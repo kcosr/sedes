@@ -215,7 +215,8 @@ and confirm that:
 
 Use **Runs**, and its **Problems** and **Skipped** filters, to tell skipped,
 missed and merged, failed, and unknown runs apart. A **Delivered** run reached
-the agent; look in the thread for its work. A run whose outcome is unknown
+the agent; look in the thread for its work. An **Interrupted** run was stopped
+before its turn finished; it is not listed as a problem. A run whose outcome is unknown
 pauses the schedule until you mark it failed. SSH prechecks are unsupported
 and fail rather than executing remotely. See
 [Tasks and automations](tasks-and-automations.md#review-run-history).

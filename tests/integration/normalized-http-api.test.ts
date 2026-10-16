@@ -7873,7 +7873,7 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
-  it("presents settled run turns and lists unsuccessful turns as problems", async () => {
+  it("presents settled run turns and lists failed, not interrupted, turns as problems", async () => {
     const current = await fixture();
     try {
       const workspace = await current
@@ -7982,17 +7982,6 @@ describe("normalized HTTP application contract", () => {
           expect(body).toEqual({
             items: [
               expect.objectContaining({
-                id: interrupted.id,
-                state: "completed",
-                turn: {
-                  id: `turn_${interrupted.id}`,
-                  outcome: "interrupted",
-                  settledAt: new Date(2_505).toISOString(),
-                  startedAt: new Date(2_010).toISOString(),
-                  endedAt: new Date(2_500).toISOString(),
-                },
-              }),
-              expect.objectContaining({
                 id: failedTurn.id,
                 state: "completed",
                 turn: {
@@ -8005,7 +7994,7 @@ describe("normalized HTTP application contract", () => {
               }),
             ],
             nextCursor: null,
-            counts: { all: 4, problems: 2, skipped: 0 },
+            counts: { all: 4, problems: 1, skipped: 0 },
           }),
         );
       await current

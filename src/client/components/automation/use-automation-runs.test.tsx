@@ -282,7 +282,7 @@ describe("useAutomationRuns", () => {
     expect(result.current.items).toEqual([manual, { ...older, state: "failed" }]);
   });
 
-  it("keeps failed and interrupted turns in Problems while excluding ordinary deliveries", async () => {
+  it("keeps failed turns in Problems while excluding ordinary deliveries and interruptions", async () => {
     const fixture = automationStore([{ automation: automationSummary() }], {
       listAutomationRuns: vi.fn().mockResolvedValue(page([])),
     });
@@ -295,10 +295,10 @@ describe("useAutomationRuns", () => {
     expect(result.current.items).toEqual([]);
     const interruptedTurn = run({ turn: { id: "turn-1", outcome: "interrupted", settledAt: new Date().toISOString() } });
     act(() => result.current.upsert(interruptedTurn));
-    expect(result.current.items).toEqual([interruptedTurn]);
+    expect(result.current.items).toEqual([]);
     const failedTurn = run({ turn: { id: "turn-2", outcome: "failed", settledAt: new Date().toISOString() } });
     act(() => result.current.upsert(failedTurn));
-    expect(result.current.items).toEqual([failedTurn, interruptedTurn]);
+    expect(result.current.items).toEqual([failedTurn]);
   });
 
   it("reports a failed first page and retries it", async () => {
@@ -326,7 +326,7 @@ describe("useAutomationRuns: reconciling the loaded history", () => {
       case "all":
         return true;
       case "problems":
-        return item.state === "failed" || item.state === "uncertain" || item.turn?.outcome === "failed" || item.turn?.outcome === "interrupted";
+        return item.state === "failed" || item.state === "uncertain" || item.turn?.outcome === "failed";
       case "skipped":
         return item.state === "skipped";
     }

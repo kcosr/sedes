@@ -87,6 +87,13 @@ describe("automation dismissal projections", () => {
     repository.settleRunTurn(scope, run.childThreadId ?? run.anchorThreadId, run.dispatchMutationId, {
       turnId: randomUUID(), outcome, settledAt: now, startedAt: run.claimedAt + 1, endedAt: now,
     });
+  const parkSource = () => {
+    const inventory = new InventoryRepository(database);
+    inventory.transitionInventory(scope, sourceId, {
+      expectedRevision: inventory.getInventory(scope, sourceId).inventoryRevision,
+      mutationId: randomUUID(), change: { action: "settle" }, now: 1_050,
+    });
+  };
   const summary = () => readThreadAutomationSummary(database, scope, sourceId);
   const contexts = (threadId = sourceId) => readThreadAutomationContexts(database, scope, threadId);
   const inventorySummary = (threadId: string) => new DatabaseApplicationThreadSummaryReader({
@@ -94,10 +101,7 @@ describe("automation dismissal projections", () => {
     completion: new SubmissionCompletionRepository(database),
   }).listByIds(scope, [threadId])[0]!;
 
-  it.each([
-    ["same_thread", "failed"], ["same_thread", "interrupted"],
-    ["clone", "failed"], ["clone", "interrupted"],
-  ] as const)("resurfaces a dismissed %s notice after the agent turn is %s", (mode, outcome) => {
+  it.each(["same_thread", "clone"] as const)("resurfaces a dismissed %s notice after the agent turn fails", (mode) => {
     const automation = definition(mode);
     const run = deliver(automation);
     const target = mode === "clone" ? childId : sourceId;
@@ -107,12 +111,11 @@ describe("automation dismissal projections", () => {
     expect(contexts(target)).toEqual([]);
     expect(summary().totalCount).toBe(1);
 
-    settle(run, outcome);
+    settle(run, "failed");
 
-    const diagnostic = outcome === "failed" ? "The automation’s agent turn failed."
-      : "The automation’s agent turn was interrupted.";
     expect(contexts(target)).toEqual([expect.objectContaining({
-      automationId: automation.id, runId: run.id, outcome: "failed", diagnostic: { text: diagnostic },
+      automationId: automation.id, runId: run.id, outcome: "failed",
+      diagnostic: { text: "The automation’s agent turn failed." },
       triggeredAt: new Date(1_100).toISOString(),
     })]);
     expect(contexts()).toEqual([expect.objectContaining({ runId: run.id, outcome: "failed" })]);
@@ -125,6 +128,44 @@ describe("automation dismissal projections", () => {
     expect(contexts(target)).toEqual([]);
     expect(summary()).toMatchObject({ totalCount: 1, attentionCount: 0 });
     expect(repository.getDefinition(scope, automation.id).deletedAt).toBeNull();
+  });
+
+  it.each(["same_thread", "clone"] as const)("shows an interrupted %s turn as a neutral notice that needs no attention", (mode) => {
+    const automation = definition(mode, true);
+    const run = deliver(automation);
+    const target = mode === "clone" ? childId : sourceId;
+    parkSource();
+
+    settle(run, "interrupted");
+
+    expect(contexts(target)).toEqual([expect.objectContaining({
+      automationId: automation.id, runId: run.id, outcome: "interrupted",
+      triggeredAt: new Date(1_100).toISOString(),
+    })]);
+    expect(contexts(target)[0]).not.toHaveProperty("diagnostic");
+    if (mode === "clone") expect(contexts()).toEqual([]);
+    expect(summary()).toMatchObject({ totalCount: 1, inFlightCount: 0, attentionCount: 0 });
+    expect(inventorySummary(target).attention.automationContext).toBe("triggered");
+    expect(repository.attentionRun(scope, automation.id)).toBeUndefined();
+    expect(new InventoryRepository(database).getInventory(scope, sourceId).inventoryState).toBe("settled");
+    expect(repository.listRuns(scope, automation.id, { limit: 10, filter: "problems" })).toEqual([]);
+    expect(repository.countRuns(scope, automation.id)).toMatchObject({ all: 1, problems: 0 });
+
+    repository.acknowledgeRun(scope, automation.id, run.id, 1_200);
+    expect(contexts(target)).toEqual([]);
+  });
+
+  it.each(["same_thread", "clone"] as const)("keeps a %s notice dismissed before the agent turn is interrupted", (mode) => {
+    const automation = definition(mode, true);
+    const run = deliver(automation);
+    const target = mode === "clone" ? childId : sourceId;
+    repository.acknowledgeRun(scope, automation.id, run.id, 1_050);
+
+    settle(run, "interrupted");
+
+    expect(repository.getRun(scope, automation.id, run.id).acknowledgedAt).toBe(1_050);
+    expect(contexts(target)).toEqual([]);
+    expect(summary()).toMatchObject({ inFlightCount: 0, attentionCount: 0 });
   });
 
   it.each(["same_thread", "clone"] as const)("removes only the dismissed successful %s one-shot while its failed sibling remains", (mode) => {

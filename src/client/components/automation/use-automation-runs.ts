@@ -124,7 +124,8 @@ function arrivedRuns(
 
 /**
  * Whether a run belongs in the list for a filter, as the server filters:
- * problems are failed or uncertain runs and failed or interrupted agent turns.
+ * problems are failed or uncertain runs and failed agent turns. An interrupted
+ * turn is not a problem.
  */
 function runMatchesFilter(
   run: Pick<ThreadAutomationRun, "state" | "turn">,
@@ -137,8 +138,7 @@ function runMatchesFilter(
       return (
         run.state === "failed" ||
         run.state === "uncertain" ||
-        run.turn?.outcome === "failed" ||
-        run.turn?.outcome === "interrupted"
+        run.turn?.outcome === "failed"
       );
     case "skipped":
       return run.state === "skipped";

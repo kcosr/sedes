@@ -2356,10 +2356,13 @@ outcome once, and fills in the backend turn's own start and end when a later
 observation reports them; it never uses observation time as a duration and
 drops an end before the start. It is idempotent across snapshot replays and skips
 force-reset runs. It never changes the recorded delivery state or rearms a
-schedule. Failed or interrupted settlement restores attention if the user had
-dismissed the earlier delivery notice; replay must preserve acknowledgement of
-the failure. A successful scheduled one-shot is retired once no run leaves a
-result notice to dismiss and no unresolved problem or in-flight turn remains.
+schedule. Failed settlement restores attention if the user had dismissed the
+earlier delivery notice; replay must preserve acknowledgement of the failure.
+An interrupted turn, whether stopped by the user or otherwise, is neutral: it
+keeps that dismissal, needs no attention, and leaves a parked anchor parked. A
+scheduled one-shot whose turn succeeded or was interrupted is retired once no
+run leaves a result notice to dismiss and no unresolved problem or in-flight
+turn remains.
 Retain its internal records and threads. Dismissals name the observed outcome so
 a delayed request cannot acknowledge a newer failure. At startup it settles runs
 whose observation committed while no observer was bound and reconciles eligible

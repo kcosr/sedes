@@ -191,18 +191,24 @@ computed independently: an unresolved uncertain delivery takes priority;
 otherwise the latest decisive delivery failure needs attention until acknowledged
 or superseded by a later success from that same automation. Skips, cancellation,
 and manual uncertainty resolution do not count as successful delivery. A failed
-or interrupted agent turn also needs attention without changing delivery state.
+agent turn also needs attention without changing delivery state. An interrupted
+turn, whatever stopped it, is neutral: it never needs attention, marks the
+automation failed, or returns a parked anchor to Active.
 
 Thread detail includes bounded `attention.automationContexts`, each with explicit
 automation, run, and source identity. Dismissal names the run and observed outcome,
-never a mutable singleton slot. A stale triggered-notice dismissal cannot clear a
-later failure. First settlement as failed or interrupted clears an earlier
-delivery acknowledgement atomically; settlement replay preserves subsequent
+never a mutable singleton slot. Its outcome is `triggered`, `interrupted`,
+`failed`, or `uncertain`; an interrupted turn has a neutral notice on its result
+thread, like a triggered one. A stale neutral-notice dismissal cannot clear a
+later failure. First settlement as failed clears an earlier delivery
+acknowledgement atomically, while an interruption keeps it; settlement replay
+preserves subsequent
 failure acknowledgement. A result thread's provenance names its actual source
 even when the source's other automations have run since.
 
 A date/time definition is retired with its existing deletion marker once its
-current scheduled occurrence has a successful agent-turn settlement and nothing
+current scheduled occurrence has a successful or interrupted agent-turn
+settlement and nothing
 about the definition remains to see or dismiss: no undismissed result notice from
 any of its runs, no unresolved problem, and no in-flight work under the same
 latest-turn rule as the in-flight count. The anchor's notice follows the latest

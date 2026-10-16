@@ -426,14 +426,16 @@ A one-time reminder waits while its source is snoozed. After its agent turn
 succeeds, its thread shows no schedule icon, while its result notice remains
 until dismissed. Dismissing that notice removes the finished reminder from the
 automation collection; the conversation and any result thread remain. If you
-dismiss while the agent is still working, removal waits for success. A later
-failure or interruption is shown again and keeps the reminder available.
+dismiss while the agent is still working, removal waits for the turn to end.
+A later failure is shown again and keeps the reminder available. An interrupted
+turn, including one you stop, is not a failure: its notice is neutral, and the
+reminder is removed once that notice is dismissed, as after a success.
 
 **Run now** is a separate invocation and does not rearm a consumed schedule.
 On a **This thread** reminder, the thread shows the latest run's notice, so a
 **Run now** replaces the earlier result notice. After it succeeds, the reminder
-is removed once its turn finishes; after it fails, once you dismiss the
-failure. A **Fork** reminder keeps each result thread's notice until you
+is removed once its turn finishes; otherwise, once you dismiss that run's
+notice. A **Fork** reminder keeps each result thread's notice until you
 dismiss it. Before the reminder is removed, you can choose a new future date
 and enable it to schedule another occurrence. Dismissing an older result does
 not remove that new schedule. Changing its name or prompt does not rearm it.
@@ -499,11 +501,15 @@ A delivery failure belongs to its automation. A later successful delivery from
 that same automation can supersede it; a sibling's success cannot. Use
 **Acknowledge failure** on the automation page, or dismiss its thread notice,
 to acknowledge the indicated run only. Skipped or cancelled work does not
-clear a prior delivery problem. A failure or interruption of the assistant's
-turn after delivery also needs attention and appears in the result notice and
-run history. It does not change the recorded delivery result or pause a recurring
-schedule. Dismissing the earlier delivery notice cannot acknowledge this later
-problem.
+clear a prior delivery problem. A failure of the assistant's turn after
+delivery also needs attention and appears in the result notice and run history.
+It does not change the recorded delivery result or pause a recurring schedule.
+Dismissing the earlier delivery notice cannot acknowledge this later problem.
+
+An interrupted turn, whether you chose **Stop** or something else ended it, is
+not a failure. Its result notice is neutral and can be dismissed, run history
+shows **Interrupted**, and the automation is not marked **Failed** and does not
+bring a parked thread back.
 
 ### Read the definition
 
@@ -520,7 +526,7 @@ thread remains the authority for model and execution configuration.
 | **Finished** | The one-time occurrence has been consumed; a successful reminder remains until no notice remains to dismiss |
 | **Waiting on source** | An unsent run is deferred until its source or capacity allows delivery |
 | **Sending** / **Waiting for turn** | A run is being delivered or is in the normal thread queue |
-| **Failed** | A delivery failure or unsuccessful agent turn needs attention |
+| **Failed** | A delivery failure or failed agent turn needs attention |
 | **Outcome unknown** | Delivery needs reconciliation before safe retry |
 | **Thread archived** / **Snoozed** | Source inventory state suppresses scheduling |
 

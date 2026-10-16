@@ -300,10 +300,10 @@ describe("multiple independent thread automations", () => {
     expect(publications).toHaveBeenLastCalledWith(scope, expect.objectContaining({ automationId: reminder.id, deleted: true }));
   });
 
-  it.each(["failed", "interrupted"] as const)("surfaces a later %s turn after early dismissal and ignores stale trigger dismissal", (outcome) => {
+  it("surfaces a later failed turn after early dismissal and ignores stale trigger dismissal", () => {
     const reminder = create("Reminder"), run = deliver(reminder.id);
     service.acknowledgeThreadRun(scope, threadId, run.id, "triggered", 10_500);
-    finishTurn(run, outcome);
+    finishTurn(run, "failed");
     expect(repository.getRun(scope, reminder.id, run.id).acknowledgedAt).toBeNull();
     expect(service.get(scope, reminder.id).attention).toMatchObject({ runId: run.id, kind: "failed" });
     expect(readThreadAutomationContexts(db, scope, threadId))
@@ -314,8 +314,32 @@ describe("multiple independent thread automations", () => {
     expect(service.get(scope, reminder.id).attention).toBeUndefined();
     expect(repository.getDefinition(scope, reminder.id).deletedAt).toBeNull();
     // Replaying immutable settlement must not undo an acknowledgement of the failure.
-    expect(finishTurn(run, outcome, 12_200)).toBeUndefined();
+    expect(finishTurn(run, "failed", 12_200)).toBeUndefined();
     expect(repository.getRun(scope, reminder.id, run.id).acknowledgedAt).toBe(12_100);
+  });
+
+  it("retires a reminder whose turn was interrupted once its neutral notice is dismissed", () => {
+    const reminder = create("Reminder"), run = deliver(reminder.id);
+    finishTurn(run, "interrupted");
+    expect(readThreadAutomationContexts(db, scope, threadId))
+      .toEqual([expect.objectContaining({ runId: run.id, outcome: "interrupted" })]);
+    expect(service.get(scope, reminder.id).attention).toBeUndefined();
+    expect(readThreadAutomationSummary(db, scope, threadId)).toMatchObject({ attentionCount: 0 });
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBeNull();
+    // Either neutral notice dismisses it; a failure would need its own.
+    expect(service.acknowledgeThreadRun(scope, threadId, run.id, "failed", 12_000).automation).not.toBeNull();
+    expect(service.acknowledgeThreadRun(scope, threadId, run.id, "triggered", 12_100).automation).toBeNull();
+    expect(repository.getRun(scope, reminder.id, run.id).acknowledgedAt).toBe(12_100);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBe(12_100);
+  });
+
+  it("keeps an early dismissal when the reminder's turn is later interrupted", () => {
+    const reminder = create("Reminder"), run = deliver(reminder.id);
+    service.acknowledgeThreadRun(scope, threadId, run.id, "triggered", 10_500);
+    finishTurn(run, "interrupted");
+    expect(repository.getRun(scope, reminder.id, run.id).acknowledgedAt).toBe(10_500);
+    expect(readThreadAutomationContexts(db, scope, threadId)).toEqual([]);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBe(11_000);
   });
 
   it("does not retire a rearmed schedule when an older result is dismissed", () => {

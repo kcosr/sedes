@@ -36,13 +36,14 @@ User-facing changes are collected here before release. See the
   settings from drafts. Busy sources defer unsent work. Successful one-time
   reminders show no sidebar schedule icon and leave the collection once no
   result notice remains to dismiss, including after a later **Run now**; their
-  conversations remain. Failures or interruptions arriving after dismissal
-  surface again. Existing automations migrate in place with their names,
-  schedules, run history, and dismissed notices; on first start, one-time
-  reminders that already succeeded with no notice left to dismiss leave the
-  collection. A thread's **Automations** page lists only its own automations
-  and links back to the thread; an automation's page names its thread and
-  returns to wherever you opened it. See
+  conversations remain. A failed turn arriving after dismissal surfaces again;
+  an interrupted turn, including **Stop**, is not a failure and shows a neutral
+  notice. Existing automations migrate in place with their names, schedules,
+  run history, and dismissed notices; on first start, one-time reminders that
+  already succeeded with no notice left to dismiss leave the collection. A
+  thread's **Automations** page lists only its own automations and links back
+  to the thread; an automation's page names its thread and returns to wherever
+  you opened it. See
   [automations](docs/user/tasks-and-automations.md#schedule-work-with-an-automation).
   ([#88](https://github.com/kcosr/sedes/pull/88))
 

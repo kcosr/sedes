@@ -37,12 +37,15 @@ export function latestDecisiveRunIdSql(definition: string): string {
     ORDER BY decisive.created_at DESC, decisive.id DESC LIMIT 1)`;
 }
 
-/** Delivery failure or an unsuccessful agent turn, excluding abandoned work. */
+/**
+ * Delivery failure or a failed agent turn, excluding abandoned work. An
+ * interrupted turn, including one the user stopped, is not a failure.
+ */
 export function runFailureSql(run: string): string {
   return `(${run}.force_reset_at IS NULL AND (
     (${run}.state = 'failed'
       AND coalesce(${run}.error_code, '') != 'automation_uncertain_resolved')
-    OR (${run}.state = 'completed' AND ${run}.turn_outcome IN ('failed', 'interrupted'))
+    OR (${run}.state = 'completed' AND ${run}.turn_outcome = 'failed')
   ))`;
 }
 
@@ -52,11 +55,22 @@ export function runHasProblemSql(run: string): string {
     OR ${runFailureSql(run)})`;
 }
 
-/** Only a scheduled delivery whose turn has not failed reports that it triggered. */
+/** Only a scheduled delivery whose turn has not ended otherwise reports that it triggered. */
 export function runTriggeredSql(run: string): string {
   return `(${run}.state = 'completed' AND ${run}.occurrence_kind = 'scheduled'
     AND ${run}.force_reset_at IS NULL
     AND (${run}.turn_outcome IS NULL OR ${run}.turn_outcome = 'completed'))`;
+}
+
+/** Any delivery whose agent turn was interrupted; neutral, never a problem. */
+export function runInterruptedSql(run: string): string {
+  return `(${run}.state = 'completed' AND ${run}.force_reset_at IS NULL
+    AND ${run}.turn_outcome = 'interrupted')`;
+}
+
+/** A notice that needs no action: a scheduled delivery or an interrupted turn. */
+export function runNeutralNoticeSql(run: string): string {
+  return `(${runTriggeredSql(run)} OR ${runInterruptedSql(run)})`;
 }
 
 /** The one run whose notice the anchor can show for a definition. */
@@ -74,13 +88,13 @@ export function anchorNoticeRunIdSql(definition: string): string {
 /** A notice on the anchor, which a later decisive run supersedes. */
 export function anchorNoticeSql(run: string): string {
   return `(${runHasProblemSql(run)}
-    OR (${runTriggeredSql(run)} AND ${run}.child_thread_id IS NULL))`;
+    OR (${runNeutralNoticeSql(run)} AND ${run}.child_thread_id IS NULL))`;
 }
 
 /** A Fork result thread keeps a notice for each of its runs. */
 export function resultThreadNoticeSql(run: string): string {
   return `(${run}.child_thread_id IS NOT NULL
-    AND (${runTriggeredSql(run)} OR ${runHasProblemSql(run)}))`;
+    AND (${runNeutralNoticeSql(run)} OR ${runHasProblemSql(run)}))`;
 }
 
 /** A definition still has a result notice the user can see and dismiss. */

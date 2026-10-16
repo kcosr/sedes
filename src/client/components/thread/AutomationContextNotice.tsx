@@ -9,7 +9,8 @@ type AutomationContext = NonNullable<
 >;
 
 /**
- * The thread notice for a run an automation sent here: triggered, or failed
+ * The thread notice for a run an automation sent here: triggered, interrupted
+ * (neutral, like a trigger: not a failure, however it was stopped), or failed
  * (red). The run's kind comes from the source thread's last run when that is
  * still the noticed run; the server records context for scheduled runs, so an
  * undeterminable kind keeps the scheduled wording. While the source thread
@@ -37,7 +38,9 @@ export function AutomationContextNotice({
           <p>
             {uncertain ? `${context.name}: delivery outcome is unknown.` : failed
               ? `${context.name}: this run failed.`
-              : `${context.name} triggered this thread.`}
+              : context.outcome === "interrupted"
+                ? `${context.name}: its turn was interrupted.`
+                : `${context.name} triggered this thread.`}
           </p>
           {context.diagnostic && <small>{context.diagnostic.text}</small>}
         </div>

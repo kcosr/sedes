@@ -1220,7 +1220,7 @@ export const normalizedThreadAttentionSchema = z.strictObject({
     runId: z.string().min(1).max(160),
     sourceThreadId: z.string().min(1).max(160),
     triggeredAt: z.iso.datetime(),
-    outcome: z.enum(["triggered", "failed", "uncertain"]),
+    outcome: z.enum(["triggered", "interrupted", "failed", "uncertain"]),
     diagnostic: boundedDisplayTextSchema.optional(),
   })).max(20),
   unseenCompletion: z

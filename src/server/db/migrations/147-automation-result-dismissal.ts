@@ -8,6 +8,7 @@ export const automationResultDismissalMigration: DatabaseMigration = {
 DROP TRIGGER automation_runs_ack_immutable;
 
 -- These dismissals preceded the failure, so the user has not acknowledged it.
+-- An interrupted turn is neutral, so a dismissal before it stays in place.
 --
 -- Migration 146 introduced per-run acknowledgement. For every delivered or
 -- failed run without a legacy notice slot (a dismissed or superseded notice,
@@ -26,7 +27,7 @@ DROP TRIGGER automation_runs_ack_immutable;
 UPDATE automation_runs
 SET acknowledged_at = NULL
 WHERE state = 'completed' AND force_reset_at IS NULL
-  AND turn_outcome IN ('failed', 'interrupted')
+  AND turn_outcome = 'failed'
   AND acknowledged_at < turn_settled_at
   AND NOT (
     acknowledged_at = finished_at
@@ -49,15 +50,9 @@ WHEN OLD.acknowledged_at IS NOT NULL
   AND NOT (
     OLD.state = 'completed' AND NEW.state = 'completed'
     AND OLD.turn_id IS NULL AND NEW.turn_id IS NOT NULL
-    AND NEW.turn_outcome IN ('failed', 'interrupted')
+    AND NEW.turn_outcome = 'failed'
     AND NEW.acknowledged_at IS NULL
   )
 BEGIN SELECT RAISE(ABORT, 'Automation acknowledgement is immutable'); END;
-
-DROP INDEX automation_runs_failed_turn_history;
-CREATE INDEX automation_runs_problem_turn_history
-  ON automation_runs(tenant_id, owner_principal_id, automation_id,
-    created_at DESC, id DESC, state, turn_outcome)
-  WHERE turn_outcome IN ('failed', 'interrupted');
 `,
 };

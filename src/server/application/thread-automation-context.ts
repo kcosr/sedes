@@ -9,7 +9,8 @@ import {
   resultThreadNoticeSql,
   runFailureSql,
   runHasProblemSql,
-  runTriggeredSql,
+  runInterruptedSql,
+  runNeutralNoticeSql,
 } from "../db/repositories/automation-read-sql.js";
 
 export const MAXIMUM_THREAD_AUTOMATION_CONTEXTS = 20;
@@ -30,7 +31,10 @@ export function threadAutomationChildProblemSql(thread: string): string {
   )`;
 }
 
-/** Successful manual invocations do not create an automatic-trigger notice. */
+/**
+ * Neutral notices: successful manual invocations create none, while an
+ * interrupted turn has one that needs no action.
+ */
 export function threadAutomationTriggeredSql(thread: string): string {
   return `(EXISTS (
     SELECT 1 FROM automation_definitions AS source_definition
@@ -43,7 +47,7 @@ export function threadAutomationTriggeredSql(thread: string): string {
       AND source_definition.owner_principal_id = ${thread}.owner_principal_id
       AND source_definition.anchor_thread_id = ${thread}.id
       AND source_definition.deleted_at IS NULL
-      AND ${runTriggeredSql("source_run")}
+      AND ${runNeutralNoticeSql("source_run")}
       AND source_run.child_thread_id IS NULL
       AND source_run.acknowledged_at IS NULL
   ) OR EXISTS (
@@ -56,7 +60,7 @@ export function threadAutomationTriggeredSql(thread: string): string {
     WHERE child_run.tenant_id = ${thread}.tenant_id
       AND child_run.owner_principal_id = ${thread}.owner_principal_id
       AND child_run.child_thread_id = ${thread}.id
-      AND ${runTriggeredSql("child_run")}
+      AND ${runNeutralNoticeSql("child_run")}
       AND child_run.acknowledged_at IS NULL
   ))`;
 }
@@ -68,15 +72,15 @@ export function readThreadAutomationContexts(
 ): NormalizedThreadAttention["automationContexts"] {
   const columns = `definition.id AS automationId, definition.name,
     run.id AS runId, run.anchor_thread_id AS sourceThreadId,
-    CASE WHEN ${runFailureSql("run")}
+    CASE WHEN ${runFailureSql("run")} OR ${runInterruptedSql("run")}
       THEN coalesce(run.turn_settled_at, run.finished_at, run.updated_at)
       ELSE coalesce(run.finished_at, run.updated_at) END AS triggeredAt,
     CASE WHEN run.state = 'uncertain' THEN 'uncertain'
-      WHEN ${runFailureSql("run")} THEN 'failed' ELSE 'triggered' END AS outcome,
+      WHEN ${runFailureSql("run")} THEN 'failed'
+      WHEN ${runInterruptedSql("run")} THEN 'interrupted'
+      ELSE 'triggered' END AS outcome,
     CASE WHEN run.state = 'completed' AND run.turn_outcome = 'failed'
       THEN 'The automation’s agent turn failed.'
-      WHEN run.state = 'completed' AND run.turn_outcome = 'interrupted'
-      THEN 'The automation’s agent turn was interrupted.'
       ELSE run.error_diagnostic END AS diagnostic`;
   const rows = database.prepare(`
     SELECT * FROM (
@@ -115,7 +119,7 @@ export function readThreadAutomationContexts(
     runId: string;
     sourceThreadId: string;
     triggeredAt: number;
-    outcome: "triggered" | "failed" | "uncertain";
+    outcome: "triggered" | "interrupted" | "failed" | "uncertain";
     diagnostic: string | null;
   }[];
   return rows.map((row) => ({

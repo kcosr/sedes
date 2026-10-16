@@ -215,8 +215,9 @@ export type AutomationTurnSettlementInput = {
 
 /**
  * Disjoint conditions behind each run-history filter; `null` reads every run.
- * An unsuccessful turn is a problem however its delivery ended, so its branch leaves
- * out the states the other problem branches already list.
+ * A failed turn is a problem however its delivery ended, so its branch leaves
+ * out the states the other problem branches already list. An interrupted turn
+ * is not a problem.
  */
 const RUN_FILTER_BRANCHES: Readonly<
   Record<AutomationRunFilter, readonly string[] | null>
@@ -225,7 +226,7 @@ const RUN_FILTER_BRANCHES: Readonly<
   problems: [
     "AND state = 'failed'",
     "AND state = 'uncertain'",
-    "AND turn_outcome IN ('failed', 'interrupted') AND state NOT IN ('failed', 'uncertain')",
+    "AND turn_outcome = 'failed' AND state NOT IN ('failed', 'uncertain')",
   ],
   skipped: ["AND state = 'skipped'"],
 };
@@ -999,7 +1000,9 @@ export class AutomationRepository {
         return this.retireFinishedOneShot(scope, run.automationId, input.settledAt)
           ? run : undefined;
       }
-      const newProblem = run.turnId === null && input.outcome !== "completed";
+      // Only a failure reopens a dismissed notice and needs the user; an
+      // interrupted turn, however it was stopped, is neutral like a success.
+      const newProblem = run.turnId === null && input.outcome === "failed";
       this.database
         .prepare(
           `
@@ -1047,7 +1050,7 @@ export class AutomationRepository {
               turn_outcome = observation.completion_outcome,
               turn_settled_at = observation.completion_observed_at,
               acknowledged_at = CASE WHEN run.state = 'completed'
-                AND observation.completion_outcome <> 'completed'
+                AND observation.completion_outcome = 'failed'
                 THEN NULL ELSE run.acknowledged_at END
             FROM submission_completion_observations AS observation
             WHERE observation.tenant_id = run.tenant_id
@@ -1063,7 +1066,7 @@ export class AutomationRepository {
         )
         .all() as RunRow[]).map(runFromRow);
       for (const run of settled) {
-        if (run.turnOutcome !== "completed" && run.state !== "failed") activateSettledThread(
+        if (run.turnOutcome === "failed" && run.state !== "failed") activateSettledThread(
           this.database,
           { tenantId: run.tenantId, principalId: run.ownerPrincipalId },
           run.anchorThreadId,
@@ -2314,7 +2317,7 @@ export class AutomationRepository {
     }
     // One ordered, limited branch per condition, each over its own index
     // (automation_runs_state_history per state, and
-    // automation_runs_problem_turn_history for unsuccessful turns), keeps a page
+    // automation_runs_failed_turn_history for failed turns), keeps a page
     // bounded by its size, however sparse the matching runs are.
     return (
       this.database
@@ -2340,7 +2343,7 @@ export class AutomationRepository {
               FROM automation_runs
               WHERE tenant_id = ? AND owner_principal_id = ?
                 AND automation_id = ?
-                AND turn_outcome IN ('failed', 'interrupted')
+                AND turn_outcome = 'failed'
                 AND state NOT IN ('failed', 'uncertain')
             ) AS problems,
             coalesce(sum(state = 'skipped'), 0) AS skipped

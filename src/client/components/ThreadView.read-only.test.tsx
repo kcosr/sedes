@@ -1529,27 +1529,31 @@ describe("ThreadView backend interaction modes", () => {
 
   it("dismisses the rendered automation outcome and leaves uncertain notices without a dismiss control", () => {
     const base = makeSnapshot("interactive", "idle");
-    const contexts: NormalizedThreadSnapshot["attention"]["automationContexts"] = ["triggered", "failed", "uncertain"].map((outcome, index) => ({
+    const contexts: NormalizedThreadSnapshot["attention"]["automationContexts"] = ["triggered", "failed", "interrupted", "uncertain"].map((outcome, index) => ({
       automationId: `30000000-0000-4000-8000-00000000000${index}`,
       runId: `20000000-0000-4000-8000-00000000000${index}`,
       name: `Reminder ${index}`,
       sourceThreadId: base.thread.id,
       triggeredAt: "2026-07-30T15:01:00.000Z",
-      outcome: outcome as "triggered" | "failed" | "uncertain",
+      outcome: outcome as "triggered" | "interrupted" | "failed" | "uncertain",
     }));
     const snapshot = { ...base, attention: { automationContexts: contexts } };
     const { applicationStore, registry, dismissAttention } = fixture(snapshot);
     render(<ThreadView threadId={snapshot.thread.id} visible registry={registry} applicationStore={applicationStore} />);
-    for (const [index, text] of ["Reminder 0 triggered this thread.", "Reminder 1: this run failed."].entries()) {
+    for (const [index, text] of [
+      "Reminder 0 triggered this thread.",
+      "Reminder 1: this run failed.",
+      "Reminder 2: its turn was interrupted.",
+    ].entries()) {
       const notice = screen.getByText(text).closest("aside")!;
       fireEvent.click(within(notice).getByRole("button", { name: "Dismiss" }));
       expect(dismissAttention).toHaveBeenNthCalledWith(index + 1, {
         kind: "automation_context", runId: contexts[index]!.runId, outcome: contexts[index]!.outcome,
       });
     }
-    const uncertain = screen.getByText("Reminder 2: delivery outcome is unknown.").closest("aside")!;
+    const uncertain = screen.getByText("Reminder 3: delivery outcome is unknown.").closest("aside")!;
     expect(within(uncertain).queryByRole("button", { name: "Dismiss" })).toBeNull();
-    expect(dismissAttention).toHaveBeenCalledTimes(2);
+    expect(dismissAttention).toHaveBeenCalledTimes(3);
   });
 
   it("renders a bound read-only thread without provider mutation controls", async () => {

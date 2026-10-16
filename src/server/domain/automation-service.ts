@@ -577,7 +577,7 @@ export class AutomationService implements DurableDeadlineSource {
     scope: RequestScope,
     threadId: string,
     runId: string,
-    outcome: "triggered" | "failed",
+    outcome: "triggered" | "interrupted" | "failed",
     now = Date.now(),
   ): ThreadAutomationRunResolution {
     this.#assertThread(scope, threadId);
@@ -590,12 +590,12 @@ export class AutomationService implements DurableDeadlineSource {
         "not_found",
         "The automation run was not found for this thread.",
       );
-    // Dismissing the delivered notice must not acknowledge a failure that
-    // arrived after that notice was rendered, including a delayed request.
+    // Dismissing a neutral notice must not acknowledge a failure that arrived
+    // after that notice was rendered, including a delayed request. An
+    // interruption is neutral, so dismissing the delivery notice covers it.
     const currentOutcome = run.state === "uncertain" ? "uncertain"
-      : run.state === "failed" || run.turnOutcome === "failed" || run.turnOutcome === "interrupted"
-        ? "failed" : "triggered";
-    if (outcome !== currentOutcome)
+      : run.state === "failed" || run.turnOutcome === "failed" ? "failed" : "neutral";
+    if (currentOutcome !== (outcome === "failed" ? "failed" : "neutral"))
       return this.#presentResolution(scope, run.automationId, run);
     return this.acknowledgeRun(scope, run.automationId, runId, now);
   }

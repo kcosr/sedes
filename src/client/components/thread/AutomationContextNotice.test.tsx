@@ -24,6 +24,15 @@ describe("automation context notice", () => {
     expect(dismiss).toHaveBeenCalledOnce();
     expect(screen.getByText("Reminder triggered this thread.")).toBeInTheDocument();
   });
+  it("shows an interrupted turn in the neutral tone with its own text", async () => {
+    const dismiss = vi.fn();
+    const { diagnostic: _diagnostic, ...interrupted } = context;
+    render(<AutomationContextNotice context={{ ...interrupted, outcome: "interrupted" }} onDismiss={dismiss} />);
+    const notice = screen.getByText("Daily update: its turn was interrupted.").closest("aside")!;
+    expect(notice).toHaveAttribute("data-tone", "neutral");
+    await userEvent.setup().click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(dismiss).toHaveBeenCalledOnce();
+  });
   it("keeps an uncertain delivery visible until resolved", () => {
     render(<AutomationContextNotice context={{ ...context, outcome: "uncertain" }} onDismiss={vi.fn()} />);
     expect(screen.getByText("Daily update: delivery outcome is unknown.")).toBeInTheDocument();

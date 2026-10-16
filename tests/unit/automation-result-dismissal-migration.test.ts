@@ -125,7 +125,8 @@ describe("automation result dismissal migration", () => {
   it("reopens only live, nonreset failure dismissals that predate turn settlement", () => {
     const cases = [
       { outcome: "failed", acknowledgedAt: 1_500, expected: null },
-      { outcome: "interrupted", acknowledgedAt: 1_500, expected: null },
+      // An interruption is neutral; a dismissal before it stays in place.
+      { outcome: "interrupted", acknowledgedAt: 1_500, expected: 1_500 },
       // 146 carried a main-era notice state over as finished_at (1002); these
       // turns settled before 146 was applied, so nothing was dismissed early.
       { outcome: "failed", acknowledgedAt: 1_002, expected: 1_002 },
@@ -174,21 +175,10 @@ describe("automation result dismissal migration", () => {
     expect(
       current.database
         .prepare(
-          "SELECT name FROM sqlite_schema WHERE type='index' AND name='automation_runs_failed_turn_history'",
+          "SELECT sql FROM sqlite_schema WHERE type='index' AND name='automation_runs_failed_turn_history'",
         )
         .get(),
-    ).toBeUndefined();
-    expect(
-      current.database
-        .prepare(
-          "SELECT sql FROM sqlite_schema WHERE type='index' AND name='automation_runs_problem_turn_history'",
-        )
-        .get(),
-    ).toEqual({
-      sql: expect.stringMatching(
-        /WHERE turn_outcome IN \('failed', 'interrupted'\)/,
-      ),
-    });
+    ).toEqual({ sql: expect.stringMatching(/WHERE turn_outcome = 'failed'$/) });
     expect(current.database.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(current.database.pragma("foreign_key_check")).toEqual([]);
     expect(current.database.pragma("integrity_check")).toEqual([
@@ -196,67 +186,66 @@ describe("automation result dismissal migration", () => {
     ]);
   });
 
-  it.each(["failed", "interrupted"] as const)(
-    "allows only an atomic first %s settlement to reopen acknowledgement",
-    (outcome) => {
-      const runId = current.seed({ acknowledgedAt: 1_500 });
-      const clear = current.database.prepare(
-        "UPDATE automation_runs SET acknowledged_at=NULL WHERE id=?",
-      );
-      const settle = current.database.prepare(
-        `UPDATE automation_runs
-         SET turn_id=?,turn_outcome=?,turn_settled_at=2000,acknowledged_at=NULL
-         WHERE id=?`,
-      );
-      const turnId = `turn-${runId}`;
-      expect(() => settle.run(turnId, outcome, runId)).toThrow(
-        /acknowledgement is immutable/,
-      );
-      applyDatabaseMigrations(current.database, dismissalMigrations);
+  it("allows only an atomic first failed settlement to reopen acknowledgement", () => {
+    const outcome = "failed";
+    const runId = current.seed({ acknowledgedAt: 1_500 });
+    const clear = current.database.prepare(
+      "UPDATE automation_runs SET acknowledged_at=NULL WHERE id=?",
+    );
+    const settle = current.database.prepare(
+      `UPDATE automation_runs
+       SET turn_id=?,turn_outcome=?,turn_settled_at=2000,acknowledged_at=NULL
+       WHERE id=?`,
+    );
+    const turnId = `turn-${runId}`;
+    expect(() => settle.run(turnId, outcome, runId)).toThrow(
+      /acknowledgement is immutable/,
+    );
+    applyDatabaseMigrations(current.database, dismissalMigrations);
 
-      expect(() => clear.run(runId)).toThrow(/acknowledgement is immutable/);
-      expect(() =>
-        current.database
-          .prepare("UPDATE automation_runs SET acknowledged_at=1600 WHERE id=?")
-          .run(runId),
-      ).toThrow(/acknowledgement is immutable/);
-      expect(() => settle.run(turnId, "completed", runId)).toThrow(
+    expect(() => clear.run(runId)).toThrow(/acknowledgement is immutable/);
+    expect(() =>
+      current.database
+        .prepare("UPDATE automation_runs SET acknowledged_at=1600 WHERE id=?")
+        .run(runId),
+    ).toThrow(/acknowledgement is immutable/);
+    for (const neutral of ["completed", "interrupted"])
+      expect(() => settle.run(turnId, neutral, runId)).toThrow(
         /acknowledgement is immutable/,
       );
-      expect(current.read(runId)).toMatchObject({
-        acknowledged_at: 1_500,
-        turn_id: null,
-      });
+    expect(current.read(runId)).toMatchObject({
+      acknowledged_at: 1_500,
+      turn_id: null,
+    });
 
-      expect(() => settle.run(turnId, outcome, runId)).not.toThrow();
-      expect(current.read(runId)).toMatchObject({
-        acknowledged_at: null,
-        turn_id: turnId,
-        turn_outcome: outcome,
-      });
-      current.database
-        .prepare("UPDATE automation_runs SET acknowledged_at=2500 WHERE id=?")
-        .run(runId);
-      expect(() => settle.run(turnId, outcome, runId)).toThrow(
-        /acknowledgement is immutable/,
-      );
-      expect(() => clear.run(runId)).toThrow(/acknowledgement is immutable/);
-      current.database
-        .prepare(
-          "UPDATE automation_runs SET turn_started_at=1000,turn_ended_at=2000 WHERE id=?",
-        )
-        .run(runId);
-      expect(current.read(runId)).toMatchObject({
-        acknowledged_at: 2_500,
-        turn_id: turnId,
-        turn_outcome: outcome,
-      });
-      expect(current.database.pragma("foreign_key_check")).toEqual([]);
-      expect(current.database.pragma("integrity_check")).toEqual([
-        { integrity_check: "ok" },
-      ]);
-    },
-  );
+    expect(() => settle.run(turnId, outcome, runId)).not.toThrow();
+    expect(current.read(runId)).toMatchObject({
+      acknowledged_at: null,
+      turn_id: turnId,
+      turn_outcome: outcome,
+    });
+    current.database
+      .prepare("UPDATE automation_runs SET acknowledged_at=2500 WHERE id=?")
+      .run(runId);
+    expect(() => settle.run(turnId, outcome, runId)).toThrow(
+      /acknowledgement is immutable/,
+    );
+    expect(() => clear.run(runId)).toThrow(/acknowledgement is immutable/);
+    current.database
+      .prepare(
+        "UPDATE automation_runs SET turn_started_at=1000,turn_ended_at=2000 WHERE id=?",
+      )
+      .run(runId);
+    expect(current.read(runId)).toMatchObject({
+      acknowledged_at: 2_500,
+      turn_id: turnId,
+      turn_outcome: outcome,
+    });
+    expect(current.database.pragma("foreign_key_check")).toEqual([]);
+    expect(current.database.pragma("integrity_check")).toEqual([
+      { integrity_check: "ok" },
+    ]);
+  });
 });
 
 /**
@@ -496,7 +485,10 @@ describe("upgrading main-era automation history", () => {
     }
     const dismissedThenFailed = postUpgradeRun(upgradedAt + 2_000);
     acknowledge.run(upgradedAt + 2_100, dismissedThenFailed.runId);
-    settle.run(`turn-${dismissedThenFailed.runId}`, "interrupted", upgradedAt + 2_200, dismissedThenFailed.runId);
+    settle.run(`turn-${dismissedThenFailed.runId}`, "failed", upgradedAt + 2_200, dismissedThenFailed.runId);
+    const dismissedThenInterrupted = postUpgradeRun(upgradedAt + 2_500);
+    acknowledge.run(upgradedAt + 2_600, dismissedThenInterrupted.runId);
+    settle.run(`turn-${dismissedThenInterrupted.runId}`, "interrupted", upgradedAt + 2_700, dismissedThenInterrupted.runId);
     const failedThenDismissed = postUpgradeRun(upgradedAt + 3_000);
     settle.run(`turn-${failedThenDismissed.runId}`, "failed", upgradedAt + 3_100, failedThenDismissed.runId);
     acknowledge.run(upgradedAt + 3_200, failedThenDismissed.runId);
@@ -512,6 +504,8 @@ describe("upgrading main-era automation history", () => {
     expect(attentionCount(runningAtUpgrade.threadId)).toBe(1);
     expect(acknowledgedAt(dismissedThenFailed.runId)).toBeNull();
     expect(attentionCount(dismissedThenFailed.threadId)).toBe(1);
+    expect(acknowledgedAt(dismissedThenInterrupted.runId)).toBe(upgradedAt + 2_600);
+    expect(attentionCount(dismissedThenInterrupted.threadId)).toBe(0);
     expect(acknowledgedAt(failedThenDismissed.runId)).toBe(upgradedAt + 3_200);
     expect(attentionCount(failedThenDismissed.threadId)).toBe(0);
     expect(acknowledgedAt(dismissedThenSucceeded.runId)).toBe(upgradedAt + 4_100);

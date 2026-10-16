@@ -527,7 +527,7 @@ describe("automation turn settlement migration", () => {
     }
   });
 
-  it("serves settlement lookups, unsuccessful-turn filters and counts from indexes", () => {
+  it("serves settlement lookups, failed-turn filters and counts from indexes", () => {
     const current = fixture();
     try {
       expect(
@@ -543,20 +543,20 @@ describe("automation turn settlement migration", () => {
         current.database,
         `SELECT id FROM automation_runs
          WHERE tenant_id = ? AND owner_principal_id = ? AND automation_id = ?
-           AND turn_outcome IN ('failed', 'interrupted') AND state NOT IN ('failed', 'uncertain')
+           AND turn_outcome = 'failed' AND state NOT IN ('failed', 'uncertain')
          ORDER BY created_at DESC, id DESC LIMIT 26`,
       );
-      expect(failedTurns).toContain("automation_runs_problem_turn_history");
+      expect(failedTurns).toContain("automation_runs_failed_turn_history");
       expect(failedTurns).not.toContain("TEMP B-TREE");
       expect(
         plan(
           current.database,
           `SELECT count(*) FROM automation_runs
            WHERE tenant_id = ? AND owner_principal_id = ? AND automation_id = ?
-             AND turn_outcome IN ('failed', 'interrupted')
+             AND turn_outcome = 'failed'
              AND state NOT IN ('failed', 'uncertain')`,
         ),
-      ).toContain("USING COVERING INDEX automation_runs_problem_turn_history");
+      ).toContain("USING COVERING INDEX automation_runs_failed_turn_history");
     } finally {
       current.database.close();
     }
@@ -1210,7 +1210,7 @@ describe("automation run turn presentation", () => {
     )!;
   }
 
-  it("lists failed and interrupted turns as problems, once, and counts them", () => {
+  it("lists failed turns as problems, once, and counts them, but not interrupted ones", () => {
     const current = fixture();
     try {
       const { automations } = service(current);
@@ -1252,12 +1252,12 @@ describe("automation run turn presentation", () => {
           }),
         );
       const first = page("problems");
-      expect(first.counts).toEqual({ all: 5, problems: 4, skipped: 0 });
+      expect(first.counts).toEqual({ all: 5, problems: 3, skipped: 0 });
       const second = page("problems", first.nextCursor!);
       expect(second.nextCursor).toBeNull();
       expect(
         [...first.items, ...second.items].map(({ id }) => id),
-      ).toEqual([uncertain.id, failedDelivery.id, failedTurn.id, interrupted.id]);
+      ).toEqual([uncertain.id, failedDelivery.id, failedTurn.id]);
       expect(first.items[0]).toMatchObject({
         state: "uncertain",
         turn: { outcome: "failed" },

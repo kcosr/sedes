@@ -38,7 +38,7 @@ const identity = {
 describe("normalized automation protocol", () => {
   it("requires the displayed outcome when dismissing an automation notice", () => {
     const request = { kind: "automation_context", runId: automationId, mutationId: threadId };
-    for (const outcome of ["triggered", "failed"]) {
+    for (const outcome of ["triggered", "interrupted", "failed"]) {
       expect(dismissThreadAttentionRequestSchema.parse({ ...request, outcome })).toEqual({ ...request, outcome });
     }
     expect(dismissThreadAttentionRequestSchema.safeParse(request).success).toBe(false);

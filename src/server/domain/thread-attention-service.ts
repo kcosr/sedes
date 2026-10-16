@@ -14,7 +14,7 @@ export class ThreadAttentionService {
         scope: RequestScope,
         applicationThreadId: string,
         runId: string,
-        outcome: "triggered" | "failed",
+        outcome: "triggered" | "interrupted" | "failed",
       ) => void | Promise<void>;
       readonly now?: () => number;
       readonly publish: (

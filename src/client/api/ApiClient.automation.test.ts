@@ -20,7 +20,7 @@ const run = {
 } as const;
 
 describe("ApiClient automation routes", () => {
-  it.each(["triggered", "failed"] as const)("fences a context dismissal with its rendered %s outcome", async (outcome) => {
+  it.each(["triggered", "interrupted", "failed"] as const)("fences a context dismissal with its rendered %s outcome", async (outcome) => {
     const fetch = vi.fn((url: string, _init?: RequestInit) => Promise.resolve(
       url.endsWith("/api/application/session")
         ? Response.json({ clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION, version: "0.1.1", csrfToken: "a".repeat(32), providerPulseEnabled: false, experimentalUsageEnabled: false })
