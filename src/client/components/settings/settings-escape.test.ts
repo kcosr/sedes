@@ -9,6 +9,7 @@ import {
   isEditingElement,
   settingsEscapeAction,
   settingsUpTarget,
+  useEscapeUp,
   useSettingsEscape,
   useSettingsEscapeLevel,
   type SettingsEscapeEvent,
@@ -159,13 +160,49 @@ describe("settingsUpTarget", () => {
   });
 });
 
-describe("useSettingsEscape", () => {
-  function press(target: EventTarget = document.body, init: KeyboardEventInit = {}): KeyboardEvent {
-    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...init });
-    act(() => { target.dispatchEvent(event); });
-    return event;
-  }
+function press(target: EventTarget = document.body, init: KeyboardEventInit = {}): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...init });
+  act(() => { target.dispatchEvent(event); });
+  return event;
+}
 
+describe("useEscapeUp", () => {
+  it("goes up by the latest callback, only while one is set", () => {
+    const hook = renderHook(({ onUp }) => useEscapeUp(onUp), {
+      initialProps: { onUp: undefined as (() => void) | undefined },
+    });
+    expect(press().defaultPrevented).toBe(false);
+    const up = vi.fn();
+    hook.rerender({ onUp: up });
+    expect(press().defaultPrevented).toBe(true);
+    expect(up).toHaveBeenCalledOnce();
+    const next = vi.fn();
+    hook.rerender({ onUp: next });
+    press();
+    expect(next).toHaveBeenCalledOnce();
+    expect(up).toHaveBeenCalledOnce();
+    hook.unmount();
+    expect(press().defaultPrevented).toBe(false);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it("leaves an open layer and a focused field their Escape", () => {
+    const up = vi.fn();
+    renderHook(() => useEscapeUp(up));
+    document.body.innerHTML = '<div role="menu" data-state="open"></div><input>';
+    press();
+    document.querySelector('[role="menu"]')!.remove();
+    const input = document.querySelector("input")!;
+    input.focus();
+    press(input);
+    expect(document.activeElement).toBe(document.body);
+    expect(up).not.toHaveBeenCalled();
+    press();
+    expect(up).toHaveBeenCalledOnce();
+  });
+});
+
+describe("useSettingsEscape", () => {
   it("goes up through the router and marks the event handled", () => {
     navigate("/settings/environments/e1/edit", { replace: true });
     const onReturn = vi.fn();

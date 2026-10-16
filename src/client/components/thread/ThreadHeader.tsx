@@ -732,7 +732,7 @@ export const ThreadHeader = memo(function ThreadHeader({
                   <button
                     className="automation-thread-button"
                     aria-label="Automations"
-                    title={`Automation · ${threadAutomationStatusText(
+                    title={`Automations · ${threadAutomationStatusText(
                       snapshot.thread.automations,
                       automationState,
                       automationNow,

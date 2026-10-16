@@ -4087,11 +4087,14 @@ textarea:disabled {
 }
 
 
+/* The automation pages add their "‹" link after the trigger, spaced as in
+   the compact Settings header; a lone trigger is unaffected. */
 .pane-nav-header {
   display: none;
   min-height: var(--workbench-bar-height);
   flex: 0 0 auto;
   align-items: center;
+  gap: var(--space-2);
   padding: var(--space-1-5) 10px;
 }
 

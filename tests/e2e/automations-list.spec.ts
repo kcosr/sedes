@@ -157,28 +157,67 @@ test("lists every automation from the More menu and opens one", async ({
   await capture(page, testInfo, "automations-list-mobile.png");
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  // The whole row opens the automation page.
+  // The whole row opens the automation page. Its one "‹" link names the
+  // list it came from, and its meta line names the thread as a link.
   await row(page, nightlyAutomation)
     .getByRole("link", { name: "Nightly dependency audit" })
     .click();
   await expect(page).toHaveURL(`/automations/${nightlyAutomation}`);
 
-  const navigation = view.getByRole("navigation", { name: "Automation navigation" });
-  await expect(navigation.getByRole("link", { name: "Open thread" })).toBeVisible();
+  const back = view.locator('[data-slot="settings-page-back"]');
+  const threadLink = view.getByRole("link", {
+    name: "Nightly dependency audit",
+    exact: true,
+  });
+  await expect(back).toHaveText("Automations");
+  await expect(threadLink).toBeVisible();
   await capture(page, testInfo, "automation-navigation-desktop.png");
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(navigation.getByRole("link", { name: "Open thread" })).toBeVisible();
+  await expect(threadLink).toBeVisible();
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "automation-navigation-mobile.png");
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  await navigation.getByRole("link", { name: "Open thread" }).click();
+  await threadLink.click();
+  await expect(page).toHaveURL(`/threads/${nightly}`);
+  await page.getByRole("button", { name: "Automations", exact: true }).click();
+  await expect(page).toHaveURL(`/threads/${nightly}/automations`);
+
+  // The thread's own list names the thread in its "‹" link, lists its
+  // automations flat without the global Scope, search or View options, and
+  // its rows leave out the thread, project and backend.
+  await expect(back).toHaveText("Nightly dependency audit");
+  await expect(back).toHaveAttribute("href", `/threads/${nightly}`);
+  await expect(view.getByTestId("automations-count")).toHaveText(
+    /^1\s*automations$/u,
+  );
+  await expect(view.getByRole("searchbox")).toHaveCount(0);
+  await expect(view.getByTestId("automations-view-options")).toHaveCount(0);
+  await expect(view.getByTestId("automations-status")).toHaveCount(0);
+  await expect(view.getByTestId("automations-group")).toHaveCount(0);
+  await expect(
+    row(page, nightlyAutomation).locator('[data-layout="wide"]'),
+  ).toHaveText("Every day at 2:00 AM UTC");
+  await expect(
+    view.getByRole("button", { name: "Add automation", exact: true }),
+  ).toHaveAttribute("data-variant", "outline");
+  await capture(page, testInfo, "automations-thread-list-desktop.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    row(page, nightlyAutomation).locator('[data-layout="narrow"]'),
+  ).toHaveText("Every day at 2:00 AM UTC");
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "automations-thread-list-mobile.png");
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  await back.click();
   await expect(page).toHaveURL(`/threads/${nightly}`);
   await page.getByRole("button", { name: "Automations", exact: true }).click();
   await expect(page).toHaveURL(`/threads/${nightly}/automations`);
   await row(page, nightlyAutomation).getByRole("link", { name: "Nightly dependency audit" }).click();
   await expect(page).toHaveURL(`/automations/${nightlyAutomation}`);
-  await navigation.getByRole("link", { name: "Thread automations", exact: true }).click();
+  await expect(back).toHaveText("Automations");
+  await back.click();
   await expect(page).toHaveURL(`/threads/${nightly}/automations`);
   await row(page, nightlyAutomation).getByRole("link", { name: "Nightly dependency audit" }).click();
   await expect(page).toHaveURL(`/automations/${nightlyAutomation}`);
@@ -190,12 +229,10 @@ test("lists every automation from the More menu and opens one", async ({
     name: /\sFinished(?: in [^,]+)?, Manual$/u,
   });
   await expect(finishedRun).toBeVisible();
-  await view.getByRole("link", { name: "Thread automations", exact: true }).click();
+  await back.click();
   await expect(page).toHaveURL(`/threads/${nightly}/automations`);
   await expect(
-    row(group(page, "status:upcoming"), nightlyAutomation).locator(
-      ".automation-row-secondary",
-    ),
+    row(page, nightlyAutomation).locator(".automation-row-secondary"),
   ).toHaveText(/^Finished (?:just now|\d+m ago)$/u);
 
   // Go to turn opens the thread at the turn the run started.

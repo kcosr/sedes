@@ -6,6 +6,7 @@ import {
   EMPTY_AUTOMATIONS_BASE,
   automationGroupCollapsedByDefault,
   automationRowPresentation,
+  listThreadAutomations,
   projectAutomations,
   selectAutomationsBase,
   type AutomationListEntry,
@@ -141,6 +142,19 @@ describe("projectAutomations", () => {
     expect(automationGroupCollapsedByDefault("status:suspended")).toBe(true);
     expect(automationGroupCollapsedByDefault("status:finished")).toBe(true);
     for (const key of ["status:needs_attention", "status:upcoming", "status:paused", "project:project-acme"]) expect(automationGroupCollapsedByDefault(key)).toBe(false);
+  });
+});
+
+describe("listThreadAutomations", () => {
+  it("lists every automation flat in status order, across projects and with suspended and finished ones", () => {
+    const billing = automation("billing", "Billing report", { source: { ...daily.source, workspaceId: "ws-billing" } });
+    const entries = listThreadAutomations(selectAutomationsBase(snapshot(), [finished, archived, paused, billing, daily, failed]), NOW);
+    expect(entries.map(({ row }) => row.displayTitle)).toEqual([
+      "Failed delivery", "Billing report", "Daily update", "Paused audit", "Archived source", "Completed reminder",
+    ]);
+    expect(entries.map(({ health }) => health.group)).toEqual([
+      "needs_attention", "upcoming", "upcoming", "paused", "suspended", "finished",
+    ]);
   });
 });
 

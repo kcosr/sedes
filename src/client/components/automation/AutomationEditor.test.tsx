@@ -1,13 +1,27 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../api/ApiClient.js";
+import {
+  automationCreatePath,
+  automationEditPath,
+  automationPath,
+  automationsPath,
+  navigate,
+} from "../../app/router.js";
 import { AutomationEditor } from "./AutomationEditor.js";
+import { useAutomationThreadId } from "./automation-route-thread.js";
 import { AUTOMATION_ID, THREAD_ID, automationStore, definition, installAutomationDom } from "./automation-test-fixture.js";
 
 beforeEach(installAutomationDom);
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); navigate("/", { replace: true }); });
+const TITLE = "Checkout flow refactor";
+/** History down to `last`, from `entries` (the first replaces the current entry). */
+function openFrom(...entries: string[]) {
+  entries.forEach((entry, index) => navigate(entry, { replace: index === 0 }));
+}
+const backLink = () => document.querySelector<HTMLAnchorElement>('[data-slot="settings-page-back"]')!;
 
 describe("automation editor", () => {
   it("aborts its resource read before local deletion and stays deleted without an event", async () => {
@@ -121,6 +135,8 @@ describe("automation editor", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(fixture.api.createAutomation).not.toHaveBeenCalled();
     expect(fixture.api.updateAutomation).not.toHaveBeenCalled();
+    // Its page is gone too: up leads out to the Automations list instead.
+    expect(backLink()).toHaveTextContent("Automations");
   });
 
   it("keeps dirty fields after a deletion event without rereading the removed resource", async () => {
@@ -165,4 +181,95 @@ describe("automation editor", () => {
     expect(fixture.api.updateAutomation).toHaveBeenCalledWith(AUTOMATION_ID, expect.objectContaining({ runMode: "clone", name: "Nightly dependency audit edited" }));
   });
 
+});
+
+describe("automation editor navigation", () => {
+  it("adds from the thread's Automations, named by its one link, and says whose thread", async () => {
+    openFrom(automationsPath(THREAD_ID), automationCreatePath(THREAD_ID));
+    const fixture = automationStore([{ title: TITLE, automation: definition() }]);
+    render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} threadId={THREAD_ID} />);
+    await screen.findByRole("heading", { name: "New automation" });
+    expect(document.querySelectorAll('[data-slot="settings-page-back"]')).toHaveLength(1);
+    expect(backLink()).toHaveTextContent("Automations");
+    expect(backLink()).toHaveAttribute("href", automationsPath(THREAD_ID));
+    const description = screen.getByText((_, element) => element?.textContent === `Sends ${TITLE} a prompt on a schedule.`);
+    expect(within(description).getByText(TITLE).tagName).toBe("STRONG");
+    fireEvent.click(backLink());
+    await waitFor(() => expect(window.location.pathname).toBe(automationsPath(THREAD_ID)));
+  });
+
+  it("names the automation it goes up to while editing, in one named editor region", async () => {
+    openFrom(automationPath(AUTOMATION_ID), automationEditPath(AUTOMATION_ID));
+    const fixture = automationStore([{ title: TITLE, automation: definition() }]);
+    render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} automationId={AUTOMATION_ID} />);
+    await screen.findByRole("heading", { name: "Edit automation" });
+    expect(screen.getAllByRole("region", { name: "Automation editor" })).toHaveLength(1);
+    expect(backLink()).toHaveTextContent("Nightly dependency audit");
+    expect(backLink()).toHaveAttribute("href", automationPath(AUTOMATION_ID));
+    fireEvent.click(backLink());
+    await waitFor(() => expect(window.location.pathname).toBe(automationPath(AUTOMATION_ID)));
+  });
+
+  it("goes up on Escape, through the unsaved-changes guard", async () => {
+    openFrom(automationPath(AUTOMATION_ID), automationEditPath(AUTOMATION_ID));
+    const fixture = automationStore([{ automation: definition() }]);
+    render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} automationId={AUTOMATION_ID} />);
+    const name = await screen.findByRole("textbox", { name: "Name" });
+    const user = userEvent.setup();
+    await user.type(name, " edited");
+    // The first Escape only leaves the field.
+    await user.keyboard("{Escape}");
+    expect(name).not.toHaveFocus();
+    expect(window.location.pathname).toBe(automationEditPath(AUTOMATION_ID));
+    await user.keyboard("{Escape}");
+    const discard = await screen.findByRole("dialog", { name: "Discard automation changes?" });
+    await user.click(within(discard).getByRole("button", { name: "Discard and leave" }));
+    await waitFor(() => expect(window.location.pathname).toBe(automationPath(AUTOMATION_ID)));
+  });
+
+  it("returns to the list it was opened from after a delete, past the page and unsaved edits", async () => {
+    openFrom(automationsPath(THREAD_ID), automationPath(AUTOMATION_ID), automationEditPath(AUTOMATION_ID));
+    const fixture = automationStore([{ automation: definition() }]);
+    render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} automationId={AUTOMATION_ID} />);
+    const user = userEvent.setup();
+    await user.type(await screen.findByRole("textbox", { name: "Name" }), " edited");
+    await user.click(screen.getByRole("button", { name: "Delete automation…" }));
+    const length = window.history.length;
+    await user.click(within(await screen.findByRole("dialog", { name: "Delete this automation?" }))
+      .getByRole("button", { name: "Delete automation" }));
+    expect(fixture.api.deleteAutomation).toHaveBeenCalledWith(AUTOMATION_ID, 3, expect.any(String));
+    await waitFor(() => expect(window.location.pathname).toBe(automationsPath(THREAD_ID)));
+    expect(window.history.length).toBe(length);
+    expect(screen.queryByRole("dialog", { name: "Discard automation changes?" })).toBeNull();
+  });
+
+  it("keeps the page frame and a way out to every automation while the automation loads", () => {
+    openFrom(automationEditPath(AUTOMATION_ID));
+    const fixture = automationStore([{ automation: definition() }], { getAutomation: vi.fn(() => new Promise(() => undefined)) });
+    const { container } = render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} automationId={AUTOMATION_ID} />);
+    expect(container.querySelector(".automations-view > .automations-page.automation-page")).not.toBeNull();
+    expect(screen.getByRole("status", { name: "Loading automation" })).toBeInTheDocument();
+    expect(backLink()).toHaveTextContent("Automations");
+    expect(backLink()).toHaveAttribute("href", "/automations");
+  });
+
+  it("says a missing automation was deleted instead of opening its editor", async () => {
+    const fixture = automationStore([{ automation: definition() }], {
+      getAutomation: vi.fn().mockRejectedValue(new ApiError(404, "not_found", "Automation was not found", false)),
+    });
+    render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} automationId={AUTOMATION_ID} />);
+    expect(await screen.findByText("This automation was deleted")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All automations" })).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't open this thread")).toBeNull();
+    expect(backLink()).toHaveTextContent("Automations");
+  });
+
+  it("tells the shell the edited automation's thread", async () => {
+    const id = "30000000-0000-4000-8000-0000000000bb";
+    const selected = renderHook(() => useAutomationThreadId(id));
+    const fixture = automationStore([{ automation: definition({ id }) }]);
+    render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} automationId={id} />);
+    await screen.findByRole("heading", { name: "Edit automation" });
+    expect(selected.result.current).toBe(THREAD_ID);
+  });
 });

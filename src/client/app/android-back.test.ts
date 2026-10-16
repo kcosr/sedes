@@ -49,6 +49,7 @@ const backInput = (
   drawerReturnsToThread: false,
   onDrawerRoute: false,
   canGoBack: false,
+  canGoUp: false,
   ...overrides,
 });
 
@@ -218,17 +219,41 @@ describe("handleExposedBack", () => {
 });
 
 describe("installAndroidBackButton", () => {
+  const handlers = (
+    overrides: Partial<Parameters<typeof installAndroidBackButton>[0]> = {},
+  ): Parameters<typeof installAndroidBackButton>[0] => ({
+    onOpenDrawer: vi.fn(),
+    isOnDrawerRoute: () => true,
+    isDrawerOpen: () => false,
+    isSidebarSearchActive: () => false,
+    onClearSidebarSearch: vi.fn(),
+    isSidebarFiltersActive: () => false,
+    onClearSidebarFilters: vi.fn(),
+    drawerReturnsToThread: () => true,
+    pageUp: () => undefined,
+    ...overrides,
+  });
+
+  it("goes up from a page with a way up when the WebView has no history", async () => {
+    const up = vi.fn();
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
+    const remove = installAndroidBackButton(handlers({ isOnDrawerRoute: () => false, pageUp: () => up }));
+    await vi.waitFor(() => expect(androidBack.press).toBeDefined());
+    try {
+      androidBack.press!({ canGoBack: true });
+      expect(back).toHaveBeenCalledOnce();
+      expect(up).not.toHaveBeenCalled();
+      androidBack.press!({ canGoBack: false });
+      expect(up).toHaveBeenCalledOnce();
+      expect(back).toHaveBeenCalledOnce();
+    } finally {
+      back.mockRestore();
+      remove();
+    }
+  });
+
   it("dismisses an overlay with a cancelable Escape, so only the topmost layer takes it", async () => {
-    const remove = installAndroidBackButton({
-      onOpenDrawer: vi.fn(),
-      isOnDrawerRoute: () => true,
-      isDrawerOpen: () => false,
-      isSidebarSearchActive: () => false,
-      onClearSidebarSearch: vi.fn(),
-      isSidebarFiltersActive: () => false,
-      onClearSidebarFilters: vi.fn(),
-      drawerReturnsToThread: () => true,
-    });
+    const remove = installAndroidBackButton(handlers());
     await vi.waitFor(() => expect(androidBack.press).toBeDefined());
     const menu = document.createElement("div");
     menu.setAttribute("role", "menu");
@@ -380,7 +405,21 @@ describe("resolveAndroidBackAction", () => {
       resolveAndroidBackAction(backInput({ canGoBack: true })),
     ).toBe("history-back");
     expect(
+      resolveAndroidBackAction(backInput({ canGoBack: true, canGoUp: true })),
+    ).toBe("history-back");
+    expect(
       resolveAndroidBackAction(backInput()),
     ).toBe("ignore");
+  });
+
+  it("goes up from a page with a way up when there is no history", () => {
+    expect(resolveAndroidBackAction(backInput({ canGoUp: true }))).toBe("go-up");
+    // The drawer and overlays still come first.
+    expect(
+      resolveAndroidBackAction(backInput({ canGoUp: true, drawerOpen: true })),
+    ).toBe("ignore");
+    expect(
+      resolveAndroidBackAction(backInput({ canGoUp: true, overlayOpen: true })),
+    ).toBe("close-overlay");
   });
 });

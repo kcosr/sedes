@@ -56,6 +56,11 @@ test("keeps named daily and one-shot automations independent on the same draft",
     name: "Daily update",
     prompt: "Summarize today's work and tomorrow's priorities.",
   });
+  // Saved from the thread's list, the page leads back there and names its thread.
+  await expect(page.locator('.automation-page [data-slot="settings-page-back"]')).toHaveText("Automations");
+  await expect(
+    page.locator(".automation-page-meta").getByRole("link", { name: "Assistant source", exact: true }),
+  ).toHaveAttribute("href", `/threads/${sourceId}`);
   await page.goto(`/threads/${sourceId}/automations`);
   const reminderId = await createInEditor(page, {
     name: "Afternoon reminder",
@@ -76,6 +81,8 @@ test("keeps named daily and one-shot automations independent on the same draft",
   await page.getByRole("button", { name: "Edit automation", exact: true }).click();
   const editor = page.getByRole("region", { name: "Automation editor", exact: true });
   await expect(editor.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Daily update");
+  // The editor's "‹" names the automation page it returns to.
+  await expect(editor.locator('[data-slot="settings-page-back"]')).toHaveText("Daily update");
   await expect(editor.getByRole("textbox", { name: "Prompt", exact: true })).toHaveValue(
     "Summarize today's work and tomorrow's priorities.",
   );
@@ -108,16 +115,15 @@ test("keeps named daily and one-shot automations independent on the same draft",
 
   await page.goto(`/threads/${sourceId}/automations`);
   await page.setViewportSize({ width: 390, height: 844 });
-  const search = page.getByRole("searchbox", { name: "Search automations" });
-  await expect.poll(async () => (await search.boundingBox())?.width ?? 0)
-    .toBeGreaterThanOrEqual(200);
-  await search.fill("Morning update");
-  await expect(page.getByTestId("automation-row")).toHaveCount(1);
-  await expect(automationRow(page, dailyId)).toBeVisible();
-  await search.fill("");
+  // A thread's list shows its few automations flat, without a search.
   await expect(page.getByTestId("automation-row")).toHaveCount(2);
+  await expect(page.getByRole("searchbox", { name: "Search automations" })).toHaveCount(0);
+  await expect(automationRow(page, dailyId)).toBeVisible();
   const reminderRow = automationRow(page, reminderId);
   await expect(reminderRow).toBeVisible();
+  // On a phone, the way back to the thread is the pane bar's one "‹" link.
+  await expect(page.locator('.pane-nav-header [data-slot="settings-page-back"]')).toHaveText("Assistant source");
+  await expect(page.locator('[data-slot="settings-page-back"]')).toHaveCount(1);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "multiple-automations-draft-mobile.png");
   // The row link remains keyboard operable at phone width.
@@ -130,11 +136,10 @@ test("keeps named daily and one-shot automations independent on the same draft",
   await editor.getByRole("button", { name: "Delete automation…", exact: true }).click();
   await page.getByRole("dialog", { name: "Delete this automation?" })
     .getByRole("button", { name: "Delete automation", exact: true }).click();
-  await expect(page).toHaveURL("/automations");
-  await expect(automationRow(page, reminderId)).toHaveCount(0);
-  await expect(automationRow(page, dailyId)).toContainText("Morning update");
-  await page.goto(`/threads/${sourceId}/automations`);
+  // Back to the list it was opened from, past the deleted automation's page.
+  await expect(page).toHaveURL(`/threads/${sourceId}/automations`);
   await expect(page.getByTestId("automation-row")).toHaveCount(1);
+  await expect(automationRow(page, reminderId)).toHaveCount(0);
   await expect(automationRow(page, dailyId)).toContainText("Morning update");
 });
 

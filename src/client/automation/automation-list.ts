@@ -44,7 +44,8 @@ import {
  *    activity a row shows is whether its latest run's turn is still going.
  * 2. `projectAutomations` applies the sidebar Scope and the search (title and
  *    prompt preview), computes each automation's health at `now`, and groups
- *    by status or by project.
+ *    by status or by project. A thread's own list
+ *    (`/threads/:id/automations`) takes `listThreadAutomations` instead.
  *
  * Every automation lands in exactly one group, so the groups double as the
  * page's filter.
@@ -291,6 +292,29 @@ function compareEntries(
   return compareAutomationsInGroup(left.health.group, left.row, right.row);
 }
 
+/** Each row with its health at `now`, in status order. */
+function entriesInStatusOrder(
+  rows: readonly AutomationListRow[],
+  now: number,
+): AutomationListEntry[] {
+  return rows
+    .map((row) => ({ row, health: automationHealth(row, now) }))
+    .sort(compareEntries);
+}
+
+/**
+ * A thread's own list: every automation, flat, in the global page's status
+ * order. It neither filters nor groups: the page is narrower than any Scope,
+ * a thread has few automations, and grouped, a snoozed or archived thread's
+ * would all sit in Suspended, which starts collapsed.
+ */
+export function listThreadAutomations(
+  base: AutomationsBase,
+  now: number,
+): readonly AutomationListEntry[] {
+  return entriesInStatusOrder(base.rows, now);
+}
+
 export function projectAutomations(
   base: AutomationsBase,
   { scope, search, groupBy, now }: AutomationsProjectionOptions,
@@ -301,14 +325,14 @@ export function projectAutomations(
     scope,
   );
   const query = normalizeThreadSearchQuery(search);
-  const entries = (
+  const entries = entriesInStatusOrder(
     query
       ? scoped.filter((row) =>
           row.searchValues.some((value) => value.includes(query)),
         )
-      : scoped
-  ).map((row) => ({ row, health: automationHealth(row, now) }));
-  entries.sort(compareEntries);
+      : scoped,
+    now,
+  );
   let groups: AutomationListGroup[];
   if (groupBy === "status") {
     groups = AUTOMATION_HEALTH_GROUPS.flatMap((group) => {

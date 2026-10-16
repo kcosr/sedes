@@ -26,6 +26,16 @@ describe("router at startup", () => {
     expect(router.parseRoute("/threads/thread-1/automations/new")).toEqual({ name: "automation-create", threadId: "thread-1" });
   });
 
+  it("leaves a deep-linked page for its fallback: nothing this document opened lies behind it", async () => {
+    const router = await import("./router.js");
+    const length = window.history.length;
+
+    expect(router.historyEntryBefore("/automations/automation%2Fone")).toBeUndefined();
+    router.navigateOut("/automations/automation%2Fone", () => true, "/threads/thread-1/automations");
+    expect(window.location.pathname).toBe("/threads/thread-1/automations");
+    expect(window.history.length).toBe(length);
+  });
+
   it("goes back where the user came from, or to the fallback on a deep link", async () => {
     const router = await import("./router.js");
     const length = window.history.length;

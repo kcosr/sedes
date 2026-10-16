@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Route } from "../app/router";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore";
 import { useApplicationStore } from "../stores/ApplicationClientStore";
@@ -11,6 +11,8 @@ import { Plus } from "lucide-react";
 import { SedesMark } from "./brand-icons";
 import { Button } from "@client/components/ui/button";
 import { NewThreadControl } from "./NewThreadControl";
+import { SettingsBackSlotContext } from "./settings/SettingsPage";
+import { useSettingsNavInSidebar } from "./settings/settings-navigation";
 import { SidebarNavTrigger } from "./SidebarNavTrigger";
 import { ThreadView } from "./ThreadView";
 import { PanelLayout } from "../workspace-panels/PanelLayout";
@@ -139,13 +141,12 @@ export function Workbench({
     );
   }
   if (route.name === "automations" || route.name === "automation" || route.name === "automation-create") {
-    return <main className="workbench"><div className="pane-host pane-host-nav-header">
-      <div className="pane-nav-header"><SidebarNavTrigger /></div>
-      {route.name === "automations" ? <AutomationsView key={route.threadId ?? "all"} store={applicationStore} threadId={route.threadId} />
+    return <AutomationsPane>
+      {route.name === "automations" ? <AutomationsView key={route.threadId ?? "all"} store={applicationStore} threadRegistry={threadRegistry} threadId={route.threadId} />
         : route.name === "automation-create" ? <AutomationEditor key={route.threadId} store={applicationStore} threadRegistry={threadRegistry} threadId={route.threadId} />
         : route.edit ? <AutomationEditor key={route.automationId} store={applicationStore} threadRegistry={threadRegistry} automationId={route.automationId} />
         : <AutomationPage key={route.automationId} store={applicationStore} threadRegistry={threadRegistry} automationId={route.automationId} />}
-    </div></main>;
+    </AutomationsPane>;
   }
   if (route.name === "thread") {
     const panelLayout = (
@@ -239,6 +240,29 @@ export function Workbench({
             </p>
           )}
         </section>
+      </div>
+    </main>
+  );
+}
+
+/**
+ * The automation pages' pane. Its bar shows where the sidebar does not
+ * (phones, a collapsed sidebar), and then carries the page's "‹" link, as
+ * the compact Settings header does, so the bar is the one way up.
+ */
+function AutomationsPane({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
+  const barShown = !useSettingsNavInSidebar();
+  const [backSlot, setBackSlot] = useState<HTMLElement | null>(null);
+  return (
+    <main className="workbench">
+      <div className="pane-host pane-host-nav-header">
+        <div className="pane-nav-header">
+          <SidebarNavTrigger />
+          <div ref={setBackSlot} className="settings-view-back-slot" />
+        </div>
+        <SettingsBackSlotContext.Provider value={barShown ? backSlot : null}>
+          {children}
+        </SettingsBackSlotContext.Provider>
       </div>
     </main>
   );

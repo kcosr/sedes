@@ -191,11 +191,15 @@ function admit(intent: NavigationIntent): void {
   commit(intent);
 }
 
+function locationRoute(location: string): Route {
+  const parsed = new URL(location, window.location.href);
+  return parseRoute(parsed.pathname, parsed.hash);
+}
+
 function intentFor(path: string, mode: NavigationIntent["mode"], targetIndex?: number): NavigationIntent {
-  const parsed = new URL(path, window.location.href);
   return {
     current: currentRoute, originLocation: currentLocation, originIndex: currentIndex,
-    next: parseRoute(parsed.pathname, parsed.hash), path, mode, targetIndex,
+    next: locationRoute(path), path, mode, targetIndex,
     approved: new Set(), ready: false,
   };
 }
@@ -280,6 +284,34 @@ export function navigateUp(path: string): void {
  */
 export function navigateBack(fallback: string): void {
   if (entryLocations.has(currentIndex - 1)) window.history.back();
+  else navigate(fallback, { replace: true });
+}
+
+/**
+ * The entry Back reaches on leaving `path` and the entries below it (such as
+ * an automation's page and its editor): its route, and the (negative) number
+ * of entries Back must go. Undefined when this document did not open it,
+ * as after a deep link or a reload.
+ */
+export function historyEntryBefore(path: string): { readonly route: Route; readonly steps: number } | undefined {
+  for (let index = currentIndex - 1; index >= 0; index--) {
+    const location = entryLocations.get(index);
+    if (location === undefined) return undefined;
+    if (location === path || location.startsWith(`${path}/`)) continue;
+    return { route: locationRoute(location), steps: index - currentIndex };
+  }
+  return undefined;
+}
+
+/**
+ * Leaves `path` and the entries below it: back to the entry before them when
+ * `accept` takes its route, so the destination keeps its state and Back never
+ * lands on a page that is gone (a deleted automation's); otherwise this entry
+ * is replaced with `fallback`. Guards run either way.
+ */
+export function navigateOut(path: string, accept: (route: Route) => boolean, fallback: string): void {
+  const before = historyEntryBefore(path);
+  if (before && accept(before.route)) window.history.go(before.steps);
   else navigate(fallback, { replace: true });
 }
 

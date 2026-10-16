@@ -6,17 +6,13 @@ import { useEffect, useRef, useState } from "react";
 import {
   automationPath,
   automationsPath,
-  automationCreatePath,
   navigate,
   navigateBack,
-  threadPath,
 } from "../../app/router.js";
 import { useDirtyNavigationGuard } from "../../app/use-dirty-navigation-guard.js";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import { DangerZone, DangerZoneItem } from "../settings/DangerZone.js";
 import { SaveBar } from "../settings/SaveBar.js";
-import { isPlainClick } from "../settings/SettingsNav.js";
-import { SettingsBackLink } from "../settings/SettingsPage.js";
 import { SettingsSection } from "../settings/SettingsSection.js";
 import {
   SettingsDetailHeader,
@@ -53,7 +49,16 @@ import {
 import {
   AutomationAnchorLoading,
   AutomationAnchorUnavailable,
+  AutomationBackLink,
+  AutomationFrame,
+  AutomationUnavailable,
 } from "./AutomationAnchorStates.js";
+import {
+  automationEditorUp,
+  automationPageUp,
+  leaveDeletedAutomation,
+} from "./automation-navigation.js";
+import { usePublishAutomationThread } from "./automation-route-thread.js";
 
 type EditorStore = Pick<ApplicationClientStore, "api" | "subscribe" | "getSnapshot" | "subscribeAutomationChanges" | "subscribeThreadSummaryChanges">;
 
@@ -73,36 +78,52 @@ export function AutomationEditor({ store, threadRegistry, threadId, automationId
   automationId?: string;
 }): React.JSX.Element {
   const resource = useAutomationResource(store, automationId);
-  const sourceId = resource.definition?.threadId ?? threadId;
-  if (resource.error && !resource.definition) return <AutomationAnchorUnavailable message={resource.error} onRetry={resource.reload} />;
-  if (!sourceId) return <AutomationAnchorLoading />;
-  return <EditorAnchor key={automationId ?? sourceId} store={store} threadRegistry={threadRegistry} threadId={sourceId} automation={resource.definition} refreshError={resource.error} missing={resource.missing} onRetry={resource.reload} reads={resource.reads} />;
+  const definition = resource.definition;
+  const sourceId = definition?.threadId ?? threadId;
+  usePublishAutomationThread(automationId, definition?.threadId);
+  // Up to the automation's page, or a new one's list; out to the Automations
+  // list when the automation is unknown or gone.
+  const up = sourceId === undefined || resource.missing
+    ? automationPageUp(automationId!, definition && {
+      id: definition.threadId, title: definition.source.title || "Untitled thread",
+    })
+    : automationEditorUp(sourceId, definition);
+  const back = <AutomationBackLink up={up} />;
+  // The editor region inside names itself; the frame does not repeat it.
+  return <AutomationFrame up={up}>
+    {resource.error && !definition ? <AutomationUnavailable back={back} message={resource.error} missing={resource.missing} onRetry={resource.reload} />
+      : sourceId ? <EditorAnchor key={automationId ?? sourceId} store={store} threadRegistry={threadRegistry} threadId={sourceId}
+        automation={definition} refreshError={resource.error} missing={resource.missing} onRetry={resource.reload}
+        reads={resource.reads} back={back} />
+      : <AutomationAnchorLoading back={back} />}
+  </AutomationFrame>;
 }
 
-function EditorAnchor({ store, threadRegistry, threadId, automation, refreshError, missing, onRetry, reads }: {
+function EditorAnchor({ store, threadRegistry, threadId, automation, refreshError, missing, onRetry, reads, back }: {
   store: EditorStore; threadRegistry: AutomationThreadSource; threadId: string;
   automation?: import("../../types.js").ThreadAutomationDefinition;
   refreshError?: string; missing: boolean; onRetry: () => void;
-  reads: AutomationResourceReads;
+  reads: AutomationResourceReads; back: React.ReactNode;
 }): React.JSX.Element {
   const anchor = useAutomationAnchor(store, threadRegistry, threadId);
-  if (anchor.status === "loading") return <AutomationAnchorLoading />;
-  if (anchor.status === "unavailable") return <AutomationAnchorUnavailable message={anchor.message} onRetry={anchor.retry} />;
-  return <section className="automations-view" aria-label="Automation editor"><div className="automations-page automation-page">
+  if (anchor.status === "loading") return <AutomationAnchorLoading back={back} />;
+  if (anchor.status === "unavailable") return <AutomationAnchorUnavailable back={back} message={anchor.message} onRetry={anchor.retry} />;
+  return <>
     {refreshError && <Callout tone="warning" title={missing ? "This automation was deleted" : "The automation could not be refreshed"}
       action={<Button variant="outline" size="sm" onClick={onRetry}>Retry</Button>}>{refreshError} Your edits are kept.</Callout>}
-    <ThreadAutomationEditor store={store} missing={missing} reads={reads} thread={{ ...anchor.thread, automation: automation ?? null }} />
-  </div></section>;
+    <ThreadAutomationEditor store={store} missing={missing} reads={reads} thread={{ ...anchor.thread, automation: automation ?? null }} back={back} />
+  </>;
 }
 
 function ThreadAutomationEditor({
   store,
-  thread, missing, reads,
+  thread, missing, reads, back,
 }: {
   readonly store: EditorStore;
   readonly missing: boolean;
   readonly thread: AutomationThread;
   readonly reads: AutomationResourceReads;
+  readonly back: React.ReactNode;
 }): React.JSX.Element {
   const capabilityState = useAutomationCapability(store, thread.id, thread);
   const capability = capabilityState.capability;
@@ -113,9 +134,11 @@ function ThreadAutomationEditor({
     reads,
   });
   const saving = editor.pending === "save" || editor.pending === "save_and_enable";
+  const [deleted, setDeleted] = useState(false);
   // Leaving is guarded while a save is unresolved too: its outcome is not
-  // known yet, and the form's edits are the only copy until it is.
-  const guard = useDirtyNavigationGuard(editor.dirty || saving);
+  // known yet, and the form's edits are the only copy until it is. A
+  // deleted automation's edits have nowhere to go.
+  const guard = useDirtyNavigationGuard(!deleted && (editor.dirty || saving));
   // A request that finishes after the editor has gone must not navigate:
   // the user has moved on (the editor is keyed by thread, so another
   // thread's editor is another mount).
@@ -126,31 +149,23 @@ function ThreadAutomationEditor({
       mounted.current = false;
     };
   }, []);
+  const automationId = thread.automation?.id;
+  useEffect(() => {
+    // After the guard has let go: back to the list the automation was
+    // opened from, past its page.
+    if (deleted && automationId) leaveDeletedAutomation(automationId, thread.id);
+  }, [automationId, deleted, thread.id]);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const deleteTrigger = useRef<HTMLButtonElement>(null);
   const now = new Date();
   const create = editor.mode === "create";
   const form = editor.form;
-  const backTo = create ? automationsPath(thread.id) : automationPath(thread.automation!.id);
-  const back = create ? (
-    <SettingsBackLink
-      href={backTo}
-      label={thread.title}
-      onNavigate={(event) => {
-        if (!isPlainClick(event)) return;
-        event.preventDefault();
-        navigateBack(backTo);
-      }}
-    />
-  ) : (
-    <SettingsBackLink href={backTo} label={thread.title} />
-  );
 
   if (
     editor.status === "loading" ||
     (capability === undefined && capabilityState.error === undefined)
   ) {
-    return <AutomationAnchorLoading />;
+    return <AutomationAnchorLoading back={back} />;
   }
   if (editor.status === "error") {
     return (
@@ -202,9 +217,13 @@ function ThreadAutomationEditor({
         headingLevel={1}
         title={create ? "New automation" : "Edit automation"}
         description={
-          create
-            ? "Sends this thread a prompt on a schedule."
-            : "Changes apply from the next run. Run now and Pause act on the saved version."
+          create ? (
+            <>
+              Sends <strong>{thread.title}</strong> a prompt on a schedule.
+            </>
+          ) : (
+            "Changes apply from the next run. Run now and Pause act on the saved version."
+          )
         }
         sections={sections}
         errors={
@@ -255,7 +274,8 @@ function ThreadAutomationEditor({
             ) : null}
             {editor.deletedElsewhere ? (
               <Callout tone="warning" role="status">
-                This automation was deleted elsewhere. Add a new automation from the thread to schedule more work.
+                This automation was deleted elsewhere. To schedule more work, add a new automation from
+                the thread's Automations.
               </Callout>
             ) : null}
             {attachBlocked ? (
@@ -426,8 +446,7 @@ function ThreadAutomationEditor({
           returnFocusRef={deleteTrigger}
           onConfirm={async () => {
             await editor.remove();
-            // Up to the list: back when the history came down from it.
-            if (mounted.current) guard.proceed(automationsPath(), { up: true });
+            setDeleted(true);
           }}
         />
       ) : null}

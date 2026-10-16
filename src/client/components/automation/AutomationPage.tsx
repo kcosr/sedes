@@ -1,9 +1,10 @@
 import "./automations-view.css";
 import "./automation-page.css";
 import {
+  CirclePause,
+  CirclePlay,
   Ellipsis,
   MessageSquare,
-  Pause,
   Pencil,
   Play,
   Repeat,
@@ -20,10 +21,7 @@ import {
 } from "react";
 import {
   automationEditPath,
-  automationsPath,
-  historyStepsBackTo,
   navigate,
-  navigateUp,
   threadPath,
 } from "../../app/router.js";
 import { useMediaQuery } from "../../app/use-media-query.js";
@@ -54,7 +52,6 @@ import {
   type ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
 import type { ThreadAutomationDefinition } from "../../types.js";
-import { SettingsBackLink } from "../settings/SettingsPage.js";
 import { SettingsSection } from "../settings/SettingsSection.js";
 import { isPlainClick } from "../settings/SettingsNav.js";
 import { SettingsDetailHeader } from "../settings/SettingsSplit.js";
@@ -69,7 +66,6 @@ import {
   DropdownMenuTrigger,
   DropdownMenuValue,
 } from "@client/components/ui/dropdown-menu";
-import { EmptyState } from "@client/components/ui/empty-state";
 import { KeyValueList, type KeyValueItem } from "@client/components/ui/key-value-list";
 import { Skeleton } from "@client/components/ui/skeleton";
 import { StatusPill } from "@client/components/ui/status-pill";
@@ -91,7 +87,16 @@ import {
 import {
   AutomationAnchorLoading,
   AutomationAnchorUnavailable,
+  AutomationBackLink,
+  AutomationFrame,
+  AutomationUnavailable,
 } from "./AutomationAnchorStates.js";
+import {
+  automationPageUp,
+  leaveDeletedAutomation,
+  openAutomationThread,
+} from "./automation-navigation.js";
+import { usePublishAutomationThread } from "./automation-route-thread.js";
 
 const PHONE_QUERY = "(max-width: 819px)";
 
@@ -107,38 +112,39 @@ export function AutomationPage({ store, threadRegistry, automationId }: {
   store: PageStore; threadRegistry: AutomationThreadSource; automationId: string;
 }): React.JSX.Element {
   const resource = useAutomationResource(store, automationId);
-  if (resource.error) return <AutomationAnchorUnavailable message={resource.error} onRetry={resource.reload} />;
-  if (!resource.definition) return <AutomationAnchorLoading />;
-  return <AutomationPageAnchor key={automationId} store={store} threadRegistry={threadRegistry}
-    definition={resource.definition} reads={resource.reads} onDefinition={(next) => {
-      if (next === null) resource.reads.markDeleted();
-      else resource.reload();
-    }} />;
+  const definition = resource.definition;
+  usePublishAutomationThread(automationId, definition?.threadId);
+  // One way up in every state; it names the thread once the automation says which.
+  const up = automationPageUp(automationId, definition && {
+    id: definition.threadId, title: definition.source.title || "Untitled thread",
+  });
+  const back = <AutomationBackLink up={up} />;
+  return <AutomationFrame label={definition ? `${definition.name} automation` : "Automation"} up={up}>
+    {resource.error ? <AutomationUnavailable back={back} message={resource.error} missing={resource.missing} onRetry={resource.reload} />
+      : definition ? <AutomationPageAnchor key={automationId} store={store} threadRegistry={threadRegistry}
+        definition={definition} reads={resource.reads} onDefinition={(next) => {
+          if (next === null) resource.reads.markDeleted();
+          else resource.reload();
+        }} back={back} />
+      : <AutomationAnchorLoading back={back} />}
+  </AutomationFrame>;
 }
 
-function AutomationPageAnchor({ store, threadRegistry, definition, onDefinition, reads }: {
+function AutomationPageAnchor({ store, threadRegistry, definition, onDefinition, reads, back }: {
   store: PageStore; threadRegistry: AutomationThreadSource; definition: ThreadAutomationDefinition;
   onDefinition: (definition: ThreadAutomationDefinition | null) => void;
-  reads: AutomationResourceReads;
+  reads: AutomationResourceReads; back: React.ReactNode;
 }): React.JSX.Element {
   const anchor = useAutomationAnchor(store, threadRegistry, definition.threadId);
   const minute = useMinuteClock();
   const now = useMemo(() => new Date(minute), [minute]);
   const selected = anchor.status === "ready" ? { ...anchor.thread, automation: definition } : undefined;
   const capabilityState = useAutomationCapability(store, definition.threadId, selected);
-  if (anchor.status === "loading") return <AutomationAnchorLoading />;
-  if (anchor.status === "unavailable") return <AutomationAnchorUnavailable message={anchor.message} onRetry={anchor.retry} />;
-  const back = <nav className="automation-page-navigation" aria-label="Automation navigation">
-    <SettingsBackLink href={automationsPath(definition.threadId)} label="Thread automations" />
-    <Button asChild variant="ghost" size="xs"><a href={threadPath(definition.threadId)} onClick={(event) => {
-      if (!isPlainClick(event)) return; event.preventDefault(); navigate(threadPath(definition.threadId));
-    }}><MessageSquare aria-hidden="true" />Open thread</a></Button>
-  </nav>;
-  return <section className="automations-view" aria-label={`${definition.name} automation`}><div className="automations-page automation-page">
-    <AutomationDetails store={store} thread={selected!} automation={definition} definition={definition}
-      definitionStatus="ready" onRetryDefinition={() => undefined} onDefinition={onDefinition} reads={reads}
-      available={capabilityState.capability?.available} unavailableReason={capabilityState.capability?.unavailableReason?.text} back={back} now={now} />
-  </div></section>;
+  if (anchor.status === "loading") return <AutomationAnchorLoading back={back} />;
+  if (anchor.status === "unavailable") return <AutomationAnchorUnavailable back={back} message={anchor.message} onRetry={anchor.retry} />;
+  return <AutomationDetails store={store} thread={selected!} automation={definition} definition={definition}
+    definitionStatus="ready" onRetryDefinition={() => undefined} onDefinition={onDefinition} reads={reads}
+    available={capabilityState.capability?.available} unavailableReason={capabilityState.capability?.unavailableReason?.text} back={back} now={now} />;
 }
 
 /**
@@ -307,7 +313,6 @@ function AutomationDetails({
     void act(action, async () => {
       await store.mutateInventory(thread, action);
     });
-  const openThread = (id = thread.id) => navigate(threadPath(id));
   const toggleState = () => setState(paused ? "enable" : "pause");
   const edit = () => navigate(automationEditPath(automation.id));
 
@@ -336,6 +341,20 @@ function AutomationDetails({
       status={<StatusPill tone={health.tone}>{health.label}</StatusPill>}
       description={
         <span className="automation-page-meta">
+          <span>
+            In{" "}
+            <a
+              className="automation-link"
+              href={threadPath(thread.id)}
+              onClick={(event) => {
+                if (!isPlainClick(event)) return;
+                event.preventDefault();
+                openAutomationThread(thread.id);
+              }}
+            >
+              {thread.title}
+            </a>
+          </span>
           {liveState ? <span data-tone={liveState.tone}>{liveState.label}</span> : null}
           <span>{headerState(automation, health, thread, now)}</span>
           {thread.projectLabel ? <span>{thread.projectLabel}</span> : null}
@@ -358,7 +377,7 @@ function AutomationDetails({
                     if (actions.toggle.available && !busy) toggleState();
                   }}
                 >
-                  {paused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}
+                  {paused ? <CirclePlay aria-hidden="true" /> : <CirclePause aria-hidden="true" />}
                 </Button>
               </ActionTooltip>
               <ActionTooltip label={actions.edit.reason ?? "Edit"}>
@@ -397,7 +416,7 @@ function AutomationDetails({
                     title={actions.toggle.reason}
                     onSelect={toggleState}
                   >
-                    {paused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}
+                    {paused ? <CirclePlay aria-hidden="true" /> : <CirclePause aria-hidden="true" />}
                     {stateLabel}
                     {actions.toggle.hint ? (
                       <DropdownMenuValue aria-hidden="true">{actions.toggle.hint}</DropdownMenuValue>
@@ -417,6 +436,11 @@ function AutomationDetails({
                   <DropdownMenuSeparator />
                 </>
               ) : null}
+              <DropdownMenuItem onSelect={() => openAutomationThread(thread.id)}>
+                <MessageSquare aria-hidden="true" />
+                Open thread
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
                 disabled={!actions.remove.available}
@@ -451,7 +475,7 @@ function AutomationDetails({
         problem={lastRunProblem}
         busy={busy}
         now={now}
-        onOpenThread={() => openThread(lastRun?.resultThreadId ?? thread.id)}
+        onOpenThread={() => openAutomationThread(lastRun?.resultThreadId ?? thread.id)}
         onMarkFailed={() => setMarkFailedOpen(true)}
         onAcknowledge={() => void act("acknowledge", async () => {
           if (!automation.attention) return;
@@ -523,7 +547,7 @@ function AutomationDetails({
           } catch (reason) {
             throw new Error(messageFrom(reason));
           }
-          navigateUp(automationsPath());
+          leaveDeletedAutomation(automation.id, thread.id);
         }}
       />
       {lastRun?.state === "uncertain" ? (
@@ -753,7 +777,7 @@ function DefinitionFacts({
     },
     {
       label: "Run in",
-      value: definition.runMode === "clone" ? "A new fork each run" : "This thread",
+      value: definition.runMode === "clone" ? "Fork" : "This thread",
     },
     {
       label: "Precheck",

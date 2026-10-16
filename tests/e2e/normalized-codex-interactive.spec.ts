@@ -321,11 +321,9 @@ test.describe.serial("normalized interactive Codex projection", () => {
         exact: true,
       }),
     ).toBeVisible();
-    // Open thread returns to the thread the editor was opened from.
-    await automationPage
-      .getByRole("navigation", { name: "Automation navigation" })
-      .getByRole("link", { name: "Open thread", exact: true })
-      .click();
+    // The thread named in the meta line walks back to the thread the editor
+    // was opened from.
+    await automationPage.locator(".automation-page-meta").getByRole("link").click();
     await expect(page).toHaveURL(new RegExp(`${importedThreadPath}$`));
     const automationChip = page.getByRole("button", {
       name: "Automations",

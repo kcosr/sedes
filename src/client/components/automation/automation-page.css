@@ -12,21 +12,6 @@
 }
 
 /* ── Header: the settings detail header anatomy on the page column ── */
-.automation-page-navigation {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.automation-page [data-slot="settings-page-back"] {
-  margin-bottom: var(--space-1);
-}
-
-.automation-page-navigation [data-slot="settings-page-back"] {
-  margin-bottom: 0;
-}
-
 .automation-page [data-slot="settings-detail-icon"] {
   color: var(--muted-foreground-2);
 }
