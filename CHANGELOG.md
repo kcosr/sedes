@@ -110,6 +110,7 @@ User-facing changes are collected here before release. See the
   is refreshed while retaining Codex 0.162.1 as the runtime minimum; native
   read/unread controls remain unsupported. See
   [Codex compatibility](docs/operator/backends/codex.md#version-compatibility).
+  ([#91](https://github.com/kcosr/sedes/pull/91))
 
 - Codex threads keep model, reasoning, Speed, and permissions editable between
   runs while automations remain enabled. Same-thread automation uses current
