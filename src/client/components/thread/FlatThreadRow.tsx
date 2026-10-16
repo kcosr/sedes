@@ -303,8 +303,6 @@ export function flatRowContext(
       tone: "neutral",
     };
   }
-  if (thread.backingState === "unbound")
-    return { label: "draft", tone: "neutral" };
   return undefined;
 }
 

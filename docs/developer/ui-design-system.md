@@ -375,6 +375,8 @@ Sidebar cards show a scheduled run or snooze wake time once. When the trailing
 timestamp already shows that instant, omit its repeated `next` or `wakes` line.
 Keep distinct deadlines, status context, and the next run beneath an activity-age
 timestamp in other groups.
+Drafts use the pencil state icon with its accessible Draft label; card context
+does not repeat the draft state as text.
 
 Uncertain runs need attention everywhere, and paused is never a warning tone.
 Repeat is the automation icon in menus, headers, and rows.

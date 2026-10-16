@@ -960,7 +960,7 @@ describe("card context slot priority", () => {
     );
   });
 
-  it("snoozed renders wakes {time}; draft renders draft", () => {
+  it("snoozed renders wakes {time}; draft uses only its accessible icon", () => {
     render(
       <FlatThreadRow
         showBackendBrand
@@ -982,7 +982,8 @@ describe("card context slot priority", () => {
         density="card"
       />,
     );
-    expect(screen.getByTestId("flat-row-context")).toHaveTextContent("draft");
+    expect(screen.queryByTestId("flat-row-context")).toBeNull();
+    expect(screen.getByRole("img", { name: "Draft" })).toHaveAttribute("data-glyph", "draft");
   });
 
   it("compact never renders the context slot", () => {
