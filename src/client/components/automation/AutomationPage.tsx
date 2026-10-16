@@ -343,7 +343,7 @@ function AutomationDetails({
       status={<StatusPill tone={health.tone}>{health.label}</StatusPill>}
       description={
         <span className="automation-page-meta">
-          <span>
+          <span className="automation-page-thread">
             In{" "}
             <a
               className="automation-link"

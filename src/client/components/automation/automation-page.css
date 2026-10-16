@@ -51,6 +51,28 @@
   content: "·";
 }
 
+/* "In {thread}" stays on one line; a long title ends in an ellipsis, as the
+   "‹" link above does. A flex row drops the space after "In", so the gap
+   stands in for it. */
+.automation-page-meta > .automation-page-thread {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  gap: var(--space-1);
+}
+
+.automation-page-thread > .automation-link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Its trailing dot follows the gap, so it sits as far out as the others. */
+.automation-page-meta > .automation-page-thread::after {
+  margin-left: var(--space-0-5);
+}
+
 /* The thread's live turn, a hint in the sidebar's colours: info-blue while
    it runs, amber while it waits for the user. */
 .automation-page-meta > [data-tone="info"] {
