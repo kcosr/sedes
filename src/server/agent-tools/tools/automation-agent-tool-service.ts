@@ -61,13 +61,6 @@ export interface AutomationRunNowToolInput extends AutomationTargetInput {
 export interface AutomationDeleteToolInput extends AutomationTargetInput {
   readonly expectedRevision: number;
 }
-export interface AutomationResolveToolInput extends AutomationTargetInput {
-  readonly runId: string;
-  readonly resume: boolean;
-}
-export interface AutomationAcknowledgeToolInput extends AutomationTargetInput {
-  readonly runId: string;
-}
 
 /**
  * The run shape frozen by the `automation.runs@2` and `automation.run_now@2`
@@ -127,8 +120,6 @@ type AutomationDomain = Pick<
   | "setState"
   | "update"
   | "delete"
-  | "resolveUncertainRun"
-  | "acknowledgeRun"
 >;
 
 /** Canonical, source-scoped adapter over the existing automation domain. */
@@ -374,43 +365,6 @@ export class AutomationAgentToolService {
       mutationId: context.mutationId,
     });
     return { deleted: true as const };
-  }
-
-  resolve(
-    input: AutomationResolveToolInput,
-    context: TrustedToolInvocationContext,
-  ) {
-    this.#admitAutomation(input, context);
-    const result = this.#automations.resolveUncertainRun(
-      scope(context),
-      input.automationId,
-      input.runId,
-      { resume: input.resume },
-    );
-    return {
-      run: toolRun(result.run),
-      automation: result.automation
-        ? this.#withUpcoming(result.automation, this.#now())
-        : null,
-    };
-  }
-
-  acknowledge(
-    input: AutomationAcknowledgeToolInput,
-    context: TrustedToolInvocationContext,
-  ) {
-    this.#admitAutomation(input, context);
-    const result = this.#automations.acknowledgeRun(
-      scope(context),
-      input.automationId,
-      input.runId,
-    );
-    return {
-      run: toolRun(result.run),
-      automation: result.automation
-        ? this.#withUpcoming(result.automation, this.#now())
-        : null,
-    };
   }
 
   #admitAutomation(

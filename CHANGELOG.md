@@ -10,6 +10,8 @@ User-facing changes are collected here before release. See the
 - Automation management now uses explicit automation IDs and the
   `/api/automations` collection. Update automation agent-tool versions and
   operator scripts; create/run-now requests require stable mutation keys.
+  Resolve and Acknowledge are user actions only; their agent tools are removed.
+  Remove stale selections from saved Agent presets before reusing them.
   The operator CLI attaches to existing threads. See the
   [automation CLI](docs/operator/automation-cli.md).
   ([#88](https://github.com/kcosr/sedes/pull/88))

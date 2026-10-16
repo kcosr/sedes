@@ -146,7 +146,7 @@ describe("AgentToolRegistry", () => {
         ({ id, schemaVersion }) => `${id}@${schemaVersion}`,
       ),
     );
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(54);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(52);
   });
 
   it("assembles the complete production catalog only with every domain adapter", () => {
@@ -197,6 +197,17 @@ describe("AgentToolRegistry", () => {
       ),
     ).toEqual(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES);
     expect(definitions.filter(tool => tool.outputMediaTypes).map(tool => tool.id)).toEqual(["page.preview"]);
+    const registry = new AgentToolRegistry();
+    for (const tool of definitions) registry.register(tool);
+    for (const id of ["automation.resolve", "automation.acknowledge"]) {
+      expect(() => registry.get(id, 1)).toThrow(/agent_tool_not_registered/);
+      for (const adapter of ["cli", "http", "mcp", "pi_sdk"] as const) {
+        const name = adapter === "mcp" || adapter === "pi_sdk"
+          ? `sedes_${id.replaceAll(".", "_")}`
+          : id;
+        expect(() => registry.resolveAdapterName(adapter, name)).toThrow(/agent_tool_adapter_name_not_registered/);
+      }
+    }
     expect(() =>
       createCanonicalAgentToolDefinitions({
         application: { readThreadStatus: async () => undefined },
@@ -223,7 +234,7 @@ describe("AgentToolRegistry", () => {
     });
     const summaries = canonical.catalogSummaries("cli", "thread_agent");
 
-    expect(summaries).toHaveLength(54);
+    expect(summaries).toHaveLength(52);
     expect(
       Buffer.byteLength(JSON.stringify({ tools: summaries }), "utf8"),
     ).toBeLessThanOrEqual(AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES);

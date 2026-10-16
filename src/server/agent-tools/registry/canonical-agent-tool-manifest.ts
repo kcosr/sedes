@@ -647,36 +647,6 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       external: "none",
     },
   }),
-  "automation.resolve": manifestEntry({
-    environmentAuthority: {
-      kind: "direct_resource",
-      resource: "automation" },
-    id: "automation.resolve",
-    schemaVersion: 1,
-    description:
-      "Marks an uncertain run of the selected automation failed; optionally resumes its schedule. This does not repeat the run.",
-    catalog: {
-      groupId: "automations",
-      label: "Resolve uncertain automation run",
-      order: 80,
-    },
-    effects: { application: "write", modelUsage: "none", external: "none" },
-  }),
-  "automation.acknowledge": manifestEntry({
-    environmentAuthority: {
-      kind: "direct_resource",
-      resource: "automation" },
-    id: "automation.acknowledge",
-    schemaVersion: 1,
-    description:
-      "Acknowledges the selected failed run's attention. Does not change execution or repeat a run.",
-    catalog: {
-      groupId: "automations",
-      label: "Acknowledge automation run",
-      order: 90,
-    },
-    effects: { application: "write", modelUsage: "none", external: "none" },
-  }),
   "research.web_search": manifestEntry({
     environmentAuthority: { kind: "public_information" },
     id: "research.web_search",

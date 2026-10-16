@@ -339,6 +339,41 @@ describe("thread agent tool policy persistence", () => {
     }
   });
 
+  it("keeps threads readable after automation recovery tools leave the catalog", () => {
+    const value = fixture();
+    try {
+      const retiredToolIds = ["automation.acknowledge", "automation.resolve"];
+      const previous = new ThreadAgentToolPolicyRepository(value.database, {
+        ...eligibility,
+        eligibleToolIds: new Set([...eligibleToolIds, ...retiredToolIds]),
+      });
+      const saved = previous.update(value.scope, value.piThreadId, {
+        expectedRevision: 0,
+        enabled: true,
+        presentation: { surface: "native", mode: "individual" },
+        enabledToolIds: [...retiredToolIds, "thread.status"],
+        accessBoundary: "environment",
+        now: 400,
+      });
+      const current = new ThreadAgentToolPolicyRepository(value.database, eligibility);
+      expect(current.get(value.scope, value.piThreadId)).toEqual({
+        ...saved,
+        enabledToolIds: ["thread.status"],
+      });
+      expect(current.getDurable(value.scope, value.piThreadId)).toEqual(saved);
+      for (const toolId of retiredToolIds) {
+        expect(() => current.update(value.scope, value.piThreadId, {
+          ...saved,
+          expectedRevision: saved.revision,
+          enabledToolIds: [toolId],
+          now: 401,
+        })).toThrow(/ineligible tool/i);
+      }
+    } finally {
+      value.database.close();
+    }
+  });
+
   it("CAS-replaces the exact enabled set without auto-enabling new tools", () => {
     const value = fixture();
     try {
@@ -503,8 +538,6 @@ describe("thread agent tool policy persistence", () => {
         "automation.set_state",
         "automation.run_now",
         "automation.delete",
-        "automation.resolve",
-        "automation.acknowledge",
         "research.web_search",
       ]);
       expect(

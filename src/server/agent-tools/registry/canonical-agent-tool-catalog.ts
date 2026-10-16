@@ -1,4 +1,4 @@
-import { createAutomationListToolDefinition, createAutomationDeleteToolDefinition, createAutomationResolveToolDefinition, createAutomationAcknowledgeToolDefinition } from "../tools/automation-management-tools.js";
+import { createAutomationListToolDefinition, createAutomationDeleteToolDefinition } from "../tools/automation-management-tools.js";
 import { createClientControlToolDefinitions, type ClientControlToolService } from "../tools/client-control-tools.js";
 import { createPageToolDefinitions } from "../tools/page-management-tools.js";
 import type { PageAgentToolService } from "../tools/page-agent-tool-service.js";
@@ -148,8 +148,6 @@ export function createCanonicalAgentToolDefinitions(input: {
           createTaskDeleteToolDefinition(input.management),
           createAutomationListToolDefinition(input.automations),
           createAutomationDeleteToolDefinition(input.automations),
-          createAutomationResolveToolDefinition(input.automations),
-          createAutomationAcknowledgeToolDefinition(input.automations),
           createAutomationGetToolDefinition(input.automations),
           createAutomationRunsToolDefinition(input.automations),
           createAutomationCreateToolDefinition(input.automations),

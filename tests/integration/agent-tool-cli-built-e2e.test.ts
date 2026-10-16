@@ -91,8 +91,6 @@ const fullToolCatalog = [
   "automation.set_state",
   "automation.run_now",
   "automation.delete",
-  "automation.resolve",
-  "automation.acknowledge",
 ] as const;
 const environmentId = "019196f7-a0a8-7bc4-a89b-8cf013978405";
 const configuration = parseResolvedBackendConfiguration({

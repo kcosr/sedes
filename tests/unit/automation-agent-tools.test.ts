@@ -154,8 +154,6 @@ function fixture(input?: {
     ),
     list: vi.fn(() => ({ items: [current], nextCursor: null })),
     delete: vi.fn(),
-    resolveUncertainRun: vi.fn(),
-    acknowledgeRun: vi.fn(),
     preview: vi.fn((...args: Parameters<AutomationService["preview"]>) => {
       scheduleValidation.preview(...args);
       return ["2026-08-08T01:05:00.000Z", "2026-08-08T01:10:00.000Z"];

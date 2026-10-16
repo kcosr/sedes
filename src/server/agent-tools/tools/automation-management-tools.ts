@@ -5,14 +5,10 @@ import type {
   AutomationAgentToolService,
   AutomationListToolInput,
   AutomationDeleteToolInput,
-  AutomationResolveToolInput,
-  AutomationAcknowledgeToolInput,
 } from "./automation-agent-tool-service.js";
 import {
-  automationDefinitionNestedToolSchema,
   automationListItemToolSchema,
   automationReadWaitCeilings,
-  automationRunToolSchema,
   automationToolExposure,
   automationToolInputSchema,
   automationToolPresentations,
@@ -28,22 +24,6 @@ const cursor = Type.Union([
   Type.String({ minLength: 1, maxLength: 2048 }),
   Type.Null(),
 ]);
-const resolution = normalizeCanonicalAgentToolSchema(
-  Type.Object(
-    {
-      run: automationRunToolSchema,
-      automation: Type.Union([
-        automationDefinitionNestedToolSchema,
-        Type.Null(),
-      ]),
-    },
-    {
-      $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
-      additionalProperties: false,
-      maxProperties: 2,
-    },
-  ),
-);
 function policy(write: boolean, output = 512 * 1024) {
   return {
     form: "inline" as const,
@@ -131,52 +111,5 @@ export function createAutomationDeleteToolDefinition(
     exposure: automationToolExposure,
     adapters: presentation("automation.delete", "Delete Sedes automation"),
     execute: async (input, context) => service.delete(input, context),
-  };
-}
-export function createAutomationResolveToolDefinition(
-  service: AutomationAgentToolService,
-): AgentToolDefinition<
-  AutomationResolveToolInput,
-  ReturnType<AutomationAgentToolService["resolve"]>
-> {
-  return {
-    ...CANONICAL_AGENT_TOOL_MANIFEST["automation.resolve"],
-    inputSchema: automationToolInputSchema({
-      automationId: requiredAutomationId,
-      runId: requiredAutomationId,
-      resume: Type.Boolean(),
-    }),
-    outputSchema: resolution,
-    requiredCapabilities: [],
-    execution: policy(true),
-    exposure: automationToolExposure,
-    adapters: presentation(
-      "automation.resolve",
-      "Resolve Sedes automation run",
-    ),
-    execute: async (input, context) => service.resolve(input, context),
-  };
-}
-export function createAutomationAcknowledgeToolDefinition(
-  service: AutomationAgentToolService,
-): AgentToolDefinition<
-  AutomationAcknowledgeToolInput,
-  ReturnType<AutomationAgentToolService["acknowledge"]>
-> {
-  return {
-    ...CANONICAL_AGENT_TOOL_MANIFEST["automation.acknowledge"],
-    inputSchema: automationToolInputSchema({
-      automationId: requiredAutomationId,
-      runId: requiredAutomationId,
-    }),
-    outputSchema: resolution,
-    requiredCapabilities: [],
-    execution: policy(true),
-    exposure: automationToolExposure,
-    adapters: presentation(
-      "automation.acknowledge",
-      "Acknowledge Sedes automation run",
-    ),
-    execute: async (input, context) => service.acknowledge(input, context),
   };
 }
