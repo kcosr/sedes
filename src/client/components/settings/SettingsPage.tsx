@@ -85,7 +85,7 @@ export function SettingsBackLink(props: SettingsBackLinkProps): React.JSX.Elemen
 }
 
 function BackLink({ label, href, onNavigate, stackOnly = false, ...props }: SettingsBackLinkProps): React.JSX.Element {
-  const content = <><ChevronLeft aria-hidden="true" />{label}</>;
+  const content = <><ChevronLeft aria-hidden="true" /><span>{label}</span></>;
   return href === undefined ? (
     <button type="button" data-slot="settings-page-back" data-stack-only={stackOnly || undefined} {...props} onClick={onNavigate}>
       {content}

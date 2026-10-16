@@ -30,6 +30,8 @@
 [data-slot="settings-page-back"] {
   display: inline-flex;
   width: fit-content;
+  min-width: 0;
+  max-width: 100%;
   min-height: var(--control-xs);
   align-items: center;
   gap: var(--space-1);
@@ -53,6 +55,14 @@
   width: var(--icon-sm);
   height: var(--icon-sm);
   flex: none;
+}
+
+/* A long name, such as a thread's title, ends in an ellipsis. */
+[data-slot="settings-page-back"] > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 [data-slot="settings-page-heading"] {
