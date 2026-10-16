@@ -119,7 +119,6 @@ function fixture(): Snapshot {
       },
     ],
     defaultNewThreadTargetId: "target",
-    counts: { active: threadCount, snoozed: 0, settled: 0, archived: 0 },
   };
 }
 
@@ -139,7 +138,6 @@ function publishChange(hub: ApplicationEventHub, index: number) {
       threadRevision: previous.threadRevision + 1,
       runState: previous.runState === "idle" ? "running" : "idle",
     },
-    counts: hub.projection!.counts,
   });
 }
 

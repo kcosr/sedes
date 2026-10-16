@@ -1781,7 +1781,6 @@ function fixture(
       lineageFamilies: [],
       executionTargets: [],
       defaultNewThreadTargetId: null,
-      counts: { active: 0, snoozed: 0, settled: 0, archived: 0 },
       tasks: [],
     },
     visibleThreads: [],

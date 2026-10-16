@@ -12,6 +12,16 @@ import {
   type ApplicationEventEnvelope,
 } from "../../src/shared/protocol/application.js";
 
+function renamedEnvironment(revision: number) {
+  return {
+    id: "environment-1",
+    kind: "local" as const,
+    label: { text: `Environment ${revision}` },
+    available: true as const,
+    directoryBrowsing: "available" as const,
+  };
+}
+
 const emptySnapshot = {
   environments: [
     {
@@ -41,7 +51,6 @@ const emptySnapshot = {
   ],
   advisories: [],
   defaultNewThreadTargetId: "target-1",
-  counts: { active: 0, snoozed: 0, settled: 0, archived: 0 },
   tasks: [],
 };
 
@@ -52,11 +61,11 @@ function seed(hub: ApplicationEventHub) {
     snapshot: emptySnapshot,
   });
 }
-function count(hub: ApplicationEventHub, active: number) {
+function rename(hub: ApplicationEventHub, revision: number) {
   return hub.publish({
-    type: "inventory_counts_changed",
+    type: "environment_upsert",
     generation: hub.generation,
-    counts: { ...emptySnapshot.counts, active },
+    environment: renamedEnvironment(revision),
   });
 }
 const scope = { tenantId: "tenant", principalId: "owner" };
@@ -115,14 +124,14 @@ describe("ApplicationEventHub", () => {
       const hub = new ApplicationEventHub();
       const baseline = seed(hub);
       const events = Array.from({ length: gap }, (_, index) =>
-        count(hub, index + 1),
+        rename(hub, index + 1),
       );
       const allowed = gap <= 32;
       expect(hub.canReplay(baseline.eventId)).toBe(allowed);
       expect(hub.retainedEventCount).toBe(Math.min(gap, 32));
       const subscription = hub.subscribe(vi.fn(), baseline.eventId);
       expect(subscription.replay).toEqual(allowed ? events : []);
-      expect(hub.currentCheckpoint()?.event.snapshot.counts.active).toBe(gap);
+      expect(hub.currentCheckpoint()?.event.snapshot.environments[0]!.label.text).toBe(`Environment ${gap}`);
       expect(hub.watermark).toBe(gap + 1);
       subscription.close();
       hub.close();
@@ -167,7 +176,7 @@ describe("ApplicationEventHub", () => {
   it("keeps explicit count and byte admission guards independent of replay retention", () => {
     const hub = new ApplicationEventHub();
     const baseline = seed(hub);
-    for (let index = 1; index <= 32; index++) count(hub, index);
+    for (let index = 1; index <= 32; index++) rename(hub, index);
     // Simulate a future wider retention policy. Admission must still enforce
     // its own exact limits rather than rely solely on retained-suffix presence.
     const retained = vi
@@ -179,7 +188,7 @@ describe("ApplicationEventHub", () => {
         retainedBytes.mockReturnValue(size);
         expect(hub.canReplay(baseline.eventId)).toBe(size <= 65_536);
       }
-      count(hub, 33);
+      rename(hub, 33);
       retainedBytes.mockClear().mockReturnValue(0);
       expect(hub.canReplay(baseline.eventId)).toBe(false);
       expect(retainedBytes).not.toHaveBeenCalled();
@@ -201,16 +210,16 @@ describe("ApplicationEventHub", () => {
       replayByteLimit: 64 * 1024 * 1024,
     });
     const baseline = seed(hub);
-    for (let i = 1; i <= 5000; i++) count(hub, i);
+    for (let i = 1; i <= 5000; i++) rename(hub, i);
     expect(hub.retainedEventCount).toBe(32);
     expect(hub.retainedBytes).toBeLessThanOrEqual(65_536);
     expect(hub.canReplay(baseline.eventId)).toBe(false);
-    expect(hub.currentCheckpoint()?.event.snapshot.counts.active).toBe(5000);
+    expect(hub.currentCheckpoint()?.event.snapshot.environments[0]!.label.text).toBe("Environment 5000");
   });
 
   it("requires a validated seed before incremental publication", () => {
     const hub = new ApplicationEventHub();
-    expect(() => count(hub, 1)).toThrow(
+    expect(() => rename(hub, 1)).toThrow(
       "application_projection_snapshot_required",
     );
     expect(hub.watermark).toBe(0);
@@ -226,13 +235,13 @@ describe("ApplicationEventHub", () => {
   it("keeps snapshots out of replay and establishes a new replay floor", () => {
     const hub = new ApplicationEventHub();
     const first = seed(hub);
-    count(hub, 1);
+    rename(hub, 1);
     const next = seed(hub);
     expect(hub.retainedEventCount).toBe(0);
     expect(hub.retainedBytes).toBe(0);
     expect(hub.canReplay(first.eventId)).toBe(false);
     expect(hub.canReplay(next.eventId)).toBe(true);
-    const update = count(hub, 2);
+    const update = rename(hub, 2);
     expect(hub.subscribe(vi.fn(), next.eventId).replay).toEqual([update]);
   });
 
@@ -242,16 +251,16 @@ describe("ApplicationEventHub", () => {
     const observations: unknown[] = [];
     hub.subscribe((event) => {
       observations.push({
-        count: hub.currentCheckpoint()?.event.snapshot.counts.active,
+        label: hub.currentCheckpoint()?.event.snapshot.environments[0]!.label.text,
         eventId: hub.currentCheckpoint()?.eventId,
         expectedId: event.eventId,
         replay: hub.subscribe(vi.fn(), baseline.eventId).replay,
       });
     });
-    const event = count(hub, 1);
+    const event = rename(hub, 1);
     expect(observations).toEqual([
       {
-        count: 1,
+        label: "Environment 1",
         eventId: event.eventId,
         expectedId: event.eventId,
         replay: [event],
@@ -262,7 +271,7 @@ describe("ApplicationEventHub", () => {
   it("reuses the encoded checkpoint without advancing or broadcasting", () => {
     const hub = new ApplicationEventHub();
     seed(hub);
-    count(hub, 1);
+    rename(hub, 1);
     const listener = vi.fn();
     hub.subscribe(listener);
     const checkpoint = hub.currentCheckpoint()!;
@@ -273,21 +282,21 @@ describe("ApplicationEventHub", () => {
     );
     expect(hub.watermark).toBe(2);
     expect(listener).not.toHaveBeenCalled();
-    count(hub, 2);
-    expect(checkpoint.event.snapshot.counts.active).toBe(1);
-    expect(hub.currentCheckpoint()?.event.snapshot.counts.active).toBe(2);
+    rename(hub, 2);
+    expect(checkpoint.event.snapshot.environments[0]!.label.text).toBe("Environment 1");
+    expect(hub.currentCheckpoint()?.event.snapshot.environments[0]!.label.text).toBe("Environment 2");
   });
 
   it("counts actual encoded SSE bytes and drops individually oversized deltas", () => {
     const hub = new ApplicationEventHub({ replayByteLimit: 1 });
     const initial = seed(hub);
-    const update = count(hub, 1);
+    const update = rename(hub, 1);
     expect(hub.retainedEventCount).toBe(0);
     expect(hub.canReplay(initial.eventId)).toBe(false);
     expect(hub.canReplay(update.eventId)).toBe(true);
     const normal = new ApplicationEventHub();
     seed(normal);
-    const event = count(normal, 1);
+    const event = rename(normal, 1);
     expect(normal.retainedBytes).toBe(normal.encoded(event).bytes);
   });
 
@@ -349,7 +358,7 @@ describe("ApplicationEventHub", () => {
       const sub = hub.subscribe(vi.fn());
       sub.close();
       await vi.advanceTimersByTimeAsync(900);
-      count(hub, 1);
+      rename(hub, 1);
       hubs.release(scope);
       await vi.advanceTimersByTimeAsync(100);
       expect(hubs.peek(scope)).toBeUndefined();

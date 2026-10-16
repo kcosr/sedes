@@ -772,7 +772,7 @@ describe("durable automation queue observation", () => {
         completionIdentity: "automation-turn:interrupted", outcome: "interrupted",
         result: { text: "" }, classifiedResult: null, observedAt: 730,
       })!;
-      turns.observe(fixture.scope, threadId, observation);
+      turns.observe(fixture.scope, threadId, observation.record);
       observeAcceptance = true;
       await queue.onAuthoritativeSettled(fixture.scope, threadId);
       expect(automations.getRun(fixture.scope, run.automationId, run.id)).toMatchObject({
@@ -969,6 +969,47 @@ describe("ConversationOperationRepository interrupt rejection", () => {
 });
 
 describe("ThreadCompletionCallbackDispatcher", () => {
+  it("materializes a callback registered after completion without rewriting its replayed observation", async () => {
+    const fixture = createFixture();
+    const [callerThreadId, targetThreadId] = fixture.threadIds;
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    gateway.authoritativelySettled = false;
+    const { dispatcher: queue } = createDispatcher(repository, gateway, { now: { value: 700 } });
+    const callbacks = new ThreadCompletionCallbackRepository(fixture.database);
+    const dispatcher = new ThreadCompletionCallbackDispatcher({
+      callbacks, inventory: new InventoryRepository(fixture.database), repository, gateway, queue, now: () => 700,
+    });
+    try {
+      await queue.recover(fixture.scope);
+      const completion = new SubmissionCompletionRepository(fixture.database);
+      completion.recordAccepted(fixture.scope, targetThreadId, { operationId: "late-callback-operation", backendCorrelation: "late-callback-operation", acceptedAt: 500 });
+      const input = { backendCorrelation: "late-callback-operation", backendTurnId: "finished-turn",
+        applicationTurnId: "finished-turn", completionIdentity: "finished-turn:completed", outcome: "completed" as const,
+        result: { text: "Finished before callback registration" }, classifiedResult: null };
+      expect((await queue.onAuthoritativeCompletion(fixture.scope, targetThreadId, input))?.changed).toBe(true);
+      await dispatcher.deliverReady(fixture.scope);
+      expect(gateway.steered).toHaveLength(0);
+      const callback = callbacks.register(fixture.scope, { callerThreadId, targetThreadId,
+        targetOperationId: "late-callback-operation", registeredAt: 650 }).callback;
+      const beforeReplay = (fixture.database.prepare("SELECT total_changes() AS count").get() as { count: number }).count;
+      expect((await queue.onAuthoritativeCompletion(fixture.scope, targetThreadId, input))?.changed).toBe(false);
+      expect((fixture.database.prepare("SELECT total_changes() AS count").get() as { count: number }).count).toBe(beforeReplay);
+      await dispatcher.deliverReady(fixture.scope);
+      expect(callbacks.get(fixture.scope, callback.id).state).toBe("materialized");
+      await vi.waitFor(() => expect(repository.get(fixture.scope, callerThreadId, callback.id).state).toBe("accepted"));
+      expect(gateway.steered).toHaveLength(1);
+      const afterMaterialization = (fixture.database.prepare("SELECT total_changes() AS count").get() as { count: number }).count;
+      const calls = gateway.calls.length;
+      await queue.onAuthoritativeCompletion(fixture.scope, targetThreadId, input);
+      await dispatcher.deliverReady(fixture.scope);
+      expect(gateway.calls).toHaveLength(calls);
+      expect((fixture.database.prepare("SELECT total_changes() AS count").get() as { count: number }).count).toBe(afterMaterialization);
+    } finally {
+      await dispatcher.close(); await queue.close(); fixture.database.close();
+    }
+  });
+
   it("blocks snoozing a caller while its callback obligation is registered", () => {
     const fixture = createFixture();
     try {
@@ -3156,11 +3197,24 @@ describe("QueuedInputDispatcher", () => {
           ),
         ]),
       ).resolves.toMatchObject({
-        lastCompletionIdentity: "turn-headless-one:completed",
+        changed: true,
+        record: { lastCompletionIdentity: "turn-headless-one:completed" },
       });
       expect(gateway.submitted.map(({ text }) => text)).toEqual([
         "text-headless-one",
       ]);
+
+      const scheduled = scheduler.scheduled.length;
+      const beforeReplay = (fixture.database.prepare("SELECT total_changes() AS count").get() as { count: number }).count;
+      for (let replay = 0; replay < 10; replay += 1) {
+        await expect(dispatcher.onAuthoritativeCompletion(fixture.scope, threadId, {
+          backendCorrelation: "operation-headless-one", backendTurnId: "turn-headless-one",
+          applicationTurnId: "turn-headless-one", completionIdentity: "turn-headless-one:completed",
+          outcome: "completed", result: { text: "Done" }, classifiedResult: null,
+        })).resolves.toMatchObject({ changed: false });
+      }
+      expect(scheduler.scheduled).toHaveLength(scheduled);
+      expect((fixture.database.prepare("SELECT total_changes() AS count").get() as { count: number }).count).toBe(beforeReplay);
 
       scheduler.runLatest();
       await acquisitionStarted;
@@ -3924,8 +3978,11 @@ describe("QueuedInputDispatcher", () => {
           },
         ),
       ).resolves.toMatchObject({
-        lastCompletionIdentity: "completion-from-backend-turn:completed",
-        attentionCreatedAt: 740,
+        changed: true,
+        record: {
+          lastCompletionIdentity: "completion-from-backend-turn:completed",
+          attentionCreatedAt: 740,
+        },
       });
       expect(lastActivityAt(fixture, backendTurnOnlyThreadId)).toBe(740);
       const completedRevision = revision(fixture, backendTurnOnlyThreadId);
@@ -3945,8 +4002,8 @@ describe("QueuedInputDispatcher", () => {
           },
         ),
       ).resolves.toMatchObject({
-        completionObservedAt: 740,
-        attentionCreatedAt: 740,
+        changed: false,
+        record: { completionObservedAt: 740, attentionCreatedAt: 740 },
       });
       expect(revision(fixture, backendTurnOnlyThreadId)).toBe(
         completedRevision,

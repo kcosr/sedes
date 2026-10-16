@@ -20,9 +20,10 @@ User-facing changes are collected here before release. See the
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **161** for Page responses, larger composer reference lists, the updated
+  **162** for Page responses, larger composer reference lists, the updated
   native voice bridge, Windows notification script paths, multiple named
-  automations per thread, and dismissal of automation results. Rebuild Android
+  automations per thread, dismissal of automation results, and removal of
+  unused global inventory totals. Rebuild Android
   and Electron with their bundled clients. See
   [Page responses](docs/user/html-previews.md#send-a-page-response),
   [voice input](docs/operator/clients/voice.md), and
@@ -101,6 +102,16 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Sidebar cards no longer repeat the same scheduled run or snooze wake time on
+  both lines, or add a draft label beside the existing draft icon. Distinct
+  deadlines and status context remain visible.
+  ([#89](https://github.com/kcosr/sedes/pull/89))
+
+- Codex advisory metadata no longer forces conversation history reloads.
+  Completion replay and already-active inventory wakes avoid unchanged
+  publications, and thread-summary reads reuse prepared SQL statements.
+  ([#89](https://github.com/kcosr/sedes/pull/89))
 
 - Automation delivery reconciles saved acceptance despite UI publication
   failures or dispatch timing races. Stopping a turn preserves its Interrupted

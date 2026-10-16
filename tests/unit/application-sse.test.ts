@@ -53,6 +53,16 @@ function envelopes(response: FakeResponse): ApplicationEventEnvelope[] {
   );
 }
 
+function renamedEnvironment(revision: number) {
+  return {
+    id: "environment-1",
+    kind: "local" as const,
+    label: { text: `Environment ${revision}` },
+    available: true as const,
+    directoryBrowsing: "available" as const,
+  };
+}
+
 const emptySnapshot: NormalizedApplicationSnapshot = {
   environments: [
     {
@@ -82,7 +92,6 @@ const emptySnapshot: NormalizedApplicationSnapshot = {
   ],
   advisories: [],
   defaultNewThreadTargetId: "target-1",
-  counts: { active: 0, snoozed: 0, settled: 0, archived: 0 },
   tasks: [],
 };
 
@@ -148,7 +157,7 @@ describe("serveApplicationEventStream", () => {
     expect(response.end).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
     const writes = response.writes.length;
-    hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: emptySnapshot.counts });
+    hub.publish({ type: "environment_upsert", generation: hub.generation, environment: renamedEnvironment(0) });
     expect(response.writes).toHaveLength(writes);
   });
 
@@ -171,7 +180,7 @@ describe("serveApplicationEventStream", () => {
         });
       expect(envelopes(response)).toEqual([baseline]);
       expect(response.writes.at(-1)).toBe("event: application-live\ndata: {}\n\n");
-      const update = hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: { ...emptySnapshot.counts, active: 1 } });
+      const update = hub.publish({ type: "environment_upsert", generation: hub.generation, environment: renamedEnvironment(1) });
       expect(envelopes(response)).toEqual([baseline, update]);
       expect(response.writes.join("")).not.toContain("event: notification");
       expect(response.end).not.toHaveBeenCalled();
@@ -195,7 +204,7 @@ describe("serveApplicationEventStream", () => {
       pendingEventLimit: 2,
       subscribeTransient: listener => { transient = listener; return unsubscribe; },
     });
-    hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: { ...emptySnapshot.counts, active: 1 } });
+    hub.publish({ type: "environment_upsert", generation: hub.generation, environment: renamedEnvironment(1) });
     transient('event: notification\ndata: {"sourceEventId":"1"}\n\n');
     expect(response.end).not.toHaveBeenCalled();
     transient('event: notification\ndata: {"sourceEventId":"2"}\n\n');
@@ -203,7 +212,7 @@ describe("serveApplicationEventStream", () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
     release({ envelope: hub.currentCheckpoint()! });
     await serving;
-    hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: { ...emptySnapshot.counts, active: 2 } });
+    hub.publish({ type: "environment_upsert", generation: hub.generation, environment: renamedEnvironment(2) });
     expect(response.writes).toEqual([]);
     hub.close();
   });
@@ -279,9 +288,9 @@ describe("serveApplicationEventStream", () => {
       });
       const events = Array.from({ length: gap }, (_, index) =>
         hub.publish({
-          type: "inventory_counts_changed",
+          type: "environment_upsert",
           generation: hub.generation,
-          counts: { ...emptySnapshot.counts, active: index + 1 },
+          environment: renamedEnvironment(index + 1),
         }),
       );
       const request = new FakeRequest(baseline.eventId);
@@ -313,7 +322,7 @@ describe("serveApplicationEventStream", () => {
           expect(checkpoint).toHaveBeenCalledExactlyOnceWith(false);
           const current = hub.currentCheckpoint()!;
           expect(envelopes(response)).toEqual([current]);
-          expect(current.event.snapshot.counts.active).toBe(gap);
+          expect(current.event.snapshot.environments[0]!.label.text).toBe(`Environment ${gap}`);
           expect(encode.mock.calls.map(([event]) => event)).toEqual([current]);
         }
         expect(hub.watermark).toBe(gap + 1);
@@ -413,9 +422,9 @@ describe("serveApplicationEventStream", () => {
       snapshot: emptySnapshot,
     });
     const historical = hub.publish({
-      type: "inventory_counts_changed",
+      type: "environment_upsert",
       generation: hub.generation,
-      counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
+      environment: renamedEnvironment(1),
     });
     const request = new FakeRequest();
     const response = new FakeResponse();
@@ -432,9 +441,9 @@ describe("serveApplicationEventStream", () => {
         snapshot,
       });
       postSnapshot = hub.publish({
-        type: "inventory_counts_changed",
+        type: "environment_upsert",
         generation: hub.generation,
-        counts: { active: 3, snoozed: 0, settled: 0, archived: 0 },
+        environment: renamedEnvironment(3),
       });
       if (envelope.event.type !== "snapshot") throw new Error("unreachable");
       return {
@@ -449,13 +458,13 @@ describe("serveApplicationEventStream", () => {
       publishAuthoritativeReplacement,
     );
     const crossing = hub.publish({
-      type: "inventory_counts_changed",
+      type: "environment_upsert",
       generation: hub.generation,
-      counts: { active: 2, snoozed: 0, settled: 0, archived: 0 },
+      environment: renamedEnvironment(2),
     });
     resolveCapture({
       ...emptySnapshot,
-      counts: { active: 2, snoozed: 0, settled: 0, archived: 0 },
+      environments: [renamedEnvironment(2)],
     });
     await serving;
 
@@ -469,7 +478,7 @@ describe("serveApplicationEventStream", () => {
         event: expect.objectContaining({
           type: "snapshot",
           snapshot: expect.objectContaining({
-            counts: expect.objectContaining({ active: 2 }),
+            environments: [renamedEnvironment(2)],
           }),
         }),
       }),
@@ -521,12 +530,6 @@ describe("serveApplicationEventStream", () => {
                 },
               ],
               defaultNewThreadTargetId: "target-1",
-              counts: {
-                active: 0,
-                snoozed: 0,
-                settled: 0,
-                archived: 0,
-              },
               advisories: [],
               tasks: [],
             },
@@ -568,9 +571,9 @@ describe("serveApplicationEventStream", () => {
       snapshot: emptySnapshot,
     });
     const update = hub.publish({
-      type: "inventory_counts_changed",
+      type: "environment_upsert",
       generation: hub.generation,
-      counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
+      environment: renamedEnvironment(1),
     });
     const request = new FakeRequest();
     const response = new FakeResponse();
@@ -597,14 +600,14 @@ describe("serveApplicationEventStream", () => {
       snapshot: emptySnapshot,
     });
     const firstUpdate = hub.publish({
-      type: "inventory_counts_changed",
+      type: "environment_upsert",
       generation: hub.generation,
-      counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
+      environment: renamedEnvironment(1),
     });
     const secondUpdate = hub.publish({
-      type: "inventory_counts_changed",
+      type: "environment_upsert",
       generation: hub.generation,
-      counts: { active: 2, snoozed: 0, settled: 0, archived: 0 },
+      environment: renamedEnvironment(2),
     });
     const request = new FakeRequest(firstUpdate.eventId);
     const response = new FakeResponse();
@@ -631,9 +634,9 @@ describe("serveApplicationEventStream", () => {
       snapshot: emptySnapshot,
     });
     hub.publish({
-      type: "inventory_counts_changed",
+      type: "environment_upsert",
       generation: hub.generation,
-      counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
+      environment: renamedEnvironment(1),
     });
     const staleHub = new ApplicationEventHub();
     const request = new FakeRequest();
@@ -664,9 +667,9 @@ describe("serveApplicationEventStream", () => {
       snapshot: emptySnapshot,
     });
     hub.publish({
-      type: "inventory_counts_changed",
+      type: "environment_upsert",
       generation: hub.generation,
-      counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
+      environment: renamedEnvironment(1),
     });
     const request = new FakeRequest();
     const response = new FakeResponse();
@@ -676,7 +679,7 @@ describe("serveApplicationEventStream", () => {
         generation: hub.generation,
         snapshot: {
           ...emptySnapshot,
-          counts: { active: 2, snoozed: 0, settled: 0, archived: 0 },
+          environments: [renamedEnvironment(2)],
         },
       }),
     }));
@@ -693,7 +696,7 @@ describe("serveApplicationEventStream", () => {
     expect(envelopes(response)).toHaveLength(1);
     expect(envelopes(response)[0]?.event).toMatchObject({
       type: "snapshot",
-      snapshot: { counts: { active: 2 } },
+      snapshot: { environments: [renamedEnvironment(2)] },
     });
     request.emit("close");
   });
@@ -706,9 +709,9 @@ describe("serveApplicationEventStream", () => {
       snapshot: emptySnapshot,
     });
     const update = hub.publish({
-      type: "inventory_counts_changed",
+      type: "environment_upsert",
       generation: hub.generation,
-      counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
+      environment: renamedEnvironment(1),
     });
     const request = new FakeRequest(baseline.eventId);
     const response = new FakeResponse();
@@ -734,11 +737,11 @@ describe("serveApplicationEventStream", () => {
       generation: hub.generation,
       snapshot: emptySnapshot,
     });
-    for (const active of [1, 2]) {
+    for (const revision of [1, 2]) {
       hub.publish({
-        type: "inventory_counts_changed",
+        type: "environment_upsert",
         generation: hub.generation,
-        counts: { active, snoozed: 0, settled: 0, archived: 0 },
+        environment: renamedEnvironment(revision),
       });
     }
     expect(hub.canReplay(baseline.eventId)).toBe(false);
@@ -772,11 +775,11 @@ describe("serveApplicationEventStream", () => {
       generation: hub.generation,
       snapshot: emptySnapshot,
     });
-    for (let active = 1; active <= 5000; active++)
+    for (let revision = 1; revision <= 5000; revision++)
       hub.publish({
-        type: "inventory_counts_changed",
+        type: "environment_upsert",
         generation: hub.generation,
-        counts: { ...emptySnapshot.counts, active },
+        environment: renamedEnvironment(revision),
       });
     const listener = vi.fn();
     const existing = hub.subscribe(listener);
@@ -799,7 +802,7 @@ describe("serveApplicationEventStream", () => {
       expect(envelopes(response)).toEqual([hub.currentCheckpoint()]);
       expect(envelopes(response)[0]?.event).toMatchObject({
         type: "snapshot",
-        snapshot: { counts: { active: 5000 } },
+        snapshot: { environments: [renamedEnvironment(5000)] },
       });
     }
     expect(hub.watermark).toBe(5001);
@@ -872,22 +875,22 @@ describe("serveApplicationEventStream", () => {
     );
     await vi.waitFor(() => expect(envelopes(response)).toHaveLength(1));
     hub.publish({
-      type: "inventory_counts_changed",
+      type: "environment_upsert",
       generation: hub.generation,
-      counts: { ...emptySnapshot.counts, active: 1 },
+      environment: renamedEnvironment(1),
     });
     const replacement = hub.publish({
       type: "snapshot",
       generation: hub.generation,
       snapshot: {
         ...emptySnapshot,
-        counts: { ...emptySnapshot.counts, active: 2 },
+        environments: [renamedEnvironment(2)],
       },
     });
     const later = hub.publish({
-      type: "inventory_counts_changed",
+      type: "environment_upsert",
       generation: hub.generation,
-      counts: { ...emptySnapshot.counts, active: 3 },
+      environment: renamedEnvironment(3),
     });
     response.writeResult = () => true;
     response.emit("drain");
@@ -946,7 +949,7 @@ describe("application stream close diagnostics", () => {
         pendingEventLimit: 2,
         subscribeTransient: listener => { transient = listener; return () => {}; },
       });
-    const event = hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: emptySnapshot.counts });
+    const event = hub.publish({ type: "environment_upsert", generation: hub.generation, environment: renamedEnvironment(0) });
     const frame = 'event: notification\ndata: {"message":"private speech 😀"}\n\n';
     transient(frame);
     transient(frame);
@@ -968,8 +971,8 @@ describe("application stream close diagnostics", () => {
     const capture = new Promise<void>(resolve => { release = resolve; });
     const serving = serveApplicationEventStream(request as unknown as Request, response as unknown as Response, hub,
       async () => { await capture; return { envelope: baseline }; }, { pendingEventLimit: 1 });
-    const event = hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: emptySnapshot.counts });
-    hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: emptySnapshot.counts });
+    const event = hub.publish({ type: "environment_upsert", generation: hub.generation, environment: renamedEnvironment(0) });
+    hub.publish({ type: "environment_upsert", generation: hub.generation, environment: renamedEnvironment(0) });
     release();
     await serving;
     expect(records()).toHaveLength(1);
@@ -1007,7 +1010,7 @@ describe("application stream close diagnostics", () => {
       });
     if (source === "write") {
       response.writeResult = () => { throw new Error("private socket failure"); };
-      hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: emptySnapshot.counts });
+      hub.publish({ type: "environment_upsert", generation: hub.generation, environment: renamedEnvironment(0) });
     }
     expect(records()).toHaveLength(1);
     expect(records()[0]).toMatchObject({ reason: source === "write" ? "stream_error" : "handshake_error", live: source === "write" });

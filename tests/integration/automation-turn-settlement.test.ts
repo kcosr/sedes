@@ -262,7 +262,7 @@ function observeFinal(
     outcome: input.outcome,
     result: { text: "Done" },
     classifiedResult: null,
-  })!;
+  })!.record;
 }
 
 function settlement(database: Database.Database, runId: string) {

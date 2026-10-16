@@ -1472,6 +1472,12 @@ unchanged visible transcript does not make its admission evidence unchanged.
 Pi, Codex, Claude, Grok, and OpenCode use this shared projector rule. It does not
 enable live progress for Grok or OpenCode, whose producers remain unsupported.
 
+A validated provider notification with no transcript or authority effect may
+have an explicit advisory-only disposition. Classify exact supported methods
+at the backend boundary; do not treat all unknown notifications as harmless.
+Malformed scoped notifications, genuine sequence gaps and changes to history
+or authority must retain their recovery behavior.
+
 Confirmed failed turns carry bounded `failure.message` metadata, separate from
 provider transcript items and transient runtime notices. Backends select a
 provider-authored diagnostic; the shared projector supplies a generic explanation
@@ -2343,6 +2349,13 @@ outcome, and one immutable bounded assistant-result snapshot before any
 consumer side effect. Consumers register and materialize durable obligations
 idempotently; they must not infer completion from queue disappearance, browser
 presence, text equality, provider-native identifiers, or a later thread turn.
+
+Repeated completion observations may enrich missing evidence or retry pending
+consumer work. An unchanged observation must not rewrite identical stored
+facts or publish unchanged thread/application state, but its existing identity
+alone cannot suppress queue dispatch, uncertain-operation reconciliation,
+automation settlement, late callbacks or failed publication retries. Test both
+the resulting state and the number of publications and authoritative captures.
 This common rail supports current attention state and thread-completion
 callbacks, passive external notifications, and automation run history. A
 consumer does not add provider callbacks, provider-name branches, or a second

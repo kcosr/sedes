@@ -125,12 +125,6 @@ describe("ApplicationSnapshotService", () => {
           availability: "available",
         },
       ],
-      countThreadsByInventoryState: () => ({
-        active: 2,
-        snoozed: 0,
-        settled: 0,
-        archived: 0,
-      }),
     } as unknown as InventoryRepository;
     const service = new ApplicationSnapshotService(
       inventory,
@@ -258,7 +252,6 @@ describe("ApplicationSnapshotService", () => {
           id: "workspace-remote", environmentId: "environment-ssh", projectId: "project-1", canonicalPath: "/work/retained",
           displayName: "Retained workspace", availability: "unavailable",
         }],
-        countThreadsByInventoryState: () => ({ active: 1, snoozed: 0, settled: 0, archived: 0 }),
       } as unknown as InventoryRepository,
       {
         list: (_scope, environmentId) => environmentId === "environment-ssh"
@@ -361,12 +354,6 @@ describe("ApplicationSnapshotService", () => {
             displayName: id,
             availability: "available",
           })),
-        countThreadsByInventoryState: () => ({
-          active: 1,
-          snoozed: 0,
-          settled: 0,
-          archived: 0,
-        }),
       } as unknown as InventoryRepository,
       {
         list: () => [
@@ -445,7 +432,6 @@ it("keeps scoped background counts equivalent in full snapshots and incremental 
     listEnvironments: () => [{ id: "environment-local", kind: "local", label: "Local", availability: "available", diagnosticCode: null }],
     listActiveProjects: () => [{ id: "project-1", name: "Project", revision: 0 }],
     listWorkspaces: () => [{ id: "workspace-local", environmentId: "environment-local", projectId: "project-1", canonicalPath: "/workspace", displayName: "Workspace", availability: "available" }],
-    countThreadsByInventoryState: () => ({ active: 1, snoozed: 0, settled: 0, archived: 0 }),
     isWorkspaceRemoved: () => false,
   } as unknown as InventoryRepository;
   const service = new ApplicationSnapshotService(inventory, {

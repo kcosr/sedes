@@ -326,7 +326,7 @@ describe("backend-normalized application adapters", () => {
           result: { text: "Failed" },
           classifiedResult: null,
         },
-      )!;
+      )!.record;
       const observer = new AutomationTurnSettlementObserver({
         repository: automation,
         publisher: new AutomationService({
@@ -703,6 +703,20 @@ describe("backend-normalized application adapters", () => {
       observe(current.threadId, "acknowledged-completion", true, 620);
       completion.acknowledgeThrough(current.scope, current.threadId, "acknowledged-completion", 630);
       observe(other.id, "other-unseen-completion", true, 640);
+      // Capture executions before the connection's statement is first prepared.
+      const captured: { sql: string; parameters: unknown[] }[] = [];
+      const originalPrepare = current.database.prepare.bind(current.database);
+      const prepare = vi.spyOn(current.database, "prepare").mockImplementation(sql => {
+        const statement = originalPrepare(sql);
+        if (sql.includes("WITH requested_threads")) {
+          const all = statement.all.bind(statement);
+          vi.spyOn(statement, "all").mockImplementation((...parameters: unknown[]) => {
+            captured.push({ sql, parameters });
+            return all(...parameters);
+          });
+        }
+        return statement;
+      });
       const read = () => summaries.listByIds(current.scope, [current.threadId]);
       expect(read()).toHaveLength(1);
       expect(read()[0]).toMatchObject({ queuedInputCount: 5, attention: { queueFailure: true, unseenCompletion: false } });
@@ -720,17 +734,7 @@ describe("backend-normalized application adapters", () => {
       expect(read()[0]).toMatchObject({ queuedInputCount: 4, attention: { queueFailure: false, unseenCompletion: false } });
       expect(summaries.listByIds(current.scope, [other.id])[0]).toMatchObject({ queuedInputCount: 5, attention: { queueFailure: true, unseenCompletion: true } });
 
-      const captured: { sql: string; parameters: unknown[] }[] = [];
-      const originalPrepare = current.database.prepare.bind(current.database);
-      const prepare = vi.spyOn(current.database, "prepare").mockImplementation(sql => {
-        const statement = originalPrepare(sql);
-        const all = statement.all.bind(statement);
-        vi.spyOn(statement, "all").mockImplementation((...parameters: unknown[]) => {
-          captured.push({ sql, parameters });
-          return all(...parameters);
-        });
-        return statement;
-      });
+      captured.length = 0;
       try {
         const targeted = read();
         const bootstrap = summaries.list(current.scope, current.environmentId);
@@ -1547,7 +1551,7 @@ describe("backend-normalized application adapters", () => {
         "completion",
         502,
       );
-      expect(publish).toHaveBeenCalledTimes(3);
+      expect(publish).toHaveBeenCalledTimes(2);
       await service.transition(
         current.scope,
         current.threadId,
@@ -2595,15 +2599,10 @@ describe("backend-normalized application adapters", () => {
 
       // Additional bounded reads capture active projects and fork-selector
       // saturation.
-      expect(prepare).toHaveBeenCalledTimes(6);
+      expect(prepare).toHaveBeenCalledTimes(5);
       expect(captureLoadedState).toHaveBeenCalledTimes(50);
       expect(snapshot.threads).toHaveLength(50);
-      expect(snapshot.counts).toEqual({
-        active: 50,
-        snoozed: 0,
-        settled: 0,
-        archived: 0,
-      });
+      expect(snapshot).not.toHaveProperty("counts");
       expect(
         snapshot.threads.find(({ id }) => id === current.threadId),
       ).toMatchObject({
@@ -2719,7 +2718,7 @@ describe("backend-normalized application adapters", () => {
     }
   });
 
-  it("bounds recurring fork families in application bootstrap while retaining total counts", async () => {
+  it("bounds recurring fork families in application bootstrap while retaining descendant totals", async () => {
     const current = fixture();
     try {
       const bindings = new ConversationBindingRepository(current.database);
@@ -2839,10 +2838,7 @@ describe("backend-normalized application adapters", () => {
           descendantCount: MAXIMUM_APPLICATION_BOOTSTRAP_FORKS + 3,
         },
       ]);
-      expect(snapshot.counts.active).toBe(
-        MAXIMUM_APPLICATION_BOOTSTRAP_FORKS + 3,
-      );
-      expect(snapshot.counts.snoozed).toBe(1);
+      expect(snapshot.threads.filter(({ inventoryState }) => inventoryState === "snoozed")).toHaveLength(1);
       expect(snapshot.threads.map(({ id }) => id)).toContain(
         "bootstrap-fork-0000",
       );
@@ -3613,7 +3609,6 @@ describe("passive lifecycle notification sources", () => {
             };
           },
           respond: async () => {},
-
         },
         { opened: () => {}, resolved: () => {} },
       );
@@ -3728,7 +3723,7 @@ describe("passive lifecycle notification sources", () => {
           current.scope,
           current.threadId,
           input,
-        )!;
+        )!.record;
         observer.completion(current.scope, finalized, "live");
         completion.acknowledgeThrough(
           current.scope,
@@ -3742,7 +3737,7 @@ describe("passive lifecycle notification sources", () => {
             current.scope,
             current.threadId,
             input,
-          )!, "live",
+          )!.record, "live",
         );
         completion.recordAccepted(current.scope, current.threadId, {
           operationId: "steered-operation",
@@ -3754,7 +3749,7 @@ describe("passive lifecycle notification sources", () => {
           completion.observeBackendCompletion(current.scope, current.threadId, {
             ...input,
             backendCorrelation: "private-steer",
-          })!, "live",
+          })!.record, "live",
         );
         expect(emit).toHaveBeenCalledTimes(3);
         expect(new Set(emit.mock.calls.map((call) => call[2])).size).toBe(1);

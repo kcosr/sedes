@@ -3337,6 +3337,7 @@ function interactionResponseFixture(input?: {
   readonly reconciliation?: "accepted" | "not_applied" | "unknown";
   readonly respond?: () => Promise<void>;
   readonly publishThreadSnapshot?: () => Promise<void>;
+  readonly onThreadChanged?: () => Promise<void>;
   readonly onPublicationError?: (error: unknown) => void;
 }) {
   const database = { prepare: vi.fn(() => ({ get: vi.fn(() => undefined) })) };
@@ -3414,7 +3415,7 @@ function interactionResponseFixture(input?: {
   const publishThreadSnapshot = vi.fn(
     input?.publishThreadSnapshot ?? (async () => undefined),
   );
-  const onThreadChanged = vi.fn(async () => undefined);
+  const onThreadChanged = vi.fn(input?.onThreadChanged ?? (async () => undefined));
   const gateway = new ThreadMutationGateway({
       actors: {} as never,
     bindings: { database } as never,
@@ -3580,17 +3581,53 @@ describe("ThreadMutationGateway interaction-response recovery", () => {
     );
   });
 
-  it("publishes a completed recovery when no uncertain receipt remains", async () => {
+  it("does not publish a completed recovery when no uncertain receipt remains", async () => {
     const subject = interactionResponseFixture();
 
     await expect(
       subject.gateway.recoverThread(scope, "thread-1"),
     ).resolves.toEqual({ status: "completed" });
-    expect(subject.publishThreadSnapshot).toHaveBeenCalledWith(
-      scope,
-      "thread-1",
-    );
-    expect(subject.onThreadChanged).toHaveBeenCalledWith(scope, "thread-1");
+    expect(subject.publishThreadSnapshot).not.toHaveBeenCalled();
+    expect(subject.onThreadChanged).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed committed publication without republishing successful recovery", async () => {
+    const publish = vi.fn().mockRejectedValueOnce(new Error("snapshot unavailable")).mockResolvedValue(undefined);
+    const reported = vi.fn();
+    const subject = interactionResponseFixture({ publishThreadSnapshot: publish, onPublicationError: reported });
+    await subject.gateway.mutate(scope, "thread-1", subject.operation);
+    await vi.waitFor(() => expect(reported).toHaveBeenCalledOnce());
+    expect(subject.state()).toBe("accepted");
+    expect(subject.onThreadChanged).not.toHaveBeenCalled();
+    await subject.gateway.recoverThread(scope, "thread-1");
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(subject.onThreadChanged).toHaveBeenCalledOnce();
+    await subject.gateway.recoverThread(scope, "thread-1");
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(subject.onThreadChanged).toHaveBeenCalledOnce();
+    await subject.gateway.close();
+  });
+
+  it("retains newer application publication failure when an older detached success finishes last", async () => {
+    const entered = deferred<void>(), release = deferred<void>();
+    const application = vi.fn()
+      .mockImplementationOnce(async () => { entered.resolve(); await release.promise; })
+      .mockRejectedValueOnce(new Error("newer application publication failed"))
+      .mockResolvedValue(undefined);
+    const reported = vi.fn();
+    const subject = interactionResponseFixture({ initialState: "accepted", onThreadChanged: application, onPublicationError: reported });
+    await subject.gateway.mutate(scope, "thread-1", subject.operation);
+    await entered.promise;
+    await subject.gateway.mutate(scope, "thread-1", subject.operation);
+    await vi.waitFor(() => expect(reported).toHaveBeenCalledOnce());
+    release.resolve();
+    await vi.waitFor(() => expect(application).toHaveBeenCalledTimes(2));
+    await subject.gateway.recoverThread(scope, "thread-1");
+    expect(subject.publishThreadSnapshot).toHaveBeenCalledTimes(2);
+    expect(application).toHaveBeenCalledTimes(3);
+    await subject.gateway.recoverThread(scope, "thread-1");
+    expect(application).toHaveBeenCalledTimes(3);
+    await subject.gateway.close();
   });
 
   it("retains uncertainty when exact backend reconciliation is inconclusive", async () => {

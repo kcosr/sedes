@@ -100,7 +100,6 @@ describe("project registration lifecycle", () => {
     expect(f.inventory.listWorkspaces(f.scope)).toEqual([]);
     expect(f.summaries.list(f.scope, f.environment.id)).toEqual([]);
     expect(f.summaries.listByIds(f.scope, [f.thread.id])).toEqual([]);
-    expect(f.inventory.countThreadsByInventoryState(f.scope).active).toBe(0);
     expect(f.inventory.getThread(f.scope, f.thread.id)).toEqual(before);
     expect(f.bindings.getBinding(f.scope, f.thread.id)).toEqual(binding);
     expect(f.handoffAuthoritativeReplacement).toHaveBeenCalledOnce();

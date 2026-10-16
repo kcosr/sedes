@@ -28,6 +28,12 @@ export type SubmissionCompletionObservationRecord = {
   readonly acknowledgedAt: number | null;
 };
 
+export type SubmissionCompletionObservationResult = {
+  readonly record: SubmissionCompletionObservationRecord;
+  /** A new terminal fact, finalized snapshot, or attention marker was stored. */
+  readonly changed: boolean;
+};
+
 type ObservationRow = Omit<
   SubmissionCompletionObservationRecord,
   "assistantResult" | "classifiedResult"
@@ -168,6 +174,20 @@ export class SubmissionCompletionRepository {
       readonly finalized?: FinalizedCompletion;
     },
   ): SubmissionCompletionObservationRecord {
+    return this.#observeCompletion(scope, applicationThreadId, operationId, input).record;
+  }
+
+  #observeCompletion(
+    scope: RequestScope,
+    applicationThreadId: string,
+    operationId: string,
+    input: {
+      readonly completionIdentity: string;
+      readonly observedAt: number;
+      readonly createAttention: boolean;
+      readonly finalized?: FinalizedCompletion;
+    },
+  ): SubmissionCompletionObservationResult {
     return this.database.transaction(() => {
       const current = this.get(scope, applicationThreadId, operationId);
       if (
@@ -179,14 +199,6 @@ export class SubmissionCompletionRepository {
           "The accepted operation already has a different completion identity.",
         );
       }
-      const attentionCreatedAt =
-        input.createAttention && current.attentionCreatedAt === null
-          ? this.#nextAttentionCreatedAt(
-              scope,
-              applicationThreadId,
-              input.observedAt,
-            )
-          : input.observedAt;
       const finalized = input.finalized
         ? {
             ...input.finalized,
@@ -212,6 +224,18 @@ export class SubmissionCompletionRepository {
           "The accepted operation already has a different finalized completion snapshot.",
         );
       }
+      if (
+        current.lastCompletionIdentity !== null &&
+        current.completionObservedAt !== null &&
+        (!input.createAttention || current.attentionCreatedAt !== null) &&
+        (!finalized || current.applicationTurnId !== null)
+      ) {
+        return { record: current, changed: false };
+      }
+      const attentionCreatedAt =
+        input.createAttention && current.attentionCreatedAt === null
+          ? this.#nextAttentionCreatedAt(scope, applicationThreadId, input.observedAt)
+          : input.observedAt;
       const result = this.database
         .prepare(
           `
@@ -258,7 +282,7 @@ export class SubmissionCompletionRepository {
           "The completion observation changed concurrently.",
         );
       }
-      return this.get(scope, applicationThreadId, operationId);
+      return { record: this.get(scope, applicationThreadId, operationId), changed: true };
     })();
   }
 
@@ -278,7 +302,7 @@ export class SubmissionCompletionRepository {
       readonly result: BoundedText;
       readonly classifiedResult: ClassifiedAssistantResult | null;
     },
-  ): SubmissionCompletionObservationRecord | undefined {
+  ): SubmissionCompletionObservationResult | undefined {
     return this.database.transaction(() => {
       const matches = this.database
         .prepare(
@@ -318,7 +342,7 @@ export class SubmissionCompletionRepository {
           "The accepted operation already has a different completion identity.",
         );
       }
-      const observed = this.observeCompletion(
+      const observed = this.#observeCompletion(
         scope,
         applicationThreadId,
         matches[0]!.operationId,

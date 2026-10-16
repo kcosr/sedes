@@ -596,7 +596,6 @@ describeRealPiCli("real Pi repository-skill CLI verification", () => {
             lineageFamilies: [],
             executionTargets: [],
             defaultNewThreadTargetId: null,
-            counts: { active: 0, snoozed: 0, settled: 0, archived: 0 },
             tasks: [],
           }),
         } as never,

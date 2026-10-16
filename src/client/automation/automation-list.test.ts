@@ -46,7 +46,7 @@ function snapshot(threads: NormalizedApplicationThreadSummary[] = [], overrides:
       { id: "ws-billing", environmentId: "env-local", projectId: "project-billing", label: { text: "billing-service" }, displayPath: { text: "/src/billing-service" }, available: true },
     ],
     executionTargets: [], threads, forkOrigins: [], lineagePlacements: [], groups: [], lineageFamilies: [],
-    defaultNewThreadTargetId: null, counts: { active: threads.length, snoozed: 0, settled: 0, archived: 0 }, tasks: [], ...overrides,
+    defaultNewThreadTargetId: null, tasks: [], ...overrides,
   };
 }
 

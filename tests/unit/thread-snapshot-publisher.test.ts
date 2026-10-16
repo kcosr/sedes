@@ -195,6 +195,97 @@ function retainedPolicyFixture(initial: NormalizedThreadSnapshot) {
 }
 
 describe("ThreadSnapshotPublisher", () => {
+  function changedPublicationFixture() {
+    const capture = vi.fn(async () => snapshot());
+    const application = vi.fn(async (_scope: typeof scope, _threadId: string) => undefined);
+    const publish = vi.fn(() => true);
+    const publisher = new ThreadSnapshotPublisher(
+      { getTarget: vi.fn(() => ({ backingState: "unbound" })) } as never,
+      { snapshot: capture } as never,
+      { quiet: () => ({ hub: {}, publishIfUnowned: publish, release() {} }) } as never,
+      application,
+    );
+    return { publisher, capture, application, publish };
+  }
+
+  it("does no work for unchanged completion replay after each successful publication", async () => {
+    const { publisher, capture, application, publish } = changedPublicationFixture();
+    for (let completed = 0; completed < 3; completed += 1) {
+      await publisher.publishChanged(scope, "thread-1", true);
+    }
+    expect(capture).toHaveBeenCalledTimes(3);
+    expect(publish).toHaveBeenCalledTimes(3);
+    expect(application).toHaveBeenCalledTimes(3);
+    for (let replay = 0; replay < 20; replay += 1) {
+      for (let completed = 0; completed < 3; completed += 1) {
+        await publisher.publishChanged(scope, "thread-1", false);
+      }
+    }
+    expect(capture).toHaveBeenCalledTimes(3);
+    expect(publish).toHaveBeenCalledTimes(3);
+    expect(application).toHaveBeenCalledTimes(3);
+    // A meaningful enrichment admits one additional authoritative capture.
+    await publisher.publishChanged(scope, "thread-1", true);
+    expect(capture).toHaveBeenCalledTimes(4);
+    await publisher.close();
+  });
+
+  it("retries only unfinished completion publication phases in the same scope", async () => {
+    const { publisher, capture, application, publish } = changedPublicationFixture();
+    capture.mockRejectedValueOnce(new Error("capture unavailable"));
+    await expect(publisher.publishChanged(scope, "thread-1", true)).rejects.toThrow("capture unavailable");
+    await publisher.publishChanged({ ...scope, principalId: "other" }, "thread-1", false);
+    expect(capture).toHaveBeenCalledOnce();
+    application.mockRejectedValueOnce(new Error("application unavailable"));
+    await expect(publisher.publishChanged(scope, "thread-1", false)).rejects.toThrow("application unavailable");
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(publish).toHaveBeenCalledOnce();
+    await publisher.publishChanged(scope, "thread-1", false);
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(application).toHaveBeenCalledTimes(2);
+    await publisher.publishChanged(scope, "thread-1", false);
+    expect(application).toHaveBeenCalledTimes(2);
+    await publisher.close();
+  });
+
+  it("orders concurrent completion changes and retains a newer failure after an older success", async () => {
+    const { publisher, capture, application } = changedPublicationFixture();
+    const entered = deferred<void>(), release = deferred<void>();
+    application.mockImplementationOnce(async () => { entered.resolve(); await release.promise; });
+    application.mockRejectedValueOnce(new Error("newer publication failed"));
+    const first = publisher.publishChanged(scope, "thread-1", true);
+    await entered.promise;
+    const next = publisher.publishChanged(scope, "thread-1", true);
+    const replay = publisher.publishChanged(scope, "thread-1", false);
+    expect(capture).toHaveBeenCalledOnce();
+    release.resolve();
+    await first;
+    await expect(next).rejects.toThrow("newer publication failed");
+    await expect(replay).rejects.toThrow("newer publication failed");
+    await publisher.publishChanged(scope, "thread-1", false);
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(application).toHaveBeenCalledTimes(3);
+    await publisher.close();
+  });
+
+  it("drains admitted and predecessor-blocked completion publications before closing", async () => {
+    const { publisher, capture, application } = changedPublicationFixture();
+    const entered = deferred<void>(), release = deferred<void>();
+    application.mockImplementationOnce(async () => { entered.resolve(); await release.promise; });
+    const first = publisher.publishChanged(scope, "thread-1", true);
+    await entered.promise;
+    const next = publisher.publishChanged(scope, "thread-1", true);
+    let closed = false;
+    const closing = publisher.close().then(() => { closed = true; });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    release.resolve();
+    await Promise.all([first, next, closing]);
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(application).toHaveBeenCalledTimes(2);
+    await expect(publisher.publishChanged(scope, "thread-1", true)).rejects.toThrow("closed");
+  });
+
   it.each(["created", "acknowledged"] as const)("orders %s attention with restored disconnected state when execution attach fails", async (transition) => {
     const completion = {
       automationContexts: [],

@@ -116,7 +116,6 @@ function snapshot(): Snapshot {
     ],
     advisories: [],
     defaultNewThreadTargetId: "target",
-    counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
     tasks: [],
   };
 }
@@ -125,7 +124,6 @@ function update(projection: ApplicationProjection, value: Thread): void {
     type: "thread_upsert",
     generation,
     thread: value,
-    counts: projection.counts,
   })();
 }
 function envelope(sequence: number, event: NormalizedApplicationEvent) {
@@ -175,13 +173,11 @@ describe("indexed application projection", () => {
         type: "thread_upsert",
         generation,
         thread: other,
-        counts: { ...seed.counts, active: 2 },
       },
       {
         type: "thread_upsert",
         generation,
         thread: { ...other, threadRevision: 1 },
-        counts: seed.counts,
       },
       {
         type: "task_upsert",
@@ -195,9 +191,9 @@ describe("indexed application projection", () => {
         task: task(1, { revision: 1, title: "Updated" }),
       },
       {
-        type: "inventory_counts_changed",
+        type: "thread_upsert",
         generation,
-        counts: { ...seed.counts, archived: 100 },
+        thread: thread({ threadRevision: 100 }),
       },
       {
         type: "workpad_changed",
@@ -213,7 +209,6 @@ describe("indexed application projection", () => {
         type: "thread_remove",
         generation,
         threadId: other.id,
-        counts: seed.counts,
       },
       { type: "workspace_remove", generation, workspaceId: workspace.id },
       { type: "environment_remove", generation, environmentId: environment.id },
@@ -233,14 +228,14 @@ describe("indexed application projection", () => {
     const projection = new ApplicationProjection(snapshot());
     const original = projection.materialize();
     const first = projection.prepare({
-      type: "inventory_counts_changed",
+      type: "thread_upsert",
       generation,
-      counts: { ...projection.counts, active: 2 },
+      thread: thread({ threadRevision: 2 }),
     });
     const stale = projection.prepare({
-      type: "inventory_counts_changed",
+      type: "thread_upsert",
       generation,
-      counts: { ...projection.counts, active: 3 },
+      thread: thread({ threadRevision: 3 }),
     });
     expect(projection.materialize()).toEqual(original);
     first();
@@ -250,35 +245,34 @@ describe("indexed application projection", () => {
     expect(() => stale()).toThrow(
       "application_projection_prepared_update_stale",
     );
-    expect(projection.counts.active).toBe(2);
+    expect(projection.get("threads", threadId)!.threadRevision).toBe(2);
   });
 
-  it("owns immutable copies of seeds, deltas, lookups, counts and checkpoints", () => {
+  it("owns immutable copies of seeds, deltas, lookups and checkpoints", () => {
     const seed = snapshot();
     const projection = new ApplicationProjection(seed);
     seed.threads[0]!.title.text = "Mutated seed";
-    const value = thread({ title: { text: "New" } });
+    const value = thread({ title: { text: "New" }, threadRevision: 2 });
     const event: Delta = {
       type: "thread_upsert",
       generation,
       thread: value,
-      counts: { ...seed.counts, active: 2 },
     };
     const commit = projection.prepare(event);
     value.title.text = "Mutated event";
-    event.counts.active = 9;
+    event.thread.threadRevision = 9;
     commit();
     expect(projection.get("threads", threadId)!.title.text).toBe("New");
-    expect(projection.counts.active).toBe(2);
+    expect(projection.get("threads", threadId)!.threadRevision).toBe(2);
     expect(() => {
       projection.get("threads", threadId)!.title.text = "Mutation";
     }).toThrow();
     expect(() => {
-      projection.counts.active = 3;
+      projection.get("threads", threadId)!.threadRevision = 3;
     }).toThrow();
     const checkpoint = projection.materialize();
     expect(() => checkpoint.threads.push(thread())).toThrow();
-    update(projection, thread({ title: { text: "Later" } }));
+    update(projection, thread({ title: { text: "Later" }, threadRevision: 3 }));
     expect(checkpoint.threads[0]!.title.text).toBe("New");
   });
 
@@ -288,9 +282,9 @@ describe("indexed application projection", () => {
     const invalid: unknown[] = [
       { type: "unknown", generation },
       {
-        type: "inventory_counts_changed",
+        type: "thread_upsert",
         generation,
-        counts: { ...projection.counts, active: -1 },
+        thread: thread({ threadRevision: -1 }),
       },
       { type: "environment_remove", generation, environmentId: "environment" },
       { type: "workspace_remove", generation, workspaceId },
@@ -298,19 +292,16 @@ describe("indexed application projection", () => {
         type: "thread_upsert",
         generation,
         thread: thread({ workspaceId: "missing" }),
-        counts: projection.counts,
       },
       {
         type: "thread_upsert",
         generation,
         thread: thread({ targetId: "missing" }),
-        counts: projection.counts,
       },
       {
         type: "thread_upsert",
         generation,
         thread: thread({ groupId: uuid(200) }),
-        counts: projection.counts,
       },
       {
         type: "thread_upsert",
@@ -318,7 +309,6 @@ describe("indexed application projection", () => {
         thread: thread({
           backend: { brand: "codex", label: { text: "Codex" } },
         }),
-        counts: projection.counts,
       },
       {
         type: "task_upsert",
@@ -405,7 +395,6 @@ describe("indexed application projection", () => {
       type: "thread_remove",
       generation,
       threadId,
-      counts: seed.counts,
     })();
     expect(projection.materialize().tasks).toHaveLength(100);
     seed.threads.push(thread({ id: uuid(500) }));
@@ -440,7 +429,6 @@ describe("indexed application projection", () => {
         type: "thread_remove",
         generation,
         threadId,
-        counts: seed.counts,
       }),
     ).toThrow("application_inventory_reference_invalid");
     expect(lineage.materialize()).toEqual(seed);
@@ -564,7 +552,6 @@ describe("indexed application projection", () => {
     seed.threads = Array.from({ length: 65 }, (_, index) =>
       thread({ id: uuid(300 + index) }),
     );
-    seed.counts = { ...seed.counts, active: 65 };
     const projection = new ApplicationProjection(seed);
     projection.prepare({
       type: "workspace_upsert",
@@ -682,7 +669,7 @@ describe("indexed application projection", () => {
 
   it("admits exact 32 MiB state and rejects one extra byte before mutation", () => {
     const seed = snapshot();
-    seed.counts.active = 9;
+    seed.threads[0]!.threadRevision = 9;
     seed.tasks = Array.from({ length: 512 }, (_, index) => task(index));
     let remaining = MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES - 1 - bytes(seed);
     for (const value of seed.tasks) {
@@ -696,9 +683,9 @@ describe("indexed application projection", () => {
       MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES - 1,
     );
     projection.prepare({
-      type: "inventory_counts_changed",
+      type: "thread_upsert",
       generation,
-      counts: { ...seed.counts, active: 99 },
+      thread: thread({ threadRevision: 99 }),
     })();
     expect(projection.serializedBytes).toBe(
       MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES,
@@ -708,13 +695,13 @@ describe("indexed application projection", () => {
     );
     expect(() =>
       projection.prepare({
-        type: "inventory_counts_changed",
+        type: "thread_upsert",
         generation,
-        counts: { ...seed.counts, active: 999 },
+        thread: thread({ threadRevision: 999 }),
       }),
     ).toThrow("application_projection_snapshot_limit");
-    expect(projection.counts.active).toBe(99);
-    seed.counts.active = 999;
+    expect(projection.get("threads", threadId)!.threadRevision).toBe(99);
+    seed.threads[0]!.threadRevision = 999;
     expect(() => new ApplicationProjection(seed)).toThrow();
   }, 20_000);
 });

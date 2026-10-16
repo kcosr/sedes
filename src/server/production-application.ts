@@ -1,3 +1,4 @@
+import { performCompletionFollowUp } from "./conversations/authoritative-completion-follow-up.js";
 import { AutomationForkTargetResolver } from "./runtime/automation-fork-target.js";
 import { ImageShowRepository } from "./db/repositories/image-show-repository.js";
 import { ImageShowService } from "./output-artifacts/image-show-service.js";
@@ -1705,12 +1706,13 @@ export async function startProductionApplication(
       applicationThreadId,
       input,
     ) => {
-      const observed = await queueDispatcher!.onAuthoritativeCompletion(
+      const observation = await queueDispatcher!.onAuthoritativeCompletion(
         eventScope,
         applicationThreadId,
         input,
       );
-      if (!observed) return;
+      if (!observation) return;
+      const observed = observation.record;
       try {
         observeAutomationTurns?.observe(
           eventScope,
@@ -1725,34 +1727,16 @@ export async function startProductionApplication(
       notificationLifecycle.completion(eventScope, observed, input.provenance, input.voiceSubscriberWatermark, input.responseVoice);
       if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId,
         observed.completionOutcome ?? "interrupted", input.responseVoice?.superseded);
-      authoritativeCompletionFollowUp.defer(async () => {
-        const failures: unknown[] = [];
-        try {
-          await completionCallbackDispatcher.deliverReady(eventScope);
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          await mutations?.recoverThread(eventScope, applicationThreadId);
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          await inventory.wakeForRuntimeSignal(
-            eventScope,
-            applicationThreadId,
-            "completion",
-          );
-        } catch (error) {
-          failures.push(error);
-        }
-        if (failures.length > 0) {
-          throw new AggregateError(
-            failures,
-            "Authoritative completion follow-up did not finish cleanly.",
-          );
-        }
-      });
+      authoritativeCompletionFollowUp.defer(() => performCompletionFollowUp({
+        deliverCallbacks: () => completionCallbackDispatcher.deliverReady(eventScope),
+        publishCompletion: () => activeThreadSnapshots.publishChanged(eventScope, applicationThreadId, observation.changed),
+        recoverThread: () => mutations?.recoverThread(eventScope, applicationThreadId),
+        wakeThread: () => inventory.wakeForRuntimeSignal(
+          eventScope,
+          applicationThreadId,
+          "completion",
+        ),
+      }));
     };
     const attention = new ThreadAttentionService({
       acknowledgeAutomationRun: (scope, threadId, runId, outcome) => {

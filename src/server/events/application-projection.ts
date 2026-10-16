@@ -64,7 +64,6 @@ export class ApplicationProjection {
   readonly #collections = new Map<Collection, Map<string, Entry>>();
   readonly #dependents = new Map<string, Set<string>>();
   readonly #lineageReferenceCounts = new Map<string, number>();
-  #counts: Snapshot["counts"];
   readonly #defaultTarget: string | null;
   #bytes: number;
   #folds = 0;
@@ -74,7 +73,6 @@ export class ApplicationProjection {
 
   constructor(raw: Snapshot) {
     const snapshot = freeze(normalizedApplicationSnapshotSchema.parse(raw));
-    this.#counts = snapshot.counts;
     this.#defaultTarget = snapshot.defaultNewThreadTargetId;
     this.#bytes = bytes(snapshot);
     for (const collection of COLLECTIONS) {
@@ -93,9 +91,6 @@ export class ApplicationProjection {
     }
   }
 
-  get counts(): Snapshot["counts"] {
-    return this.#counts;
-  }
   get serializedBytes(): number {
     return this.#bytes;
   }
@@ -132,7 +127,6 @@ export class ApplicationProjection {
     );
     const snapshot = normalizedApplicationSnapshotSchema.parse({
       ...fields,
-      counts: this.#counts,
       defaultNewThreadTargetId: this.#defaultTarget,
     });
     assert(
@@ -197,13 +191,9 @@ export class ApplicationProjection {
     let collection: Collection | undefined;
     let id = "";
     let value: Value | undefined;
-    let counts = this.#counts;
     switch (event.type) {
       case "automation_changed":
       case "workpad_changed":
-        break;
-      case "inventory_counts_changed":
-        counts = event.counts;
         break;
       case "environment_upsert":
         collection = "environments";
@@ -227,12 +217,10 @@ export class ApplicationProjection {
         collection = "threads";
         value = event.thread;
         id = value.id;
-        counts = event.counts;
         break;
       case "thread_remove":
         collection = "threads";
         id = event.threadId;
-        counts = event.counts;
         break;
       case "task_upsert":
         collection = "tasks";
@@ -336,15 +324,9 @@ export class ApplicationProjection {
         this.#validate(name, this.get(name, entityId)!, lookup);
       }
     }
-    const countsChanged =
-      JSON.stringify(counts) !== JSON.stringify(this.#counts);
     const oldBytes = prior ? Buffer.byteLength(prior.json, "utf8") : 0;
     const newBytes = json ? Buffer.byteLength(json, "utf8") : 0;
-    const oldCountBytes = bytes(this.#counts);
-    const newCountBytes = bytes(counts);
-    const countsExamined = "counts" in event;
-    let nextBytes =
-      this.#bytes + newBytes - oldBytes + newCountBytes - oldCountBytes;
+    let nextBytes = this.#bytes + newBytes - oldBytes;
     if (entries && !prior && value && entries.size > 0) nextBytes++;
     if (entries && prior && !value && entries.size > 1) nextBytes--;
     assert(
@@ -366,15 +348,11 @@ export class ApplicationProjection {
           this.#index(ownKey, references, true);
         } else entries.delete(id);
       }
-      this.#counts = counts;
       this.#bytes = nextBytes;
       this.#version++;
-      if (changed || countsChanged) {
+      if (changed) {
         this.#folds++;
-        this.#changedBytes +=
-          oldBytes +
-          newBytes +
-          (countsExamined ? oldCountBytes + newCountBytes : 0);
+        this.#changedBytes += oldBytes + newBytes;
         this.#firstFoldAt ??= performance.now();
       }
     };

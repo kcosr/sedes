@@ -318,7 +318,6 @@ export class ApplicationSnapshotService {
       forkOrigins: lineage.forkOrigins,
       lineagePlacements: lineage.lineagePlacements,
       lineageFamilies: lineage.lineageFamilies,
-      counts: this.inventory.countThreadsByInventoryState(scope),
       tasks: associatedTasks,
     });
     this.captureMetadata.set(snapshot, saturation);
@@ -602,7 +601,6 @@ export class ApplicationSnapshotPublicationBoundary {
     id: string,
     forcePublication: boolean,
   ): Promise<void | "retry"> {
-    const counts = this.snapshots.inventory.countThreadsByInventoryState(scope);
     const durable = this.snapshots.summaries.listByIds(scope, [id])[0];
     const prior = hub.projection!.get("threads", id);
     let thread: NormalizedApplicationThreadSummary | null = null;
@@ -637,12 +635,7 @@ export class ApplicationSnapshotPublicationBoundary {
       );
       return;
     }
-    const checkpointCounts = hub.projection!.counts;
-    if (
-      !forcePublication &&
-      isDeepStrictEqual(prior ?? null, thread) &&
-      isDeepStrictEqual(checkpointCounts, counts)
-    )
+    if (!forcePublication && isDeepStrictEqual(prior ?? null, thread))
       return;
     hub.publish(
       thread
@@ -650,13 +643,11 @@ export class ApplicationSnapshotPublicationBoundary {
             type: "thread_upsert",
             generation: hub.generation,
             thread,
-            counts,
           }
         : {
             type: "thread_remove",
             generation: hub.generation,
             threadId: id,
-            counts,
           },
     );
     if (!this.#readyToPublish(scope, hub)) return "retry";

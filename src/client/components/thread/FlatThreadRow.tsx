@@ -230,13 +230,17 @@ export interface FlatRowTime {
   readonly overdue: boolean;
 }
 
+function futureRowTime(thread: NormalizedApplicationThreadSummary): string | undefined {
+  return thread.snoozedUntil ?? thread.automations.nextRunAt;
+}
+
 export function flatRowTime(
   thread: NormalizedApplicationThreadSummary,
   futureTimes: boolean,
   now = new Date(),
 ): FlatRowTime {
   if (futureTimes) {
-    const at = thread.snoozedUntil ?? thread.automations.nextRunAt;
+    const at = futureRowTime(thread);
     if (at !== undefined) {
       return {
         label: futureTimeLabel(at, now),
@@ -258,11 +262,12 @@ export interface FlatRowContext {
 
 /**
  * Card line-2 context slot; one string, priority failure > unknown outcome >
- * paused > schedule.
+ * paused > schedule. Omit a deadline already shown in the trailing time slot.
  */
 export function flatRowContext(
   thread: NormalizedApplicationThreadSummary,
   now = new Date(),
+  displayedFutureTime?: string,
 ): FlatRowContext | undefined {
   const automation = thread.automations.totalCount > 0 ? thread.automations : undefined;
   const health = threadAutomationHealth(thread, now);
@@ -280,6 +285,8 @@ export function flatRowContext(
     return { label: health.label.toLowerCase(), tone: "neutral" };
   }
   if (automation?.nextRunAt !== undefined) {
+    if (displayedFutureTime !== undefined &&
+        Date.parse(automation.nextRunAt) === Date.parse(displayedFutureTime)) return undefined;
     return {
       label: `next ${futureTimeLabel(automation.nextRunAt, now)}`,
       tone: "neutral",
@@ -289,13 +296,13 @@ export function flatRowContext(
     thread.inventoryState === "snoozed" &&
     thread.snoozedUntil !== undefined
   ) {
+    if (displayedFutureTime !== undefined &&
+        Date.parse(thread.snoozedUntil) === Date.parse(displayedFutureTime)) return undefined;
     return {
       label: `wakes ${futureTimeLabel(thread.snoozedUntil, now)}`,
       tone: "neutral",
     };
   }
-  if (thread.backingState === "unbound")
-    return { label: "draft", tone: "neutral" };
   return undefined;
 }
 
@@ -459,7 +466,11 @@ export function FlatThreadRow({
   const renderedGlyphLabel = flatRowGlyphLabel(thread, backgroundWorkCurrent);
   const now = new Date();
   const time = flatRowTime(thread, futureTimes, now);
-  const context = density === "card" ? flatRowContext(thread, now) : undefined;
+  const context = density === "card" ? flatRowContext(
+    thread,
+    now,
+    time.future && quickSwitchHint === undefined ? futureRowTime(thread) : undefined,
+  ) : undefined;
 
   const badges = buildBadges(thread, parked, threadAutomationHealth(thread, now));
 

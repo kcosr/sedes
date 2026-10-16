@@ -82,6 +82,21 @@ describe("thread workpad counts", () => {
     f.database.transaction(() => { for (let count = 0; count < 101; count++) retained = create(first); })();
     create(second);
 
+    // Observe execution before any scope warms the connection's prepared query.
+    const queries: Array<{ sql: string; parameters: unknown[] }> = [];
+    const prepare = f.database.prepare.bind(f.database);
+    const spy = vi.spyOn(f.database, "prepare").mockImplementation(sql => {
+      const statement = prepare(sql);
+      if (sql.includes("WITH requested_threads")) {
+        const all = statement.all.bind(statement);
+        vi.spyOn(statement, "all").mockImplementation((...parameters: unknown[]) => {
+          queries.push({ sql, parameters });
+          return all(...parameters);
+        });
+      }
+      return statement;
+    });
+
     // Deliberately colliding thread references under other owners must never
     // contribute to the authorized principal's count.
     f.database.prepare("INSERT INTO tenants(id, created_at) VALUES ('another-tenant', 1)").run();
@@ -102,19 +117,7 @@ describe("thread workpad counts", () => {
       })).rejects.toMatchObject({ code: "not_found" });
     }
 
-    const queries: Array<{ sql: string; parameters: unknown[] }> = [];
-    const prepare = f.database.prepare.bind(f.database);
-    const spy = vi.spyOn(f.database, "prepare").mockImplementation(sql => {
-      const statement = prepare(sql);
-      if (sql.includes("WITH requested_threads")) {
-        const all = statement.all.bind(statement);
-        vi.spyOn(statement, "all").mockImplementation((...parameters: unknown[]) => {
-          queries.push({ sql, parameters });
-          return all(...parameters);
-        });
-      }
-      return statement;
-    });
+    queries.length = 0;
     expect(f.summaries.listByIds(f.scope, [first])[0]?.nonArchivedWorkpadCount).toBe(101);
     expect(f.counts(await f.application.capture(f.scope))).toEqual([101, 1, 0]);
     spy.mockRestore();

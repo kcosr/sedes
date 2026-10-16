@@ -371,6 +371,13 @@ the helpers and their tests.
 | `dayTimeLabel`, `dayTimePhrase` | The one format for times in a list (runs and next-run previews), always with the clock time: "Today 3:17 AM", "Tmrw 9:00 AM", "Mon 9:00 AM", "Sun Oct 4 2:00 AM"; and its form inside a sentence ("today at 6:00 PM") |
 | `AutomationGlyph` | Draws a health glyph at `sidebar`, `list`, or `header` size; colors only `danger`, `warning`, and `info`, so Active and Paused stay quiet |
 
+Sidebar cards show a scheduled run or snooze wake time once. When the trailing
+timestamp already shows that instant, omit its repeated `next` or `wakes` line.
+Keep distinct deadlines, status context, and the next run beneath an activity-age
+timestamp in other groups.
+Drafts use the pencil state icon with its accessible Draft label; card context
+does not repeat the draft state as text.
+
 Uncertain runs need attention everywhere, and paused is never a warning tone.
 Repeat is the automation icon in menus, headers, and rows.
 Finished definitions use CircleCheck and show their last result once. A thread

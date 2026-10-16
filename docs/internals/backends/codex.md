@@ -102,12 +102,17 @@ requests, settings update, command approval, MCP elicitation, settings-updated, 
 thread-started. Remaining adopted directions, including both pagination
 requests, select the stable artifact. No direction falls back between profiles.
 RPC admission recognizes all 86 official stable server notifications; 65 have
-reviewed thread-routing evidence for bounded resnapshot recovery. The 32
-adopted notification directions have explicit dispositions. The prediction
-notification is validated and ignored because prediction requests remain
-unimplemented in this release; other notifications retain their reviewed
-consumers. Other official notifications are validated and ignored when no
-consumer is active.
+reviewed thread-routing evidence for bounded resnapshot recovery. The 37
+adopted notification directions have explicit dispositions. The exact
+`turn/moderationMetadata`, `model/verification`, `model/safetyBuffering/updated`
+and `thread/prediction/updated` advisories are validated, including bounded
+routing identities, then ignored before transcript queuing or mutation
+accounting. They do not change transcript or completion authority. Malformed
+scoped notifications still invalidate the projection, and history changes,
+model reroutes, generation changes and genuine sequence gaps retain recovery.
+Other notifications retain their reviewed consumers or conservative recovery
+when an active conversation has no semantic disposition. Official notifications
+are validated and ignored when no consumer is active.
 
 The 0.153.0 command-approval request distinguishes ordinary commands from
 `writeStdin`. Sedes handles both kinds. A `writeStdin` approval requires a

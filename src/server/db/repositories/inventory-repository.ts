@@ -672,38 +672,6 @@ export class InventoryRepository {
     this.#attachments = new ComposerAttachmentRepository(database);
   }
 
-  countThreadsByInventoryState(
-    scope: RequestScope,
-  ): Readonly<Record<InventoryState, number>> {
-    const rows = this.database
-      .prepare(
-        `
-          SELECT inventory_state AS state, count(*) AS count
-          FROM thread_principal_state
-          WHERE tenant_id = ? AND principal_id = ?
-            AND EXISTS (SELECT 1 FROM application_threads AS thread JOIN workspaces AS workspace
-              ON workspace.tenant_id = thread.tenant_id AND workspace.owner_principal_id = thread.owner_principal_id
-              AND workspace.id = thread.workspace_id
-              WHERE thread.tenant_id = thread_principal_state.tenant_id
-                AND thread.owner_principal_id = thread_principal_state.principal_id
-                AND thread.id = thread_principal_state.thread_id AND workspace.removed_at IS NULL)
-          GROUP BY inventory_state
-        `,
-      )
-      .all(scope.tenantId, scope.principalId) as Array<{
-      state: InventoryState;
-      count: number;
-    }>;
-    const counts: Record<InventoryState, number> = {
-      active: 0,
-      snoozed: 0,
-      settled: 0,
-      archived: 0,
-    };
-    for (const row of rows) counts[row.state] = row.count;
-    return counts;
-  }
-
   getEnvironment(
     scope: RequestScope,
     environmentId: string,

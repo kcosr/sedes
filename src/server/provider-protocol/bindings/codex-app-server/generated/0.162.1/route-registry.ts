@@ -50,6 +50,8 @@ import type { McpServerStatusUpdatedNotification as StableMcpServerStatusUpdated
 import type { McpToolCallProgressNotification as StableMcpToolCallProgressNotification } from "./stable/v2/McpToolCallProgressNotification.js";
 import type { ModelListParams as StableModelListParams } from "./stable/v2/ModelListParams.js";
 import type { ModelListResponse as StableModelListResponse } from "./stable/v2/ModelListResponse.js";
+import type { ModelSafetyBufferingUpdatedNotification as StableModelSafetyBufferingUpdatedNotification } from "./stable/v2/ModelSafetyBufferingUpdatedNotification.js";
+import type { ModelVerificationNotification as StableModelVerificationNotification } from "./stable/v2/ModelVerificationNotification.js";
 import type { PermissionProfileListParams as StablePermissionProfileListParams } from "./stable/v2/PermissionProfileListParams.js";
 import type { PermissionProfileListResponse as StablePermissionProfileListResponse } from "./stable/v2/PermissionProfileListResponse.js";
 import type { PermissionsRequestApprovalParams as StablePermissionsRequestApprovalParams } from "./stable/v2/PermissionsRequestApprovalParams.js";
@@ -99,6 +101,7 @@ import type { TurnCompletedNotification as StableTurnCompletedNotification } fro
 import type { TurnDiffUpdatedNotification as StableTurnDiffUpdatedNotification } from "./stable/v2/TurnDiffUpdatedNotification.js";
 import type { TurnInterruptParams as StableTurnInterruptParams } from "./stable/v2/TurnInterruptParams.js";
 import type { TurnInterruptResponse as StableTurnInterruptResponse } from "./stable/v2/TurnInterruptResponse.js";
+import type { TurnModerationMetadataNotification as StableTurnModerationMetadataNotification } from "./stable/v2/TurnModerationMetadataNotification.js";
 import type { TurnPlanUpdatedNotification as StableTurnPlanUpdatedNotification } from "./stable/v2/TurnPlanUpdatedNotification.js";
 import type { TurnStartParams as StableTurnStartParams } from "./stable/v2/TurnStartParams.js";
 import type { TurnStartResponse as StableTurnStartResponse } from "./stable/v2/TurnStartResponse.js";
@@ -323,6 +326,9 @@ export interface CodexServerNotificationMap {
   readonly "thread/goal/updated": { readonly params: StableThreadGoalUpdatedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "thread/goal/cleared": { readonly params: StableThreadGoalClearedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "thread/prediction/updated": { readonly params: StableThreadPredictionUpdatedNotification; readonly domain: "live_turns"; readonly use: "ignored_informational" };
+  readonly "turn/moderationMetadata": { readonly params: StableTurnModerationMetadataNotification; readonly domain: "live_turns"; readonly use: "ignored_informational" };
+  readonly "model/verification": { readonly params: StableModelVerificationNotification; readonly domain: "live_turns"; readonly use: "ignored_informational" };
+  readonly "model/safetyBuffering/updated": { readonly params: StableModelSafetyBufferingUpdatedNotification; readonly domain: "live_turns"; readonly use: "ignored_informational" };
   readonly "thread/settings/updated": { readonly params: ExperimentalThreadSettingsUpdatedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "thread/tokenUsage/updated": { readonly params: StableThreadTokenUsageUpdatedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "thread/compacted": { readonly params: StableContextCompactedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
@@ -507,6 +513,9 @@ export const codexServerNotificationRegistry = Object.freeze({
   "thread/goal/updated": Object.freeze({ params: validateStableThreadGoalUpdatedNotification, domain: "live_turns", use: "decoded" }),
   "thread/goal/cleared": Object.freeze({ params: validateStableThreadGoalClearedNotification, domain: "live_turns", use: "decoded" }),
   "thread/prediction/updated": Object.freeze({ params: validateStableThreadPredictionUpdatedNotification, domain: "live_turns", use: "ignored_informational" }),
+  "turn/moderationMetadata": Object.freeze({ params: validateStableTurnModerationMetadataNotification, domain: "live_turns", use: "ignored_informational" }),
+  "model/verification": Object.freeze({ params: validateStableModelVerificationNotification, domain: "live_turns", use: "ignored_informational" }),
+  "model/safetyBuffering/updated": Object.freeze({ params: validateStableModelSafetyBufferingUpdatedNotification, domain: "live_turns", use: "ignored_informational" }),
   "thread/settings/updated": Object.freeze({ params: validateExperimentalThreadSettingsUpdatedNotification, domain: "live_turns", use: "decoded" }),
   "thread/tokenUsage/updated": Object.freeze({ params: validateStableThreadTokenUsageUpdatedNotification, domain: "live_turns", use: "decoded" }),
   "thread/compacted": Object.freeze({ params: validateStableContextCompactedNotification, domain: "live_turns", use: "decoded" }),

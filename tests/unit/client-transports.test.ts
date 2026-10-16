@@ -1233,7 +1233,6 @@ describe("ApiClient normalized contract", () => {
           environments: [],
           workspaces: [],
           threads: [],
-          counts: { active: 0, snoozed: 0, settled: 0, archived: 0 },
         }),
       ),
     );

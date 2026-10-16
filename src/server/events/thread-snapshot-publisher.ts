@@ -26,6 +26,12 @@ interface PublicationMailbox {
 export class ThreadSnapshotPublisher {
   readonly #publicationMailboxes = new Map<string, PublicationMailbox>();
   readonly #scheduledPublications = new Set<Promise<void>>();
+  readonly #conditionalPublications = new Set<Promise<void>>();
+  readonly #pendingChanges = new Map<string, {
+    snapshot: boolean;
+    application: boolean;
+    inFlight?: Promise<void>;
+  }>();
   #closing = false;
   #closePromise?: Promise<void>;
 
@@ -75,6 +81,46 @@ export class ThreadSnapshotPublisher {
     this.#assertAccepting();
     await this.#publishThread(scope, applicationThreadId);
     await this.onThreadChanged?.(scope, applicationThreadId);
+  }
+
+  /** Publish a newly committed fact, or retry an unfinished publication. */
+  async publishChanged(
+    scope: RequestScope,
+    applicationThreadId: string,
+    changed: boolean,
+  ): Promise<void> {
+    this.#assertAccepting();
+    const key = publicationKey(scope, applicationThreadId);
+    let pending = this.#pendingChanges.get(key);
+    if (!changed && !pending) return;
+    if (!changed && pending?.inFlight) return pending.inFlight;
+    const predecessor = pending?.inFlight;
+    if (changed) {
+      pending = { snapshot: true, application: true };
+      this.#pendingChanges.set(key, pending);
+    }
+    const entry = pending!;
+    // Follow-up callers may overlap. Keep a thread's capture and application
+    // publication together, including a change arriving during an older one.
+    const publication = (predecessor ?? Promise.resolve()).catch(() => undefined).then(async () => {
+      if (entry.snapshot) {
+        await this.#publishThread(scope, applicationThreadId);
+        entry.snapshot = false;
+      }
+      if (entry.application) {
+        await this.onThreadChanged?.(scope, applicationThreadId);
+        entry.application = false;
+      }
+    });
+    entry.inFlight = publication;
+    this.#conditionalPublications.add(publication);
+    try {
+      await publication;
+      if (this.#pendingChanges.get(key) === entry) this.#pendingChanges.delete(key);
+    } finally {
+      this.#conditionalPublications.delete(publication);
+      if (entry.inFlight === publication) entry.inFlight = undefined;
+    }
   }
 
   async publishMany(
@@ -397,7 +443,8 @@ export class ThreadSnapshotPublisher {
     applicationThreadId: string,
     operation: () => T | Promise<T>,
   ): Promise<T> {
-    this.#assertAccepting();
+    // Public entry points fence admission. Already-admitted conditional work
+    // may reach this mailbox after close starts while an earlier change drains.
     const key = publicationKey(scope, applicationThreadId);
     let entry = this.#publicationMailboxes.get(key);
     if (!entry) {
@@ -438,6 +485,7 @@ export class ThreadSnapshotPublisher {
   }
 
   async #performClose(): Promise<void> {
+    await Promise.allSettled([...this.#conditionalPublications]);
     await Promise.all(
       [...this.#publicationMailboxes.values()].map(({ mailbox }) =>
         mailbox.close(),

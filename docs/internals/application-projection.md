@@ -37,6 +37,16 @@ provider or reads its transcript. Responses use `Cache-Control: no-store`.
 Clients use this read to resolve a saved default thread that is absent from
 their currently loaded inventory.
 
+Application snapshots and thread deltas do not carry global Active, Snoozed,
+Parked or Archived totals. Shelves and archive views retain their own scoped
+counts, and thread summaries retain their descendant, group and automation
+counts. A single-thread publication never runs a global inventory aggregate.
+
+Thread-summary readers reuse a bounded set of prepared SQL statements on the
+owning database connection. Scope and thread IDs are bound on every execution;
+rows are read afresh, including inside transactions. This caches query
+preparation only, not query results or a replacement for authoritative reads.
+
 ## Fold and epoch model
 
 An aggregate is `unseeded`, `seeding`, `ready`, `recapturing` or `closed`. The
@@ -53,8 +63,8 @@ installs the projection before any subscriber callback runs, so a subscriber
 never observes an event ahead of the checkpoint that includes it. A failure
 before the commit changes nothing; a failure inside it closes the aggregate.
 
-Environment, workspace, thread and Task upserts and removals and inventory
-counts fold incrementally; a Workpad invalidation advances the position without
+Environment, workspace, thread and Task upserts and removals fold
+incrementally; a Workpad invalidation advances the position without
 changing snapshot values. Projects, execution targets, advisories, Groups,
 fork origins and lineage have no incremental event and change only through a
 full replacement, as do cross-collection changes one delta cannot carry, such

@@ -153,16 +153,6 @@ export type NormalizedInstallationAdvisory = z.infer<
   typeof normalizedInstallationAdvisorySchema
 >;
 
-export const normalizedInventoryCountsSchema = z.strictObject({
-  active: safeInventoryCountSchema,
-  snoozed: safeInventoryCountSchema,
-  settled: safeInventoryCountSchema,
-  archived: safeInventoryCountSchema,
-});
-export type NormalizedInventoryCounts = z.infer<
-  typeof normalizedInventoryCountsSchema
->;
-
 /**
  * The application stream only needs enough attention state to render durable
  * sidebar badges. Full reminder text, diagnostics, and operation identifiers
@@ -406,7 +396,6 @@ export const normalizedApplicationSnapshotSchema = z
       .array(normalizedInstallationAdvisorySchema)
       .max(MAXIMUM_ACTIVE_INSTALLATION_ADVISORIES),
     defaultNewThreadTargetId: applicationEntityIdSchema.nullable(),
-    counts: normalizedInventoryCountsSchema,
     tasks: z.array(associatedTaskSchema).max(10_000),
   })
   .superRefine((snapshot, context) => {
@@ -729,18 +718,11 @@ export const normalizedApplicationEventSchema = z.discriminatedUnion("type", [
     type: z.literal("thread_upsert"),
     generation: applicationGenerationSchema,
     thread: normalizedApplicationThreadSummarySchema,
-    counts: normalizedInventoryCountsSchema,
   }),
   z.strictObject({
     type: z.literal("thread_remove"),
     generation: applicationGenerationSchema,
     threadId: applicationEntityIdSchema,
-    counts: normalizedInventoryCountsSchema,
-  }),
-  z.strictObject({
-    type: z.literal("inventory_counts_changed"),
-    generation: applicationGenerationSchema,
-    counts: normalizedInventoryCountsSchema,
   }),
   z.strictObject({
     type: z.literal("task_upsert"),
@@ -787,7 +769,7 @@ export type ApplicationEventEnvelope = z.infer<
   typeof applicationEventEnvelopeSchema
 >;
 
-export const SEDES_CLIENT_PROTOCOL_VERSION = 161 as const;
+export const SEDES_CLIENT_PROTOCOL_VERSION = 162 as const;
 
 export const normalizedApplicationSessionSchema = z.strictObject({
   clientProtocolVersion: z.literal(SEDES_CLIENT_PROTOCOL_VERSION),
