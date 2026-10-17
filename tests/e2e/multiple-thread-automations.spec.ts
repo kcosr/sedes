@@ -318,7 +318,7 @@ test("fork creates a fresh result from a draft or started source without inherit
     expect(child.agentTools).toMatchObject({
       enabled: sourceSnapshot.agentTools.enabled,
       presentation: sourceSnapshot.agentTools.presentation,
-      accessBoundary: sourceSnapshot.agentTools.accessBoundary,
+      resourceScope: sourceSnapshot.agentTools.resourceScope,
     });
   }
 

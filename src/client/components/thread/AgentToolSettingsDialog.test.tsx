@@ -54,7 +54,8 @@ function policySnapshot(
     readonly presentationSurface?: AgentToolPresentationSurface;
     readonly presentationMode?: AgentToolPresentationMode;
     readonly presentationOptions?: readonly AgentToolPresentationOption[];
-    readonly accessBoundary?: "thread" | "environment" | "unrestricted";
+    readonly origin?: NormalizedThreadSnapshot["agentTools"]["origin"];
+    readonly resourceScope?: { allowOtherEnvironments: boolean; allowOtherProjects: boolean };
     readonly toolAccessMode?: "read_only" | "ask" | "full";
     readonly runState?: NormalizedThreadSnapshot["runState"];
   } = {},
@@ -151,7 +152,8 @@ function policySnapshot(
         { surface: "native", modes: ["progressive", "individual"] },
         { surface: "cli", modes: ["progressive", "individual"] },
       ],
-      accessBoundary: input.accessBoundary ?? "environment",
+      origin: input.origin ?? null,
+      resourceScope: input.resourceScope ?? { allowOtherEnvironments: false, allowOtherProjects: false },
       revision: input.revision ?? 4,
     },
   } as unknown as NormalizedThreadSnapshot;
@@ -190,6 +192,11 @@ function deferred<T>() {
 }
 
 describe("AgentToolSettingsDialog", () => {
+  it("shows immutable creation provenance without implying current settings still match", () => {
+    subject(policySnapshot({ revision: 8, origin: { source: "account", policySet: { id: "33333333-3333-4333-8333-333333333333", name: "Everyday", revision: 2 } } }));
+    expect(screen.getByText(/Original policy: Everyday \(revision 2\)/)).toHaveTextContent("later default or policy-set changes do not update it");
+  });
+
   it("shows a runtime-unavailable tool disabled with its startup diagnostic", () => {
     subject(policySnapshot({ contextAvailable: false }));
 
@@ -235,7 +242,7 @@ describe("AgentToolSettingsDialog", () => {
         enabled: true,
         enabledToolIds: ["workspace.list", "thread.status"],
         presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
       }),
     );
   });
@@ -411,7 +418,7 @@ describe("AgentToolSettingsDialog", () => {
       "1 enabled",
     );
     expect(agentToolPolicySummary(policySnapshot({ contextEnabled: false }).agentTools)).toBe("0 enabled");
-    expect(agentToolPolicySummary(policySnapshot({ workspaceEnabled: true, presentationSurface: "cli", accessBoundary: "unrestricted" }).agentTools)).toBe("2 enabled");
+    expect(agentToolPolicySummary(policySnapshot({ workspaceEnabled: true, presentationSurface: "cli", resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false } }).agentTools)).toBe("2 enabled");
   });
 
   it("hides a fixed surface while retaining the CLI presentation selector", () => {
@@ -535,61 +542,37 @@ describe("AgentToolSettingsDialog", () => {
     expect(screen.queryByText(NATIVE_TOOL_CACHE_WARNING)).not.toBeInTheDocument();
   });
 
-  it("saves the thread boundary without granting global access", async () => {
+  it("changes the two resource boundaries independently", async () => {
     const { setAgentToolPolicy } = subject(policySnapshot());
-    fireEvent.click(screen.getByRole("combobox", { name: "Access boundary" }));
-    fireEvent.click(screen.getByRole("option", { name: "Ask outside this thread" }));
+    expect(screen.getByRole("switch", { name: "Allow other environments" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Allow other projects" })).not.toBeChecked();
+    fireEvent.click(screen.getByRole("switch", { name: "Allow other projects" }));
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ accessBoundary: "thread" }),
+      expect.objectContaining({ resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true } }),
     ));
+    expect(screen.queryByText(NATIVE_TOOL_CACHE_WARNING)).not.toBeInTheDocument();
   });
 
-  it("defaults the environment selector from the strict snapshot and saves allow", async () => {
-    const { setAgentToolPolicy } = subject(
-      policySnapshot({ presentationSurface: "cli", accessBoundary: "environment" }),
-    );
-    const selector = screen.getByRole("combobox", {
-      name: "Access boundary",
-    });
-    expect(selector).toHaveTextContent("Ask outside this environment");
+  it("lets the user enable other environments without changing project access", async () => {
+    const { setAgentToolPolicy } = subject(policySnapshot({ presentationSurface: "cli" }));
+    expect(screen.getByText(/lists and searches stay in this environment/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Save$/ })).toBeDisabled();
-
-    fireEvent.click(selector);
-    fireEvent.click(
-      screen.getByRole("option", { name: /Allow without asking/ }),
-    );
-    expect(selector).toHaveTextContent("Allow without asking");
-    expect(screen.getByRole("button", { name: /^Save$/ })).toBeEnabled();
-
+    fireEvent.click(screen.getByRole("switch", { name: "Allow other environments" }));
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
-
-    await waitFor(() =>
-      expect(setAgentToolPolicy).toHaveBeenCalledWith({
-        expectedPolicyRevision: 4,
-        enabled: true,
-        enabledToolIds: ["agent.context"],
-        presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "unrestricted",
-      }),
-    );
+    await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledWith({
+      expectedPolicyRevision: 4,
+      enabled: true,
+      enabledToolIds: ["agent.context"],
+      presentation: { surface: "cli", mode: "progressive" },
+      resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },
+    }));
   });
 
   it("saves an environment-only native policy change without a Pi cache confirmation", async () => {
-    const { setAgentToolPolicy } = subject(
-      policySnapshot({
-        presentationMode: "individual",
-        accessBoundary: "environment",
-      }),
-    );
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "Access boundary" }),
-    );
-    fireEvent.click(
-      screen.getByRole("option", { name: /Allow without asking/ }),
-    );
+    const { setAgentToolPolicy } = subject(policySnapshot({ presentationMode: "individual" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Allow other environments" }));
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
-
     await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledOnce());
     expect(screen.queryByText(NATIVE_TOOL_CACHE_WARNING)).not.toBeInTheDocument();
   });
@@ -639,7 +622,7 @@ describe("AgentToolSettingsDialog", () => {
     expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
     expect(screen.getByRole("switch", { name: "Enable agent tools" })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: "List workspaces" })).toBeDisabled();
-    expect(screen.getByRole("combobox", { name: "Access boundary" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Allow other environments" })).toBeDisabled();
     expect(onOpenChange).not.toHaveBeenCalled();
 
     await act(async () => mutation.resolve({ status: "completed" }));
@@ -836,15 +819,14 @@ describe("AgentToolSettingsDialog", () => {
       expect(screen.getByRole("combobox", { name: "Agent tool presentation" })).toBeDisabled();
       fireEvent.click(screen.getByRole("switch", { name: "Enable agent tools" }));
       fireEvent.click(screen.getByRole("checkbox", { name: "Select all Context tools" }));
-      fireEvent.click(screen.getByRole("combobox", { name: "Access boundary" }));
-      fireEvent.click(screen.getByRole("option", { name: /Allow without asking/ }));
+      fireEvent.click(screen.getByRole("switch", { name: "Allow other environments" }));
       fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
       await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledWith({
         expectedPolicyRevision: 4,
         enabled: true,
         enabledToolIds: ["agent.context", "workspace.list"],
         presentation: { surface: "cli", mode: presentationMode },
-        accessBoundary: "unrestricted",
+        resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },
       }));
       expect(screen.queryByText(NATIVE_TOOL_CACHE_WARNING)).not.toBeInTheDocument();
     },
@@ -869,7 +851,7 @@ describe("AgentToolSettingsDialog", () => {
     subject(policySnapshot({ presentationSurface: "cli", runState: "running" }), options);
     expect(screen.getByRole("switch", { name: "Enable agent tools" })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: "List workspaces" })).toBeDisabled();
-    expect(screen.getByRole("combobox", { name: "Access boundary" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Allow other environments" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^Save$/ })).toBeDisabled();
   });
 

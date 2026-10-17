@@ -1,3 +1,6 @@
+import { ThreadToolPolicyOriginRepository } from "./db/repositories/thread-tool-policy-origin-repository.js";
+import { ToolPolicyRepository } from "./db/repositories/tool-policy-repository.js";
+import { ToolPolicyService } from "./tool-policies/tool-policy-service.js";
 import { performCompletionFollowUp } from "./conversations/authoritative-completion-follow-up.js";
 import { AutomationForkTargetResolver } from "./runtime/automation-fork-target.js";
 import { ImageShowRepository } from "./db/repositories/image-show-repository.js";
@@ -582,6 +585,7 @@ export async function startProductionApplication(
     const agentToolPolicyDependencies = createThreadAgentToolPolicyDependencies(
       agentToolRuntimeAvailability,
     );
+    const toolPolicyOrigins = new ThreadToolPolicyOriginRepository(database);
     const agentToolPolicies = new ThreadAgentToolPolicyRepository(
       database,
       agentToolPolicyDependencies.eligibility,
@@ -1138,6 +1142,8 @@ export async function startProductionApplication(
         runtimeModules.automationExecutionPolicy,
       );
     const forks = new ThreadForkService({
+      toolPolicies: agentToolPolicies,
+      toolPolicyOrigins,
       environmentVariables,
       database,
       targets,
@@ -1427,7 +1433,11 @@ export async function startProductionApplication(
       savedAgentRepository,
       savedAgentAdapters,
     );
+    const policySets = new ToolPolicyService(new ToolPolicyRepository(database), configurationRepository, agentToolPolicyDependencies.catalog, backendId => savedAgentAdapters.findByBackendInstanceId(backendId)?.typeId);
     const savedAgents = new SavedAgentApplicationService({
+      principalToolClients: principalAgentToolClients,
+      policySets,
+      toolPolicyOrigins,
       environmentVariables,
       agents: savedAgentDomain,
       repository: savedAgentRepository,
@@ -1949,9 +1959,7 @@ export async function startProductionApplication(
       agentToolPolicies,
       agentToolEnvironmentAuthority,
       agentToolSources,
-      runtimes,
-      interactions,
-      clientControlTools,
+      runtimes, clientControlTools,
     );
     const principalClientAgentTools = new PrincipalAgentToolClientService(
       toolProvenanceKey,
@@ -3199,6 +3207,7 @@ export async function startProductionApplication(
       identity,
       executionTargets,
       savedAgents,
+      policySets,
       threadTemplates,
       applicationSnapshots: activeApplicationSnapshots,
       principalPreferences,

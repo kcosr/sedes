@@ -96,7 +96,7 @@ const carefulAgent = {
   backendTypeId: "pi",
   backend: { typeId: "pi", label: { text: "Pi" }, brand: "pi" },
   overrideCount: 2,
-  sedesTools: null,
+  toolPolicySelection: { kind: "inherit" as const },
   revision: 0,
   createdAt: "2026-08-08T12:00:00.000Z",
   updatedAt: "2026-08-08T12:00:00.000Z",
@@ -115,6 +115,7 @@ const carefulTemplate: ThreadTemplate = {
   targetId: "target-pi",
   executionWorkspace: { kind: "direct" },
   agentId: carefulAgent.id,
+  toolPolicySelection: { kind: "inherit" },
   capturedAgentName: carefulAgent.name,
   capturedWorkspaceName: workspace.label.text,
   capturedTargetName: "Local SDK",
@@ -126,7 +127,7 @@ const carefulTemplate: ThreadTemplate = {
 function candidate(
   id: string,
   label: string,
-  accessBoundary: "thread" | "environment" | "unrestricted" = "environment",
+  scope: "current" | "all" = "current",
   toolsEnabled = false,
 ) {
   return {
@@ -145,13 +146,13 @@ function candidate(
         enabled: false,
         enabledToolIds: [],
         presentation: { surface: "native", mode: "progressive" },
-        accessBoundary,
+        resourceScope: { allowOtherEnvironments: scope === "all", allowOtherProjects: scope === "all" },
       },
       resolvedPolicy: {
         enabled: toolsEnabled,
         enabledToolIds: [],
         presentation: { surface: "native", mode: "progressive" },
-        accessBoundary,
+        resourceScope: { allowOtherEnvironments: scope === "all", allowOtherProjects: scope === "all" },
       },
       groups: [],
       presentationOptions: [
@@ -215,6 +216,8 @@ function control(options?: {
   readonly listSavedAgents?: ReturnType<typeof vi.fn>;
   readonly listThreadTemplates?: ReturnType<typeof vi.fn>;
   readonly templates?: readonly ThreadTemplate[];
+  readonly listToolPolicySets?: ReturnType<typeof vi.fn>;
+  readonly resolveToolPolicy?: ReturnType<typeof vi.fn>;
   readonly createThreadTemplate?: ReturnType<typeof vi.fn>;
   readonly updateThreadTemplate?: ReturnType<typeof vi.fn>;
   readonly deleteThreadTemplate?: ReturnType<typeof vi.fn>;
@@ -231,6 +234,11 @@ function control(options?: {
       targetId: "target-pi",
     });
   const api = {
+    listToolPolicySets: options?.listToolPolicySets ?? vi.fn().mockResolvedValue({ items: [] }),
+    resolveToolPolicy: options?.resolveToolPolicy ?? vi.fn().mockResolvedValue({
+      enabled: false, enabledToolIds: [], source: "default",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
+    }),
     getEnvironmentVariablePreview: options?.getEnvironmentVariablePreview ?? vi.fn().mockResolvedValue({ snapshot: { version: 1, layers: { environment: {}, backend: {}, agent: {}, thread: {} } }, revision: { configurationRevision: 1 }, startup: { supported: true } }),
     listThreadTemplates:
       options?.listThreadTemplates ??
@@ -275,7 +283,7 @@ function control(options?: {
       vi.fn().mockResolvedValue({
         ...carefulAgent,
         backendOverrides: [],
-        sedesTools: undefined,
+
       }),
   };
   const openWorkspace = vi.fn().mockResolvedValue({ id: "workspace-added", projectId: "project-added" });
@@ -364,6 +372,48 @@ async function chooseTemplate(
 }
 
 describe("NewThreadControl", () => {
+  it("saves an independent policy selection in templates and applies it to new threads", async () => {
+    const user = userEvent.setup();
+    const policy = {
+      id: "33333333-3333-4333-8333-333333333333", name: "Reviewer",
+      enabledToolIds: ["thread.list"], resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },
+      revision: 1, createdAt: "2026-10-17T00:00:00Z", updatedAt: "2026-10-17T00:00:00Z",
+    };
+    const selection = { kind: "policy_set", policySetId: policy.id };
+    const { api, createThread } = control({
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [policy] }),
+      resolveToolPolicy: vi.fn().mockImplementation(async ({ threadSelection }) => ({
+        enabled: threadSelection.kind === "policy_set", enabledToolIds: threadSelection.kind === "policy_set" ? policy.enabledToolIds : [],
+        resourceScope: policy.resourceScope, source: threadSelection.kind === "policy_set" ? "thread" : "account",
+      })),
+    });
+    await openPicker(user);
+    await chooseCareful(user);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Sedes tool policy" }), policy.id);
+    expect(await screen.findByText("1 tool · This project across all environments")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save as template…" }));
+    await user.type(screen.getByRole("textbox", { name: "Template name" }), "Review on any host");
+    await user.click(screen.getByRole("button", { name: "Save template" }));
+    await waitFor(() => expect(api.createThreadTemplate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicySelection: selection })));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    await waitFor(() => expect(createThread).toHaveBeenCalledWith(expect.objectContaining({
+      toolPolicySelection: selection,
+      configuration: { kind: "saved_agent", agentId: carefulAgent.id, targetId: "target-pi" },
+    })));
+  });
+
+  it("restores a template's explicit disabled tool selection", async () => {
+    const user = userEvent.setup();
+    const { createThread } = control({ templates: [{ ...carefulTemplate, toolPolicySelection: { kind: "disabled" } }] });
+    await openPicker(user);
+    await chooseTemplate(user);
+    expect(screen.getByRole("combobox", { name: "Sedes tool policy" })).toHaveValue("disabled");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    await waitFor(() => expect(createThread).toHaveBeenCalledWith(expect.objectContaining({ toolPolicySelection: { kind: "disabled" } })));
+  });
+
   it("opens the Agent picker from the keyboard and scrolls the active option into view", async () => {
     const user = userEvent.setup();
     control({ agents: [carefulAgent, replacementAgent] });
@@ -492,7 +542,7 @@ describe("NewThreadControl", () => {
     await chooseCareful(user);
     await waitFor(() => expect(api.resolveSavedAgent).toHaveBeenCalledWith(
       carefulAgent.id,
-      { workspaceId: "workspace-1", targetId: "target-codex" },
+      { workspaceId: "workspace-1", targetId: "target-codex", toolPolicySelection: { kind: "inherit" } },
       expect.any(AbortSignal),
     ));
   });
@@ -517,7 +567,7 @@ describe("NewThreadControl", () => {
     await user.click(screen.getByRole("combobox", { name: "Template" }));
 
     expect(
-      screen.getAllByRole("option").map((option) => option.textContent),
+      within(screen.getByRole("listbox")).getAllByRole("option").map((option) => option.textContent),
     ).toEqual([
       "Configure manually",
       expect.stringContaining("Alpha"),
@@ -663,6 +713,7 @@ describe("NewThreadControl", () => {
     await waitFor(() =>
       expect(createThreadTemplate).toHaveBeenCalledWith({
         name: "My launch",
+        toolPolicySelection: { kind: "inherit" },
         workspaceId: workspace.id,
         targetId: "target-pi",
         executionWorkspace: { kind: "direct" },
@@ -694,6 +745,7 @@ describe("NewThreadControl", () => {
     await waitFor(() =>
       expect(createThreadTemplate).toHaveBeenCalledWith({
         name: "Careful copy",
+        toolPolicySelection: { kind: "inherit" },
         workspaceId: workspace.id,
         targetId: "target-pi",
         executionWorkspace: { kind: "direct" },
@@ -987,6 +1039,7 @@ describe("NewThreadControl", () => {
     await waitFor(() =>
       expect(createThread).toHaveBeenCalledWith({
         environmentVariables: {},
+        toolPolicySelection: { kind: "inherit" },
         environmentVariablesRevision: { configurationRevision: 1 },
         workspaceId: "workspace-1",
         title: "Review build",
@@ -1001,7 +1054,7 @@ describe("NewThreadControl", () => {
     const user = userEvent.setup();
     const { api, createThread } = control({
       resolution: {
-        candidates: [candidate("target-pi", "Local SDK", "environment", true)],
+        candidates: [candidate("target-pi", "Local SDK", "current", true)],
         failures: [],
       },
     });
@@ -1012,9 +1065,9 @@ describe("NewThreadControl", () => {
       expect.objectContaining({ targetId: "target-pi" }),
     );
 
-    const status = await screen.findByRole("status");
+    const status = await screen.findByText("Runs on Local SDK · Pi.");
     expect(status).toHaveTextContent(
-      "Runs on Local SDK · Pi. Sedes tools: Ask outside this environment.",
+      "Runs on Local SDK · Pi.",
     );
     expect(status).toHaveAttribute("aria-live", "polite");
     expect(screen.queryByRole("combobox", { name: "Target" })).toBeNull();
@@ -1022,12 +1075,13 @@ describe("NewThreadControl", () => {
 
     expect(api.resolveSavedAgent).toHaveBeenCalledWith(
       carefulAgent.id,
-      { workspaceId: "workspace-1", targetId: "target-pi" },
+      { workspaceId: "workspace-1", targetId: "target-pi", toolPolicySelection: { kind: "inherit" } },
       expect.any(AbortSignal),
     );
     await waitFor(() =>
       expect(createThread).toHaveBeenCalledWith({
         environmentVariables: {},
+        toolPolicySelection: { kind: "inherit" },
         environmentVariablesRevision: { configurationRevision: 1 },
         workspaceId: "workspace-1",
         title: "New thread",
@@ -1041,20 +1095,16 @@ describe("NewThreadControl", () => {
     );
   });
 
-  it("previews allow relative to the selected thread environment", async () => {
+  it("shows the effective inherited policy and its scope", async () => {
     const user = userEvent.setup();
-    control({
-      resolution: {
-        candidates: [candidate("target-pi", "Local SDK", "unrestricted", true)],
-        failures: [],
-      },
-    });
+    control({ resolveToolPolicy: vi.fn().mockResolvedValue({
+      enabled: true, enabledToolIds: ["thread.list"], source: "account",
+      policySet: { id: "33333333-3333-4333-8333-333333333333", name: "Everyday", revision: 2 },
+      resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },
+    }) });
     await openPicker(user);
-    await chooseCareful(user);
-
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Allow without asking.",
-    );
+    expect(await screen.findByText("1 tool · This project across all environments")).toBeInTheDocument();
+    expect(screen.getByText("Inherited from account settings · Everyday")).toBeInTheDocument();
   });
 
   it("previews Sedes tools as off without implying an environment grant", async () => {
@@ -1063,9 +1113,7 @@ describe("NewThreadControl", () => {
     await openPicker(user);
     await chooseCareful(user);
 
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Runs on Local SDK · Pi. Sedes tools: Off.",
-    );
+    expect(await screen.findByText("Runs on Local SDK · Pi.")).toBeInTheDocument();
   });
 
   it("keeps Agent resolution on the Target selected before Agent", async () => {
@@ -1088,6 +1136,7 @@ describe("NewThreadControl", () => {
     await waitFor(() =>
       expect(createThread).toHaveBeenCalledWith({
         environmentVariables: {},
+        toolPolicySelection: { kind: "inherit" },
         environmentVariablesRevision: { configurationRevision: 1 },
         workspaceId: "workspace-1",
         title: "New thread",
@@ -1155,7 +1204,7 @@ describe("NewThreadControl", () => {
     );
     expect(api.resolveSavedAgent).toHaveBeenCalledWith(
       carefulAgent.id,
-      { workspaceId: "workspace-1", targetId: "target-codex" },
+      { workspaceId: "workspace-1", targetId: "target-codex", toolPolicySelection: { kind: "inherit" } },
       expect.any(AbortSignal),
     );
     expect(
@@ -1238,7 +1287,7 @@ describe("NewThreadControl", () => {
     await waitFor(() =>
       expect(api.resolveSavedAgent).toHaveBeenCalledWith(
         carefulAgent.id,
-        { workspaceId: "workspace-2", targetId: "target-website" },
+        { workspaceId: "workspace-2", targetId: "target-website", toolPolicySelection: { kind: "inherit" } },
         expect.any(AbortSignal),
       ),
     );
@@ -1314,7 +1363,7 @@ describe("NewThreadControl", () => {
     });
     await openPicker(user);
     await chooseCareful(user);
-    await screen.findByText(/Runs on Local SDK · Pi\. Sedes tools:/);
+    await screen.findByText(/Runs on Local SDK · Pi\./);
     await user.click(screen.getByRole("button", { name: "Create thread" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -1467,7 +1516,7 @@ describe("NewThreadControl", () => {
     );
     await user.click(screen.getByRole("combobox", { name: "Location" }));
     expect(
-      screen.getAllByRole("option").map((option) => option.textContent),
+      within(screen.getByRole("listbox")).getAllByRole("option").map((option) => option.textContent),
     ).toEqual(["Remote · /srv/a", "Remote · /srv/b"]);
     await user.click(screen.getByRole("option", { name: "Remote · /srv/b" }));
     await user.click(await screen.findByRole("button", { name: "Use Custom" }));
@@ -1503,7 +1552,7 @@ describe("NewThreadControl", () => {
     expect(target).toHaveAttribute("data-target-id", "target-website");
     await user.click(target);
     expect(
-      screen.getAllByRole("option").map((option) => option.textContent),
+      within(screen.getByRole("listbox")).getAllByRole("option").map((option) => option.textContent),
     ).toEqual(["Website agent · Pi"]);
     await user.keyboard("{Escape}");
 
@@ -1515,7 +1564,7 @@ describe("NewThreadControl", () => {
     );
     await user.click(screen.getByRole("combobox", { name: "Target" }));
     expect(
-      screen.getAllByRole("option").map((option) => option.textContent),
+      within(screen.getByRole("listbox")).getAllByRole("option").map((option) => option.textContent),
     ).toEqual(["Local SDK · Pi", "Local app server · Codex"]);
   });
 
@@ -1586,7 +1635,7 @@ describe("NewThreadControl", () => {
     expect(project).toHaveAttribute("data-project-id", sedesProject.id);
     await user.click(project);
     const reasons = Object.fromEntries(
-      screen.getAllByRole("option").map((option) => [
+      within(screen.getByRole("listbox")).getAllByRole("option").map((option) => [
         option.textContent,
         option.getAttribute("aria-disabled"),
       ]),
@@ -1616,7 +1665,7 @@ describe("NewThreadControl", () => {
     expect(project).toHaveAttribute("data-project-id", websiteProject.id);
     await user.click(project);
     expect(
-      screen.getAllByRole("option").map((option) => option.textContent),
+      within(screen.getByRole("listbox")).getAllByRole("option").map((option) => option.textContent),
     ).toEqual(["Website"]);
     await user.keyboard("{Escape}");
     await user.click(await screen.findByRole("button", { name: "Use Custom" }));
@@ -1739,7 +1788,7 @@ describe("NewThreadControl", () => {
     expect(project).toHaveAttribute("data-project-id", "");
     expect(screen.queryByRole("combobox", { name: "Location" })).toBeNull();
     await user.click(project);
-    const option = screen.getByRole("option", { name: /Sedes/ });
+    const option = within(screen.getByRole("listbox")).getByRole("option", { name: /Sedes/ });
     expect(option).toHaveAttribute("aria-disabled", "true");
     expect(option).toHaveTextContent("Unavailable");
     expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
@@ -1824,7 +1873,7 @@ describe("NewThreadControl", () => {
     await waitFor(() =>
       expect(api.resolveSavedAgent).toHaveBeenCalledWith(
         carefulAgent.id,
-        { workspaceId: "workspace-2", targetId: "target-website" },
+        { workspaceId: "workspace-2", targetId: "target-website", toolPolicySelection: { kind: "inherit" } },
         expect.any(AbortSignal),
       ),
     );

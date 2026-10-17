@@ -18,6 +18,7 @@ const environmentAuthority = {
     ownerId: "thread-1",
     revision: 1,
   },
+  resourceScope: {allowOtherEnvironments:false,allowOtherProjects:false},
   admittedEnvironmentIds: ["environment-1"],
   targetEnvironmentIds: [] as string[],
   resolvedResourceRefs: [
@@ -26,18 +27,21 @@ const environmentAuthority = {
       id: "thread-1",
       environmentId: "environment-1",
       workspaceId: "workspace-1",
+      projectId: "project-1",
     },
     {
       kind: "thread_family" as const,
       id: "thread-2",
       environmentId: "environment-1",
       workspaceId: "workspace-1",
+      projectId: "project-1",
     },
     {
       kind: "thread" as const,
       id: "thread-1",
       environmentId: "environment-1",
       workspaceId: "workspace-1",
+      projectId: "project-1",
     },
   ],
   canonicalInputDigest: "input-digest",
@@ -50,7 +54,7 @@ function thread(
   environmentId = "environment-1",
   workspaceId = "workspace-1",
 ) {
-  return { thread: { id, environmentId, workspaceId } } as never;
+  return { thread: { id, environmentId, workspaceId, projectId: "project-1" } } as never;
 }
 
 describe("AgentThreadInventoryControlService", () => {

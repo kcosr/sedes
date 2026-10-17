@@ -54,6 +54,7 @@ A template stores:
 - target ID and captured target label;
 - direct or isolated execution-workspace selection;
 - Saved Agent ID and captured Agent name;
+- thread-variable overrides and the thread-level tool-policy selection;
 - revision and creation/update timestamps; and
 - server-derived tenant and principal ownership.
 
@@ -65,7 +66,10 @@ revision checks. Duplicate names are allowed.
 
 The template stores neither an Agent settings snapshot nor an Agent revision.
 It follows the referenced Agent's current definition until the user creates a
-thread. The resulting thread receives the resolved settings and tool policy as
+thread. Tool-policy selection resolves Account → Environment → Backend → Agent →
+Thread, replacing the complete selected set at each explicit level. A missing
+selected set fails creation unless a later explicit choice overrides it.
+The resulting thread receives the resolved settings and tool policy as
 independent thread state.
 
 ## Drift, repair, and deletion

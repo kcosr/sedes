@@ -189,7 +189,7 @@ export class DatabaseAgentToolSourceAuthority
     return this.database
       .prepare(
         `
-          SELECT id, environment_id AS environmentId, display_name AS label
+          SELECT id, environment_id AS environmentId, project_id AS projectId, display_name AS label
           FROM workspaces
           WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
         `,
@@ -206,7 +206,7 @@ export class DatabaseAgentToolSourceAuthority
       .prepare(
         `
           SELECT id, environment_id AS environmentId,
-            workspace_id AS workspaceId, title AS label
+            workspace_id AS workspaceId, (SELECT project_id FROM workspaces AS location WHERE location.tenant_id=application_threads.tenant_id AND location.owner_principal_id=application_threads.owner_principal_id AND location.id=application_threads.workspace_id) AS projectId, title AS label
           FROM application_threads
           WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
         `,
@@ -226,6 +226,7 @@ export class DatabaseAgentToolSourceAuthority
         `
       SELECT automation.id, automation.anchor_thread_id AS threadId,
         thread.environment_id AS environmentId, thread.workspace_id AS workspaceId,
+        (SELECT project_id FROM workspaces AS location WHERE location.tenant_id=thread.tenant_id AND location.owner_principal_id=thread.owner_principal_id AND location.id=thread.workspace_id) AS projectId,
         automation.name AS label
       FROM automation_definitions AS automation
       JOIN application_threads AS thread ON thread.tenant_id = automation.tenant_id
@@ -248,7 +249,7 @@ export class DatabaseAgentToolSourceAuthority
       .prepare(
         `
           SELECT thread.id, thread.environment_id AS environmentId,
-            thread.workspace_id AS workspaceId, thread.title AS label
+            thread.workspace_id AS workspaceId, (SELECT project_id FROM workspaces AS location WHERE location.tenant_id=thread.tenant_id AND location.owner_principal_id=thread.owner_principal_id AND location.id=thread.workspace_id) AS projectId, thread.title AS label
           FROM thread_lineage_closure AS lineage
           JOIN application_threads AS thread
             ON thread.tenant_id = lineage.tenant_id
@@ -293,7 +294,7 @@ export class DatabaseAgentToolSourceAuthority
           `
             SELECT task.id, task.revision, task.scope_kind AS scopeKind,
               thread.environment_id AS environmentId,
-              task.project_id AS projectId, task.thread_id AS threadId,
+              coalesce(task.project_id, (SELECT project_id FROM workspaces AS location WHERE location.tenant_id=thread.tenant_id AND location.owner_principal_id=thread.owner_principal_id AND location.id=thread.workspace_id)) AS projectId, task.thread_id AS threadId,
               task.title AS label
             FROM tasks AS task
             LEFT JOIN application_threads AS thread
@@ -320,7 +321,7 @@ export class DatabaseAgentToolSourceAuthority
           `
             SELECT pad.id, pad.revision, pad.scope_kind AS scopeKind,
               thread.environment_id AS environmentId,
-              pad.project_id AS projectId, pad.thread_id AS threadId,
+              coalesce(pad.project_id, (SELECT project_id FROM workspaces AS location WHERE location.tenant_id=thread.tenant_id AND location.owner_principal_id=thread.owner_principal_id AND location.id=thread.workspace_id)) AS projectId, pad.thread_id AS threadId,
               pad.title AS label
             FROM workpads AS pad
             LEFT JOIN application_threads AS thread

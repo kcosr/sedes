@@ -123,7 +123,7 @@ blocking-interaction UI.
 
 Use **Thread actions > Agent tools…** to choose the exact Sedes application
 tools available to that thread. In CLI mode, you can enable or disable access,
-add or remove tools, and change the access boundary during a turn. Changes apply
+add or remove tools, and change the resource scope during a turn. Changes apply
 to subsequent tool requests; work already admitted continues. The agent sees
 added tools when it next requests discovery. Native-tool changes and changes
 to the surface or mode require an idle thread.
@@ -159,23 +159,20 @@ this dialog changes the next discovery request, and every invocation rechecks
 the current policy. The injected mode is only an instruction to the CLI; it
 does not grant access.
 
-The **Access boundary** setting determines when enabled tools ask for approval:
+The **Allow other environments** and **Allow other projects** switches define
+which resources enabled tools may access. Lists and searches filter to this
+scope. Exact outside-scope requests are denied without an approval popup; only
+you can enable broader access. The switches are independent, and neither
+bypasses ownership, runtime eligibility, or provider permissions. New threads
+can inherit named policy sets through Account → Environment → Backend → Agent
+→ Thread; existing threads keep independent snapshots. See
+[Tool policy sets](tool-policies.md) for defaults, templates, shared resources,
+and upgrade behavior.
 
-- **Ask outside this thread** asks before accessing another thread, project or
-  global content, or resources outside the current thread's workspace.
-- **Ask outside this environment** is the default and asks when a tool reaches
-  another execution environment. A project's Tasks and Workpads are inside
-  when this thread's environment hosts one of the project's locations; a
-  project hosted only elsewhere, or with no active location, asks.
-- **Allow without asking** skips this extra application prompt.
-
-An approval waits across browser navigation or disconnect and applies only to
-that exact invocation. None of these choices bypasses ordinary Sedes authority
-or provider permission controls. Automations fail closed when access requires
-an interactive decision. Delegated work is evaluated under the destination
-thread's own policy. See the
-[Agent-tools contract](../internals/agent-tools.md) for the complete tool and
-authority model.
+Delegated work is evaluated under the destination thread's own policy. An
+agent cannot give a newly created thread broader tools or scope than its own.
+See the [Agent-tools contract](../internals/agent-tools.md) for the complete
+model.
 
 ## Connect an external Tool client
 

@@ -1,4 +1,6 @@
 import { Type } from "typebox";
+import type { ToolPolicySelection } from "../../../shared/protocol/tool-policies.js";
+import type { AgentToolPresentation } from "../../../shared/protocol/conversation.js";
 import { z } from "zod";
 import { createThreadTitleSchema } from "../../../shared/protocol/api.js";
 import type { AgentToolDefinition } from "../contracts/agent-tool-contracts.js";
@@ -21,12 +23,12 @@ import {
 } from "./management-tool-schemas.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 import type {
-  AgentToolBootstrapPolicy,
   NormalizedAgentConfigurationOverrides,
 } from "../../../shared/protocol/saved-agents.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import {
-  savedAgentSedesToolsToolSchema,
+  toolPolicySelectionToolSchema,
+  agentToolPresentationToolSchema,
   savedAgentOverridesToolSchema,
 } from "./saved-agent-tool-schemas.js";
 import type { TrustedEnvironmentAuthorityGrant } from "../environment/environment-authority.js";
@@ -49,6 +51,8 @@ export type ThreadListInput = {
 export type ThreadCreateInput = {
   readonly title: string;
   readonly workspaceId?: string;
+  readonly toolPolicySelection?: ToolPolicySelection;
+  readonly toolPresentation?: AgentToolPresentation;
   readonly configuration:
     | {
         readonly kind: "saved_agent";
@@ -59,7 +63,6 @@ export type ThreadCreateInput = {
         readonly kind: "custom";
         readonly targetId: string;
         readonly backendOverrides?: NormalizedAgentConfigurationOverrides;
-        readonly sedesTools?: AgentToolBootstrapPolicy;
       };
 };
 
@@ -341,6 +344,8 @@ export function createThreadCreateToolDefinition(
         {
           title: threadTitleSchema,
           workspaceId: Type.Optional(identifierSchema),
+          toolPolicySelection: Type.Optional(toolPolicySelectionToolSchema),
+          toolPresentation: Type.Optional(agentToolPresentationToolSchema),
           configuration: Type.Union([
             Type.Object(
               {
@@ -355,16 +360,15 @@ export function createThreadCreateToolDefinition(
                 kind: Type.String({ enum: ["custom"], maxLength: 6 }),
                 targetId: targetIdentifierSchema,
                 backendOverrides: Type.Optional(savedAgentOverridesToolSchema),
-                sedesTools: Type.Optional(savedAgentSedesToolsToolSchema),
               },
-              { additionalProperties: false, maxProperties: 4 },
+              { additionalProperties: false, maxProperties: 3 },
             ),
           ]),
         },
         {
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
-          maxProperties: 3,
+          maxProperties: 5,
         },
       ),
     ),

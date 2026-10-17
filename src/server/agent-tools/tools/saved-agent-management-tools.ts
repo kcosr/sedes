@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { environmentVariableOverridesSchema, type EnvironmentVariableOverrides, type EnvironmentVariableBinding } from "../../../shared/protocol/environment-variables.js";
 import {
   SAVED_AGENT_CURSOR_MAX_CHARACTERS,
   createSavedAgentRequestSchema,
@@ -35,7 +36,9 @@ import {
   savedAgentAuthoringContextToolSchema,
   savedAgentBackendTypeIdToolSchema,
   savedAgentDescriptionToolSchema,
-  savedAgentSedesToolsToolSchema,
+  toolPolicySelectionToolSchema,
+  agentToolPresentationToolSchema,
+  environmentVariableEntriesToolSchema,
   savedAgentListPageToolSchema,
   savedAgentNameToolSchema,
   savedAgentOptionsResultToolSchema,
@@ -67,7 +70,24 @@ export type SavedAgentOptionsToolInput = Omit<
   "workspaceId"
 > & { readonly workspaceId?: string };
 
-export type SavedAgentUpdateToolInput = UpdateSavedAgentRequest & {
+type EnvironmentVariableEntries = Array<{ name: string; binding: EnvironmentVariableBinding }>;
+type SavedAgentToolOutput = Omit<SavedAgent, "environmentVariables"> & { environmentVariables?: EnvironmentVariableEntries };
+type SavedAgentCreateToolInput = Omit<CreateSavedAgentRequest, "environmentVariables"> & { environmentVariables?: EnvironmentVariableEntries };
+
+function presentAgent(agent: SavedAgent): SavedAgentToolOutput {
+  const { environmentVariables, ...rest } = agent;
+  return { ...rest, ...(environmentVariables ? { environmentVariables: Object.entries(environmentVariables).map(([name, binding]) => ({ name, binding })) } : {}) };
+}
+function variableMap(entries: EnvironmentVariableEntries | undefined): EnvironmentVariableOverrides | undefined {
+  if (!entries) return undefined;
+  if (new Set(entries.map(entry => entry.name.toUpperCase())).size !== entries.length) {
+    throw new CanonicalAgentToolRequestError("invalid_input", "Environment variable names must be unique.");
+  }
+  return environmentVariableOverridesSchema.parse(Object.fromEntries(entries.map(({ name, binding }) => [name, binding])));
+}
+
+export type SavedAgentUpdateToolInput = Omit<UpdateSavedAgentRequest, "environmentVariables"> & {
+  readonly environmentVariables?: EnvironmentVariableEntries;
   readonly agentId: string;
 };
 
@@ -197,7 +217,7 @@ export function createSavedAgentListToolDefinition(
 
 export function createSavedAgentGetToolDefinition(
   service: SavedAgentCanonicalToolService,
-): AgentToolDefinition<{ readonly agentId: string }, SavedAgent> {
+): AgentToolDefinition<{ readonly agentId: string }, SavedAgentToolOutput> {
   return {
     ...getManifest,
     inputSchema: normalizeCanonicalAgentToolSchema(
@@ -232,7 +252,7 @@ export function createSavedAgentGetToolDefinition(
       requireAdmittedResource(context.environmentAuthority, {
         kind: "saved_agent", id: agent.id, revision: agent.revision,
       });
-      return agent;
+      return presentAgent(agent);
     },
   };
 }
@@ -250,12 +270,13 @@ export function createSavedAgentOptionsToolDefinition(
             Type.String({ minLength: 1, maxLength: 160 }),
           ),
           overrides: Type.Optional(savedAgentOverridesToolSchema),
-          sedesTools: Type.Optional(savedAgentSedesToolsToolSchema),
+          toolPolicySelection: Type.Optional(toolPolicySelectionToolSchema),
+          toolPresentation: Type.Optional(agentToolPresentationToolSchema),
         },
         {
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
-          maxProperties: 4,
+          maxProperties: 5,
         },
       ),
     ),
@@ -304,7 +325,7 @@ export function createSavedAgentOptionsToolDefinition(
 
 export function createSavedAgentCreateToolDefinition(
   service: SavedAgentCanonicalToolService,
-): AgentToolDefinition<CreateSavedAgentRequest, SavedAgent> {
+): AgentToolDefinition<SavedAgentCreateToolInput, SavedAgentToolOutput> {
   return {
     ...createManifest,
     inputSchema: normalizeCanonicalAgentToolSchema(
@@ -314,12 +335,14 @@ export function createSavedAgentCreateToolDefinition(
           description: Type.Optional(savedAgentDescriptionToolSchema),
           authoringContext: savedAgentAuthoringContextToolSchema,
           backendOverrides: savedAgentOverridesToolSchema,
-          sedesTools: Type.Optional(savedAgentSedesToolsToolSchema),
+          environmentVariables: Type.Optional(environmentVariableEntriesToolSchema),
+          toolPolicySelection: Type.Optional(toolPolicySelectionToolSchema),
+          toolPresentation: Type.Optional(agentToolPresentationToolSchema),
         },
         {
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
-          maxProperties: 5,
+          maxProperties: 7,
         },
       ),
     ),
@@ -343,19 +366,19 @@ export function createSavedAgentCreateToolDefinition(
       cli: { command: createManifest.id },
     },
     async execute(input, context) {
-      return service.createAgentForAgentTool(
+      return presentAgent(await service.createAgentForAgentTool(
         scope(context),
-        createSavedAgentRequestSchema.parse(input),
+        createSavedAgentRequestSchema.parse({ ...input, environmentVariables: variableMap(input.environmentVariables) }),
         context.abortSignal,
         context.environmentAuthority,
-      );
+      ));
     },
   };
 }
 
 export function createSavedAgentUpdateToolDefinition(
   service: SavedAgentCanonicalToolService,
-): AgentToolDefinition<SavedAgentUpdateToolInput, SavedAgent> {
+): AgentToolDefinition<SavedAgentUpdateToolInput, SavedAgentToolOutput> {
   return {
     ...updateManifest,
     inputSchema: normalizeCanonicalAgentToolSchema(
@@ -372,15 +395,15 @@ export function createSavedAgentUpdateToolDefinition(
           ),
           authoringContext: Type.Optional(savedAgentAuthoringContextToolSchema),
           backendOverrides: Type.Optional(savedAgentOverridesToolSchema),
-          sedesTools: Type.Optional(
-            Type.Union([savedAgentSedesToolsToolSchema, Type.Null()]),
-          ),
+          environmentVariables: Type.Optional(environmentVariableEntriesToolSchema),
+          toolPolicySelection: Type.Optional(toolPolicySelectionToolSchema),
+          toolPresentation: Type.Optional(Type.Union([agentToolPresentationToolSchema, Type.Null()])),
         },
         {
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
           minProperties: 3,
-          maxProperties: 7,
+          maxProperties: 9,
         },
       ),
     ),
@@ -406,13 +429,13 @@ export function createSavedAgentUpdateToolDefinition(
     async execute(input, context) {
       const agentId = savedAgentIdSchema.parse(input.agentId);
       const { agentId: _agentId, ...request } = input;
-      return service.updateAgentForAgentTool(
+      return presentAgent(await service.updateAgentForAgentTool(
         scope(context),
         agentId,
-        updateSavedAgentRequestSchema.parse(request),
+        updateSavedAgentRequestSchema.parse({ ...request, environmentVariables: variableMap(request.environmentVariables) }),
         context.abortSignal,
         context.environmentAuthority,
-      );
+      ));
     },
   };
 }

@@ -111,6 +111,13 @@ test("templates prefill editable thread creation and survive Agent drift", async
   const careful = await createAgent(page, "Template careful Agent");
   const fast = await createAgent(page, "Template fast Agent");
 
+  const session = await applicationSession(page);
+  const policyResponse = await page.request.post("/api/tool-policies", { headers: { "X-CSRF-Token": session.csrfToken }, data: {
+    name: "Template review tools", enabledToolIds: ["agent.context"], resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },
+  } });
+  expect(policyResponse.status()).toBe(201);
+  const policyId = (await policyResponse.json()).policySet.id as string;
+
   await page.goto("/");
   await sidebarNewThread(page).click();
   const creation = page.getByRole("dialog", { name: "New thread" });
@@ -132,6 +139,8 @@ test("templates prefill editable thread creation and survive Agent drift", async
   const selectedTargetId = await targetPicker.getAttribute("data-target-id");
   expect(selectedTargetId).toBeTruthy();
   await chooseAgent(page, careful.name);
+  await creation.getByRole("combobox", { name: "Sedes tool policy", exact: true }).selectOption(policyId);
+  await expect(creation.getByText("1 tool · This project across all environments")).toBeVisible();
   const saveAsTemplate = creation.getByRole("button", {
     name: "Save as template…",
   });
@@ -147,7 +156,8 @@ test("templates prefill editable thread creation and survive Agent drift", async
       response.status() === 201,
   );
   await creation.getByRole("button", { name: "Save template" }).click();
-  await templateCreated;
+  const savedTemplateResponse = await templateCreated;
+  expect(savedTemplateResponse.request().postDataJSON()).toMatchObject({ toolPolicySelection: { kind: "policy_set", policySetId: policyId } });
   await expect(creation.getByText("Using Careful launch")).toBeVisible();
 
   await creation.getByRole("button", { name: "Cancel" }).click();
@@ -157,7 +167,7 @@ test("templates prefill editable thread creation and survive Agent drift", async
   const templateSearch = page.getByRole("combobox", { name: "Search templates", exact: true });
   await expect(templateSearch).toBeFocused();
   await templateSearch.fill("no-such-template");
-  await expect(page.getByRole("option")).toHaveCount(1);
+  await expect(page.getByRole("listbox", { name: "Template options", exact: true }).getByRole("option")).toHaveCount(1);
   await expect(page.getByRole("option", { name: "Configure manually", exact: true })).toBeVisible();
   await expect(templatePicker).toContainText("Configure manually");
   await templateSearch.fill("careful");
@@ -171,6 +181,7 @@ test("templates prefill editable thread creation and survive Agent drift", async
   await expect(creation.getByRole("combobox", { name: "Agent", exact: true })).toHaveText(
     careful.name,
   );
+  await expect(creation.getByRole("combobox", { name: "Sedes tool policy", exact: true })).toHaveValue(policyId);
   await creation
     .getByRole("textbox", { name: "Thread name" })
     .fill("Title is not template state");
@@ -235,6 +246,7 @@ test("templates prefill editable thread creation and survive Agent drift", async
   expect(threadResponse.request().postDataJSON()).toMatchObject({
     title: "Created from editable template",
     workspaceId: workspace.id,
+    toolPolicySelection: { kind: "policy_set", policySetId: policyId },
     configuration: {
       kind: "saved_agent",
       agentId: fast.id,

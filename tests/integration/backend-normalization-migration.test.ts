@@ -1,3 +1,5 @@
+import { ThreadToolPolicyOriginRepository } from "../../src/server/db/repositories/thread-tool-policy-origin-repository.js";
+import { threadAgentToolPolicyRepository } from "../support/thread-agent-tool-policy.js";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
@@ -2407,6 +2409,8 @@ describe("inactive backend-normalization migration", () => {
         lineage,
         inventory: new InventoryRepository(database),
         operations: new ConversationOperationRepository(database),
+        toolPolicies: threadAgentToolPolicyRepository(database),
+        toolPolicyOrigins: new ThreadToolPolicyOriginRepository(database),
         outputArtifacts: { collectGarbage: async () => undefined },
         automations,
         automationExecutionPolicy: { assertCanAutomate: () => undefined },
@@ -2670,6 +2674,8 @@ describe("inactive backend-normalization migration", () => {
         lineage,
         inventory: new InventoryRepository(database),
         operations: new ConversationOperationRepository(database),
+        toolPolicies: threadAgentToolPolicyRepository(database),
+        toolPolicyOrigins: new ThreadToolPolicyOriginRepository(database),
         outputArtifacts: { collectGarbage: async () => undefined },
         automations,
         automationExecutionPolicy: { assertCanAutomate: () => undefined },

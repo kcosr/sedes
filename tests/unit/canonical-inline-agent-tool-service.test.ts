@@ -40,6 +40,7 @@ const source = {
   environmentAuthority: {
     id: "grant-1",
     callerKind: "thread_agent" as const,
+    resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
     defaults: {
       kind: "thread_agent" as const,
       environmentId: "environment-1",

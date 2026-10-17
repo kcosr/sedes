@@ -1,3 +1,4 @@
+import { testAgentToolExecutionAuthority } from "../support/agent-tool-execution-authority.js";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -100,12 +101,13 @@ async function fixture(kind: "pi" | "codex_app_server") {
     { snapshot: async () => ({ thread: { inventoryState: "active", runState: "running" } }) } as never, sources);
   const policies = new ThreadAgentToolPolicyRepository(database, createThreadAgentToolPolicyDependencies().eligibility);
   const setPolicy = (surface: "cli" | "native", mode: "individual" | "progressive", enabled = true) => policies.update(scope, thread.id, {
-    expectedRevision: policies.get(scope, thread.id).revision, enabled, presentation: { surface, mode }, accessBoundary: "thread", enabledToolIds: ["image.show"], now: 200 });
+    expectedRevision: policies.get(scope, thread.id).revision, enabled, presentation: { surface, mode }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, enabledToolIds: ["image.show"], now: 200 });
   const canonical = new CanonicalInlineAgentToolService({ application, images: tools });
   cleanups.push(async () => { await canonical.close(); await images.close(); });
-  const scoped = new SourceScopedAgentToolService(canonical, policies, new AgentToolEnvironmentAuthorityResolver(sources), sources,
-    { acquireAgentToolApprovalAuthority: async () => { throw new Error("image.show must remain source-only"); } },
-    { requestApplicationDecision: async () => { throw new Error("image.show must not request cross-thread access"); } });
+  const scoped = new SourceScopedAgentToolService(canonical,
+policies,
+new AgentToolEnvironmentAuthorityResolver(sources),
+sources, testAgentToolExecutionAuthority);
   const app = createNormalizedApp({ workpads: {}, identity, csrfToken: "image-csrf", config: {
     authenticationRequired: true, experimentalUsageEnabled: false, host: "127.0.0.1", port: 4784, stateDirectory: root,
     allowedTailscaleHosts: [], packagedClientOrigins: [], conversationRetentionMilliseconds: 60_000, conversationRuntimeBudget: 2 },

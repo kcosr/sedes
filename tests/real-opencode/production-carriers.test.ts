@@ -211,7 +211,7 @@ async function qualifyTools(fixture: OpenCodeProductionFixture, threadId: string
   expect(policy.presentationOptions.some(option => option.surface === "cli")).toBe(true);
   await fixture.json(`/api/threads/${threadId}/operations`, "POST", {
     kind: "set_agent_tool_policy", mutationId: crypto.randomUUID(), expectedPolicyRevision: policy.revision,
-    enabled: true, enabledToolIds: ["thread.status"], accessBoundary: "thread", presentation: { surface: "cli", mode: "progressive" },
+    enabled: true, enabledToolIds: ["thread.status"], resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, presentation: { surface: "cli", mode: "progressive" },
   });
   await fixture.closeStreams(); await fixture.openStream(threadId);
   const cliStart = fixture.model.requests.length;

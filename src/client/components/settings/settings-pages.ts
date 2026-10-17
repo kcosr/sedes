@@ -11,6 +11,7 @@ import {
   MonitorSmartphone,
   Network,
   Server,
+  ShieldCheck,
   SlidersHorizontal,
   Smartphone,
   SquareTerminal,
@@ -144,6 +145,14 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     description: "Saved presets for new threads.",
     icon: Bot,
     group: "execution",
+    available: ({ agents }) => agents,
+  },
+  {
+    id: "tool_policies",
+    label: "Tool policies",
+    description: "Reusable tools and access for new threads.",
+    icon: ShieldCheck,
+    group: "access",
     available: ({ agents }) => agents,
   },
   {

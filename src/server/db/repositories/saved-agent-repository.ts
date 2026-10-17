@@ -1,16 +1,16 @@
+import { toolPolicySelectionSchema, type ToolPolicySelection } from "../../../shared/protocol/tool-policies.js";
+import { agentToolPresentationSchema, type AgentToolPresentation } from "../../../shared/protocol/conversation.js";
 import { environmentVariableOverridesSchema, type EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   SAVED_AGENT_CURSOR_MAX_CHARACTERS,
   SAVED_AGENT_PAGE_MAX_ITEMS,
-  agentToolBootstrapPolicySchema,
   normalizedAgentConfigurationOverridesSchema,
   savedAgentBackendTypeIdSchema,
   savedAgentDescriptionSchema,
   savedAgentIdSchema,
   savedAgentNameSchema,
-  type AgentToolBootstrapPolicy,
   type NormalizedAgentConfigurationOverrides,
   type SavedAgentBackendTypeId,
 } from "../../../shared/protocol/saved-agents.js";
@@ -27,7 +27,8 @@ export interface SavedAgentRecord {
   readonly backendOverridesSchemaVersion: number;
   readonly backendOverrides: NormalizedAgentConfigurationOverrides;
   readonly environmentVariables?: EnvironmentVariableOverrides;
-  readonly sedesTools: AgentToolBootstrapPolicy | null;
+  readonly toolPolicySelection: ToolPolicySelection;
+  readonly toolPresentation?: AgentToolPresentation;
   readonly revision: number;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -40,12 +41,13 @@ export interface SavedAgentListPageRecord {
 
 type SavedAgentRow = Omit<
   SavedAgentRecord,
-  "backendTypeId" | "backendOverrides" | "sedesTools" | "environmentVariables"
+  "backendTypeId" | "backendOverrides" | "toolPolicySelection" | "toolPresentation" | "environmentVariables"
 > & {
   readonly backendTypeId: string;
   readonly backendOverridesJson: string;
   readonly environmentVariablesJson: string;
-  readonly sedesToolsJson: string | null;
+  readonly toolPolicySelectionJson: string;
+  readonly toolPresentationJson: string | null;
   readonly normalizedName?: string;
 };
 
@@ -59,7 +61,8 @@ const columns = `
   backend_overrides_schema_version AS backendOverridesSchemaVersion,
   backend_overrides_json AS backendOverridesJson,
   environment_variables_json AS environmentVariablesJson,
-  sedes_tools_json AS sedesToolsJson,
+  tool_policy_selection_json AS toolPolicySelectionJson,
+  tool_presentation_json AS toolPresentationJson,
   revision,
   created_at AS createdAt,
   updated_at AS updatedAt
@@ -74,18 +77,6 @@ export function canonicalSavedAgentOverrides(
 ): NormalizedAgentConfigurationOverrides {
   const parsed = normalizedAgentConfigurationOverridesSchema.parse(value);
   return [...parsed].sort((left, right) => compareCodePoints(left.id, right.id));
-}
-
-export function canonicalSavedAgentSedesTools(
-  value: AgentToolBootstrapPolicy,
-): AgentToolBootstrapPolicy {
-  const parsed = agentToolBootstrapPolicySchema.parse(value);
-  return {
-    enabled: parsed.enabled,
-    enabledToolIds: [...parsed.enabledToolIds].sort(compareCodePoints),
-    presentation: parsed.presentation,
-    accessBoundary: parsed.accessBoundary,
-  };
 }
 
 function queryFingerprint(input: {
@@ -310,7 +301,8 @@ export class SavedAgentRepository {
       readonly backendOverridesSchemaVersion: number;
       readonly backendOverrides: NormalizedAgentConfigurationOverrides;
       readonly environmentVariables?: EnvironmentVariableOverrides;
-  readonly sedesTools: AgentToolBootstrapPolicy | null;
+  readonly toolPolicySelection: ToolPolicySelection;
+  readonly toolPresentation?: AgentToolPresentation;
       readonly now: number;
     },
   ): SavedAgentRecord {
@@ -322,9 +314,9 @@ export class SavedAgentRepository {
         `INSERT INTO saved_agents(
           tenant_id, owner_principal_id, id, name, description,
           backend_type_id, backend_overrides_schema_version,
-          backend_overrides_json, sedes_tools_json, environment_variables_json, revision,
+          backend_overrides_json, tool_policy_selection_json, tool_presentation_json, environment_variables_json, revision,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       )
       .run(
         scope.tenantId,
@@ -335,9 +327,8 @@ export class SavedAgentRepository {
         values.backendTypeId,
         values.backendOverridesSchemaVersion,
         JSON.stringify(values.backendOverrides),
-        values.sedesTools === null
-          ? null
-          : JSON.stringify(values.sedesTools),
+        JSON.stringify(values.toolPolicySelection),
+        values.toolPresentation ? JSON.stringify(values.toolPresentation) : null,
         JSON.stringify(values.environmentVariables),
         now,
         now,
@@ -357,7 +348,8 @@ export class SavedAgentRepository {
         readonly values: NormalizedAgentConfigurationOverrides;
       };
       readonly environmentVariables?: EnvironmentVariableOverrides;
-      readonly sedesTools?: AgentToolBootstrapPolicy | null;
+      readonly toolPolicySelection?: ToolPolicySelection;
+      readonly toolPresentation?: AgentToolPresentation | null;
       readonly now: number;
     },
   ): SavedAgentRecord {
@@ -384,17 +376,15 @@ export class SavedAgentRepository {
         backendOverrides:
           input.backendOverrides?.values ?? current.backendOverrides,
         environmentVariables: input.environmentVariables ?? current.environmentVariables,
-        sedesTools:
-          input.sedesTools === undefined
-            ? current.sedesTools
-            : input.sedesTools,
+        toolPolicySelection: input.toolPolicySelection ?? current.toolPolicySelection,
+        toolPresentation: input.toolPresentation === null ? undefined : input.toolPresentation ?? current.toolPresentation,
       });
       const changed = this.database
         .prepare(
           `UPDATE saved_agents
            SET name = ?, description = ?,
              backend_overrides_schema_version = ?,
-             backend_overrides_json = ?, sedes_tools_json = ?, environment_variables_json = ?,
+             backend_overrides_json = ?, tool_policy_selection_json = ?, tool_presentation_json = ?, environment_variables_json = ?,
              revision = revision + 1, updated_at = ?
            WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
              AND revision = ?`,
@@ -404,9 +394,8 @@ export class SavedAgentRepository {
           values.description,
           values.backendOverridesSchemaVersion,
           JSON.stringify(values.backendOverrides),
-          values.sedesTools === null
-            ? null
-            : JSON.stringify(values.sedesTools),
+          JSON.stringify(values.toolPolicySelection),
+          values.toolPresentation ? JSON.stringify(values.toolPresentation) : null,
           JSON.stringify(values.environmentVariables),
           now,
           scope.tenantId,
@@ -459,7 +448,8 @@ export class SavedAgentRepository {
     readonly backendOverridesSchemaVersion: number;
     readonly backendOverrides: NormalizedAgentConfigurationOverrides;
     readonly environmentVariables?: EnvironmentVariableOverrides;
-  readonly sedesTools: AgentToolBootstrapPolicy | null;
+  readonly toolPolicySelection: ToolPolicySelection;
+  readonly toolPresentation?: AgentToolPresentation;
   }) {
     const name = savedAgentNameSchema.parse(input.name);
     const description = savedAgentDescriptionSchema.parse(input.description);
@@ -479,10 +469,8 @@ export class SavedAgentRepository {
       backendOverridesSchemaVersion: input.backendOverridesSchemaVersion,
       backendOverrides: canonicalSavedAgentOverrides(input.backendOverrides),
       environmentVariables: environmentVariableOverridesSchema.parse(input.environmentVariables ?? {}),
-      sedesTools:
-        input.sedesTools === null
-          ? null
-          : canonicalSavedAgentSedesTools(input.sedesTools),
+      toolPolicySelection: toolPolicySelectionSchema.parse(input.toolPolicySelection),
+      ...(input.toolPresentation ? {toolPresentation: agentToolPresentationSchema.parse(input.toolPresentation)} : {}),
     };
   }
 
@@ -518,16 +506,8 @@ export class SavedAgentRepository {
       if (JSON.stringify(backendOverrides) !== row.backendOverridesJson) {
         throw invalidDurableState();
       }
-      let sedesTools: AgentToolBootstrapPolicy | null = null;
-      if (row.sedesToolsJson !== null) {
-        const parsedTools = JSON.parse(row.sedesToolsJson) as unknown;
-        sedesTools = canonicalSavedAgentSedesTools(
-          agentToolBootstrapPolicySchema.parse(parsedTools),
-        );
-        if (JSON.stringify(sedesTools) !== row.sedesToolsJson) {
-          throw invalidDurableState();
-        }
-      }
+      const toolPolicySelection = toolPolicySelectionSchema.parse(JSON.parse(row.toolPolicySelectionJson));
+      const toolPresentation = row.toolPresentationJson === null ? undefined : agentToolPresentationSchema.parse(JSON.parse(row.toolPresentationJson));
       return {
         tenantId: row.tenantId,
         ownerPrincipalId: row.ownerPrincipalId,
@@ -537,7 +517,8 @@ export class SavedAgentRepository {
         backendTypeId,
         backendOverridesSchemaVersion: row.backendOverridesSchemaVersion,
         backendOverrides,
-        sedesTools,
+        toolPolicySelection,
+        ...(toolPresentation ? {toolPresentation} : {}),
         environmentVariables: environmentVariableOverridesSchema.parse(JSON.parse(row.environmentVariablesJson)),
         revision: row.revision,
         createdAt: row.createdAt,

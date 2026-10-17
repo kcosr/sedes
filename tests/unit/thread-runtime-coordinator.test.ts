@@ -2532,7 +2532,7 @@ describe("ThreadRuntimeCoordinator", () => {
       });
 
       await expect(
-        coordinator.acquireAgentToolApprovalAuthority(scope, "thread-failure"),
+        coordinator.acquireAgentToolExecutionAuthority(scope, "thread-failure"),
       ).rejects.toThrow("subscribe failed");
       await vi.advanceTimersByTimeAsync(0);
       await vi.waitFor(() => expect(actorRelease).toHaveBeenCalledOnce());
@@ -2592,8 +2592,8 @@ describe("ThreadRuntimeCoordinator", () => {
       });
 
       await expect(
-        coordinator.acquireAgentToolApprovalAuthority(scope, "thread-recheck"),
-      ).rejects.toThrow("agent_tool_approval_runtime_changed");
+        coordinator.acquireAgentToolExecutionAuthority(scope, "thread-recheck"),
+      ).rejects.toThrow("agent_tool_execution_runtime_changed");
       expect(unsubscribe).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(0);
       await vi.waitFor(() => expect(actorRelease).toHaveBeenCalledOnce());
@@ -2670,7 +2670,7 @@ describe("ThreadRuntimeCoordinator", () => {
       retentionMilliseconds: 60_000,
     });
 
-    const lease = await coordinator.acquireAgentToolApprovalAuthority(
+    const lease = await coordinator.acquireAgentToolExecutionAuthority(
       scope,
       "thread-closed-authority",
     );

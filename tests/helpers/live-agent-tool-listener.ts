@@ -1,3 +1,4 @@
+import { testAgentToolExecutionAuthority } from "../support/agent-tool-execution-authority.js";
 import { createServer, type Server } from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -131,7 +132,7 @@ export async function startLiveAgentToolListener(input: {
     expectedRevision: policies.get(scope, thread.id).revision,
     enabled: true,
     presentation: input.presentation,
-    accessBoundary: "environment",
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
     enabledToolIds: [...input.enabledToolIds],
     now: 310,
   });
@@ -171,21 +172,10 @@ export async function startLiveAgentToolListener(input: {
     ...(imageTools ? { images: imageTools } : {}),
     invocationId: () => "live-agent-tool-invocation",
   });
-  const scopedTools = new SourceScopedAgentToolService(
-    canonical,
-    policies,
-    new AgentToolEnvironmentAuthorityResolver(sources),
-    sources,
-    {
-      acquireAgentToolApprovalAuthority: async () => ({
-        generation: "generation-1",
-        signal: new AbortController().signal,
-        isCurrent: () => true,
-        release: () => undefined,
-      }),
-    },
-    { requestApplicationDecision: async () => "allow" },
-  );
+  const scopedTools = new SourceScopedAgentToolService(canonical,
+policies,
+new AgentToolEnvironmentAuthorityResolver(sources),
+sources, testAgentToolExecutionAuthority);
   const config: AppConfig = {
     authenticationRequired: true,
     experimentalUsageEnabled: false,

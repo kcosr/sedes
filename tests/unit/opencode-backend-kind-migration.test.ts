@@ -55,7 +55,7 @@ describe("OpenCode v2 identity migration", () => {
         applicationThreadId: thread.id,
         enabled: false,
         presentation: { surface: "native", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         revision: 0,
         updatedAt: 210,
         enabledToolIds: [],

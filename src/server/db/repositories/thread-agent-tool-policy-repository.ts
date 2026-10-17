@@ -3,7 +3,7 @@ import type { BackendKind } from "../../backends/contracts.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type {
-  AgentToolAccessBoundary,
+  AgentToolResourceScope,
   AgentToolPresentation,
   AgentToolPresentationOption,
 } from "../../../shared/protocol/conversation.js";
@@ -24,7 +24,7 @@ export interface ThreadAgentToolPolicyRecord {
   readonly applicationThreadId: string;
   readonly enabled: boolean;
   readonly presentation: ThreadAgentToolPresentation;
-  readonly accessBoundary: AgentToolAccessBoundary;
+  readonly resourceScope: AgentToolResourceScope;
   readonly revision: number;
   readonly updatedAt: number;
   readonly enabledToolIds: readonly string[];
@@ -37,7 +37,8 @@ type PolicyRow = {
   readonly enabled: 0 | 1;
   readonly presentationSurface: ThreadAgentToolPresentation["surface"];
   readonly presentationMode: ThreadAgentToolPresentation["mode"];
-  readonly accessBoundary: AgentToolAccessBoundary;
+  readonly allowOtherEnvironments: 0 | 1;
+  readonly allowOtherProjects: 0 | 1;
   readonly revision: number;
   readonly updatedAt: number;
   readonly backendKind: BackendKind;
@@ -51,7 +52,8 @@ const policyColumns = `
   policy.enabled,
   policy.presentation_surface AS presentationSurface,
   policy.presentation_mode AS presentationMode,
-  policy.access_boundary AS accessBoundary,
+  policy.allow_other_environments AS allowOtherEnvironments,
+  policy.allow_other_projects AS allowOtherProjects,
   policy.revision,
   policy.updated_at AS updatedAt,
   backend.kind AS backendKind,
@@ -126,7 +128,7 @@ export class ThreadAgentToolPolicyRepository {
     input: {
       readonly enabled: boolean;
       readonly presentation: ThreadAgentToolPresentation;
-      readonly accessBoundary: AgentToolAccessBoundary;
+      readonly resourceScope: AgentToolResourceScope;
       readonly enabledToolIds: readonly string[];
       readonly now: number;
     },
@@ -166,13 +168,13 @@ export class ThreadAgentToolPolicyRepository {
       input.presentation,
       input.enabledToolIds,
     );
-    this.#validateAccessBoundary(input.accessBoundary);
+    this.#validateResourceScope(input.resourceScope);
     const changed = this.database
       .prepare(
         `
           UPDATE thread_agent_tool_policies
           SET enabled = ?, presentation_surface = ?, presentation_mode = ?,
-            access_boundary = ?, updated_at = ?
+            allow_other_environments = ?, allow_other_projects = ?, updated_at = ?
           WHERE tenant_id = ? AND owner_principal_id = ?
             AND application_thread_id = ? AND revision = 0
         `,
@@ -181,7 +183,8 @@ export class ThreadAgentToolPolicyRepository {
         input.enabled ? 1 : 0,
         input.presentation.surface,
         input.presentation.mode,
-        input.accessBoundary,
+        input.resourceScope.allowOtherEnvironments ? 1 : 0,
+        input.resourceScope.allowOtherProjects ? 1 : 0,
         input.now,
         scope.tenantId,
         scope.principalId,
@@ -218,7 +221,7 @@ export class ThreadAgentToolPolicyRepository {
       readonly expectedRevision: number;
       readonly enabled: boolean;
       readonly presentation: ThreadAgentToolPresentation;
-      readonly accessBoundary: AgentToolAccessBoundary;
+      readonly resourceScope: AgentToolResourceScope;
       readonly enabledToolIds: readonly string[];
       readonly now: number;
     },
@@ -237,13 +240,13 @@ export class ThreadAgentToolPolicyRepository {
         input.presentation,
         input.enabledToolIds,
       );
-      this.#validateAccessBoundary(input.accessBoundary);
+      this.#validateResourceScope(input.resourceScope);
       const changed = this.database
         .prepare(
           `
             UPDATE thread_agent_tool_policies
             SET enabled = ?, presentation_surface = ?, presentation_mode = ?,
-              access_boundary = ?,
+              allow_other_environments = ?, allow_other_projects = ?,
               revision = revision + 1, updated_at = ?
             WHERE tenant_id = ? AND owner_principal_id = ?
               AND application_thread_id = ? AND revision = ?
@@ -253,7 +256,8 @@ export class ThreadAgentToolPolicyRepository {
           input.enabled ? 1 : 0,
           input.presentation.surface,
           input.presentation.mode,
-          input.accessBoundary,
+          input.resourceScope.allowOtherEnvironments ? 1 : 0,
+        input.resourceScope.allowOtherProjects ? 1 : 0,
           input.now,
           scope.tenantId,
           scope.principalId,
@@ -379,7 +383,10 @@ export class ThreadAgentToolPolicyRepository {
         surface: row.presentationSurface,
         mode: row.presentationMode,
       },
-      accessBoundary: row.accessBoundary,
+      resourceScope: {
+        allowOtherEnvironments: row.allowOtherEnvironments === 1,
+        allowOtherProjects: row.allowOtherProjects === 1,
+      },
       revision: row.revision,
       updatedAt: row.updatedAt,
       enabledToolIds,
@@ -460,15 +467,12 @@ export class ThreadAgentToolPolicyRepository {
     return Object.freeze([...options]);
   }
 
-  #validateAccessBoundary(value: AgentToolAccessBoundary): void {
-    if (
-      value !== "thread" &&
-      value !== "environment" &&
-      value !== "unrestricted"
-    ) {
+  #validateResourceScope(value: AgentToolResourceScope): void {
+    if (!value || typeof value.allowOtherEnvironments !== "boolean" ||
+        typeof value.allowOtherProjects !== "boolean") {
       throw new DomainError(
         "invalid_transition",
-        "The agent tool access boundary is invalid.",
+        "The agent tool resource scope is invalid.",
       );
     }
   }

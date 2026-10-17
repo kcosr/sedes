@@ -1,3 +1,6 @@
+import { ToolPolicyService } from "../../src/server/tool-policies/tool-policy-service.js";
+import { ToolPolicyRepository } from "../../src/server/db/repositories/tool-policy-repository.js";
+import { ThreadToolPolicyOriginRepository } from "../../src/server/db/repositories/thread-tool-policy-origin-repository.js";
 import { AutomationForkTargetResolver } from "../../src/server/runtime/automation-fork-target.js";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { ViewedImageCaptureService } from "../../src/server/output-artifacts/viewed-image-capture.js";
@@ -297,7 +300,7 @@ const e2eBackendAgentTools: BackendAgentToolFacade = {
   readPolicy: () => ({
     enabled: false,
     presentation: { surface: "cli", mode: "progressive" },
-    accessBoundary: "environment",
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
     enabledToolIds: [],
   }),
   invoke: async () => {
@@ -4652,7 +4655,12 @@ async function main(): Promise<void> {
       completion,
     },
   );
+  const agentToolPolicyDependencies = threadAgentToolPolicyReaderDependencies(database);
+  const toolPolicyOrigins = new ThreadToolPolicyOriginRepository(database);
+  const policySets = new ToolPolicyService(new ToolPolicyRepository(database), configurationFixture.repository, agentToolPolicyDependencies.agentToolCatalog, backendId => savedAgentAdapters.findByBackendInstanceId(backendId)?.typeId);
   const forks = new ThreadForkService({
+    toolPolicies: agentToolPolicyDependencies.agentTools,
+    toolPolicyOrigins,
     environmentVariables,
     database,
     targets,
@@ -4678,8 +4686,6 @@ async function main(): Promise<void> {
     onOpened: (eventScope, interaction) =>
       notificationLifecycle.interactionOpened(eventScope, interaction),
   });
-  const agentToolPolicyDependencies =
-    threadAgentToolPolicyReaderDependencies(database);
   const threadInventory = new DatabaseThreadApplicationInventoryReader({
     inventory: inventoryRepository,
     queue: queueRepository,
@@ -4921,6 +4927,9 @@ async function main(): Promise<void> {
   ]);
   const savedAgentRepository = new SavedAgentRepository(database);
   const savedAgents = new SavedAgentApplicationService({
+    policySets,
+    principalToolClients: new PrincipalAgentToolClientRepository(database, createPrincipalAgentToolClientEligibility()),
+    toolPolicyOrigins,
     environmentVariables,
     agents: new SavedAgentService(savedAgentRepository, savedAgentAdapters),
     repository: savedAgentRepository,
@@ -6225,6 +6234,7 @@ async function main(): Promise<void> {
   }));
   app.use(
     createNormalizedApp({
+      policySets,
       usage,
       environmentVariables,
       ...{ configurationAdmin, hostPairingAdmin },

@@ -1,3 +1,4 @@
+import { testAgentToolExecutionAuthority } from "../support/agent-tool-execution-authority.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
 import { WorkpadRepository } from "../../src/server/db/repositories/workpad-repository.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,7 +26,6 @@ import { createPrincipalAgentToolClientEligibility, createThreadAgentToolPolicyD
 import { createWorkspaceOpenToolDefinition, type WorkspaceOpenOutput } from "../../src/server/agent-tools/tools/workspace-open-tool.js";
 import type { AgentManagementService } from "../../src/server/agent-tools/application/agent-management-service.js";
 import type { ThreadAgentToolPolicyRepository } from "../../src/server/db/repositories/thread-agent-tool-policy-repository.js";
-import type { ApplicationDecisionPresentation } from "../../src/server/conversations/interaction-broker.js";
 import path from "node:path";
 
 const cleanups: Array<() => void> = [];
@@ -224,6 +224,7 @@ describe("workspace.open for agents", () => {
       canonicalInputDigest:"input",authorityDigest:"authority",targetEnvironmentIds:[f.environment.id],
       resolvedResourceRefs:[{kind:"environment",id:f.environment.id,environmentId:f.environment.id}],
       display:{targetEnvironmentLabels:[],resourceLabels:[]},tool:{id:"workspace.open",schemaVersion:3},callerKind:"thread_agent",
+      resourceScope:{allowOtherEnvironments:false,allowOtherProjects:true},
       defaults:{kind:"thread_agent",environmentId:f.environment.id,workspaceId:f.workspace.id,projectId:f.workspace.projectId,threadId:f.thread.id},
       policyIdentity:{ownerKind:"thread",ownerId:f.thread.id,revision:1},admittedEnvironmentIds:[f.environment.id]});
     return {...f,open:(canonicalPath:string)=>f.open.openWorkspaceForAgent(f.scope,{environmentId:f.environment.id,path:canonicalPath},grant)};
@@ -270,10 +271,11 @@ describe("workspace.open@3 with a project", () => {
     const tool=CANONICAL_AGENT_TOOL_MANIFEST["workspace.open"];
     const defaults={kind:"thread_agent" as const,environmentId:f.environment.id,workspaceId:f.workspace.id,projectId:f.workspace.projectId,threadId:f.thread.id};
     const policyIdentity={ownerKind:"thread" as const,ownerId:f.thread.id,revision:1};
-    /** Admits like a thread agent whose request needs no approval, then runs it. */
+    /** Admits under an explicit same-environment, other-project policy. */
     const admit=(input:{readonly environmentId:string;readonly path:string;readonly projectId?:string})=>{
-      const resolved=new AgentToolEnvironmentAuthorityResolver(reader).resolve({tool,input,scope:f.scope,defaults});
-      return createTrustedEnvironmentAuthorityGrant({...resolved,tool,callerKind:"thread_agent",defaults,policyIdentity,
+      const resourceScope={allowOtherEnvironments:false,allowOtherProjects:true};
+      const resolved=new AgentToolEnvironmentAuthorityResolver(reader).resolve({tool,input,scope:f.scope,defaults,resourceScope});
+      return createTrustedEnvironmentAuthorityGrant({...resolved,tool,callerKind:"thread_agent",defaults,policyIdentity,resourceScope,
         admittedEnvironmentIds:[f.environment.id,...resolved.targetEnvironmentIds]});
     };
     const openIn=(path:string,projectId?:string)=>{
@@ -358,19 +360,16 @@ describe("workspace.open restores a location only with its project's authority",
   }
   type CrossHost=ReturnType<typeof crossHostFixture>;
 
-  /** A thread agent on the local host with the default "Ask outside this environment" boundary. */
-  function threadAgent(f:CrossHost,decision:"allow"|"deny") {
+  /** A thread agent on the local host, with an explicit project boundary. */
+  function threadAgent(f:CrossHost,allowOtherProjects:boolean) {
     const source={scope:f.scope,sourceThreadId:f.thread.id,sourceWorkspaceId:f.workspace.id,sourceEnvironmentId:f.environment.id,backendKind:"pi" as const};
-    const requestApplicationDecision=vi.fn(async(_request:{readonly presentation:ApplicationDecisionPresentation})=>decision);
     const service=new SourceScopedAgentToolService(f.canonical,
-      {get:()=>({enabled:true,enabledToolIds:["workspace.open"],presentation:{surface:"cli",mode:"progressive"},accessBoundary:"environment",revision:1})} as unknown as ThreadAgentToolPolicyRepository,
-      f.resolver,{resolveInScope:()=>source},
-      {acquireAgentToolApprovalAuthority:async()=>({generation:"generation-1",signal:new AbortController().signal,isCurrent:()=>true,release:()=>undefined})},
-      {requestApplicationDecision:requestApplicationDecision as never});
+      {get:()=>({enabled:true,enabledToolIds:["workspace.open"],presentation:{surface:"cli",mode:"progressive"},
+        resourceScope:{allowOtherEnvironments:false,allowOtherProjects},revision:1})} as unknown as ThreadAgentToolPolicyRepository,
+      f.resolver,{resolveInScope:()=>source}, testAgentToolExecutionAuthority);
     const open=(canonicalPath:string,projectId?:string)=>service.invoke<WorkspaceOpenOutput>({source,adapter:"cli",signal:new AbortController().signal,
       request:{toolId:"workspace.open",schemaVersion:3,requestId:randomUUID(),input:f.input(canonicalPath,projectId)}});
-    const prompt=(call:number)=>requestApplicationDecision.mock.calls[call]![0].presentation.message?.text;
-    return {open,requestApplicationDecision,prompt};
+    return {open};
   }
 
   /** A Tool client whose default is the local host. */
@@ -386,32 +385,31 @@ describe("workspace.open restores a location only with its project's authority",
 
   const removedMessage=(projectId:string)=>`This directory is a removed location of project ${projectId}. To restore it there, retry with that projectId.`;
 
-  it("asks a thread agent for the project's hosts before restoring its location on the agent's host", async () => {
+  it("checks the project boundary when restoring a local location of a cross-host project", async () => {
     const f=crossHostFixture();
     expect(f.state(f.local)).toEqual({removed:true,members:[buildServer]});
-    const denied=threadAgent(f,"deny");
-    // Opening the directory alone is admitted for the local host only, so it cannot restore the location.
-    await expect(denied.open("/srv/shared")).rejects.toMatchObject({toolError:{code:"conflict",message:removedMessage(f.local.projectId)}});
-    expect(denied.requestApplicationDecision).not.toHaveBeenCalled();
+    const denied=threadAgent(f,false);
+    // A restricted caller cannot implicitly create or select another project.
+    await expect(denied.open("/srv/shared")).rejects.toMatchObject({toolError:{code:"permission_denied"}});
     await expect(denied.open("/srv/shared",f.local.projectId)).rejects.toMatchObject({toolError:{code:"permission_denied"}});
-    expect(denied.requestApplicationDecision).toHaveBeenCalledOnce();
-    expect(denied.prompt(0)).toContain("Build server");
     expect(f.state(f.local)).toEqual({removed:true,members:[buildServer]});
 
-    const allowed=threadAgent(f,"allow");
+    // Shared project data has no owning host. Restoring this local location needs
+    // other-project access but does not need access to the remote location.
+    const allowed=threadAgent(f,true);
+    await expect(allowed.open("/srv/shared")).rejects.toMatchObject({toolError:{code:"conflict",message:removedMessage(f.local.projectId)}});
     await expect(allowed.open("/srv/shared",f.local.projectId)).resolves.toMatchObject({state:"completed",output:{workspaceId:f.local.id,projectId:f.local.projectId}});
-    expect(allowed.requestApplicationDecision).toHaveBeenCalledOnce();
     expect(f.state(f.local)).toEqual({removed:false,members:[buildServer,f.environment.id].sort()});
   });
 
-  it("asks a thread agent before restoring a location of a project with no active location", async () => {
+  it("checks the project boundary for a project with no active location", async () => {
     const f=crossHostFixture();
-    const denied=threadAgent(f,"deny");
-    await expect(denied.open("/srv/lone")).rejects.toMatchObject({toolError:{code:"conflict",message:removedMessage(f.lone.projectId)}});
+    const denied=threadAgent(f,false);
+    await expect(denied.open("/srv/lone")).rejects.toMatchObject({toolError:{code:"permission_denied"}});
     await expect(denied.open("/srv/lone",f.lone.projectId)).rejects.toMatchObject({toolError:{code:"permission_denied"}});
-    expect(denied.requestApplicationDecision).toHaveBeenCalledOnce();
-    expect(denied.prompt(0)).toContain("a project with no active location");
     expect(f.state(f.lone)).toEqual({removed:true,members:[]});
+    await expect(threadAgent(f,true).open("/srv/lone",f.lone.projectId)).resolves.toMatchObject({state:"completed",output:{workspaceId:f.lone.id,projectId:f.lone.projectId}});
+    expect(f.state(f.lone)).toEqual({removed:false,members:[f.environment.id]});
   });
 
   it("denies a Tool client the restore unless it may use one of the project's hosts", async () => {
@@ -434,7 +432,7 @@ describe("workspace.open restores a location only with its project's authority",
 
   it("returns an active location unchanged and gives a new directory its own project without asking", async () => {
     const f=crossHostFixture();
-    const agent=threadAgent(f,"deny");
+    const agent=threadAgent(f,true);
     const before=f.project(f.workspace.projectId);
     await expect(agent.open(f.workspace.canonicalPath)).resolves.toMatchObject({output:{workspaceId:f.workspace.id,projectId:f.workspace.projectId}});
     expect(f.project(f.workspace.projectId).membershipRevision).toBe(before.membershipRevision);
@@ -444,7 +442,6 @@ describe("workspace.open restores a location only with its project's authority",
     expect(created.label).toBe("fresh");
     expect([f.workspace.projectId,f.local.projectId,f.lone.projectId]).not.toContain(created.projectId);
     expect(f.members(created.projectId)).toEqual([f.environment.id]);
-    expect(agent.requestApplicationDecision).not.toHaveBeenCalled();
     expect(f.state(f.local)).toEqual({removed:true,members:[buildServer]});
   });
 

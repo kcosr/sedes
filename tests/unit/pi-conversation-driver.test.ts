@@ -159,7 +159,7 @@ const noAgentTools = {
   readPolicy: () => ({
     enabled: false,
     presentation: { surface: "native" as const, mode: "individual" as const },
-    accessBoundary: "environment" as const,
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
     enabledToolIds: [],
   }),
   invoke: async () => {
@@ -2884,7 +2884,7 @@ describe("Pi conversation backend driver", () => {
     const readPolicy = vi.fn(() => ({
       enabled,
       presentation,
-      accessBoundary: "environment" as const,
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       enabledToolIds,
     }));
     const facade = {
@@ -6803,7 +6803,7 @@ describe("Pi conversation backend driver", () => {
       readPolicy: () => ({
         enabled: true,
         presentation,
-        accessBoundary: "environment" as const,
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds,
       }),
       invoke: async () => {
@@ -7012,7 +7012,7 @@ describe("Pi conversation backend driver", () => {
           readPolicy: () => ({
             enabled: false,
             presentation: { surface: "cli", mode },
-            accessBoundary: "environment",
+            resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
             enabledToolIds: [],
           }),
         },
@@ -7072,7 +7072,7 @@ describe("Pi conversation backend driver", () => {
       readPolicy: () => ({
         enabled: true,
         presentation: { surface: "cli" as const, mode: "progressive" as const },
-        accessBoundary: "environment" as const,
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: [contract.id],
       }),
       invoke: async () => {
@@ -7160,7 +7160,7 @@ describe("Pi conversation backend driver", () => {
         readPolicy: () => ({
           enabled: true,
           presentation: { surface: "invalid" as never, mode: "individual" },
-          accessBoundary: "environment" as const,
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: [],
         }),
       },
@@ -7280,7 +7280,7 @@ describe("Pi conversation backend driver", () => {
       readPolicy: () => ({
         enabled: true,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: [contract.id],
       }),
       async invoke<Output>(input: BackendAgentToolInvocationInput) {
@@ -7555,7 +7555,7 @@ describe("Pi conversation backend driver", () => {
     const readPolicy = vi.fn(() => ({
       enabled: false,
       presentation: { surface: "native" as const, mode: "individual" as const },
-      accessBoundary: "environment" as const,
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       enabledToolIds: [],
     }));
     const driver = new PiConversationBackendDriver({

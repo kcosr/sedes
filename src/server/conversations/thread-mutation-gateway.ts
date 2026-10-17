@@ -3143,7 +3143,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
                 enabled: operation.enabled,
                 enabledToolIds: operation.enabledToolIds,
                 presentation: operation.presentation,
-                accessBoundary: operation.accessBoundary,
+                resourceScope: operation.resourceScope,
                 now: this.#now(),
               },
             );
@@ -3190,7 +3190,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         enabled: operation.enabled,
         enabledToolIds: operation.enabledToolIds,
         presentation: operation.presentation,
-        accessBoundary: operation.accessBoundary,
+        resourceScope: operation.resourceScope,
         now: this.#now(),
       });
     }

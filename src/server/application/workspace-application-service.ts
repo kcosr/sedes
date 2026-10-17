@@ -122,15 +122,9 @@ export class WorkspaceApplicationService {
   }
 
   /**
-   * An agent adds a new directory to a project, or restores a removed
-   * location of one, only with that project's authority: either changes the
-   * project's membership, and so the environments it is reachable from. An
-   * agent on one host therefore cannot make a project hosted elsewhere
-   * reachable from its own host without approval. Without a project, a new
-   * directory becomes its own project, an active location is returned
-   * unchanged, and a removed location is a conflict naming its project. A
-   * known directory keeps its project: naming another is a conflict, never
-   * an implicit move.
+   * Opening a location requires its environment and the assigned project.
+   * Shared project membership does not grant access to other hosts. Without
+   * an explicit project, creating a project requires other-project access.
    */
   async openWorkspaceForAgent(
     scope: RequestScope,
@@ -153,6 +147,9 @@ export class WorkspaceApplicationService {
       environmentAuthority,
       signal,
     );
+    if (request.projectId === undefined && environmentAuthority.resourceScope && !environmentAuthority.resourceScope.allowOtherProjects) {
+      throw new CanonicalAgentToolRequestError("permission_denied", "Access to other projects is disabled for this thread. Specify the current projectId when opening a workspace, or enable access to other projects in tool settings.");
+    }
     if (request.projectId === undefined) {
       // Admission authorized only the environment, not any existing project.
       try {

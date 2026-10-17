@@ -40,11 +40,11 @@ interface AgentToolPolicyDraft {
   readonly baseEnabled: boolean;
   readonly baseEnabledToolIds: readonly string[];
   readonly basePresentation: AgentToolPolicy["presentation"];
-  readonly baseAccessBoundary: AgentToolPolicy["accessBoundary"];
+  readonly baseResourceScope: AgentToolPolicy["resourceScope"];
   readonly enabled: boolean;
   readonly enabledToolIds: readonly string[];
   readonly presentation: AgentToolPolicy["presentation"];
-  readonly accessBoundary: AgentToolPolicy["accessBoundary"];
+  readonly resourceScope: AgentToolPolicy["resourceScope"];
 }
 
 function enabledToolIds(policy: AgentToolPolicy): readonly string[] {
@@ -60,11 +60,11 @@ function draftFrom(policy: AgentToolPolicy): AgentToolPolicyDraft {
     baseEnabled: policy.enabled,
     baseEnabledToolIds: ids,
     basePresentation: policy.presentation,
-    baseAccessBoundary: policy.accessBoundary,
+    baseResourceScope: policy.resourceScope,
     enabled: policy.enabled,
     enabledToolIds: ids,
     presentation: policy.presentation,
-    accessBoundary: policy.accessBoundary,
+    resourceScope: policy.resourceScope,
   };
 }
 
@@ -80,8 +80,8 @@ function dirty(draft: AgentToolPolicyDraft): boolean {
     draft.enabled !== draft.baseEnabled ||
     draft.presentation.surface !== draft.basePresentation.surface ||
     draft.presentation.mode !== draft.basePresentation.mode ||
-    draft.accessBoundary !==
-      draft.baseAccessBoundary ||
+    draft.resourceScope.allowOtherEnvironments !== draft.baseResourceScope.allowOtherEnvironments ||
+    draft.resourceScope.allowOtherProjects !== draft.baseResourceScope.allowOtherProjects ||
     !sameIds(draft.enabledToolIds, draft.baseEnabledToolIds)
   );
 }
@@ -217,7 +217,7 @@ export function AgentToolSettingsDialog({
   const dialogId = useId();
   const dialogDescriptionId = `${dialogId}-description`;
   const nativeToolCacheWarningId = `${dialogId}-pi-native-cache-warning`;
-  const policyFingerprint = `${policy.revision}:${policy.enabled}:${policy.presentation.surface}:${policy.presentation.mode}:${policy.accessBoundary}:${policy.groups
+  const policyFingerprint = `${policy.revision}:${policy.enabled}:${policy.presentation.surface}:${policy.presentation.mode}:${policy.resourceScope.allowOtherEnvironments}:${policy.resourceScope.allowOtherProjects}:${policy.groups
     .flatMap(({ id, order, tools }) => [
       `${id}:${order}`,
       ...tools.map(
@@ -338,7 +338,7 @@ export function AgentToolSettingsDialog({
         enabled: draft.enabled,
         enabledToolIds: draft.enabledToolIds,
         presentation: draft.presentation,
-        accessBoundary: draft.accessBoundary,
+        resourceScope: draft.resourceScope,
       })
       .then(
         () => {
@@ -399,6 +399,10 @@ export function AgentToolSettingsDialog({
         </DialogHeader>
 
         <DialogBody>
+        {policy.origin && <p className="agent-tool-policy-origin">
+          Original policy: {policy.origin.policySet ? `${policy.origin.policySet.name} (revision ${policy.origin.policySet.revision})` : `${policy.origin.source} settings`}.
+          {" "}These settings are saved on this thread; later default or policy-set changes do not update it.
+        </p>}
         {policy.runtimeAvailability.availability === "unavailable" && (
           <p role="status">
             <strong>Sedes tools are unavailable for this thread.</strong>{" "}
@@ -499,66 +503,35 @@ export function AgentToolSettingsDialog({
               </Select>
             </label>
           )}
-          <label
-            className="agent-tool-dialog-setting agent-tool-environment-access-setting"
-            data-caution={
-              draft.accessBoundary === "unrestricted"
-                ? "true"
-                : "false"
-            }
-          >
+          <label className="agent-tool-dialog-setting">
             <span>
-              <strong>Access boundary</strong>
-              <small>
-                Choose which resources enabled tools can access without approval.
-              </small>
+              <strong>Allow other environments</strong>
+              <small>Access resources on other execution hosts. When off, lists and searches stay in this environment; direct requests outside it are denied.</small>
             </span>
-            <Select
-              value={draft.accessBoundary}
+            <Switch
+              aria-label="Allow other environments"
+              checked={draft.resourceScope.allowOtherEnvironments}
               disabled={!editable}
-              onValueChange={(accessBoundary) =>
-                setDraft((current) => ({
-                  ...current,
-                  accessBoundary:
-                    accessBoundary as AgentToolPolicyDraft["accessBoundary"],
-                }))
-              }
-            >
-              <SelectTrigger aria-label="Access boundary">
-                <SelectValue>
-                  {{
-                    thread: "Ask outside this thread",
-                    environment: "Ask outside this environment",
-                    unrestricted: "Allow without asking",
-                  }[draft.accessBoundary]}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent position="popper">
-                <SelectItem value="thread">Ask outside this thread</SelectItem>
-                <SelectItem
-                  value="environment"
-                  textValue="Ask outside this environment"
-                >
-                  <span className="agent-tool-environment-access-option">
-                    <strong>Ask outside this environment</strong>
-                    <small>
-                      Show an approval before an enabled Sedes tool reads or
-                      changes resources in another execution environment.
-                    </small>
-                  </span>
-                </SelectItem>
-                <SelectItem value="unrestricted" textValue="Allow without asking">
-                  <span className="agent-tool-environment-access-option">
-                    <strong>Allow without asking</strong>
-                    <small>
-                      Enabled Sedes tools may read or change any
-                      principal-owned environment without a Sedes environment
-                      prompt.
-                    </small>
-                  </span>
-                </SelectItem>
-              </SelectContent>
-            </Select>
+              onCheckedChange={(allowOtherEnvironments) => setDraft((current) => ({
+                ...current,
+                resourceScope: { ...current.resourceScope, allowOtherEnvironments },
+              }))}
+            />
+          </label>
+          <label className="agent-tool-dialog-setting">
+            <span>
+              <strong>Allow other projects</strong>
+              <small>Access resources in other projects. When off, lists and searches stay in this project; direct requests outside it are denied.</small>
+            </span>
+            <Switch
+              aria-label="Allow other projects"
+              checked={draft.resourceScope.allowOtherProjects}
+              disabled={!editable}
+              onCheckedChange={(allowOtherProjects) => setDraft((current) => ({
+                ...current,
+                resourceScope: { ...current.resourceScope, allowOtherProjects },
+              }))}
+            />
           </label>
         </div>
 

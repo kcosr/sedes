@@ -114,6 +114,7 @@ export class ThreadWorktreeAgentToolService implements AgentThreadWorktreeServic
       kind: "thread",
       id: thread.id,
       environmentId: thread.environmentId,
+      projectId: thread.projectId,
     });
     if (
       thread.workspaceId !== context.workspaceId ||

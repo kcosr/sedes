@@ -28,6 +28,8 @@ export type WorkpadActor = { kind: "user" } | { kind: "agent"; threadId: string 
  */
 export type WorkpadListAuthority = {
   readonly environmentIds: readonly string[];
+  readonly projectId?: string;
+  readonly sharedProjects?: boolean;
   readonly continuationKey: string;
 };
 const notFound = () => new DomainError("not_found", "The workpad was not found.");
@@ -369,12 +371,15 @@ export class WorkpadRepository {
     if (authority) {
       const ids = [...new Set(authority.environmentIds)];
       const admitted = ids.map(() => "?").join(",");
-      conditions.push(`(p.scope_kind='global'
-        OR (p.scope_kind='thread' AND t.environment_id IN (${admitted}))
-        OR (p.scope_kind='project' AND ${request.scope.kind === "project" ? "p.project_id=?" : `EXISTS (SELECT 1 FROM workspaces AS location
-          WHERE location.tenant_id=p.tenant_id AND location.owner_principal_id=p.owner_principal_id
-            AND location.project_id=p.project_id AND location.removed_at IS NULL AND location.environment_id IN (${admitted}))`}))`);
-      params.push(...ids, ...(request.scope.kind === "project" ? [request.scope.projectId] : ids));
+      conditions.push(`(p.scope_kind <> 'thread' OR t.environment_id IN (${admitted}))`);
+      params.push(...ids);
+      if (authority.projectId !== undefined) {
+        conditions.push(`(p.scope_kind='global' OR (p.scope_kind='project' AND p.project_id=?) OR (p.scope_kind='thread' AND EXISTS (SELECT 1 FROM workspaces AS location WHERE location.tenant_id=t.tenant_id AND location.owner_principal_id=t.owner_principal_id AND location.id=t.workspace_id AND location.project_id=?)))`);
+        params.push(authority.projectId, authority.projectId);
+      } else if (!authority.sharedProjects) {
+        conditions.push(`(p.scope_kind<>'project' OR ${request.scope.kind === "project" ? "p.project_id=?" : `EXISTS (SELECT 1 FROM workspaces AS location WHERE location.tenant_id=p.tenant_id AND location.owner_principal_id=p.owner_principal_id AND location.project_id=p.project_id AND location.removed_at IS NULL AND location.environment_id IN (${admitted}))`})`);
+        params.push(...(request.scope.kind === "project" ? [request.scope.projectId] : ids));
+      }
     }
     if (request.query) { conditions.push("(instr(lower(p.title), lower(?)) > 0 OR instr(lower(json_extract(p.document_json,'$.content')), lower(?)) > 0)"); params.push(request.query, request.query); }
     if (after) {

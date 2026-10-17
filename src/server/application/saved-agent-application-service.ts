@@ -1,3 +1,8 @@
+import type { PrincipalAgentToolClientRepository } from "../db/repositories/principal-agent-tool-client-repository.js";
+import type { ThreadToolPolicyOriginRepository } from "../db/repositories/thread-tool-policy-origin-repository.js";
+import type { ToolPolicyService } from "../tool-policies/tool-policy-service.js";
+import type { ResolvedToolPolicy, ToolPolicySelection } from "../../shared/protocol/tool-policies.js";
+import type { AgentToolPresentation } from "../../shared/protocol/conversation.js";
 import type { AutomationThreadCopyIdentity } from "../db/repositories/conversation-binding-repository.js";
 import { AutomationDeferredError } from "../domain/automation-deferred.js";
 import type { EnvironmentVariablesService } from "../environment-variables/environment-variables-service.js";
@@ -11,7 +16,6 @@ import {
   resolveSavedAgentResultSchema,
   savedAgentOptionsResultSchema,
   type AgentToolBootstrapDescriptor,
-  type AgentToolBootstrapPolicy,
   type CreateSavedAgentRequest,
   type NormalizedAgentConfigurationOverrides,
   type ResolveSavedAgentRequest,
@@ -62,6 +66,13 @@ import type { ExecutionWorkspaceSelection } from "../../shared/protocol/conversa
 import type { ConversationCreationTransaction } from "../backends/saved-agent-adapter.js";
 import type { ResolvedLifecycleTarget } from "../conversations/conversation-lifecycle-service.js";
 
+type ToolResolutionInput = {
+  readonly agentSelection?: ToolPolicySelection;
+  readonly threadSelection?: ToolPolicySelection;
+  readonly presentation?: AgentToolPresentation;
+  readonly snapshot?: ResolvedAgentToolBootstrapPolicy;
+};
+
 type Candidate = {
   readonly target: SavedAgentTargetDescriptor;
   readonly adapter: SavedAgentBackendAdapter;
@@ -74,6 +85,8 @@ type ResolvedCandidate = Candidate & {
   readonly preview: SavedAgentResolutionCandidate;
   readonly backendConfiguration: ResolvedSavedAgentBackendConfiguration;
   readonly toolPolicy: ResolvedAgentToolBootstrapPolicy;
+  readonly toolResolution: ToolResolutionInput;
+  readonly resolvedToolPolicy: ResolvedToolPolicy;
   readonly profileRevision: number;
   readonly profileFingerprint: string;
   readonly backendRevision: number;
@@ -91,6 +104,8 @@ type PreparedCandidate = Candidate & {
   readonly preview: SavedAgentResolutionCandidate;
   readonly workspaceRevision: number;
   readonly workspaceAuthorityRevision: number;
+  readonly toolResolution: ToolResolutionInput;
+  readonly resolvedToolPolicy: ResolvedToolPolicy;
 };
 
 export type SavedAgentCreationCallerContext =
@@ -177,8 +192,8 @@ function sameToolPolicy(
     left.enabled === right.enabled &&
     left.presentation.surface === right.presentation.surface &&
     left.presentation.mode === right.presentation.mode &&
-    left.accessBoundary ===
-      right.accessBoundary &&
+    left.resourceScope.allowOtherEnvironments === right.resourceScope.allowOtherEnvironments &&
+    left.resourceScope.allowOtherProjects === right.resourceScope.allowOtherProjects &&
     left.enabledToolIds.length === right.enabledToolIds.length &&
     left.enabledToolIds.every(
       (toolId, index) => toolId === right.enabledToolIds[index],
@@ -190,6 +205,9 @@ export class SavedAgentApplicationService {
   constructor(
     readonly input: {
       readonly environmentVariables?: EnvironmentVariablesService;
+      readonly policySets: ToolPolicyService;
+      readonly principalToolClients: Pick<PrincipalAgentToolClientRepository, "get">;
+      readonly toolPolicyOrigins: ThreadToolPolicyOriginRepository;
       readonly agents: SavedAgentService;
       readonly repository: SavedAgentRepository;
       readonly adapters: SavedAgentBackendAdapterRegistry;
@@ -211,6 +229,8 @@ export class SavedAgentApplicationService {
   ) {
     if (
       input.repository.database !== input.toolPolicies.database ||
+      input.repository.database !== input.policySets.repository.database ||
+      input.repository.database !== input.toolPolicyOrigins.database ||
       input.repository.database !== input.configuration.database ||
       input.repository.database !== input.inventory.database
     ) {
@@ -259,22 +279,25 @@ export class SavedAgentApplicationService {
       request.authoringContext.workspaceId,
       environmentAuthority,
     );
-    return this.#createAgent(scope, request, signal);
+    return this.#createAgent(scope, request, signal, environmentAuthority);
   }
 
   async #createAgent(
     scope: RequestScope,
     request: CreateSavedAgentRequest,
     signal?: AbortSignal,
+    authority?: TrustedEnvironmentAuthorityGrant,
   ): Promise<SavedAgent> {
     const resolved = await this.#resolveTarget(
       scope,
       request.authoringContext.workspaceId,
       request.authoringContext.targetId,
       request.backendOverrides,
-      request.sedesTools,
+      { agentSelection: request.toolPolicySelection, presentation: request.toolPresentation },
       signal,
     );
+    if (authority) this.#assertToolPolicyWithinCaller(scope, authority, resolved.toolPolicy);
+    this.#assertCandidateFences(scope, request.authoringContext.workspaceId, resolved);
     return this.input.agents.create(scope, {
       name: request.name,
       ...(request.description === undefined
@@ -283,9 +306,8 @@ export class SavedAgentApplicationService {
       backendTypeId: resolved.adapter.typeId,
       environmentVariables: request.environmentVariables,
       backendOverrides: resolved.preview.configuration.canonicalOverrides,
-      ...(request.sedesTools === undefined
-        ? {}
-        : { sedesTools: request.sedesTools }),
+      toolPolicySelection: request.toolPolicySelection,
+      toolPresentation: request.toolPresentation,
     });
   }
 
@@ -312,7 +334,7 @@ export class SavedAgentApplicationService {
         environmentAuthority,
       );
     }
-    return this.#updateAgent(scope, agentId, request, signal);
+    return this.#updateAgent(scope, agentId, request, signal, environmentAuthority);
   }
 
   async #updateAgent(
@@ -320,19 +342,28 @@ export class SavedAgentApplicationService {
     agentId: string,
     request: UpdateSavedAgentRequest,
     signal?: AbortSignal,
+    authority?: TrustedEnvironmentAuthorityGrant,
   ): Promise<SavedAgent> {
     const current = this.input.agents.get(scope, agentId);
+    if (request.toolPolicySelection) this.input.policySets.assertSelection(scope, request.toolPolicySelection);
+    if (authority && request.toolPolicySelection && !request.authoringContext) {
+      const selection = request.toolPolicySelection;
+      if (selection.kind === "inherit") throw new DomainError("invalid_transition", "An agent must select an explicit permitted tool policy or a target before restoring inheritance.");
+      const policy = selection.kind === "disabled" ? {enabled:false,enabledToolIds:[],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}} : {enabled:true,...this.input.policySets.get(scope,selection.policySetId)};
+      this.#assertToolPolicyWithinCaller(scope, authority, policy);
+    }
     if (request.authoringContext) {
       const resolved = await this.#resolveTarget(
         scope,
         request.authoringContext.workspaceId,
         request.authoringContext.targetId,
         request.backendOverrides ?? current.backendOverrides,
-        request.sedesTools === null
-          ? undefined
-          : (request.sedesTools ?? current.sedesTools),
+        { agentSelection: request.toolPolicySelection ?? current.toolPolicySelection,
+          presentation: request.toolPresentation === null ? undefined : request.toolPresentation ?? current.toolPresentation },
         signal,
       );
+      if (authority) this.#assertToolPolicyWithinCaller(scope, authority, resolved.toolPolicy);
+      this.#assertCandidateFences(scope, request.authoringContext.workspaceId, resolved);
       if (resolved.adapter.typeId !== current.backendTypeId) {
         throw new DomainError(
           "conflict",
@@ -350,9 +381,8 @@ export class SavedAgentApplicationService {
       ...(request.backendOverrides === undefined
         ? {}
         : { backendOverrides: request.backendOverrides }),
-      ...(request.sedesTools === undefined
-        ? {}
-        : { sedesTools: request.sedesTools }),
+      toolPolicySelection: request.toolPolicySelection,
+      toolPresentation: request.toolPresentation,
     });
   }
 
@@ -404,7 +434,7 @@ export class SavedAgentApplicationService {
       request.workspaceId,
       request.targetId,
       request.overrides ?? [],
-      request.sedesTools,
+      { threadSelection: request.toolPolicySelection, presentation: request.toolPresentation },
       signal,
     );
     return savedAgentOptionsResultSchema.parse({
@@ -448,7 +478,8 @@ export class SavedAgentApplicationService {
               request.workspaceId,
               candidate,
               agent.backendOverrides,
-              agent.sedesTools,
+              { agentSelection: agent.toolPolicySelection, threadSelection: request.toolPolicySelection,
+                presentation: request.toolPresentation ?? agent.toolPresentation },
               signal,
             ),
           };
@@ -481,6 +512,8 @@ export class SavedAgentApplicationService {
       readonly targetId: string;
       readonly executionWorkspace: ExecutionWorkspaceSelection;
       readonly agentId: string;
+      readonly toolPolicySelection?: ToolPolicySelection;
+      readonly toolPresentation?: AgentToolPresentation;
     },
     signal?: AbortSignal,
   ): Promise<PreparedThreadTemplateSelection> {
@@ -490,7 +523,8 @@ export class SavedAgentApplicationService {
       input.workspaceId,
       input.targetId,
       agent.backendOverrides,
-      agent.sedesTools,
+      { agentSelection: agent.toolPolicySelection, threadSelection: input.toolPolicySelection,
+        presentation: input.toolPresentation ?? agent.toolPresentation },
       signal,
     );
     if (resolved.adapter.typeId !== agent.backendTypeId) {
@@ -538,6 +572,15 @@ export class SavedAgentApplicationService {
     caller: SavedAgentCreationCallerContext,
     signal?: AbortSignal,
   ): Promise<CreateThreadResult> {
+    if (caller.kind === "agent_tool" && caller.initiator.kind === "principal_client") {
+      const authority = caller.environmentAuthority;
+      if (authority.callerKind !== "principal_client" ||
+        authority.defaults.kind !== "principal_client" ||
+        authority.policyIdentity.ownerKind !== "principal_client" ||
+        authority.policyIdentity.ownerId !== caller.initiator.clientId) {
+        throw new DomainError("conflict", "The trusted tool client context does not match its credential.");
+      }
+    }
     if (caller.kind === "agent_tool" && caller.initiator.kind === "thread_agent") {
       const source = this.input.inventory.getThread(
         scope,
@@ -549,8 +592,12 @@ export class SavedAgentApplicationService {
       );
       if (
         source.workspaceId !== caller.initiator.sourceWorkspaceId ||
-        sourceWorkspace?.environmentId !==
-          caller.environmentAuthority.defaults.environmentId
+        caller.environmentAuthority.callerKind !== "thread_agent" ||
+        caller.environmentAuthority.defaults.kind !== "thread_agent" ||
+        caller.environmentAuthority.defaults.threadId !== caller.initiator.sourceThreadId ||
+        caller.environmentAuthority.defaults.workspaceId !== caller.initiator.sourceWorkspaceId ||
+        sourceWorkspace.projectId !== caller.environmentAuthority.defaults.projectId ||
+        sourceWorkspace.environmentId !== caller.environmentAuthority.defaults.environmentId
       ) {
         throw new DomainError(
           "conflict",
@@ -563,64 +610,64 @@ export class SavedAgentApplicationService {
         caller.environmentAuthority,
       );
     }
-    if (
-      request.configuration.kind === "custom" &&
-      request.configuration.backendOverrides === undefined &&
-      request.configuration.sedesTools === undefined
-    ) {
+    if (request.configuration.kind === "custom" && request.configuration.backendOverrides === undefined) {
       this.#assertSimpleTargetDestination(scope, request, caller);
       if (this.input.targetHealth.requireAgentSelectable) {
-        await this.input.targetHealth.requireAgentSelectable(
-          scope,
-          request.configuration.targetId,
-          signal,
-        );
+        await this.input.targetHealth.requireAgentSelectable(scope, request.configuration.targetId, signal);
       } else {
-        await this.input.targetHealth.requireSelectable(
-          scope,
-          request.configuration.targetId,
-        );
+        await this.input.targetHealth.requireSelectable(scope, request.configuration.targetId);
       }
       throwIfAborted(signal);
       this.#assertSimpleTargetDestination(scope, request, caller);
-      const created = await this.input.lifecycle.createServerDraft(
-        scope,
-        {
-          workspaceId: request.workspaceId,
-          connectionProfileId: request.configuration.targetId,
-          title: request.title,
-          environmentVariables: this.input.environmentVariables?.prepare(scope, request.configuration.targetId, { overrides: request.environmentVariables, expectedRevision: request.environmentVariablesRevision }),
-          ...(caller.kind === "agent_tool"
-            ? {
-                toolCreationOrigin: {
-                  initiator: caller.initiator,
-                  mutationId: caller.mutationId,
-                },
-              }
-            : {}),
-          ...this.#executionWorkspaceInitialization(
-            scope,
-            request.workspaceId,
-            request.configuration.targetId,
-            request.executionWorkspace,
-          ),
-        },
-        signal,
-      );
-      this.input.publications.handoffThreadChange(
-        scope,
-        created.applicationThreadId,
-      );
-      return {
-        threadId: created.applicationThreadId,
-        workspaceId: request.workspaceId,
-        targetId: request.configuration.targetId,
+      const profile = this.input.configuration.getProfile(scope, request.configuration.targetId);
+      const backend = this.input.configuration.getBackend(scope, profile.backendInstanceId);
+      const environment = this.input.inventory.getEnvironment(scope, profile.executionEnvironmentId);
+      const selection = {target: {backendId: backend.id, executionEnvironmentId: profile.executionEnvironmentId}, threadSelection: request.toolPolicySelection};
+      const resolved = this.input.policySets.resolvePolicy(scope, selection);
+      const policy = this.#toolDescriptor(backend.kind, environment.kind, resolved, null, request.toolPresentation).resolvedPolicy;
+      const assertPolicy = () => {
+        this.#assertSimpleTargetDestination(scope, request, caller);
+        const current = this.input.policySets.resolvePolicy(scope, selection);
+        if (JSON.stringify(current) !== JSON.stringify(resolved)) {
+          throw new DomainError("conflict", "The selected tool policy changed while the thread was created.");
+        }
+        const currentProfile = this.input.configuration.getProfile(scope, profile.id);
+        const currentBackend = this.input.configuration.getBackend(scope, backend.id);
+        if (currentProfile.enabled !== 1 || currentBackend.enabled !== 1 ||
+          currentProfile.configurationRevision !== profile.configurationRevision ||
+          currentProfile.configurationFingerprint !== profile.configurationFingerprint ||
+          currentBackend.configurationRevision !== backend.configurationRevision ||
+          currentBackend.configurationFingerprint !== backend.configurationFingerprint) {
+          throw new DomainError("conflict", "The selected target changed while the thread was created.");
+        }
+        if (caller.kind === "agent_tool") this.#assertToolPolicyWithinCaller(scope, caller.environmentAuthority, policy);
       };
+      assertPolicy();
+      const workspaceInitialization = this.#executionWorkspaceInitialization(scope, request.workspaceId, profile.id, request.executionWorkspace);
+      const created = await this.input.lifecycle.createServerDraft(scope, {
+        workspaceId: request.workspaceId,
+        connectionProfileId: profile.id,
+        title: request.title,
+        environmentVariables: this.input.environmentVariables?.prepare(scope, profile.id, {overrides: request.environmentVariables, expectedRevision: request.environmentVariablesRevision}),
+        ...(caller.kind === "agent_tool" ? {toolCreationOrigin: {initiator: caller.initiator, mutationId: caller.mutationId}} : {}),
+        ...workspaceInitialization,
+        initializeApplicationThread: ({transaction, applicationThreadId, target, now}) => {
+          transaction.assertActive();
+          assertPolicy();
+          if (target.connection.backendInstanceId !== backend.id || target.connection.executionEnvironmentId !== profile.executionEnvironmentId) {
+            throw new DomainError("conflict", "The resolved target changed while the thread was created.");
+          }
+          workspaceInitialization.initializeApplicationThread?.({transaction, applicationThreadId, target, now});
+          this.input.toolPolicies.initialize(scope, applicationThreadId, {...policy, now});
+          this.input.toolPolicyOrigins.record(scope, applicationThreadId, {source: resolved.source, ...(resolved.policySet ? {policySet: resolved.policySet} : {})}, now);
+        },
+      }, signal);
+      this.input.publications.handoffThreadChange(scope, created.applicationThreadId);
+      return {threadId: created.applicationThreadId, workspaceId: request.workspaceId, targetId: profile.id};
     }
     let agentRevision:
       { readonly id: string; readonly revision: number; readonly name: string }
       | undefined;
-    let initializeTools = false;
     let resolved: ResolvedCandidate;
     if (request.configuration.kind === "saved_agent") {
       const agent = this.input.agents.get(scope, request.configuration.agentId);
@@ -629,7 +676,6 @@ export class SavedAgentApplicationService {
         revision: agent.revision,
         name: agent.name,
       };
-      initializeTools = agent.sedesTools !== undefined;
       const candidates = await this.#candidates(
         scope,
         request.workspaceId,
@@ -655,7 +701,8 @@ export class SavedAgentApplicationService {
           request.workspaceId,
           selected[0]!,
           agent.backendOverrides,
-          agent.sedesTools,
+          { agentSelection: agent.toolPolicySelection, threadSelection: request.toolPolicySelection,
+            presentation: request.toolPresentation ?? agent.toolPresentation },
           signal,
         );
       } else {
@@ -668,7 +715,8 @@ export class SavedAgentApplicationService {
                   request.workspaceId,
                   candidate,
                   agent.backendOverrides,
-                  agent.sedesTools,
+                  { agentSelection: agent.toolPolicySelection, threadSelection: request.toolPolicySelection,
+                presentation: request.toolPresentation ?? agent.toolPresentation },
                   signal,
                 );
               } catch {
@@ -705,13 +753,12 @@ export class SavedAgentApplicationService {
         resolved = compatible[0]!;
       }
     } else {
-      initializeTools = request.configuration.sedesTools !== undefined;
       resolved = await this.#resolveTarget(
         scope,
         request.workspaceId,
         request.configuration.targetId,
         request.configuration.backendOverrides ?? [],
-        request.configuration.sedesTools,
+        { threadSelection: request.toolPolicySelection, presentation: request.toolPresentation },
         signal,
       );
     }
@@ -722,6 +769,7 @@ export class SavedAgentApplicationService {
         request.workspaceId,
         caller.environmentAuthority,
       );
+      this.#assertToolPolicyWithinCaller(scope, caller.environmentAuthority, resolved.toolPolicy);
     }
     const created = await this.input.lifecycle.createServerDraft(
       scope,
@@ -764,6 +812,7 @@ export class SavedAgentApplicationService {
                 request.workspaceId,
                 caller.environmentAuthority,
               );
+              this.#assertToolPolicyWithinCaller(scope, caller.environmentAuthority, resolved.toolPolicy);
             }
             this.#assertCandidateFences(scope, request.workspaceId, resolved);
             if (agentRevision) {
@@ -774,9 +823,7 @@ export class SavedAgentApplicationService {
               );
             }
           },
-          ...(initializeTools
-            ? {
-                initializeAgentTools: ({
+          initializeAgentTools: ({
                   transaction,
                   applicationThreadId,
                   now,
@@ -787,9 +834,11 @@ export class SavedAgentApplicationService {
                     applicationThreadId,
                     { ...resolved.toolPolicy, now },
                   );
+                  this.input.toolPolicyOrigins.record(scope, applicationThreadId, {
+                    source: resolved.resolvedToolPolicy.source,
+                    ...(resolved.resolvedToolPolicy.policySet ? {policySet: resolved.resolvedToolPolicy.policySet} : {}),
+                  }, now);
                 },
-              }
-            : {}),
         },
       },
       signal,
@@ -919,18 +968,18 @@ export class SavedAgentApplicationService {
       candidate.adapter.backendKind,
       environment.kind,
     );
-    const sedesTools: AgentToolBootstrapPolicy = {
+    const toolSnapshot: ResolvedAgentToolBootstrapPolicy = {
       enabled: capturedTools.enabled,
       enabledToolIds: [...capturedTools.enabledToolIds],
       presentation: capturedTools.presentation,
-      accessBoundary: capturedTools.accessBoundary,
+      resourceScope: capturedTools.resourceScope,
     };
     const resolved = await this.#materialize(
       scope,
       source.thread.workspaceId,
       candidate,
       capturedBackend.overrides,
-      sedesTools,
+      { snapshot: toolSnapshot, presentation: capturedTools.presentation },
       signal,
     );
     throwIfAborted(signal);
@@ -1015,6 +1064,7 @@ export class SavedAgentApplicationService {
               ...resolved.toolPolicy,
               now,
             });
+            this.input.toolPolicyOrigins.copy(scope, sourceApplicationThreadId, applicationThreadId, now);
           },
         },
       },
@@ -1046,7 +1096,7 @@ export class SavedAgentApplicationService {
     workspaceId: string,
     targetId: string,
     overrides: NormalizedAgentConfigurationOverrides,
-    sedesTools: AgentToolBootstrapPolicy | undefined,
+    toolResolution: ToolResolutionInput,
     signal?: AbortSignal,
   ): Promise<ResolvedCandidate> {
     const candidates = await this.#candidates(
@@ -1070,7 +1120,7 @@ export class SavedAgentApplicationService {
       workspaceId,
       candidate,
       overrides,
-      sedesTools,
+      toolResolution,
       signal,
     );
   }
@@ -1080,7 +1130,7 @@ export class SavedAgentApplicationService {
     workspaceId: string,
     targetId: string,
     overrides: NormalizedAgentConfigurationOverrides,
-    sedesTools: AgentToolBootstrapPolicy | undefined,
+    toolResolution: ToolResolutionInput,
     signal?: AbortSignal,
   ): Promise<SavedAgentResolutionCandidate> {
     const candidates = await this.#candidates(
@@ -1105,7 +1155,7 @@ export class SavedAgentApplicationService {
         workspaceId,
         candidate,
         overrides,
-        sedesTools,
+        toolResolution,
         signal,
       )
     ).preview;
@@ -1201,7 +1251,7 @@ export class SavedAgentApplicationService {
     workspaceId: string,
     candidate: Candidate,
     overrides: NormalizedAgentConfigurationOverrides,
-    sedesTools: AgentToolBootstrapPolicy | null | undefined,
+    toolResolution: ToolResolutionInput,
     signal?: AbortSignal,
   ): Promise<ResolvedCandidate> {
     const preparedCandidate = await this.#prepareCandidate(
@@ -1209,7 +1259,7 @@ export class SavedAgentApplicationService {
       workspaceId,
       candidate,
       overrides,
-      sedesTools,
+      toolResolution,
       signal,
     );
     const backendConfiguration = candidate.adapter.resolve({
@@ -1229,6 +1279,8 @@ export class SavedAgentApplicationService {
       preview: preparedCandidate.preview,
       backendConfiguration,
       toolPolicy: preparedCandidate.preview.sedesTools.resolvedPolicy,
+      toolResolution: preparedCandidate.toolResolution,
+      resolvedToolPolicy: preparedCandidate.resolvedToolPolicy,
       profileRevision: preparedCandidate.profile.configurationRevision,
       profileFingerprint: preparedCandidate.profile.configurationFingerprint,
       backendRevision: preparedCandidate.backend.configurationRevision,
@@ -1243,7 +1295,7 @@ export class SavedAgentApplicationService {
     workspaceId: string,
     candidate: Candidate,
     overrides: NormalizedAgentConfigurationOverrides,
-    sedesTools: AgentToolBootstrapPolicy | null | undefined,
+    toolResolution: ToolResolutionInput,
     signal?: AbortSignal,
   ): Promise<PreparedCandidate> {
     throwIfAborted(signal);
@@ -1317,13 +1369,31 @@ export class SavedAgentApplicationService {
     if (configuration.backendTypeId !== candidate.adapter.typeId) {
       throw new Error("saved_agent_backend_editor_result_invalid");
     }
+    const resolvedToolPolicy = toolResolution.snapshot
+      ? { enabled: toolResolution.snapshot.enabled, enabledToolIds: toolResolution.snapshot.enabledToolIds,
+          resourceScope: toolResolution.snapshot.resourceScope, source: "thread" as const }
+      : this.input.policySets.resolvePolicy(scope, {
+          target: { backendId: candidate.backendInstanceId, executionEnvironmentId: candidate.executionEnvironmentId },
+          agentSelection: toolResolution.agentSelection,
+          threadSelection: toolResolution.threadSelection,
+        });
+    let defaultToolPolicy: ResolvedToolPolicy | null = null;
+    let defaultUnavailableReason: string | undefined;
+    try {
+      defaultToolPolicy = this.input.policySets.resolvePolicy(scope, {
+        target: { backendId: candidate.backendInstanceId, executionEnvironmentId: candidate.executionEnvironmentId },
+      });
+    } catch (error) {
+      if (!(error instanceof DomainError) || error.code !== "not_found") throw error;
+      defaultUnavailableReason = "The inherited tool policy is unavailable. Select a policy or repair its default setting.";
+    }
     const sedesToolsDescriptor = this.#toolDescriptor(
       backend.kind,
-      this.input.inventory.getEnvironment(
-        context.scope,
-        context.workspace.summary.environmentId,
-      ).kind,
-      sedesTools ?? undefined,
+      this.input.inventory.getEnvironment(context.scope, context.workspace.summary.environmentId).kind,
+      resolvedToolPolicy,
+      defaultToolPolicy,
+      toolResolution.presentation,
+      defaultUnavailableReason,
     );
     return {
       ...candidate,
@@ -1337,6 +1407,8 @@ export class SavedAgentApplicationService {
         configuration,
         sedesTools: sedesToolsDescriptor,
       },
+      toolResolution,
+      resolvedToolPolicy,
       workspaceRevision: resolvedTarget.workspace.summary.revision,
       workspaceAuthorityRevision: resolvedTarget.workspace.authorityRevision,
     };
@@ -1349,7 +1421,10 @@ export class SavedAgentApplicationService {
     environmentKind: Parameters<
       ThreadAgentToolEligibilityPolicy["presentationOptions"]
     >[1],
-    requested: AgentToolBootstrapPolicy | undefined,
+    requested: ResolvedToolPolicy,
+    inherited: ResolvedToolPolicy | null,
+    presentation?: AgentToolPresentation,
+    defaultUnavailableReason?: string,
   ): AgentToolBootstrapDescriptor {
     const presentationOptions = this.input.toolEligibility.presentationOptions(
       backendKind,
@@ -1360,43 +1435,26 @@ export class SavedAgentApplicationService {
     if (!defaultPresentationOption || !defaultPresentationMode) {
       throw new Error("saved_agent_tool_presentation_options_invalid");
     }
-    const defaultPolicy: ResolvedAgentToolBootstrapPolicy = {
-      enabled: false,
-      enabledToolIds: [],
-      presentation: {
-        surface: defaultPresentationOption.surface,
-        mode: defaultPresentationMode,
-      },
-      accessBoundary: "environment",
+    const defaultPresentation = { surface: defaultPresentationOption.surface, mode: defaultPresentationMode };
+    const defaultPolicy: ResolvedAgentToolBootstrapPolicy | null = inherited ? {
+      enabled: inherited.enabled,
+      enabledToolIds: [...inherited.enabledToolIds],
+      resourceScope: inherited.resourceScope,
+      presentation: defaultPresentation,
+    } : null;
+    for (const id of requested.enabledToolIds) {
+      if (!this.input.toolEligibility.eligibleToolIds.has(id)) {
+        throw new DomainError("invalid_transition", `Sedes tool "${id}" is not available for Saved Agents.`);
+      }
+    }
+    const resolvedPolicy: ResolvedAgentToolBootstrapPolicy = {
+      enabled: requested.enabled,
+      enabledToolIds: [...requested.enabledToolIds].sort(compareCodePoints),
+      resourceScope: requested.resourceScope,
+      presentation: presentation ?? defaultPresentation,
     };
-    let resolvedPolicy = defaultPolicy;
-    if (requested) {
-      for (const id of requested.enabledToolIds) {
-        if (!this.input.toolEligibility.eligibleToolIds.has(id)) {
-          throw new DomainError(
-            "invalid_transition",
-            `Sedes tool "${id}" is not available for Saved Agents.`,
-          );
-        }
-      }
-      resolvedPolicy = {
-        enabled: requested.enabled,
-        enabledToolIds: [...requested.enabledToolIds].sort(compareCodePoints),
-        presentation: requested.presentation,
-        accessBoundary: requested.accessBoundary,
-      };
-      if (
-        !presentationOptions.some(
-          ({ surface, modes }) =>
-            surface === resolvedPolicy.presentation.surface &&
-            modes.includes(resolvedPolicy.presentation.mode),
-        )
-      ) {
-        throw new DomainError(
-          "invalid_transition",
-          "This Sedes tool presentation mode is unavailable for the selected target.",
-        );
-      }
+    if (!presentationOptions.some(({surface, modes}) => surface === resolvedPolicy.presentation.surface && modes.includes(resolvedPolicy.presentation.mode))) {
+      throw new DomainError("invalid_transition", "This Sedes tool presentation mode is unavailable for the selected target.");
     }
     const enabled = new Set(resolvedPolicy.enabledToolIds);
     const groups = this.input.toolCatalog.list().groups.map((group) => ({
@@ -1421,6 +1479,7 @@ export class SavedAgentApplicationService {
     }));
     return agentToolBootstrapDescriptorSchema.parse({
       defaultPolicy,
+      ...(defaultUnavailableReason ? {defaultUnavailableReason: boundDisplayText(defaultUnavailableReason)} : {}),
       resolvedPolicy,
       groups,
       presentationOptions,
@@ -1433,6 +1492,16 @@ export class SavedAgentApplicationService {
     resolved: ResolvedCandidate,
   ): void {
     this.input.inventory.assertWorkspaceActive(scope, workspaceId);
+    if (!resolved.toolResolution.snapshot) {
+      const current = this.input.policySets.resolvePolicy(scope, {
+        target: { backendId: resolved.backendInstanceId, executionEnvironmentId: resolved.executionEnvironmentId },
+        agentSelection: resolved.toolResolution.agentSelection,
+        threadSelection: resolved.toolResolution.threadSelection,
+      });
+      if (JSON.stringify(current) !== JSON.stringify(resolved.resolvedToolPolicy)) {
+        throw new DomainError("conflict", "The selected tool policy changed while the thread was created.");
+      }
+    }
     const profile = this.input.configuration.getProfile(
       scope,
       resolved.connectionProfileId,
@@ -1474,6 +1543,7 @@ export class SavedAgentApplicationService {
       kind: "workspace",
       id: workspace.id,
       environmentId: workspace.environmentId,
+      projectId: workspace.projectId,
     });
   }
 
@@ -1484,26 +1554,47 @@ export class SavedAgentApplicationService {
   ): void {
     if (request.configuration.kind !== "custom") return;
     this.input.inventory.assertWorkspaceActive(scope, request.workspaceId);
-    const workspace = this.input.inventory.getWorkspace(
-      scope,
-      request.workspaceId,
-    );
-    const profile = this.input.configuration.getProfile(
-      scope,
-      request.configuration.targetId,
-    );
+    const workspace = this.input.inventory.getWorkspace(scope, request.workspaceId);
+    const profile = this.input.configuration.getProfile(scope, request.configuration.targetId);
     if (profile.executionEnvironmentId !== workspace.environmentId) {
-      throw new DomainError(
-        "not_found",
-        "The selected target was not found in this workspace.",
-      );
+      throw new DomainError("not_found", "The selected target was not found in this workspace.");
     }
-    if (caller.kind === "agent_tool") {
-      requireAdmittedResource(caller.environmentAuthority, {
-        kind: "workspace",
-        id: workspace.id,
-        environmentId: workspace.environmentId,
-      });
+    if (caller.kind === "agent_tool") this.#requireAgentDestination(scope, request.workspaceId, caller.environmentAuthority);
+  }
+
+  #assertToolPolicyWithinCaller(
+    scope: RequestScope,
+    authority: TrustedEnvironmentAuthorityGrant,
+    requested: Pick<ResolvedAgentToolBootstrapPolicy, "enabled" | "enabledToolIds" | "resourceScope">,
+  ): void {
+    if (authority.defaults.kind === "principal_client") {
+      if (authority.policyIdentity.ownerKind !== "principal_client") {
+        throw new DomainError("conflict", "The tool client identity changed.");
+      }
+      const client = this.input.principalToolClients.get(scope, authority.policyIdentity.ownerId);
+      if (!client.enabled || client.revokedAt !== undefined ||
+        client.policyRevision !== authority.policyIdentity.revision ||
+        client.credentialGeneration !== authority.policyIdentity.credentialGeneration) {
+        throw new DomainError("conflict", "The tool client policy changed. Retry with its current permissions.");
+      }
+      if (requested.enabled && (requested.resourceScope.allowOtherEnvironments ||
+        requested.enabledToolIds.some(id => !client.toolIds.includes(id)))) {
+        throw new DomainError("invalid_transition", "A tool client cannot grant tools or all-environment access beyond its credential policy. Ask the user to change the policy.");
+      }
+      return;
+    }
+    const source = this.input.toolPolicies.getDurable(scope, authority.defaults.threadId);
+    if (authority.policyIdentity.ownerKind !== "thread" ||
+      authority.policyIdentity.ownerId !== authority.defaults.threadId ||
+      source.revision !== authority.policyIdentity.revision) {
+      throw new DomainError("conflict", "The source thread tool policy changed. Retry with its current permissions.");
+    }
+    if (!requested.enabled) return;
+    const allowed = new Set(source.enabledToolIds);
+    if (!source.enabled || requested.enabledToolIds.some(id => !allowed.has(id)) ||
+      (requested.resourceScope.allowOtherEnvironments && !source.resourceScope.allowOtherEnvironments) ||
+      (requested.resourceScope.allowOtherProjects && !source.resourceScope.allowOtherProjects)) {
+      throw new DomainError("invalid_transition", "An agent cannot grant tools or resource access beyond its own thread policy. Ask the user to change the policy.");
     }
   }
 

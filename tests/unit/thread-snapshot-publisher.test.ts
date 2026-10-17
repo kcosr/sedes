@@ -75,9 +75,10 @@ function snapshot(title = "Thread"): NormalizedThreadSnapshot {
     stashes: [],
     composerCommands: [],
     agentTools: {
+      origin: null,
       runtimeAvailability: { availability: "available" },
       enabled: false,
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       groups: [],
       presentation: { surface: "native", mode: "individual" },
       presentationOptions: [
@@ -508,7 +509,7 @@ describe("ThreadSnapshotPublisher", () => {
       if (state === "archived") initial.thread.inventoryState = "archived";
       const fixture = retainedPolicyFixture(initial);
       const enabled = { ...initial.agentTools, enabled: true, revision: 1 };
-      const revised = { ...enabled, accessBoundary: "thread" as const, revision: 2 };
+      const revised = { ...enabled, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, revision: 2 };
       fixture.agentToolPolicy.mockResolvedValueOnce(enabled).mockResolvedValueOnce(revised);
 
       await fixture.publisher.publish(scope, "thread-1");
@@ -614,7 +615,7 @@ describe("ThreadSnapshotPublisher", () => {
     await vi.waitFor(() => expect(fixture.agentToolPolicy).toHaveBeenCalledOnce());
     const current = {
       ...initial,
-      agentTools: { ...initial.agentTools, accessBoundary: "thread" as const, revision: 2 },
+      agentTools: { ...initial.agentTools, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, revision: 2 },
     };
     fixture.hub.publish({ type: "application_state_changed", generation: "generation-1", state: applicationState(current) });
     fixture.received.mockClear();

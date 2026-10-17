@@ -208,12 +208,13 @@ function discoveryFixture() {
   });
   const environmentAuthority = {
     id: "environment-authority-1",
+    resourceScope: {allowOtherEnvironments:false,allowOtherProjects:true},
     callerKind: "thread_agent" as const,
     defaults: {
       kind: "thread_agent" as const,
       environmentId: environment.id,
       workspaceId: workspaceA.id,
-      projectId: "project-1",
+      projectId: workspaceA.projectId,
       threadId: "source-thread",
     },
     policyIdentity: {
@@ -257,6 +258,31 @@ function discoveryFixture() {
 }
 
 describe("AgentManagementService discovery", () => {
+  it.each([[false,false],[true,false],[false,true],[true,true]] as const)("filters workspace rows before paging for environment=%s and project=%s", (allowOtherEnvironments,allowOtherProjects)=>{
+    const f=discoveryFixture();
+    try {
+      const authority={...f.environmentAuthority,resourceScope:{allowOtherEnvironments,allowOtherProjects},
+        admittedEnvironmentIds:allowOtherEnvironments?[f.environment.id,f.remoteEnvironmentId]:[f.environment.id],
+        targetEnvironmentIds:allowOtherEnvironments?[f.environment.id,f.remoteEnvironmentId]:[f.environment.id]};
+      const expected=[...(allowOtherEnvironments?[f.remoteWorkspace.id]:[]),...(allowOtherProjects?[f.workspaceB.id]:[]),f.workspaceA.id];
+      const found:string[]=[];let cursor:string|undefined;
+      do {const page=f.management.listWorkspaces(f.scope,{scope:{kind:"all_allowed_environments"},pageSize:1,...(cursor?{cursor}:{})},authority);found.push(...page.items.map(item=>item.id));cursor=page.nextCursor;} while(cursor);
+      expect(found).toEqual(expected);
+      if(!allowOtherEnvironments) expect(f.management.listWorkspaces(f.scope,{scope:{kind:"environment",environmentId:f.remoteEnvironmentId},pageSize:10},authority).items).toEqual([]);
+    } finally {f.database.close();}
+  });
+  it("filters other project thread rows before pagination and binds cursors to the effective scope",async()=>{
+    const f=discoveryFixture();try {
+      const authority={...f.environmentAuthority,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}};
+      const first=await f.management.listThreads(f.scope,undefined,{pageSize:1},authority);
+      expect(first.items.map(item=>item.id)).toEqual([f.tiedFirst.id]);
+      const second=await f.management.listThreads(f.scope,undefined,{pageSize:1,cursor:first.nextCursor},authority);
+      expect(second.items.map(item=>item.id)).toEqual([f.tiedSecond.id]);
+      await expect(f.management.listThreads(f.scope,undefined,{pageSize:1,cursor:first.nextCursor},{...authority,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:true}})).rejects.toMatchObject({code:"cursor_invalid"});
+      expect((await f.management.listThreads(f.scope,undefined,{scope:{kind:"workspace",workspaceId:f.workspaceB.id},pageSize:10},authority)).items).toEqual([]);
+    } finally {f.database.close();}
+  });
+
   it("includes bounded automation counts when listing threads", async () => {
     const current = discoveryFixture();
     try {
@@ -368,19 +394,9 @@ describe("AgentManagementService discovery", () => {
           current.environmentAuthority,
         ),
       ).toThrow("The management-list cursor is invalid.");
-      expect(() =>
-        current.management.listWorkspaces(
-          current.scope,
-          {
-            scope: {
-              kind: "environment",
-              environmentId: current.remoteEnvironmentId,
-            },
-            pageSize: 10,
-          },
-          current.environmentAuthority,
-        ),
-      ).toThrow("The requested resource is unavailable.");
+      expect(current.management.listWorkspaces(current.scope, {
+        scope:{kind:"environment",environmentId:current.remoteEnvironmentId},pageSize:10,
+      },current.environmentAuthority).items).toEqual([]);
       const allEnvironmentAuthority = {
         ...current.environmentAuthority,
         admittedEnvironmentIds: [
@@ -733,16 +749,17 @@ describe("AgentManagementService task authority", () => {
       threadId: current.older.id,
     };
     /** Resolves like admission and assumes any needed approval was granted. */
-    const admit = (toolId: string, input: unknown) => {
+    const admit = (toolId: string, input: unknown, resourceScope = {allowOtherEnvironments:true,allowOtherProjects:true}) => {
       const tool = CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES.find(
         (entry) => entry.id === toolId,
       )!;
       const resolved = new AgentToolEnvironmentAuthorityResolver(
         reader,
-      ).resolve({ tool, input, scope: current.scope, defaults });
+      ).resolve({ tool, input, scope: current.scope, defaults, resourceScope });
       return createTrustedEnvironmentAuthorityGrant({
         ...resolved,
         tool,
+        resourceScope,
         callerKind: "thread_agent",
         defaults,
         policyIdentity: {
@@ -750,10 +767,7 @@ describe("AgentManagementService task authority", () => {
           ownerId: current.older.id,
           revision: 1,
         },
-        admittedEnvironmentIds: [
-          current.environment.id,
-          ...resolved.targetEnvironmentIds,
-        ],
+        admittedEnvironmentIds: resourceScope.allowOtherEnvironments ? [current.environment.id,current.remoteEnvironmentId] : [current.environment.id],
       });
     };
     let clock = 6_000;
@@ -780,6 +794,28 @@ describe("AgentManagementService task authority", () => {
     return { ...current, reader, taskRepository, management, admit, create, list };
   }
 
+
+  it("filters task subtree rows by project and environment before pagination, while keeping shared records",()=>{
+    const f=taskFixture();try {
+      const profile=f.database.prepare("SELECT * FROM agent_connection_profiles LIMIT 1").get() as Record<string,unknown>;
+      const columns=Object.keys(profile);const remoteProfile: Record<string,unknown>={...profile,id:randomUUID(),template_id:randomUUID(),execution_environment_id:f.remoteEnvironmentId};
+      f.database.prepare(`INSERT INTO agent_connection_profiles (${columns.join(",")}) VALUES (${columns.map(()=>"?").join(",")})`).run(...columns.map(column=>remoteProfile[column]));
+      const remote=new ConversationBindingRepository(f.database).createUnboundThread(f.scope,{workspaceId:f.remoteWorkspace.id,connectionProfileId:remoteProfile.id as string,title:"Remote",now:6000});
+      const global=f.create("Shared account",{kind:"global"});
+      const project=f.create("Shared project",{kind:"project",projectId:f.workspaceA.projectId});
+      const local=f.create("Local thread",{kind:"thread",threadId:f.older.id});
+      const outside=f.create("Other project",{kind:"thread",threadId:f.newer.id});
+      const remoteTask=f.create("Remote thread",{kind:"thread",threadId:remote.id});
+      for(const [allowOtherEnvironments,allowOtherProjects] of [[false,false],[true,false],[false,true],[true,true]] as const) {
+        const input={scope:{kind:"global" as const},scopeMode:"subtree" as const};
+        const grant=f.admit("task.list",input,{allowOtherEnvironments,allowOtherProjects});
+        const expected=[global.id,project.id,local.id,...(allowOtherProjects?[outside.id]:[]),...(allowOtherEnvironments?[remoteTask.id]:[])];
+        const found:string[]=[];let cursor:string|undefined;
+        do {const page=f.list(grant,input.scope,input.scopeMode,cursor,1);found.push(...page.items.map(item=>item.id));cursor=page.nextCursor;}while(cursor);
+        expect(found).toEqual(expected);
+      }
+    } finally {f.database.close();}
+  });
   it("deletes only completed tasks at the admitted revision", async () => {
     const f = taskFixture();
     try {
@@ -852,7 +888,7 @@ describe("AgentManagementService task authority", () => {
       f.create("Elsewhere", { kind: "project", projectId: f.workspaceB.projectId });
       const exact = f.admit("task.list", { scope: { kind: "project" }, scopeMode: "exact" });
       // The caller's environment is a member, so it is inside the project.
-      expect(exact.targetEnvironmentIds).toEqual([f.environment.id]);
+      expect(exact.targetEnvironmentIds).toEqual([]);
       expect(f.list(exact, project, "exact").items.map(({ id }) => id)).toEqual([shared.id]);
       expect(f.list(exact, project, "exact").items[0]).toMatchObject({
         scope: project,
@@ -860,12 +896,10 @@ describe("AgentManagementService task authority", () => {
       });
       // A subtree spans every member environment, so an exact grant cannot serve it.
       expect(() => f.list(exact, project, "subtree")).toThrow(
-        expect.objectContaining({ code: "not_found" }),
+        expect.objectContaining({ code: "permission_denied" }),
       );
       const subtree = f.admit("task.list", { scope: { kind: "project" }, scopeMode: "subtree" });
-      expect(subtree.targetEnvironmentIds).toEqual(
-        [f.environment.id, f.remoteEnvironmentId].sort(),
-      );
+      expect(subtree.targetEnvironmentIds).toEqual([]);
       expect(
         f.list(subtree, project, "subtree").items.map(({ id }) => id).sort(),
       ).toEqual([shared.id, threadTask.id].sort());
@@ -928,7 +962,7 @@ describe("AgentManagementService task authority", () => {
         }),
       ).toThrow(/unavailable/);
       const remote = f.admit("task.create", { title: "Remote", scope: destination });
-      expect(remote.targetEnvironmentIds).toEqual([f.remoteEnvironmentId]);
+      expect(remote.targetEnvironmentIds).toEqual([]);
       const created = await f.management.createTask(f.scope, randomUUID(), remote, {
         title: "Remote",
         taskScope: destination,
@@ -999,7 +1033,7 @@ describe("AgentManagementService task authority", () => {
           global,
           "exact",
         ),
-      ).toThrow(/unavailable|not_found|target/);
+      ).toThrow(expect.objectContaining({code:"permission_denied"}));
     } finally {
       f.database.close();
     }

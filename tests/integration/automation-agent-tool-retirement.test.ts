@@ -161,7 +161,7 @@ describe("automation agent tools after one-shot retirement", () => {
       kind: "thread_agent" as const,
       environmentId: thread.environmentId,
       workspaceId: thread.workspaceId,
-      projectId: "project-1",
+      projectId: thread.projectId,
       threadId,
     };
     const policyIdentity = {
@@ -183,6 +183,7 @@ describe("automation agent tools after one-shot retirement", () => {
       environmentAuthority: {
         id: "authority-1",
         callerKind: "thread_agent",
+        resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
         defaults,
         policyIdentity,
         admittedEnvironmentIds: [thread.environmentId],
@@ -192,6 +193,7 @@ describe("automation agent tools after one-shot retirement", () => {
           id,
           environmentId: thread.environmentId,
           workspaceId: thread.workspaceId,
+          projectId: thread.projectId,
         })),
         display: { targetEnvironmentLabels: [], resourceLabels: [] },
         canonicalInputDigest: "input-digest",

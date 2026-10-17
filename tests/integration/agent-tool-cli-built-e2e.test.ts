@@ -1,3 +1,4 @@
+import { testAgentToolExecutionAuthority } from "../support/agent-tool-execution-authority.js";
 import { randomUUID } from "node:crypto";
 import { buildSedesToolExecutable } from "../helpers/built-sedes-cli.js";
 import { execFile } from "node:child_process";
@@ -269,7 +270,7 @@ describe("built Sedes agent-tool CLI", () => {
         expectedRevision: 0,
         enabled: true,
         presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: [...fullToolCatalog],
         now: 300,
       });
@@ -365,21 +366,10 @@ describe("built Sedes agent-tool CLI", () => {
         sources: application,
         clients: principalClients,
         tools: new PolicyCheckedAgentToolHttpService(
-          new SourceScopedAgentToolService(
-            canonical,
-            policies,
-            new AgentToolEnvironmentAuthorityResolver(sourceAuthority),
-            sourceAuthority,
-            {
-              acquireAgentToolApprovalAuthority: async () => ({
-                generation: "generation-1",
-                signal: new AbortController().signal,
-                isCurrent: () => true,
-                release: () => undefined,
-              }),
-            },
-            { requestApplicationDecision: async () => "allow" },
-          ),
+          new SourceScopedAgentToolService(canonical,
+policies,
+new AgentToolEnvironmentAuthorityResolver(sourceAuthority),
+sourceAuthority, testAgentToolExecutionAuthority),
         ),
       };
       const trustedSource = sourceAuthority.resolveInScope(
@@ -945,7 +935,7 @@ describe("built Sedes agent-tool CLI", () => {
         expectedRevision: 1,
         enabled: true,
         presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: ["agent.context"],
         now: 400,
       });
@@ -967,7 +957,7 @@ describe("built Sedes agent-tool CLI", () => {
         expectedRevision: 2,
         enabled: false,
         presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: ["agent.context"],
         now: 500,
       });

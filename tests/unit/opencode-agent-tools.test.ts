@@ -58,7 +58,7 @@ function fixture(options: { inventory?: unknown; beforeInventory?: () => Promise
     catalogSummaries: vi.fn(() => canonical.catalogSummaries("mcp", "thread_agent")),
     describeMany: vi.fn((_source, _adapter, ids) => canonical.describeMany("mcp", "thread_agent", ids)),
     readPolicy: vi.fn(() => ({ enabled: true, presentation: { surface: options.cli ? "cli" as const : "native" as const, mode: "progressive" as const },
-      accessBoundary: "thread" as const, enabledToolIds: ["agent.context"] })),
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, enabledToolIds: ["agent.context"] })),
     invoke: vi.fn<BackendAgentToolFacade["invoke"]>(async () => { throw new Error("unexpected invocation"); }) as
       ReturnType<typeof vi.fn<BackendAgentToolFacade["invoke"]>> & BackendAgentToolFacade["invoke"] };
   const tools = new OpenCodeAgentTools({ facade, sourceCapabilities: { issue: (source, _transport, presentation) => `${source.sourceThreadId}:${presentation}` }, sourceCapabilityTransport: "management_http",
@@ -181,12 +181,12 @@ describe("OpenCode MCP runtime admission", () => {
     expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).toBeUndefined();
     expect(f.mutations).toEqual(["PUT"]); expect(f.host.snapshot().operations).toEqual([]);
   });
-  it.each(["access decision", "approved execution"] as const)("blocks automatic eviction during a bridge %s and returns typed cancellation on explicit close without replay", async phase => {
+  it("blocks automatic eviction during an authorized bridge tool call and returns typed cancellation on explicit close without replay", async () => {
     const f = fixture({ retentionMilliseconds: 0 });
     const { scope, binding, workspace } = f.target;
     const coordinator = new ThreadRuntimeCoordinator({ actors: f.manager, targets: { resolve: async () => f.target },
-      bridge: { bind: () => ({ ready: Promise.resolve(), publishAuthoritativeReplacement: vi.fn(), release: async () => {} }) } as unknown as ConversationEventBridge,
-      interactions: { bind: () => ({ publishPending: vi.fn(), release: async () => {} }) } as unknown as InteractionBroker,
+      bridge: { bind: () => ({ ready: Promise.resolve(), publishAuthoritativeReplacement: vi.fn(), release: async () => {}, detach: vi.fn() }) } as unknown as ConversationEventBridge,
+      interactions: { bind: () => ({ publishPending: vi.fn(), release: async () => {}, detach: vi.fn() }) } as unknown as InteractionBroker,
       hubs: new ScopedThreadEventHubRegistry(), retentionMilliseconds: 0 });
     cleanups.push(() => coordinator.close());
     const acquired = await coordinator.acquire(scope, binding.applicationThreadId);
@@ -208,20 +208,17 @@ describe("OpenCode MCP runtime admission", () => {
       sourceEnvironmentId: binding.executionEnvironmentId, backendKind: "opencode" as const };
     const readThreadStatus = vi.fn<AgentToolApplicationReader["readThreadStatus"]>(async (_scope, _id, _authority, signal) =>
       new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })));
-    const decision = vi.fn(({ signal }: { signal: AbortSignal }) => phase === "approved execution" ? Promise.resolve("allow" as const)
-      : new Promise<"allow" | "deny">((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-      }));
     const facade = new SourceScopedAgentToolService(new CanonicalInlineAgentToolService({ application: { readThreadStatus } }),
-      { get: () => ({ enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "progressive" },
-        accessBoundary: "thread", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
-      new AgentToolEnvironmentAuthorityResolver({
+{ get: () => ({ enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "progressive" },
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
+new AgentToolEnvironmentAuthorityResolver({
         resolveEnvironment: () => undefined, resolveWorkspace: () => undefined,
         resolveAutomation: () => undefined,
-        resolveThread: (_scope, id) => ({ id, environmentId: binding.executionEnvironmentId, label: "Other thread" }),
+        resolveThread: (_scope, id) => ({ id, environmentId: binding.executionEnvironmentId, projectId: "project-1", label: "Other thread" }),
         resolveThreadFamily: () => undefined, resolveSavedAgent: () => undefined, resolveWorkpad: () => undefined,
         resolveTask: () => undefined, resolveProject: () => undefined, resolveWorkspaceProject: () => "project-1", listEnvironments: () => [{ id: binding.executionEnvironmentId, environmentId: binding.executionEnvironmentId, label: "Local" }],
-      }), { resolveInScope: () => source }, coordinator, { requestApplicationDecision: decision });
+      }),
+{ resolveInScope: () => source }, coordinator);
     f.facade.invoke.mockImplementation(input => facade.invoke(input));
     const stdin = new PassThrough(); const replies: Record<string, any>[] = [];
     const child = runSedesOpenCodeMcp([], { environment: f.registrations[0]!.config.environment, input: stdin,
@@ -235,15 +232,14 @@ describe("OpenCode MCP runtime admission", () => {
       _meta: { "ai.opencode/sessionID": f.wire.sessionID } });
     await vi.waitFor(() => {
       expect(replies.find(reply => reply.id === 2)).toBeUndefined();
-      expect(decision).toHaveBeenCalledOnce();
-      expect(readThreadStatus).toHaveBeenCalledTimes(phase === "approved execution" ? 1 : 0);
+      expect(readThreadStatus).toHaveBeenCalledOnce();
     });
-    acquired.release(); // The approval borrow is now the only application runtime reference.
+    acquired.release(); // The active tool call is now the only application runtime reference.
     expect(acquired.actor.canAutomaticallyEvict).toBe(true); // Native state itself is idle.
     expect(coordinator.tryReclaimOldestIdleRuntime({ budgetScope: { ...scope, executionEnvironmentId: binding.executionEnvironmentId } })).toBeUndefined();
     await new Promise(resolve => setTimeout(resolve, 15)); // Also cross the zero-retention timer.
     expect(acquired.actor.closed).toBe(false); expect(findOpenCodeInputObserver(f.port, f.target)).toBe(observer);
-    expect(readThreadStatus).toHaveBeenCalledTimes(phase === "approved execution" ? 1 : 0);
+    expect(readThreadStatus).toHaveBeenCalledOnce();
     await acquired.actor.close();
     await vi.waitFor(() => expect(replies.some(reply => reply.id === 2)).toBe(true));
     const response = replies.find(reply => reply.id === 2)!;
@@ -251,8 +247,8 @@ describe("OpenCode MCP runtime admission", () => {
     expect(JSON.parse(response.result.content[0].text)).toMatchObject({ error: { code: "cancelled", retryable: false } });
     expect(findOpenCodeInputObserver(f.port, f.target)).toBeUndefined();
     expect(f.runtime.snapshot().references).toBe(1);
-    expect(f.facade.invoke).toHaveBeenCalledOnce(); expect(decision).toHaveBeenCalledOnce();
-    expect(readThreadStatus).toHaveBeenCalledTimes(phase === "approved execution" ? 1 : 0);
+    expect(f.facade.invoke).toHaveBeenCalledOnce();
+    expect(readThreadStatus).toHaveBeenCalledOnce();
     expect(f.wire.requests.filter(request => request.pathname.endsWith("/prompt") || request.pathname.endsWith("/interrupt"))).toEqual([]);
     expect(handle.retirementBlocked).toBe(false);
   });

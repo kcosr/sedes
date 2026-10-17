@@ -106,6 +106,7 @@ function context(mutationId = firstMutationId): TrustedToolInvocationContext {
         ownerId: sourceThreadId,
         revision: 1,
       },
+      resourceScope: {allowOtherEnvironments:true,allowOtherProjects:true},
       admittedEnvironmentIds: ["environment-1", "environment-2"],
       targetEnvironmentIds: ["environment-2"],
       resolvedResourceRefs: [

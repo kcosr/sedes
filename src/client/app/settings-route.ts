@@ -10,6 +10,7 @@ export type SettingsPage =
   | "mobile"
   | "terminal"
   | "tool_clients"
+  | "tool_policies"
   | "connection"
   | "environments"
   | "backends"
@@ -28,6 +29,7 @@ export const settingsPageSlugs = {
   mobile: "mobile",
   terminal: "terminal",
   tool_clients: "tool-clients",
+  tool_policies: "tool-policies",
   connection: "connection",
   environments: "environments",
   backends: "backends",
@@ -40,10 +42,10 @@ export const settingsPageSlugs = {
  * Inventory pages whose entities have their own URLs. Selection and editing
  * are route state, so browser and Android Back walk the same path.
  */
-export type SettingsResourcePage = "environments" | "backends" | "agents";
+export type SettingsResourcePage = "environments" | "backends" | "agents" | "tool_policies";
 /** `view` shows an entity, `edit` its editor, `new` a creation flow and
- * `pending` a host registration awaiting approval (environments only). An
- * Agent is a small preset whose view is its editor, so Agents have no `edit`. */
+ * `pending` a host registration awaiting approval (environments only). Agents and tool policies are small presets whose view is their editor,
+ * so those pages have no separate `edit` route. */
 export type SettingsResourceMode = "view" | "edit" | "new" | "pending";
 
 /**
@@ -59,7 +61,7 @@ export interface SettingsResourceRoute {
   readonly mode?: SettingsResourceMode;
 }
 
-export const settingsResourcePages: readonly SettingsResourcePage[] = ["environments", "backends", "agents"];
+export const settingsResourcePages: readonly SettingsResourcePage[] = ["environments", "backends", "agents", "tool_policies"];
 
 /** Creation starts for environments: `/~new` is the chooser, `/~new/:kind` the form or pairing setup. */
 export const environmentCreationKinds = ["local", "ssh", "pair"] as const;
@@ -98,7 +100,7 @@ export function parseSettingsResource(page: SettingsResourcePage, segments: read
   const resourceId = decodeSegment(first);
   if (!resourceId || resourceId.startsWith("~")) return undefined;
   if (second === undefined) return { mode: "view", resourceId };
-  return second === "edit" && page !== "agents" ? { mode: "edit", resourceId } : undefined;
+  return second === "edit" && page !== "agents" && page !== "tool_policies" ? { mode: "edit", resourceId } : undefined;
 }
 
 /**

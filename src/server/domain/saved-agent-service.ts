@@ -1,10 +1,11 @@
+import { type ToolPolicySelection } from "../../shared/protocol/tool-policies.js";
+import { type AgentToolPresentation } from "../../shared/protocol/conversation.js";
 import type { EnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
 import {
   SAVED_AGENT_PAGE_MAX_ITEMS,
   savedAgentDeleteResultSchema,
   savedAgentListPageSchema,
   savedAgentSchema,
-  type AgentToolBootstrapPolicy,
   type NormalizedAgentConfigurationOverrides,
   type SavedAgent,
   type SavedAgentBackendTypeId,
@@ -18,7 +19,6 @@ import type {
   SavedAgentBackendAdapter,
 } from "../backends/saved-agent-adapter.js";
 import {
-  canonicalSavedAgentSedesTools,
   canonicalSavedAgentOverrides,
   type SavedAgentRecord,
   type SavedAgentRepository,
@@ -33,7 +33,8 @@ export interface CreateSavedAgentFields {
   readonly backendTypeId: SavedAgentBackendTypeId;
   readonly backendOverrides: NormalizedAgentConfigurationOverrides;
   readonly environmentVariables?: EnvironmentVariableOverrides;
-  readonly sedesTools?: AgentToolBootstrapPolicy;
+  readonly toolPolicySelection?: ToolPolicySelection;
+  readonly toolPresentation?: AgentToolPresentation;
 }
 
 export interface UpdateSavedAgentFields {
@@ -44,7 +45,8 @@ export interface UpdateSavedAgentFields {
   readonly backendOverrides?: NormalizedAgentConfigurationOverrides;
   /** Null restores ordinary new-thread tool-policy inheritance. */
   readonly environmentVariables?: EnvironmentVariableOverrides;
-  readonly sedesTools?: AgentToolBootstrapPolicy | null;
+  readonly toolPolicySelection?: ToolPolicySelection;
+  readonly toolPresentation?: AgentToolPresentation | null;
 }
 
 function sameOverrides(
@@ -135,10 +137,8 @@ export class SavedAgentService {
         backendOverridesSchemaVersion: canonical.schemaVersion,
         backendOverrides: canonical.overrides,
         environmentVariables: input.environmentVariables,
-        sedesTools:
-          input.sedesTools === undefined
-            ? null
-            : canonicalSavedAgentSedesTools(input.sedesTools),
+        toolPolicySelection: input.toolPolicySelection ?? {kind: "inherit"},
+        toolPresentation: input.toolPresentation,
         now,
       }),
     );
@@ -154,7 +154,7 @@ export class SavedAgentService {
       input.name === undefined &&
       input.description === undefined &&
       input.backendOverrides === undefined &&
-      input.sedesTools === undefined && input.environmentVariables === undefined
+      input.toolPolicySelection === undefined && input.toolPresentation === undefined && input.environmentVariables === undefined
     ) {
       throw new DomainError(
         "invalid_transition",
@@ -188,14 +188,8 @@ export class SavedAgentService {
               },
             }
           : {}),
-        ...(input.sedesTools === undefined
-          ? {}
-          : {
-              sedesTools:
-                input.sedesTools === null
-                  ? null
-                  : canonicalSavedAgentSedesTools(input.sedesTools),
-            }),
+        ...(input.toolPolicySelection === undefined ? {} : {toolPolicySelection: input.toolPolicySelection}),
+        ...(input.toolPresentation === undefined ? {} : {toolPresentation: input.toolPresentation}),
         now,
       }),
     );
@@ -256,9 +250,8 @@ export class SavedAgentService {
       backend: adapter.presentation,
       backendOverrides: validated.backendOverrides,
       ...(Object.keys(validated.environmentVariables ?? {}).length ? { environmentVariables: validated.environmentVariables } : {}),
-      ...(validated.sedesTools
-        ? { sedesTools: validated.sedesTools }
-        : {}),
+      toolPolicySelection: validated.toolPolicySelection,
+      ...(validated.toolPresentation ? {toolPresentation: validated.toolPresentation} : {}),
       revision: validated.revision,
       createdAt: new Date(validated.createdAt).toISOString(),
       updatedAt: new Date(validated.updatedAt).toISOString(),
@@ -276,14 +269,8 @@ export class SavedAgentService {
       backendTypeId: validated.backendTypeId,
       backend: adapter.presentation,
       overrideCount: validated.backendOverrides.length,
-      sedesTools: validated.sedesTools
-        ? {
-            enabled: validated.sedesTools.enabled,
-            selectedToolCount: validated.sedesTools.enabledToolIds.length,
-            presentation: validated.sedesTools.presentation,
-            accessBoundary: validated.sedesTools.accessBoundary,
-          }
-        : null,
+      toolPolicySelection: validated.toolPolicySelection,
+      ...(validated.toolPresentation ? {toolPresentation: validated.toolPresentation} : {}),
       revision: validated.revision,
       createdAt: new Date(validated.createdAt).toISOString(),
       updatedAt: new Date(validated.updatedAt).toISOString(),

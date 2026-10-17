@@ -202,6 +202,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
       id: workspaceId,
       environmentId,
       label: "Sedes",
+      projectId: "project-1",
     });
     expect(
       authority.resolveThread({ tenantId, principalId }, threadId),
@@ -209,6 +210,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
       id: threadId,
       environmentId,
       workspaceId,
+      projectId: "project-1",
       label: "Source thread",
     });
     expect(
@@ -216,6 +218,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
     ).toMatchObject({
       id: "task-1",
       scopeKind: "thread",
+      projectId: "project-1",
       environmentId,
       threadId,
       revision: 0,

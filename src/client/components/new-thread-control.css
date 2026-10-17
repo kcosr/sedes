@@ -128,3 +128,10 @@ html[data-sidebar-collapsed="true"]
     height: var(--control-touch);
   }
 }
+
+/* Keep the reusable selector aligned with the creation form's stacked fields. */
+.new-thread-tool-policy {
+  min-width: 0;
+  padding-block: var(--space-3);
+  border-block: 1px solid var(--border-soft);
+}

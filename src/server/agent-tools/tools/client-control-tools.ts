@@ -7,7 +7,7 @@ import type { ConversationActorManager } from "../../conversations/conversation-
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { DomainError } from "../../domain/errors.js";
 import type { AgentToolDefinition, TrustedToolInvocationContext, TrustedClientTurn } from "../contracts/agent-tool-contracts.js";
-import type { AgentToolEnvironmentAuthorityReader, EnvironmentAuthorityResourceFact } from "../environment/environment-authority.js";
+import { assertResourceScope, resourceWithinScope, type AgentToolEnvironmentAuthorityReader, type EnvironmentAuthorityResourceFact } from "../environment/environment-authority.js";
 import { CanonicalAgentToolRequestError } from "../invocation/canonical-agent-tool-request-error.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 import { AGENT_TOOL_JSON_SCHEMA_DIALECT, normalizeCanonicalAgentToolSchema } from "../schema/canonical-json-schema.js";
@@ -68,7 +68,7 @@ export class ClientControlToolService {
       throw new DomainError("runtime_unavailable", "The originating turn changed.");
     }
     const input = raw as { clientId?: string; threadId?: string; turnId?: string; listen?: boolean; expectedRevision?: number; patch?: { voice: unknown } };
-    if (id === "client.list") return { defaultClientId: turn.clientId ?? null, clients: this.clients.list(scope) };
+    if (id === "client.list") return { defaultClientId: turn.clientId ?? null, clients: this.clients.list(scope).map(client => this.#visibleSettings(scope, client, context)) };
     const target = this.clients.target(scope, input.clientId ?? turn.clientId);
     const source = { sourceThreadId: turn.threadId, sourceTurnId: turn.turnId };
     if (id === "client.replay_turn") {
@@ -84,19 +84,19 @@ export class ClientControlToolService {
       // The default turn always has non-blank stored text, so only an explicit turn can be empty here.
       if (!assistantResult) throw new CanonicalAgentToolRequestError("not_found", input.turnId
         ? "Sedes stored no reply for that turn; it may not have ended yet." : "Sedes stored no reply for that thread; its turns may not have ended yet.");
-      return settled(await this.clients.request(target, { ...command, assistantResult }, context.abortSignal));
+      return this.#visibleResult(scope, settled(await this.clients.request(target, { ...command, assistantResult }, context.abortSignal)), context);
     }
     const action = id.slice("client.".length) as "settings.get" | "settings.update" | "switch_thread" | "end_interaction";
     const voicePatch = input.patch ? clientVoicePatchSchema.parse(input.patch.voice) : undefined;
     const threadId = input.threadId ?? voicePatch?.voiceThreadId;
     const thread = threadId ? this.#admittedThread(scope, threadId, context) : undefined;
-    return settled(await this.clients.request(target, {
+    return this.#visibleResult(scope, settled(await this.clients.request(target, {
       action, ...source,
       ...(input.threadId ? { threadId: input.threadId, listen: input.listen ?? false } : {}),
       ...(thread ? { threadTitle: threadTitle(thread) } : {}),
       ...(input.expectedRevision !== undefined ? { expectedRevision: input.expectedRevision } : {}),
       ...(voicePatch ? { patch: voicePatch } : {}),
-    }, context.abortSignal));
+    }, context.abortSignal)), context);
   }
 
   #admittedThread(scope: RequestScope, threadId: string, context: TrustedToolInvocationContext): EnvironmentAuthorityResourceFact {
@@ -104,7 +104,20 @@ export class ClientControlToolService {
     if (!thread || !context.environmentAuthority.admittedEnvironmentIds.includes(thread.environmentId)) {
       throw new DomainError("not_found", "The requested thread is unavailable.");
     }
+    assertResourceScope([{...thread, kind:"thread"}], context.environmentAuthority);
     return thread;
+  }
+
+  #visibleSettings<T extends {settings: {revision:number; voice: {voiceThreadId:string|null}} | null}>(scope: RequestScope, value: T, context: TrustedToolInvocationContext): T {
+    const id = value.settings?.voice.voiceThreadId;
+    if (!id) return value;
+    const thread = this.authority.resolveThread(scope, id);
+    if (thread && context.environmentAuthority.admittedEnvironmentIds.includes(thread.environmentId) && resourceWithinScope({...thread, kind:"thread"}, context.environmentAuthority)) return value;
+    return {...value, settings: {...value.settings!, voice: {...value.settings!.voice, voiceThreadId: null}}};
+  }
+
+  #visibleResult<T extends ClientActionResult & {client: {settings: {revision:number; voice:{voiceThreadId:string|null}} | null}}>(scope: RequestScope, result: T, context: TrustedToolInvocationContext): T {
+    return {...result, client:this.#visibleSettings(scope, result.client, context), state:this.#visibleSettings(scope, result.state, context)};
   }
 }
 

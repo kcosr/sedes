@@ -1,3 +1,4 @@
+import type { AgentToolExecutionAuthorityLease } from "../../events/thread-runtime-coordinator.js";
 import type { ClientControlToolService } from "../tools/client-control-tools.js";
 import type { TrustedClientTurn } from "../contracts/agent-tool-contracts.js";
 import type {
@@ -16,19 +17,12 @@ import {
 } from "../invocation/canonical-inline-agent-tool-service.js";
 import type { CanonicalInlineAgentToolService } from "../invocation/canonical-inline-agent-tool-service.js";
 import type { ThreadAgentToolPolicyRepository } from "../../db/repositories/thread-agent-tool-policy-repository.js";
-import { deterministicJson } from "../../canonical-json.js";
 import {
   AgentToolEnvironmentAuthorityResolver,
   createTrustedEnvironmentAuthorityGrant,
-  reachesOutsideEveryEnvironment,
   type ResolvedEnvironmentAuthority,
 } from "../environment/environment-authority.js";
 import type { TrustedAgentToolCallerDefaults } from "../contracts/agent-tool-contracts.js";
-import type {
-  ApplicationDecisionPresentation,
-  InteractionBroker,
-} from "../../conversations/interaction-broker.js";
-import type { AgentToolApprovalAuthorityLease } from "../../events/thread-runtime-coordinator.js";
 import { DomainError } from "../../domain/errors.js";
 
 export interface AgentToolSourceRevalidator {
@@ -39,17 +33,6 @@ export interface AgentToolSourceRevalidator {
   ): TrustedAgentToolSource;
 }
 
-export interface AgentToolApprovalAuthorityProvider {
-  acquireAgentToolApprovalAuthority(
-    scope: TrustedAgentToolSource["scope"],
-    sourceThreadId: string,
-  ): Promise<AgentToolApprovalAuthorityLease>;
-}
-
-export interface AgentToolApprovalRequester {
-  requestApplicationDecision: InteractionBroker["requestApplicationDecision"];
-}
-
 /** Provider-neutral facade over canonical tools and the live thread policy. */
 export class SourceScopedAgentToolService implements BackendAgentToolFacade {
   constructor(
@@ -57,8 +40,9 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
     readonly policies: ThreadAgentToolPolicyRepository,
     readonly environmentAuthority: AgentToolEnvironmentAuthorityResolver,
     readonly sources: AgentToolSourceRevalidator,
-    readonly approvalAuthority: AgentToolApprovalAuthorityProvider,
-    readonly approvals: AgentToolApprovalRequester,
+    readonly executionAuthority: {
+      acquireAgentToolExecutionAuthority(scope: TrustedAgentToolSource["scope"], sourceThreadId: string): Promise<AgentToolExecutionAuthorityLease>;
+    },
     readonly clientControls?: ClientControlToolService,
   ) {}
 
@@ -128,116 +112,34 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
     return Object.freeze({
       enabled: policy.enabled,
       presentation: policy.presentation,
-      accessBoundary: policy.accessBoundary,
+      resourceScope: policy.resourceScope,
       enabledToolIds: policy.enabledToolIds,
     });
   }
 
   async invoke<Output = unknown>(input: BackendAgentToolInvocationInput) {
-    let approvalAuthority: AgentToolApprovalAuthorityLease | undefined;
+    let executionAuthority: AgentToolExecutionAuthorityLease | undefined;
     let sourceAuthority: Awaited<ReturnType<NonNullable<BackendAgentToolInvocationInput["accessDecisionAuthority"]>["acquire"]>> | undefined;
     try {
       const source = this.#resolveSource(input.source, input.signal);
-      const admitted = this.#admit(input, source);
+      let admitted = this.#admit(input, source);
       let clientTurn: TrustedClientTurn | undefined;
       if (input.request.toolId.startsWith("client.")) {
         if (!this.clientControls) throw this.#unavailable();
         // Admission binds the normalized turn before any asynchronous provider
         // check. A later turn can invalidate this call, never become its source.
         clientTurn = this.clientControls.capture(source.scope, source.sourceThreadId);
-        sourceAuthority = await input.accessDecisionAuthority?.acquire(input.signal);
-        if (sourceAuthority && !sourceAuthority.isCurrent()) throw this.#unavailable();
       }
-      const needsApproval = admitted.policy.accessBoundary === "thread"
-        ? !isWithinSourceThread(admitted.resolved, source.sourceThreadId,
-            admitted.definition.environmentAuthority.kind)
-        : admitted.policy.accessBoundary === "environment" &&
-          (admitted.resolved.targetEnvironmentIds.some(
-            (environmentId) => environmentId !== source.sourceEnvironmentId,
-          ) ||
-            reachesOutsideEveryEnvironment(admitted.resolved));
-      if (needsApproval) {
-        sourceAuthority ??= await input.accessDecisionAuthority?.acquire(input.signal);
-        if (sourceAuthority && !sourceAuthority.isCurrent()) throw new CanonicalAgentToolRequestError(
-          "cancelled", "The input authority changed before approval could be requested.");
-        approvalAuthority =
-          await this.approvalAuthority.acquireAgentToolApprovalAuthority(
-            source.scope,
-            source.sourceThreadId,
-          );
-        const signal = AbortSignal.any([
-          input.signal,
-          approvalAuthority.signal,
-          ...(sourceAuthority ? [sourceAuthority.signal] : []),
-        ]);
-        signal.throwIfAborted();
-        let decision;
-        try {
-          decision = await this.approvals.requestApplicationDecision({
-            scope: source.scope,
-            applicationThreadId: source.sourceThreadId,
-            generation: approvalAuthority.generation,
-            presentation: approvalPresentation(
-              source,
-              admitted.resolved,
-              admitted.definition,
-              input.request.input,
-            ),
-            signal,
-          });
-        } catch (error) {
-          if (isAbortError(error)) {
-            throw new CanonicalAgentToolRequestError(
-              "cancelled",
-              "The tool invocation was cancelled.",
-            );
-          }
-          throw error;
-        }
-        if (decision !== "allow") {
-          throw new CanonicalAgentToolRequestError(
-            "permission_denied",
-            "Access outside the configured boundary was denied.",
-          );
-        }
-        signal.throwIfAborted();
-        if (!approvalAuthority.isCurrent() || sourceAuthority && !sourceAuthority.isCurrent()) {
-          throw new CanonicalAgentToolRequestError(
-            "cancelled",
-            "The thread runtime changed while approval was pending.",
-          );
-        }
-        const refreshedSource = this.#resolveSource(input.source, signal);
-        if (!sameSource(source, refreshedSource)) {
-          throw new CanonicalAgentToolRequestError(
-            "permission_denied",
-            "The agent-tool source authority changed.",
-          );
-        }
-        const refreshed = this.#admit(input, refreshedSource);
-        if (
-          refreshed.policy.revision !== admitted.policy.revision ||
-          refreshed.resolved.canonicalInputDigest !==
-            admitted.resolved.canonicalInputDigest ||
-          refreshed.resolved.authorityDigest !==
-            admitted.resolved.authorityDigest ||
-          definitionApprovalDigest(refreshed.definition) !==
-            definitionApprovalDigest(admitted.definition)
-        ) {
-          throw new CanonicalAgentToolRequestError(
-            "permission_denied",
-            "The access request changed while approval was pending.",
-          );
-        }
-        return await this.#execute<Output>(
-          input,
-          refreshedSource,
-          refreshed.defaults,
-          refreshed.policy.revision,
-          refreshed.resolved,
-          signal,
-          clientTurn,
-        );
+      executionAuthority = await this.executionAuthority.acquireAgentToolExecutionAuthority(source.scope, source.sourceThreadId);
+      const executionSignal = AbortSignal.any([input.signal, executionAuthority.signal]);
+      executionSignal.throwIfAborted();
+      if (!executionAuthority.isCurrent()) throw new CanonicalAgentToolRequestError("cancelled", "The source thread runtime changed.");
+      const refreshedSource = this.#resolveSource(input.source, executionSignal);
+      admitted = this.#admit(input, refreshedSource);
+      if (clientTurn) {
+        sourceAuthority = await input.accessDecisionAuthority?.acquire(executionSignal);
+        if (sourceAuthority && !sourceAuthority.isCurrent()) throw this.#unavailable();
+        admitted = this.#admit(input, this.#resolveSource(input.source, executionSignal));
       }
       return await this.#execute<Output>(
         input,
@@ -245,12 +147,13 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
         admitted.defaults,
         admitted.policy.revision,
         admitted.resolved,
-        sourceAuthority ? AbortSignal.any([input.signal, sourceAuthority.signal]) : input.signal,
+        admitted.policy.resourceScope,
+        sourceAuthority ? AbortSignal.any([executionSignal, sourceAuthority.signal]) : executionSignal,
         clientTurn,
       );
     } catch (error) {
       if (
-        (input.signal.aborted || approvalAuthority?.signal.aborted || sourceAuthority?.signal.aborted) &&
+        (input.signal.aborted || executionAuthority?.signal.aborted || sourceAuthority?.signal.aborted) &&
         !(error instanceof CanonicalAgentToolRequestError)
       ) {
         throw new BackendAgentToolRequestError({
@@ -276,15 +179,18 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
             input.request.toolId.startsWith("client.")
               ? "The originating turn is no longer available for client controls."
               : error.code === "runtime_unavailable"
-              ? "The thread cannot accept another approval request right now."
-              : "The access approval request could not be completed.",
+              ? "The thread is unavailable right now."
+              : "The resource access request could not be completed.",
           retryable: error.code === "runtime_unavailable" && error.retryable,
         });
       }
       throw error;
     } finally {
-      approvalAuthority?.release();
-      sourceAuthority?.release();
+      try {
+        sourceAuthority?.release();
+      } finally {
+        executionAuthority?.release();
+      }
     }
   }
 
@@ -361,6 +267,10 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
         input: input.request.input,
         scope: source.scope,
         defaults,
+        resourceScope: policy.resourceScope,
+        admittedEnvironmentIds: policy.resourceScope.allowOtherEnvironments
+          ? this.environmentAuthority.reader.listEnvironments(source.scope).map(({id}) => id)
+          : [source.sourceEnvironmentId],
       }),
     };
   }
@@ -371,6 +281,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
     defaults: Extract<TrustedAgentToolCallerDefaults, { kind: "thread_agent" }>,
     policyRevision: number,
     resolved: ResolvedEnvironmentAuthority,
+    resourceScope: BackendAgentToolPolicy["resourceScope"],
     signal: AbortSignal,
     clientTurn?: TrustedClientTurn,
   ) {
@@ -387,10 +298,10 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
         ownerId: source.sourceThreadId,
         revision: policyRevision,
       },
-      admittedEnvironmentIds: [
-        source.sourceEnvironmentId,
-        ...resolved.targetEnvironmentIds,
-      ],
+      resourceScope,
+      admittedEnvironmentIds: resourceScope.allowOtherEnvironments
+        ? this.environmentAuthority.reader.listEnvironments(source.scope).map(({id}) => id)
+        : [source.sourceEnvironmentId],
     });
     return this.canonical.invoke<Output>(input.request, {
       scope: source.scope,
@@ -449,203 +360,5 @@ function sameSource(
     left.sourceWorkspaceId === right.sourceWorkspaceId &&
     left.sourceEnvironmentId === right.sourceEnvironmentId &&
     left.backendKind === right.backendKind
-  );
-}
-
-function approvalPresentation(
-  source: TrustedAgentToolSource,
-  resolved: ResolvedEnvironmentAuthority,
-  definition: {
-    readonly id: string;
-    readonly schemaVersion: number;
-    readonly catalog: { readonly label: string };
-    readonly effects: {
-      readonly application: "read" | "write" | "destructive";
-      readonly modelUsage: "none" | "agent_execution";
-      readonly external: "none" | "durable_side_effect";
-    };
-  },
-  input: unknown,
-): ApplicationDecisionPresentation {
-  const otherTargetLabels = resolved.targetEnvironmentIds.flatMap(
-    (environmentId, index) =>
-      environmentId === source.sourceEnvironmentId
-        ? []
-        : [resolved.display.targetEnvironmentLabels[index] ?? environmentId],
-  );
-  const outside = reachesOutsideEveryEnvironment(resolved)
-    ? ["a project with no active location"]
-    : [];
-  const targets = [...otherTargetLabels, ...outside].join(", ");
-  // A project resource reached through several environments has one ref per
-  // environment; name it once.
-  const resources = [
-    ...new Set(
-      resolved.display.resourceLabels.filter(
-        (_label, index) =>
-          resolved.resolvedResourceRefs[index]?.kind !== "environment",
-      ),
-    ),
-  ].join(", ");
-  const consequences = approvalConsequences(definition.effects);
-  const argumentsSummary = approvalArgumentSummary(input);
-  return {
-    sourceLabel: {
-      text: bounded(
-        resolved.display.defaultEnvironmentLabel ?? source.sourceEnvironmentId,
-        256,
-      ),
-    },
-    title: {
-      text: bounded(`Allow ${definition.catalog.label}?`, 256),
-    },
-    message: {
-      text: bounded(
-        `This tool wants to access ${targets || "resources outside this thread"}${
-          resources ? ` for ${resources}` : ""
-        }. Arguments: ${argumentsSummary}.${
-          consequences.length > 0 ? ` ${consequences.join(" ")}` : ""
-        }`,
-        4_096,
-      ),
-    },
-    code: {
-      text: `${definition.id}@${definition.schemaVersion} · ${effectsLabel(
-        definition.effects,
-      )}`,
-    },
-    destructive: definition.effects.application === "destructive",
-  };
-}
-
-function approvalConsequences(effects: {
-  readonly application: "read" | "write" | "destructive";
-  readonly modelUsage: "none" | "agent_execution";
-  readonly external: "none" | "durable_side_effect";
-}): readonly string[] {
-  return [
-    effects.application === "destructive"
-      ? "This can destructively change Sedes application state."
-      : undefined,
-    effects.modelUsage === "agent_execution"
-      ? "This starts model work."
-      : undefined,
-    effects.external === "durable_side_effect"
-      ? "This may create a durable external side effect."
-      : undefined,
-  ].filter((value): value is string => value !== undefined);
-}
-
-const SENSITIVE_ARGUMENT_KEY =
-  /(?:authorization|cookie|credential|password|secret|token|api[-_]?key)/i;
-
-/**
- * Keep approval arguments useful without copying arbitrary prompts, names, or
- * other free-form content into an application interaction. Resource IDs and
- * paths are the authority-bearing values a reviewer needs to distinguish.
- */
-function approvalArgumentSummary(input: unknown): string {
-  return bounded(
-    deterministicJson(summarizeApprovalArgument(input, undefined, 0)),
-    2_048,
-  );
-}
-
-function summarizeApprovalArgument(
-  value: unknown,
-  key: string | undefined,
-  depth: number,
-): unknown {
-  if (depth >= 6) return "[nested value omitted]";
-  if (value === null || typeof value === "boolean" || typeof value === "number")
-    return value;
-  if (typeof value === "string") {
-    if (key && SENSITIVE_ARGUMENT_KEY.test(key)) return "[redacted]";
-    if (key === "path" || key?.endsWith("Id")) return bounded(value, 512);
-    return `[string:${value.length}]`;
-  }
-  if (Array.isArray(value)) {
-    return value
-      .slice(0, 12)
-      .map((item) => summarizeApprovalArgument(item, key, depth + 1))
-      .concat(value.length > 12 ? [`[${value.length - 12} more]`] : []);
-  }
-  if (typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>).sort(
-      ([left], [right]) => left.localeCompare(right),
-    );
-    return Object.fromEntries(
-      entries
-        .slice(0, 24)
-        .map(([entryKey, entryValue]) => [
-          entryKey,
-          summarizeApprovalArgument(entryValue, entryKey, depth + 1),
-        ])
-        .concat(
-          entries.length > 24
-            ? [["[omitted]", `${entries.length - 24} properties`]]
-            : [],
-        ),
-    );
-  }
-  return "[unsupported value]";
-}
-
-function definitionApprovalDigest(definition: {
-  readonly id: string;
-  readonly schemaVersion: number;
-  readonly catalog: { readonly label: string };
-  readonly effects: unknown;
-}): string {
-  return deterministicJson({
-    id: definition.id,
-    schemaVersion: definition.schemaVersion,
-    label: definition.catalog.label,
-    effects: definition.effects,
-  });
-}
-
-function effectsLabel(effects: {
-  readonly application: "read" | "write" | "destructive";
-  readonly modelUsage: "none" | "agent_execution";
-  readonly external: "none" | "durable_side_effect";
-}): string {
-  return [
-    effects.application,
-    effects.modelUsage === "agent_execution" ? "starts model work" : undefined,
-    effects.external === "durable_side_effect"
-      ? "external side effect"
-      : undefined,
-  ]
-    .filter((value): value is string => value !== undefined)
-    .join(" · ");
-}
-
-function bounded(value: string, maximum: number): string {
-  return value.length <= maximum
-    ? value
-    : `${value.slice(0, Math.max(0, maximum - 1))}…`;
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
-
-/** Empty resource sets are global, except explicitly classified public information. */
-function isWithinSourceThread(
-  resolved: ResolvedEnvironmentAuthority,
-  sourceThreadId: string,
-  declarationKind: string,
-): boolean {
-  if (declarationKind === "public_information") return true;
-  return (
-    resolved.resolvedResourceRefs.length > 0 &&
-    resolved.resolvedResourceRefs.every(
-      (resource) =>
-        ((resource.kind === "thread" || resource.kind === "thread_family") &&
-          resource.id === sourceThreadId) ||
-        ((resource.kind === "task" || resource.kind === "workpad" || resource.kind === "automation") &&
-          resource.threadId === sourceThreadId),
-    )
   );
 }

@@ -82,6 +82,7 @@ describe("settings page registry", () => {
       "backends",
       "projects",
       "agents",
+      "tool_policies",
       "tool_clients",
       "paired_clients",
       "diagnostics",

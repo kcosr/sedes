@@ -29,6 +29,8 @@ import type { ThreadLineageRepository } from "../db/repositories/thread-lineage-
 import type { InventoryRepository } from "../db/repositories/inventory-repository.js";
 import type { ConversationOperationRepository } from "../db/repositories/conversation-operation-repository.js";
 import type { DeliveryInputSnapshotRepository } from "../db/repositories/delivery-input-snapshot-repository.js";
+import type { ThreadAgentToolPolicyRepository } from "../db/repositories/thread-agent-tool-policy-repository.js";
+import type { ThreadToolPolicyOriginRepository } from "../db/repositories/thread-tool-policy-origin-repository.js";
 import { DomainError } from "../domain/errors.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type {
@@ -247,6 +249,8 @@ export class ThreadForkService {
       readonly lineage: ThreadLineageRepository;
       readonly inventory: InventoryRepository;
       readonly operations: ConversationOperationRepository;
+      readonly toolPolicies: ThreadAgentToolPolicyRepository;
+      readonly toolPolicyOrigins: ThreadToolPolicyOriginRepository;
       readonly deliveryInputSnapshots?: DeliveryInputSnapshotRepository;
       readonly outputArtifacts: Pick<OutputArtifactService, "collectGarbage">;
       readonly automations: AutomationForkBinder;
@@ -277,6 +281,8 @@ export class ThreadForkService {
       input.lineage.database !== database ||
       input.inventory.database !== database ||
       input.operations.database !== database ||
+      input.toolPolicies.database !== database ||
+      input.toolPolicyOrigins.database !== database ||
       (input.deliveryInputSnapshots !== undefined &&
         input.deliveryInputSnapshots.database !== database) ||
       input.automations.database !== database ||
@@ -374,9 +380,9 @@ export class ThreadForkService {
       kind: "thread",
       id: source.thread.id,
       environmentId: source.thread.environmentId,
+      projectId: source.thread.projectId,
       workspaceId: source.thread.workspaceId,
     });
-    const { environmentAuthority: _environmentAuthority, ...forkInput } = input;
     return this.#coalesce(
       input.scope,
       input.mutationId,
@@ -393,7 +399,7 @@ export class ThreadForkService {
       }),
       () =>
         this.#fork({
-          ...forkInput,
+          ...input,
           sourceKind: "agent_control",
           originKind: "agent_fork",
           initiatingPrincipalId: input.scope.principalId,
@@ -416,9 +422,9 @@ export class ThreadForkService {
       kind: "thread",
       id: source.thread.id,
       environmentId: source.thread.environmentId,
+      projectId: source.thread.projectId,
       workspaceId: source.thread.workspaceId,
     });
-    const { environmentAuthority: _environmentAuthority, ...forkInput } = input;
     return this.#coalesce(
       input.scope,
       input.mutationId,
@@ -435,7 +441,7 @@ export class ThreadForkService {
       }),
       () =>
         this.#fork({
-          ...forkInput,
+          ...input,
           sourceKind: "principal_client",
           originKind: "principal_client_fork",
           initiatingPrincipalId: input.scope.principalId,
@@ -1039,6 +1045,8 @@ export class ThreadForkService {
 
   async #fork(input: {
     readonly environmentVariables?: EnvironmentVariableOverrides;
+    /** Transient grant: rechecked at reservation, never stored with the fork. */
+    readonly environmentAuthority?: TrustedEnvironmentAuthorityGrant;
     readonly scope: RequestScope;
     readonly sourceThreadId: string;
     readonly mutationId: string;
@@ -1306,6 +1314,7 @@ export class ThreadForkService {
       readonly scope: RequestScope;
       readonly sourceThreadId: string;
       readonly environmentVariables?: EnvironmentVariableOverrides;
+      readonly environmentAuthority?: TrustedEnvironmentAuthorityGrant;
       readonly mutationId: string;
       readonly claimToken?: string;
       readonly sourceKind: ForkSourceKind;
@@ -1334,6 +1343,17 @@ export class ThreadForkService {
     const creationCorrelation = this.#id();
     try {
       return this.input.database.transaction(() => {
+        // Check the current project again after asynchronous checkpoint capture.
+        if (input.environmentAuthority) {
+          const current = this.input.inventory.getThread(input.scope, input.sourceThreadId).thread;
+          requireAdmittedResource(input.environmentAuthority, {
+            kind: "thread",
+            id: current.id,
+            environmentId: current.environmentId,
+            projectId: current.projectId,
+            workspaceId: current.workspaceId,
+          });
+        }
         // Check application-owned eligibility again at the atomic reservation
         // boundary. Checkpoint capture can await provider I/O, during which an
         // archive, queued input, or recovery state may have become durable.
@@ -1400,6 +1420,16 @@ export class ThreadForkService {
           now: this.#now(),
         });
         this.input.environmentVariables?.copy(input.scope, input.sourceThreadId, child.id, input.environmentVariables);
+        // Forks retain the exact source snapshot instead of resolving today's defaults.
+        const toolPolicy = this.input.toolPolicies.getDurable(input.scope, input.sourceThreadId);
+        this.input.toolPolicies.initialize(input.scope, child.id, {
+          enabled: toolPolicy.enabled,
+          enabledToolIds: toolPolicy.enabledToolIds,
+          presentation: toolPolicy.presentation,
+          resourceScope: toolPolicy.resourceScope,
+          now: this.#now(),
+        });
+        this.input.toolPolicyOrigins.copy(input.scope, input.sourceThreadId, child.id, this.#now());
         this.input.executionWorkspaces?.copySelection(
           input.scope,
           input.sourceThreadId,

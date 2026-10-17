@@ -975,6 +975,7 @@ describe("workspace-file write protocol", () => {
 describe("normalized conversation protocol", () => {
   it("validates one current agent-tool policy and idle mutation shape", () => {
     const policy = {
+      origin: null,
       runtimeAvailability: { availability: "available" },
       enabled: true,
       groups: [
@@ -1004,7 +1005,7 @@ describe("normalized conversation protocol", () => {
         { surface: "native", modes: ["progressive", "individual"] },
         { surface: "cli", modes: ["progressive", "individual"] },
       ],
-      accessBoundary: "environment" as const,
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       revision: 2,
     };
     expect(normalizedThreadAgentToolPolicySchema.parse(policy)).toEqual(policy);
@@ -1109,7 +1110,7 @@ describe("normalized conversation protocol", () => {
         enabled: true,
         enabledToolIds: ["thread.status"],
         presentation: { surface: "native", mode: "progressive" },
-        accessBoundary: "unrestricted",
+        resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
       }).success,
     ).toBe(true);
     expect(
@@ -1131,7 +1132,7 @@ describe("normalized conversation protocol", () => {
         enabled: true,
         enabledToolIds: ["thread.status"],
         presentationMode: "native_progressive",
-        accessBoundary: "unrestricted",
+        resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
       }).success,
     ).toBe(false);
     expect(
@@ -1142,7 +1143,7 @@ describe("normalized conversation protocol", () => {
         enabled: true,
         enabledToolIds: ["thread.status", "thread.status"],
         presentation: { surface: "native", mode: "progressive" },
-        accessBoundary: "unrestricted",
+        resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
       }).success,
     ).toBe(false);
   });
@@ -2076,6 +2077,7 @@ describe("normalized conversation protocol", () => {
         argumentHint: display,
       })),
       agentTools: {
+        origin: null,
         runtimeAvailability: { availability: "available" },
         enabled: false,
         groups: [
@@ -2106,7 +2108,7 @@ describe("normalized conversation protocol", () => {
           { surface: "native", modes: ["progressive", "individual"] },
           { surface: "cli", modes: ["progressive", "individual"] },
         ],
-        accessBoundary: "environment" as const,
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         revision: 0,
       },
       orderedTurnIds: [],
@@ -2384,7 +2386,7 @@ describe("application sidebar background-work wire contract", () => {
     }).success).toBe(true);
   });
   it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(163);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(164);
     expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
       .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
     expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread }))

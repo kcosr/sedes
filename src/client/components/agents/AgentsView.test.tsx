@@ -10,11 +10,6 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  AgentToolBootstrapPolicy,
-  SavedAgentOptionsRequest,
-  SavedAgentOptionsResult,
-} from "../../../shared/index.js";
 import { ApiError, type ApiClient } from "../../api/ApiClient.js";
 import { AgentClientStore } from "../../agents/AgentClientStore.js";
 import { navigate, settingsPath } from "../../app/router.js";
@@ -57,7 +52,7 @@ const summary = {
   backendTypeId: "pi",
   backend,
   overrideCount: 2,
-  sedesTools: null,
+  toolPolicySelection: { kind: "inherit" as const },
   revision: 0,
   createdAt: "2026-08-08T00:00:00.000Z",
   updatedAt: "2026-08-08T00:00:00.000Z",
@@ -66,7 +61,7 @@ const detail = {
   ...summary,
   description: "Reviews carefully",
   backendOverrides: [],
-  sedesTools: undefined,
+
 };
 
 afterEach(() => {
@@ -76,161 +71,42 @@ afterEach(() => {
 });
 
 describe("AgentsView", () => {
-  it("loads the current catalog so retired saved tools can be removed without losing other selections", async () => {
-    Object.assign(window.HTMLElement.prototype, { scrollIntoView: vi.fn() });
-    vi.stubGlobal("ResizeObserver", class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    });
-    const policy: AgentToolBootstrapPolicy = {
-      enabled: true,
-      enabledToolIds: [
-        "automation.get",
-        "thread.status",
-        "automation.resolve",
-        "automation.acknowledge",
-      ],
-      presentation: { surface: "cli", mode: "individual" },
-      accessBoundary: "thread",
-    };
-    const repairedPolicy = {
-      ...policy,
-      enabledToolIds: ["automation.get", "thread.status"],
-    };
-    const target = { id: "target-1", label: { text: "Pi" }, backend };
-    const defaultPolicy = {
-      enabled: false,
-      enabledToolIds: [],
-      presentation: { surface: "native" as const, mode: "progressive" as const },
-      accessBoundary: "environment" as const,
-    };
-    const getSavedAgentOptions = vi.fn(
-      async (input: SavedAgentOptionsRequest): Promise<SavedAgentOptionsResult> => {
-        if (!input.targetId) return { kind: "targets", targets: [target] };
-        if (input.sedesTools) {
-          throw new ApiError(409, "invalid_transition", "A selected Sedes tool is unavailable.", false);
-        }
-        return {
-          kind: "configuration",
-          target,
-          configuration: { backendTypeId: "pi", fields: [], canonicalOverrides: [] },
-          sedesTools: {
-            defaultPolicy,
-            resolvedPolicy: defaultPolicy,
-            presentationOptions: [
-              { surface: "native", modes: ["progressive"] },
-              { surface: "cli", modes: ["progressive", "individual"] },
-            ],
-            groups: [{
-              id: "current-tools",
-              label: { text: "Current tools" },
-              description: { text: "Available Sedes tools" },
-              order: 0,
-              tools: [
-                { id: "automation.get", label: "Get automation" },
-                { id: "thread.status", label: "Thread status" },
-              ].map(({ id, label }, order) => ({
-                id,
-                label: { text: label },
-                order,
-                effects: { application: "read", modelUsage: "none", external: "none" },
-                enabled: false,
-                available: true,
-              })),
-            }],
-          },
-        };
-      },
-    );
-    const updateSavedAgent = vi.fn().mockResolvedValue({
-      ...detail, sedesTools: repairedPolicy, revision: 1,
-    });
+  it("replaces a missing policy without requiring an authoring target", async () => {
+    const missingSelection = { kind: "policy_set" as const, policySetId: "33333333-3333-4333-8333-333333333333" };
+    const updateSavedAgent = vi.fn().mockResolvedValue({ ...detail, revision: 1 });
     const api = {
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
-      getSavedAgent: vi.fn().mockResolvedValue({ ...detail, sedesTools: policy }),
-      getSavedAgentOptions,
-      getEnvironmentVariablePreview: vi.fn().mockResolvedValue({
-        snapshot: { version: 1, layers: { environment: {}, backend: {}, agent: {}, thread: {} } },
-        revision: { configurationRevision: 0 },
-        startup: { supported: true },
-      }),
+      getSavedAgent: vi.fn().mockResolvedValue({ ...detail, toolPolicySelection: missingSelection }),
+      getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "targets", targets: [] }),
       updateSavedAgent,
     } as unknown as ApiClient;
     navigate(agentPath(agentId), { replace: true });
     render(<AgentsView store={new AgentClientStore(api)} {...locations} />);
-
-    const configureUsing = await screen.findByRole("combobox", { name: "Configure using" });
-    await waitFor(() => expect(configureUsing).toBeEnabled());
-    fireEvent.click(configureUsing);
-    fireEvent.click(await screen.findByRole("option", { name: "Pi" }));
-
-    const removeResolve = await screen.findByRole("checkbox", {
-      name: "Remove unavailable tool automation.resolve",
-    });
-    expect(removeResolve).toBeChecked();
-    expect(screen.getByRole("checkbox", {
-      name: "Remove unavailable tool automation.acknowledge",
-    })).toBeChecked();
-    expect(screen.getByRole("combobox", { name: "Sedes tool surface" })).toHaveTextContent("Sedes CLI");
-    expect(screen.getByRole("combobox", { name: "Sedes tool presentation" })).toHaveTextContent("Individual operations");
-    expect(screen.getByRole("combobox", { name: "Access boundary" })).toHaveTextContent("Ask outside this thread");
-    fireEvent.click(screen.getByRole("button", { name: "Current tools" }));
-    expect(screen.getByRole("checkbox", { name: "Get automation" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "Thread status" })).toBeChecked();
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
-
-    fireEvent.click(removeResolve);
-    const removeAcknowledge = screen.getByRole("checkbox", {
-      name: "Remove unavailable tool automation.acknowledge",
-    });
-    expect(removeAcknowledge).toBeChecked();
-    await waitFor(() => expect(removeAcknowledge).toBeEnabled());
-    fireEvent.click(removeAcknowledge);
-    const save = screen.getByRole("button", { name: "Save" });
-    await waitFor(() => expect(save).toBeEnabled());
-    fireEvent.click(save);
-
+    const selector = await screen.findByRole("combobox", { name: "Tool policy" });
+    await waitFor(() => expect(selector).toBeEnabled());
+    expect(selector).toHaveValue(missingSelection.policySetId);
+    expect(screen.getByText(/New threads cannot use this selection/)).toBeInTheDocument();
+    fireEvent.change(selector, { target: { value: "inherit" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(updateSavedAgent).toHaveBeenCalledWith(agentId, {
       expectedRevision: 0,
-      authoringContext: { workspaceId: workspace.id, targetId: target.id },
-      backendOverrides: [],
-      sedesTools: repairedPolicy,
+      toolPolicySelection: { kind: "inherit" },
     }));
-    expect(getSavedAgentOptions).toHaveBeenCalledWith({
-      workspaceId: workspace.id, targetId: target.id, overrides: [],
-    }, expect.any(AbortSignal));
-    expect(getSavedAgentOptions.mock.calls.every(([input]) => input.sedesTools === undefined)).toBe(true);
   });
 
-  it("summarizes an explicit Agent environment-access policy", async () => {
-    const explicitSummary = {
-      ...summary,
-      sedesTools: {
-        enabled: true,
-        selectedToolCount: 3,
-        presentation: {
-          surface: "native" as const,
-          mode: "progressive" as const,
-        },
-        accessBoundary: "unrestricted" as const,
-      },
-    };
-    const store = new AgentClientStore({
-      listSavedAgents: vi.fn().mockResolvedValue({ items: [explicitSummary] }),
-    } as unknown as ApiClient);
+  it("summarizes an explicit saved tool policy", async () => {
+    const explicitSummary = { ...summary, toolPolicySelection: { kind: "policy_set" as const, policySetId: "33333333-3333-4333-8333-333333333333" } };
+    const store = new AgentClientStore({ listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
+      listSavedAgents: vi.fn().mockResolvedValue({ items: [explicitSummary] }) } as unknown as ApiClient);
     navigate(agentsPath(), { replace: true });
     render(<AgentsView store={store} {...locations} />);
-
-    expect(
-      await screen.findByRole("link", { name: "Careful reviewer" }),
-    ).toHaveAccessibleDescription(
-      /3 enabled · Allow without asking · Native · Progressive$/u,
-    );
+    expect(await screen.findByRole("link", { name: "Careful reviewer" })).toHaveAccessibleDescription(/Policy needs attention$/u);
   });
 
   it("bounds Agent list searches to the server contract", () => {
     const store = new AgentClientStore({
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [] }),
     } as unknown as ApiClient);
     navigate(agentsPath(), { replace: true });
@@ -245,6 +121,7 @@ describe("AgentsView", () => {
     const listSavedAgents = vi.fn().mockResolvedValue({ items: [summary] });
     const getSavedAgent = vi.fn().mockResolvedValue(detail);
     const store = new AgentClientStore({
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents,
       getSavedAgent,
       getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "targets", targets: [] }),
@@ -271,6 +148,7 @@ describe("AgentsView", () => {
       targets: [],
     });
     const api = {
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
       getSavedAgent: vi.fn().mockResolvedValue(detail),
       getSavedAgentOptions,
@@ -303,6 +181,7 @@ describe("AgentsView", () => {
 
   it("surfaces a focused validation error for an unnamed new Agent", async () => {
     const store = new AgentClientStore({
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [] }),
       getSavedAgentOptions: vi.fn().mockResolvedValue({
         kind: "targets",
@@ -327,6 +206,7 @@ describe("AgentsView", () => {
       targets: [],
     });
     const store = new AgentClientStore({
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [] }),
       getSavedAgentOptions,
     } as unknown as ApiClient);
@@ -350,6 +230,7 @@ describe("AgentsView", () => {
       targets: [],
     });
     const store = new AgentClientStore({
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [] }),
       getSavedAgentOptions,
     } as unknown as ApiClient);
@@ -415,6 +296,7 @@ describe("AgentsView", () => {
       agentId,
     });
     const api = {
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
       getSavedAgent: vi.fn().mockResolvedValue(detail),
       getSavedAgentOptions: vi.fn().mockResolvedValue({
@@ -459,6 +341,7 @@ describe("AgentsView", () => {
         revision: 2,
       });
     const api = {
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
       getSavedAgent: vi
         .fn()
@@ -512,6 +395,7 @@ describe("AgentsView", () => {
       )
       .mockResolvedValueOnce({ deleted: true, agentId });
     const api = {
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
       getSavedAgent: vi
         .fn()
@@ -552,6 +436,7 @@ describe("AgentsView", () => {
 
   it("lays the list beside the selected Agent on the settings split, and names the stack's selection", async () => {
     const api = {
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
       getSavedAgent: vi.fn().mockResolvedValue(detail),
       getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "targets", targets: [] }),
@@ -565,7 +450,7 @@ describe("AgentsView", () => {
     const list = screen.getByRole("region", { name: "Saved Agents" });
     expect(list).toHaveAttribute("data-slot", "settings-split-list");
     expect(await within(list).findByRole("link", { name: "Careful reviewer" })).toHaveAccessibleDescription(
-      "Pi · 2 overrides · Default tools",
+      "Pi · 2 overrides · Inherited tools",
     );
     expect(screen.getByText("Select an Agent").closest('[data-slot="settings-split-detail"]')).not.toBeNull();
     expect(screen.getByRole("button", { name: "Create Agent" })).toBeVisible();
@@ -580,7 +465,7 @@ describe("AgentsView", () => {
     expect(within(editor).getByRole("heading", { name: "Careful reviewer", level: 2 })).toBeVisible();
     expect(
       within(within(editor).getByRole("navigation", { name: "Editor sections" })).getAllByRole("button").map(button => button.textContent),
-    ).toEqual(["Details", "Validate", "Variables"]);
+    ).toEqual(["Details", "Validate", "Variables", "Sedes tools"]);
     expect(within(editor).getByRole("region", { name: "Danger zone" })).toBeVisible();
 
     act(() => navigate(newAgentPath()));
@@ -593,6 +478,7 @@ describe("AgentsView", () => {
 
   it("focuses a deep-linked Agent's heading, and its row on the way back to the list", async () => {
     const api = {
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
       getSavedAgent: vi.fn().mockResolvedValue(detail),
       getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "targets", targets: [] }),
@@ -618,6 +504,7 @@ describe("AgentsView", () => {
       return { items: [summary] };
     });
     const api = {
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents,
       getSavedAgent: vi.fn().mockRejectedValue(new ApiError(404, "not_found", "That Agent does not exist.", false)),
     } as unknown as ApiClient;
@@ -646,6 +533,7 @@ describe("AgentsView", () => {
       .mockRejectedValueOnce(new Error("Still unreachable."))
       .mockImplementationOnce(() => new Promise((resolve) => { finishRetry = resolve; }));
     const api = {
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
       getSavedAgent,
       getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "targets", targets: [] }),
@@ -676,6 +564,7 @@ describe("AgentsView", () => {
   it("drops an unavailable Agent's failure when the route opens another Agent", async () => {
     const other = { ...detail, id: "33333333-3333-4333-8333-333333333333", name: "Other Agent" };
     const api = {
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
       listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
       getSavedAgent: vi.fn()
         .mockRejectedValueOnce(new ApiError(404, "not_found", "That Agent does not exist.", false))

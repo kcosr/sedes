@@ -107,6 +107,8 @@ export function ComposerPromptPicker({
   const suppressClickRef = useRef(false);
   const suppressClickTimerRef = useRef<number | undefined>(undefined);
   const actionGuardRef = useRef(false);
+  const actionGuardTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(true);
   const preventCloseAutoFocusRef = useRef(false);
 
   const visibleCatalog = useMemo(() => {
@@ -146,7 +148,17 @@ export function ComposerPromptPicker({
     [clearClickSuppression, onOpen, open],
   );
 
-  useEffect(() => clearClickSuppression, [clearClickSuppression]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearClickSuppression();
+      if (actionGuardTimerRef.current !== undefined) {
+        window.clearTimeout(actionGuardTimerRef.current);
+        actionGuardTimerRef.current = undefined;
+      }
+    };
+  }, [clearClickSuppression]);
 
   const runPromptAction = useCallback(
     async (
@@ -163,10 +175,13 @@ export function ComposerPromptPicker({
       } finally {
         // Retain the guard beyond a synchronous callback so a double click or
         // synthetic click following pointer-up cannot apply the prompt twice.
-        window.setTimeout(() => {
-          actionGuardRef.current = false;
-          setActionPending(false);
-        }, 250);
+        if (mountedRef.current) {
+          actionGuardTimerRef.current = window.setTimeout(() => {
+            actionGuardTimerRef.current = undefined;
+            actionGuardRef.current = false;
+            setActionPending(false);
+          }, 250);
+        }
       }
     },
     [changeOpen, disabled],

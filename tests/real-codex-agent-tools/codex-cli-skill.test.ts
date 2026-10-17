@@ -1,3 +1,4 @@
+import { testAgentToolExecutionAuthority } from "../support/agent-tool-execution-authority.js";
 import { spawn } from "node:child_process";
 import {
   cp,
@@ -353,7 +354,7 @@ describe("real Codex Sedes CLI skill", () => {
           expectedRevision: 0,
           enabled: true,
           presentation: { surface: "cli", mode: "progressive" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: ["agent.context", "thread.status"],
           now: 300,
         });
@@ -361,21 +362,10 @@ describe("real Codex Sedes CLI skill", () => {
           application,
           invocationId: () => "real-codex-cli-skill-invocation",
         });
-        const scopedTools = new SourceScopedAgentToolService(
-          canonical,
-          policies,
-          new AgentToolEnvironmentAuthorityResolver(sources),
-          sources,
-          {
-            acquireAgentToolApprovalAuthority: async () => ({
-              generation: "generation-1",
-              signal: new AbortController().signal,
-              isCurrent: () => true,
-              release: () => undefined,
-            }),
-          },
-          { requestApplicationDecision: async () => "allow" },
-        );
+        const scopedTools = new SourceScopedAgentToolService(canonical,
+policies,
+new AgentToolEnvironmentAuthorityResolver(sources),
+sources, testAgentToolExecutionAuthority);
         const sourceReference = sources.issue(
           sources.resolveInScope(
             scope,

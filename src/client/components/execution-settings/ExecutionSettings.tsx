@@ -14,6 +14,7 @@ import { ConfirmDialog } from "../ui/confirm-dialog.js";
 import { DiscardChangesDialog } from "../ui/discard-changes-dialog.js";
 import { EmptyState } from "../ui/empty-state.js";
 import { Skeleton } from "../ui/skeleton.js";
+import type { ToolPolicySettingsApi } from "../tool-policies/ToolPolicyScopeSettings.js";
 import { BackendDefaults, defaultsFields, defaultsOf, type DefaultsDraft } from "./BackendDefaults.js";
 import { BackendDetail } from "./BackendDetail.js";
 import { BackendEditor, backendFields, type BackendDraft } from "./BackendEditor.js";
@@ -93,7 +94,8 @@ type Confirmation = ConfirmationRequest & { readonly owner: string };
 /** Configuration is principal-owned. Inventory filters, tabs and selection are client-local.
  * There is exactly one configuration snapshot and one mounted lifecycle controller
  * per resource, independent of visible inventory, filters, or detail selection. */
-export function ExecutionSettings({ controls }: {
+export function ExecutionSettings({ controls, toolPolicyApi }: {
+  readonly toolPolicyApi?: ToolPolicySettingsApi;
   readonly controls: ConfigurationControls & HostPairingControls;
 }): React.JSX.Element {
   const route = useRoute();
@@ -530,13 +532,13 @@ export function ExecutionSettings({ controls }: {
           {detailPane()}
           {/* Never unmount a retained resource because navigation, a filter or an editor hides it. */}
           {runtimeProps ? <>
-            {configuration.executionEnvironments.map(environment => <EnvironmentDetail key={environment.id} environment={environment} {...runtimeProps}
+            {configuration.executionEnvironments.map(environment => <EnvironmentDetail key={environment.id} environment={environment} toolPolicyApi={toolPolicyApi} {...runtimeProps}
               selected={environment.id === selectedEnvironment?.id} tab={tabOf("environments", environment.id)} onTab={tab => setTab("environments", environment.id, tab)}
               hosts={pairing.hosts} stale={pairing.stale} renderBackends={renderEnvironmentBackends}
               onRemove={entry => requestConfirmation({ kind: "remove-environment", id: entry.id, label: entry.label, revision: snapshot.revision })}
               onPairing={(entry, binding) => requestConfirmation({ kind: binding.state === "revoked" ? "reapprove" : "revoke", environmentId: entry.id, label: entry.label,
                 pairingId: binding.id, pairingRevision: binding.revision, revision: snapshot.revision })} />)}
-            {configuration.backends.map(backend => <BackendDetail key={backend.id} backend={backend} {...runtimeProps}
+            {configuration.backends.map(backend => <BackendDetail key={backend.id} backend={backend} toolPolicyApi={toolPolicyApi} {...runtimeProps}
               selected={backend.id === selectedBackend?.id} tab={tabOf("backends", backend.id)} onTab={tab => setTab("backends", backend.id, tab)}
               onRemove={entry => requestConfirmation({ kind: "remove-backend", id: entry.id, label: entry.label, revision: snapshot.revision })} />)}
           </> : null}

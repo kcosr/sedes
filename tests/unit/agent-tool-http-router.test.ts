@@ -1,3 +1,4 @@
+import { testAgentToolExecutionAuthority } from "../support/agent-tool-execution-authority.js";
 import { randomBytes } from "node:crypto";
 import express from "express";
 import request from "supertest";
@@ -31,7 +32,7 @@ function fixture(
   let policy: BackendAgentToolPolicy = {
     enabled: true,
     presentation: { surface: "cli", mode: "progressive" },
-    accessBoundary: "environment",
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
     enabledToolIds: ["agent.context", "thread.status"],
   };
   const source: ResolvedAgentToolSourceContext = {
@@ -62,12 +63,11 @@ function fixture(
     },
     invocationId: () => "invocation-1",
   });
-  const scoped = new SourceScopedAgentToolService(
-    canonical,
-    {
+  const scoped = new SourceScopedAgentToolService(canonical,
+{
       get: vi.fn(() => ({ ...policy, revision: 1 })),
     } as unknown as ThreadAgentToolPolicyRepository,
-    new AgentToolEnvironmentAuthorityResolver({
+new AgentToolEnvironmentAuthorityResolver({
       resolveEnvironment: () => undefined,
       resolveWorkspace: () => undefined,
       resolveAutomation: () => undefined,
@@ -85,17 +85,7 @@ function fixture(
         { id: "environment-1", environmentId: "environment-1", label: "Local" },
       ],
     }),
-    { resolveInScope: () => source },
-    {
-      acquireAgentToolApprovalAuthority: async () => ({
-        generation: "generation-1",
-        signal: new AbortController().signal,
-        isCurrent: () => true,
-        release: () => undefined,
-      }),
-    },
-    { requestApplicationDecision: async () => "allow" },
-  );
+{ resolveInScope: () => source }, testAgentToolExecutionAuthority);
   const tools = new PolicyCheckedAgentToolHttpService(scoped);
   const clients = unavailablePrincipalAgentToolClientService();
   const app = express();
@@ -138,7 +128,7 @@ describe("agent tool HTTP router", () => {
     value.setPolicy({
       enabled: true,
       presentation: { surface: "cli", mode: "progressive" },
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       enabledToolIds: ["thread.status"],
     });
 
@@ -215,7 +205,7 @@ describe("agent tool HTTP router", () => {
       value.setPolicy({
         enabled: true,
         presentation: { surface: "native", mode: presentationMode },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: ["agent.context", "thread.status"],
       });
 
@@ -244,7 +234,7 @@ describe("agent tool HTTP router", () => {
     value.setPolicy({
       enabled: true,
       presentation: { surface: "native", mode: "individual" },
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       enabledToolIds: ["agent.context", "thread.status"],
     });
 
@@ -275,7 +265,7 @@ describe("agent tool HTTP router", () => {
     value.setPolicy({
       enabled: true,
       presentation: { surface: "cli", mode: "individual" },
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       enabledToolIds: ["agent.context", "thread.status"],
     });
     await associated(request(value.app).get("/api/agent-tools"))
@@ -302,7 +292,7 @@ describe("agent tool HTTP router", () => {
       value.setPolicy({
         enabled: true,
         presentation: { surface: "native", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: ["agent.context"],
       });
       await associated(request(value.app).get("/api/agent-tools"))
@@ -398,7 +388,7 @@ describe("agent tool HTTP router", () => {
     value.setPolicy({
       enabled: false,
       presentation: { surface: "cli", mode: "progressive" },
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       enabledToolIds: ["thread.status"],
     });
     await associated(request(value.app).post("/api/agent-tool-invocations"))
@@ -414,7 +404,7 @@ describe("agent tool HTTP router", () => {
     value.setPolicy({
       enabled: true,
       presentation: { surface: "cli", mode: "progressive" },
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       enabledToolIds: ["thread.status"],
     });
     await associated(request(value.app).post("/api/agent-tool-invocations"))

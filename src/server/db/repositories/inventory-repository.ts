@@ -375,6 +375,7 @@ const threadColumns = `
   owner_principal_id AS ownerPrincipalId,
   id, environment_id AS environmentId,
   workspace_id AS workspaceId,
+  (SELECT project_id FROM workspaces AS location WHERE location.tenant_id=application_threads.tenant_id AND location.owner_principal_id=application_threads.owner_principal_id AND location.id=application_threads.workspace_id) AS projectId,
   backend_instance_id AS backendInstanceId,
   connection_profile_id AS connectionProfileId,
   backing_state AS backingState, title, availability,
@@ -1300,7 +1301,7 @@ export class InventoryRepository {
     ).map(({ id }) => id);
   }
 
-  getThread(scope: RequestScope, threadId: string): InventoryThreadAggregate {
+  getThread(scope: RequestScope, threadId: string): InventoryThreadAggregate & {readonly thread: InventoryThreadRecord & {readonly projectId: string}} {
     const thread = this.database
       .prepare(
         `
@@ -1310,7 +1311,7 @@ export class InventoryRepository {
         `,
       )
       .get(scope.tenantId, scope.principalId, threadId) as
-      InventoryThreadRecord | undefined;
+      (InventoryThreadRecord & {readonly projectId: string}) | undefined;
     if (!thread)
       throw new DomainError("not_found", "The thread was not found.");
     return {

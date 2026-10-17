@@ -178,7 +178,7 @@ describe("Pi 0.86 transcript and lifecycle compatibility", () => {
       outputArtifacts: createInMemoryOutputArtifactPublisher(),
       agentToolSourceCapabilities: createFakeAgentToolSourceCapabilities().issuer,
       agentTools: { eligibleCatalog: () => [], catalogSummaries: () => [], describeMany: () => [],
-        readPolicy: () => ({ enabled: false, presentation: { surface: "native", mode: "individual" }, accessBoundary: "environment", enabledToolIds: [] }),
+        readPolicy: () => ({ enabled: false, presentation: { surface: "native", mode: "individual" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true }, enabledToolIds: [] }),
         invoke: async () => { throw new Error("No application tools in this test"); } },
       sessionFactory: { create: async input => {
         const source = await f.open(input.manager, input.workspace, input);

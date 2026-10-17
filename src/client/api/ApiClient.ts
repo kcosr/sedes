@@ -1,3 +1,10 @@
+import {
+  toolPolicySetListSchema, toolPolicySetSchema, toolPolicySetMutationResultSchema, toolPolicyOptionsSchema,
+  deleteToolPolicySetResultSchema, toolPolicySelectionListSchema,
+  toolPolicySelectionMutationResultSchema, resolvedToolPolicySchema,
+  type ToolPolicyDefinition, type ToolPolicySelection, type ToolPolicySelectionTarget,
+  type ToolPolicySet, type ToolPolicySelectionSetting, type ResolvedToolPolicy,
+} from "../../shared/protocol/tool-policies.js";
 import { usageReportSchema, usageAvailabilitySchema, usageAvailabilityRequestSchema, type UsageAvailability, type UsageReport } from "../../shared/protocol/usage-accounting.js";
 import { usageAnalyticsRequestSchema, usageAnalyticsResponseSchema, type UsageAnalyticsRequest, type UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import { turnReplySpeechSchema, type TurnReplySpeech } from "../../shared/protocol/turn-reply-speech.js";
@@ -905,6 +912,53 @@ export class ApiClient {
       codexTuiAdmissionSchema,
       { method: "POST", body: "{}" },
     );
+  }
+
+  getToolPolicyOptions(signal?: AbortSignal) {
+    return this.#request("/api/tool-policies/options", { signal }, toolPolicyOptionsSchema);
+  }
+
+  async listToolPolicySets(signal?: AbortSignal): Promise<{ items: ToolPolicySet[] }> {
+    const items = new Map<string,ToolPolicySet>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+      const page = await this.#request(`/api/tool-policies${query}`, { signal }, toolPolicySetListSchema);
+      for (const policy of page.items) items.set(policy.id,policy);
+      cursor = page.nextCursor;
+      if (cursor && cursors.has(cursor)) throw new Error("The tool policy list did not advance.");
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
+    return {items:[...items.values()]};
+  }
+
+  getToolPolicySet(policySetId: string, signal?: AbortSignal): Promise<ToolPolicySet> {
+    return this.#request(`/api/tool-policies/${encodeURIComponent(policySetId)}`, { signal }, toolPolicySetSchema);
+  }
+
+  createToolPolicySet(input: ToolPolicyDefinition): Promise<{ policySet: ToolPolicySet }> {
+    return this.#mutation("/api/tool-policies", toolPolicySetMutationResultSchema, { method: "POST", body: JSON.stringify(input) });
+  }
+
+  updateToolPolicySet(policySetId: string, input: ToolPolicyDefinition & { expectedRevision: number }): Promise<{ policySet: ToolPolicySet }> {
+    return this.#mutation(`/api/tool-policies/${encodeURIComponent(policySetId)}`, toolPolicySetMutationResultSchema, { method: "PATCH", body: JSON.stringify(input) });
+  }
+
+  deleteToolPolicySet(policySetId: string, input: { expectedRevision: number }): Promise<{ deleted: true }> {
+    return this.#mutation(`/api/tool-policies/${encodeURIComponent(policySetId)}`, deleteToolPolicySetResultSchema, { method: "DELETE", body: JSON.stringify(input) });
+  }
+
+  listToolPolicySelections(signal?: AbortSignal): Promise<{ items: ToolPolicySelectionSetting[] }> {
+    return this.#request("/api/tool-policy-selections", { signal }, toolPolicySelectionListSchema);
+  }
+
+  setToolPolicySelection(input: { target: ToolPolicySelectionTarget; selection: ToolPolicySelection; expectedRevision: number }): Promise<{ setting: ToolPolicySelectionSetting }> {
+    return this.#mutation("/api/tool-policy-selections", toolPolicySelectionMutationResultSchema, { method: "PUT", body: JSON.stringify(input) });
+  }
+
+  resolveToolPolicy(input: { targetId: string; agentId?: string; agentSelection?: ToolPolicySelection; threadSelection?: ToolPolicySelection }, signal?: AbortSignal): Promise<ResolvedToolPolicy> {
+    return this.#mutation("/api/tool-policies/resolve", resolvedToolPolicySchema, { method: "POST", body: JSON.stringify(input), signal });
   }
 
   listSavedAgents(

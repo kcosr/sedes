@@ -56,7 +56,7 @@ export class ThreadTemplateApplicationService {
         request,
         signal,
       );
-    const selection = { ...this.#selection(prepared), environmentVariables: request.environmentVariables };
+    const selection = { ...this.#selection(prepared), environmentVariables: request.environmentVariables, toolPolicySelection: request.toolPolicySelection ?? {kind: "inherit" as const}, toolPresentation: request.toolPresentation };
     return this.#present(
       this.input.repository.create(scope, {
         name: request.name,
@@ -83,6 +83,8 @@ export class ThreadTemplateApplicationService {
           executionWorkspace:
             request.executionWorkspace ?? current.executionWorkspace,
           agentId: request.agentId ?? current.agentId,
+          toolPolicySelection: request.toolPolicySelection ?? current.toolPolicySelection,
+          toolPresentation: request.toolPresentation === null ? undefined : request.toolPresentation ?? current.toolPresentation,
         },
         signal,
       );
@@ -90,7 +92,9 @@ export class ThreadTemplateApplicationService {
       this.input.repository.update(scope, templateId, {
         expectedRevision: request.expectedRevision,
         name: request.name ?? current.name,
-        selection: { ...this.#selection(prepared), environmentVariables: request.environmentVariables ?? current.environmentVariables },
+        selection: { ...this.#selection(prepared), environmentVariables: request.environmentVariables ?? current.environmentVariables,
+          toolPolicySelection: request.toolPolicySelection ?? current.toolPolicySelection ?? {kind: "inherit" as const},
+          toolPresentation: request.toolPresentation === null ? undefined : request.toolPresentation ?? current.toolPresentation },
         assertReferences: prepared.assertDurableFences,
         now: this.input.now?.() ?? Date.now(),
       }),
@@ -131,6 +135,8 @@ export class ThreadTemplateApplicationService {
       targetId: record.targetId,
       executionWorkspace: record.executionWorkspace,
       agentId: record.agentId,
+      toolPolicySelection: record.toolPolicySelection,
+      ...(record.toolPresentation ? {toolPresentation: record.toolPresentation} : {}),
       ...(Object.keys(record.environmentVariables ?? {}).length ? { environmentVariables: record.environmentVariables } : {}),
       capturedAgentName: record.capturedAgentName,
       capturedWorkspaceName: record.capturedWorkspaceName,

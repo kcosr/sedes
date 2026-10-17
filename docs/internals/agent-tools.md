@@ -25,7 +25,7 @@ backends must also follow the
 ## Contents
 
 - [Policy and caller ownership](#policy-ownership-and-persistence)
-- [Environment authority](#access-boundary)
+- [Environment authority](#resource-scope)
 - [Workspaces and projects](#workspaces-and-projects)
 - [Catalog and backend presentations](#catalog-and-effects)
 - [Native MCP presentation](#native-mcp-presentation-codex-and-claude)
@@ -35,22 +35,34 @@ backends must also follow the
 
 ## Policy ownership and persistence
 
-Agent-tool policy is principal-owned application state attached to a thread,
-not provider session state. Ordinary Custom threads start disabled with no
-selected IDs. A Saved Agent may provide the complete initial tool policy, and
-the thread menu's **New with same settings** action copies the source thread's
-complete policy. Both paths create independent thread state, so later edits to
-the Agent or source thread do not alter the new thread.
+Agent-tool policy is principal-owned application state attached to a thread.
+Named policy sets contain exact enabled tool IDs and a `resourceScope` with
+`allowOtherEnvironments` and `allowOtherProjects`. Selections resolve in order:
+Account → Environment → Backend → Saved Agent → Thread. Each selection is
+`inherit`, `disabled`, or `policy_set` with a scoped set ID. The nearest
+explicit selection replaces the whole policy; no tool IDs or scope flags merge.
+With no explicit selection, tools are disabled and both scope flags are false.
+
+Policy sets and default selections are independent of provider runtime
+configuration. Their edits do not restart providers. New thread preparation
+resolves the current scoped set and snapshots its exact tools, scope and
+backend-supported presentation in the creation transaction, recording immutable
+set name/revision and source provenance. The same-settings and fork paths copy
+resolved thread state. Existing threads never follow later set/default changes.
+Deleting a set leaves its selections needing attention; a missing effective
+reference fails creation rather than inheriting another set. A more specific
+explicit choice may replace a missing earlier reference. Templates store the
+thread selection alongside the Saved Agent reference.
 
 UI groups and select-all controls are conveniences. Durable policy stores the
-master flag, exact enabled IDs, one thread-wide environment-access rule,
+master flag, exact enabled IDs, two independent project/environment resource-scope flags,
 revision, and presentation surface/mode. Concurrent edits conflict instead of
 overwriting one another. With an unchanged CLI presentation, the master flag,
-exact enabled IDs, and environment-access rule can change during a turn or
+exact enabled IDs, and resource-scope flags can change during a turn or
 beside queued input without retiring the runtime. Discovery and invocation
 read the current policy. Disabling a tool prevents a stale discovery result
-from invoking it later; already admitted work is not cancelled. Any policy
-revision change invalidates a pending access approval at revalidation.
+from invoking it later; already admitted work is not cancelled. Policy changes apply to subsequent invocations; operations already admitted
+retain their authority.
 The agent learns about added tools on its next discovery request, not through
 an automatic message.
 
@@ -72,6 +84,20 @@ This publication reads principal-scoped policy only and preserves the retained
 provider projection; it does not restart a stopped or archived thread. The next
 runtime attachment constructs its tools from the saved policy. Pi, Codex,
 Claude, Grok, and OpenCode share this publication path.
+
+Named policy management is a browser/API operation; ordinary tool callers
+select an existing policy through `thread.create@6` or Saved Agent contracts.
+`saved_agent.list/get/options/create/update@6` use `toolPolicySelection` and
+optional `toolPresentation` instead of an embedded policy. Canonical tools
+represent environment variables as bounded `{ name, binding }` entries and
+convert them explicitly to the browser API's map; duplicate names are rejected.
+The output preserves the same bindings without resolving secret references.
+
+Each named set is limited to 128 KiB of serialized JSON. Policy lists use
+principal-bound keyset cursors with at most 100 sets and 512 KiB per page;
+the browser collects these pages. Default selections are limited to 2,048
+entries and 512 KiB per principal. Catalog responses allow at most 64 groups
+and 512 KiB. Oversized changes fail before persistence.
 
 ## Principal Tool clients
 
@@ -103,92 +129,62 @@ counterpart. In particular, they may invoke `thread.send@2` only in its
 fire-and-forget form: `callback: true` requires a trusted calling thread and is
 rejected when the caller is a principal Tool client.
 
-## Access boundary
+## Resource scope
 
-Thread-owned policy uses `accessBoundary`: `thread`, `environment` (default),
-or `unrestricted`. It controls whether an enabled Sedes tool needs an
-application decision; it never bypasses ownership, tool exposure, or provider
-permissions.
+An enabled thread tool is restricted by two independent flags:
+`resourceScope.allowOtherEnvironments` and
+`resourceScope.allowOtherProjects`. Both default to false. The source thread's
+current project and environment are resolved from principal-owned state at each
+invocation. A project location move cannot leave a runtime with stale project
+authority.
 
-- **Ask outside this thread** admits only exact source-thread resources without
-  prompting. Thread-scoped Tasks and Workpads belong to that audience. Other
-  threads (including descendants), project scopes, global scopes, and the
-  environment directory require approval. Moving a resource checks both its
-  current and destination scopes. Source context and public web research do
-  not cross the boundary.
-- **Ask outside this environment** is the default. It asks when a target
-  environment differs from the source thread's. Global Tasks, Workpads, and
-  Saved Agent metadata remain environment-neutral; project resources are
-  reached through the project's environments, as described in
-  [Project resources](#project-resources).
-- **Allow without asking** performs the same resource checks without prompting.
+- With both flags false, thread/workspace resources must belong to the source
+  project and environment.
+- Other-environment access alone admits the source project on other hosts.
+- Other-project access alone admits projects on the source environment.
+- Both flags admit principal-owned resources across projects and environments.
 
-Approval is **Allow once** or **Deny**, bound to the exact invocation. Sedes
-revalidates the source thread, approval runtime, policy revision, input,
-resource identity and revision, tool contract, and effects after approval.
-Task and Workpad authority includes thread identity and, for a project scope,
-the project's membership revision, preventing a resource moved between scopes
-or a project whose locations changed while approval is pending from inheriting
-stale access. Execution recomputes a Task's or Workpad's refs from its current
-scope rather than trusting the admitted ones. Policy changes and runtime
-resets invalidate pending approvals.
+Lists and searches intersect their requested collection with the permitted
+scope before sorting, pagination, snippets, full-record materialization or
+runtime inspection. Hidden results do not contribute counts or continuation
+positions. Explicit resource requests outside scope fail with an explanation;
+Sedes never requests an application access approval or redirects the operation.
+Only user-facing policy edits can broaden access. Thread-initiated creation or
+Agent configuration cannot exceed the source's exact tools or scope flags.
+Provider-native permission prompts remain independent.
 
-These scopes do not otherwise isolate projects. A thread in environment mode
-may explicitly query another project hosted on its environment, or another
-thread in its environment. Lists use the requested scope and do not silently
-filter denied targets into a different query. Cross-environment checks remain
-in addition to principal ownership.
-
-Tool clients retain their configured environment allowlists and have no
-interactive approval path. They do not inherit a thread policy. Automations
-cannot answer browser decisions; any invocation that needs approval fails
-closed. Delegated agent work uses the destination thread's own policy.
-Application decisions are provider-neutral for Pi, Codex, Claude, and Grok;
-unavailable interaction bindings fail closed instead of bypassing approval.
+Every canonical operation declares source-only, public-information, directory,
+neutral, direct-resource, scoped-query or scope-transition authority. Direct
+reads/writes recheck exact resource identity and mutable scope at execution.
+Moves check both the source and destination. Continuations bind the effective
+project/environment scope, policy revision, trusted source defaults and relevant
+project membership revisions. An earlier cursor cannot broaden a later query.
 
 ### Project resources
 
-A project-scoped Task or Workpad, a `project` scope, and a project named by
-`workspace.open` are reachable from the project's **member environments**:
-those hosting one of its active locations. Membership is not a separate
-boundary; this host rule decides. Any thread can already reach other threads
-and workspaces on its own environment without asking, so a membership-only rule
-could be laundered through them and would only look stricter, while for a
-single-location project the host rule is exactly that location's environment
-rule. A project ref carries the project's membership revision, which every
-location edit advances, and its access environment:
+Global Tasks and Workpads and Saved Agent definitions remain shared account
+resources. Project Tasks and Workpads are shared within their project: the
+project flag determines which projects can be reached, and a shared document
+is not divided by host. For project subtree lists, project records remain shared
+while thread records are filtered by both flags. No-active-location projects
+remain subject to the project boundary; they do not become global records.
 
-- A thread agent whose environment is a member is inside the project. For any
-  other thread agent every member environment is a target, so an
-  `environment`-boundary approval names them all.
-- A Tool client reaches the project through its default environment when that
-  is a member, otherwise through its lowest-sorted allowlisted member, so any
-  one allowlisted member suffices for an exact scope. With none, the call is
-  denied.
-- A project with no active location is outside every environment, never
-  environment-neutral like a global resource: a thread agent with the
-  `environment` boundary is asked, with the prompt naming a project with no
-  active location, and a Tool client is denied.
-- A removed project is not found, whether it is the source scope, the
-  destination, or the query.
-- A project subtree list, which adds the Tasks or Workpads of threads in the
-  project's active locations, targets every member environment. In a
-  multi-host project a thread agent is therefore asked and a Tool client needs
-  every member allowlisted, as for a global subtree list. A global subtree list
-  omits projects with no active location; an explicit project query still
-  reaches them, with approval.
-- The `thread` boundary asks for every project scope. `unrestricted` resolves
-  the same refs without prompting.
+The environment directory is filtered to permitted environments. Registered
+client devices remain account resources, while their returned default-thread
+references are projected through the caller's resource scope. Page, image and
+worktree tools preserve their narrower source-thread/workspace contracts.
+Public web research remains public information.
 
-A `project` scope without `projectId` means the caller's project. For a thread
-agent that is the current project of its source thread's location, read at
-each admission rather than captured with a native runtime's trusted source: a
-location can move between projects while its runtimes keep running, and a move
-neither retires them nor changes source authority. The project is part of the
-trusted defaults bound into the authority digest, so a move invalidates a
-pending approval. A Tool client's project is its default location's project
-while that location is active; without one, a project scope must name its
-project.
+Principal Tool clients retain explicit environment allowlists and do not
+inherit a thread's project policy or acquire an interactive approval path.
+Delegated work runs under the destination thread's own saved policy. Automations
+cannot silently widen the policy of a source or destination thread.
+
+The migration replaces old boundary choices with explicit scope. Existing
+unrestricted policies become true/true; environment policies become false/true.
+Legacy thread-only policies are disabled because the new project scope would
+be broader. Their exact selected IDs are preserved for user review. Explicit
+Saved Agent policies migrate into named sets with presentation kept separately.
 
 ## Workspaces and projects
 
@@ -198,7 +194,7 @@ several workspaces and environments; see
 [Projects and locations](architecture.md#projects-and-locations). A project
 ID grants nothing by itself: workspaces and threads keep their environment
 checks, and project Tasks and Workpads are reached through the project's
-environments under [Project resources](#project-resources).
+environments under [Resource scope](#resource-scope).
 
 - `workspace.list@5` adds each workspace's `project: { id, name }`. Its
   continuation fingerprint names the new version, so an earlier cursor is
@@ -985,8 +981,8 @@ A Pi SSH target never receives the CLI in remote Bash. The Pi model loop and
 native session stay on the Sedes host while only its seven built-in workspace
 tools execute remotely. See [Remote Pi workspace tools](pi-remote-workspace-tools.md).
 
-`thread.create@5` and `saved_agent.list/get/options/create/update@5` expose
-`accessBoundary: thread | environment | unrestricted` in their policy contracts.
+`thread.create@6` and `saved_agent.list/get/options/create/update@6` expose
+`resourceScope: { allowOtherEnvironments, allowOtherProjects }` in their policy contracts.
 Their previous v4 schemas are no longer admitted; callers must describe the
 current tool before invocation. `saved_agent.delete` retains its version because
 its wire shape is unchanged.

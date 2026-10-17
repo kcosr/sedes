@@ -103,10 +103,15 @@ export class DatabaseAgentToolApplicationReader
       kind: "thread",
       id: source.id,
       environmentId: source.environmentId,
+      projectId: source.projectId,
       workspaceId: source.workspaceId,
     });
     const snapshot = await this.threads.snapshot(scope, threadId);
     this.#assertOpen(signal);
+    const current = this.#sources.resolveThread(scope, threadId);
+    if (!current) return undefined;
+    requireAdmittedResource(environmentAuthority, {kind:"thread",id:current.id,
+      environmentId:current.environmentId,workspaceId:current.workspaceId,projectId:current.projectId});
     return {
       threadId: source.id,
       backend: backend.backendKind,

@@ -1,3 +1,4 @@
+import { ToolPolicyScopeSettings, type ToolPolicySettingsApi } from "../tool-policies/ToolPolicyScopeSettings.js";
 import type { Ref } from "react";
 import { navigate, settingsPath } from "../../app/router.js";
 import { BackendBrandIcon } from "../brand-icons.js";
@@ -26,8 +27,9 @@ import type { BackendDefinition } from "./types.js";
  * One backend's detail. Every backend keeps one mounted, whether or not it
  * is shown, so its runtime controller keeps settling receipts.
  */
-export function BackendDetail({ backend, selected, tab, onTab, headingRef, onRemove, ...runtimeProps }: DetailRuntimeProps & {
+export function BackendDetail({ backend, toolPolicyApi, selected, tab, onTab, headingRef, onRemove, ...runtimeProps }: DetailRuntimeProps & {
   readonly backend: BackendDefinition;
+  readonly toolPolicyApi?: ToolPolicySettingsApi;
   readonly selected: boolean;
   readonly tab: DetailTab;
   readonly onTab: (tab: DetailTab) => void;
@@ -94,6 +96,7 @@ export function BackendDetail({ backend, selected, tab, onTab, headingRef, onRem
             ...rules.map((rule, index) => ({ key: `rule-${index}`, label: `Rule ${index + 1}`, value: summarizeRule(rule), mono: true })),
           ]} />
         </SettingsSection>
+        {toolPolicyApi ? <SettingsSection title="Sedes tool policy" description="A default for new threads on this backend. Saving it does not restart the backend." card><ToolPolicyScopeSettings api={toolPolicyApi} target={{ kind: "backend", backendId: backend.id }} environmentId={environment?.id} /></SettingsSection> : null}
         <SettingsSection title="Environment variables" card><KeyValueList className="execution-facts" items={variableFacts(backend.environmentVariables)} /></SettingsSection>
         <DangerZone>
           <DangerZoneItem title="Remove backend" description="Its connections are removed too. Existing threads and history are retained. Running work may prevent removal."

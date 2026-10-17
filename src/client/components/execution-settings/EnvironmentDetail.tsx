@@ -1,3 +1,4 @@
+import { ToolPolicyScopeSettings, type ToolPolicySettingsApi } from "../tool-policies/ToolPolicyScopeSettings.js";
 import { useEffect, useState, type ReactNode, type Ref } from "react";
 import { Ellipsis } from "lucide-react";
 import type { ConfiguredEnvironmentVariables } from "../../../shared/protocol/environment-variables.js";
@@ -84,8 +85,9 @@ export function DetailMenu({ label, controller, extra }: { readonly label: strin
  * One environment's detail. Every environment keeps one mounted, whether
  * or not it is shown, so its runtime controller keeps settling receipts.
  */
-export function EnvironmentDetail({ environment, selected, tab, onTab, hosts, stale, headingRef, renderBackends, onRemove, onPairing, ...runtimeProps }: DetailRuntimeProps & {
+export function EnvironmentDetail({ environment, toolPolicyApi, selected, tab, onTab, hosts, stale, headingRef, renderBackends, onRemove, onPairing, ...runtimeProps }: DetailRuntimeProps & {
   readonly environment: EnvironmentDefinition;
+  readonly toolPolicyApi?: ToolPolicySettingsApi;
   readonly selected: boolean;
   readonly tab: DetailTab;
   readonly onTab: (tab: DetailTab) => void;
@@ -162,6 +164,7 @@ export function EnvironmentDetail({ environment, selected, tab, onTab, hosts, st
         </RuntimeHealth>
         <SettingsSection title="Host" card><KeyValueList className="execution-facts" items={hostFacts} /></SettingsSection>
         <SettingsSection title="Workspace access" card><KeyValueList className="execution-facts" items={accessFacts} /></SettingsSection>
+        {toolPolicyApi ? <SettingsSection title="Sedes tool policy" description="A default for new threads in this environment. Saving it does not restart any backend." card><ToolPolicyScopeSettings api={toolPolicyApi} target={{ kind: "environment", executionEnvironmentId: environment.id }} /></SettingsSection> : null}
         <SettingsSection title="Environment variables" card><KeyValueList className="execution-facts" items={variableFacts(environment.environmentVariables)} /></SettingsSection>
         <DangerZone>
           {binding ? <DangerZoneItem title={revoked ? "Reapprove pairing" : "Revoke pairing"}

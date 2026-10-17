@@ -22,6 +22,7 @@ If Sedes is not running yet, begin with [Getting started](getting-started.md).
 | Show screenshots, charts, and image files directly in a conversation | [Images in chat](images.md) |
 | Review tokens and estimated spend over time across threads | [Usage and spend](usage.md) |
 | Understand backend controls, blocking interactions, and per-thread Agent tools | [Provider features](provider-features.md) |
+| Reuse tool sets, configure inherited defaults, and constrain agent resource access | [Tool policy sets](tool-policies.md) |
 | Move around Settings; configure environments, backends, projects, Agents, appearance, prompts, mobile behavior, terminals, servers, and Tool clients | [Settings](settings.md) |
 | Recover from a failed, disconnected, or uncertain operation | [Troubleshooting and recovery](troubleshooting.md) |
 

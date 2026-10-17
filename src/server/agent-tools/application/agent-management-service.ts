@@ -28,10 +28,9 @@ import {
   currentScopedResourceRefs,
   environmentAuthorityContinuationDigest,
   grantProjectAccessCaller,
-  requireAdmittedEnvironment,
-  requireAdmittedResource,
   requireAdmittedResources,
   requireExactScopeQuery,
+  requireThreadResourceScope,
   scopeAuthorityRefs,
   type AgentToolEnvironmentAuthorityReader,
   type TrustedEnvironmentAuthorityGrant,
@@ -227,8 +226,10 @@ export class AgentManagementService {
 
   listEnvironments(
     scope: RequestScope,
+    authority: TrustedEnvironmentAuthorityGrant,
   ): readonly WorkspaceEnvironmentSummary[] {
-    return this.input.workspaces.listEnvironments(scope);
+    requireThreadResourceScope(authority);
+    return this.input.workspaces.listEnvironments(scope).filter(({id}) => authority.callerKind === "principal_client" || authority.admittedEnvironmentIds.includes(id));
   }
 
   openWorkspaceForAgent(
@@ -258,7 +259,8 @@ export class AgentManagementService {
     },
     environmentAuthority: TrustedEnvironmentAuthorityGrant,
   ): AgentManagementPage<AgentWorkspaceSummary> {
-    const environmentIds =
+    requireThreadResourceScope(environmentAuthority);
+    const requestedEnvironmentIds =
       request.scope.kind === "default_environment"
         ? [environmentAuthority.defaults.environmentId]
         : request.scope.kind === "environment"
@@ -269,9 +271,7 @@ export class AgentManagementService {
               ).id,
             ]
           : [...environmentAuthority.targetEnvironmentIds];
-    for (const environmentId of environmentIds) {
-      requireAdmittedEnvironment(environmentAuthority, environmentId);
-    }
+    const environmentIds = requestedEnvironmentIds.filter(id => environmentAuthority.admittedEnvironmentIds.includes(id));
     const fingerprint = queryFingerprint("workspace.list@5", [
       scope.tenantId,
       scope.principalId,
@@ -309,6 +309,7 @@ export class AgentManagementService {
           WHERE workspace.tenant_id = ? AND workspace.owner_principal_id = ?
             AND workspace.removed_at IS NULL
             AND workspace.environment_id IN (${environmentIds.map(() => "?").join(", ")})
+            ${environmentAuthority.resourceScope && !environmentAuthority.resourceScope.allowOtherProjects ? "AND workspace.project_id = ?" : ""}
             ${after ? "AND (workspace.last_opened_at < ? OR (workspace.last_opened_at = ? AND workspace.id > ?))" : ""}
           ORDER BY workspace.last_opened_at DESC, workspace.id ASC
           LIMIT ?
@@ -318,6 +319,7 @@ export class AgentManagementService {
         scope.tenantId,
         scope.principalId,
         ...environmentIds,
+        ...(environmentAuthority.resourceScope && !environmentAuthority.resourceScope.allowOtherProjects ? [environmentAuthority.defaults.projectId] : []),
         ...(after ? [after.sort, after.sort, after.id] : []),
         request.pageSize + 1,
       ) as Array<{
@@ -370,6 +372,7 @@ export class AgentManagementService {
     signal = new AbortController().signal,
   ): Promise<AgentManagementPage<AgentThreadSummary>> {
     throwIfAborted(signal);
+    requireThreadResourceScope(environmentAuthority);
     const requestedScope = request.scope ?? {
       kind: "default_environment" as const,
     };
@@ -385,21 +388,12 @@ export class AgentManagementService {
         : requestedScope.kind === "workspace"
           ? this.input.inventory.getWorkspace(scope, requestedScope.workspaceId)
           : undefined;
-    if (resolvedWorkspace) {
-      requireAdmittedResource(environmentAuthority, {
-        kind: "workspace",
-        id: resolvedWorkspace.id,
-        environmentId: resolvedWorkspace.environmentId,
-      });
-    }
-    const environmentIds = resolvedWorkspace
+    const requestedEnvironmentIds = resolvedWorkspace
       ? [resolvedWorkspace.environmentId]
       : requestedScope.kind === "default_environment"
         ? [environmentAuthority.defaults.environmentId]
         : [...environmentAuthority.targetEnvironmentIds];
-    for (const environmentId of environmentIds) {
-      requireAdmittedEnvironment(environmentAuthority, environmentId);
-    }
+    const environmentIds = requestedEnvironmentIds.filter(id => environmentAuthority.admittedEnvironmentIds.includes(id));
     const lastActivityAfter =
       request.lastActivityAfter === undefined
         ? undefined
@@ -437,6 +431,8 @@ export class AgentManagementService {
     ];
     const parameters: unknown[] = [scope.tenantId, scope.principalId];
     if (resolvedWorkspace) {
+      conditions.push(`thread.environment_id IN (${environmentIds.map(() => "?").join(", ")})`);
+      parameters.push(...environmentIds);
       conditions.push("thread.workspace_id = ?");
       parameters.push(resolvedWorkspace.id);
     } else {
@@ -444,6 +440,10 @@ export class AgentManagementService {
         `thread.environment_id IN (${environmentIds.map(() => "?").join(", ")})`,
       );
       parameters.push(...environmentIds);
+    }
+    if (environmentAuthority.resourceScope && !environmentAuthority.resourceScope.allowOtherProjects) {
+      conditions.push(`EXISTS (SELECT 1 FROM workspaces AS location WHERE location.tenant_id=thread.tenant_id AND location.owner_principal_id=thread.owner_principal_id AND location.id=thread.workspace_id AND location.project_id=?)`);
+      parameters.push(environmentAuthority.defaults.projectId);
     }
     if (request.query !== undefined) {
       conditions.push("instr(lower(thread.title), lower(?)) > 0");
@@ -612,7 +612,8 @@ export class AgentManagementService {
       pageSize: request.pageSize,
       authorityBinding: {
         sourceEnvironmentId: authority.defaults.environmentId,
-        targetEnvironmentIds: authority.targetEnvironmentIds,
+        targetEnvironmentIds: authority.admittedEnvironmentIds,
+        ...(authority.resourceScope && !authority.resourceScope.allowOtherProjects ? {projectId: authority.defaults.projectId!} : {}),
         policyRevision: authority.policyIdentity.revision,
         continuationAuthorityDigest: environmentAuthorityContinuationDigest(
           authority,

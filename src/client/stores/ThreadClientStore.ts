@@ -300,7 +300,7 @@ export interface SetAgentToolPolicyInput {
   readonly enabled: boolean;
   readonly enabledToolIds: readonly string[];
   readonly presentation: NormalizedThreadSnapshot["agentTools"]["presentation"];
-  readonly accessBoundary: NormalizedThreadSnapshot["agentTools"]["accessBoundary"];
+  readonly resourceScope: NormalizedThreadSnapshot["agentTools"]["resourceScope"];
 }
 
 export class ThreadClientStore {
@@ -2150,7 +2150,7 @@ export class ThreadClientStore {
         enabled: input.enabled,
         enabledToolIds: [...input.enabledToolIds],
         presentation: input.presentation,
-        accessBoundary: input.accessBoundary,
+        resourceScope: input.resourceScope,
       });
     });
   }

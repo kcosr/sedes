@@ -182,7 +182,7 @@ describe("thread agent tool policy persistence", () => {
       const policies = new ThreadAgentToolPolicyRepository(value.database, dependencies.eligibility);
       policies.update(value.scope, value.codexThreadId, {
         expectedRevision: 0, enabled: true, enabledToolIds: ["agent.context"],
-        presentation: { surface: "native", mode: "individual" }, accessBoundary: "environment", now: 500,
+        presentation: { surface: "native", mode: "individual" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true }, now: 500,
       });
       const inventory = new InventoryRepository(value.database);
       const calls: string[] = [];
@@ -268,14 +268,14 @@ describe("thread agent tool policy persistence", () => {
       expect(repository.get(value.scope, value.piThreadId)).toMatchObject({
         enabled: false,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         revision: 0,
         enabledToolIds: [],
       });
       expect(repository.get(value.scope, value.codexThreadId)).toMatchObject({
         enabled: false,
         presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         revision: 0,
         enabledToolIds: [],
       });
@@ -298,7 +298,7 @@ describe("thread agent tool policy persistence", () => {
       ).toMatchObject({
         enabled: false,
         presentation: { surface: "native", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
         revision: 0,
         enabledToolIds: [],
         updatedAt: 340,
@@ -323,7 +323,7 @@ describe("thread agent tool policy persistence", () => {
       ).toMatchObject({
         enabled: false,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
         revision: 0,
         enabledToolIds: [],
         updatedAt: 350,
@@ -352,7 +352,7 @@ describe("thread agent tool policy persistence", () => {
         enabled: true,
         presentation: { surface: "native", mode: "individual" },
         enabledToolIds: [...retiredToolIds, "thread.status"],
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         now: 400,
       });
       const current = new ThreadAgentToolPolicyRepository(value.database, eligibility);
@@ -393,13 +393,13 @@ describe("thread agent tool policy persistence", () => {
         enabled: true,
         presentation: { surface: "native", mode: "individual" },
         enabledToolIds: ["thread.status", "agent.context"],
-        accessBoundary: "unrestricted",
+        resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
         now: 400,
       });
       expect(changed).toMatchObject({
         enabled: true,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "unrestricted",
+        resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
         revision: 1,
         updatedAt: 400,
         enabledToolIds: ["agent.context", "thread.status"],
@@ -416,7 +416,7 @@ describe("thread agent tool policy persistence", () => {
           enabled: false,
           presentation: { surface: "cli", mode: "progressive" },
           enabledToolIds: ["thread.tasks"],
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           now: 401,
         }),
       ).toThrow(/changed in another client/i);
@@ -427,11 +427,11 @@ describe("thread agent tool policy persistence", () => {
         enabled: true,
         presentation: { surface: "cli", mode: "progressive" },
         enabledToolIds: ["thread.tasks"],
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         now: 402,
       });
       expect(replaced.enabledToolIds).toEqual(["thread.tasks"]);
-      expect(replaced.accessBoundary).toEqual("environment");
+      expect(replaced.resourceScope).toEqual({ allowOtherEnvironments: false, allowOtherProjects: true });
       expect(replaced.revision).toBe(2);
 
       policyToolIds.delete("thread.tasks");
@@ -453,7 +453,7 @@ describe("thread agent tool policy persistence", () => {
           enabled: true,
           presentation: { surface: "cli", mode: "progressive" },
           enabledToolIds: ["thread.tasks"],
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           now: 403,
         }),
       ).toThrow(/ineligible/i);
@@ -483,7 +483,7 @@ describe("thread agent tool policy persistence", () => {
       expect(pi.agentTools).toMatchObject({
         enabled: false,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         presentationOptions: [
           { surface: "native", modes: ["progressive", "individual"] },
           { surface: "cli", modes: ["progressive", "individual"] },
@@ -552,7 +552,7 @@ describe("thread agent tool policy persistence", () => {
       );
       expect(codex.agentTools).toMatchObject({
         presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         presentationOptions: [
           { surface: "native", modes: ["individual", "progressive"] },
           { surface: "cli", modes: ["progressive", "individual"] },
@@ -587,7 +587,7 @@ describe("thread agent tool policy persistence", () => {
           enabled: true,
           presentation: { surface: "native", mode: "progressive" },
           enabledToolIds: ["unknown.tool"],
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           now: 500,
         }),
       ).toThrow(/ineligible/i);
@@ -597,7 +597,7 @@ describe("thread agent tool policy persistence", () => {
           enabled: true,
           presentation: { surface: "native", mode: "individual" },
           enabledToolIds: ["agent.context", "agent.context"],
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           now: 500,
         }),
       ).toThrow(/duplicated/i);
@@ -607,7 +607,7 @@ describe("thread agent tool policy persistence", () => {
           enabled: true,
           presentation: { surface: "native", mode: "progressive" },
           enabledToolIds: ["agent.context"],
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           now: 500,
         }),
       ).toThrow(/unavailable/i);
@@ -689,7 +689,7 @@ describe("thread agent tool policy persistence", () => {
           enabled: true,
           presentation: { surface: "cli", mode: "progressive" },
           enabledToolIds: ["task.list"],
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           now: 600,
         }),
       ).toThrow(/unavailable for the thread target/i);

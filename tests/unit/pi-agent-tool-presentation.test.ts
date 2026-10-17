@@ -107,7 +107,7 @@ describe("Pi agent tool presentation", () => {
         {
           enabled: true,
           presentation: { surface: "native", mode: "individual" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: definitions.map(({ id }) => id),
         },
         controlDescriptors,
@@ -127,7 +127,7 @@ describe("Pi agent tool presentation", () => {
       {
         enabled: true,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: ["workspace.write", "agent.context"],
       },
       descriptors,
@@ -148,7 +148,7 @@ describe("Pi agent tool presentation", () => {
         {
           enabled: true,
           presentation: { surface: "cli", mode: "progressive" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: ["agent.context"],
         },
         descriptors,
@@ -159,7 +159,7 @@ describe("Pi agent tool presentation", () => {
         {
           enabled: false,
           presentation: { surface: "native", mode: "individual" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: ["agent.context"],
         },
         descriptors,
@@ -170,7 +170,7 @@ describe("Pi agent tool presentation", () => {
         {
           enabled: true,
           presentation: { surface: "native", mode: "individual" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: ["not.eligible", "agent.context"],
         },
         descriptors,
@@ -184,7 +184,7 @@ describe("Pi agent tool presentation", () => {
         {
           enabled: true,
           presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: ["agent.context", "workspace.write"],
         },
         descriptors,
@@ -203,7 +203,7 @@ describe("Pi agent tool presentation", () => {
         {
           enabled: true,
           presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: ["agent.context", "workspace.write"],
         },
         descriptors,
@@ -218,7 +218,7 @@ describe("Pi agent tool presentation", () => {
         {
           enabled: true,
           presentation: { surface: "cli", mode: "progressive" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: ["agent.context", "removed.tool"],
         },
         descriptors,

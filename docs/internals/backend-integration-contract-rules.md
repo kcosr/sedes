@@ -3657,13 +3657,15 @@ their existing eligibility rules.
 Agent tools use the normalized, principal-scoped contract in
 [Agent tools](agent-tools.md). Eligibility is checked at execution time against
 the current thread, backend generation, effective policy revision, and tool
-capabilities. Exact-ID exposure and the thread-wide
-`accessBoundary` rule are independent: every canonical
-tool declares resource-to-environment authority, and the shared admission layer
-resolves it relative to the source thread and execution environment. `environment`
-is the default; `unrestricted` bypasses only the application access prompt, never
-identity, resource, turn, policy, capability, or provider checks. Provider-native
-tool injection and approval remain private to the backend.
+capabilities. Exact-ID exposure and the two
+`resourceScope` flags are independent. Every canonical tool declares resource
+authority; shared admission derives source project/environment and either
+filters a collection or denies an explicit outside resource. No application
+access approval is requested. Provider-native permission handling remains
+private to the backend. Named policy sets and their Account → Environment →
+Backend → Agent → Thread selections resolve to independent creation snapshots
+for all five compiled backends. Preserve exact flags, IDs, presentation and
+creation provenance across forks and same-settings copies.
 
 Model-visible tool media is a separate closed `modelContent` array on a
 completed canonical invocation, never an oversized base64 string in ordinary
@@ -3676,32 +3678,20 @@ text and can open those files with its image tool. Cancellation must suppress th
 media. Version the strict local and sidecar transport contracts when adding
 new result shapes; stale peers must fail closed rather than discard media.
 
-Environment discovery is not environment entry. `environment.list` may expose
-only the bounded principal-scoped directory needed to address tools—no routes,
-credentials, hosts, or topology. Environment-scoped workspace and thread lists
-default to the source environment. Each compiled canonical operation must have
-an explicit source-only, public-information, directory, neutral, direct-resource, scoped-query, or
-scope-transition disposition; omission must fail closed.
+Environment discovery is filtered to the thread's admitted environment scope.
+Directory responses expose no routes, credentials, hosts or topology. Each
+compiled canonical operation must have an explicit source-only,
+public-information, directory, neutral, direct-resource, scoped-query or
+scope-transition disposition; omission fails closed. Keep query filtering in
+shared application/repository paths before limits and cursors. Scope admission
+must not depend on a provider-native tool-name convention.
 
-Only a user-originated active agent turn can open an application access
-decision. The decision is ephemeral, admits one exact invocation, has no user
-response deadline, and must be revalidated after approval. Automation
-access outside the configured boundary that requires approval fails closed. Delegated
-agent-control work uses the destination thread's own policy. Cancellation
-follows the exact invocation/turn/runtime signal; browser presence is not
-authority and must not be polled to infer cancellation.
-
-A backend whose daemon accepts inputs from other clients must additionally
-prove that the current consumed input came from an authenticated Sedes user
-request. Its server-owned access-decision authority is re-resolved for every
-CLI or MCP invocation, including restart-safe source references. Acquire and
-revalidate this authority only when an invocation needs interactive approval;
-otherwise authorized calls inside the configured boundary do not need a user
-turn. Combine its cancellation signal with the ordinary decision lease and
-invalidate it on input replacement, conflicting proof, stream gaps, disconnect,
-terminal events or runtime replacement. Historical receipts alone cannot
-establish a current user turn. OpenCode implements this additional authority;
-Pi, Codex, Claude and Grok retain their existing actor-owned turn authority.
+Every accepted Sedes tool invocation retains its source application runtime
+through completion or cancellation. Source-generation replacement aborts that
+work; recheck admission after acquiring the runtime lease. This execution lease
+is independent of the current-user proof required for client-control tools.
+Removing application access prompts does not remove provider permission
+handling or the turn-bound identity of client actions.
 
 CLI presentation receives an opaque, unguessable, restart-safe thread source
 reference—not a caller-selected thread ID. Resolve it beneath server-derived
@@ -3824,8 +3814,7 @@ CLI remain unsupported. OpenCode reconstructs an immutable per-root shell
 environment independently of its shared MCP channel and gates native child
 execution when that environment cannot be preserved.
 Removed authority blocks subsequent admission, not work already admitted.
-Revalidate pending environment decisions against the policy revision before
-execution. Native-tool policy changes remain idle-only.
+Revalidate current scope at admission and before execution. Native-tool policy changes remain idle-only.
 
 A bound thread's provider process or session may capture environment and tool
 presentation only at establishment. Therefore an idle presentation-policy
@@ -3888,18 +3877,28 @@ server-derived normalized thread and runtime generation. See
 [Codex managed TUI](codex-managed-tui.md) for the current provider-specific
 implementation.
 
-### Thread access boundary
+### Thread resource scope
 
-Agent tool policy uses `accessBoundary: "thread" | "environment" | "unrestricted"`.
-All compiled backends share source-scoped invocation enforcement and the
-application decision broker. Thread mode requires approval for project/global
-resources and other threads, including same-environment descendants. Source
-context and explicitly classified public research are exempt. Resource
-classification must be explicit in the canonical manifest; empty authority
-sets are not evidence of source-thread access. Mutable scope facts and their
-revisions must remain bound into approval and continuation digests. Principal
-Tool clients keep environment allowlists and cannot request interactive
-approval. Automations and unavailable interaction bindings fail closed.
+Agent tool policy uses `resourceScope` with required booleans
+`allowOtherEnvironments` and `allowOtherProjects`. They are independent limits,
+not interactive approval modes. All compiled backends share the same admission:
+lists intersect requested scope, and direct outside IDs fail without a prompt.
+Global resources and Saved Agent definitions retain their explicit shared
+account classification; project documents are shared project records. Page and
+worktree source-only restrictions remain narrower than this policy.
+
+Resolve the source project from its current location on every request, bind
+mutable scope facts and revisions into grants/continuations, and recheck exact
+resources before side effects. Collection implementations must apply trusted
+project and environment filters before SQL pagination and data materialization.
+Thread-created child/Agent policies cannot increase the parent's tool set or
+scope. Principal Tool clients retain their independent environment allowlists.
+
+Named sets, scope defaults and selections are principal-owned. The effective
+policy is resolved and fenced transactionally at creation, stored as independent
+thread state, and copied intact by forks. Policy metadata names and IDs are
+provenance rather than live authority. Missing selected sets fail closed;
+existing thread snapshots remain usable after set deletion.
 
 Workpads are application-owned Markdown documents, revision history,
 attribution, and user drafts; providers receive only normalized canonical tools.
@@ -3907,7 +3906,7 @@ Pi native/CLI, Codex and Claude CLI/Native MCP, Grok CLI, and the admitted
 OpenCode Native MCP/owned CLI paths are
 implemented through the shared source-scoped facade. Tool clients use the same canonical operations
 with their environment allowlists. Workpad history is authorized from current
-scope, not historical scope. Approval binds current resource identity/revision;
+scope, not historical scope. Admission binds current resource identity/revision;
 document updates additionally check the expected revision atomically. Backend
 adapters must not introduce provider-specific Workpad storage or bypass these
 checks. Unsupported tool transports remain explicitly unavailable.

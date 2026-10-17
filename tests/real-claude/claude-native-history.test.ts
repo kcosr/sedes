@@ -45,7 +45,7 @@ const connection: AgentConnectionProfile = {
 };
 const agentTools: BackendAgentToolFacade = {
   eligibleCatalog: () => [], catalogSummaries: () => [], describeMany: () => [],
-  readPolicy: () => ({ enabled: false, presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "environment", enabledToolIds: [] }),
+  readPolicy: () => ({ enabled: false, presentation: { surface: "cli", mode: "progressive" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true }, enabledToolIds: [] }),
   invoke: async () => { throw new Error("real_claude_agent_tools_disabled"); },
 };
 const executablePath = process.env.SEDES_REAL_CLAUDE_EXECUTABLE ?? "claude";

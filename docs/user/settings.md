@@ -297,6 +297,14 @@ revoked roots may require attention first. Paused schedules stay paused. See
 [Manage projects](organize-work.md#manage-projects) for what each action moves
 or keeps.
 
+## Tool policies
+
+**Settings → Tool policies** manages named exact tool sets, the account default,
+and their project/environment access rules. Environment and backend Overview
+pages can select their own defaults without restarting providers. Agents and
+New thread can override them; templates save the New thread selection. See
+[Tool policy sets](tool-policies.md) for inheritance and snapshots.
+
 ## Agents
 
 **Settings → Agents** (`/settings/agents`) manages saved Agents. **More →

@@ -60,7 +60,7 @@ describe("scoped environment variables", () => {
       doc.executionEnvironments[0]!.environmentVariables = { execution: { A: literal("env"), SHARED: literal("env") }, startup: { BOOT: literal("boot") } };
       doc.backends[0]!.environmentVariables = { execution: { SHARED: literal("backend") }, startup: {} };
     });
-    const agent = f.agents.create(f.scope, { name: "Agent", description: "", backendTypeId: "pi", backendOverridesSchemaVersion: 1, backendOverrides: [], sedesTools: null, environmentVariables: { SHARED: literal("agent"), TOKEN: { kind: "secret", source: { kind: "protected_file", path: "/private/token" } } }, now: 100 });
+    const agent = f.agents.create(f.scope, { name: "Agent", description: "", backendTypeId: "pi", backendOverridesSchemaVersion: 1, backendOverrides: [], toolPolicySelection: {kind:"inherit"}, environmentVariables: { SHARED: literal("agent"), TOKEN: { kind: "secret", source: { kind: "protected_file", path: "/private/token" } } }, now: 100 });
     const preview = f.variables.preview(f.scope, f.targetId, agent.id);
     expect(preview.startup.supported).toBe(false);
     const prepared = f.variables.prepare(f.scope, f.targetId, { agentId: agent.id, expectedRevision: preview.revision, overrides: { SHARED: literal("thread"), A: { kind: "unset" } } });
@@ -88,7 +88,7 @@ describe("scoped environment variables", () => {
 
   it("rejects Saved Agent revision drift and unsupported provider startup overrides", () => {
     const f = fixture();
-    const agent = f.agents.create(f.scope, { name: "Agent", description: "", backendTypeId: "pi", backendOverridesSchemaVersion: 1, backendOverrides: [], sedesTools: null, environmentVariables: { A: literal("agent") }, now: 100 });
+    const agent = f.agents.create(f.scope, { name: "Agent", description: "", backendTypeId: "pi", backendOverridesSchemaVersion: 1, backendOverrides: [], toolPolicySelection: {kind:"inherit"}, environmentVariables: { A: literal("agent") }, now: 100 });
     const prepared = f.variables.prepare(f.scope, f.targetId, { agentId: agent.id });
     f.agents.update(f.scope, agent.id, { expectedRevision: 0, environmentVariables: { A: literal("updated") }, now: 200 });
     expect(() => prepared.assertCurrent()).toThrow(expect.objectContaining({ code: "conflict" }));

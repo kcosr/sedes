@@ -195,9 +195,10 @@ function snapshot(): NormalizedThreadSnapshot {
     stashes: [],
     composerCommands: [],
     agentTools: {
+      origin: null,
       runtimeAvailability: { availability: "available" },
       enabled: false,
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       groups: [],
       presentation: { surface: "cli", mode: "progressive" },
       presentationOptions: [
@@ -3535,9 +3536,10 @@ describe("ThreadClientStore normalized operations", () => {
     ready.capabilities = { ...ready.capabilities, runState: "idle" };
     delete ready.activeTurnId;
     ready.agentTools = {
+      origin: null,
       runtimeAvailability: { availability: "available" },
       enabled: true,
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       groups: [
         {
           id: "context",
@@ -3599,7 +3601,7 @@ describe("ThreadClientStore normalized operations", () => {
       enabled: true,
       enabledToolIds: ["agent.context", "thread.status"],
       presentation: { surface: "native", mode: "individual" },
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
     });
 
     expect(operateThread).toHaveBeenCalledWith("thread-1", {
@@ -3609,7 +3611,7 @@ describe("ThreadClientStore normalized operations", () => {
       enabled: true,
       enabledToolIds: ["agent.context", "thread.status"],
       presentation: { surface: "native", mode: "individual" },
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
     });
   });
 
@@ -3645,7 +3647,7 @@ describe("ThreadClientStore normalized operations", () => {
           enabled,
           enabledToolIds: [],
           presentation: { surface: "cli" as const, mode },
-          accessBoundary: "unrestricted" as const,
+          resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
         };
         await store.setAgentToolPolicy(input);
         expect(operateThread).toHaveBeenLastCalledWith("thread-1", {
@@ -3698,7 +3700,7 @@ describe("ThreadClientStore normalized operations", () => {
           enabled: true,
           enabledToolIds: [],
           presentation: { surface: nextSurface, mode },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         }),
       ).rejects.toThrow("require an idle thread");
       expect(operateThread).not.toHaveBeenCalled();
@@ -3729,7 +3731,7 @@ describe("ThreadClientStore normalized operations", () => {
         enabled: false,
         enabledToolIds: [],
         presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       }),
     ).rejects.toThrow("changed in another client");
     expect(operateThread).not.toHaveBeenCalled();

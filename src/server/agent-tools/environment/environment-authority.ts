@@ -1,3 +1,4 @@
+import type { AgentToolResourceScope } from "../../../shared/protocol/conversation.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { deterministicJson } from "../../canonical-json.js";
@@ -13,6 +14,7 @@ export type EnvironmentResourceKind =
   | "environment"
   | "workspace"
   | "project"
+  | "project_subtree"
   | "thread"
   | "thread_family"
   | "task"
@@ -54,14 +56,16 @@ export interface ResolvedEnvironmentResourceRef {
   readonly kind: EnvironmentResourceKind;
   readonly id: string;
   readonly environmentId?: string;
+  readonly projectId?: string;
   readonly workspaceId?: string;
   readonly threadId?: string;
   /** Mutable resource generation included when authority depends on it. */
   readonly revision?: number;
+  readonly outsideEveryEnvironment?: true;
   readonly label?: string;
 }
 
-export interface EnvironmentApprovalDisplay {
+export interface EnvironmentAuthorityDisplay {
   readonly defaultEnvironmentLabel?: string;
   readonly targetEnvironmentLabels: readonly string[];
   readonly resourceLabels: readonly string[];
@@ -72,7 +76,7 @@ export interface ResolvedEnvironmentAuthority {
   readonly authorityDigest: string;
   readonly targetEnvironmentIds: readonly string[];
   readonly resolvedResourceRefs: readonly ResolvedEnvironmentResourceRef[];
-  readonly display: EnvironmentApprovalDisplay;
+  readonly display: EnvironmentAuthorityDisplay;
 }
 
 export interface TrustedEnvironmentAuthorityGrant extends ResolvedEnvironmentAuthority {
@@ -81,12 +85,14 @@ export interface TrustedEnvironmentAuthorityGrant extends ResolvedEnvironmentAut
   readonly defaults: TrustedAgentToolCallerDefaults;
   readonly policyIdentity: TrustedAgentToolPolicyIdentity;
   readonly admittedEnvironmentIds: readonly string[];
+  readonly resourceScope?: AgentToolResourceScope;
 }
 
 export interface EnvironmentAuthorityResourceFact {
   readonly id: string;
   readonly threadId?: string;
   readonly environmentId: string;
+  readonly projectId?: string;
   readonly workspaceId?: string;
   readonly label?: string;
 }
@@ -178,6 +184,7 @@ export interface ResolveEnvironmentAuthorityInput {
   readonly defaults: TrustedAgentToolCallerDefaults;
   /** Exact pre-authorized set for callers that cannot request an interaction. */
   readonly admittedEnvironmentIds?: readonly string[];
+  readonly resourceScope?: AgentToolResourceScope;
 }
 
 export class AgentToolEnvironmentAuthorityResolver {
@@ -186,6 +193,7 @@ export class AgentToolEnvironmentAuthorityResolver {
   resolve(
     request: ResolveEnvironmentAuthorityInput,
   ): ResolvedEnvironmentAuthority {
+    requireThreadResourceScope(request);
     const canonicalInputDigest = digest(request.input);
     const refs = [...this.#resolveRefs(request)];
     // Updates may also resolve an authoring workspace; retain both authorities.
@@ -201,7 +209,21 @@ export class AgentToolEnvironmentAuthorityResolver {
         ),
       });
     }
-    const resolvedResourceRefs = uniqueSortedRefs(refs);
+    const identifiedRefs = refs.map(ref => {
+      const workspaceId = ref.kind === "workspace" ? ref.id : ref.workspaceId ??
+        (ref.threadId && !ref.projectId
+          ? this.reader.resolveThread(request.scope, ref.threadId)?.workspaceId : undefined);
+      const projectId = ref.kind === "project" || ref.kind === "project_subtree" ? ref.id : ref.projectId ??
+        ((ref.kind === "thread" && ref.id === request.defaults.threadId) ? request.defaults.projectId : undefined) ??
+        (workspaceId ? this.reader.resolveWorkspaceProject(request.scope, workspaceId) : undefined);
+      return {...ref, ...(projectId ? {projectId} : {})};
+    });
+    const isQuery = request.tool.environmentAuthority.kind === "scoped_query" ||
+      request.tool.environmentAuthority.kind === "installation_directory";
+    const resolvedResourceRefs = uniqueSortedRefs(isQuery
+      ? filterResourceScopeRefs(identifiedRefs, request)
+      : identifiedRefs);
+    if (!isQuery) assertResourceScope(identifiedRefs, request);
     const targetEnvironmentIds = Object.freeze(
       [
         ...new Set(
@@ -232,13 +254,15 @@ export class AgentToolEnvironmentAuthorityResolver {
       defaults: request.defaults,
       targetEnvironmentIds,
       resolvedResourceRefs: resolvedResourceRefs.map(
-        ({ kind, id, environmentId, workspaceId, threadId, revision }) => ({
+        ({ kind, id, environmentId, projectId, workspaceId, threadId, revision, outsideEveryEnvironment }) => ({
           kind,
           id,
           ...(environmentId ? { environmentId } : {}),
+          ...(projectId ? { projectId } : {}),
           ...(workspaceId ? { workspaceId } : {}),
           ...(threadId ? { threadId } : {}),
           ...(revision !== undefined ? { revision } : {}),
+          ...(outsideEveryEnvironment ? {outsideEveryEnvironment} : {}),
         }),
       ),
     });
@@ -265,10 +289,10 @@ export class AgentToolEnvironmentAuthorityResolver {
     }
     if (
       declaration.kind === "public_information" ||
-      declaration.kind === "installation_directory" ||
       declaration.kind === "environment_neutral"
     )
       return [];
+    if (declaration.kind === "installation_directory") return request.defaults.kind === "principal_client" ? [] : allowedEnvironments(request, this.reader).map(fact => resourceRef("environment", fact));
     if (declaration.kind === "direct_resource")
       return this.#direct(request, declaration);
     if (declaration.kind === "scoped_query")
@@ -557,8 +581,10 @@ export function createTrustedEnvironmentAuthorityGrant(
     readonly defaults: TrustedAgentToolCallerDefaults;
     readonly policyIdentity: TrustedAgentToolPolicyIdentity;
     readonly admittedEnvironmentIds: readonly string[];
+    readonly resourceScope?: AgentToolResourceScope;
   },
 ): TrustedEnvironmentAuthorityGrant {
+  requireThreadResourceScope(input);
   const targetEnvironmentIds = Object.freeze([...input.targetEnvironmentIds]);
   const resolvedResourceRefs = Object.freeze(
     input.resolvedResourceRefs.map((ref) => Object.freeze({ ...ref })),
@@ -582,15 +608,18 @@ export function createTrustedEnvironmentAuthorityGrant(
     defaults,
     policyIdentity,
     admittedEnvironmentIds,
+    ...(input.resourceScope ? {resourceScope: input.resourceScope} : {}),
     targetEnvironmentIds,
     resolvedResourceRefs: resolvedResourceRefs.map(
-      ({ kind, id, environmentId, workspaceId, threadId, revision }) => ({
+      ({ kind, id, environmentId, projectId, workspaceId, threadId, revision, outsideEveryEnvironment }) => ({
         kind,
         id,
         ...(environmentId ? { environmentId } : {}),
+        ...(projectId ? { projectId } : {}),
         ...(workspaceId ? { workspaceId } : {}),
         ...(threadId ? { threadId } : {}),
         ...(revision !== undefined ? { revision } : {}),
+        ...(outsideEveryEnvironment ? {outsideEveryEnvironment} : {}),
       }),
     ),
   });
@@ -601,6 +630,7 @@ export function createTrustedEnvironmentAuthorityGrant(
     defaults,
     policyIdentity,
     admittedEnvironmentIds,
+    ...(input.resourceScope ? { resourceScope: Object.freeze({...input.resourceScope}) } : {}),
     targetEnvironmentIds,
     resolvedResourceRefs,
     display,
@@ -624,15 +654,18 @@ export function environmentAuthorityContinuationDigest(
     defaults: grant.defaults,
     policyIdentity: grant.policyIdentity,
     admittedEnvironmentIds: grant.admittedEnvironmentIds,
+    ...(grant.resourceScope ? {resourceScope: grant.resourceScope} : {}),
     targetEnvironmentIds: grant.targetEnvironmentIds,
     resolvedResourceRefs: grant.resolvedResourceRefs.map(
-      ({ kind, id, environmentId, workspaceId, threadId, revision }) => ({
+      ({ kind, id, environmentId, projectId, workspaceId, threadId, revision, outsideEveryEnvironment }) => ({
         kind,
         id,
         ...(environmentId ? { environmentId } : {}),
+        ...(projectId ? { projectId } : {}),
         ...(workspaceId ? { workspaceId } : {}),
         ...(threadId ? { threadId } : {}),
         ...(revision !== undefined ? { revision } : {}),
+        ...(outsideEveryEnvironment ? {outsideEveryEnvironment} : {}),
       }),
     ),
   });
@@ -642,6 +675,7 @@ export function requireAdmittedEnvironment(
   grant: TrustedEnvironmentAuthorityGrant,
   environmentId: string,
 ): void {
+  requireThreadResourceScope(grant);
   if (!grant.admittedEnvironmentIds.includes(environmentId)) deny();
 }
 
@@ -649,6 +683,7 @@ export function requireAdmittedResource(
   grant: TrustedEnvironmentAuthorityGrant,
   resource: ResolvedEnvironmentResourceRef,
 ): void {
+  assertResourceScope([resource], grant);
   requireAdmittedEnvironment(
     grant,
     resource.environmentId ?? grant.defaults.environmentId,
@@ -660,6 +695,7 @@ export function requireAdmittedResource(
         candidate.id === resource.id &&
         candidate.environmentId === resource.environmentId &&
         candidate.workspaceId === resource.workspaceId &&
+        (resource.projectId === undefined || candidate.projectId === resource.projectId) &&
         candidate.revision === resource.revision,
     )
   )
@@ -705,8 +741,9 @@ function scopeRefs(
 /** Who reaches a project, and through which pre-authorized environments. */
 export interface ProjectAccessCaller {
   readonly defaults: TrustedAgentToolCallerDefaults;
-  /** A Tool client's environment allowlist; thread agents ask instead. */
+  /** Tool-client allowlist or the environments admitted by the thread policy. */
   readonly admittedEnvironmentIds?: readonly string[];
+  readonly resourceScope?: AgentToolResourceScope;
 }
 
 /** The caller facts an admitted grant was resolved with. */
@@ -718,19 +755,13 @@ export function grantProjectAccessCaller(
         defaults: grant.defaults,
         admittedEnvironmentIds: grant.admittedEnvironmentIds,
       }
-    : { defaults: grant.defaults };
+    : { defaults: grant.defaults, resourceScope: grant.resourceScope, admittedEnvironmentIds: grant.admittedEnvironmentIds };
 }
 
 /**
- * The environments through which a caller reaches a project resource. A
- * project is reachable from its member environments: a thread agent on a
- * member environment is inside it; any other thread agent targets every
- * member, so its approval names them; a Tool client uses its default
- * environment when that is a member, otherwise its lowest allowlisted member,
- * and is denied when it may use none. Subtree queries span every member.
- * An empty result means the project has no active location: that is outside
- * every environment, never environment-neutral like a global resource, so
- * thread agents ask and Tool clients are denied.
+ * Shared project records are environment-neutral for thread agents. Tool
+ * clients retain their explicit environment grants: exact access needs one
+ * member, while subtree authority names every member environment.
  */
 export function projectAccessEnvironmentIds(
   project: EnvironmentAuthorityProjectFact,
@@ -738,33 +769,31 @@ export function projectAccessEnvironmentIds(
   mode: "exact" | "subtree",
 ): readonly string[] {
   const members = [...new Set(project.memberEnvironmentIds)].sort();
+  if (caller.defaults.kind === "thread_agent") return [];
   if (members.length === 0) {
-    return caller.defaults.kind === "principal_client" ? deny() : [];
+    return deny();
   }
   if (mode === "subtree") return members;
   if (members.includes(caller.defaults.environmentId))
     return [caller.defaults.environmentId];
-  if (caller.defaults.kind === "thread_agent") return members;
   const allowed = members.filter((environmentId) =>
     caller.admittedEnvironmentIds?.includes(environmentId),
   );
   return allowed.length > 0 ? [allowed[0]!] : deny();
 }
 
-/**
- * Project refs carry the membership revision, so any location edit changes
- * the authority digest and invalidates a pending approval. A project ref
- * without an environment is the explicit outside marker.
- */
+/** Membership changes invalidate an admitted project reference before execution. */
 export function projectScopeRefs(
   project: EnvironmentAuthorityProjectFact,
   caller: ProjectAccessCaller,
   mode: "exact" | "subtree",
 ): readonly ResolvedEnvironmentResourceRef[] {
   const base = {
-    kind: "project" as const,
+    kind: mode === "subtree" ? "project_subtree" as const : "project" as const,
     id: project.id,
     revision: project.membershipRevision,
+    projectId: project.id,
+    ...(project.memberEnvironmentIds.length === 0 ? {outsideEveryEnvironment:true as const} : {}),
     ...(project.label ? { label: project.label } : {}),
   };
   const environmentIds = projectAccessEnvironmentIds(project, caller, mode);
@@ -778,7 +807,7 @@ export function reachesOutsideEveryEnvironment(authority: {
   readonly resolvedResourceRefs: readonly ResolvedEnvironmentResourceRef[];
 }): boolean {
   return authority.resolvedResourceRefs.some(
-    (ref) => ref.kind === "project" && ref.environmentId === undefined,
+    (ref) => ref.outsideEveryEnvironment === true,
   );
 }
 
@@ -806,6 +835,7 @@ export function scopedResourceRefs(
     return [
       ...projectRefs.map(({ environmentId }) => ({
         ...base,
+        projectId: project.id,
         ...(environmentId ? { environmentId } : {}),
       })),
       ...projectRefs,
@@ -821,6 +851,7 @@ export function scopedResourceRefs(
     {
       ...base,
       ...(resource.threadId ? { threadId: resource.threadId } : {}),
+      ...(resource.projectId ? { projectId: resource.projectId } : {}),
       environmentId,
     },
   ];
@@ -844,7 +875,7 @@ export function currentScopedResourceRefs(
   );
   return scopedResourceRefs(
     kind,
-    resource,
+    resource.scopeKind === "thread" && resource.threadId ? {...resource, projectId: resource.projectId ?? (() => {const thread = reader.resolveThread(scope, resource.threadId!); return thread?.workspaceId ? reader.resolveWorkspaceProject(scope, thread.workspaceId) : undefined;})()} : resource,
     resource.scopeKind === "project"
       ? required(reader.resolveProject(scope, resource.projectId!))
       : undefined,
@@ -881,7 +912,7 @@ export function scopeAuthorityRefs(
       );
     case "thread":
       return [
-        resourceRef("thread", required(reader.resolveThread(scope, target.threadId)),
+        resourceRef("thread", (() => {const fact = required(reader.resolveThread(scope, target.threadId)); return {...fact, projectId: fact.projectId ?? (fact.workspaceId ? reader.resolveWorkspaceProject(scope, fact.workspaceId) : undefined)};})(),
         ),
       ];
   }
@@ -896,6 +927,8 @@ export function requireExactScopeQuery(
   grant: TrustedEnvironmentAuthorityGrant,
   refs: readonly ResolvedEnvironmentResourceRef[],
 ): void {
+  requireThreadResourceScope(grant);
+  refs = filterResourceScopeRefs(refs, grant);
   const environmentIds = [
     ...new Set(refs.flatMap(({ environmentId }) =>
         environmentId ? [environmentId] : [],
@@ -911,10 +944,12 @@ export function requireExactScopeQuery(
       "The target environments no longer match the query scope.",
     );
   }
-  requireAdmittedResources(
-    grant,
-    refs.filter(({ kind }) => kind !== "environment"),
-  );
+  const expectedResources = refs.filter(({kind}) => kind !== "environment");
+  const admittedResources = grant.resolvedResourceRefs.filter(({kind}) => kind !== "environment");
+  if (expectedResources.length !== admittedResources.length) {
+    throw new CanonicalAgentToolRequestError("permission_denied", "The query scope does not match the admitted resource scope.");
+  }
+  requireAdmittedResources(grant, expectedResources);
 }
 
 /** Rechecks freshly resolved refs against an admitted grant at execution. */
@@ -922,7 +957,39 @@ export function requireAdmittedResources(
   grant: TrustedEnvironmentAuthorityGrant,
   resources: readonly ResolvedEnvironmentResourceRef[],
 ): void {
+  requireThreadResourceScope(grant);
   for (const resource of resources) requireAdmittedResource(grant, resource);
+}
+
+export function requireThreadResourceScope(caller: ProjectAccessCaller): void {
+  if (caller.defaults.kind === "thread_agent" && (!caller.resourceScope ||
+      typeof caller.resourceScope.allowOtherEnvironments !== "boolean" ||
+      typeof caller.resourceScope.allowOtherProjects !== "boolean")) {
+    throw new CanonicalAgentToolRequestError("permission_denied", "The thread resource scope is unavailable.");
+  }
+}
+
+/** Resource visibility is the intersection of the two independent thread boundaries. */
+export function resourceWithinScope(ref: ResolvedEnvironmentResourceRef, caller: ProjectAccessCaller): boolean {
+  const policy = caller.resourceScope;
+  if (caller.defaults.kind !== "thread_agent") return true;
+  if (!policy) return false;
+  if (ref.kind === "global" || ref.kind === "saved_agent") return true;
+  if (ref.environmentId && !policy.allowOtherEnvironments && ref.environmentId !== caller.defaults.environmentId) return false;
+  if (!policy.allowOtherProjects && !ref.projectId && ["workspace", "thread", "thread_family", "automation"].includes(ref.kind)) return false;
+  if (ref.projectId && !policy.allowOtherProjects && ref.projectId !== caller.defaults.projectId) return false;
+  return true;
+}
+export function filterResourceScopeRefs(refs: readonly ResolvedEnvironmentResourceRef[], caller: ProjectAccessCaller): readonly ResolvedEnvironmentResourceRef[] {
+  return refs.filter(ref => resourceWithinScope(ref, caller));
+}
+export function assertResourceScope(refs: readonly ResolvedEnvironmentResourceRef[], caller: ProjectAccessCaller): void {
+  const outside = refs.find(ref => !resourceWithinScope(ref, caller));
+  if (!outside) return;
+  const environment = outside.environmentId && !caller.resourceScope?.allowOtherEnvironments && outside.environmentId !== caller.defaults.environmentId;
+  throw new CanonicalAgentToolRequestError("permission_denied", environment
+    ? "Cross-environment access is disabled for this thread. Enable access to other environments in its tool settings to continue."
+    : "Access to other projects is disabled for this thread. Enable access to other projects in its tool settings to continue.");
 }
 
 function requiredDefaultWorkspaceId(
@@ -968,6 +1035,7 @@ function resourceRef(
     id: fact.id,
     environmentId: fact.environmentId,
     ...(fact.workspaceId ? { workspaceId: fact.workspaceId } : {}),
+    ...(fact.projectId ? { projectId: fact.projectId } : {}),
     ...(fact.label ? { label: fact.label } : {}),
     ...(fact.threadId ? { threadId: fact.threadId } : {}),
   });

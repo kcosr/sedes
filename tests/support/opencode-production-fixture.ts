@@ -215,7 +215,7 @@ export class OpenCodeProductionFixture {
       const options = savedAgentOptionsResultSchema.parse(value);
       return options.kind === "configuration" && options.configuration.fields.some(field => field.id === "model" && field.options.some(option => option.available && String(option.value) === qualifiedOpenCodeModelId({ providerID: "probe", id: "probe-model" })));
     });
-    const created = await this.json("/api/threads", "POST", { workspaceId: workspace.id, title, executionWorkspace: { kind: "direct" }, configuration: { kind: "custom", targetId: this.targetId, sedesTools: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "progressive" }, accessBoundary: "thread" } } }) as { threadId: string };
+    const created = await this.json("/api/threads", "POST", { workspaceId: workspace.id, title, executionWorkspace: { kind: "direct" }, configuration: { kind: "custom", targetId: this.targetId, sedesTools: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "progressive" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } } } }) as { threadId: string };
     await this.openStream(created.threadId);
     return created.threadId;
   }

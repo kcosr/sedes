@@ -15,6 +15,10 @@ import {
   type ResolveSavedAgentResult,
   type SavedAgentSummary,
   type ThreadTemplate,
+  type ToolPolicySelection,
+  type ToolPolicySet,
+  type ResolvedToolPolicy,
+  type AgentToolPresentation,
   type UpdateThreadTemplateRequest,
 } from "../../shared/index.js";
 import { navigate, settingsPath } from "../app/router.js";
@@ -60,6 +64,7 @@ import {
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
 import "./new-thread-control.css";
+import { ToolPolicySelector } from "./tool-policies/ToolPolicySelector.js";
 
 const AGENT_PAGE_SIZE = 50;
 const TEMPLATE_PAGE_SIZE = 100;
@@ -189,6 +194,14 @@ export function NewThreadControl({
   const [resolutionLoading, setResolutionLoading] = useState(false);
   const [environmentVariables, setEnvironmentVariables] = useState<EnvironmentVariableOverrides>({});
   const [variablesOpen, setVariablesOpen] = useState(false);
+  const [toolPolicySelection, setToolPolicySelection] = useState<ToolPolicySelection>({ kind: "inherit" });
+  const [toolPresentation, setToolPresentation] = useState<AgentToolPresentation>();
+  const [policySets, setPolicySets] = useState<readonly ToolPolicySet[]>([]);
+  const [policiesLoading, setPoliciesLoading] = useState(false);
+  const [policiesError, setPoliciesError] = useState("");
+  const [toolPolicyPreview, setToolPolicyPreview] = useState<ResolvedToolPolicy>();
+  const [toolPolicyLoading, setToolPolicyLoading] = useState(false);
+  const [toolPolicyError, setToolPolicyError] = useState("");
   const [variablesRefresh, setVariablesRefresh] = useState(0);
   const variablesTrigger = useRef<HTMLButtonElement>(null);
   const [pending, setPending] = useState(false);
@@ -429,7 +442,67 @@ export function NewThreadControl({
     selection.kind === "saved_agent" ? selection.agentId : undefined, variablesRefresh);
   const variablesSnapshot = variablesPreview.result ? { ...variablesPreview.result.snapshot, layers: { ...variablesPreview.result.snapshot.layers, thread: environmentVariables } } : undefined;
   const effectiveVariableCount = variablesSnapshot ? variableRows(Object.entries(variablesSnapshot.layers).map(([scope, values]) => ({ scope: scope as "environment" | "backend" | "agent" | "thread", values }))).filter(row => row.entry.kind !== "unset").length : 0;
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const abort = new AbortController();
+    setPoliciesLoading(true);
+    setPoliciesError("");
+    void store.api.listToolPolicySets(abort.signal).then(
+      ({ items }) => {
+        if (abort.signal.aborted) return;
+        setPolicySets(items);
+        setPoliciesLoading(false);
+      },
+      (cause: unknown) => {
+        if (abort.signal.aborted) return;
+        setPoliciesError(messageFrom(cause));
+        setPoliciesLoading(false);
+      },
+    );
+    return () => abort.abort();
+  }, [pickerOpen, store]);
+
+  useEffect(() => {
+    setToolPolicyPreview(undefined);
+    setToolPolicyError("");
+    if (!pickerOpen || !selectedTarget?.available || !previewAgentAvailable) {
+      setToolPolicyLoading(false);
+      return;
+    }
+    const abort = new AbortController();
+    setToolPolicyLoading(true);
+    void store.api.resolveToolPolicy({
+      targetId: selectedTarget.id,
+      ...(selection.kind === "saved_agent" ? { agentId: selection.agentId } : {}),
+      threadSelection: toolPolicySelection,
+    }, abort.signal).then(
+      (result) => {
+        if (abort.signal.aborted) return;
+        setToolPolicyPreview(result);
+        setToolPolicyLoading(false);
+      },
+      (cause: unknown) => {
+        if (abort.signal.aborted) return;
+        setToolPolicyError(messageFrom(cause));
+        setToolPolicyLoading(false);
+      },
+    );
+    return () => abort.abort();
+  }, [
+    pickerOpen,
+    selectedTarget?.id,
+    selectedTarget?.available,
+    selection,
+    previewAgentAvailable,
+    toolPolicySelection,
+    store,
+  ]);
+  const toolPolicySourceLabel = toolPolicyPreview
+    ? `${toolPolicyPreview.source === "default" ? "default settings" : `${toolPolicyPreview.source} settings`}${toolPolicyPreview.policySet ? ` · ${toolPolicyPreview.policySet.name}` : ""}`
+    : "Agent, backend, environment, or account defaults";
+
   const canCreate = Boolean(
+    toolPolicyPreview && !toolPolicyLoading && !policiesError && !policiesLoading &&
     variablesPreview.result &&
     !pendingLocation &&
     !scopeConflict &&
@@ -449,6 +522,8 @@ export function NewThreadControl({
     selection.kind === "saved_agent" &&
     selection.agentId === selectedTemplate.agentId &&
     JSON.stringify(environmentVariables) === JSON.stringify(selectedTemplate.environmentVariables ?? {}) &&
+    JSON.stringify(toolPolicySelection) === JSON.stringify(selectedTemplate.toolPolicySelection) &&
+    JSON.stringify(toolPresentation) === JSON.stringify(selectedTemplate.toolPresentation) &&
     executionWorkspacesMatch(
       selectedExecutionWorkspace,
       selectedTemplate.executionWorkspace,
@@ -533,6 +608,8 @@ export function NewThreadControl({
   const resetPanel = () => {
     setVariablesOpen(false);
     setEnvironmentVariables({});
+    setToolPolicySelection({ kind: "inherit" });
+    setToolPresentation(undefined);
     templateSelectionGeneration.current += 1;
     agentRequest.current?.abort();
     resolutionRequest.current?.abort();
@@ -770,6 +847,8 @@ export function NewThreadControl({
         agentId,
         {
           workspaceId,
+          toolPolicySelection,
+          ...(toolPresentation ? { toolPresentation } : {}),
           ...(selectedTarget ? { targetId: selectedTarget.id } : {}),
         },
         controller.signal,
@@ -816,6 +895,8 @@ export function NewThreadControl({
     selectedWorkspace?.available,
     selectedTarget?.id,
     selectedTarget?.available,
+    toolPolicySelection,
+    toolPresentation,
   ]);
 
   const closePicker = (restoreFocus: boolean) => {
@@ -879,6 +960,8 @@ export function NewThreadControl({
     );
     setSelectedTemplate(undefined);
     setEnvironmentVariables({});
+    setToolPolicySelection({ kind: "inherit" });
+    setToolPresentation(undefined);
     setSelectedProjectId(undefined);
     setSelectedWorkspaceId(undefined);
     setSelectedTargetId(target?.available ? target.id : undefined);
@@ -901,6 +984,8 @@ export function NewThreadControl({
     const workspace = workspaces.find(({ id }) => id === template.workspaceId);
     setSelectedTemplate(template);
     setEnvironmentVariables(template.environmentVariables ?? {});
+    setToolPolicySelection(template.toolPolicySelection);
+    setToolPresentation(template.toolPresentation);
     setSelectedProjectId(workspace?.projectId);
     setSelectedWorkspaceId(workspace?.available ? workspace.id : undefined);
     setSelectedTargetId(target?.available ? target.id : undefined);
@@ -983,6 +1068,8 @@ export function NewThreadControl({
           targetId: selectedTarget.id,
           executionWorkspace: selectedExecutionWorkspace,
           agentId: selection.agentId,
+          toolPolicySelection,
+          toolPresentation: toolPresentation ?? null,
           ...(Object.keys(environmentVariables).length > 0 || selectedTemplate?.environmentVariables ? { environmentVariables } : {}),
         };
         saved = await store.api.updateThreadTemplate(
@@ -996,6 +1083,8 @@ export function NewThreadControl({
           targetId: selectedTarget.id,
           executionWorkspace: selectedExecutionWorkspace,
           agentId: selection.agentId,
+          toolPolicySelection,
+          ...(toolPresentation ? { toolPresentation } : {}),
           ...(Object.keys(environmentVariables).length > 0 || selectedTemplate?.environmentVariables ? { environmentVariables } : {}),
         };
         saved = await store.api.createThreadTemplate(request);
@@ -1046,6 +1135,8 @@ export function NewThreadControl({
         title: normalized,
         executionWorkspace: selectedExecutionWorkspace!,
         environmentVariables,
+        toolPolicySelection,
+        ...(toolPresentation ? { toolPresentation } : {}),
         environmentVariablesRevision: variablesPreview.result!.revision,
         configuration:
           selection.kind === "saved_agent"
@@ -1114,17 +1205,9 @@ export function NewThreadControl({
     }
     if (resolution.candidates.length === 1) {
       const candidate = resolution.candidates[0]!;
-      const toolPolicy = candidate.sedesTools.resolvedPolicy;
       const resolved = executionTargets.find(
         ({ id }) => id === candidate.target.id,
       );
-      const toolPolicySummary = !toolPolicy.enabled
-        ? "Off"
-        : {
-      thread: "Ask outside this thread",
-      environment: "Ask outside this environment",
-      unrestricted: "Allow without asking",
-    }[toolPolicy.accessBoundary];
       return `Runs on ${
         resolved
           ? targetDisplayLabel({
@@ -1134,7 +1217,7 @@ export function NewThreadControl({
               includeEnvironment: false,
             })
           : candidate.target.label.text
-      }. Sedes tools: ${toolPolicySummary}.`;
+      }.`;
     }
     return "Choose where this Agent should run.";
   })();
@@ -1743,6 +1826,25 @@ export function NewThreadControl({
                   {resolutionMessage}
                 </p>
               ))}
+            <section className="new-thread-tool-policy" aria-label="Sedes tools">
+              <ToolPolicySelector
+                layout="stacked"
+                value={toolPolicySelection}
+                onChange={setToolPolicySelection}
+                policySets={policySets}
+                disabled={pending || policiesLoading || Boolean(policiesError)}
+                label="Sedes tool policy"
+                inheritedLabel={toolPolicySourceLabel}
+                inheritedPolicy={toolPolicyPreview}
+                description="The nearest selected policy replaces the whole list. New threads keep a snapshot of these settings."
+              />
+              {toolPolicyLoading && (
+                <p className="new-thread-field-note" role="status">Resolving tool policy…</p>
+              )}
+              {(policiesError || toolPolicyError) && (
+                <DialogAlert tone="danger">{policiesError || toolPolicyError}</DialogAlert>
+              )}
+            </section>
             <section
               className="new-thread-variables"
               aria-labelledby={`${pickerId}-variables`}

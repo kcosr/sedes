@@ -1,6 +1,7 @@
 import { environmentVariableOverridesSchema } from "./environment-variables.js";
 import { z } from "zod";
-import { executionWorkspaceSelectionSchema } from "./conversation.js";
+import { executionWorkspaceSelectionSchema, agentToolPresentationSchema } from "./conversation.js";
+import { toolPolicySelectionSchema } from "./tool-policies.js";
 import { workspaceIdSchema } from "./domain.js";
 import {
   MAXIMUM_BROWSER_ENTITY_BYTES,
@@ -60,6 +61,8 @@ export const threadTemplateSchema = z.strictObject({
   executionWorkspace: executionWorkspaceSelectionSchema,
   agentId: savedAgentIdSchema,
   environmentVariables: environmentVariableOverridesSchema.optional(),
+  toolPolicySelection: toolPolicySelectionSchema,
+  toolPresentation: agentToolPresentationSchema.optional(),
   capturedAgentName: threadTemplateCapturedAgentNameSchema,
   capturedWorkspaceName: threadTemplateCapturedWorkspaceNameSchema,
   capturedTargetName: threadTemplateCapturedTargetNameSchema,
@@ -113,6 +116,8 @@ const threadTemplateSelectionShape = {
   executionWorkspace: executionWorkspaceSelectionSchema,
   agentId: savedAgentIdSchema,
   environmentVariables: environmentVariableOverridesSchema.optional(),
+  toolPolicySelection: toolPolicySelectionSchema.optional(),
+  toolPresentation: agentToolPresentationSchema.optional(),
 } as const;
 
 export const createThreadTemplateRequestSchema = z.strictObject({
@@ -132,6 +137,8 @@ export const updateThreadTemplateRequestSchema = z
     executionWorkspace: executionWorkspaceSelectionSchema.optional(),
     agentId: savedAgentIdSchema.optional(),
     environmentVariables: environmentVariableOverridesSchema.optional(),
+  toolPolicySelection: toolPolicySelectionSchema.optional(),
+  toolPresentation: agentToolPresentationSchema.nullable().optional(),
   })
   .refine(
     (request) =>
@@ -140,7 +147,9 @@ export const updateThreadTemplateRequestSchema = z
       request.targetId !== undefined ||
       request.executionWorkspace !== undefined ||
       request.agentId !== undefined ||
-      request.environmentVariables !== undefined,
+      request.environmentVariables !== undefined ||
+      request.toolPolicySelection !== undefined ||
+      request.toolPresentation !== undefined,
     { message: "A thread template update must change at least one field." },
   );
 export type UpdateThreadTemplateRequest = z.infer<

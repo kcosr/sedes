@@ -20,6 +20,7 @@ const agentAuthority = {
     ownerId: "thread-source",
     revision: 1,
   },
+  resourceScope: {allowOtherEnvironments:true,allowOtherProjects:true},
   admittedEnvironmentIds: ["environment-source", "environment-a"],
   targetEnvironmentIds: ["environment-a"],
   resolvedResourceRefs: [
@@ -295,15 +296,16 @@ describe("WorkspaceApplicationService", () => {
       kind: "project",
       id: "project-b",
       revision: 4,
-      environmentId: "environment-b",
+      projectId: "project-b",
       label: "Beta",
     } as const;
-    // As admitted after approval: the project is reached through its member.
+    // Explicit cross-environment/project scope admits the named project.
     const approved = createTrustedEnvironmentAuthorityGrant({
       ...agentAuthority,
       tool: { id: "workspace.open", schemaVersion: 3 },
       targetEnvironmentIds: ["environment-a", "environment-b"],
       resolvedResourceRefs: [...agentAuthority.resolvedResourceRefs, projectRef],
+      resourceScope: {allowOtherEnvironments:true,allowOtherProjects:true},
       admittedEnvironmentIds: ["environment-source", "environment-a", "environment-b"],
     });
     const input = {

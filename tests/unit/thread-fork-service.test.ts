@@ -33,6 +33,8 @@ import { codexBackendTurnId } from "../../src/server/backends/codex/codex-histor
 import { OverlayRepository } from "../support/schema9/overlay-repository.js";
 import { ThreadInventoryService } from "../support/schema9/thread-inventory-service.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
+import { ThreadToolPolicyOriginRepository } from "../../src/server/db/repositories/thread-tool-policy-origin-repository.js";
+import { threadAgentToolPolicyRepository } from "../support/thread-agent-tool-policy.js";
 
 const configuration = parseResolvedBackendConfiguration({
   schemaVersion: 10,
@@ -176,6 +178,7 @@ function fixture(withEnvironmentVariables = false) {
   const checkpoints = new BackendCheckpointRepository(database);
   const lineage = new ThreadLineageRepository(database);
   const inventory = new InventoryRepository(database);
+  const projectId = inventory.getWorkspace(scope, workspace.id).projectId;
   bindings.bindDiscoveredConversation(scope, source.id, {
     backendConversationId: "native-source",
     now: 300,
@@ -210,7 +213,7 @@ function fixture(withEnvironmentVariables = false) {
       summary: {
         id: workspace.id,
         environmentId: environment.id,
-        projectId: "project-1",
+        projectId,
         label: { text: "Fork service" },
         displayPath: { text: workspace.canonicalPath },
         available: true,
@@ -333,6 +336,8 @@ function fixture(withEnvironmentVariables = false) {
     lineage,
     inventory,
     operations: new ConversationOperationRepository(database),
+    toolPolicies: threadAgentToolPolicyRepository(database),
+    toolPolicyOrigins: new ThreadToolPolicyOriginRepository(database),
     deliveryInputSnapshots,
     outputArtifacts: { collectGarbage: collectOutputArtifactGarbage },
     automations: new AutomationRepository(database),
@@ -376,11 +381,12 @@ function fixture(withEnvironmentVariables = false) {
     environmentAuthority: {
       id: "grant-1",
       callerKind: "thread_agent" as const,
+      resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
       defaults: {
         kind: "thread_agent" as const,
         environmentId: environment.id,
         workspaceId: workspace.id,
-        projectId: "project-1",
+        projectId,
         threadId: secondSource.id,
       },
       policyIdentity: {
@@ -396,6 +402,7 @@ function fixture(withEnvironmentVariables = false) {
           id: source.id,
           environmentId: environment.id,
           workspaceId: workspace.id,
+          projectId,
         },
       ],
       canonicalInputDigest: "input-digest",
@@ -427,6 +434,7 @@ function fixture(withEnvironmentVariables = false) {
           id: source.id,
           environmentId: environment.id,
           workspaceId: workspace.id,
+          projectId,
         },
       ],
       canonicalInputDigest: "principal-input-digest",
@@ -485,6 +493,46 @@ function fixture(withEnvironmentVariables = false) {
 }
 
 describe("ThreadForkService", () => {
+
+  it.each(["selected_completed_turn", "latest_provider_snapshot"] as const)(
+    "preserves the exact Sedes tool snapshot and immutable origin for a %s fork",
+    async (boundary) => {
+      const current = fixture();
+      try {
+        const { toolPolicies, toolPolicyOrigins } = current.service.input;
+        const origin = { source: "account" as const, policySet: {
+          id: "11111111-1111-4111-8111-111111111111", name: "Everyday", revision: 4,
+        } };
+        const sourcePolicy = toolPolicies.update(current.scope, current.source.id, {
+          expectedRevision: 0, enabled: true, enabledToolIds: ["thread.list", "task.list"],
+          presentation: { surface: "cli", mode: "individual" },
+          resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false }, now: 400,
+        });
+        current.database.transaction(() => toolPolicyOrigins.record(
+          current.scope, current.source.id, origin, 400,
+        ))();
+        const result = await current.service.forkManual(boundary === "selected_completed_turn"
+          ? current.manual() : current.latestSnapshot());
+        expect(result.status).toBe("created");
+        expect(toolPolicies.getDurable(current.scope, result.childThreadId)).toMatchObject({
+          enabled: true, enabledToolIds: ["task.list", "thread.list"],
+          presentation: sourcePolicy.presentation, resourceScope: sourcePolicy.resourceScope,
+          revision: 0,
+        });
+        expect(toolPolicyOrigins.get(current.scope, result.childThreadId)).toEqual(origin);
+        toolPolicies.update(current.scope, current.source.id, {
+          expectedRevision: sourcePolicy.revision, enabled: false, enabledToolIds: [],
+          presentation: sourcePolicy.presentation,
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true }, now: 2_000,
+        });
+        expect(toolPolicies.getDurable(current.scope, result.childThreadId)).toMatchObject({
+          enabled: true, enabledToolIds: ["task.list", "thread.list"],
+          resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },
+        });
+        expect(toolPolicyOrigins.get(current.scope, result.childThreadId)).toEqual(origin);
+      } finally { current.database.close(); }
+    },
+  );
 
   it("keeps variable retry identity with durable forks and preserves concurrent recovery", async () => {
     const current = fixture(true);
@@ -639,6 +687,29 @@ describe("ThreadForkService", () => {
     } finally {
       current.database.close();
     }
+  });
+
+  it("rechecks the source project after checkpoint capture before reserving an agent fork", async () => {
+    const current = fixture();
+    try {
+      const request = current.agent();
+      const capture = current.actor.withBranchCheckpoint.getMockImplementation()!;
+      current.actor.withBranchCheckpoint.mockImplementationOnce(async (selection, operation) => {
+        await Promise.resolve();
+        const workspaceId = current.inventory.getThread(current.scope, current.source.id).thread.workspaceId;
+        const workspace = current.inventory.getWorkspace(current.scope, workspaceId);
+        current.inventory.moveWorkspaceToProject(current.scope, workspaceId, {
+          target: { kind: "new", name: "Moved project" },
+          expectedRevision: workspace.revision,
+          expectedThreadIds: [current.source.id, current.secondSource.id].sort(),
+          now: 800,
+        });
+        return capture(selection, operation);
+      });
+      await expect(current.service.forkAgent(request)).rejects.toMatchObject({ code: "permission_denied" });
+      expect(current.branchConversation).not.toHaveBeenCalled();
+      expect(current.creation.findByMutationId(current.scope, request.mutationId)).toBeUndefined();
+    } finally { current.database.close(); }
   });
 
   it("rejects agent-fork replay with a different trusted controller", async () => {

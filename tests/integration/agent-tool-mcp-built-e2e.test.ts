@@ -1,3 +1,4 @@
+import { testAgentToolExecutionAuthority } from "../support/agent-tool-execution-authority.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
@@ -207,7 +208,7 @@ describe("built Sedes MCP server", () => {
           expectedRevision: revision,
           enabled: true,
           presentation: { surface, mode },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: ["agent.context", "thread.status"],
           now: 300 + revision,
         });
@@ -223,21 +224,10 @@ describe("built Sedes MCP server", () => {
         sources: application,
         clients: unavailablePrincipalAgentToolClientService(),
         tools: new PolicyCheckedAgentToolHttpService(
-          new SourceScopedAgentToolService(
-            canonical,
-            policies,
-            new AgentToolEnvironmentAuthorityResolver(sourceAuthority),
-            sourceAuthority,
-            {
-              acquireAgentToolApprovalAuthority: async () => ({
-                generation: "generation-1",
-                signal: new AbortController().signal,
-                isCurrent: () => true,
-                release: () => undefined,
-              }),
-            },
-            { requestApplicationDecision: async () => "allow" },
-          ),
+          new SourceScopedAgentToolService(canonical,
+policies,
+new AgentToolEnvironmentAuthorityResolver(sourceAuthority),
+sourceAuthority, testAgentToolExecutionAuthority),
         ),
       };
       const trustedSource = sourceAuthority.resolveInScope(

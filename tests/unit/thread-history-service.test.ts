@@ -107,9 +107,10 @@ function applicationSnapshot(
     stashes: [],
     composerCommands: [],
     agentTools: {
+      origin: null,
       runtimeAvailability: { availability: "available" },
       enabled: false,
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       groups: [],
       presentation: { surface: "native", mode: "individual" },
       presentationOptions: [

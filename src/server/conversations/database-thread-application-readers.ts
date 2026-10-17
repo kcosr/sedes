@@ -16,6 +16,7 @@ import type { InventoryRepository } from "../db/repositories/inventory-repositor
 import type { QueuedInputRepository } from "../db/repositories/queued-input-repository.js";
 import type { SubmissionCompletionRepository } from "../db/repositories/submission-completion-repository.js";
 import type { ThreadAgentToolPolicyRepository } from "../db/repositories/thread-agent-tool-policy-repository.js";
+import { ThreadToolPolicyOriginRepository } from "../db/repositories/thread-tool-policy-origin-repository.js";
 import type { ToolEffects } from "../agent-tools/contracts/agent-tool-contracts.js";
 import { ConversationBindingRepository } from "../db/repositories/conversation-binding-repository.js";
 import { DomainError } from "../domain/errors.js";
@@ -89,6 +90,7 @@ export class DatabaseThreadApplicationInventoryReader implements ThreadApplicati
   readonly #queue: QueuedInputRepository;
   readonly #completion: SubmissionCompletionRepository;
   readonly #agentTools: ThreadAgentToolPolicyRepository;
+  readonly #toolPolicyOrigins: ThreadToolPolicyOriginRepository;
   readonly #agentToolCatalog: ThreadAgentToolCatalogReader;
   readonly #agentToolRuntimeAvailability: ThreadAgentToolRuntimeAvailabilityReader;
   readonly #bindings: ConversationBindingRepository;
@@ -123,6 +125,7 @@ export class DatabaseThreadApplicationInventoryReader implements ThreadApplicati
     this.#queue = input.queue;
     this.#completion = input.completion;
     this.#agentTools = input.agentTools;
+    this.#toolPolicyOrigins = new ThreadToolPolicyOriginRepository(this.#database);
     this.#agentToolCatalog = input.agentToolCatalog;
     this.#agentToolRuntimeAvailability = input.agentToolRuntimeAvailability;
     this.#directoryBrowsingAvailability = input.directoryBrowsingAvailability;
@@ -283,7 +286,8 @@ export class DatabaseThreadApplicationInventoryReader implements ThreadApplicati
           applicationThreadId,
           agentTools.presentation,
         ),
-        accessBoundary: agentTools.accessBoundary,
+        resourceScope: agentTools.resourceScope,
+        origin: this.#toolPolicyOrigins.get(scope, applicationThreadId),
         groups: [...agentToolCatalog.groups]
           .sort(
             (left, right) =>

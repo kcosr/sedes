@@ -1,3 +1,7 @@
+import { threadToolPolicyOriginsMigration } from "./migrations/151-thread-tool-policy-origins.js";
+import { templateToolPoliciesMigration } from "./migrations/150-template-tool-policies.js";
+import { toolPolicySetsMigration } from "./migrations/149-tool-policy-sets.js";
+import { agentToolResourceScopeMigration } from "./migrations/148-agent-tool-resource-scope.js";
 import { automationResultDismissalMigration } from "./migrations/147-automation-result-dismissal.js";
 import { multipleThreadAutomationsMigration } from "./migrations/146-multiple-thread-automations.js";
 import { unifiedThreadInputLimitMigration } from "./migrations/144-unified-thread-input-limit.js";
@@ -308,6 +312,10 @@ export const backendNormalizedMigrations = [
   pageResponseInputOriginMigration,
   multipleThreadAutomationsMigration,
   automationResultDismissalMigration,
+  agentToolResourceScopeMigration,
+  toolPolicySetsMigration,
+  templateToolPoliciesMigration,
+  threadToolPolicyOriginsMigration,
 ] as const;
 
 export type DatabaseMigration = {

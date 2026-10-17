@@ -1745,7 +1745,7 @@ describe("backend-normalized application adapters", () => {
         backendTypeId: "test-agent",
         backendOverridesSchemaVersion: 1,
         backendOverrides: [],
-        sedesTools: null,
+        toolPolicySelection: {kind:"inherit"},
         now: 400,
       });
       current.database

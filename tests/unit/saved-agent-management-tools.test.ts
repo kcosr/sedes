@@ -32,6 +32,7 @@ function service(
     backendTypeId: "pi",
     backend: { typeId: "pi", label: { text: "Pi" }, brand: "pi" as const },
     backendOverrides: [],
+    toolPolicySelection: { kind: "inherit" as const },
     revision: 0,
     createdAt: "2026-08-08T00:00:00.000Z",
     updatedAt: "2026-08-08T00:00:00.000Z",
@@ -84,6 +85,7 @@ function context(): TrustedToolInvocationContext {
     environmentAuthority: {
       id: "authority-1",
       callerKind: "thread_agent",
+      resourceScope: {allowOtherEnvironments:true,allowOtherProjects:true},
       defaults: {
         kind: "thread_agent",
         environmentId: "environment-1",
@@ -100,6 +102,7 @@ function context(): TrustedToolInvocationContext {
       targetEnvironmentIds: [],
       resolvedResourceRefs: [
         { kind: "workspace", id: workspaceId, environmentId: "environment-1" },
+        { kind: "saved_agent", id: agentId, revision: 0 },
       ],
       display: { targetEnvironmentLabels: [], resourceLabels: [] },
       canonicalInputDigest: "input-digest",
@@ -127,7 +130,7 @@ describe("Saved Agent canonical tools", () => {
     const value = service({
       list: () => ({ items: [{
         id: agent.id, name: agent.name, backendTypeId: agent.backendTypeId,
-        backend, overrideCount: 0, sedesTools: null, revision: agent.revision,
+        backend, overrideCount: 0, toolPolicySelection: {kind:"inherit"}, revision: agent.revision,
         createdAt: agent.createdAt, updatedAt: agent.updatedAt,
       }] }),
       optionsForAgentTool: async () => ({
@@ -152,6 +155,25 @@ describe("Saved Agent canonical tools", () => {
     expect(registry.validatesOutput(create.id, create.schemaVersion, {
       ...createOutput, backend: { ...backend, brand: "unknown" },
     })).toBe(false);
+  });
+
+  it("roundtrips bounded environment entries and rejects duplicate variable names", async () => {
+    const agent = await service().get({tenantId:"tenant-1",principalId:"principal-1"},agentId);
+    const configured = {...agent, environmentVariables:{REVIEW:{kind:"literal" as const,value:"strict"}}};
+    const createAgent = vi.fn(() => configured);
+    const value = service({createAgentForAgentTool:createAgent,get:()=>configured});
+    const create = createSavedAgentCreateToolDefinition(value);
+    const get = createSavedAgentGetToolDefinition(value);
+    const registry = new AgentToolRegistry();registry.register(create);registry.register(get);
+    const request={name:"Review",authoringContext:{workspaceId,targetId},backendOverrides:[],environmentVariables:[{name:"REVIEW",binding:{kind:"literal" as const,value:"strict"}}]};
+    expect(registry.validatesInput(create.id,create.schemaVersion,request)).toBe(true);
+    const output=await create.execute(request,context());
+    expect(createAgent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({environmentVariables:configured.environmentVariables}), expect.anything(), expect.anything());
+    expect(output).toMatchObject({environmentVariables:request.environmentVariables});
+    expect(registry.validatesOutput(create.id,create.schemaVersion,output)).toBe(true);
+    const read=await get.execute({agentId},context());
+    expect(registry.validatesOutput(get.id,get.schemaVersion,read)).toBe(true);
+    await expect(create.execute({...request,environmentVariables:[...request.environmentVariables,{name:"review",binding:{kind:"unset"}}]},context())).rejects.toThrow("unique");
   });
 
   it("registers six independently exposable contracts with truthful effects", () => {
@@ -181,7 +203,7 @@ describe("Saved Agent canonical tools", () => {
       "saved_agent.create",
       "saved_agent.update",
     ]) {
-      expect(registry.get(id, 5).schemaVersion).toBe(5);
+      expect(registry.get(id, 6).schemaVersion).toBe(6);
       expect(() => registry.get(id, 4)).toThrow();
     }
     expect(
@@ -212,7 +234,7 @@ describe("Saved Agent canonical tools", () => {
           enabled: true,
           presentation: { surface: "native", mode: "progressive" },
           enabledToolIds: artifacts.map(({ id }) => id),
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           revision: 1,
         }),
         invoke: vi.fn(),
@@ -350,19 +372,19 @@ describe("Saved Agent canonical tools", () => {
     expect(updateAgent).not.toHaveBeenCalled();
   });
 
-  it("publishes only strict thread.create@5 saved-Agent and Custom branches", () => {
+  it("publishes only strict thread.create@6 saved-Agent and Custom branches", () => {
     const registry = new AgentToolRegistry();
     registry.register(
       createThreadCreateToolDefinition({ createThread: vi.fn() }),
     );
     expect(
-      registry.validatesInput("thread.create", 5, {
+      registry.validatesInput("thread.create", 6, {
         title: "Review",
         configuration: { kind: "saved_agent", agentId },
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("thread.create", 5, {
+      registry.validatesInput("thread.create", 6, {
         title: "Review",
         configuration: {
           kind: "custom",
@@ -372,28 +394,26 @@ describe("Saved Agent canonical tools", () => {
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("thread.create", 5, {
+      registry.validatesInput("thread.create", 6, {
         title: "Legacy",
         targetId,
       }),
     ).toBe(false);
+    expect(registry.validatesInput("thread.create", 6, {
+      title: "No old inline policy", configuration: {kind:"custom", targetId, sedesTools:{enabled:true}},
+    })).toBe(false);
+    expect(registry.validatesInput("thread.create", 6, {
+      title:"Review", toolPolicySelection:{kind:"policy_set",policySetId:agentId},
+      configuration:{kind:"saved_agent",agentId},
+    })).toBe(true);
     expect(() => registry.get("thread.create", 4)).toThrow();
-    expect(registry.get("thread.create", 5).execution.maximumInputBytes).toBe(
+    expect(registry.get("thread.create", 6).execution.maximumInputBytes).toBe(
       256 * 1_024,
     );
 
-    const largestToolPolicy = {
-      enabled: true,
-      enabledToolIds: Array.from(
-        { length: 512 },
-        (_, index) =>
-          `tool.${index.toString().padStart(3, "0")}.${"x".repeat(118)}`,
-      ),
-      presentation: { surface: "native", mode: "progressive" },
-      accessBoundary: "unrestricted",
-    };
     const largestCustomRequest = {
       title: "Review",
+      toolPolicySelection: { kind: "policy_set", policySetId: agentId },
       configuration: {
         kind: "custom",
         targetId,
@@ -401,11 +421,10 @@ describe("Saved Agent canonical tools", () => {
           id: `field.${index}`,
           value: "x".repeat(240),
         })),
-        sedesTools: largestToolPolicy,
       },
     };
     expect(
-      registry.validatesInput("thread.create", 5, largestCustomRequest),
+      registry.validatesInput("thread.create", 6, largestCustomRequest),
     ).toBe(true);
     const serializedBytes = Buffer.byteLength(
       JSON.stringify(largestCustomRequest),
@@ -413,7 +432,7 @@ describe("Saved Agent canonical tools", () => {
     );
     expect(serializedBytes).toBeGreaterThan(4_096);
     expect(serializedBytes).toBeLessThan(
-      registry.get("thread.create", 5).execution.maximumInputBytes,
+      registry.get("thread.create", 6).execution.maximumInputBytes,
     );
   });
 

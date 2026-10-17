@@ -506,12 +506,38 @@ describe("client.replay_turn over stored replies", () => {
       observeInputRuntime: () => ({ authoritative: true, ownerGeneration: "owner", runState: "running", sourceTurnId: runningTurnId,
         activeTurnId: runningTurnId, sourceTurnStatus: "in_progress", settled: false, firstInput: { operationId: "running" } }) as ConversationInputRuntimeObservation,
     }, { originForTurn: () => ({ clientId: registered.clientId }) }, authority, current.replies);
-    const environmentId = authority.resolveThread(current.scope, current.threadId)!.environmentId;
+    const sourceThread = authority.resolveThread(current.scope, current.threadId)!;
+    const defaults = {
+      kind: "thread_agent" as const,
+      threadId: current.threadId,
+      workspaceId: sourceThread.workspaceId,
+      environmentId: sourceThread.environmentId,
+      projectId: sourceThread.projectId,
+    };
+    const policyIdentity = { ownerKind: "thread" as const, ownerId: current.threadId, revision: 0 };
     const context = {
       tenantId: scope.tenantId, principalId: scope.principalId,
       subject: { kind: "thread_agent", sourceThreadId: current.threadId },
       clientTurn: { threadId: current.threadId, turnId: runningTurnId, ownerGeneration: "owner", clientId: registered.clientId },
-      environmentAuthority: { admittedEnvironmentIds: [environmentId] }, abortSignal: new AbortController().signal,
+      defaults,
+      policyIdentity,
+      environmentAuthority: {
+        id: "stored-reply-test-grant",
+        callerKind: "thread_agent" as const,
+        defaults,
+        policyIdentity,
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
+        admittedEnvironmentIds: [sourceThread.environmentId],
+        targetEnvironmentIds: [sourceThread.environmentId],
+        resolvedResourceRefs: [current.threadId, current.otherThreadId].map(threadId => ({
+          kind: "thread" as const,
+          ...authority.resolveThread(current.scope, threadId)!,
+        })),
+        canonicalInputDigest: "stored-reply-test-input",
+        authorityDigest: "stored-reply-test-authority",
+        display: { targetEnvironmentLabels: [], resourceLabels: [] },
+      },
+      abortSignal: new AbortController().signal,
     } as unknown as TrustedToolInvocationContext;
     const replay = async (input: Record<string, unknown>) => {
       await tools.execute("client.replay_turn", input, context);

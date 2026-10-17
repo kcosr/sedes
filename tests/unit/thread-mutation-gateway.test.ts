@@ -5342,7 +5342,7 @@ function agentToolPolicyMutationFixture(input: {
     presentation: input.presentation ?? {
       surface: "native", mode: "individual",
     },
-    accessBoundary: "environment",
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
     revision: 2,
     updatedAt: 100,
   });
@@ -5357,7 +5357,7 @@ function agentToolPolicyMutationFixture(input: {
         applicationThreadId,
         enabled: request.enabled,
         presentation: request.presentation,
-        accessBoundary: request.accessBoundary,
+        resourceScope: request.resourceScope,
         revision: request.expectedRevision + 1,
         updatedAt: request.now,
         enabledToolIds: request.enabledToolIds,
@@ -5436,7 +5436,7 @@ function agentToolPolicyMutationFixture(input: {
     presentation: input.presentation ?? {
       surface: "native" as const, mode: "individual" as const,
     },
-    accessBoundary: "environment" as const,
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
   };
   return {
     gateway,
@@ -5534,7 +5534,7 @@ describe("ThreadMutationGateway agent-tool policy", () => {
         enabled: true,
         enabledToolIds: ["thread.status"],
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         now: 500,
       });
       expect(subject.runWithRuntimeRetired).toHaveBeenCalledWith(

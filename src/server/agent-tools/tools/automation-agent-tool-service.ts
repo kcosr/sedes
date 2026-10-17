@@ -499,6 +499,7 @@ export class AutomationAgentToolService {
       id: definition.id,
       threadId: target.id,
       environmentId: target.environmentId,
+      projectId: target.projectId,
       workspaceId: target.workspaceId,
     });
     return definition;
@@ -514,6 +515,7 @@ export class AutomationAgentToolService {
       kind: "thread",
       id: target.id,
       environmentId: target.environmentId,
+      projectId: target.projectId,
       workspaceId: target.workspaceId,
     });
     return threadId;

@@ -112,7 +112,7 @@ describe("OpenCode execution settings and explicit actions", () => {
   it("delivers a CLI-surface Send with an unavailable diagnostic when host tool admission fails", async () => {
     const f = fixture();
     const cli = new OpenCodeCliEnvironment({ ownership: "owned", availability: { availability: "unavailable", reason: "cli_unavailable" },
-      tools: { readPolicy: () => ({ enabled: false, presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "thread", enabledToolIds: [] }) } });
+      tools: { readPolicy: () => ({ enabled: false, presentation: { surface: "cli", mode: "progressive" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, enabledToolIds: [] }) } });
     vi.spyOn(cli, "plan").mockReturnValue({ source: { scope, sourceThreadId: threadID, sourceWorkspaceId: f.target.workspace.summary.id,
       sourceEnvironmentId: f.target.binding.executionEnvironmentId, backendKind: "opencode" }, mode: "progressive" });
     vi.spyOn(f.context.tools, "cliAdmission").mockReturnValue(null);
@@ -251,7 +251,7 @@ describe("OpenCode execution settings and explicit actions", () => {
     const cli = new OpenCodeCliEnvironment({ ownership,
       availability: { availability: "available", endpoint: "http://127.0.0.1:4784", executableDirectory: "/fixture/bin", inheritedPath: "/bin" },
       tools: { readPolicy: () => ({ enabled: true, presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "thread", enabledToolIds: ["agent.context"] }) } });
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, enabledToolIds: ["agent.context"] }) } });
     f.context.executionEnvironment = new OpenCodeExecutionEnvironment({ scope, ownership, readDefinitions: () => ({}), cli });
     await expect(f.delivery.submit(f.submit())).resolves.toMatchObject({ accepted: true });
     await expect(f.delivery.steer(f.steer())).resolves.toMatchObject({ status: "pending_materialization" });
