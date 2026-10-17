@@ -147,6 +147,7 @@ User-facing changes are collected here before release. See the
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See
   [voice input](docs/operator/clients/voice.md).
+  ([#97](https://github.com/kcosr/sedes/pull/97))
 
 - Restore supported OpenCode reasoning-effort choices after native model
   catalog validation. See [OpenCode settings](docs/operator/backends/opencode.md#conversations-and-settings).
