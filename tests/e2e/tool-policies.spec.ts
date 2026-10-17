@@ -155,14 +155,14 @@ test("policy sets replace inherited tools across levels and snapshot new threads
   await applied;
   const appliedStatus = toolsDialog.getByText(/^Loaded Reviewer/);
   await expect(appliedStatus).toBeVisible();
-  await appliedStatus.scrollIntoViewIfNeeded();
+  await toolsDialog.locator('[data-slot="dialog-body"]').evaluate(body => body.scrollTo({ top: 0 }));
   await expect(appliedStatus).toBeInViewport();
   await expect(policyChooser).toBeVisible();
   await expect(policyChooser).toBeInViewport();
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "thread-applied-policy-desktop.png");
   await page.setViewportSize({ width: 390, height: 844 });
-  await appliedStatus.scrollIntoViewIfNeeded();
+  await toolsDialog.locator('[data-slot="dialog-body"]').evaluate(body => body.scrollTo({ top: 0 }));
   await expect(appliedStatus).toBeVisible();
   await expect(appliedStatus).toBeInViewport();
   await expect(policyChooser).toBeVisible();
