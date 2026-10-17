@@ -52,20 +52,21 @@ export class OpenCodeModelCatalog {
   }
 }
 
-/** Exact pinned native OpenAI overlays only. Labels and arbitrary plugin variants prove nothing. */
+/** Exact pinned native OpenAI overlays only. Labels and arbitrary plugin variants prove nothing.
+ * Native codecs return prototype-free JSON; compare its content, not its prototype. */
 export function reviewedOpenCodeEffort(model: ModelInfo, variant: ModelInfo["variants"][number]): boolean {
   if (!variant.id || variant.id === "default" || variant.id.length > 120 || /\p{Cc}/u.test(variant.id) || Buffer.from(variant.id, "utf8").toString("utf8") !== variant.id) return false;
   if (Object.keys(variant.headers ?? {}).length || Object.keys(variant.body ?? {}).length) return false;
   if (model.package === "@opencode/ai/providers/openai-compatible") {
-    return isDeepStrictEqual(variant.settings, { reasoningEffort: variant.id }) &&
+    return isDeepStrictEqual(variant.settings, { reasoningEffort: variant.id }, { skipPrototype: true }) &&
       (!Object.hasOwn(model.body ?? {}, "reasoning_effort") || model.body!.reasoning_effort === variant.id);
   }
   if (model.package === "@opencode/ai/providers/openai") {
-    if (!isDeepStrictEqual(variant.settings, { reasoningEffort: variant.id, reasoningSummary: "auto", include: ["reasoning.encrypted_content"] })) return false;
+    if (!isDeepStrictEqual(variant.settings, { reasoningEffort: variant.id, reasoningSummary: "auto", include: ["reasoning.encrypted_content"] }, { skipPrototype: true })) return false;
     const body = model.body ?? {};
     // Raw body is merged last by the native provider; it must not replace the reviewed settings.
-    return (!Object.hasOwn(body, "reasoning") || isDeepStrictEqual(body.reasoning, { effort: variant.id, summary: "auto" })) &&
-      (!Object.hasOwn(body, "include") || isDeepStrictEqual(body.include, ["reasoning.encrypted_content"]));
+    return (!Object.hasOwn(body, "reasoning") || isDeepStrictEqual(body.reasoning, { effort: variant.id, summary: "auto" }, { skipPrototype: true })) &&
+      (!Object.hasOwn(body, "include") || isDeepStrictEqual(body.include, ["reasoning.encrypted_content"], { skipPrototype: true }));
   }
   return false;
 }
