@@ -8,6 +8,7 @@ export const OPENCODE_MAXIMUM_RESPONSE_BYTES = 32 * 1_024 * 1_024;
 const infoSchema = z.object({
   version: z.string().max(64), pid: z.number().int().positive(),
   urls: z.array(z.string().max(2_048)).max(128), paths: z.object({ tmp: z.string().max(4_096) }).strict(),
+  capabilities: z.object({ persistentPty: z.boolean().optional() }).strict().optional(),
 }).strict();
 
 function boundedFailure(error: unknown): OpenCodeRuntimeError | undefined {

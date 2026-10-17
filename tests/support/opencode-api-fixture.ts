@@ -75,7 +75,7 @@ export function createOpenCodeApiFixture(input: {
           cancel() { streams.delete(owned); init?.signal?.removeEventListener("abort", abort); },
         }), { status: 200, headers: { "content-type": "text/event-stream" } });
       }
-      if (url.pathname === "/api/info") return json(200, { version: "2.0.18", pid: process.pid, paths: { tmp: "/tmp" }, urls: [] });
+      if (url.pathname === "/api/info") return json(200, { version: "2.0.29", pid: process.pid, paths: { tmp: "/tmp" }, urls: [] });
       if (url.pathname === "/api/session/active") return json(200, { data: {} });
       if (url.pathname === "/api/shell") return json(200, { location: { directory }, data: [] });
       if (url.pathname === "/api/session") {

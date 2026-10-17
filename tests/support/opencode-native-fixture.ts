@@ -6,12 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import { decodeOpenCodeReleaseProbe } from "../../src/server/backends/opencode/opencode-release.js";
 
 // Qualification only. This deliberately does not register a production backend
 // or use the operator's native account, configuration, or conversation store.
 export const RUN_REAL_OPENCODE = process.env.SEDES_RUN_REAL_OPENCODE === "1";
-export const OPENCODE_FIXTURE_VERSION = "2.0.18";
-export const OPENCODE_FIXTURE_SOURCE = "cd9a14a6b688d4021bee381dfd39d2cef9c0f862";
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const PROCESS_MARKER_NAME = "SEDES_OPENCODE_FIXTURE_OWNER";
 const MAX_PROCESS_ENTRIES = 16_384;
@@ -241,6 +240,7 @@ export interface OpenCodeNativeFixture {
 
 export interface OpenCodeNativeAccount {
   readonly executable: string;
+  readonly runtimeVersion: string;
   readonly rootDirectory: string;
   readonly workspace: string;
   readonly configDirectory: string;
@@ -292,21 +292,20 @@ export async function prepareOpencodeNativeAccount(input: {
     OPENCODE_FILEWATCHER_DISABLE: "1",
     OPENCODE_PASSWORD: password,
   };
+  let runtimeVersion: string;
   try {
     await Promise.all([mkdir(workspace), mkdir(configDirectory, { recursive: true }), mkdir(environment.HOME!)]);
     await writeFile(environment.OPENCODE_MODELS_PATH!, "{}", { mode: 0o600 });
     await writeFile(path.join(configDirectory, "opencode.json"), JSON.stringify({ ...input.config, update: "disable" }), { mode: 0o600 });
     const version = await execFileAsync(executable, ["--version"], { env: environment, cwd: workspace, timeout: 10_000, maxBuffer: 4096 });
-    if (version.stdout.trim() !== `opencode v${OPENCODE_FIXTURE_VERSION}`) {
-      throw new Error(`Qualification requires opencode2 ${OPENCODE_FIXTURE_VERSION}; the selected executable is unreviewed`);
-    }
+    runtimeVersion = decodeOpenCodeReleaseProbe(version.stdout);
   } catch (error) {
     await cleanupProcesses();
     await rm(rootDirectory, { recursive: true, force: true });
     throw error;
   }
 
-  return { executable, rootDirectory, workspace, configDirectory, password, environment,
+  return { executable, runtimeVersion, rootDirectory, workspace, configDirectory, password, environment,
     nativeStorePath: path.join(rootDirectory, "data", "opencode", "opencode.db"), cleanupProcesses,
     close: async () => { await cleanupProcesses(); await rm(rootDirectory, { recursive: true, force: true }); } };
 }

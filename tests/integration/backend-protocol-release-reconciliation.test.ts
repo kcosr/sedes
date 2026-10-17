@@ -12,6 +12,7 @@ import { ConversationBindingRepository } from "../../src/server/db/repositories/
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { startProductionApplication } from "../../src/server/production-application.js";
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { OpenCodeThreadRepository } from "../../src/server/backends/opencode/opencode-thread-repository.js";
 
 const localEnvironmentId = "019196f7-a0a8-7bc4-a89b-8cf013978405";
 
@@ -44,6 +45,13 @@ const releaseValidationCases = [
     supportedRelease: "1.x",
     unsupportedRelease: "2.x",
   },
+  {
+    label: "OpenCode",
+    backendKind: "opencode",
+    connectionKind: "opencode_http",
+    supportedRelease: "2.0.32",
+    unsupportedRelease: "2.0.29",
+  },
 ] as const;
 
 function singleBackendConfiguration(
@@ -67,6 +75,9 @@ function singleBackendConfiguration(
         label: releaseCase.label,
         enabled: true,
         modelPolicy: { type: "catalog" },
+        ...(releaseCase.backendKind === "opencode" ? {
+          moduleConfiguration: { connection: { ownership: "owned", channel: { type: "process_stdio" } } },
+        } : {}),
       },
     ],
     targets: [
@@ -77,6 +88,9 @@ function singleBackendConfiguration(
         backendInstanceId: backendId,
         executionEnvironmentId: localEnvironmentId,
         enabled: true,
+        ...(releaseCase.backendKind === "opencode" ? {
+          moduleConfiguration: { defaults: { model: { type: "catalogDefault" }, variant: { type: "modelDefault" } } },
+        } : {}),
       },
     ],
     defaultTargetId: targetId,
@@ -240,6 +254,77 @@ describe("backend protocol release reconciliation", () => {
       }
     },
   );
+
+  it.each([
+    { previousRelease: "2.0.29", expectedRevision: 8, expectedUpdatedAt: 300 },
+    { previousRelease: "2.0.32", expectedRevision: 7, expectedUpdatedAt: 240 },
+  ])("reconciles OpenCode profile $previousRelease to 2.0.32 while retaining its scoped native binding", ({
+    previousRelease, expectedRevision, expectedUpdatedAt,
+  }) => {
+    const value = savedAgentDatabase();
+    try {
+      const repository = new BackendConfigurationRepository(value.database);
+      const openCodeCase = releaseValidationCases.find(releaseCase => releaseCase.backendKind === "opencode")!;
+      const currentConfiguration = databaseSeedConfiguration(openCodeCase);
+      const backendId = "opencode-primary", targetId = "opencode_http-local";
+      expect(currentConfiguration.backends.find(backend => backend.id === backendId)?.protocolRelease).toBe("2.0.32");
+      repository.reconcile(value.scope, {
+        ...currentConfiguration,
+        backends: currentConfiguration.backends.map(backend => backend.id === backendId
+          ? { ...backend, protocolRelease: previousRelease } : backend),
+      }, { localWorkspaceRoots: [], now: 200 });
+      const profile = repository.getProfileByTemplate(value.scope, targetId);
+      const inventory = new InventoryRepository(value.database);
+      const environment = inventory.getLocalEnvironment(value.scope);
+      const workspace = inventory.upsertWorkspace(value.scope, {
+        environmentId: environment.id,
+        canonicalPath: "/tmp/opencode-protocol-release-reconciliation",
+        displayName: "OpenCode protocol release reconciliation",
+        project: { kind: "new", name: "OpenCode protocol release reconciliation" },
+        available: true, trustState: "trusted",
+        environmentConfigurationRevision: environment.configurationRevision,
+        now: 210,
+      });
+      const bindings = new ConversationBindingRepository(value.database);
+      const thread = bindings.createUnboundThread(value.scope, {
+        id: "opencode-protocol-release-thread", workspaceId: workspace.id,
+        connectionProfileId: profile.id, title: "OpenCode protocol release thread", now: 220,
+      });
+      const binding = bindings.bindDiscoveredConversation(value.scope, thread.id, {
+        backendConversationId: "ses_stable_across_profile_upgrade", now: 230,
+      });
+      const nativeNamespaceKey = "opencode-profile-reconciliation-store";
+      const nativeThreads = new OpenCodeThreadRepository({
+        database: value.database, scope: value.scope, backendInstanceId: backendId, nativeNamespaceKey,
+      });
+      nativeThreads.saveBinding(value.scope, thread.id, {
+        version: 1, ...value.scope, backendInstanceId: backendId,
+        connectionProfileId: profile.id, executionEnvironmentId: environment.id,
+        canonicalWorkspacePath: workspace.canonicalPath, nativeNamespaceKey,
+        sessionId: binding.backendConversationId,
+      });
+      const nativeBinding = nativeThreads.getBinding(value.scope, thread.id);
+      value.database.prepare(`UPDATE agent_backend_instances
+        SET configuration_revision = 7, updated_at = 240
+        WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+        .run(value.scope.tenantId, value.scope.principalId, backendId);
+      const backend = repository.getBackend(value.scope, backendId);
+      const boundThread = inventory.getThread(value.scope, thread.id);
+      for (const now of [300, 400]) {
+        repository.reconcile(value.scope, currentConfiguration, { localWorkspaceRoots: [], now });
+        expect(repository.getBackend(value.scope, backendId)).toEqual({
+          ...backend, protocolRelease: "2.0.32", configurationRevision: expectedRevision,
+        });
+        expect(value.database.prepare(`SELECT updated_at AS updatedAt
+          FROM agent_backend_instances WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+          .get(value.scope.tenantId, value.scope.principalId, backendId)).toEqual({ updatedAt: expectedUpdatedAt });
+        expect(repository.getProfileByTemplate(value.scope, targetId)).toEqual(profile);
+        expect(inventory.getThread(value.scope, thread.id)).toEqual(boundThread);
+        expect(bindings.getBinding(value.scope, thread.id)).toEqual(binding);
+        expect(nativeThreads.getBinding(value.scope, thread.id)).toBe(nativeBinding);
+      }
+    } finally { value.database.close(); }
+  });
 
   it.each(["0.83.0", "0.84.4"])(
     "reconciles persisted Pi %s state to 0.86.0 without changing relationships",

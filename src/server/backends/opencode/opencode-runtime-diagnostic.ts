@@ -1,5 +1,5 @@
 import type { BackendRuntimeDiagnostic } from "../module.js";
-import { OpenCodeRuntimeError } from "./opencode-release.js";
+import { OpenCodeRuntimeError, OPENCODE_RUNTIME_MINIMUM_SUPPORTED_RELEASE } from "./opencode-release.js";
 
 export const openCodeOwnerRecoveryCodes = [
   "opencode_runtime_owner_recovery_required", "opencode_runtime_owner_already_owned",
@@ -52,9 +52,9 @@ function diagnosticForCode(code: string): BackendRuntimeDiagnostic | undefined {
     message: "This host does not advertise the required OpenCode runtime. OpenCode requires a Linux execution host and a current Sedes sidecar. Upgrade and restart the sidecar on a supported host; other negotiated host operations remain available.",
   };
   if (code === "opencode_release_incompatible") return { connectionState: "unknown",
-    message: "The execution host must use stock opencode2 2.0.18. Check the selected executable and external daemon version on that host." };
+    message: `The execution host must use stock opencode2 ${OPENCODE_RUNTIME_MINIMUM_SUPPORTED_RELEASE} or newer (stable release). Check the selected executable and external daemon version on that host.` };
   if (code === "opencode_executable_unavailable") return { connectionState: "unknown",
-    message: "The execution host could not find or execute stock opencode2 2.0.18. Install it on that host in the Sedes service or sidecar startup PATH, or set the backend Advanced executable path or startup PATH override. A login shell can have a different PATH. Then use backend Connect or Start to retry startup." };
+    message: `The execution host could not find or execute stock opencode2 ${OPENCODE_RUNTIME_MINIMUM_SUPPORTED_RELEASE} or newer (stable release). Install it on that host in the Sedes service or sidecar startup PATH, or set the backend Advanced executable path or startup PATH override. A login shell can have a different PATH. Then use backend Connect or Start to retry startup.` };
   if (code === "opencode_runtime_owner_directory_invalid") return { connectionState: "unknown",
     message: "Sedes could not safely access the OpenCode ownership directory under the execution host account's state directory. Check the host account HOME/XDG_STATE_HOME, parent access, and ownership-directory permissions: the final directory must belong to that account, have mode 0700, and not be a symlink. Preserve existing owner records, then use backend Connect or Start to retry startup." };
   return undefined;

@@ -52,7 +52,7 @@ export class OpenCodeInteractions {
   readonly #notices = new Set<string>();
   readonly #children = new Set<string>();
   readonly #operations = new Map<string, { readonly fingerprint: string; readonly promise: Promise<void> }>();
-  #refresh: Promise<void> | undefined;
+  #refresh: Promise<OpenCodeNativeInteractions> | undefined;
   #refreshAgain = false;
   #closed = false;
 
@@ -68,7 +68,7 @@ export class OpenCodeInteractions {
     this.#signal.addEventListener("abort", () => this.close(), { once: true });
   }
 
-  async refresh(inventory?: OpenCodeNativeInteractions, children?: readonly OpenCodeNativeSession[], activeChildren: readonly string[] = []): Promise<void> {
+  async refresh(children?: readonly OpenCodeNativeSession[], activeChildren: readonly string[] = []): Promise<OpenCodeNativeInteractions> {
     this.#assertOpen();
     if (children) {
       if (children.some(child => child.parentID !== this.#authority.sessionID)) throw new OpenCodeNativeProtocolError();
@@ -80,23 +80,33 @@ export class OpenCodeInteractions {
     }
     if (this.#refresh) { this.#refreshAgain = true; return this.#refresh; }
     const reading = (async () => {
-      let supplied = inventory;
-      do {
-        this.#refreshAgain = false; await this.#assertCurrent();
-        const current = supplied ?? await this.#api.getInteractions(this.#authority.sessionID, this.#signal); supplied = undefined;
-        await this.#assertCurrent();
-        if (current.permissions.length + current.forms.length > MAX_GATES) throw new OpenCodeNativeProtocolError();
-        const next = new Map<string, Gate>();
-        for (const request of current.permissions) this.#include(next, "permission", request);
-        for (const request of current.forms) this.#include(next, "form", request);
-        for (const id of this.#gates.keys()) if (!next.has(id)) this.#send({ type: "interaction_resolved", backendInteractionId: id });
-        for (const [id, gate] of next) if (!this.#gates.has(id)) this.#send({ type: "interaction_opened", interaction: gate.mapped.interaction });
-        this.#gates.clear(); for (const [id, gate] of next) this.#gates.set(id, gate);
-        await this.#refreshChildren();
-      } while (this.#refreshAgain && !this.#signal.aborted);
+      try {
+        let current: OpenCodeNativeInteractions;
+        do {
+          this.#refreshAgain = false; await this.#assertCurrent();
+          current = await this.#api.getInteractions(this.#authority.sessionID, this.#signal);
+          await this.#assertCurrent();
+          // Events and accepted responses supersede a read that was already
+          // in flight. Publish only the next authoritative inventory.
+          if (this.#refreshAgain) continue;
+          if (current.permissions.length + current.forms.length > MAX_GATES) throw new OpenCodeNativeProtocolError();
+          const next = new Map<string, Gate>();
+          for (const request of current.permissions) this.#include(next, "permission", request);
+          for (const request of current.forms) this.#include(next, "form", request);
+          for (const id of this.#gates.keys()) if (!next.has(id)) this.#send({ type: "interaction_resolved", backendInteractionId: id });
+          for (const [id, gate] of next) if (!this.#gates.has(id)) this.#send({ type: "interaction_opened", interaction: gate.mapped.interaction });
+          this.#gates.clear(); for (const [id, gate] of next) this.#gates.set(id, gate);
+          await this.#refreshChildren();
+        } while (this.#refreshAgain && !this.#signal.aborted);
+        return current;
+      } finally {
+        // Release before the shared promise settles, so a completion-time
+        // event starts a fresh read instead of joining a finished pass.
+        this.#refresh = undefined;
+      }
     })();
     this.#refresh = reading;
-    try { await reading; } finally { if (this.#refresh === reading) this.#refresh = undefined; }
+    return reading;
   }
 
   observe(event: OpenCodeNativeEvent): void {
