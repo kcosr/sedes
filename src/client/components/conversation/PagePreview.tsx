@@ -2,6 +2,8 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Download,
+  LoaderCircle,
   Maximize2,
   Pointer,
   RotateCcw,
@@ -18,6 +20,7 @@ import type { PageRevision } from "../../../shared/protocol/pages.js";
 import { PageResponseBridge } from "../../lib/page-response-bridge.js";
 import type { PageResponseServices } from "./page-response-services.js";
 import { usePageResponseSubmission, type PageResponseSubmission } from "./page-response-submission.js";
+import { usePageDownload } from "./page-download.js";
 import { MediaFrame } from "../../workbench/components/MediaFrame.js";
 import { MediaZoomControls } from "../../workbench/components/MediaZoomControls.js";
 import { Button } from "../ui/button.js";
@@ -41,7 +44,7 @@ import "./page-preview.css";
 
 export type PagePreviewServices = Pick<
   ItemRenderContext,
-  "createPageRenderAdmission" | "listPageRevisions" | "getPageRevision" | "pageResponse"
+  "createPageRenderAdmission" | "listPageRevisions" | "getPageRevision" | "preparePageDownload" | "pageResponse"
 >;
 
 /** Each occurrence keeps its pinned revision and its own interaction state. */
@@ -66,6 +69,9 @@ export function PagePreview({
   const deactivate = useCallback(() => setInteracting(false), []);
   const viewerOpen = presentation === "library" || expanded;
   const connection = useConnectionScope();
+  const download = usePageDownload(
+    pageFrameRecoveryKey(connection, selected), selected, viewerOpen, services.preparePageDownload, connection.profileId,
+  );
   const responsePage = viewerOpen ? selected : page;
   const response = usePageResponseSubmission(
     pageFrameRecoveryKey(connection, responsePage), responsePage, services.pageResponse,
@@ -249,6 +255,17 @@ export function PagePreview({
       >
         <RotateCcw />
       </Button>
+      <Button
+        aria-label={download.phase === "preparing" ? "Preparing HTML download" : download.phase === "started" ? "HTML download started" : "Download HTML"}
+        title="Download HTML"
+        aria-busy={download.phase !== "idle" || undefined}
+        disabled={!services.preparePageDownload || download.phase !== "idle"}
+        onClick={() => void download.download()}
+        size="icon-lg"
+        variant="ghost"
+      >
+        {download.phase === "preparing" ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : <Download aria-hidden="true" />}
+      </Button>
     </div>
   );
 
@@ -267,6 +284,11 @@ export function PagePreview({
       {error ? (
         <p className="page-preview-error" role="alert">
           {error}
+        </p>
+      ) : null}
+      {download.error || download.status ? (
+        <p className={download.error ? "page-preview-error" : "page-preview-download-status"} role={download.error ? "alert" : "status"}>
+          {download.error || download.status}
         </p>
       ) : null}
       <PageFrame

@@ -19,9 +19,9 @@ vi.mock("@capacitor/core", () => ({
 }));
 
 import {
-  downloadWorkspaceFileInPackagedClient,
-  supportsPackagedWorkspaceFileDownloads,
-} from "./packaged-workspace-file-download.js";
+  downloadInPackagedClient,
+  supportsPackagedDownloads,
+} from "./packaged-download.js";
 
 const request = {
   serverOrigin: "https://sedes.example",
@@ -42,21 +42,21 @@ beforeEach(() => {
 
 describe("packaged workspace file downloads", () => {
   it("is available only in the packaged Android and Electron clients", () => {
-    expect(supportsPackagedWorkspaceFileDownloads()).toBe(true);
+    expect(supportsPackagedDownloads()).toBe(true);
     native.platform = "electron";
-    expect(supportsPackagedWorkspaceFileDownloads()).toBe(true);
+    expect(supportsPackagedDownloads()).toBe(true);
     native.platform = "ios";
-    expect(supportsPackagedWorkspaceFileDownloads()).toBe(false);
+    expect(supportsPackagedDownloads()).toBe(false);
     native.platform = "android";
     native.value = false;
-    expect(supportsPackagedWorkspaceFileDownloads()).toBe(false);
+    expect(supportsPackagedDownloads()).toBe(false);
   });
 
   it("passes only preflight metadata to the native streaming implementation", async () => {
     plugin.downloadFile.mockResolvedValue({ action: "saved" });
 
     await expect(
-      downloadWorkspaceFileInPackagedClient(request),
+      downloadInPackagedClient(request),
     ).resolves.toBe("saved");
     expect(plugin.downloadFile).toHaveBeenCalledWith({
       transferId: expect.any(String),
@@ -69,7 +69,7 @@ describe("packaged workspace file downloads", () => {
   it("does no work outside packaged clients and forwards cancellation", async () => {
     native.value = false;
     await expect(
-      downloadWorkspaceFileInPackagedClient(request),
+      downloadInPackagedClient(request),
     ).resolves.toBe("cancelled");
     expect(plugin.downloadFile).not.toHaveBeenCalled();
 
@@ -84,7 +84,7 @@ describe("packaged workspace file downloads", () => {
         }),
     );
     plugin.cancelDownload.mockResolvedValue(undefined);
-    const pending = downloadWorkspaceFileInPackagedClient({
+    const pending = downloadInPackagedClient({
       ...request,
       signal: controller.signal,
     });
@@ -99,12 +99,21 @@ describe("packaged workspace file downloads", () => {
     const controller = new AbortController();
     controller.abort(new Error("cancelled before start"));
     await expect(
-      downloadWorkspaceFileInPackagedClient({
+      downloadInPackagedClient({
         ...request,
         signal: controller.signal,
       }),
     ).rejects.toThrow("cancelled before start");
     expect(plugin.downloadFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses a transfer if the selected native credential profile changed during preflight", async () => {
+    await expect(downloadInPackagedClient({ ...request, expectedProfileId: "old-profile" }))
+      .rejects.toThrow("server connection changed");
+    expect(plugin.downloadFile).not.toHaveBeenCalled();
+    plugin.downloadFile.mockResolvedValue({ action: "saved" });
+    await expect(downloadInPackagedClient({ ...request, expectedProfileId: "test-profile" })).resolves.toBe("saved");
+    expect(plugin.downloadFile).toHaveBeenCalledWith(expect.objectContaining({ profileId: "test-profile" }));
   });
 
   it.each([
@@ -133,7 +142,7 @@ describe("packaged workspace file downloads", () => {
     async (code, message) => {
       plugin.downloadFile.mockRejectedValue({ code, message: "native detail" });
       await expect(
-        downloadWorkspaceFileInPackagedClient(request),
+        downloadInPackagedClient(request),
       ).rejects.toThrow(message);
     },
   );
@@ -142,7 +151,7 @@ describe("packaged workspace file downloads", () => {
     const failure = new Error("network unavailable");
     plugin.downloadFile.mockRejectedValue(failure);
     await expect(
-      downloadWorkspaceFileInPackagedClient(request),
+      downloadInPackagedClient(request),
     ).rejects.toBe(failure);
   });
 });

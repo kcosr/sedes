@@ -25,6 +25,12 @@ function render(ui: React.ReactNode) {
 }
 
 const safety = vi.hoisted(() => ({ supports: vi.fn(), android: vi.fn() }));
+const downloads = vi.hoisted(() => ({ browser: vi.fn(), native: vi.fn(), packaged: vi.fn() }));
+vi.mock("../../app/browser-download.js", () => ({ startBrowserDownload: downloads.browser }));
+vi.mock("../../app/packaged-download.js", () => ({
+  downloadInPackagedClient: downloads.native,
+  supportsPackagedDownloads: downloads.packaged,
+}));
 vi.mock("../../app/page-safety.js", () => ({
   supportsSafePageFrames: safety.supports,
 }));
@@ -70,6 +76,9 @@ function makePreviewsVisible(initial = true) {
     });
 }
 beforeEach(() => {
+  downloads.browser.mockReset();
+  downloads.native.mockReset().mockResolvedValue("saved");
+  downloads.packaged.mockReset().mockReturnValue(false);
   safety.supports.mockReset().mockResolvedValue(true);
   safety.android.mockReset().mockReturnValue(false);
   localStorage.clear();
@@ -88,6 +97,14 @@ afterEach(() => {
 });
 function services() {
   return {
+    preparePageDownload: vi.fn(async (page: PageRevision, _signal?: AbortSignal) => ({
+      url: `/api/threads/${page.threadId}/pages/${page.pageId}/revisions/${page.revision}/download`,
+      serverOrigin: window.location.origin,
+      suggestedFileName: `${page.title}-${page.revision}.html`,
+      contentDisposition: `attachment; filename="${page.title}-${page.revision}.html"`,
+      contentLength: page.byteSize + 3,
+      revision: page.sha256,
+    })),
     createPageRenderAdmission: vi.fn(
       async (_pageId: string, _revision: number, _signal?: AbortSignal) => ({
         url: "/page-render/token",
@@ -1189,3 +1206,121 @@ describe("page responses", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Page preview unavailable.");
   });
 });
+
+describe("saved page HTML downloads", () => {
+  it("downloads the selected older revision even when safe rendering is unavailable", async () => {
+    safety.supports.mockResolvedValue(false);
+    const api = services();
+    const published = { ...original, revision: 2, title: "New phone" };
+    render(<PagePreview page={published} services={api} />);
+    expect(screen.queryByRole("button", { name: "Download HTML" })).toBeNull();
+    expandPage(published.title);
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText("Page preview unavailable.");
+    await within(dialog).findByLabelText("Revision 2 of 2");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Previous page revision" }));
+    await within(dialog).findByText("1/2");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Download HTML" }));
+    await within(dialog).findByText("Download started.");
+    expect(api.preparePageDownload).toHaveBeenCalledWith(original, expect.any(AbortSignal));
+    expect(downloads.browser).toHaveBeenCalledWith(expect.objectContaining({ url: expect.stringContaining("/revisions/1/download"), signal: expect.any(AbortSignal) }));
+    expect(downloads.native).not.toHaveBeenCalled();
+  });
+
+  it("disables duplicates during preflight and displays browser GET failures independently of preview errors", async () => {
+    const api = services();
+    const prepared = await api.preparePageDownload(original);
+    api.preparePageDownload.mockClear();
+    const pending = deferredDownload<typeof prepared>();
+    api.preparePageDownload.mockReturnValue(pending.promise);
+    render(<PagePreview page={original} services={api} presentation="library" />);
+    fireEvent.click(screen.getByRole("button", { name: "Download HTML" }));
+    expect(screen.getByRole("button", { name: "Preparing HTML download" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Preparing HTML download" }));
+    expect(api.preparePageDownload).toHaveBeenCalledTimes(1);
+    await act(async () => pending.resolve(prepared));
+    expect(screen.getByRole("button", { name: "HTML download started" })).toBeDisabled();
+    act(() => downloads.browser.mock.calls[0]![0].onFailure("This page is no longer available."));
+    expect(screen.getByRole("alert")).toHaveTextContent("This page is no longer available.");
+    expect(screen.getByRole("button", { name: "Download HTML" })).toBeEnabled();
+  });
+
+  it.each(["saved", "cancelled"])("uses the native picker and handles %s without starting browser navigation", async (result) => {
+    downloads.packaged.mockReturnValue(true);
+    downloads.native.mockResolvedValue(result);
+    const api = services();
+    render(<PagePreview page={original} services={api} presentation="library" />);
+    fireEvent.click(screen.getByRole("button", { name: "Download HTML" }));
+    await waitFor(() => expect(downloads.native).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Download HTML" })).toBeEnabled());
+    expect(downloads.native).toHaveBeenCalledWith(expect.objectContaining({
+      suggestedFileName: "Phone-1.html", expectedRevision: original.sha256,
+      expectedContentLength: original.byteSize + 3, signal: expect.any(AbortSignal),
+    }));
+    expect(screen.queryByText("HTML saved.")).toBe(result === "saved" ? screen.getByText("HTML saved.") : null);
+    expect(downloads.browser).not.toHaveBeenCalled();
+    expect(screen.queryByText("Download started.")).toBeNull();
+  });
+
+  it("shows a preflight error and lets the user retry", async () => {
+    const api = services();
+    api.preparePageDownload.mockRejectedValueOnce(new Error("This page could not be prepared for download."));
+    render(<PagePreview page={original} services={api} presentation="library" />);
+    fireEvent.click(screen.getByRole("button", { name: "Download HTML" }));
+    await screen.findByText("This page could not be prepared for download.");
+    expect(screen.getByRole("button", { name: "Download HTML" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Download HTML" }));
+    await screen.findByText("Download started.");
+    expect(screen.queryByText("This page could not be prepared for download.")).toBeNull();
+  });
+
+  it.each(["close", "revision", "connection", "unmount"])("aborts pending downloads and suppresses stale completion after %s", async (change) => {
+    const api = services();
+    const prepared = await api.preparePageDownload(original);
+    api.preparePageDownload.mockClear();
+    const pending = deferredDownload<typeof prepared>();
+    api.preparePageDownload.mockReturnValue(pending.promise);
+    const ui = (nextScope = scope) => (
+      <ConnectionScopeProvider scope={nextScope}><PagePreview page={original} services={api} /></ConnectionScopeProvider>
+    );
+    const view = renderView(ui());
+    expandPage();
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByLabelText("Revision 1 of 2");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Download HTML" }));
+    const signal = api.preparePageDownload.mock.calls[0]![1]!;
+    if (change === "close") fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    else if (change === "revision") {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Next page revision" }));
+      await within(dialog).findByText("2/2");
+    } else if (change === "connection") view.rerender(ui(connectionScope("other", window.location.origin, "another-principal")));
+    else view.unmount();
+    expect(signal.aborted).toBe(true);
+    await act(async () => pending.resolve(prepared));
+    expect(downloads.browser).not.toHaveBeenCalled();
+    expect(downloads.native).not.toHaveBeenCalled();
+    expect(screen.queryByText("Download started.")).toBeNull();
+  });
+
+  it("cancels an open native picker when its viewer closes and ignores its late result", async () => {
+    downloads.packaged.mockReturnValue(true);
+    const pending = deferredDownload<string>();
+    downloads.native.mockReturnValue(pending.promise);
+    render(<PagePreview page={original} services={services()} />);
+    expandPage();
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Download HTML" }));
+    await waitFor(() => expect(downloads.native).toHaveBeenCalledTimes(1));
+    const signal = downloads.native.mock.calls[0]![0].signal as AbortSignal;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(signal.aborted).toBe(true);
+    await act(async () => pending.resolve("saved"));
+    expect(screen.queryByText("HTML saved.")).toBeNull();
+  });
+});
+
+function deferredDownload<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}

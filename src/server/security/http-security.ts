@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { SEDES_DOWNLOAD_REVISION_HEADER } from "../../shared/downloads.js";
 import type { IncomingMessage } from "node:http";
 import type { NextFunction, Request, Response } from "express";
 import type {
@@ -396,7 +397,7 @@ export function packagedClientCors(config: AppConfig) {
     response.setHeader("Access-Control-Allow-Origin", packagedClientOrigin);
     response.setHeader(
       "Access-Control-Expose-Headers",
-      "Content-Disposition, Content-Length, X-Sedes-Workspace-File-Revision",
+      `Content-Disposition, Content-Length, ${SEDES_DOWNLOAD_REVISION_HEADER}`,
     );
     response.vary("Origin");
 

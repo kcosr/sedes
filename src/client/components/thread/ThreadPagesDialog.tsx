@@ -145,6 +145,7 @@ function ThreadPagePreview({ page, store }: { readonly page: PageRevision; reado
   const pageResponse = usePageResponseServices(store, threadState);
   const services = useMemo(
     () => ({
+      preparePageDownload: (page: PageRevision, signal?: AbortSignal) => store.preparePageDownload(page, signal),
       createPageRenderAdmission: (
         pageId: string,
         revision: number,

@@ -27,6 +27,11 @@ const profile = profileArguments[1] ?? "full";
 const full = profile === "full";
 const packaged = mode === "--packaged";
 const expectedOrigin = "capacitor-electron://localhost";
+const smokeDownloadPath = "/api/workspaces/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/files/download";
+const smokeStaleDownloadPath = `${smokeDownloadPath}?stale=true`;
+const smokePageDownloadPath = "/api/threads/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pages/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/revisions/3/download";
+const smokePageContent = "\uFEFF<!doctype html><meta charset=\"utf-8\"><p>Saved page</p>";
+const smokePageRevision = "a".repeat(64);
 const lifecycle = [];
 const userDataDirectory = await mkdtemp(
   path.join(os.tmpdir(), "sedes-electron-smoke-user-data-"),
@@ -122,7 +127,7 @@ function createSmokeBackend(label, { webSocket = false } = {}) {
     if (origin) response.setHeader("Access-Control-Allow-Origin", origin);
     response.setHeader(
       "Access-Control-Expose-Headers",
-      "Content-Disposition, Content-Length, X-Sedes-Workspace-File-Revision",
+      "Content-Disposition, Content-Length, X-Sedes-Download-Revision",
     );
     const credential = request.headers.authorization?.replace(/^Bearer /u, "");
     const client = credentials.get(credential);
@@ -210,19 +215,21 @@ function createSmokeBackend(label, { webSocket = false } = {}) {
       return;
     }
     if (
-      request.url === "/api/electron-smoke-download" ||
-      request.url === "/api/electron-smoke-stale-download"
+      request.url === smokeDownloadPath ||
+      request.url === smokeStaleDownloadPath ||
+      request.url === smokePageDownloadPath
     ) {
       observed.downloadOrigins.push(origin);
-      const content = Buffer.from("electron smoke download\n");
+      const pageDownload = request.url === smokePageDownloadPath;
+      const content = Buffer.from(pageDownload ? smokePageContent : "electron smoke download\n");
       response.setHeader("Content-Type", "application/octet-stream");
       response.setHeader(
         "Content-Disposition",
-        'attachment; filename="electron-smoke.txt"',
+        pageDownload ? 'attachment; filename="saved-page.html"' : 'attachment; filename="electron-smoke.txt"',
       );
       response.setHeader(
-        "X-Sedes-Workspace-File-Revision",
-        request.url.includes("stale")
+        "X-Sedes-Download-Revision",
+        pageDownload ? smokePageRevision : request.url === smokeStaleDownloadPath
           ? "electron-smoke-stale-revision"
           : "electron-smoke-revision",
       );
@@ -844,7 +851,7 @@ async function verifyDownload(app, page, backendOrigin) {
     {
       ...common,
       transferId: "10000000-0000-4000-8000-000000000099",
-      url: `${backendOrigin}/api/electron-smoke-download`,
+      url: `${backendOrigin}${smokeDownloadPath}`,
     },
   );
   if (
@@ -852,6 +859,27 @@ async function verifyDownload(app, page, backendOrigin) {
     (await readFile(downloadPath, "utf8")) !== "electron smoke download\n"
   )
     throw new Error("electron_smoke_download_failed");
+  const pageDownloadPath = path.join(userDataDirectory, "saved-page.html");
+  await app.evaluate(({ dialog }, savePath) => {
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: savePath });
+  }, pageDownloadPath);
+  const pageDownload = await page.evaluate(
+    async (input) => window.Capacitor.Plugins.WorkspaceFileDownload.downloadFile(input),
+    {
+      ...common,
+      transferId: "10000000-0000-4000-8000-000000000096",
+      url: `${backendOrigin}${smokePageDownloadPath}`,
+      suggestedFileName: "saved-page.html",
+      expectedContentDisposition: 'attachment; filename="saved-page.html"',
+      expectedContentLength: Buffer.byteLength(smokePageContent),
+      expectedRevision: smokePageRevision,
+    },
+  );
+  if (pageDownload.action !== "saved" || (await readFile(pageDownloadPath, "utf8")) !== smokePageContent)
+    throw new Error("electron_smoke_page_download_failed");
+  await app.evaluate(({ dialog }, savePath) => {
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: savePath });
+  }, downloadPath);
   const mismatch = await page.evaluate(
     async (input) => {
       try {
@@ -866,7 +894,7 @@ async function verifyDownload(app, page, backendOrigin) {
     {
       ...common,
       transferId: "10000000-0000-4000-8000-000000000097",
-      url: `${backendOrigin}/api/electron-smoke-stale-download`,
+      url: `${backendOrigin}${smokeStaleDownloadPath}`,
     },
   );
   if (mismatch !== "download_revision_mismatch")

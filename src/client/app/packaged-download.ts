@@ -6,24 +6,28 @@ import {
   type PackagedWorkspaceFileDownloadCompletion,
 } from "./workspace-file-download-plugin.js";
 
-export function supportsPackagedWorkspaceFileDownloads(): boolean {
+export function supportsPackagedDownloads(): boolean {
   return isAndroidClient() || isElectronClient();
 }
 
-export async function downloadWorkspaceFileInPackagedClient(input: {
+export async function downloadInPackagedClient(input: {
   readonly serverOrigin: string;
   readonly url: string;
   readonly suggestedFileName: string;
   readonly expectedContentDisposition: string;
   readonly expectedContentLength: number;
   readonly expectedRevision: string;
+  /** Pin a transfer to the connection selected when the user clicked. */
+  readonly expectedProfileId?: string;
   readonly signal?: AbortSignal;
 }): Promise<PackagedWorkspaceFileDownloadCompletion> {
-  if (!supportsPackagedWorkspaceFileDownloads()) return "cancelled";
+  if (!supportsPackagedDownloads()) return "cancelled";
   if (input.signal?.aborted) throw input.signal.reason;
 
   const profileId = getEndpointProfile(configuredSedesServer(input.serverOrigin));
   if (!profileId) throw new Error("Pair this server connection before downloading files.");
+  if (input.expectedProfileId !== undefined && profileId !== input.expectedProfileId)
+    throw new Error("The server connection changed before the download started. Try again.");
   const transferId = crypto.randomUUID();
   const cancel = (): void => {
     void workspaceFileDownload

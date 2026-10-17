@@ -1,4 +1,6 @@
 import { registerClientSchema, clientPollRequestSchema } from "../shared/protocol/client-controls.js";
+import { attachmentContentDisposition, SEDES_DOWNLOAD_REVISION_HEADER } from "../shared/downloads.js";
+import { pageDownloadFileName } from "../shared/page-download.js";
 import type { ClientControlService } from "./domain/client-control-service.js";
 import { usageAnalyticsRequestSchema } from "../shared/protocol/usage-analytics.js";
 import { usageAvailabilityRequestSchema } from "../shared/protocol/usage-accounting.js";
@@ -231,6 +233,7 @@ import type { TaskService } from "./domain/task-service.js";
 import type { WorkpadService } from "./domain/workpad-service.js";
 import type { PageService } from "./pages/page-service.js";
 import { createPageRenderRoutes } from "./pages/render-routes.js";
+import { downloadPageDocument } from "./pages/html-download.js";
 import { pageRevisionSchema, pageRevisionPageSchema } from "../shared/protocol/pages.js";
 import { registerWorkpadRoutes } from "./http/workpad-routes.js";
 import type { WorkspaceFileService } from "./domain/workspace-file-service.js";
@@ -616,23 +619,6 @@ function stashes(
       createdAt: new Date(record.createdAt).toISOString(),
     }),
   );
-}
-
-function attachmentContentDisposition(
-  disposition: "inline" | "attachment",
-  fileName: string,
-): string {
-  const asciiFallback =
-    fileName
-      .normalize("NFKD")
-      .replace(/[^\x20-\x7e]/gu, "_")
-      .replace(/["\\]/gu, "_")
-      .slice(0, 180) || "attachment";
-  const encoded = encodeURIComponent(fileName).replace(
-    /['()*]/gu,
-    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-  return `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
 }
 
 function workspaceFileDownloadContentDisposition(fileName: string): string {
@@ -2348,7 +2334,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
           );
           response.setHeader("X-Content-Type-Options", "nosniff");
           response.setHeader(
-            "X-Sedes-Workspace-File-Revision",
+            SEDES_DOWNLOAD_REVISION_HEADER,
             source.revision,
           );
           if (request.method === "HEAD") return;
@@ -3192,6 +3178,25 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const pageParameters = z.object({ threadId: z.string().uuid(), pageId: z.string().uuid().optional(), revision: z.coerce.number().int().positive().safe().optional() });
     const pageQuery = z.strictObject({ limit: z.coerce.number().int().min(1).max(100).optional(), cursor: z.string().max(256).optional() });
     routes.post("/api/threads/:threadId/pages/:pageId/revisions/:revision/render-token", pageRoutes.mintHandler);
+    const downloadPage: RequestHandler = async (request, response) => {
+      const requestScope = await scope(request);
+      const { threadId, pageId, revision } = pageParameters.parse(request.params);
+      if (request.header("Range") !== undefined) {
+        throw new ApiError(416, "range_not_supported", "Page downloads do not support byte ranges.");
+      }
+      const document = dependencies.pages!.content(requestScope, threadId, pageId!, revision!);
+      const bytes = downloadPageDocument(document);
+      response.status(200);
+      response.setHeader("Cache-Control", "private, no-store");
+      response.setHeader("Content-Type", "application/octet-stream");
+      response.setHeader("Content-Length", String(bytes.byteLength));
+      response.setHeader("Content-Disposition", attachmentContentDisposition("attachment", pageDownloadFileName(document.page.title, document.page.revision)));
+      response.setHeader("X-Content-Type-Options", "nosniff");
+      response.setHeader(SEDES_DOWNLOAD_REVISION_HEADER, document.page.sha256);
+      response.end(request.method === "HEAD" ? undefined : bytes);
+    };
+    routes.head("/api/threads/:threadId/pages/:pageId/revisions/:revision/download", downloadPage);
+    routes.get("/api/threads/:threadId/pages/:pageId/revisions/:revision/download", downloadPage);
     routes.get("/api/threads/:threadId/pages", async (request, response) => {
       const requestScope = await scope(request);
       const { threadId } = pageParameters.parse(request.params);

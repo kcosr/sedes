@@ -1,7 +1,8 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { FrameLocator, Locator, Page } from "@playwright/test";
+import { pathToFileURL } from "node:url";
+import type { FrameLocator, Locator, Page, TestInfo } from "@playwright/test";
 import {
   pagePublicationResultSchema,
   pageRevisionPageSchema,
@@ -9,7 +10,7 @@ import {
 } from "../../src/shared/protocol/pages.js";
 import { imageShowResultSchema, type ImageShowRequest } from "../../src/shared/protocol/image-show.js";
 import { normalizedThreadSnapshotSchema } from "../../src/shared/protocol/conversation.js";
-import { test, expect } from "./fixtures.js";
+import { test, expect, type BrowserDiagnostics } from "./fixtures.js";
 import {
   capture,
   createDraftThread,
@@ -25,12 +26,14 @@ const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 function mockup(version: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
+  const charset = version === "one" ? "" : `<meta charset="${version === "two" ? "windows-1252" : "utf-8"}">`;
+  return `<!doctype html><html><head>${charset}<style>
     *{box-sizing:border-box}body{margin:0;padding:24px;font:16px system-ui;background:#f2f5ff;color:#152447;min-height:100vh}
     main{max-width:620px;margin:auto;background:white;padding:20px;border-radius:16px;box-shadow:0 3px 15px #15244722}
     h1{font-size:26px;margin:0 0 16px}img{width:44px;height:44px;image-rendering:pixelated}button{font:inherit;padding:12px;background:#254fbd;color:white;border:0;border-radius:8px}
     #layout{padding:16px 0}.wide{display:none}@media(min-width:600px){.wide{display:block}.narrow{display:none}}
     </style></head><body><main><img src="images/logo.png" alt="Saved local logo"><h1>Inbox ${version}</h1>
+    <p id="unicode">Résumé – 東京 🦊</p><label>Draft note<input id="draft-note" value="Saved résumé"></label>
     <div class="narrow">Mobile layout</div><div class="wide">Desktop layout</div><p id="layout"></p>
     <button id="counter">Clicks: 0</button><p id="privacy"></p></main><script>
     const layout=()=>document.querySelector('#layout').textContent='Viewport '+innerWidth+' × '+innerHeight;
@@ -107,7 +110,65 @@ async function expandPage(page: Page, card: Locator): Promise<Locator> {
   return dialog;
 }
 
-test("published HTML keeps revisions, target viewport, local images, and host isolation across screen sizes", async ({
+async function downloadSavedHtml(
+  page: Page,
+  viewer: Locator,
+  browserDiagnostics: BrowserDiagnostics,
+  testInfo: TestInfo,
+  revision: number,
+  fileName: string,
+) {
+  const currentUrl = page.url();
+  // Chromium reports its deliberate attachment navigation as ERR_ABORTED,
+  // matching the saved workspace-file download coverage.
+  browserDiagnostics.allowNetworkFailures = true;
+  try {
+    const downloaded = page.waitForEvent("download");
+    await viewer.getByRole("button", { name: "Download HTML", exact: true }).click();
+    const download = await downloaded;
+    expect(await download.failure()).toBeNull();
+    expect(download.suggestedFilename()).toBe(`Inbox mockup-r${revision}.html`);
+    const filePath = testInfo.outputPath(fileName);
+    await download.saveAs(filePath);
+    expect(page.url()).toBe(currentUrl);
+    await expect(viewer).toBeVisible();
+    const bytes = await readFile(filePath);
+    expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    const html = bytes.subarray(3).toString("utf8");
+    expect(html).toContain(`data:image/png;base64,${PNG}`);
+    expect(html).toContain("Résumé – 東京 🦊");
+    expect(html).toContain('value="Saved résumé"');
+    expect(html).not.toContain("Unsaved live note");
+    expect(html).not.toContain("sedes-page-document");
+    expect(html).not.toContain("sedes:page-");
+    expect(html).not.toContain("__sedes");
+    return { filePath, html };
+  } finally {
+    browserDiagnostics.allowNetworkFailures = false;
+  }
+}
+
+async function expectStandaloneHtml(page: Page, filePath: string, heading: string) {
+  const standalone = await page.context().newPage();
+  const errors: string[] = [];
+  standalone.on("pageerror", error => errors.push(error.message));
+  try {
+    await standalone.goto(pathToFileURL(filePath).toString());
+    await expect(standalone.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+    await expect(standalone.locator("#unicode")).toHaveText("Résumé – 東京 🦊");
+    await expect(standalone.getByLabel("Draft note")).toHaveValue("Saved résumé");
+    await expect(standalone.getByRole("button", { name: "Clicks: 0", exact: true })).toBeVisible();
+    expect(await standalone.evaluate(() => "sedes" in window)).toBe(false);
+    const image = standalone.getByRole("img", { name: "Saved local logo" });
+    await expect(image).toHaveAttribute("src", /^data:image\/png;base64,/u);
+    expect(await image.evaluate(node => (node as HTMLImageElement).naturalWidth)).toBe(1);
+    expect(errors).toEqual([]);
+  } finally {
+    await standalone.close();
+  }
+}
+
+test("published HTML keeps revisions, downloads, target viewport, local images, and host isolation across screen sizes", async ({
   page,
   browserDiagnostics,
 }, testInfo) => {
@@ -351,6 +412,25 @@ test("published HTML keeps revisions, target viewport, local images, and host is
         .getByRole("img", { name: "Saved local logo" })
         .evaluate((image) => (image as HTMLImageElement).naturalWidth),
     ).toBe(1);
+    // Export an older saved revision after both source files are gone. Live
+    // interaction stays in the preview; the download contains the publication.
+    const downloadViewer = await expandPage(page, secondCard);
+    await expect(pageDocument(downloadViewer).getByRole("heading", { name: "Inbox two" })).toBeVisible();
+    await downloadViewer.getByRole("button", { name: "Previous page revision" }).click();
+    await expect(pageDocument(downloadViewer).getByRole("heading", { name: "Inbox one" })).toBeVisible();
+    await pageDocument(downloadViewer).getByLabel("Draft note").fill("Unsaved live note");
+    await pageDocument(downloadViewer).getByRole("button", { name: "Clicks: 0", exact: true }).click();
+    const firstDownload = await downloadSavedHtml(page, downloadViewer, browserDiagnostics, testInfo, 1, "inbox-revision-1.html");
+    expect(firstDownload.html).toContain("Inbox one");
+    expect(firstDownload.html).not.toContain("Inbox two");
+    expect(firstDownload.html).not.toContain("charset=");
+    await expectStandaloneHtml(page, firstDownload.filePath, "Inbox one");
+    await expect(pageDocument(downloadViewer).getByLabel("Draft note")).toHaveValue("Unsaved live note");
+    await expect(pageDocument(downloadViewer).getByRole("button", { name: "Clicks: 1", exact: true })).toBeVisible();
+    await expect(downloadViewer.getByRole("button", { name: "Download HTML", exact: true })).toBeVisible();
+    await capture(page, testInfo, "generative-ui-download-desktop.png");
+    await downloadViewer.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(downloadViewer).toBeHidden();
     const longPage = await publish(page, threadId, {
       html: '<!doctype html><style>body{margin:0;height:2200px;background:#eef2ff}</style><h1>Long library example</h1>',
       title: "Long example",
@@ -455,6 +535,16 @@ test("published HTML keeps revisions, target viewport, local images, and host is
       pageDocument(library).getByRole("heading", { name: "Inbox three" }),
     ).toBeVisible();
     await expect(library.getByLabel("Revision 3 of 3")).toHaveText("3/3");
+    await library.getByRole("button", { name: "Previous page revision" }).click();
+    await expect(pageDocument(library).getByRole("heading", { name: "Inbox two" })).toBeVisible();
+    const secondDownload = await downloadSavedHtml(page, library, browserDiagnostics, testInfo, 2, "inbox-revision-2.html");
+    expect(secondDownload.html).toContain("Inbox two");
+    expect(secondDownload.html).not.toContain("Inbox three");
+    expect(secondDownload.html).toContain('charset="windows-1252"');
+    await expectStandaloneHtml(page, secondDownload.filePath, "Inbox two");
+    await library.getByRole("button", { name: "Return to published revision 3", exact: true }).click();
+    await expect(pageDocument(library).getByRole("heading", { name: "Inbox three" })).toBeVisible();
+    await expect(library.getByRole("button", { name: "Download HTML", exact: true })).toBeVisible();
     await pageDocument(library)
       .getByRole("button", { name: "Clicks: 0" })
       .click();

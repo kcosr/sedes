@@ -4,15 +4,21 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Locale;
 import java.util.function.Function;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 final class WorkspaceFileDownloadPolicy {
 
-    private static final Pattern DOWNLOAD_PATH = Pattern.compile(
-        "^/api/workspaces/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/files/download$"
+    private static final String UUID_PATH = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+    private static final Pattern WORKSPACE_DOWNLOAD_PATH = Pattern.compile(
+        "^/api/workspaces/" + UUID_PATH + "/files/download$"
+    );
+    private static final Pattern PAGE_DOWNLOAD_PATH = Pattern.compile(
+        "^/api/threads/" + UUID_PATH + "/pages/" + UUID_PATH + "/revisions/([1-9][0-9]{0,15})/download$"
     );
 
     static final long MAXIMUM_FILE_BYTES = 1024L * 1024L * 1024L;
+    static final long MAXIMUM_PAGE_BYTES = 16L * 1024L * 1024L + 3;
     static final int STREAM_BUFFER_BYTES = 64 * 1024;
     static final int CONNECT_TIMEOUT_MILLISECONDS = 15_000;
     static final int READ_INACTIVITY_TIMEOUT_MILLISECONDS = 30_000;
@@ -32,7 +38,7 @@ final class WorkspaceFileDownloadPolicy {
             }
             if (!isHttp(request) || request.getHost() == null || request.getRawUserInfo() != null ||
                 request.getRawFragment() != null || request.getRawPath() == null ||
-                !DOWNLOAD_PATH.matcher(request.getRawPath()).matches()) {
+                !(WORKSPACE_DOWNLOAD_PATH.matcher(request.getRawPath()).matches() || isPageDownload(request))) {
                 throw new IllegalArgumentException("download_url_invalid");
             }
             if (!sameOrigin(origin, request)) throw new IllegalArgumentException("download_origin_mismatch");
@@ -42,7 +48,7 @@ final class WorkspaceFileDownloadPolicy {
         }
     }
 
-    static long validatedByteSize(Object value) {
+    static long validatedByteSize(Object value, URI request) {
         if (!(value instanceof Number)) {
             throw new IllegalArgumentException("download_byte_size_invalid");
         }
@@ -53,7 +59,7 @@ final class WorkspaceFileDownloadPolicy {
             !Double.isFinite(numericValue) ||
             numericValue != integralValue ||
             integralValue < 0 ||
-            integralValue > MAXIMUM_FILE_BYTES
+            integralValue > (isPageDownload(request) ? MAXIMUM_PAGE_BYTES : MAXIMUM_FILE_BYTES)
         ) {
             throw new IllegalArgumentException("download_byte_size_invalid");
         }
@@ -64,8 +70,8 @@ final class WorkspaceFileDownloadPolicy {
         return requiredText(value, 160, "download_revision_invalid");
     }
 
-    static String validatedContentDisposition(String value) {
-        String disposition = requiredText(value, 2048, "download_content_disposition_invalid");
+    static String validatedContentDisposition(String value, URI request) {
+        String disposition = requiredText(value, isPageDownload(request) ? 1024 : 2048, "download_content_disposition_invalid");
         if (!disposition.regionMatches(true, 0, "attachment;", 0, "attachment;".length())) {
             throw new IllegalArgumentException("download_content_disposition_invalid");
         }
@@ -96,6 +102,7 @@ final class WorkspaceFileDownloadPolicy {
         int separator = fileName.lastIndexOf('.');
         if (separator < 0 || separator == fileName.length() - 1) return "application/octet-stream";
         String extension = fileName.substring(separator + 1).toLowerCase(Locale.ROOT);
+        if ("html".equals(extension)) return "text/html";
         String mimeType = lookup.apply(extension);
         return mimeType == null || mimeType.isEmpty() ? "application/octet-stream" : mimeType;
     }
@@ -159,6 +166,12 @@ final class WorkspaceFileDownloadPolicy {
 
     private static boolean isHttp(URI uri) {
         return "http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme());
+    }
+
+    private static boolean isPageDownload(URI uri) {
+        if (uri.getRawPath() == null || uri.getRawQuery() != null) return false;
+        Matcher match = PAGE_DOWNLOAD_PATH.matcher(uri.getRawPath());
+        return match.matches() && Long.parseLong(match.group(1)) <= 9_007_199_254_740_991L;
     }
 
     private static boolean sameOrigin(URI left, URI right) {

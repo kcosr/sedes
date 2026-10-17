@@ -17,6 +17,8 @@ public final class WorkspaceFileDownloadIntentTest {
         assertDocument("app debug (1).APK", "application/vnd.android.package-archive");
         assertDocument("report final.pdf", "application/pdf");
         assertDocument("photo.jpg", "image/jpeg");
+        assertDocument("saved page.html", "text/html");
+        assertDocument("saved page.HTML", "text/html");
         assertDocument("README", "application/octet-stream");
         assertDocument("file.sedesunknownextension", "application/octet-stream");
     }

@@ -20,7 +20,8 @@ User-facing changes are collected here before release. See the
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **162** for Page responses, larger composer reference lists, the updated
+  **163** for Page responses, HTML page downloads and shared download metadata,
+  larger composer reference lists, the updated
   native voice bridge, Windows notification script paths, multiple named
   automations per thread, dismissal of automation results, and removal of
   unused global inventory totals. Rebuild Android
@@ -31,6 +32,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88))
 
 ### Added
+
+- Download the selected saved HTML page revision from the expanded viewer or
+  Pages library on web, desktop, and Android. Images are embedded in one UTF-8
+  HTML file; unsaved interaction state and Sedes host controls are excluded.
+  See [page downloads](docs/user/html-previews.md#download-a-page).
 
 - Threads support multiple named recurring schedules and one-time reminders.
   Run on **This thread**, or **Fork** a fresh result each time, copying saved

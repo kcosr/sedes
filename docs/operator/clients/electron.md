@@ -114,7 +114,7 @@ provider authentication remain operator responsibilities.
 - HTTP(S) API, SSE, and WebSocket connectivity to the selected server.
 - A narrow native connection runtime that owns the full profile's Local server and uses
   the system OpenSSH client for managed SSH loopback forwarding.
-- A narrow native workspace-file download plugin that streams validated server
+- A narrow native download plugin that streams validated workspace files and saved HTML pages
   bytes to a user-selected destination.
 - Application terminal panes and the Codex managed-TUI presentation for
   eligible threads when the desktop account has a compatible Codex CLI
@@ -547,8 +547,12 @@ interactive feature checks on each supported platform.
   and new-window guards.
 - CSP admits runtime-configured HTTP(S) API/SSE and WS/WSS endpoints, while
   blocking cross-origin frames, objects, and arbitrary form destinations.
-- Workspace downloads cross the native boundary only through the dedicated
+- Workspace and saved HTML page downloads cross the native boundary only through the dedicated
   streaming plugin after exact metadata validation.
+  Downloads use a user-selected destination and do not open automatically.
+  Rebuild the client with the server for client protocol 163 and the shared
+  `X-Sedes-Download-Revision` metadata contract. See
+  [Download a page](../../user/html-previews.md#download-a-page).
 - Managed Local and SSH cross the native boundary only through the consolidated
   connection runtime. Local uses code-owned executable/config/state paths and
   a loopback listener; SSH accepts a restricted host alias and remote port,

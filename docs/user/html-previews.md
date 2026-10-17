@@ -8,7 +8,7 @@ own **Send** control; it has no access to your credentials or other Sedes tools.
 
 Inline content appears without a permanent header or dimensions footer. Use
 the maximize button at the top right to open the larger viewer. Its header
-contains the title, refresh, and previous/next arrows around a `1/3` revision
+contains the title, Download HTML, refresh, and previous/next arrows around a `1/3` revision
 indicator when the page has multiple revisions. Single-revision pages omit
 the revision controls.
 Refresh reloads the selected saved revision and resets its local interaction
@@ -56,6 +56,30 @@ They do not save transient interaction state such as selected filters or text
 typed into a mock form. Reopening, switching revisions, or moving between the
 inline and fullscreen views starts that page again. Pages belong to their
 original thread and are removed when that thread is deleted.
+
+## Download a page
+
+Open the expanded viewer or the thread's **Pages** library and choose
+**Download HTML** to save the revision currently displayed. Web browsers start
+a file download; desktop and Android clients open their save dialog or document
+picker. You can download a saved revision even if its preview cannot load.
+
+The download is one `.html` file with captured images embedded as data URLs,
+including images referenced by CSS. It needs no ZIP or separate asset folder,
+and still contains those images if the original files have changed or been
+deleted. HTML and CSS reflect the normalized saved page rather than the exact
+source text the agent wrote. A UTF-8 byte-order mark preserves non-ASCII text
+when the file is opened separately.
+
+Downloads preserve saved content, not current input values, canvas drawings,
+zoom, or other unsaved interactions. Sedes's configured viewer dimensions and
+host controls are not included. The file has no Sedes credentials, response
+bridge, or **Send** action. Code that unconditionally uses `window.sedes` can
+fail outside Sedes; guard response registration as shown below.
+
+Opening the file runs its authored JavaScript as an ordinary local web page.
+It does not retain Sedes's iframe sandbox or network restrictions. Downloading
+saves the file without opening it automatically.
 
 ## Send a Page response
 
@@ -179,7 +203,7 @@ is no fixed form schema. For example:
 </label>
 <label>Notes <textarea id="notes"></textarea></label>
 <script>
-  window.sedes.onSubmit(() => {
+  window.sedes?.onSubmit(() => {
     const pace = document.querySelector('input[name="pace"]:checked').value;
     const topics = [...document.querySelector('#topics').selectedOptions]
       .map(option => option.value).join(', ');

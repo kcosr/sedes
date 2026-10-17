@@ -11,6 +11,8 @@ import {
   type PageRevision,
   type PageRevisionPage,
 } from "../../shared/protocol/pages.js";
+import { PAGE_DOWNLOAD_MAX_BYTES, pageDownloadFileName } from "../../shared/page-download.js";
+import { attachmentContentDisposition, SEDES_DOWNLOAD_REVISION_HEADER } from "../../shared/downloads.js";
 import {
   environmentVariablesPreviewQuerySchema,
   environmentVariablesPreviewResultSchema,
@@ -506,13 +508,17 @@ const codexTuiAdmissionSchema = z.strictObject({
 
 export type CodexTuiAdmission = z.infer<typeof codexTuiAdmissionSchema>;
 
-export interface PreparedWorkspaceFileDownload {
+export interface PreparedDownload {
   /** Exact GET URL validated by the preflight request. */
   readonly url: string;
   readonly serverOrigin: string;
   readonly contentDisposition: string;
   readonly contentLength: number;
   readonly revision: string;
+}
+
+export interface PreparedPageDownload extends PreparedDownload {
+  readonly suggestedFileName: string;
 }
 
 export interface PageRenderAdmission {
@@ -1158,7 +1164,7 @@ export class ApiClient {
       readonly expectedRevision: string;
       readonly signal?: AbortSignal;
     },
-  ): Promise<PreparedWorkspaceFileDownload> {
+  ): Promise<PreparedDownload> {
     const parameters = new URLSearchParams({
       rootId: input.rootId,
       path: input.path,
@@ -1182,7 +1188,7 @@ export class ApiClient {
     const contentDisposition = response.headers.get("Content-Disposition");
     const contentLengthText = response.headers.get("Content-Length");
     const contentType = response.headers.get("Content-Type");
-    const revision = response.headers.get("X-Sedes-Workspace-File-Revision");
+    const revision = response.headers.get(SEDES_DOWNLOAD_REVISION_HEADER);
     const contentLength =
       contentLengthText === null ? Number.NaN : Number(contentLengthText);
     if (
@@ -2067,6 +2073,43 @@ export class ApiClient {
       { signal }, z.strictObject({ page: pageRevisionSchema }),
     );
     return result.page;
+  }
+
+  async preparePageDownload(threadId: string, page: PageRevision, signal?: AbortSignal): Promise<PreparedPageDownload> {
+    if (page.threadId !== threadId)
+      throw new Error("This page does not belong to the selected thread.");
+    const path = `/api/threads/${encodeURIComponent(threadId)}/pages/${encodeURIComponent(page.pageId)}/revisions/${page.revision}/download`;
+    const response = await this.#fetch(path, {
+      method: "HEAD",
+      credentials: endpointUsesCrossOriginTransport(this.#endpoint) ? "omit" : "same-origin",
+      redirect: "error",
+      headers: { Accept: "application/octet-stream" },
+      signal,
+    });
+    if (!response.ok)
+      throw new ApiError(response.status, "page_download_unavailable", "This page could not be prepared for download.", response.status >= 500);
+    const contentDisposition = response.headers.get("Content-Disposition");
+    const contentLengthText = response.headers.get("Content-Length");
+    const contentLength = contentLengthText === null ? Number.NaN : Number(contentLengthText);
+    const revision = response.headers.get(SEDES_DOWNLOAD_REVISION_HEADER);
+    const suggestedFileName = pageDownloadFileName(page.title, page.revision);
+    if (response.status !== 200 || response.redirected ||
+        !contentDisposition || contentDisposition.length > 1_024 ||
+        contentDisposition !== attachmentContentDisposition("attachment", suggestedFileName) ||
+        !/^(?:0|[1-9][0-9]*)$/.test(contentLengthText ?? "") ||
+        !Number.isSafeInteger(contentLength) || contentLength !== page.byteSize + 3 ||
+        contentLength > PAGE_DOWNLOAD_MAX_BYTES ||
+        response.headers.get("Content-Type") !== "application/octet-stream" ||
+        revision !== page.sha256)
+      throw new ApiError(502, "invalid_response", "The server returned invalid HTML download metadata.", true);
+    return {
+      url: resolveSedesServerUrl(this.#endpoint, path),
+      serverOrigin: this.#endpoint.baseUrl ?? window.location.origin,
+      suggestedFileName,
+      contentDisposition,
+      contentLength,
+      revision,
+    };
   }
 
   async createPageRenderAdmission(threadId: string, pageId: string, revision: number, signal?: AbortSignal): Promise<PageRenderAdmission> {
