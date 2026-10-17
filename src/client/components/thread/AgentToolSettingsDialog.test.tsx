@@ -491,10 +491,11 @@ describe("AgentToolSettingsDialog", () => {
   it("preserves a stale manual draft when the thread changes during a policy GET", async () => {
     const selected = reusablePolicy();
     const request = deferred<ToolPolicySet>();
+    const getToolPolicySet = vi.fn().mockReturnValue(request.promise);
     const { store, rerender, onOpenChange, setAgentToolPolicy } = subject(policySnapshot({ presentationSurface: "cli" }), {
       storeOverrides: {
         listToolPolicySets: vi.fn().mockResolvedValue({ items: [selected] }),
-        getToolPolicySet: vi.fn().mockReturnValue(request.promise),
+        getToolPolicySet,
       },
     });
     fireEvent.click(screen.getByRole("checkbox", { name: "List workspaces" }));
@@ -504,12 +505,21 @@ describe("AgentToolSettingsDialog", () => {
       authoritative disabled={false} open onOpenChange={onOpenChange}
     />);
     await act(async () => request.resolve(selected));
-    expect(await screen.findByText(/changed while the policy loaded/)).toBeVisible();
-    expect(await screen.findByText(/changed in another client/i)).toBeVisible();
+    const loadError = await screen.findByText(/changed while the policy loaded/);
+    expect(loadError).toBeVisible();
+    expect(loadError).toHaveTextContent("Close and reopen Agent tools to load the latest settings before applying a policy set.");
+    const staleWarning = await screen.findByText(/changed in another client/i);
+    expect(staleWarning).toBeVisible();
+    expect(staleWarning).toHaveTextContent("Close and reopen Agent tools to load the latest settings.");
     expect(screen.getByRole("checkbox", { name: "Agent context" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "List workspaces" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "Allow other environments" })).not.toBeChecked();
     expect(screen.queryByText(/Loaded Focused review|already matches/i)).not.toBeInTheDocument();
+    const apply = screen.getByRole("button", { name: "Apply" });
+    expect(apply).toBeDisabled();
+    expect(getToolPolicySet).toHaveBeenCalledOnce();
+    fireEvent.click(apply);
+    expect(getToolPolicySet).toHaveBeenCalledOnce();
     const save = screen.getByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
     fireEvent.click(save);

@@ -365,7 +365,7 @@ export function AgentToolSettingsDialog({
     tools.map(({ id }) => id),
   );
   const applyPolicySet = async () => {
-    if (!editable || policySetsLoading || !selectedPolicySetId || applyRequest.current) return;
+    if (!editable || stale || policySetsLoading || !selectedPolicySetId || applyRequest.current) return;
     const request = new AbortController();
     applyRequest.current = request;
     restoreApplyFocus.current = document.activeElement === applyButtonRef.current;
@@ -377,7 +377,9 @@ export function AgentToolSettingsDialog({
       const selected = await store.getToolPolicySet(selectedPolicySetId, request.signal);
       if (request.signal.aborted) return;
       if (currentPolicyRevision.current !== draft.baseRevision) {
-        throw new Error("This thread’s tool settings changed while the policy loaded. Review them and apply again.");
+        throw new Error(dirty(draft)
+          ? "This thread’s tool settings changed while the policy loaded. Close and reopen Agent tools to load the latest settings before applying a policy set."
+          : "This thread’s tool settings changed while the policy loaded. Review them and apply again.");
       }
       const ids = new Set(selected.enabledToolIds);
       if (selected.enabledToolIds.some(id => !orderedIds.includes(id))) {
@@ -525,7 +527,7 @@ export function AgentToolSettingsDialog({
               {policySets.map(set => <option key={set.id} value={set.id}>{set.name}</option>)}
             </NativeSelect>
             <Button ref={applyButtonRef} type="button" variant="outline"
-              disabled={!editable || policySetsLoading || !selectedPolicySetId}
+              disabled={!editable || stale || policySetsLoading || !selectedPolicySetId}
               onClick={() => void applyPolicySet()}>{applyingPolicy ? "Applying…" : "Apply"}</Button>
           </div>
           <p id={`${dialogId}-policy-set-description`}>Replace this draft’s tools and access settings. Presentation stays unchanged; Save applies the changes to this thread.</p>
@@ -767,7 +769,8 @@ export function AgentToolSettingsDialog({
             {showStaleWarning && (
               <DialogAlert tone="warning" role="alert">
                 Agent tool settings changed in another client. Save will not
-                overwrite the newer settings.
+                overwrite the newer settings. Close and reopen Agent tools to
+                load the latest settings.
               </DialogAlert>
             )}
             {error && <DialogAlert tone="danger">{error}</DialogAlert>}
