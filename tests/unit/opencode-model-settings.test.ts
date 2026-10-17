@@ -6,6 +6,7 @@ import type { AgentConnectionProfile } from "../../src/server/backends/contracts
 import type { ValidatedWorkspace } from "../../src/server/execution/contracts.js";
 import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import { OpenCodeModelCatalog, reviewedOpenCodeEffort } from "../../src/server/backends/opencode/opencode-model-catalog.js";
+import { parseModels, parseOpenCodeReadOutput } from "../../src/server/backends/opencode/opencode-native-codecs.js";
 import { classifyObserved, decodeOpenCodeModelId, decodeOpenCodeModelSetting, encodeOpenCodeModelSetting, qualifiedOpenCodeModelId, resolveOpenCodeDefaults, resolveOpenCodeSelection, toEffective } from "../../src/server/backends/opencode/opencode-model-selection.js";
 import { OpenCodeThreadSettingsRepository } from "../../src/server/backends/opencode/opencode-thread-settings-repository.js";
 import { OpenCodeThreadRepository } from "../../src/server/backends/opencode/opencode-thread-repository.js";
@@ -38,6 +39,13 @@ function nativeModel(overrides: Partial<ModelInfo> = {}): ModelInfo {
 async function catalog(models: ModelInfo[] = [nativeModel()], defaultModel: ModelInfo | undefined = models[0]) {
   return new OpenCodeModelCatalog({ modelPolicy, readNative: async () => ({ models, ...(defaultModel ? { defaultModel } : {}) }) }).read({ connection, workspace });
 }
+function decodedModel(model: ModelInfo, transport: "plain" | "http" | "sidecar"): ModelInfo {
+  if (transport === "plain") return model;
+  const directory = workspace.canonicalPath;
+  const models = parseModels({ location: { directory }, data: [model] }).data;
+  return transport === "http" ? models[0]!
+    : parseOpenCodeReadOutput("listModels", { directory }, JSON.parse(JSON.stringify(models)))[0]!;
+}
 function fixture() {
   const database = new Database(":memory:"); databases.push(database); database.pragma("foreign_keys = ON");
   database.exec(`
@@ -69,6 +77,28 @@ function fixture() {
 }
 
 describe("OpenCode native model catalog", () => {
+  describe.each(["http", "sidecar"] as const)("%s decoded reasoning variants", transport => {
+    it.each([
+      { package: "@opencode/ai/providers/openai-compatible", body: undefined },
+      { package: "@opencode/ai/providers/openai-compatible", body: { reasoning_effort: "low" } },
+      { package: "@opencode/ai/providers/openai", body: undefined },
+      { package: "@opencode/ai/providers/openai", body: { reasoning: { summary: "auto", effort: "low" }, include: ["reasoning.encrypted_content"] } },
+    ])("retains exact effort choices for $package with body $body", async ({ package: providerPackage, body }) => {
+      const variants = ["low", "medium", "high"].map(id => ({ id, settings: providerPackage.endsWith("/openai")
+        ? { include: ["reasoning.encrypted_content"], reasoningSummary: "auto", reasoningEffort: id }
+        : { reasoningEffort: id } }));
+      const model = decodedModel(nativeModel({ package: providerPackage, variants, ...(body ? { body } : {}) }), transport);
+      expect(Object.getPrototypeOf(model.variants[0]!.settings)).toBeNull();
+      const read = await catalog([model]);
+      const efforts = body ? ["default", "low"] : ["default", "low", "medium", "high"];
+      expect(read.catalog.models[0]!.supportedReasoningEfforts).toEqual(efforts);
+      for (const variant of efforts.slice(1)) {
+        expect(resolveOpenCodeSelection({ connection, catalog: read.catalog, modelPolicy,
+          modelId: qualifiedOpenCodeModelId(selection), variant })).toEqual({ ...selection, variant });
+        expect(classifyObserved({ selection: { ...selection, variant }, catalog: read }).classification).toBe("recognized");
+      }
+    });
+  });
   it("uses exact provider/id pairs, not the upstream routing model or slash concatenation", async () => {
     const ref = { providerID: "provider/日本", id: "model/#other" };
     expect(decodeOpenCodeModelId(qualifiedOpenCodeModelId(ref))).toEqual(ref);
@@ -97,19 +127,25 @@ describe("OpenCode native model catalog", () => {
     expect(() => resolveOpenCodeDefaults({ connection, catalog: read.catalog, defaults, modelPolicy })).toThrow();
     expect(() => resolveOpenCodeDefaults({ connection, catalog: read.catalog, modelPolicy, defaults: { model: { type: "fixed", modelId: qualifiedOpenCodeModelId({ providerID: "removed", id: "removed" }) }, variant: defaults.variant } })).toThrow();
   });
-  it("recognizes only exact reviewed package/overlay combinations and raw-body compatibility", () => {
+  it.each(["plain", "http", "sidecar"] as const)("recognizes only exact reviewed package/overlay combinations and raw-body compatibility (%s)", transport => {
+    const review = (model: ModelInfo, variant: ModelInfo["variants"][number]) => {
+      const decoded = decodedModel({ ...model, variants: [variant] }, transport);
+      return reviewedOpenCodeEffort(decoded, decoded.variants[0]!);
+    };
     const model = nativeModel(); const low = model.variants[0]!;
-    expect(reviewedOpenCodeEffort(model, low)).toBe(true);
+    expect(review(model, low)).toBe(true);
     for (const variant of [{ ...low, settings: { reasoningEffort: "high" } }, { ...low, settings: { ...low.settings, temperature: 0 } },
-      { ...low, body: { extra: true } }, { ...low, headers: { special: "x" } }]) expect(reviewedOpenCodeEffort(model, variant)).toBe(false);
-    expect(reviewedOpenCodeEffort({ ...model, package: "custom-package" }, low)).toBe(false);
-    expect(reviewedOpenCodeEffort({ ...model, body: { reasoning_effort: "high" } }, low)).toBe(false);
+      { ...low, body: { extra: true } }, { ...low, headers: { special: "x" } }]) expect(review(model, variant)).toBe(false);
+    expect(review({ ...model, package: "custom-package" }, low)).toBe(false);
+    expect(review({ ...model, body: { reasoning_effort: "high" } }, low)).toBe(false);
     const responses = { ...model, package: "@opencode/ai/providers/openai" };
     const variant = { id: "low", settings: { reasoningEffort: "low", reasoningSummary: "auto", include: ["reasoning.encrypted_content"] } };
-    expect(reviewedOpenCodeEffort(responses, variant)).toBe(true);
-    expect(reviewedOpenCodeEffort(responses, low)).toBe(false);
-    expect(reviewedOpenCodeEffort({ ...responses, body: { reasoning: { effort: "high" } } }, variant)).toBe(false);
-    expect(reviewedOpenCodeEffort({ ...responses, body: { include: [] } }, variant)).toBe(false);
+    expect(review(responses, variant)).toBe(true);
+    expect(review(responses, low)).toBe(false);
+    expect(review(responses, { ...variant, settings: { ...variant.settings, temperature: 0 } })).toBe(false);
+    expect(review({ ...responses, body: { reasoning: { effort: "high" } } }, variant)).toBe(false);
+    expect(review({ ...responses, body: { reasoning: { effort: "low", summary: "auto", extra: true } } }, variant)).toBe(false);
+    expect(review({ ...responses, body: { include: [] } }, variant)).toBe(false);
   });
   it("classifies native custom/unavailable selections without inventing effort and omits default effective thinking", async () => {
     const read = await catalog();
@@ -195,12 +231,17 @@ describe("OpenCode desired settings authority", () => {
     expect(actions.driverAction({ action: "compact" }, "compact")).toEqual({ action: "compact", applicationOperationId: "compact" });
   });
   it("presents desired and effective selections independently with stable desired revision", async () => {
-    const { database, settings, persistence, presentation } = fixture(); const read = await catalog();
+    const { database, settings, persistence, presentation } = fixture(); const read = await catalog([decodedModel(nativeModel(), "http")]);
     persistence.initializeNewThread(scope, "thread", connection, read.catalog);
     database.prepare("UPDATE application_threads SET backing_state='bound' WHERE id='thread'").run();
     const args = { scope, applicationThreadId: "thread", connection, workspace, catalog: read.catalog,
       backend: { id: backendInstanceId, tenantId: scope.tenantId, kind: "opencode" as const, label: "OpenCode", enabled: true, configurationRevision: 1, protocolRelease: OPENCODE_RELEASE } };
     const before = await presentation.read(args); const revision = settings.get(scope, "thread").revision;
+    expect(before.settingDescriptors.find(setting => setting.id === "thinking_level")?.options).toEqual([
+      { value: "default", label: { text: "Default" }, available: true },
+      { value: "low", label: { text: "Low" }, available: true },
+      { value: "high", label: { text: "High" }, available: true },
+    ]);
     settings.beginObservation(scope, "thread", { expectedRevision: revision, generation: "generation", now: 2 });
     settings.recordObserved(scope, "thread", { expectedRevision: revision, generation: "generation", observed: classifyObserved({ selection: { ...selection, variant: "low" }, catalog: read }), now: 3 });
     const after = await presentation.read(args);
