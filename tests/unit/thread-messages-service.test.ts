@@ -25,6 +25,7 @@ const scope: RequestScope = {
 const environmentAuthority: TrustedEnvironmentAuthorityGrant = Object.freeze({
   id: "grant-1",
   callerKind: "thread_agent",
+  resourceScope: {allowOtherEnvironments:true,allowOtherProjects:true},
   defaults: Object.freeze({
     kind: "thread_agent",
     environmentId: "environment-1",
@@ -45,6 +46,7 @@ const environmentAuthority: TrustedEnvironmentAuthorityGrant = Object.freeze({
       id: "thread-1",
       environmentId: "environment-1",
       workspaceId: "workspace-1",
+      projectId:"project-1",
     }),
   ]),
   canonicalInputDigest: "input-digest",
@@ -194,7 +196,7 @@ function fixture(
         backendInstanceId: "backend-1",
         thread: { id: threadId, backingState: input.backingState ?? "bound" },
         environment: { id: "environment-1" },
-        workspace: { id: "workspace-1" },
+        workspace: { id: "workspace-1", projectId: "project-1" },
       }),
     ),
   };
@@ -225,6 +227,7 @@ function fixture(
               id: threadId,
               environmentId: "environment-1",
               workspaceId: "workspace-1",
+              projectId: "project-1",
             },
           ],
         },
@@ -292,6 +295,14 @@ function historyPage(
 }
 
 describe("ThreadMessagesService", () => {
+  it("denies transcript disclosure when its project changes during capture",async()=>{
+    const harness=fixture(state([turn("one","completed",0,["answer"])],[item("answer","one","assistant","private") ]));
+    const initial=await harness.inventory.getAuthorized(scope,"thread-1");
+    harness.inventory.getAuthorized.mockResolvedValueOnce(initial).mockResolvedValueOnce({...initial,workspace:{id:"workspace-1",projectId:"other-project"}});
+    await expect(harness.rawService.list(scope,"thread-1",{environmentAuthority:{...environmentAuthority,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}}})).rejects.toMatchObject({code:"permission_denied"});
+    expect(harness.release).toHaveBeenCalledOnce();
+  });
+
   it("reports the source revision for agent forks while omitting page presentation items", async () => {
     const page: ConversationItem = { id: "page", turnId: "turn-1", revision: 0, kind: "page", status: "completed", page: {
       pageId: "22222222-2222-4222-8222-222222222222", threadId: "thread-1", revision: 1, title: "Preview", viewport: {},

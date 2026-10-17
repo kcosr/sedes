@@ -158,7 +158,7 @@ describe("Pi backend module", () => {
             surface: "native" as const,
             mode: "individual" as const,
           },
-          accessBoundary: "environment" as const,
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: [],
         }),
         invoke: async () => {
@@ -307,7 +307,7 @@ describe("Pi backend module", () => {
             surface: "native" as const,
             mode: "individual" as const,
           },
-          accessBoundary: "environment" as const,
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: [],
         }),
         invoke: async () => {

@@ -378,6 +378,9 @@ export class TaskRepository {
       /** Trusted authority binding for agent-tool cursors. */
       readonly authorityBinding?: {
         readonly sourceEnvironmentId: string;
+        readonly projectId?: string;
+        /** Null removes the location restriction for shared project records. */
+        readonly projectEnvironmentIds: readonly string[] | null;
         readonly targetEnvironmentIds: readonly string[];
         readonly policyRevision: number;
         readonly continuationAuthorityDigest: string;
@@ -465,6 +468,23 @@ export class TaskRepository {
         ? undefined
         : "(instr(lower(title), ?) > 0 OR instr(lower(details), ?) > 0)",
     ].filter((filter): filter is string => filter !== undefined);
+    const authorityFilters: string[] = [];
+    const authorityParameters: unknown[] = [];
+    if (input.authorityBinding) {
+      const authority = input.authorityBinding;
+      const placeholders = authority.targetEnvironmentIds.map(() => "?").join(",");
+      authorityFilters.push(`(scope_kind <> 'thread' OR EXISTS (SELECT 1 FROM application_threads AS allowed_thread WHERE allowed_thread.tenant_id=tasks.tenant_id AND allowed_thread.owner_principal_id=tasks.owner_principal_id AND allowed_thread.id=tasks.thread_id AND allowed_thread.environment_id IN (${placeholders})))`);
+      authorityParameters.push(...authority.targetEnvironmentIds);
+      if (authority.projectEnvironmentIds !== null) {
+        const placeholders = authority.projectEnvironmentIds.map(() => "?").join(",");
+        authorityFilters.push(`(scope_kind <> 'project' OR EXISTS (SELECT 1 FROM workspaces AS project_location WHERE project_location.tenant_id=tasks.tenant_id AND project_location.owner_principal_id=tasks.owner_principal_id AND project_location.project_id=tasks.project_id AND project_location.removed_at IS NULL AND project_location.environment_id IN (${placeholders})))`);
+        authorityParameters.push(...authority.projectEnvironmentIds);
+      }
+      if (authority.projectId !== undefined) {
+        authorityFilters.push(`(scope_kind='global' OR (scope_kind='project' AND project_id=?) OR (scope_kind='thread' AND EXISTS (SELECT 1 FROM application_threads AS allowed_thread JOIN workspaces AS location ON location.tenant_id=allowed_thread.tenant_id AND location.owner_principal_id=allowed_thread.owner_principal_id AND location.id=allowed_thread.workspace_id WHERE allowed_thread.tenant_id=tasks.tenant_id AND allowed_thread.owner_principal_id=tasks.owner_principal_id AND allowed_thread.id=tasks.thread_id AND location.project_id=?)))`);
+        authorityParameters.push(authority.projectId, authority.projectId);
+      }
+    }
     const rows = this.database
       .prepare(
         `
@@ -476,6 +496,7 @@ export class TaskRepository {
             json_array_length(files_json) AS fileCount
           FROM tasks
           WHERE tenant_id = ? AND owner_principal_id = ? AND ${scopeSelection.clause}
+            ${authorityFilters.map(filter => `AND ${filter}`).join("\n            ")}
             ${filters.map((filter) => `AND ${filter}`).join("\n            ")}
             ${after ? "AND (created_at > ? OR (created_at = ? AND id > ?))" : ""}
           ORDER BY created_at ASC, id ASC
@@ -486,6 +507,7 @@ export class TaskRepository {
         scope.tenantId,
         scope.principalId,
         ...scopeSelection.values,
+        ...authorityParameters,
         ...(input.pinned === undefined ? [] : [input.pinned ? 1 : 0]),
         ...(input.backlog === undefined ? [] : [input.backlog ? 1 : 0]),
         ...(query === undefined ? [] : [query, query]),

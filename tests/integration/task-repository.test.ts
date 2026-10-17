@@ -198,8 +198,8 @@ describe("task repository", () => {
         mutationId: "thread-authority",
         now: 1_002,
       });
-      // A project task carries no environment of its own: agents reach it
-      // through the project's member environments.
+      // Project tasks are shared data; thread tasks carry their owning
+      // project and environment for independent scope enforcement.
       const reader = new DatabaseAgentToolSourceAuthority(
         current.database,
         new Uint8Array(32).fill(3),
@@ -223,6 +223,7 @@ describe("task repository", () => {
         scopeKind: "thread",
         environmentId: current.environmentId,
         threadId: current.firstThreadId,
+        projectId: current.firstProjectId,
         label: "Thread authority",
       });
       expect(reader.resolveProject(current.scope, current.firstProjectId)).toEqual({

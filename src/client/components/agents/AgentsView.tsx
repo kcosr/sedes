@@ -4,7 +4,9 @@ import { EnvironmentVariableEditor } from "../environment-variables/EnvironmentV
 import { useEnvironmentVariablePreview } from "../environment-variables/use-environment-variable-preview.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
-  AgentToolBootstrapPolicy,
+  AgentToolPresentation,
+  ToolPolicySelection,
+  ToolPolicySet,
   NormalizedAgentConfigurationOverrides,
   NormalizedEnvironmentSummary,
   NormalizedProjectSummary,
@@ -96,6 +98,12 @@ interface LocationCatalog {
   readonly environments: readonly NormalizedEnvironmentSummary[];
 }
 
+interface PolicyCatalog {
+  readonly policySets: readonly ToolPolicySet[];
+  readonly policiesLoading: boolean;
+  readonly policiesError: string;
+}
+
 /**
  * Saved Agents on the settings kit's split inventory: the list beside the
  * selected Agent, or one at a time in the stack. An Agent is a small preset,
@@ -112,6 +120,22 @@ export function AgentsView({
   const creating = location?.mode === "new";
   const agentId = location?.mode === "view" ? location.resourceId : undefined;
   const state = useAgentStore(store);
+  const [policySets, setPolicySets] = useState<readonly ToolPolicySet[]>([]);
+  const [policiesLoading, setPoliciesLoading] = useState(true);
+  const [policiesError, setPoliciesError] = useState("");
+  const [policiesAttempt, setPoliciesAttempt] = useState(0);
+  useEffect(() => {
+    const abort = new AbortController();
+    setPoliciesLoading(true);
+    setPoliciesError("");
+    void store.api.listToolPolicySets(abort.signal).then(({ items }) => {
+      if (!abort.signal.aborted) { setPolicySets(items); setPoliciesLoading(false); }
+    }, (cause: unknown) => {
+      if (!abort.signal.aborted) { setPoliciesError(messageFrom(cause)); setPoliciesLoading(false); }
+    });
+    return () => abort.abort();
+  }, [store, policiesAttempt]);
+  const policyCatalog = { policySets, policiesLoading, policiesError };
   const [search, setSearch] = useState("");
   const root = useRef<HTMLDivElement>(null);
   useSettingsSplitFocus({
@@ -158,7 +182,7 @@ export function AgentsView({
               data-resource-id={agent.id}
               icon={<BackendBrandIcon brand={agent.backend.brand} />}
               title={agent.name}
-              subtitle={`${agent.backend.label.text} · ${agent.overrideCount} override${agent.overrideCount === 1 ? "" : "s"} · ${toolSummary(agent.sedesTools)}`}
+              subtitle={`${agent.backend.label.text} · ${agent.overrideCount} override${agent.overrideCount === 1 ? "" : "s"} · ${toolSummary(agent.toolPolicySelection, policySets, !policiesLoading && !policiesError)}`}
               selected={agentId === agent.id}
               href={agentPath(agent.id)}
               onSelect={(event) => followLink(event, agentPath(agent.id))}
@@ -209,6 +233,11 @@ export function AgentsView({
           ) : undefined
         }
       >
+        {policiesError && (
+          <Callout tone="danger" role="alert" action={
+            <Button variant="outline" size="sm" onClick={() => setPoliciesAttempt((value) => value + 1)}>Retry tool policies</Button>
+          }>{policiesError}</Callout>
+        )}
         <SettingsSplit listLabel="Saved Agents" list={list} empty={empty}>
           {empty ? (
             <EmptyState
@@ -222,12 +251,13 @@ export function AgentsView({
               }
             />
           ) : creating ? (
-            <AgentEditor store={store} {...catalog} />
+            <AgentEditor store={store} {...catalog} {...policyCatalog} />
           ) : agentId ? (
             <AgentDetail
               agentId={agentId}
               detail={state.detail}
               store={store}
+              {...policyCatalog}
               {...catalog}
             />
           ) : (
@@ -254,7 +284,7 @@ function AgentDetail({
   detail,
   store,
   ...catalog
-}: LocationCatalog & {
+}: LocationCatalog & PolicyCatalog & {
   readonly agentId: string;
   readonly detail: AgentDetailState;
   readonly store: AgentClientStore;
@@ -324,7 +354,10 @@ function AgentEditor({
   workspaces,
   environments,
   agent,
-}: LocationCatalog & {
+  policySets,
+  policiesLoading,
+  policiesError,
+}: LocationCatalog & PolicyCatalog & {
   readonly store: AgentClientStore;
   readonly agent?: SavedAgent;
 }): React.JSX.Element {
@@ -341,6 +374,10 @@ function AgentEditor({
   const [workspaceId, setWorkspaceId] = useState(
     availableWorkspaces.length === 1 ? availableWorkspaces[0]!.id : "",
   );
+  const selectedProjectLabel = workspaceId
+    ? projectLocations.projectLocationLabel(workspaceId) ??
+      workspaces.find(({ id }) => id === workspaceId)?.displayPath.text
+    : undefined;
   const [targetId, setTargetId] = useState("");
   const [environmentVariables, setEnvironmentVariables] = useState<EnvironmentVariableOverrides>(agent?.environmentVariables ?? {});
   const variablesPreview = useEnvironmentVariablePreview(store.api, targetId || undefined);
@@ -349,9 +386,8 @@ function AgentEditor({
     useState<NormalizedAgentConfigurationOverrides>(
       agent?.backendOverrides ?? [],
     );
-  const [sedesTools, setSedesTools] = useState<
-    AgentToolBootstrapPolicy | undefined
-  >(agent?.sedesTools);
+  const [toolPolicySelection, setToolPolicySelection] = useState<ToolPolicySelection>(agent?.toolPolicySelection ?? { kind: "inherit" });
+  const [toolPresentation, setToolPresentation] = useState<AgentToolPresentation | undefined>(agent?.toolPresentation);
   const [options, setOptions] = useState<SavedAgentOptionsResult>();
   const [authoringTargets, setAuthoringTargets] = useState<
     readonly SavedAgentTargetDescriptor[]
@@ -377,8 +413,9 @@ function AgentEditor({
   const configurationDirty =
     JSON.stringify(overrides) !==
       JSON.stringify(agent?.backendOverrides ?? []) ||
-    JSON.stringify(sedesTools) !== JSON.stringify(agent?.sedesTools);
-  const dirty = metadataDirty || configurationDirty || variablesDirty;
+    JSON.stringify(toolPresentation) !== JSON.stringify(agent?.toolPresentation);
+  const policyDirty = JSON.stringify(toolPolicySelection) !== JSON.stringify(agent?.toolPolicySelection ?? { kind: "inherit" });
+  const dirty = metadataDirty || configurationDirty || variablesDirty || policyDirty;
   const guard = useDirtyNavigationGuard(dirty && !pending);
 
   const recoverConflict = async (cause: unknown): Promise<boolean> => {
@@ -407,6 +444,8 @@ function AgentEditor({
     nextWorkspaceId: string,
     nextTargetId: string,
     nextOverrides = overrides,
+    nextPolicySelection = toolPolicySelection,
+    nextPresentation: AgentToolPresentation | null = toolPresentation ?? null,
   ): void => {
     optionsAbort.current?.abort();
     if (!nextWorkspaceId) {
@@ -427,6 +466,8 @@ function AgentEditor({
             ? {
                 targetId: nextTargetId,
                 overrides: nextOverrides,
+                toolPolicySelection: nextPolicySelection,
+                ...(nextPresentation ? { toolPresentation: nextPresentation } : {}),
               }
             : {}),
         },
@@ -473,7 +514,7 @@ function AgentEditor({
     { id: "agent-validation", label: "Validate" },
     ...(configuration ? [{ id: "agent-configuration", label: "Configuration" }] : []),
     { id: "agent-variables", label: "Variables" },
-    ...(toolCatalog ? [{ id: "agent-tools", label: "Sedes tools" }] : []),
+    { id: "agent-tools", label: "Sedes tools" },
   ];
 
   const save = async (): Promise<void> => {
@@ -497,6 +538,7 @@ function AgentEditor({
       const saved = agent
         ? await store.update(agent.id, {
             expectedRevision: agent.revision,
+            ...(policyDirty ? { toolPolicySelection } : {}),
             ...(variablesDirty ? { environmentVariables, authoringContext: { workspaceId, targetId } } : {}),
             ...(normalizedName !== agent.name ? { name: normalizedName } : {}),
             ...(description !== (agent.description ?? "")
@@ -506,7 +548,7 @@ function AgentEditor({
               ? {
                   authoringContext: { workspaceId, targetId },
                   backendOverrides: overrides,
-                  sedesTools: sedesTools ?? null,
+                  toolPresentation: toolPresentation ?? null,
                 }
               : {}),
           })
@@ -516,12 +558,14 @@ function AgentEditor({
             authoringContext: { workspaceId, targetId },
             backendOverrides: overrides,
             environmentVariables,
-            ...(sedesTools ? { sedesTools } : {}),
+            toolPolicySelection,
+            ...(toolPresentation ? { toolPresentation } : {}),
           });
       setName(saved.name);
       setDescription(saved.description ?? "");
       setOverrides(saved.backendOverrides);
-      setSedesTools(saved.sedesTools);
+      setToolPolicySelection(saved.toolPolicySelection);
+      setToolPresentation(saved.toolPresentation);
       setEnvironmentVariables(saved.environmentVariables ?? {});
       guard.proceed(agentPath(saved.id), { replace: true });
     } catch (cause) {
@@ -536,11 +580,18 @@ function AgentEditor({
     setDescription(agent?.description ?? "");
     setEnvironmentVariables(agent?.environmentVariables ?? {});
     setOverrides(agent?.backendOverrides ?? []);
-    setSedesTools(agent?.sedesTools);
+    setToolPolicySelection(agent?.toolPolicySelection ?? { kind: "inherit" });
+    setToolPresentation(agent?.toolPresentation);
     setError("");
     setNameError("");
     if (workspaceId && targetId) {
-      loadOptions(workspaceId, targetId, agent?.backendOverrides ?? []);
+      loadOptions(
+        workspaceId,
+        targetId,
+        agent?.backendOverrides ?? [],
+        agent?.toolPolicySelection ?? { kind: "inherit" },
+        agent?.toolPresentation ?? null,
+      );
     }
   };
 
@@ -636,8 +687,14 @@ function AgentEditor({
                 loadOptions(nextWorkspaceId, "");
               }}
             >
-              <SelectTrigger ref={projectRef} className="w-full" aria-label="Project">
-                <SelectValue placeholder="Choose a Project" />
+              <SelectTrigger ref={projectRef} className="w-full min-w-0 overflow-hidden" aria-label="Project">
+                <SelectValue className="min-w-0 flex-1" placeholder="Choose a Project">
+                  {selectedProjectLabel && (
+                    <span className="min-w-0 truncate" title={selectedProjectLabel}>
+                      {selectedProjectLabel}
+                    </span>
+                  )}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {availableWorkspaces.map((workspace) => (
@@ -665,10 +722,10 @@ function AgentEditor({
                   nextTarget &&
                   configuredBackendTypeId &&
                   nextTarget.backend.typeId !== configuredBackendTypeId &&
-                  (overrides.length > 0 || sedesTools !== undefined)
+                  (overrides.length > 0 || toolPresentation !== undefined)
                 ) {
                   setError(
-                    "Return every setting and Sedes tools to their defaults before changing backend.",
+                    "Return backend settings and tool presentation to their defaults before changing backend.",
                   );
                   return;
                 }
@@ -730,18 +787,21 @@ function AgentEditor({
               { scope: "backend", values: variablesPreview.result.snapshot.layers.backend },
             ] : []} onChange={setEnvironmentVariables} />
         </SettingsSection>
-        {toolCatalog && (
-          <AgentToolPolicyEditor
-            id="agent-tools"
-            catalog={toolCatalog}
-            value={sedesTools}
-            disabled={pending || optionsLoading}
-            onChange={(next) => {
-              setSedesTools(next);
-              loadOptions(workspaceId, targetId, overrides);
-            }}
-          />
-        )}
+        <AgentToolPolicyEditor
+          id="agent-tools" catalog={toolCatalog} value={toolPolicySelection}
+          toolPresentation={toolPresentation} policySets={policySets}
+          catalogState={policiesLoading ? "loading" : policiesError ? "error" : "ready"}
+          disabled={pending}
+          updating={optionsLoading}
+          onChange={(next) => {
+            setToolPolicySelection(next);
+            if (workspaceId && targetId) loadOptions(workspaceId, targetId, overrides, next, toolPresentation);
+          }}
+          onPresentationChange={(next) => {
+            setToolPresentation(next);
+            if (workspaceId && targetId) loadOptions(workspaceId, targetId, overrides, toolPolicySelection, next ?? null);
+          }}
+        />
         {agent && (
           <DangerZone>
             <DangerZoneItem
@@ -791,28 +851,8 @@ function AgentEditor({
   );
 }
 
-function toolSummary(
-  policy: {
-    readonly enabled: boolean;
-    readonly selectedToolCount: number;
-    readonly accessBoundary: "thread" | "environment" | "unrestricted";
-    readonly presentation: {
-      readonly surface: "native" | "cli";
-      readonly mode: "progressive" | "individual";
-    };
-  } | null,
-): string {
-  if (!policy) return "Default tools";
-  const mode = ` · ${
-    policy.presentation.surface === "native" ? "Native" : "CLI"
-  } · ${policy.presentation.mode === "progressive" ? "Progressive" : "Individual"}`;
-  const accessBoundary =
-    ` · ${{
-      thread: "Ask outside this thread",
-      environment: "Ask outside this environment",
-      unrestricted: "Allow without asking",
-    }[policy.accessBoundary]}`;
-  return policy.enabled
-    ? `${policy.selectedToolCount} enabled${accessBoundary}${mode}`
-    : `Off · ${policy.selectedToolCount} selected${accessBoundary}${mode}`;
+function toolSummary(selection: ToolPolicySelection, policySets: readonly ToolPolicySet[], catalogReady: boolean): string {
+  if (selection.kind === "inherit") return "Inherited tools";
+  if (selection.kind === "disabled") return "Tools disabled";
+  return policySets.find(({ id }) => id === selection.policySetId)?.name ?? (catalogReady ? "Policy needs attention" : "Saved tool policy");
 }

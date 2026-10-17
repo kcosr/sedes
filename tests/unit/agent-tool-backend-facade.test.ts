@@ -68,7 +68,7 @@ describe("LateBoundBackendAgentToolFacade", () => {
           surface: "native" as const,
           mode: "progressive" as const,
         },
-        accessBoundary: "environment" as const,
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: ["agent.context"],
       })),
       async invoke<Output = unknown>() {

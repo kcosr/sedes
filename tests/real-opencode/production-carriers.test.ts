@@ -33,6 +33,12 @@ describe.skipIf(!RUN_REAL_OPENCODE || process.platform !== "linux")("stock OpenC
       await fixture.waitFor(async () => (await fixture.thread(threadId)).runState === "idle");
       await assertBackendApplied(fixture);
       const first = await fixture.thread(threadId);
+      expect(first.agentTools).toMatchObject({
+        enabled: true,
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
+        policySet: { name: "Stock qualification tools", revision: 0 },
+      });
+      expect(first.agentTools.groups.flatMap(group => group.tools).filter(tool => tool.enabled).map(tool => tool.id)).toEqual(["thread.status"]);
       const option = first.capabilities.settings.find(item => item.id === "model")?.options.find(item => item.available && item.label.text.includes("second-model"));
       expect(option).toBeDefined();
       if (!option) throw new Error("fixture_second_model_missing");
@@ -206,12 +212,12 @@ async function qualifyTools(fixture: OpenCodeProductionFixture, threadId: string
   let mcpCalled = false; void mcp.called.then(() => { mcpCalled = true; });
   await fixture.waitFor(async () => mcpCalled);
   await fixture.waitFor(async () => fixture.model.requests.slice(mcpStart).some(request => request.toolResults.some(result => hasThreadStatus(result, threadId))));
-  await fixture.waitFor(async () => (await fixture.thread(threadId)).runState === "idle");
+  await waitForCompletedPrompt(fixture, threadId, "qualified-mcp");
   const policy = (await fixture.thread(threadId)).agentTools;
   expect(policy.presentationOptions.some(option => option.surface === "cli")).toBe(true);
   await fixture.json(`/api/threads/${threadId}/operations`, "POST", {
     kind: "set_agent_tool_policy", mutationId: crypto.randomUUID(), expectedPolicyRevision: policy.revision,
-    enabled: true, enabledToolIds: ["thread.status"], accessBoundary: "thread", presentation: { surface: "cli", mode: "progressive" },
+    enabled: true, enabledToolIds: ["thread.status"], resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, presentation: { surface: "cli", mode: "progressive" },
   });
   await fixture.closeStreams(); await fixture.openStream(threadId);
   const cliStart = fixture.model.requests.length;
@@ -234,8 +240,19 @@ async function qualifyTools(fixture: OpenCodeProductionFixture, threadId: string
     return fixture.model.requests.slice(cliStart).some(request => request.toolResults.some(result => fixture.ownership === "owned"
       ? hasThreadStatus(result, threadId) : hasExternalCliAbsence(result)));
   });
-  await fixture.waitFor(async () => (await fixture.thread(threadId)).runState === "idle");
+  await waitForCompletedPrompt(fixture, threadId, "qualified-cli");
   if (fixture.ownership === "external") expect(fixture.streamText).toContain("CLI requires a Sedes-created root on an owned server");
+}
+
+async function waitForCompletedPrompt(fixture: OpenCodeProductionFixture, threadId: string, prompt: string): Promise<void> {
+  await fixture.waitFor(async () => {
+    const snapshot = await fixture.thread(threadId);
+    const message = Object.values(snapshot.itemsById).find(item => item.kind === "user_message" &&
+      item.content.some(part => part.kind === "text" && part.text.text === prompt));
+    // A tool-result continuation can arrive before its final native idle event.
+    // Require this prompt's terminal turn, rather than an older idle snapshot.
+    return message !== undefined && snapshot.turnsById[message.turnId]?.status === "completed" && snapshot.runState === "idle";
+  });
 }
 
 function hasExternalCliAbsence(value: string): boolean {

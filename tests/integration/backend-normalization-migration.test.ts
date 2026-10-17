@@ -1,3 +1,6 @@
+import { PrincipalAgentToolClientRepository } from "../../src/server/db/repositories/principal-agent-tool-client-repository.js";
+import { createPrincipalAgentToolClientEligibility } from "../../src/server/conversations/thread-agent-tool-policy-dependencies.js";
+import { threadAgentToolPolicyRepository } from "../support/thread-agent-tool-policy.js";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
@@ -2407,6 +2410,8 @@ describe("inactive backend-normalization migration", () => {
         lineage,
         inventory: new InventoryRepository(database),
         operations: new ConversationOperationRepository(database),
+        toolPolicies: threadAgentToolPolicyRepository(database),
+        principalToolClients: new PrincipalAgentToolClientRepository(database, createPrincipalAgentToolClientEligibility()),
         outputArtifacts: { collectGarbage: async () => undefined },
         automations,
         automationExecutionPolicy: { assertCanAutomate: () => undefined },
@@ -2670,6 +2675,8 @@ describe("inactive backend-normalization migration", () => {
         lineage,
         inventory: new InventoryRepository(database),
         operations: new ConversationOperationRepository(database),
+        toolPolicies: threadAgentToolPolicyRepository(database),
+        principalToolClients: new PrincipalAgentToolClientRepository(database, createPrincipalAgentToolClientEligibility()),
         outputArtifacts: { collectGarbage: async () => undefined },
         automations,
         automationExecutionPolicy: { assertCanAutomate: () => undefined },

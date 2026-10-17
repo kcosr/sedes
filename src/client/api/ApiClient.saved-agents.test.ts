@@ -21,7 +21,7 @@ describe("ApiClient Saved Agents", () => {
                 brand: "pi",
               },
               overrideCount: 1,
-              sedesTools: null,
+              toolPolicySelection: { kind: "inherit" },
               revision: 0,
               createdAt: "2026-08-08T00:00:00.000Z",
               updatedAt: "2026-08-08T00:00:00.000Z",

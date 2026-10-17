@@ -35,7 +35,8 @@ import {
   savedAgentAuthoringContextToolSchema,
   savedAgentBackendTypeIdToolSchema,
   savedAgentDescriptionToolSchema,
-  savedAgentSedesToolsToolSchema,
+  toolPolicySelectionToolSchema,
+  agentToolPresentationToolSchema,
   savedAgentListPageToolSchema,
   savedAgentNameToolSchema,
   savedAgentOptionsResultToolSchema,
@@ -67,7 +68,15 @@ export type SavedAgentOptionsToolInput = Omit<
   "workspaceId"
 > & { readonly workspaceId?: string };
 
-export type SavedAgentUpdateToolInput = UpdateSavedAgentRequest & {
+type SavedAgentToolOutput = Omit<SavedAgent, "environmentVariables">;
+type SavedAgentCreateToolInput = Omit<CreateSavedAgentRequest, "environmentVariables">;
+
+function presentAgent(agent: SavedAgent): SavedAgentToolOutput {
+  const { environmentVariables: _environmentVariables, ...visible } = agent;
+  return visible;
+}
+
+export type SavedAgentUpdateToolInput = Omit<UpdateSavedAgentRequest, "environmentVariables"> & {
   readonly agentId: string;
 };
 
@@ -197,7 +206,7 @@ export function createSavedAgentListToolDefinition(
 
 export function createSavedAgentGetToolDefinition(
   service: SavedAgentCanonicalToolService,
-): AgentToolDefinition<{ readonly agentId: string }, SavedAgent> {
+): AgentToolDefinition<{ readonly agentId: string }, SavedAgentToolOutput> {
   return {
     ...getManifest,
     inputSchema: normalizeCanonicalAgentToolSchema(
@@ -218,7 +227,7 @@ export function createSavedAgentGetToolDefinition(
       pi: {
         name: "sedes_saved_agent_get",
         label: "Get Sedes Agent",
-        promptSnippet: "Read one complete saved Sedes Agent.",
+        promptSnippet: "Read a reusable Sedes Agent configuration.",
       },
       mcp: { name: "sedes_saved_agent_get" },
       http: { invocation: "inline" },
@@ -232,7 +241,7 @@ export function createSavedAgentGetToolDefinition(
       requireAdmittedResource(context.environmentAuthority, {
         kind: "saved_agent", id: agent.id, revision: agent.revision,
       });
-      return agent;
+      return presentAgent(agent);
     },
   };
 }
@@ -250,12 +259,13 @@ export function createSavedAgentOptionsToolDefinition(
             Type.String({ minLength: 1, maxLength: 160 }),
           ),
           overrides: Type.Optional(savedAgentOverridesToolSchema),
-          sedesTools: Type.Optional(savedAgentSedesToolsToolSchema),
+          toolPolicySelection: Type.Optional(toolPolicySelectionToolSchema),
+          toolPresentation: Type.Optional(agentToolPresentationToolSchema),
         },
         {
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
-          maxProperties: 4,
+          maxProperties: 5,
         },
       ),
     ),
@@ -304,7 +314,7 @@ export function createSavedAgentOptionsToolDefinition(
 
 export function createSavedAgentCreateToolDefinition(
   service: SavedAgentCanonicalToolService,
-): AgentToolDefinition<CreateSavedAgentRequest, SavedAgent> {
+): AgentToolDefinition<SavedAgentCreateToolInput, SavedAgentToolOutput> {
   return {
     ...createManifest,
     inputSchema: normalizeCanonicalAgentToolSchema(
@@ -314,12 +324,13 @@ export function createSavedAgentCreateToolDefinition(
           description: Type.Optional(savedAgentDescriptionToolSchema),
           authoringContext: savedAgentAuthoringContextToolSchema,
           backendOverrides: savedAgentOverridesToolSchema,
-          sedesTools: Type.Optional(savedAgentSedesToolsToolSchema),
+          toolPolicySelection: Type.Optional(toolPolicySelectionToolSchema),
+          toolPresentation: Type.Optional(agentToolPresentationToolSchema),
         },
         {
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
-          maxProperties: 5,
+          maxProperties: 6,
         },
       ),
     ),
@@ -343,19 +354,19 @@ export function createSavedAgentCreateToolDefinition(
       cli: { command: createManifest.id },
     },
     async execute(input, context) {
-      return service.createAgentForAgentTool(
+      return presentAgent(await service.createAgentForAgentTool(
         scope(context),
         createSavedAgentRequestSchema.parse(input),
         context.abortSignal,
         context.environmentAuthority,
-      );
+      ));
     },
   };
 }
 
 export function createSavedAgentUpdateToolDefinition(
   service: SavedAgentCanonicalToolService,
-): AgentToolDefinition<SavedAgentUpdateToolInput, SavedAgent> {
+): AgentToolDefinition<SavedAgentUpdateToolInput, SavedAgentToolOutput> {
   return {
     ...updateManifest,
     inputSchema: normalizeCanonicalAgentToolSchema(
@@ -372,15 +383,14 @@ export function createSavedAgentUpdateToolDefinition(
           ),
           authoringContext: Type.Optional(savedAgentAuthoringContextToolSchema),
           backendOverrides: Type.Optional(savedAgentOverridesToolSchema),
-          sedesTools: Type.Optional(
-            Type.Union([savedAgentSedesToolsToolSchema, Type.Null()]),
-          ),
+          toolPolicySelection: Type.Optional(toolPolicySelectionToolSchema),
+          toolPresentation: Type.Optional(Type.Union([agentToolPresentationToolSchema, Type.Null()])),
         },
         {
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
           minProperties: 3,
-          maxProperties: 7,
+          maxProperties: 8,
         },
       ),
     ),
@@ -406,13 +416,13 @@ export function createSavedAgentUpdateToolDefinition(
     async execute(input, context) {
       const agentId = savedAgentIdSchema.parse(input.agentId);
       const { agentId: _agentId, ...request } = input;
-      return service.updateAgentForAgentTool(
+      return presentAgent(await service.updateAgentForAgentTool(
         scope(context),
         agentId,
         updateSavedAgentRequestSchema.parse(request),
         context.abortSignal,
         context.environmentAuthority,
-      );
+      ));
     },
   };
 }

@@ -1,3 +1,4 @@
+import { testAgentToolExecutionAuthority } from "../support/agent-tool-execution-authority.js";
 import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
@@ -66,7 +67,7 @@ const configuration = parseResolvedBackendConfiguration({
   defaultTargetId: "pi-local",
 });
 
-function createCrossEnvironmentApprovalComposition() {
+function createCrossEnvironmentComposition() {
   const readThreadStatus = vi.fn(async () => ({
     threadId: "remote-thread",
     backend: "pi" as const,
@@ -78,15 +79,14 @@ function createCrossEnvironmentApprovalComposition() {
     application: { readThreadStatus },
     invocationId: () => "cross-environment-invocation",
   });
-  const policies = {
-    get: () => ({
-      enabled: true,
-      enabledToolIds: ["thread.status"],
-      presentation: { surface: "cli" as const, mode: "progressive" as const },
-      accessBoundary: "environment" as const,
-      revision: 1,
-    }),
-  } as unknown as ThreadAgentToolPolicyRepository;
+  const policy = {
+    enabled: true,
+    enabledToolIds: ["thread.status"],
+    presentation: { surface: "cli" as const, mode: "progressive" as const },
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
+    revision: 1,
+  };
+  const policies = { get: () => policy } as unknown as ThreadAgentToolPolicyRepository;
   const environmentAuthority = new AgentToolEnvironmentAuthorityResolver({
     resolveEnvironment: () => undefined,
     resolveWorkspace: () => undefined,
@@ -134,23 +134,17 @@ function createCrossEnvironmentApprovalComposition() {
     conversation,
     publisher,
   );
-  const service = new SourceScopedAgentToolService(
-    canonical,
-    policies,
-    environmentAuthority,
-    { resolveInScope: () => crossEnvironmentSource },
-    {
-      acquireAgentToolApprovalAuthority: async () => ({
-        generation: "generation-cross-env",
-        signal: new AbortController().signal,
-        isCurrent: () => true,
-        release: () => undefined,
-      }),
-    },
-    broker,
-  );
+  const service = new SourceScopedAgentToolService(canonical,
+policies,
+environmentAuthority,
+{ resolveInScope: () => crossEnvironmentSource }, testAgentToolExecutionAuthority);
 
-  return { broker, publisher, readThreadStatus, service };
+  return { broker, publisher, readThreadStatus, service,
+    setCrossEnvironmentAccess(allowed: boolean) {
+      policy.resourceScope.allowOtherEnvironments = allowed;
+      policy.revision += 1;
+    },
+  };
 }
 
 function invokeRemoteThreadStatus(
@@ -168,39 +162,6 @@ function invokeRemoteThreadStatus(
     },
     signal,
   });
-}
-
-async function respondToCrossEnvironmentApproval(
-  broker: InteractionBroker,
-  publisher: InteractionBrokerPublisher & {
-    readonly opened: ReturnType<typeof vi.fn>;
-  },
-  actionLabel: "Allow once" | "Deny",
-) {
-  await vi.waitFor(() => expect(publisher.opened).toHaveBeenCalledOnce());
-  const interaction = broker.listPending(
-    crossEnvironmentSource.scope,
-    crossEnvironmentSource.sourceThreadId,
-  )[0];
-  if (!interaction || interaction.kind !== "decision") {
-    throw new Error("cross-environment approval decision expected");
-  }
-  const action = interaction.actions.find(
-    ({ label }) => label.text === actionLabel,
-  );
-  if (!action) throw new Error(`${actionLabel} action expected`);
-  const prepared = broker.prepareResponse(
-    crossEnvironmentSource.scope,
-    crossEnvironmentSource.sourceThreadId,
-    "browser-response-operation",
-    interaction.id,
-    { kind: "decision", selectedActionId: action.id },
-  );
-  await broker.respondPrepared(
-    crossEnvironmentSource.scope,
-    crossEnvironmentSource.sourceThreadId,
-    prepared,
-  );
 }
 
 describe("agent-tool HTTP production composition", () => {
@@ -255,7 +216,7 @@ describe("agent-tool HTTP production composition", () => {
         expectedRevision: 0,
         enabled: true,
         presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: ["agent.context", "thread.status"],
         now: 300,
       });
@@ -294,18 +255,10 @@ describe("agent-tool HTTP production composition", () => {
             }),
         },
       });
-      const firstTools = new SourceScopedAgentToolService(
-        firstCanonical,
-        firstPolicies,
-        new AgentToolEnvironmentAuthorityResolver(firstAuthority),
-        firstAuthority,
-        {
-          acquireAgentToolApprovalAuthority: async () => {
-            throw new Error("provider runtime must not gate thread tools");
-          },
-        },
-        { requestApplicationDecision: async () => "allow" },
-      );
+      const firstTools = new SourceScopedAgentToolService(firstCanonical,
+firstPolicies,
+new AgentToolEnvironmentAuthorityResolver(firstAuthority),
+firstAuthority, testAgentToolExecutionAuthority);
       const oldRuntimeWork = firstTools.invoke({
         source: firstAuthority.resolveCapabilityInScope(
           scope,
@@ -369,18 +322,10 @@ describe("agent-tool HTTP production composition", () => {
       const canonical = new CanonicalInlineAgentToolService({
         application,
       });
-      const providerTools = new SourceScopedAgentToolService(
-        canonical,
-        policies,
-        new AgentToolEnvironmentAuthorityResolver(secondAuthority),
-        secondAuthority,
-        {
-          acquireAgentToolApprovalAuthority: async () => {
-            throw new Error("provider runtime must not gate thread tools");
-          },
-        },
-        { requestApplicationDecision: async () => "allow" },
-      );
+      const providerTools = new SourceScopedAgentToolService(canonical,
+policies,
+new AgentToolEnvironmentAuthorityResolver(secondAuthority),
+secondAuthority, testAgentToolExecutionAuthority);
       const app = express();
       app.use(express.json({ strict: true, type: "application/json" }));
       app.use(
@@ -516,7 +461,7 @@ describe("agent-tool HTTP production composition", () => {
         expectedRevision: 0,
         enabled: true,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: ["agent.context", "thread.status"],
         now: 300,
       });
@@ -558,21 +503,10 @@ describe("agent-tool HTTP production composition", () => {
       const environmentAuthority = new AgentToolEnvironmentAuthorityResolver(
         sourceAuthority,
       );
-      const providerTools = new SourceScopedAgentToolService(
-        canonical,
-        policies,
-        environmentAuthority,
-        sourceAuthority,
-        {
-          acquireAgentToolApprovalAuthority: async () => ({
-            generation: "generation-1",
-            signal: new AbortController().signal,
-            isCurrent: () => true,
-            release: () => undefined,
-          }),
-        },
-        { requestApplicationDecision: async () => "allow" },
-      );
+      const providerTools = new SourceScopedAgentToolService(canonical,
+policies,
+environmentAuthority,
+sourceAuthority, testAgentToolExecutionAuthority);
       const source = {
         scope,
         sourceThreadId: thread.thread.id,
@@ -608,7 +542,7 @@ describe("agent-tool HTTP production composition", () => {
         expectedRevision: 1,
         enabled: false,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: ["agent.context", "thread.status"],
         now: 301,
       });
@@ -635,7 +569,7 @@ describe("agent-tool HTTP production composition", () => {
         expectedRevision: 2,
         enabled: true,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: ["agent.context", "thread.status"],
         now: 302,
       });
@@ -687,7 +621,7 @@ describe("agent-tool HTTP production composition", () => {
         expectedRevision: 3,
         enabled: true,
         presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: [
           "agent.context",
           "thread.status",
@@ -856,89 +790,45 @@ describe("agent-tool HTTP production composition", () => {
   });
 });
 
-describe("cross-environment agent-tool approval composition", () => {
-  it("waits for browser approval and executes exactly once after Allow once", async () => {
-    const composition = createCrossEnvironmentApprovalComposition();
+describe("cross-environment agent-tool policy composition", () => {
+  it("uses an explicit user policy change and immediately revokes later cross-environment calls", async () => {
+    const composition = createCrossEnvironmentComposition();
     try {
-      let settled = false;
-      const invocation = invokeRemoteThreadStatus(
-        composition.service,
-        new AbortController().signal,
-      ).finally(() => {
-        settled = true;
-      });
-
-      await vi.waitFor(() =>
-        expect(composition.publisher.opened).toHaveBeenCalledOnce(),
-      );
-      expect(settled).toBe(false);
-      expect(composition.readThreadStatus).not.toHaveBeenCalled();
-
-      await respondToCrossEnvironmentApproval(
-        composition.broker,
-        composition.publisher,
-        "Allow once",
-      );
-      await expect(invocation).resolves.toMatchObject({
-        state: "completed",
-        output: { threadId: "remote-thread" },
-      });
+      composition.setCrossEnvironmentAccess(true);
+      await expect(invokeRemoteThreadStatus(composition.service, new AbortController().signal))
+        .resolves.toMatchObject({ state: "completed", output: { threadId: "remote-thread" } });
       expect(composition.readThreadStatus).toHaveBeenCalledOnce();
-      expect(composition.publisher.resolved).toHaveBeenCalledOnce();
-    } finally {
-      await composition.broker.close();
-    }
+      composition.setCrossEnvironmentAccess(false);
+      await expect(invokeRemoteThreadStatus(composition.service, new AbortController().signal))
+        .rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+      expect(composition.readThreadStatus).toHaveBeenCalledOnce();
+      expect(composition.publisher.opened).not.toHaveBeenCalled();
+      expect(composition.publisher.resolved).not.toHaveBeenCalled();
+    } finally { await composition.broker.close(); }
   });
 
-  it("executes nothing after a browser denial", async () => {
-    const composition = createCrossEnvironmentApprovalComposition();
+  it("denies an outside ID without executing the tool or requesting an approval", async () => {
+    const composition = createCrossEnvironmentComposition();
     try {
-      const invocation = invokeRemoteThreadStatus(
-        composition.service,
-        new AbortController().signal,
-      );
-      await respondToCrossEnvironmentApproval(
-        composition.broker,
-        composition.publisher,
-        "Deny",
-      );
-
-      await expect(invocation).rejects.toMatchObject({
-        toolError: { code: "permission_denied" },
-      });
+      await expect(invokeRemoteThreadStatus(composition.service, new AbortController().signal))
+        .rejects.toMatchObject({ toolError: { code: "permission_denied", message: expect.stringContaining("Cross-environment access is disabled") } });
       expect(composition.readThreadStatus).not.toHaveBeenCalled();
-      expect(composition.publisher.resolved).toHaveBeenCalledOnce();
-    } finally {
-      await composition.broker.close();
-    }
+      expect(composition.publisher.opened).not.toHaveBeenCalled();
+      expect(composition.broker.listPending(crossEnvironmentSource.scope, crossEnvironmentSource.sourceThreadId)).toEqual([]);
+    } finally { await composition.broker.close(); }
   });
 
-  it("removes the approval and executes nothing when the caller aborts", async () => {
-    const composition = createCrossEnvironmentApprovalComposition();
+  it("executes nothing when the caller has already aborted", async () => {
+    const composition = createCrossEnvironmentComposition();
     const controller = new AbortController();
     try {
-      const invocation = invokeRemoteThreadStatus(
-        composition.service,
-        controller.signal,
-      );
-      await vi.waitFor(() =>
-        expect(composition.publisher.opened).toHaveBeenCalledOnce(),
-      );
+      composition.setCrossEnvironmentAccess(true);
       controller.abort();
-
-      await expect(invocation).rejects.toMatchObject({
-        toolError: { code: "cancelled" },
-      });
+      await expect(invokeRemoteThreadStatus(composition.service, controller.signal))
+        .rejects.toMatchObject({ toolError: { code: "cancelled" } });
       expect(composition.readThreadStatus).not.toHaveBeenCalled();
-      expect(
-        composition.broker.listPending(
-          crossEnvironmentSource.scope,
-          crossEnvironmentSource.sourceThreadId,
-        ),
-      ).toEqual([]);
-      expect(composition.publisher.resolved).toHaveBeenCalledOnce();
-    } finally {
-      await composition.broker.close();
-    }
+      expect(composition.publisher.opened).not.toHaveBeenCalled();
+      expect(composition.broker.listPending(crossEnvironmentSource.scope, crossEnvironmentSource.sourceThreadId)).toEqual([]);
+    } finally { await composition.broker.close(); }
   });
 });

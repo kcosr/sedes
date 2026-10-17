@@ -1,3 +1,11 @@
+import {
+  toolPolicyOptionsSchema, toolPolicySetListSchema, toolPolicySetListQuerySchema, toolPolicySetSchema, createToolPolicySetRequestSchema,
+  updateToolPolicySetRequestSchema, deleteToolPolicySetRequestSchema, toolPolicySetRouteParametersSchema,
+  toolPolicySetMutationResultSchema, deleteToolPolicySetResultSchema, toolPolicySelectionListSchema,
+  updateToolPolicySelectionRequestSchema, toolPolicySelectionMutationResultSchema,
+  resolveToolPolicyRequestSchema, toolPolicyPreviewSchema,
+} from "../shared/protocol/tool-policies.js";
+import type { ToolPolicyService } from "./tool-policies/tool-policy-service.js";
 import { registerClientSchema, clientPollRequestSchema } from "../shared/protocol/client-controls.js";
 import { attachmentContentDisposition, SEDES_DOWNLOAD_REVISION_HEADER } from "../shared/downloads.js";
 import { pageDownloadFileName } from "../shared/page-download.js";
@@ -391,6 +399,7 @@ export interface NormalizedAppDependencies {
   readonly identity: IdentityProvider<Request>;
   readonly executionTargets: ExecutionTargetReader;
   readonly savedAgents: SavedAgentApplicationService;
+  readonly policySets?: ToolPolicyService;
   readonly threadTemplates: ThreadTemplateApplicationService;
   readonly applicationSnapshots: ApplicationSnapshotPublicationBoundary;
   readonly principalPreferences: PrincipalApplicationPreferenceService;
@@ -2902,6 +2911,51 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       );
     },
   );
+
+  const policySets = () => {
+    if (!dependencies.policySets) throw new DomainError("runtime_unavailable", "Tool policies are unavailable.");
+    return dependencies.policySets;
+  };
+  routes.get("/api/tool-policies/options", async (request, response) => {
+    response.json(toolPolicyOptionsSchema.parse(policySets().options(await scope(request))));
+  });
+  routes.get("/api/tool-policies", async (request, response) => {
+    response.json(toolPolicySetListSchema.parse(policySets().list(await scope(request), toolPolicySetListQuerySchema.parse(request.query))));
+  });
+  routes.post("/api/tool-policies", async (request, response) => {
+    const requestScope = await scope(request);
+    const policySet = policySets().create(requestScope, createToolPolicySetRequestSchema.parse(request.body));
+    response.status(201).json(toolPolicySetMutationResultSchema.parse({policySet}));
+  });
+  routes.post("/api/tool-policies/resolve", async (request, response) => {
+    const requestScope = await scope(request);
+    response.json(toolPolicyPreviewSchema.parse(policySets().preview(requestScope, resolveToolPolicyRequestSchema.parse(request.body))));
+  });
+  routes.get("/api/tool-policies/:policySetId", async (request, response) => {
+    const requestScope = await scope(request);
+    const {policySetId} = toolPolicySetRouteParametersSchema.parse(request.params);
+    response.json(toolPolicySetSchema.parse(policySets().get(requestScope, policySetId)));
+  });
+  routes.patch("/api/tool-policies/:policySetId", async (request, response) => {
+    const requestScope = await scope(request);
+    const {policySetId} = toolPolicySetRouteParametersSchema.parse(request.params);
+    const policySet = policySets().update(requestScope, policySetId, updateToolPolicySetRequestSchema.parse(request.body));
+    response.json(toolPolicySetMutationResultSchema.parse({policySet}));
+  });
+  routes.delete("/api/tool-policies/:policySetId", async (request, response) => {
+    const requestScope = await scope(request);
+    const {policySetId} = toolPolicySetRouteParametersSchema.parse(request.params);
+    const {expectedRevision} = deleteToolPolicySetRequestSchema.parse(request.body);
+    response.json(deleteToolPolicySetResultSchema.parse(policySets().delete(requestScope, policySetId, expectedRevision)));
+  });
+  routes.get("/api/tool-policy-selections", async (request, response) => {
+    response.json(toolPolicySelectionListSchema.parse(policySets().listSelections(await scope(request))));
+  });
+  routes.put("/api/tool-policy-selections", async (request, response) => {
+    const requestScope = await scope(request);
+    const setting = policySets().updateSelection(requestScope, updateToolPolicySelectionRequestSchema.parse(request.body));
+    response.json(toolPolicySelectionMutationResultSchema.parse({setting}));
+  });
 
   routes.get("/api/agents", async (request, response) => {
     const requestScope = await scope(request);

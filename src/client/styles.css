@@ -9483,30 +9483,24 @@ tr.diff-hunk td {
   gap: var(--space-3);
 }
 
-.agent-tool-environment-access-setting[data-caution="true"] {
-  margin-inline: calc(-1 * var(--space-2-5) - 1px);
-  padding: var(--space-2) var(--space-2-5);
-  border: 1px solid var(--warning-border);
-  border-radius: var(--radius-ctl);
-  background: var(--warning-soft);
+.agent-tool-policy-apply {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
 }
+
+.agent-tool-policy-apply > label { font-weight: var(--weight-semibold); }
+.agent-tool-policy-apply-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); }
+.agent-tool-policy-apply-controls > button { height: auto; min-height: var(--control-md); }
+.agent-tool-policy-apply p { margin: 0; overflow-wrap: anywhere; color: var(--muted-foreground-2); font-size: var(--text-meta); line-height: var(--leading-normal); }
+.agent-tool-policy-apply-status:empty { margin-block-start: calc(-1 * var(--space-2)); }
 
 .agent-tool-dialog-setting [data-slot="select-trigger"] {
   width: 240px;
   flex: 0 0 240px;
-}
-
-.agent-tool-environment-access-option {
-  display: grid;
-  max-width: 360px;
-  gap: 2px;
-  white-space: normal;
-}
-
-.agent-tool-environment-access-option small {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  line-height: 1.35;
 }
 
 .agent-tool-dialog-setting,

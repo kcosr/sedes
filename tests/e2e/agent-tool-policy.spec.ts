@@ -64,10 +64,9 @@ test.describe.serial("agent tool policy", () => {
       settings.getByRole("combobox", { name: "Agent tool presentation" }),
     ).toContainText("Progressive");
     await expect(
-      settings.getByRole("combobox", {
-        name: "Access boundary",
-      }),
-    ).toContainText("Ask outside this environment");
+      settings.getByRole("switch", { name: "Allow other environments" }),
+    ).not.toBeChecked();
+    await expect(settings.getByRole("switch", { name: "Allow other projects" })).not.toBeChecked();
     await expect(
       settings.getByRole("checkbox", { name: "Agent context" }),
     ).toBeEnabled();
@@ -102,26 +101,11 @@ test.describe.serial("agent tool policy", () => {
       .getByRole("switch", { name: "Enable agent tools" })
       .click();
     await settings.getByRole("checkbox", { name: "Agent context" }).click();
-    await selectRadixOption(
-      page,
-      settings.getByRole("combobox", {
-        name: "Access boundary",
-      }),
-      /^Allow without asking/,
-    );
-    const accessBoundary = settings.getByRole("combobox", {
-      name: "Access boundary",
-    });
-    await accessBoundary.click();
-    await expect(
-      page.getByText(
-        "Enabled Sedes tools may read or change any principal-owned environment without a Sedes environment prompt.",
-      ),
-    ).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(accessBoundary).toContainText(
-      "Allow without asking",
-    );
+    const environmentAccess = settings.getByRole("switch", { name: "Allow other environments" });
+    await environmentAccess.click();
+    await expect(environmentAccess).toBeChecked();
+    await expect(settings.getByRole("switch", { name: "Allow other projects" })).not.toBeChecked();
+    await expect(settings.getByText(/direct requests outside it are denied/).first()).toBeVisible();
     await selectRadixOption(
       page,
       settings.getByRole("combobox", { name: "Agent tool surface" }),
@@ -153,7 +137,7 @@ test.describe.serial("agent tool policy", () => {
       enabled: true,
       enabledToolIds: ["agent.context"],
       presentation: { surface: "native", mode: "progressive" },
-      accessBoundary: "unrestricted",
+      resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },
     });
     expect(policyMutationCount).toBe(1);
 
@@ -173,10 +157,9 @@ test.describe.serial("agent tool policy", () => {
       }),
     ).toContainText("Progressive");
     await expect(
-      secondSettings.getByRole("combobox", {
-        name: "Access boundary",
-      }),
-    ).toContainText("Allow without asking");
+      secondSettings.getByRole("switch", { name: "Allow other environments" }),
+    ).toBeChecked();
+    await expect(secondSettings.getByRole("switch", { name: "Allow other projects" })).not.toBeChecked();
 
     await page.reload();
     await page.getByRole("button", { name: "Thread actions" }).click();
@@ -198,10 +181,9 @@ test.describe.serial("agent tool policy", () => {
       }),
     ).toContainText("Progressive");
     await expect(
-      reloadedSettings.getByRole("combobox", {
-        name: "Access boundary",
-      }),
-    ).toContainText("Allow without asking");
+      reloadedSettings.getByRole("switch", { name: "Allow other environments" }),
+    ).toBeChecked();
+    await expect(reloadedSettings.getByRole("switch", { name: "Allow other projects" })).not.toBeChecked();
     await secondPage.close();
   });
 
@@ -230,10 +212,9 @@ test.describe.serial("agent tool policy", () => {
       settings.getByRole("combobox", { name: "Agent tool presentation" }),
     ).toBeDisabled();
     await expect(
-      settings.getByRole("combobox", {
-        name: "Access boundary",
-      }),
+      settings.getByRole("switch", { name: "Allow other environments" }),
     ).toBeDisabled();
+    await expect(settings.getByRole("switch", { name: "Allow other projects" })).toBeDisabled();
     await expect(settings.getByRole("button", { name: "Save" })).toBeDisabled();
     await expect(settings).toContainText(
       "Agent tools can be changed when the thread is idle.",
@@ -266,7 +247,7 @@ test.describe.serial("agent tool policy", () => {
           enabled: false,
           enabledToolIds: [],
           presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: snapshot.agentTools.accessBoundary,
+          resourceScope: snapshot.agentTools.resourceScope,
         },
       },
     );
@@ -461,7 +442,7 @@ test.describe.serial("agent tool policy", () => {
             enabledToolIds: snapshot.agentTools.groups.flatMap((group) =>
               group.tools.filter((tool) => tool.enabled).map((tool) => tool.id),
             ),
-            accessBoundary: snapshot.agentTools.accessBoundary,
+            resourceScope: snapshot.agentTools.resourceScope,
             presentation,
           },
         });
@@ -494,13 +475,9 @@ test.describe.serial("agent tool policy", () => {
     await settings
       .getByRole("switch", { name: "Enable agent tools" })
       .click();
-    const accessBoundary = settings.getByRole("combobox", {
-      name: "Access boundary",
-    });
-    await accessBoundary.scrollIntoViewIfNeeded();
-    await expect(
-      accessBoundary,
-    ).toBeInViewport();
+    const environmentAccess = settings.getByRole("switch", { name: "Allow other environments" });
+    await environmentAccess.scrollIntoViewIfNeeded();
+    await expect(environmentAccess).toBeInViewport();
     const groups = settings.getByRole("navigation", { name: "Agent tool groups" });
     await groups.scrollIntoViewIfNeeded();
     const groupBounds = await groups.boundingBox();

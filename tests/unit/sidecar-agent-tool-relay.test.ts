@@ -70,7 +70,7 @@ function fixture(
       readPolicy: vi.fn(() => ({
         enabled: true,
         presentation: { surface: "cli" as const, mode: "progressive" as const },
-        accessBoundary: "environment" as const,
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: ["agent.context"],
       })),
       invoke: <Output = unknown>(input: unknown) =>

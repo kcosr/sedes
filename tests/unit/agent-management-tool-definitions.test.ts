@@ -64,8 +64,8 @@ describe("agent management tool definitions", () => {
     ]);
     expect(registry.get("workspace.list", 5).schemaVersion).toBe(5);
     expect(registry.get("thread.list", 7).schemaVersion).toBe(7);
-    expect(registry.get("thread.create", 5).schemaVersion).toBe(5);
-    expect(() => registry.get("thread.create", 4)).toThrow();
+    expect(registry.get("thread.create", 6).schemaVersion).toBe(6);
+    expect(() => registry.get("thread.create", 5)).toThrow();
     expect(registry.get("task.list", 5).schemaVersion).toBe(5);
     expect(() => registry.get("task.list", 4)).toThrow();
     for (const id of ["task.get", "task.create", "task.update"] as const) {
@@ -341,7 +341,7 @@ describe("agent management tool definitions", () => {
       tenantId: context.tenantId,
       principalId: context.principalId,
     };
-    expect(listEnvironments).toHaveBeenCalledWith(expectedScope);
+    expect(listEnvironments).toHaveBeenCalledWith(expectedScope, context.environmentAuthority);
     expect(openWorkspaceForAgent).toHaveBeenCalledWith(
       expectedScope,
       { environmentId: "environment-a", path: "/srv/projects/sedes" },

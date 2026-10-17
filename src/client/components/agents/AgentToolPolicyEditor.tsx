@@ -1,8 +1,8 @@
 import type {
   AgentToolBootstrapDescriptor,
-  AgentToolBootstrapPolicy,
-  AgentToolPresentationMode,
-  AgentToolPresentationSurface,
+  AgentToolPresentation,
+  ToolPolicySelection,
+  ToolPolicySet,
 } from "../../../shared/index.js";
 import { Callout } from "@client/components/ui/callout";
 import {
@@ -13,214 +13,146 @@ import {
   SelectValue,
 } from "@client/components/ui/select";
 import { SettingsField, SwitchField } from "../settings/SettingsField.js";
-import { SettingsSection, SettingsSubgroup } from "../settings/SettingsSection.js";
-import { ExactToolSelector } from "./ExactToolSelector.js";
+import { SettingsSection } from "../settings/SettingsSection.js";
+import { missingToolPolicyMessage, toolPolicySourceLabel } from "../tool-policies/tool-policy-messages.js";
+import { ToolPolicySelector } from "../tool-policies/ToolPolicySelector.js";
 
 export function AgentToolPolicyEditor({
   id,
   catalog,
   value,
+  policySets,
+  toolPresentation,
   disabled = false,
+  updating = false,
+  catalogState = "ready",
   onChange,
+  onPresentationChange,
 }: {
-  /** The section's id, a target for the editor's section anchors. */
   readonly id?: string;
-  readonly catalog: AgentToolBootstrapDescriptor;
-  readonly value?: AgentToolBootstrapPolicy;
+  readonly catalog?: AgentToolBootstrapDescriptor;
+  readonly value: ToolPolicySelection;
+  readonly policySets: readonly ToolPolicySet[];
+  readonly toolPresentation?: AgentToolPresentation;
   readonly disabled?: boolean;
-  readonly onChange: (value: AgentToolBootstrapPolicy | undefined) => void;
+  readonly updating?: boolean;
+  readonly catalogState?: "loading" | "ready" | "error";
+  readonly onChange: (value: ToolPolicySelection) => void;
+  readonly onPresentationChange: (value: AgentToolPresentation | undefined) => void;
 }): React.JSX.Element {
-  const knownToolIds = catalog.groups.flatMap(({ tools }) =>
-    tools.map(({ id }) => id),
+  const presentation = toolPresentation ?? catalog?.defaultPresentation;
+  const selectedOption = catalog?.presentationOptions.find(
+    ({ surface }) => surface === presentation?.surface,
   );
-  const selected = new Set(value?.enabledToolIds ?? []);
-  const unavailableIds = [...selected].filter(
-    (id) => !knownToolIds.includes(id),
-  );
-  const groups = catalog.groups.map((group) => ({
-    id: group.id,
-    label: group.label.text,
-    description: group.description.text,
-    tools: group.tools.map((tool) => ({
-      id: tool.id,
-      label: tool.label.text,
-      description: tool.description?.text ?? "",
-      effects: tool.effects,
-      available: tool.available,
-      unavailableReason: tool.unavailableReason?.text,
-    })),
-  }));
-  const presentation =
-    value?.presentation ?? catalog.resolvedPolicy.presentation;
-  const selectedPresentationOption =
-    catalog.presentationOptions.find(
-      ({ surface }) => surface === presentation.surface,
-    ) ?? catalog.presentationOptions[0]!;
-
   return (
     <SettingsSection
       id={id}
       title="Sedes tools"
-      description="Choose whether new threads inherit the ordinary tool policy."
+      description="Choose a reusable policy for new threads. Inherited policies resolve through account, environment, and backend defaults."
       card
     >
-      <SwitchField
-        label="Use default tool policy"
-        description="Use the selected target’s ordinary new-thread settings."
-        checked={value === undefined}
+      <ToolPolicySelector
+        value={value}
+        policySets={policySets}
         disabled={disabled}
-        onCheckedChange={(checked) => {
-          if (checked) {
-            onChange(undefined);
-            return;
-          }
-          onChange({
-            enabled: catalog.defaultPolicy.enabled,
-            enabledToolIds: catalog.defaultPolicy.enabledToolIds,
-            presentation: catalog.defaultPolicy.presentation,
-            accessBoundary: catalog.defaultPolicy.accessBoundary,
-          });
-        }}
+        catalogState={catalogState}
+        inheritedLabel={catalog?.defaultPolicy ? toolPolicySourceLabel(catalog.defaultPolicy.source) : "backend, environment, or account defaults"}
+        inheritedPolicy={catalog?.defaultPolicy ?? undefined}
+        hidePreview={Boolean(catalog?.defaultIssue && value.kind === "inherit")}
+        suppressMissingMessage={Boolean(catalog?.resolvedIssue)}
+        onChange={onChange}
       />
-      {value && (
+      {catalog?.resolvedIssue && (
+        <Callout tone="warning">{missingToolPolicyMessage(catalog.resolvedIssue, "agent")}</Callout>
+      )}
+      {catalog && presentation && (
         <>
           <SwitchField
-            label="Enable Sedes tools"
-            description="Expose the selected tools on new threads."
-            checked={value.enabled}
+            label="Use backend presentation"
+            description="Let each compatible backend choose how to expose the selected tools."
+            checked={toolPresentation === undefined}
             disabled={disabled}
-            onCheckedChange={(enabled) => onChange({ ...value, enabled })}
+            onCheckedChange={(checked) =>
+              onPresentationChange(checked ? undefined : presentation)
+            }
           />
-          {catalog.presentationOptions.length > 1 && (
-            <SettingsField
-              label="Surface"
-              description="Expose Sedes operations as native tools or CLI commands."
-            >
-              <Select
-                value={presentation.surface}
-                disabled={disabled}
-                onValueChange={(nextSurface) => {
-                  const option = catalog.presentationOptions.find(
-                    ({ surface }) => surface === nextSurface,
-                  );
-                  if (!option) return;
-                  onChange({
-                    ...value,
-                    presentation: {
-                      surface: nextSurface as AgentToolPresentationSurface,
-                      mode: option.modes.includes(presentation.mode)
-                        ? presentation.mode
-                        : option.modes[0]!,
-                    },
-                  });
-                }}
-              >
-                <SelectTrigger className="w-full" aria-label="Sedes tool surface">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {catalog.presentationOptions.map((option) => (
-                    <SelectItem key={option.surface} value={option.surface}>
-                      {surfaceLabel(option.surface)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </SettingsField>
+          {toolPresentation && (
+            <>
+              {catalog.presentationOptions.length > 1 && (
+                <SettingsField
+                  label="Surface"
+                  description="Expose Sedes operations as native tools or CLI commands."
+                >
+                  <Select
+                    value={presentation.surface}
+                    disabled={disabled}
+                    onValueChange={(surface) => {
+                      const option = catalog.presentationOptions.find(
+                        (item) => item.surface === surface,
+                      );
+                      if (!option) return;
+                      onPresentationChange({
+                        surface: option.surface,
+                        mode: option.modes.includes(presentation.mode)
+                          ? presentation.mode
+                          : option.modes[0]!,
+                      });
+                    }}
+                  >
+                    <SelectTrigger className="w-full" aria-label="Sedes tool surface">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {catalog.presentationOptions.map(({ surface }) => (
+                        <SelectItem key={surface} value={surface}>
+                          {surface === "native" ? "Native tools" : "Sedes CLI"}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </SettingsField>
+              )}
+              {selectedOption && selectedOption.modes.length > 1 && (
+                <SettingsField
+                  label="Presentation"
+                  description="Choose progressive discovery or individual operations."
+                >
+                  <Select
+                    value={presentation.mode}
+                    disabled={disabled}
+                    onValueChange={(mode) => {
+                      if (mode === "progressive" || mode === "individual") {
+                        onPresentationChange({ ...presentation, mode });
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="w-full" aria-label="Sedes tool presentation">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {selectedOption.modes.map((mode) => (
+                        <SelectItem key={mode} value={mode}>
+                          {mode === "progressive"
+                            ? "Progressive discovery (recommended)"
+                            : "Individual operations"}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </SettingsField>
+              )}
+            </>
           )}
-          {selectedPresentationOption.modes.length > 1 && (
-            <SettingsField
-              label="Presentation"
-              description="Choose progressive discovery or individual operations."
-            >
-              <Select
-                value={presentation.mode}
-                disabled={disabled}
-                onValueChange={(nextMode) =>
-                  onChange({
-                    ...value,
-                    presentation: {
-                      ...presentation,
-                      mode: nextMode as AgentToolPresentationMode,
-                    },
-                  })
-                }
-              >
-                <SelectTrigger className="w-full" aria-label="Sedes tool presentation">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {selectedPresentationOption.modes.map((mode) => (
-                    <SelectItem key={mode} value={mode}>
-                      {modeLabel(mode)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </SettingsField>
-          )}
-          <SettingsField
-            label="Access boundary"
-            description="For each thread created from this Agent, that thread’s execution environment is treated as its current environment. Thread access asks before accessing project, global, or other-thread resources."
-          >
-            <Select
-              value={value.accessBoundary}
-              disabled={disabled}
-              onValueChange={(next) =>
-                onChange({
-                  ...value,
-                  accessBoundary: next as AgentToolBootstrapPolicy["accessBoundary"],
-                })
-              }
-            >
-              <SelectTrigger className="w-full" aria-label="Access boundary">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="thread">Ask outside this thread</SelectItem>
-                <SelectItem value="environment">Ask outside this environment</SelectItem>
-                <SelectItem value="unrestricted">Allow without asking</SelectItem>
-              </SelectContent>
-            </Select>
-          </SettingsField>
-          {value.accessBoundary === "unrestricted" && (
-            <Callout tone="warning" role="status">
-              Threads created from this Agent may use enabled Sedes tools in
-              other environments without asking. Existing threads are not
-              changed when this Agent is edited.
-            </Callout>
-          )}
-          <SettingsSubgroup
-            title="Tools"
-            description="The tools new threads expose when Sedes tools are enabled."
-          >
-            <ExactToolSelector
-              groups={groups}
-              selectedToolIds={value.enabledToolIds}
-              unavailableToolIds={unavailableIds}
-              disabled={disabled}
-              onChange={(toolIds) =>
-                onChange({
-                  enabled: value.enabled,
-                  enabledToolIds: [...toolIds],
-                  presentation,
-                  accessBoundary: value.accessBoundary,
-                })
-              }
-            />
-          </SettingsSubgroup>
         </>
       )}
+      <div className="agent-tool-policy-footer">
+        <p className="agent-configuration-resolved">
+          Policy changes affect future threads. Existing threads keep their saved settings.
+        </p>
+        <p className="agent-configuration-resolved agent-tool-policy-update-status" role="status" aria-live="polite" aria-atomic="true">
+          {updating ? "Updating available settings…" : ""}
+        </p>
+      </div>
     </SettingsSection>
   );
-}
-
-function surfaceLabel(surface: AgentToolPresentationSurface): string {
-  return surface === "native" ? "Native tools" : "Sedes CLI";
-}
-
-function modeLabel(mode: AgentToolPresentationMode): string {
-  return mode === "progressive"
-    ? "Progressive discovery (recommended)"
-    : "Individual operations";
 }

@@ -62,6 +62,8 @@ export const test = base.extend<{
           !(
             (request.url().includes("/events") ||
               request.url().includes("/files/download?") ||
+              // Policy resolution is read-only; closing creation cancels its preview.
+              (request.method() === "POST" && new URL(request.url()).pathname === "/api/tool-policies/resolve") ||
               // Usage availability is a read-only POST batch. Closing or
               // navigating away from its view deliberately cancels the read.
               (request.method() === "POST" &&
@@ -87,7 +89,9 @@ export const test = base.extend<{
                 (/^\/api\/configuration(?:\/|$)/u.test(new URL(request.url()).pathname) ||
                   new URL(request.url()).pathname === "/api/projects" ||
                   new URL(request.url()).pathname === "/api/host-registrations" ||
-                  new URL(request.url()).pathname === "/api/environment-variables/preview"))) &&
+                  new URL(request.url()).pathname === "/api/environment-variables/preview" ||
+                  /^\/api\/tool-policies(?:\/options)?$/u.test(new URL(request.url()).pathname) ||
+                  new URL(request.url()).pathname === "/api/tool-policy-selections"))) &&
             request.failure()?.errorText.includes("ERR_ABORTED")
           )
         ) {

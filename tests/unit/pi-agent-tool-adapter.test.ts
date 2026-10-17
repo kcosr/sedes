@@ -47,7 +47,7 @@ const source: TrustedAgentToolSource = Object.freeze({
 const enabledPolicy = Object.freeze({
   enabled: true,
   presentation: { surface: "native" as const, mode: "individual" as const },
-  accessBoundary: "environment" as const,
+  resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
   enabledToolIds: ["agent.context"],
 });
 
@@ -171,7 +171,7 @@ describe("Pi agent-tool adapter", () => {
         surface: "native" as const,
         mode: "progressive" as const,
       },
-      accessBoundary: "environment" as const,
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       enabledToolIds: [contract.id],
     };
     const toolAccess = new PiToolAccessController("full");
@@ -345,7 +345,7 @@ describe("Pi agent-tool adapter", () => {
         surface: "native" as const,
         mode: "progressive" as const,
       },
-      accessBoundary: "environment" as const,
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       enabledToolIds: [contract.id],
     };
     const disabled = { ...enabled, enabled: false };
@@ -412,7 +412,7 @@ describe("Pi agent-tool adapter", () => {
         readPolicy: () => ({
           enabled: true,
           presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: [contract.id],
         }),
         invoke: progressiveInvoke,
@@ -446,7 +446,7 @@ describe("Pi agent-tool adapter", () => {
         readPolicy: () => ({
           enabled: true,
           presentation: { surface: "native", mode: "individual" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           enabledToolIds: [actionContract.id],
         }),
         invoke: readOnlyInvoke,

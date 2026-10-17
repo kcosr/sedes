@@ -1,3 +1,4 @@
+import { testAgentToolExecutionAuthority } from "../support/agent-tool-execution-authority.js";
 import { execFile } from "node:child_process";
 import {
   chmod,
@@ -147,7 +148,7 @@ function fixture() {
         enabled: false,
         revision: 1,
         presentation: { surface: "cli" as const, mode: "progressive" as const },
-        accessBoundary: "environment" as const,
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: [
           "thread.status",
           "thread.create",
@@ -368,13 +369,12 @@ function fixture() {
       },
     ],
   };
-  const scoped = new SourceScopedAgentToolService(
-    canonical,
-    {
+  const scoped = new SourceScopedAgentToolService(canonical,
+{
       get: (_requestScope: RequestScope, id: string) => policies.get(id)!,
     } as never,
-    new AgentToolEnvironmentAuthorityResolver(authorityReader),
-    {
+new AgentToolEnvironmentAuthorityResolver(authorityReader),
+{
       resolveInScope(_requestScope, sourceThreadId) {
         const backendKind = sources.get(sourceThreadId);
         if (!backendKind) {
@@ -391,19 +391,7 @@ function fixture() {
           backendKind,
         };
       },
-    },
-    {
-      acquireAgentToolApprovalAuthority: async () => ({
-        generation: "generation-1",
-        signal: new AbortController().signal,
-        isCurrent: () => true,
-        release: () => undefined,
-      }),
-    },
-    {
-      requestApplicationDecision: async () => "deny" as const,
-    },
-  );
+    }, testAgentToolExecutionAuthority);
   const tools = new PolicyCheckedAgentToolHttpService(scoped);
   const app = express();
   app.use(express.json({ strict: true, type: "application/json" }));
@@ -527,6 +515,7 @@ describe("agent control tools through canonical adapters", () => {
               environmentAuthority: {
                 id: "grant-native",
                 callerKind: "thread_agent",
+                resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
                 defaults: {
                   kind: "thread_agent",
                   environmentId: "environment-1",
@@ -579,13 +568,13 @@ describe("agent control tools through canonical adapters", () => {
           toolId,
           schemaVersion:
             toolId === "thread.create"
-              ? 5
+              ? 6
               : toolId === "thread.messages"
                 ? 4
                 : toolId === "thread.send"
                   ? 2
                 : toolId === "thread.status"
-                  ? 2
+                  ? 3
                   : 1,
           requestId,
           input,

@@ -1,3 +1,5 @@
+import { ToolPolicyRepository } from "../../src/server/db/repositories/tool-policy-repository.js";
+import { ThreadAppliedToolPolicySetRepository } from "../../src/server/db/repositories/thread-applied-tool-policy-set-repository.js";
 import { describe, expect, it } from "vitest";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
 import {
@@ -175,6 +177,91 @@ function fixture(): {
 }
 
 describe("thread agent tool policy persistence", () => {
+  it("requires the policy and its current association to share one database transaction", () => {
+    const database = openOverlayDatabaseConnection(":memory:");
+    const another = openOverlayDatabaseConnection(":memory:");
+    try {
+      expect(() => new ThreadAgentToolPolicyRepository(
+        database,
+        eligibility,
+        new ThreadAppliedToolPolicySetRepository(another),
+      )).toThrow("thread_agent_tool_policy_database_mismatch");
+    } finally {
+      database.close();
+      another.close();
+    }
+  });
+
+  it("tracks the current named association and preserves it only for unchanged policy content", async () => {
+    const value = fixture();
+    try {
+      const policies = new ThreadAgentToolPolicyRepository(value.database,eligibility);
+      const sets = new ToolPolicyRepository(value.database);
+      const first = sets.create(value.scope,{name:"Review",enabledToolIds:["thread.status","agent.context"],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}},400);
+      const content = {enabled:true,enabledToolIds:[...first.enabledToolIds],resourceScope:first.resourceScope};
+      let current = policies.update(value.scope,value.piThreadId,{...content,expectedRevision:0,presentation:{surface:"native",mode:"individual"},policySet:{id:first.id,revision:first.revision},now:500});
+      const captured = {id:first.id,name:first.name,revision:first.revision};
+      expect(current.policySet).toEqual(captured);
+      const changedDefinition = sets.update(value.scope,first.id,{name:"Changed review",enabledToolIds:["thread.status"],resourceScope:first.resourceScope},0,501);
+      current = policies.update(value.scope,value.piThreadId,{...content,expectedRevision:current.revision,presentation:{surface:"native",mode:"progressive"},now:502});
+      expect(current.policySet).toEqual(captured);
+      sets.delete(value.scope,first.id,changedDefinition.revision);
+      current = policies.update(value.scope,value.piThreadId,{...content,expectedRevision:current.revision,presentation:{surface:"native",mode:"individual"},policySet:{id:first.id,revision:first.revision},now:503});
+      expect(current.policySet).toEqual(captured);
+      current = policies.update(value.scope,value.piThreadId,{...content,expectedRevision:current.revision,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:true},presentation:current.presentation,now:504});
+      expect(current.policySet).toBeNull();
+      expect(() => policies.update(value.scope,value.piThreadId,{...content,expectedRevision:current.revision,presentation:current.presentation,policySet:{id:first.id,revision:first.revision},now:505})).toThrow(/not found/i);
+      expect(policies.getDurable(value.scope,value.piThreadId)).toEqual(current);
+      const second = sets.create(value.scope,{name:"Current review",enabledToolIds:[...current.enabledToolIds],resourceScope:current.resourceScope},506);
+      const next = policies.update(value.scope,value.piThreadId,{...current,expectedRevision:current.revision,policySet:{id:second.id,revision:second.revision},now:507});
+      expect(next.revision).toBe(current.revision+1);
+      expect(next.policySet).toEqual({id:second.id,name:second.name,revision:second.revision});
+      current = policies.update(value.scope,value.piThreadId,{...next,expectedRevision:next.revision,policySet:null,now:508});
+      expect(current.policySet).toBeNull();
+      expect(current.revision).toBe(next.revision+1);
+      const dependencies = createThreadAgentToolPolicyDependencies();
+      const reader = new DatabaseThreadApplicationInventoryReader({inventory:new InventoryRepository(value.database),queue:new QueuedInputRepository(value.database),completion:new SubmissionCompletionRepository(value.database),agentTools:policies,agentToolCatalog:dependencies.catalog,agentToolRuntimeAvailability:{read:()=>({availability:"available"})},directoryBrowsingAvailability:()=>"unavailable",executionWorkspaces:directThreadExecutionWorkspaceReader});
+      const projected = (await reader.getAuthorized(value.scope,value.piThreadId)).agentTools;
+      expect(projected.policySet).toBeNull();
+      expect(projected).not.toHaveProperty("origin");
+    } finally {value.database.close();}
+  });
+
+  it("rejects stale, foreign, or mismatching named associations without changing grants or metadata", () => {
+    const value = fixture();
+    try {
+      const policies = new ThreadAgentToolPolicyRepository(value.database,eligibility);
+      const sets = new ToolPolicyRepository(value.database);
+      const definition = sets.create(value.scope,{name:"Exact review",enabledToolIds:["thread.status"],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}},400);
+      const valid = {enabled:true,enabledToolIds:definition.enabledToolIds,resourceScope:definition.resourceScope,presentation:{surface:"native" as const,mode:"individual" as const},expectedRevision:0,now:500};
+      const before = policies.getDurable(value.scope,value.piThreadId);
+      const reference = {id:definition.id,revision:definition.revision};
+      for (const invalid of [
+        {...valid,enabled:false,policySet:reference},
+        {...valid,enabledToolIds:["agent.context"],policySet:reference},
+        {...valid,resourceScope:{allowOtherEnvironments:true,allowOtherProjects:false},policySet:reference},
+        {...valid,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:true},policySet:reference},
+        {...valid,policySet:{...reference,revision:1}},
+      ]) {
+        expect(() => policies.update(value.scope,value.piThreadId,invalid)).toThrow();
+        expect(policies.getDurable(value.scope,value.piThreadId)).toEqual(before);
+      }
+      const foreignScope = {...value.scope,principalId:"foreign-policy-owner"};
+      value.database.prepare("INSERT INTO principals(tenant_id,id,kind,created_at) VALUES (?,?,'local_human',100)").run(foreignScope.tenantId,foreignScope.principalId);
+      const foreign = sets.create(foreignScope,{name:"Private",enabledToolIds:definition.enabledToolIds,resourceScope:definition.resourceScope},400);
+      expect(() => policies.update(value.scope,value.piThreadId,{...valid,policySet:{id:foreign.id,revision:foreign.revision}})).toThrow(/not found/i);
+      expect(policies.getDurable(value.scope,value.piThreadId)).toEqual(before);
+      const applied = policies.update(value.scope,value.piThreadId,{...valid,policySet:reference});
+      expect(applied.policySet).toEqual({id:definition.id,name:definition.name,revision:definition.revision});
+      expect(() => policies.update(value.scope,value.piThreadId,{...valid,expectedRevision:0,policySet:null})).toThrow(/changed in another client/i);
+      expect(policies.getDurable(value.scope,value.piThreadId)).toEqual(applied);
+      const custom = policies.update(value.scope,value.piThreadId,{...valid,expectedRevision:applied.revision,enabledToolIds:["agent.context"],now:501});
+      expect(custom.policySet).toBeNull();
+      const disabled = policies.update(value.scope,value.piThreadId,{...valid,expectedRevision:custom.revision,enabled:false,now:502});
+      expect(disabled.policySet).toBeNull();
+    } finally {value.database.close();}
+  });
+
   it("projects runtime and archived-thread denials independently of saved grants and catalog availability", async () => {
     const value = fixture();
     try {
@@ -182,7 +269,7 @@ describe("thread agent tool policy persistence", () => {
       const policies = new ThreadAgentToolPolicyRepository(value.database, dependencies.eligibility);
       policies.update(value.scope, value.codexThreadId, {
         expectedRevision: 0, enabled: true, enabledToolIds: ["agent.context"],
-        presentation: { surface: "native", mode: "individual" }, accessBoundary: "environment", now: 500,
+        presentation: { surface: "native", mode: "individual" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true }, now: 500,
       });
       const inventory = new InventoryRepository(value.database);
       const calls: string[] = [];
@@ -268,14 +355,14 @@ describe("thread agent tool policy persistence", () => {
       expect(repository.get(value.scope, value.piThreadId)).toMatchObject({
         enabled: false,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         revision: 0,
         enabledToolIds: [],
       });
       expect(repository.get(value.scope, value.codexThreadId)).toMatchObject({
         enabled: false,
         presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         revision: 0,
         enabledToolIds: [],
       });
@@ -298,7 +385,7 @@ describe("thread agent tool policy persistence", () => {
       ).toMatchObject({
         enabled: false,
         presentation: { surface: "native", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
         revision: 0,
         enabledToolIds: [],
         updatedAt: 340,
@@ -323,7 +410,7 @@ describe("thread agent tool policy persistence", () => {
       ).toMatchObject({
         enabled: false,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
         revision: 0,
         enabledToolIds: [],
         updatedAt: 350,
@@ -352,7 +439,7 @@ describe("thread agent tool policy persistence", () => {
         enabled: true,
         presentation: { surface: "native", mode: "individual" },
         enabledToolIds: [...retiredToolIds, "thread.status"],
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         now: 400,
       });
       const current = new ThreadAgentToolPolicyRepository(value.database, eligibility);
@@ -369,6 +456,151 @@ describe("thread agent tool policy persistence", () => {
           now: 401,
         })).toThrow(/ineligible tool/i);
       }
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("retains the exact durable snapshot for unchanged projected saves after catalog shrink", () => {
+    const value = fixture();
+    try {
+      const hiddenToolId = "automation.acknowledge";
+      const previous = new ThreadAgentToolPolicyRepository(value.database, {
+        ...eligibility,
+        eligibleToolIds: new Set([...eligibleToolIds, hiddenToolId]),
+      });
+      const definitions = new ToolPolicyRepository(value.database);
+      const definition = definitions.create(value.scope, {
+        name: "Captured review",
+        enabledToolIds: [hiddenToolId, "thread.status"],
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
+      }, 400);
+      const reference = { id: definition.id, revision: definition.revision };
+      const applied = previous.update(value.scope, value.piThreadId, {
+        expectedRevision: 0,
+        enabled: true,
+        enabledToolIds: definition.enabledToolIds,
+        presentation: { surface: "native", mode: "individual" },
+        resourceScope: definition.resourceScope,
+        policySet: reference,
+        now: 401,
+      });
+      const current = new ThreadAgentToolPolicyRepository(value.database, eligibility);
+      const projection = current.get(value.scope, value.piThreadId);
+      expect(projection.enabledToolIds).toEqual(["thread.status"]);
+
+      definitions.update(value.scope, definition.id, {
+        name: "Edited reusable set",
+        enabledToolIds: ["agent.context"],
+        resourceScope: definition.resourceScope,
+      }, 0, 402);
+      let saved = current.update(value.scope, value.piThreadId, {
+        enabled: projection.enabled,
+        enabledToolIds: projection.enabledToolIds,
+        resourceScope: projection.resourceScope,
+        expectedRevision: projection.revision,
+        presentation: { surface: "native", mode: "progressive" },
+        now: 403,
+      });
+      expect(saved.policySet).toEqual(applied.policySet);
+      expect(current.getDurable(value.scope, value.piThreadId).enabledToolIds).toEqual(applied.enabledToolIds);
+      saved = current.update(value.scope, value.piThreadId, {
+        ...saved,
+        expectedRevision: saved.revision,
+        policySet: reference,
+        now: 404,
+      });
+      expect(saved.policySet).toEqual(applied.policySet);
+      definitions.delete(value.scope, definition.id, 1);
+      saved = current.update(value.scope, value.piThreadId, {
+        ...saved,
+        expectedRevision: saved.revision,
+        presentation: { surface: "cli", mode: "individual" },
+        policySet: reference,
+        now: 405,
+      });
+      expect(saved.policySet).toEqual(applied.policySet);
+      expect(current.getDurable(value.scope, value.piThreadId).enabledToolIds).toEqual(applied.enabledToolIds);
+
+      for (const unknown of [hiddenToolId, "newly.unknown"]) {
+        const before = current.getDurable(value.scope, value.piThreadId);
+        expect(() => current.update(value.scope, value.piThreadId, {
+          ...saved,
+          expectedRevision: saved.revision,
+          enabledToolIds: ["thread.status", unknown],
+          policySet: reference,
+          now: 406,
+        })).toThrow(/ineligible tool/i);
+        expect(current.getDurable(value.scope, value.piThreadId)).toEqual(before);
+      }
+
+      const containingHidden = definitions.create(value.scope, {
+        name: "Requires unavailable tool",
+        enabledToolIds: definition.enabledToolIds,
+        resourceScope: definition.resourceScope,
+      }, 407);
+      expect(() => current.update(value.scope, value.piThreadId, {
+        ...saved,
+        expectedRevision: saved.revision,
+        policySet: { id: containingHidden.id, revision: containingHidden.revision },
+        now: 408,
+      })).toThrow(/do not match/i);
+      expect(current.getDurable(value.scope, value.piThreadId).enabledToolIds).toEqual(applied.enabledToolIds);
+
+      saved = current.update(value.scope, value.piThreadId, {
+        ...saved,
+        expectedRevision: saved.revision,
+        policySet: null,
+        now: 409,
+      });
+      expect(saved.policySet).toBeNull();
+      expect(current.getDurable(value.scope, value.piThreadId).enabledToolIds).toEqual(applied.enabledToolIds);
+      const replacement = definitions.create(value.scope, {
+        name: "Available tools only",
+        enabledToolIds: ["thread.status"],
+        resourceScope: definition.resourceScope,
+      }, 410);
+      const replaced = current.update(value.scope, value.piThreadId, {
+        ...saved,
+        expectedRevision: saved.revision,
+        policySet: { id: replacement.id, revision: replacement.revision },
+        now: 411,
+      });
+      expect(replaced.policySet).toEqual({ id: replacement.id, name: replacement.name, revision: replacement.revision });
+      expect(current.getDurable(value.scope, value.piThreadId).enabledToolIds).toEqual(["thread.status"]);
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it.each([
+    { name: "enabled flag", change: { enabled: false } },
+    { name: "resource scope", change: { resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true } } },
+    { name: "visible tool list", change: { enabledToolIds: [] } },
+  ])("replaces hidden durable tool IDs when the $name is manually changed", ({ change }) => {
+    const value = fixture();
+    try {
+      const previous = new ThreadAgentToolPolicyRepository(value.database, {
+        ...eligibility,
+        eligibleToolIds: new Set([...eligibleToolIds, "automation.acknowledge"]),
+      });
+      previous.update(value.scope, value.piThreadId, {
+        expectedRevision: 0,
+        enabled: true,
+        enabledToolIds: ["thread.status", "automation.acknowledge"],
+        presentation: { surface: "native", mode: "individual" },
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
+        now: 400,
+      });
+      const current = new ThreadAgentToolPolicyRepository(value.database, eligibility);
+      const projected = current.get(value.scope, value.piThreadId);
+      current.update(value.scope, value.piThreadId, {
+        ...projected,
+        ...change,
+        expectedRevision: projected.revision,
+        now: 401,
+      });
+      expect(current.getDurable(value.scope, value.piThreadId).enabledToolIds).toEqual(change.enabledToolIds ?? projected.enabledToolIds);
     } finally {
       value.database.close();
     }
@@ -393,13 +625,13 @@ describe("thread agent tool policy persistence", () => {
         enabled: true,
         presentation: { surface: "native", mode: "individual" },
         enabledToolIds: ["thread.status", "agent.context"],
-        accessBoundary: "unrestricted",
+        resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
         now: 400,
       });
       expect(changed).toMatchObject({
         enabled: true,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "unrestricted",
+        resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
         revision: 1,
         updatedAt: 400,
         enabledToolIds: ["agent.context", "thread.status"],
@@ -416,7 +648,7 @@ describe("thread agent tool policy persistence", () => {
           enabled: false,
           presentation: { surface: "cli", mode: "progressive" },
           enabledToolIds: ["thread.tasks"],
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           now: 401,
         }),
       ).toThrow(/changed in another client/i);
@@ -427,11 +659,11 @@ describe("thread agent tool policy persistence", () => {
         enabled: true,
         presentation: { surface: "cli", mode: "progressive" },
         enabledToolIds: ["thread.tasks"],
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         now: 402,
       });
       expect(replaced.enabledToolIds).toEqual(["thread.tasks"]);
-      expect(replaced.accessBoundary).toEqual("environment");
+      expect(replaced.resourceScope).toEqual({ allowOtherEnvironments: false, allowOtherProjects: true });
       expect(replaced.revision).toBe(2);
 
       policyToolIds.delete("thread.tasks");
@@ -453,7 +685,7 @@ describe("thread agent tool policy persistence", () => {
           enabled: true,
           presentation: { surface: "cli", mode: "progressive" },
           enabledToolIds: ["thread.tasks"],
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           now: 403,
         }),
       ).toThrow(/ineligible/i);
@@ -483,7 +715,7 @@ describe("thread agent tool policy persistence", () => {
       expect(pi.agentTools).toMatchObject({
         enabled: false,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         presentationOptions: [
           { surface: "native", modes: ["progressive", "individual"] },
           { surface: "cli", modes: ["progressive", "individual"] },
@@ -552,7 +784,7 @@ describe("thread agent tool policy persistence", () => {
       );
       expect(codex.agentTools).toMatchObject({
         presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         presentationOptions: [
           { surface: "native", modes: ["individual", "progressive"] },
           { surface: "cli", modes: ["progressive", "individual"] },
@@ -587,7 +819,7 @@ describe("thread agent tool policy persistence", () => {
           enabled: true,
           presentation: { surface: "native", mode: "progressive" },
           enabledToolIds: ["unknown.tool"],
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           now: 500,
         }),
       ).toThrow(/ineligible/i);
@@ -597,7 +829,7 @@ describe("thread agent tool policy persistence", () => {
           enabled: true,
           presentation: { surface: "native", mode: "individual" },
           enabledToolIds: ["agent.context", "agent.context"],
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           now: 500,
         }),
       ).toThrow(/duplicated/i);
@@ -607,7 +839,7 @@ describe("thread agent tool policy persistence", () => {
           enabled: true,
           presentation: { surface: "native", mode: "progressive" },
           enabledToolIds: ["agent.context"],
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           now: 500,
         }),
       ).toThrow(/unavailable/i);
@@ -689,7 +921,7 @@ describe("thread agent tool policy persistence", () => {
           enabled: true,
           presentation: { surface: "cli", mode: "progressive" },
           enabledToolIds: ["task.list"],
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           now: 600,
         }),
       ).toThrow(/unavailable for the thread target/i);

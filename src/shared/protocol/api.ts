@@ -1,3 +1,4 @@
+import { toolPolicySelectionSchema, toolPolicyResolutionIssueSchema } from "./tool-policies.js";
 import { formAnswersSchema } from "./interactions.js";
 import { clientOriginSchema } from "./thread-input.js";
 import {
@@ -37,8 +38,9 @@ import {
   taskTitleSchema,
 } from "./tasks.js";
 import {
-  agentToolAccessBoundarySchema,
+  agentToolResourceScopeSchema,
   agentToolIdSchema,
+  appliedToolPolicySetReferenceSchema,
   agentToolPresentationSchema,
   activityDetailModeSchema,
   executionWorkspaceSelectionSchema,
@@ -72,7 +74,6 @@ import {
 } from "./composer-attachments.js";
 import { composerTaskReferenceIdsSchema } from "./tasks.js";
 import {
-  agentToolBootstrapPolicySchema,
   normalizedAgentConfigurationOverridesSchema,
   savedAgentIdSchema,
 } from "./saved-agents.js";
@@ -140,6 +141,7 @@ export const apiErrorCodeSchema = z.enum([
 ]);
 
 export const apiErrorDetailSchema = z.strictObject({
+  toolPolicyIssue: toolPolicyResolutionIssueSchema.optional(),
   code: apiErrorCodeSchema,
   message: z.string().min(1).max(500),
   retryable: z.boolean(),
@@ -189,6 +191,8 @@ export const createThreadTitleSchema = normalizedThreadTitleSchema
 const createThreadTargetIdSchema = z.string().min(1).max(160);
 
 export const createThreadRequestSchema = z.strictObject({
+  toolPolicySelection: toolPolicySelectionSchema.optional(),
+  toolPresentation: agentToolPresentationSchema.optional(),
   environmentVariables: environmentVariableOverridesSchema.optional(),
   environmentVariablesRevision: environmentVariablesRevisionSchema.optional(),
   workspaceId: workspaceIdSchema,
@@ -204,7 +208,6 @@ export const createThreadRequestSchema = z.strictObject({
       kind: z.literal("custom"),
       targetId: createThreadTargetIdSchema,
       backendOverrides: normalizedAgentConfigurationOverridesSchema.optional(),
-      sedesTools: agentToolBootstrapPolicySchema.optional(),
     }),
   ]),
 });
@@ -1223,12 +1226,13 @@ export const threadApplicationOperationSchema = z.discriminatedUnion("kind", [
   z
     .strictObject({
       kind: z.literal("set_agent_tool_policy"),
+      policySet: appliedToolPolicySetReferenceSchema.nullable().optional(),
       mutationId: mutationIdSchema,
       expectedPolicyRevision: z.number().int().nonnegative(),
       enabled: z.boolean(),
       enabledToolIds: z.array(agentToolIdSchema).max(512),
       presentation: agentToolPresentationSchema,
-      accessBoundary: agentToolAccessBoundarySchema,
+      resourceScope: agentToolResourceScopeSchema,
     })
     .superRefine((operation, context) => {
       if (

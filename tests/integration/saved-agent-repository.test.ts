@@ -23,12 +23,8 @@ describe("SavedAgentRepository", () => {
           { id: "thinking", value: "high" },
           { id: "model", value: "grok" },
         ],
-        sedesTools: {
-          enabled: true,
-          enabledToolIds: ["thread.status", "agent.context"],
-          presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "unrestricted",
-        },
+        toolPolicySelection: { kind: "policy_set", policySetId: "99999999-9999-4999-8999-999999999999" },
+        toolPresentation: { surface: "native", mode: "progressive" },
         now: 1_000,
       });
       const second = repository.create(current.scope, {
@@ -37,30 +33,20 @@ describe("SavedAgentRepository", () => {
         backendTypeId,
         backendOverridesSchemaVersion: 3,
         backendOverrides: [],
-        sedesTools: null,
+        toolPolicySelection: { kind: "inherit" },
         now: 2_000,
       });
       expect(first.backendOverrides.map(({ id }) => id)).toEqual([
         "model",
         "thinking",
       ]);
-      expect(first.sedesTools?.enabledToolIds).toEqual([
-        "agent.context",
-        "thread.status",
-      ]);
-      expect(first.sedesTools?.accessBoundary).toEqual("unrestricted");
-      expect(
-        current.database
-          .prepare(
-            `SELECT sedes_tools_json AS sedesToolsJson
-             FROM saved_agents
-             WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`,
-          )
-          .get(current.scope.tenantId, current.scope.principalId, first.id),
-      ).toEqual({
-        sedesToolsJson:
-          '{"enabled":true,"enabledToolIds":["agent.context","thread.status"],"presentation":{"surface":"native","mode":"progressive"},"accessBoundary":"unrestricted"}',
-      });
+      expect(first.toolPolicySelection).toEqual({ kind: "policy_set", policySetId: "99999999-9999-4999-8999-999999999999" });
+      expect(first.toolPresentation).toEqual({ surface: "native", mode: "progressive" });
+      expect(current.database.prepare(`SELECT tool_policy_selection_json AS selection, tool_presentation_json AS presentation FROM saved_agents WHERE tenant_id=? AND owner_principal_id=? AND id=?`)
+        .get(current.scope.tenantId, current.scope.principalId, first.id)).toEqual({
+          selection: '{"kind":"policy_set","policySetId":"99999999-9999-4999-8999-999999999999"}',
+          presentation: '{"surface":"native","mode":"progressive"}',
+        });
       const page = repository.listPage(current.scope, { pageSize: 1 });
       expect(page.items).toHaveLength(1);
       expect(page.nextCursor).toBeDefined();
@@ -92,12 +78,8 @@ describe("SavedAgentRepository", () => {
         backendTypeId,
         backendOverridesSchemaVersion: 1,
         backendOverrides: [{ id: "model", value: "old" }],
-        sedesTools: {
-          enabled: false,
-          enabledToolIds: [],
-          presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "environment",
-        },
+        toolPolicySelection: { kind: "disabled" },
+        toolPresentation: { surface: "native", mode: "progressive" },
         now: 1_000,
       });
       const updated = repository.update(current.scope, created.id, {
@@ -107,16 +89,18 @@ describe("SavedAgentRepository", () => {
           schemaVersion: 2,
           values: [{ id: "thinking", value: "low" }],
         },
-        sedesTools: null,
+        toolPolicySelection: { kind: "inherit" },
+        toolPresentation: null,
         now: 2_000,
       });
       expect(updated).toMatchObject({
         description: "New",
         backendOverridesSchemaVersion: 2,
         backendOverrides: [{ id: "thinking", value: "low" }],
-        sedesTools: null,
+        toolPolicySelection: { kind: "inherit" },
         revision: 1,
       });
+      expect(updated.toolPresentation).toBeUndefined();
       expect(() =>
         repository.update(current.scope, created.id, {
           expectedRevision: 0,
@@ -145,7 +129,7 @@ describe("SavedAgentRepository", () => {
           backendTypeId,
           backendOverridesSchemaVersion: 1,
           backendOverrides: [],
-          sedesTools: null,
+          toolPolicySelection: { kind: "inherit" },
           now: Number.MAX_SAFE_INTEGER,
         }),
       ).toThrow("saved_agent_timestamp_invalid");
@@ -156,7 +140,7 @@ describe("SavedAgentRepository", () => {
         backendTypeId,
         backendOverridesSchemaVersion: 1,
         backendOverrides: [],
-        sedesTools: null,
+        toolPolicySelection: { kind: "inherit" },
         now: 1_000,
       });
       current.database
@@ -191,7 +175,7 @@ describe("SavedAgentRepository", () => {
         backendTypeId,
         backendOverridesSchemaVersion: 1,
         backendOverrides: [{ id: "model", value: "one" }],
-        sedesTools: null,
+        toolPolicySelection: { kind: "inherit" },
         now: 1_000,
       });
       const foreignScope = {

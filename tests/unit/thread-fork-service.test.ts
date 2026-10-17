@@ -33,6 +33,7 @@ import { codexBackendTurnId } from "../../src/server/backends/codex/codex-histor
 import { OverlayRepository } from "../support/schema9/overlay-repository.js";
 import { ThreadInventoryService } from "../support/schema9/thread-inventory-service.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
+import { threadAgentToolPolicyRepository } from "../support/thread-agent-tool-policy.js";
 
 const configuration = parseResolvedBackendConfiguration({
   schemaVersion: 10,
@@ -176,6 +177,7 @@ function fixture(withEnvironmentVariables = false) {
   const checkpoints = new BackendCheckpointRepository(database);
   const lineage = new ThreadLineageRepository(database);
   const inventory = new InventoryRepository(database);
+  const projectId = inventory.getWorkspace(scope, workspace.id).projectId;
   bindings.bindDiscoveredConversation(scope, source.id, {
     backendConversationId: "native-source",
     now: 300,
@@ -210,7 +212,7 @@ function fixture(withEnvironmentVariables = false) {
       summary: {
         id: workspace.id,
         environmentId: environment.id,
-        projectId: "project-1",
+        projectId,
         label: { text: "Fork service" },
         displayPath: { text: workspace.canonicalPath },
         available: true,
@@ -321,6 +323,15 @@ function fixture(withEnvironmentVariables = false) {
   const deliveryInputSnapshots = new DeliveryInputSnapshotRepository(database);
   const collectOutputArtifactGarbage = vi.fn();
   const environmentVariables = withEnvironmentVariables ? new EnvironmentVariablesService(database, new ConfigurationRepository(database)) : undefined;
+  const toolPolicies = threadAgentToolPolicyRepository(database);
+  toolPolicies.update(scope, secondSource.id, {
+    expectedRevision: 0,
+    enabled: true,
+    enabledToolIds: ["thread.fork", "thread.send"],
+    presentation: { surface: "native", mode: "progressive" },
+    resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
+    now: 350,
+  });
   const service = new ThreadForkService({
     environmentVariables,
     database,
@@ -333,6 +344,8 @@ function fixture(withEnvironmentVariables = false) {
     lineage,
     inventory,
     operations: new ConversationOperationRepository(database),
+    toolPolicies,
+    principalToolClients: new PrincipalAgentToolClientRepository(database, createPrincipalAgentToolClientEligibility()),
     deliveryInputSnapshots,
     outputArtifacts: { collectGarbage: collectOutputArtifactGarbage },
     automations: new AutomationRepository(database),
@@ -376,11 +389,12 @@ function fixture(withEnvironmentVariables = false) {
     environmentAuthority: {
       id: "grant-1",
       callerKind: "thread_agent" as const,
+      resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
       defaults: {
         kind: "thread_agent" as const,
         environmentId: environment.id,
         workspaceId: workspace.id,
-        projectId: "project-1",
+        projectId,
         threadId: secondSource.id,
       },
       policyIdentity: {
@@ -396,6 +410,7 @@ function fixture(withEnvironmentVariables = false) {
           id: source.id,
           environmentId: environment.id,
           workspaceId: workspace.id,
+          projectId,
         },
       ],
       canonicalInputDigest: "input-digest",
@@ -427,6 +442,7 @@ function fixture(withEnvironmentVariables = false) {
           id: source.id,
           environmentId: environment.id,
           workspaceId: workspace.id,
+          projectId,
         },
       ],
       canonicalInputDigest: "principal-input-digest",
@@ -485,6 +501,130 @@ function fixture(withEnvironmentVariables = false) {
 }
 
 describe("ThreadForkService", () => {
+
+  it.each([
+    { name: "additional tools", enabledToolIds: ["thread.fork", "task.list"], allowOtherEnvironments: false, allowOtherProjects: false },
+    { name: "other environments", enabledToolIds: ["thread.fork"], allowOtherEnvironments: true, allowOtherProjects: false },
+    { name: "other projects", enabledToolIds: ["thread.fork"], allowOtherEnvironments: false, allowOtherProjects: true },
+  ])("refuses an agent fork that would grant $name beyond its caller", async (policy) => {
+    const current = fixture();
+    try {
+      const { toolPolicies } = current.service.input;
+      const caller = toolPolicies.update(current.scope, current.secondSource.id, {
+        expectedRevision: 1, enabled: true, enabledToolIds: ["thread.fork", "thread.send"],
+        presentation: { surface: "native", mode: "progressive" },
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, now: 400,
+      });
+      toolPolicies.update(current.scope, current.source.id, {
+        expectedRevision: 0, enabled: true, enabledToolIds: policy.enabledToolIds,
+        presentation: { surface: "native", mode: "progressive" },
+        resourceScope: { allowOtherEnvironments: policy.allowOtherEnvironments, allowOtherProjects: policy.allowOtherProjects }, now: 400,
+      });
+      const request = current.agent();
+      await expect(current.service.forkAgent({ ...request, environmentAuthority: {
+        ...request.environmentAuthority,
+        resourceScope: caller.resourceScope,
+        policyIdentity: { ...request.environmentAuthority.policyIdentity, revision: caller.revision },
+      } })).rejects.toMatchObject({ code: "invalid_transition" });
+      expect(current.branchConversation).not.toHaveBeenCalled();
+      expect(current.creation.findByMutationId(current.scope, request.mutationId)).toBeUndefined();
+      expect(current.database.prepare("SELECT count(*) AS count FROM backend_checkpoints").get()).toEqual({ count: 0 });
+    } finally { current.database.close(); }
+  });
+
+  it.each([
+    { name: "additional tools", enabledToolIds: ["thread.fork", "task.list"], allowOtherEnvironments: false },
+    { name: "all-environment access", enabledToolIds: ["thread.fork"], allowOtherEnvironments: true },
+  ])("refuses a Tool-client fork that would grant $name beyond its credential", async (policy) => {
+    const current = fixture();
+    try {
+      current.service.input.toolPolicies.update(current.scope, current.source.id, {
+        expectedRevision: 0, enabled: true, enabledToolIds: policy.enabledToolIds,
+        presentation: { surface: "native", mode: "progressive" },
+        resourceScope: { allowOtherEnvironments: policy.allowOtherEnvironments, allowOtherProjects: false }, now: 400,
+      });
+      const request = current.principal();
+      await expect(current.service.forkPrincipalClient(request)).rejects.toMatchObject({ code: "invalid_transition" });
+      expect(current.branchConversation).not.toHaveBeenCalled();
+      expect(current.creation.findByMutationId(current.scope, request.mutationId)).toBeUndefined();
+    } finally { current.database.close(); }
+  });
+
+  it.each(["agent", "principal"] as const)("rechecks %s caller authority after checkpoint capture", async (callerKind) => {
+    const current = fixture();
+    try {
+      const request = callerKind === "agent" ? current.agent() : current.principal();
+      const capture = current.actor.withBranchCheckpoint.getMockImplementation()!;
+      current.actor.withBranchCheckpoint.mockImplementationOnce(async (selection, operation) => {
+        await Promise.resolve();
+        if (callerKind === "agent") {
+          current.service.input.toolPolicies.update(current.scope, current.secondSource.id, {
+            expectedRevision: 1, enabled: false, enabledToolIds: [],
+            presentation: { surface: "native", mode: "progressive" },
+            resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, now: 800,
+          });
+        } else {
+          current.service.input.principalToolClients.revoke(current.scope, current.principal().clientId, {
+            expectedRevision: 1, now: 800,
+          });
+        }
+        return capture(selection, operation);
+      });
+      const call = callerKind === "agent"
+        ? current.service.forkAgent(request as ReturnType<typeof current.agent>)
+        : current.service.forkPrincipalClient(request as ReturnType<typeof current.principal>);
+      await expect(call).rejects.toMatchObject({ code: "conflict" });
+      expect(current.branchConversation).not.toHaveBeenCalled();
+      expect(current.creation.findByMutationId(current.scope, request.mutationId)).toBeUndefined();
+    } finally { current.database.close(); }
+  });
+
+  it.each(["selected_completed_turn", "latest_provider_snapshot"] as const)(
+    "preserves the exact Sedes tool snapshot and current applied set for a %s fork",
+    async (boundary) => {
+      const current = fixture();
+      try {
+        const { toolPolicies } = current.service.input;
+        const { appliedToolPolicySets } = toolPolicies;
+        const policySet = {
+          id: "11111111-1111-4111-8111-111111111111", name: "Everyday", revision: 4,
+        };
+        const sourcePolicy = toolPolicies.update(current.scope, current.source.id, {
+          expectedRevision: 0, enabled: true, enabledToolIds: ["thread.list", "task.list"],
+          presentation: { surface: "cli", mode: "individual" },
+          resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false }, now: 400,
+        });
+        current.database.transaction(() => appliedToolPolicySets.set(
+          current.scope, current.source.id, policySet, 400,
+        ))();
+        const result = await current.service.forkManual(boundary === "selected_completed_turn"
+          ? current.manual() : current.latestSnapshot());
+        expect(result.status).toBe("created");
+        expect(toolPolicies.getDurable(current.scope, result.childThreadId)).toMatchObject({
+          enabled: true, enabledToolIds: ["task.list", "thread.list"],
+          presentation: sourcePolicy.presentation, resourceScope: sourcePolicy.resourceScope,
+          revision: 0,
+        });
+        expect(appliedToolPolicySets.get(current.scope, result.childThreadId)).toEqual(policySet);
+        toolPolicies.update(current.scope, current.source.id, {
+          expectedRevision: sourcePolicy.revision, enabled: false, enabledToolIds: [],
+          presentation: sourcePolicy.presentation,
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true }, now: 2_000,
+        });
+        expect(toolPolicies.getDurable(current.scope, result.childThreadId)).toMatchObject({
+          enabled: true, enabledToolIds: ["task.list", "thread.list"],
+          resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },
+        });
+        expect(appliedToolPolicySets.get(current.scope, result.childThreadId)).toEqual(policySet);
+        expect(appliedToolPolicySets.get(current.scope, current.source.id)).toBeNull();
+        const customCopy = await current.service.forkManual(boundary === "selected_completed_turn"
+          ? current.manual("custom-policy-copy") : current.latestSnapshot("custom-policy-copy"));
+        expect(customCopy.status).toBe("created");
+        expect(toolPolicies.getDurable(current.scope, customCopy.childThreadId)).toMatchObject({enabled: false, enabledToolIds: []});
+        expect(appliedToolPolicySets.get(current.scope, customCopy.childThreadId)).toBeNull();
+      } finally { current.database.close(); }
+    },
+  );
 
   it("keeps variable retry identity with durable forks and preserves concurrent recovery", async () => {
     const current = fixture(true);
@@ -555,9 +695,17 @@ describe("ThreadForkService", () => {
   it("creates a version-one principal-client fork with durable client provenance", async () => {
     const current = fixture();
     try {
+      current.service.input.toolPolicies.update(current.scope, current.source.id, {
+        expectedRevision: 0, enabled: true, enabledToolIds: ["thread.fork"],
+        presentation: { surface: "native", mode: "progressive" },
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, now: 400,
+      });
       const request = current.principal();
       const result = await current.service.forkPrincipalClient(request);
       expect(result.status).toBe("created");
+      expect(current.service.input.toolPolicies.getDurable(current.scope, result.childThreadId))
+        .toMatchObject({ enabled: true, enabledToolIds: ["thread.fork"],
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } });
       expect(
         current.creation.findByMutationId(current.scope, request.mutationId),
       ).toMatchObject({
@@ -594,10 +742,18 @@ describe("ThreadForkService", () => {
   it("creates an exact agent fork with durable controller provenance", async () => {
     const current = fixture();
     try {
+      current.service.input.toolPolicies.update(current.scope, current.source.id, {
+        expectedRevision: 0, enabled: true, enabledToolIds: ["thread.send"],
+        presentation: { surface: "native", mode: "progressive" },
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, now: 400,
+      });
       const request = current.agent();
       const result = await current.service.forkAgent(request);
       expect(result.status).toBe("created");
       const childThreadId = result.childThreadId;
+      expect(current.service.input.toolPolicies.getDurable(current.scope, childThreadId))
+        .toMatchObject({ enabled: true, enabledToolIds: ["thread.send"],
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } });
 
       expect(current.actor.withBranchCheckpoint).toHaveBeenCalledWith(
         {
@@ -639,6 +795,29 @@ describe("ThreadForkService", () => {
     } finally {
       current.database.close();
     }
+  });
+
+  it("rechecks the source project after checkpoint capture before reserving an agent fork", async () => {
+    const current = fixture();
+    try {
+      const request = current.agent();
+      const capture = current.actor.withBranchCheckpoint.getMockImplementation()!;
+      current.actor.withBranchCheckpoint.mockImplementationOnce(async (selection, operation) => {
+        await Promise.resolve();
+        const workspaceId = current.inventory.getThread(current.scope, current.source.id).thread.workspaceId;
+        const workspace = current.inventory.getWorkspace(current.scope, workspaceId);
+        current.inventory.moveWorkspaceToProject(current.scope, workspaceId, {
+          target: { kind: "new", name: "Moved project" },
+          expectedRevision: workspace.revision,
+          expectedThreadIds: [current.source.id, current.secondSource.id].sort(),
+          now: 800,
+        });
+        return capture(selection, operation);
+      });
+      await expect(current.service.forkAgent(request)).rejects.toMatchObject({ code: "permission_denied" });
+      expect(current.branchConversation).not.toHaveBeenCalled();
+      expect(current.creation.findByMutationId(current.scope, request.mutationId)).toBeUndefined();
+    } finally { current.database.close(); }
   });
 
   it("rejects agent-fork replay with a different trusted controller", async () => {

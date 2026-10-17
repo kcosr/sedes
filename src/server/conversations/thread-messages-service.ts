@@ -454,6 +454,7 @@ export class ThreadMessagesService {
       id: authorized.thread.id,
       environmentId: authorized.environment.id,
       workspaceId: authorized.workspace.id,
+      projectId: authorized.workspace.projectId,
     });
     if (authorized.thread.backingState === "unbound") {
       if (input.cursor) this.#invalidCursor();
@@ -609,6 +610,15 @@ export class ThreadMessagesService {
         }
       }
 
+      const current = await this.#inventory.getAuthorized(scope, applicationThreadId);
+      if (current.tenantId !== scope.tenantId || current.ownerPrincipalId !== scope.principalId || current.thread.id !== applicationThreadId) {
+        throw new Error("thread_messages_scope_mismatch");
+      }
+      requireAdmittedResource(environmentAuthority, {
+        kind: "thread", id: current.thread.id,
+        environmentId: current.environment.id, workspaceId: current.workspace.id,
+        projectId: current.workspace.projectId,
+      });
       const nextCursor =
         liveThrough || backendCursor
           ? this.#register(scope, applicationThreadId, generation, pageSize, {

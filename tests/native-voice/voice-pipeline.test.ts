@@ -226,7 +226,7 @@ describe("native voice production pipeline with loopback providers", () => {
     const policy = (await app.thread(threadId)).agentTools;
     await app.json(`/api/threads/${threadId}/operations`, "POST", {
       kind: "set_agent_tool_policy", mutationId: randomUUID(), expectedPolicyRevision: policy.revision,
-      enabled: true, enabledToolIds: ["client.switch_thread"], accessBoundary: "environment",
+      enabled: true, enabledToolIds: ["client.switch_thread"], resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       presentation: { surface: "native", mode: "progressive" },
     });
     await app.send(threadId, "Discover client controls");
@@ -367,7 +367,7 @@ describe("native voice production pipeline with loopback providers", () => {
         const policy = (await app.thread(threadId)).agentTools;
         await app.json(`/api/threads/${threadId}/operations`, "POST", {
           kind: "set_agent_tool_policy", mutationId: randomUUID(), expectedPolicyRevision: policy.revision,
-          enabled: true, enabledToolIds: ["client.switch_thread"], accessBoundary: "environment",
+          enabled: true, enabledToolIds: ["client.switch_thread"], resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           presentation: { surface: "native", mode: "progressive" },
         });
         const discovery = `Discover background client controls ${threadId}`;

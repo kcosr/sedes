@@ -33,7 +33,7 @@ describe("ThreadTemplateApplicationService", () => {
         executionWorkspace: { kind: "direct" },
         agentId,
       });
-      expect(created).toMatchObject(labels);
+      expect(created).toMatchObject({...labels,toolPolicySelection:{kind:"inherit"}});
       expect(assertDurableFences).toHaveBeenCalledTimes(1);
 
       labels = {
@@ -45,7 +45,7 @@ describe("ThreadTemplateApplicationService", () => {
         expectedRevision: 0,
         name: "Updated review",
       });
-      expect(updated).toMatchObject({ ...labels, revision: 1 });
+      expect(updated).toMatchObject({ ...labels, revision: 1, toolPolicySelection:{kind:"inherit"} });
       expect(prepareThreadTemplateSelection).toHaveBeenLastCalledWith(
         current.scope,
         {
@@ -53,6 +53,8 @@ describe("ThreadTemplateApplicationService", () => {
           targetId: "local-primary",
           executionWorkspace: { kind: "direct" },
           agentId,
+          toolPolicySelection:{kind:"inherit"},
+          toolPresentation:undefined,
         },
         undefined,
       );

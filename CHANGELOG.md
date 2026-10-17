@@ -7,6 +7,14 @@ User-facing changes are collected here before release. See the
 
 ### Breaking Changes
 
+- Upgrade server and browser/packaged clients together for client protocol
+  **166**. Sedes tool policies replace cross-boundary approval modes with
+  independent project/environment limits: queries filter to scope and direct
+  outside requests are denied. Legacy thread-only policies are disabled for
+  review rather than broadened. Saved Agent and thread-create tool contracts
+  advance to version 6. See [tool policy sets](docs/user/tool-policies.md).
+  ([#96](https://github.com/kcosr/sedes/pull/96))
+
 - Upgrade OpenCode execution sidecars with the server for private OpenCode
   runtime protocol **3**, which reports the observed native version. See
   [OpenCode setup](docs/operator/backends/opencode.md).
@@ -24,8 +32,8 @@ User-facing changes are collected here before release. See the
   See [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
-- Upgrade the server and browser/packaged clients together for client protocol
-  **164** for Page responses, HTML page downloads and shared download metadata,
+- Client protocol **166** also includes Page responses, HTML page downloads
+  and shared download metadata,
   larger composer reference lists, the updated
   native voice bridge, Windows notification script paths, multiple named
   automations per thread, dismissal of automation results, and removal of
@@ -38,6 +46,13 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95))
 
 ### Added
+
+- Reuse named Sedes tool policy sets across backends, with Account → Environment
+  → Backend → Agent → Thread defaults and template selections. Apply a set to
+  an existing thread and customize it before saving. Threads show the current
+  named set or Custom; presentation edits retain the association. New threads,
+  forks and same-settings copies retain independent policy snapshots.
+  ([#96](https://github.com/kcosr/sedes/pull/96))
 
 - Download the selected saved HTML page revision from the expanded viewer or
   Pages library on web, desktop, and Android. Images are embedded in one UTF-8

@@ -57,8 +57,11 @@ test.describe.serial("normalized interactive Codex projection", () => {
       exact: true,
     });
     await targetPicker.click();
-    await expect(page.getByRole("option")).toHaveCount(6);
-    await expect(page.getByRole("option")).toHaveText([
+    const targetOptions = page
+      .getByRole("listbox", { name: "Target options", exact: true })
+      .getByRole("option");
+    await expect(targetOptions).toHaveCount(6);
+    await expect(targetOptions).toHaveText([
       "Claude subscription · Claude",
       "Codex stdio owned · Codex stdio",
       "Codex TCP external · Codex TCP",

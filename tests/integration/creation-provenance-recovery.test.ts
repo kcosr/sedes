@@ -110,7 +110,7 @@ function fixture(migrateLatest = true, filename = ":memory:") {
   const provider = (surface: "native" | "cli") => new DatabaseCodexAgentToolCliEnvironmentProvider({ database, backendInstanceId: "codex-proof",
     runtime: { availability: "available", endpoint: "http://127.0.0.1:4784", executableDirectory: "/tmp/sedes/bin", inheritedPath: "/bin" },
     sourceCapabilities: { issue: () => "scoped-test-capability-00000000000000000000000000000000" }, agentTools: { readPolicy: () => ({ enabled: true,
-      presentation: { surface, mode: "individual" }, accessBoundary: "environment", enabledToolIds: ["agent.context"] }) } });
+      presentation: { surface, mode: "individual" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true }, enabledToolIds: ["agent.context"] }) } });
   return { database, scope, threadId, nativeId, detail, bindings, creation, prepare, identify, bind, abandon, provider };
 }
 

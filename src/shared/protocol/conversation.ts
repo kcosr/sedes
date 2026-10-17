@@ -1525,14 +1525,27 @@ export const normalizedThreadAgentToolGroupSchema = z.strictObject({
   tools: z.array(normalizedThreadAgentToolDescriptorSchema).min(1).max(512),
 });
 
-export const agentToolAccessBoundarySchema = z.enum([
-  "thread",
-  "environment",
-  "unrestricted",
-]);
-export type AgentToolAccessBoundary = z.infer<
-  typeof agentToolAccessBoundarySchema
+export const agentToolResourceScopeSchema = z.strictObject({
+  allowOtherEnvironments: z.boolean(),
+  allowOtherProjects: z.boolean(),
+});
+export type AgentToolResourceScope = z.infer<
+  typeof agentToolResourceScopeSchema
 >;
+
+/** The named set currently associated with this thread's exact policy snapshot. */
+export const appliedToolPolicySetReferenceSchema = z.strictObject({
+  id: z.uuid(),
+  revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+});
+export type AppliedToolPolicySetReference = z.infer<typeof appliedToolPolicySetReferenceSchema>;
+export const appliedToolPolicySetSchema = appliedToolPolicySetReferenceSchema.extend({
+  name: z.string().trim().min(1).max(160).refine(
+    value => !/[\uD800-\uDFFF]/u.test(value),
+    "Policy names must be well-formed display text.",
+  ),
+});
+export type AppliedToolPolicySet = z.infer<typeof appliedToolPolicySetSchema>;
 
 export const threadAgentToolRuntimeAvailabilitySchema = z.discriminatedUnion(
   "availability",
@@ -1552,7 +1565,8 @@ export const normalizedThreadAgentToolPolicySchema = z
   .strictObject({
     enabled: z.boolean(),
     runtimeAvailability: threadAgentToolRuntimeAvailabilitySchema,
-    accessBoundary: agentToolAccessBoundarySchema,
+    resourceScope: agentToolResourceScopeSchema,
+    policySet: appliedToolPolicySetSchema.nullable(),
     groups: z.array(normalizedThreadAgentToolGroupSchema).max(64),
     presentation: agentToolPresentationSchema,
     presentationOptions: agentToolPresentationOptionsSchema,

@@ -430,8 +430,8 @@ deliberately local:
 ## Manage saved Agents
 
 Open **Settings → Agents** (`/settings/agents`), or **More → Agents** in the
-sidebar footer, to create a reusable backend configuration and Sedes agent-tool
-policy, including reusable environment-variable overrides. Choose **Create
+sidebar footer, to create a reusable backend configuration and tool-policy selection,
+including reusable environment-variable overrides. Choose **Create
 Agent** for a new one, or select an Agent to edit it; **Delete Agent** is in
 its **Danger zone**. **Create an Agent** in **New thread** opens the same form.
 The **Project** and **Configure using** target under **Validate against** are
@@ -442,6 +442,10 @@ target. It then copies the resolved settings into the new thread. Existing
 threads do not change when you revise the Agent later. **Session stats** keeps
 the captured Agent name and revision as origin information.
 
+An Agent's tool-policy selection can inherit the backend default, disable
+Sedes tools, or select a reusable named set. A New thread selection takes
+precedence over the Agent. See [Tool policy sets](tool-policies.md).
+
 The **Environment variables** section previews defaults from **Configure
 using**. Only the Agent's own overrides and explicit unsets are saved; inherited
 values are resolved again when creating a thread. Startup variables belong to
@@ -451,7 +455,7 @@ environment/backend Settings and are not Agent configuration.
 
 Thread templates are available from **New thread**. They require a saved Agent
 and store project, target, execution-workspace choice, the Agent reference, and
-thread-variable overrides.
+thread-variable overrides, and a thread-level tool-policy selection.
 They do not store the title.
 
 After editing prefilled values, use the form's actions to update the current

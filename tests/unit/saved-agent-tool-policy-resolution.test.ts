@@ -1,5 +1,12 @@
-import Database from "better-sqlite3";
-import { describe, expect, it } from "vitest";
+import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { ToolPolicyRepository } from "../../src/server/db/repositories/tool-policy-repository.js";
+import { ToolPolicyService } from "../../src/server/tool-policies/tool-policy-service.js";
+import { AgentToolEnvironmentAuthorityResolver, type AgentToolEnvironmentAuthorityReader } from "../../src/server/agent-tools/environment/environment-authority.js";
+import { CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES } from "../../src/server/agent-tools/registry/canonical-agent-tool-manifest.js";
+import type { AgentToolPresentation, AgentToolResourceScope } from "../../src/shared/protocol/conversation.js";
+import type { ToolPolicySelection } from "../../src/shared/protocol/tool-policies.js";
+import type { CreateThreadRequest } from "../../src/shared/protocol/api.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   directThreadExecutionWorkspaceAllocator,
   SavedAgentApplicationService,
@@ -9,14 +16,13 @@ import type { SavedAgentBackendAdapter } from "../../src/server/backends/saved-a
 import type { BackendKind } from "../../src/server/backends/contracts.js";
 import {
   savedAgentBackendTypeIdSchema,
-  type AgentToolBootstrapPolicy,
 } from "../../src/shared/protocol/saved-agents.js";
 
-const scope = { tenantId: "tenant-1", principalId: "principal-1" } as const;
+let scope: {tenantId:string;principalId:string};
 const workspaceId = "10000000-0000-4000-8000-000000000001";
-const environmentId = "environment-1";
+const environmentId = "019196f7-a0a8-7bc4-a89b-8cf013978405";
 const targetId = "target-1";
-const backendInstanceId = "backend-1";
+const backendInstanceId = "pi-primary";
 const backendTypeId = savedAgentBackendTypeIdSchema.parse("test-agent");
 
 function adapter(backendKind: BackendKind): SavedAgentBackendAdapter {
@@ -66,7 +72,21 @@ function fixture(input: {
   readonly environmentKind?: "local" | "ssh";
   readonly eligibleToolIds?: ReadonlySet<string>;
 }) {
-  const database = new Database(":memory:");
+  const initialized = vi.fn();
+  const {database, scope: realScope} = savedAgentDatabase();
+  scope = realScope;
+  const policySets = new ToolPolicyService(new ToolPolicyRepository(database));
+  let beforeCreation: (() => void) | undefined;
+  let agentSelection: ToolPolicySelection = {kind:"inherit"};
+  const sourcePolicy = { enabled: true, enabledToolIds: ["task.list"], resourceScope: {allowOtherEnvironments:false,allowOtherProjects:false}, revision: 0 };
+  const createServerDraft = vi.fn(async (_scope, value) => {
+    beforeCreation?.();
+    const transaction = {assertActive() {}};
+    value.bootstrap?.assertDurableFences(transaction);
+    value.bootstrap?.initializeAgentTools({transaction,applicationThreadId:"created-thread",now:1});
+    value.initializeApplicationThread?.({transaction,applicationThreadId:"created-thread",target:{connection:{backendInstanceId,executionEnvironmentId:environmentId}},now:1});
+    return {applicationThreadId:"created-thread"};
+  });
   const profile = {
     id: targetId,
     backendInstanceId,
@@ -84,8 +104,10 @@ function fixture(input: {
     configurationFingerprint: "backend-fingerprint",
   };
   const service = new SavedAgentApplicationService({
-    agents: {} as never,
-    repository: { database } as never,
+    policySets,
+    principalToolClients: {get: () => ({enabled:true,policyRevision:2,credentialGeneration:1,toolIds:["task.list"]})} as never,
+    agents: {get: () => ({id:"20000000-0000-4000-8000-000000000001",name:"Reviewer",backendTypeId,backendOverrides:[],revision:0,toolPolicySelection:agentSelection})} as never,
+    repository: { database, assertRevision: () => undefined } as never,
     adapters: new SavedAgentBackendAdapterRegistry([
       { backendInstanceId, adapter: adapter(input.backendKind) },
     ]),
@@ -100,10 +122,13 @@ function fixture(input: {
       getWorkspace: () => ({
         id: workspaceId,
         environmentId,
+        projectId: "project-1",
         revision: 0,
         environmentConfigurationRevision: 0,
       }),
       getEnvironment: () => ({ kind: input.environmentKind ?? "local" }),
+      assertWorkspaceActive: () => undefined,
+      getThread: () => ({thread:{workspaceId,environmentId}}),
     } as never,
     targets: {
       lifecycle: async () => ({
@@ -144,8 +169,8 @@ function fixture(input: {
         }),
       }),
     } as never,
-    lifecycle: {} as never,
-    toolPolicies: { database } as never,
+    lifecycle: {createServerDraft} as never,
+    toolPolicies: { database, initialize: initialized, getDurable: () => sourcePolicy } as never,
     toolEligibility: {
       eligibleToolIds: input.eligibleToolIds ?? new Set(),
       presentationOptions: (_backendKind, environmentKind) =>
@@ -164,18 +189,19 @@ function fixture(input: {
     executionWorkspaces: directThreadExecutionWorkspaceAllocator,
     publications: { handoffThreadChange: () => undefined },
   });
-  return { database, service };
+  return { database, service, policySets, initialized, createServerDraft, sourcePolicy, beforeCreate(callback:()=>void) {beforeCreation = callback;}, setAgentSelection(selection: ToolPolicySelection) {agentSelection = selection;} };
 }
 
 async function options(
   current: ReturnType<typeof fixture>,
-  sedesTools: AgentToolBootstrapPolicy,
+  sedesTools: {enabled:boolean;enabledToolIds:string[];presentation:AgentToolPresentation;resourceScope:AgentToolResourceScope},
 ) {
   return current.service.options(scope, {
     workspaceId,
     targetId,
     overrides: [],
-    sedesTools,
+    toolPolicySelection: sedesTools.enabled ? {kind:"policy_set",policySetId:current.policySets.repository.create(scope,{name:"Options policy",enabledToolIds:sedesTools.enabledToolIds,resourceScope:sedesTools.resourceScope}).id} : {kind:"disabled"},
+    toolPresentation: sedesTools.presentation,
   });
 }
 
@@ -188,7 +214,7 @@ describe("Saved Agent Sedes-tool policy resolution", () => {
           enabled: true,
           enabledToolIds: ["not.saved-agent-eligible"],
           presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         }),
       ).rejects.toMatchObject({ code: "invalid_transition" });
     } finally {
@@ -207,7 +233,7 @@ describe("Saved Agent Sedes-tool policy resolution", () => {
           enabled: false,
           enabledToolIds: [],
           presentation: { surface: "cli", mode: "individual" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         }),
       ).resolves.toMatchObject({
         kind: "configuration",
@@ -235,7 +261,7 @@ describe("Saved Agent Sedes-tool policy resolution", () => {
           enabled: true,
           enabledToolIds: [toolId],
           presentation: { surface: "cli", mode: "progressive" },
-          accessBoundary: "unrestricted",
+          resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
         }),
       ).resolves.toMatchObject({
         kind: "configuration",
@@ -244,7 +270,7 @@ describe("Saved Agent Sedes-tool policy resolution", () => {
             enabled: true,
             enabledToolIds: [toolId],
             presentation: { surface: "cli", mode: "progressive" },
-            accessBoundary: "unrestricted",
+            resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
           },
         },
       });
@@ -265,7 +291,7 @@ describe("Saved Agent Sedes-tool policy resolution", () => {
           enabled: false,
           enabledToolIds: [],
           presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         }),
       ).resolves.toMatchObject({
         kind: "configuration",
@@ -274,7 +300,7 @@ describe("Saved Agent Sedes-tool policy resolution", () => {
             { surface: "native", modes: ["progressive", "individual"] },
           ],
           resolvedPolicy: expect.objectContaining({
-            accessBoundary: "environment",
+            resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
           }),
         },
       });
@@ -283,11 +309,216 @@ describe("Saved Agent Sedes-tool policy resolution", () => {
           enabled: false,
           enabledToolIds: [],
           presentation: { surface: "cli", mode: "progressive" },
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         }),
       ).rejects.toMatchObject({ code: "invalid_transition" });
     } finally {
       current.database.close();
     }
   });
+});
+
+
+describe("new-thread tool policy snapshots", () => {
+  function request(): CreateThreadRequest {
+    return {workspaceId,title:"Policy example",executionWorkspace:{kind:"direct"},configuration:{kind:"custom",targetId}};
+  }
+  function configure(current: ReturnType<typeof fixture>, level: "account" | "environment" | "backend", name: string, tools: string[]) {
+    const policy = current.policySets.create(scope,{name,enabledToolIds:tools,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}});
+    const target = level === "account" ? {kind:level as "account"} : level === "environment" ? {kind:level as "environment",executionEnvironmentId:environmentId} : {kind:level as "backend",backendId:backendInstanceId};
+    current.policySets.updateSelection(scope,{target,selection:{kind:"policy_set",policySetId:policy.id},expectedRevision:0});
+    return policy;
+  }
+  it("uses account defaults for custom creation and freezes exact IDs and applied set metadata", async () => {
+    const current = fixture({backendKind:"pi",nativePresentation:true,eligibleToolIds:new Set(["task.list","thread.status"])});
+    try {
+      const policy = configure(current,"account","Everyday",["task.list"]);
+      await current.service.createThread(scope,request(),{kind:"http_ui"});
+      expect(current.initialized).toHaveBeenCalledWith(scope,"created-thread",expect.objectContaining({enabled:true,enabledToolIds:["task.list"],presentation:{surface:"native",mode:"progressive"}}));
+      expect(current.initialized.mock.calls[0]![2].policySet).toEqual({id:policy.id,name:"Everyday",revision:0});
+      current.policySets.update(scope,policy.id,{name:policy.name,enabledToolIds:["thread.status"],resourceScope:policy.resourceScope,expectedRevision:0});
+      expect(current.initialized.mock.calls[0]![2].enabledToolIds).toEqual(["task.list"]);
+    } finally {current.database.close();}
+  });
+  it("replaces the whole inherited list at the closest selected level and allows explicit disablement", async () => {
+    const current = fixture({backendKind:"pi",nativePresentation:true,eligibleToolIds:new Set(["task.list","thread.status"])});
+    try {
+      configure(current,"account","Everyday",["task.list"]);
+      configure(current,"backend","Backend",["thread.status"]);
+      await current.service.createThread(scope,request(),{kind:"http_ui"});
+      expect(current.initialized.mock.calls[0]![2].enabledToolIds).toEqual(["thread.status"]);
+      await current.service.createThread(scope,{...request(),toolPolicySelection:{kind:"disabled"}},{kind:"http_ui"});
+      expect(current.initialized.mock.calls[1]![2]).toMatchObject({enabled:false,enabledToolIds:[],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}});
+      await current.service.createThread(scope,{
+        ...request(),
+        configuration:{kind:"custom",targetId,backendOverrides:[]},
+        toolPolicySelection:{kind:"disabled"},
+      },{kind:"http_ui"});
+      expect(current.initialized.mock.calls[2]![2].policySet).toBeNull();
+    } finally {current.database.close();}
+  });
+  it("replaces backend defaults with an Agent policy and permits a thread override", async () => {
+    const current = fixture({backendKind:"pi",nativePresentation:true,eligibleToolIds:new Set(["task.list","thread.status"])});
+    try {
+      const account = configure(current,"account","Everyday",["task.list"]);
+      configure(current,"backend","Backend",["task.list"]);
+      const agent = current.policySets.create(scope,{name:"Reviewer",enabledToolIds:["thread.status"],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:true}});
+      current.setAgentSelection({kind:"policy_set",policySetId:agent.id});
+      const fromAgent: CreateThreadRequest = {...request(),configuration:{kind:"saved_agent",agentId:"20000000-0000-4000-8000-000000000001",targetId}};
+      await current.service.createThread(scope,fromAgent,{kind:"http_ui"});
+      expect(current.initialized.mock.calls[0]![2].enabledToolIds).toEqual(["thread.status"]);
+      expect(current.initialized.mock.calls[0]![2].policySet).toEqual({id:agent.id,name:agent.name,revision:0});
+      await current.service.createThread(scope,{...fromAgent,toolPolicySelection:{kind:"policy_set",policySetId:account.id}},{kind:"http_ui"});
+      expect(current.initialized.mock.calls[1]![2].enabledToolIds).toEqual(["task.list"]);
+      expect(current.initialized.mock.calls[1]![2].policySet).toEqual({id:account.id,name:account.name,revision:0});
+    } finally {current.database.close();}
+  });
+  it("allows an explicit replacement when an inherited policy was deleted", async () => {
+    const current = fixture({backendKind:"pi",nativePresentation:true,eligibleToolIds:new Set(["task.list"])});
+    try {
+      const account = configure(current,"account","Everyday",["task.list"]);
+      current.policySets.delete(scope,account.id,account.revision);
+      await expect(current.service.createThread(scope,request(),{kind:"http_ui"})).rejects.toMatchObject({code:"not_found"});
+      await current.service.createThread(scope,{...request(),toolPolicySelection:{kind:"disabled"}},{kind:"http_ui"});
+      expect(current.initialized).toHaveBeenCalledOnce();
+      const preview = await current.service.options(scope,{workspaceId,targetId,toolPolicySelection:{kind:"disabled"}});
+      expect(preview).toMatchObject({kind:"configuration",sedesTools:{
+        defaultPolicy:null,
+        defaultIssue:{kind:"missing_policy_set",source:"account",policySetId:account.id},
+        resolvedPolicy:{enabled:false,source:"agent"},
+        defaultPresentation:{surface:"native",mode:"progressive"},
+      }});
+    } finally {current.database.close();}
+  });
+  it.each(["account", "environment", "backend"] as const)("describes inherited %s policy origin and revision", async (level) => {
+    const current = fixture({backendKind:"pi",nativePresentation:true,eligibleToolIds:new Set(["task.list"])});
+    try {
+      const policy = configure(current,level,"Named tools",["task.list"]);
+      current.policySets.update(scope,policy.id,{name:"Renamed tools",enabledToolIds:["task.list"],resourceScope:policy.resourceScope,expectedRevision:0});
+      const preview = await current.service.options(scope,{workspaceId,targetId});
+      expect(preview).toMatchObject({kind:"configuration",sedesTools:{
+        defaultPolicy:{source:level,policySet:{id:policy.id,name:"Renamed tools",revision:1}},
+        resolvedPolicy:{source:level,policySet:{id:policy.id,name:"Renamed tools",revision:1}},
+      }});
+    } finally {current.database.close();}
+  });
+  it("keeps backend options available for a deleted inherited policy while blocking creation", async () => {
+    const current = fixture({backendKind:"pi",nativePresentation:true,eligibleToolIds:new Set(["task.list"])});
+    try {
+      const policy = configure(current,"backend","Removed tools",["task.list"]);
+      current.policySets.delete(scope,policy.id,policy.revision);
+      const preview = await current.service.options(scope,{workspaceId,targetId});
+      expect(preview).toMatchObject({kind:"configuration",configuration:{backendTypeId,fields:[],canonicalOverrides:[]},sedesTools:{
+        defaultPolicy:null,
+        resolvedPolicy:null,
+        defaultIssue:{kind:"missing_policy_set",source:"backend",policySetId:policy.id},
+        resolvedIssue:{kind:"missing_policy_set",source:"backend",policySetId:policy.id},
+        defaultPresentation:{surface:"native",mode:"progressive"},
+        presentationOptions:[{surface:"native",modes:["progressive","individual"]},{surface:"cli",modes:["progressive","individual"]}],
+      }});
+      await expect(current.service.createThread(scope,request(),{kind:"http_ui"})).rejects.toMatchObject({code:"not_found",issue:{kind:"missing_policy_set",source:"backend",policySetId:policy.id}});
+      expect(current.initialized).not.toHaveBeenCalled();
+    } finally {current.database.close();}
+  });
+  it("keeps an Agent with a deleted policy configurable and allows a thread replacement", async () => {
+    const current = fixture({backendKind:"pi",nativePresentation:true,eligibleToolIds:new Set(["task.list"])});
+    try {
+      const account = configure(current,"account","Account tools",["task.list"]);
+      const policy = current.policySets.create(scope,{name:"Removed Agent tools",enabledToolIds:["task.list"],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}});
+      current.setAgentSelection({kind:"policy_set",policySetId:policy.id});
+      current.policySets.delete(scope,policy.id,policy.revision);
+      await expect(current.service.options(scope,{workspaceId,targetId,toolPolicySelection:{kind:"policy_set",policySetId:policy.id}})).resolves.toMatchObject({kind:"configuration",sedesTools:{
+        resolvedPolicy:null,
+        resolvedIssue:{kind:"missing_policy_set",source:"agent",policySetId:policy.id},
+      }});
+      const agentId = "20000000-0000-4000-8000-000000000001";
+      const preview = await current.service.resolveAgent(scope,agentId,{workspaceId,targetId});
+      expect(preview.failures).toEqual([]);
+      expect(preview.candidates).toHaveLength(1);
+      expect(preview.candidates[0]).toMatchObject({configuration:{backendTypeId},sedesTools:{
+        resolvedPolicy:null,
+        resolvedIssue:{kind:"missing_policy_set",source:"agent",policySetId:policy.id},
+        defaultPolicy:{source:"account",policySet:{id:account.id,name:"Account tools",revision:0}},
+      }});
+      await expect(current.service.createThread(scope,{...request(),configuration:{kind:"saved_agent",agentId,targetId}},{kind:"http_ui"})).rejects.toMatchObject({code:"not_found"});
+      const replacement = await current.service.resolveAgent(scope,agentId,{workspaceId,targetId,toolPolicySelection:{kind:"disabled"}});
+      expect(replacement.candidates[0]?.sedesTools.resolvedPolicy).toMatchObject({enabled:false,source:"thread"});
+      expect(replacement.candidates[0]?.sedesTools.resolvedIssue).toBeUndefined();
+      expect(current.initialized).not.toHaveBeenCalled();
+    } finally {current.database.close();}
+  });
+  it("rejects policy edits between resolution and creation commit", async () => {
+    const current = fixture({backendKind:"pi",nativePresentation:true,eligibleToolIds:new Set(["task.list","thread.status"])});
+    try {
+      const policy = configure(current,"account","Everyday",["task.list"]);
+      current.beforeCreate(() => current.policySets.update(scope,policy.id,{name:policy.name,enabledToolIds:["thread.status"],resourceScope:policy.resourceScope,expectedRevision:0}));
+      await expect(current.service.createThread(scope,request(),{kind:"http_ui"})).rejects.toMatchObject({code:"conflict"});
+      expect(current.initialized).not.toHaveBeenCalled();
+    } finally {current.database.close();}
+  });
+  it("fails closed when a selected policy belongs to another principal", async () => {
+    const current = fixture({backendKind:"pi",nativePresentation:true,eligibleToolIds:new Set(["task.list"])});
+    try {
+      const policy = configure(current,"account","Everyday",["task.list"]);
+      const otherScope = {...scope,principalId:"another-principal"};
+      await expect(current.service.options(otherScope,{workspaceId,targetId,toolPolicySelection:{kind:"policy_set",policySetId:policy.id}})).rejects.toMatchObject({code:"not_found"});
+      await expect(current.service.createThread(otherScope,{...request(),toolPolicySelection:{kind:"policy_set",policySetId:policy.id}},{kind:"http_ui"})).rejects.toMatchObject({code:"not_found"});
+      expect(current.initialized).not.toHaveBeenCalled();
+    } finally {current.database.close();}
+  });
+  it("prevents an agent from giving a child more tools or cross-environment access", async () => {
+    const current = fixture({backendKind:"pi",nativePresentation:true,eligibleToolIds:new Set(["task.list","thread.status"])});
+    try {
+      const policy = current.policySets.create(scope,{name:"Too broad",enabledToolIds:["task.list","thread.status"],resourceScope:{allowOtherEnvironments:true,allowOtherProjects:false}});
+      const authority = {id:"grant",callerKind:"thread_agent",defaults:{kind:"thread_agent",threadId:"source-thread",workspaceId,environmentId,projectId:"project-1"},policyIdentity:{ownerKind:"thread",ownerId:"source-thread",revision:0},admittedEnvironmentIds:[environmentId],targetEnvironmentIds:[environmentId],resolvedResourceRefs:[{kind:"workspace",id:workspaceId,environmentId,projectId:"project-1"}],display:{targetEnvironmentLabels:[],resourceLabels:[]},canonicalInputDigest:"input",authorityDigest:"authority",resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}} as const;
+      const caller = {kind:"agent_tool",initiator:{kind:"thread_agent",sourceThreadId:"source-thread",sourceWorkspaceId:workspaceId},mutationId:"create-child",environmentAuthority:authority} as const;
+      await expect(current.service.createThread(scope,{...request(),toolPolicySelection:{kind:"policy_set",policySetId:policy.id}},caller)).rejects.toMatchObject({code:"invalid_transition"});
+      expect(current.createServerDraft).not.toHaveBeenCalled();
+      await current.service.createThread(scope,{...request(),toolPolicySelection:{kind:"disabled"}},caller);
+      expect(current.initialized).toHaveBeenCalledOnce();
+    } finally {current.database.close();}
+  });
+  it("caps delegated threads to the principal tool client's selected tools and environment", async () => {
+    const current = fixture({backendKind:"pi",nativePresentation:true,eligibleToolIds:new Set(["task.list","thread.status"])});
+    try {
+      const policy = current.policySets.create(scope,{name:"Too broad",enabledToolIds:["task.list"],resourceScope:{allowOtherEnvironments:true,allowOtherProjects:false}});
+      const authority = {id:"grant",callerKind:"principal_client",defaults:{kind:"principal_client",environmentId},policyIdentity:{ownerKind:"principal_client",ownerId:"client",revision:2,credentialGeneration:1},admittedEnvironmentIds:[environmentId],targetEnvironmentIds:[environmentId],resolvedResourceRefs:[{kind:"workspace",id:workspaceId,environmentId,projectId:"project-1"}],display:{targetEnvironmentLabels:[],resourceLabels:[]},canonicalInputDigest:"input",authorityDigest:"authority"} as const;
+      const caller = {kind:"agent_tool",initiator:{kind:"principal_client",clientId:"client"},mutationId:"create-client-child",environmentAuthority:authority} as const;
+      await expect(current.service.createThread(scope,{...request(),toolPolicySelection:{kind:"disabled"}},{...caller,initiator:{kind:"principal_client",clientId:"different-client"}})).rejects.toMatchObject({code:"conflict"});
+      await expect(current.service.createThread(scope,{...request(),toolPolicySelection:{kind:"disabled"}},{...caller,environmentAuthority:{...authority,callerKind:"thread_agent"}})).rejects.toMatchObject({code:"conflict"});
+      expect(current.createServerDraft).not.toHaveBeenCalled();
+      await expect(current.service.createThread(scope,{...request(),toolPolicySelection:{kind:"policy_set",policySetId:policy.id}},caller)).rejects.toMatchObject({code:"invalid_transition"});
+      current.policySets.update(scope,policy.id,{name:policy.name,enabledToolIds:["thread.status"],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false},expectedRevision:0});
+      await expect(current.service.createThread(scope,{...request(),toolPolicySelection:{kind:"policy_set",policySetId:policy.id}},caller)).rejects.toMatchObject({code:"invalid_transition"});
+      current.policySets.update(scope,policy.id,{name:policy.name,enabledToolIds:["task.list"],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:true},expectedRevision:1});
+      await current.service.createThread(scope,{...request(),toolPolicySelection:{kind:"policy_set",policySetId:policy.id}},caller);
+      expect(current.initialized).toHaveBeenCalledOnce();
+      const reader: AgentToolEnvironmentAuthorityReader = {
+        resolveEnvironment: (_scope, id) => ({id,environmentId:id}),
+        resolveProject: (_scope, id) => ({id,membershipRevision:0,memberEnvironmentIds:[id === "remote-only" ? "environment-b" : environmentId]}),
+        resolveWorkspace: () => undefined,
+        resolveThread: () => undefined,
+        resolveAutomation: () => undefined,
+        resolveThreadFamily: () => undefined,
+        resolveTask: () => undefined,
+        resolveSavedAgent: () => undefined,
+        resolveWorkpad: () => undefined,
+        resolveWorkspaceProject: () => undefined,
+        listEnvironments: () => [{id:environmentId,environmentId},{id:"environment-b",environmentId:"environment-b"}],
+      };
+      const resolver = new AgentToolEnvironmentAuthorityResolver(reader);
+      const tool = CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES.find(entry => entry.id === "task.list")!;
+      const remoteInput = {scope:{kind:"project",projectId:"remote-only"},scopeMode:"exact"};
+      expect(() => resolver.resolve({scope,tool,input:remoteInput,defaults:authority.defaults,admittedEnvironmentIds:[environmentId]})).toThrow(expect.objectContaining({code:"permission_denied"}));
+      const childRequest = {
+        scope,tool,
+        defaults:{kind:"thread_agent" as const,threadId:"created-thread",workspaceId,environmentId,projectId:"project-1"},
+        resourceScope:current.initialized.mock.calls[0]![2].resourceScope,
+      };
+      expect(childRequest.resourceScope).toEqual({allowOtherEnvironments:false,allowOtherProjects:true});
+      expect(resolver.resolve({...childRequest,input:remoteInput}).resolvedResourceRefs).toEqual([]);
+      expect(resolver.resolve({...childRequest,input:{scope:{kind:"project",projectId:"local-project"},scopeMode:"exact"}}).targetEnvironmentIds).toEqual([environmentId]);
+    } finally {current.database.close();}
+  });
+
 });

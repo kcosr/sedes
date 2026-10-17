@@ -7,7 +7,7 @@ import type { AgentToolPresentationOption } from "../../shared/protocol/conversa
 import type { ThreadAgentToolEligibilityPolicy } from "../db/repositories/thread-agent-tool-policy-repository.js";
 import type { ThreadAgentToolCatalogReader } from "./database-thread-application-readers.js";
 
-function presentationOptionsForBackend(
+export function presentationOptionsForBackend(
   backendKind: BackendKind,
   environmentKind: "local" | "ssh" | "outbound",
 ): readonly AgentToolPresentationOption[] {

@@ -1,3 +1,5 @@
+import { toolPolicySelectionSchema, type ToolPolicySelection } from "../../../shared/protocol/tool-policies.js";
+import { agentToolPresentationSchema, type AgentToolPresentation } from "../../../shared/protocol/conversation.js";
 import { environmentVariableOverridesSchema, type EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -30,6 +32,8 @@ export interface ThreadTemplateRecord {
   readonly executionWorkspace: ExecutionWorkspaceSelection;
   readonly agentId: string;
   readonly environmentVariables?: EnvironmentVariableOverrides;
+  readonly toolPolicySelection: ToolPolicySelection;
+  readonly toolPresentation?: AgentToolPresentation;
   readonly capturedAgentName: string;
   readonly capturedWorkspaceName: string;
   readonly capturedTargetName: string;
@@ -43,9 +47,11 @@ export interface ThreadTemplateListPageRecord {
   readonly nextCursor?: string;
 }
 
-type ThreadTemplateRow = Omit<ThreadTemplateRecord, "executionWorkspace" | "environmentVariables"> & {
+type ThreadTemplateRow = Omit<ThreadTemplateRecord, "executionWorkspace" | "environmentVariables" | "toolPolicySelection" | "toolPresentation"> & {
   readonly executionWorkspaceJson: string;
   readonly environmentVariablesJson: string;
+  readonly toolPolicySelectionJson: string;
+  readonly toolPresentationJson: string | null;
   readonly normalizedName?: string;
 };
 
@@ -55,6 +61,8 @@ export interface ThreadTemplateSelectionRecord {
   readonly executionWorkspace: ExecutionWorkspaceSelection;
   readonly agentId: string;
   readonly environmentVariables?: EnvironmentVariableOverrides;
+  readonly toolPolicySelection?: ToolPolicySelection;
+  readonly toolPresentation?: AgentToolPresentation;
   readonly capturedAgentName: string;
   readonly capturedWorkspaceName: string;
   readonly capturedTargetName: string;
@@ -70,6 +78,8 @@ const columns = `
   execution_workspace_json AS executionWorkspaceJson,
   agent_id AS agentId,
   environment_variables_json AS environmentVariablesJson,
+  tool_policy_selection_json AS toolPolicySelectionJson,
+  tool_presentation_json AS toolPresentationJson,
   captured_agent_name AS capturedAgentName,
   captured_workspace_name AS capturedWorkspaceName,
   captured_target_name AS capturedTargetName,
@@ -295,10 +305,10 @@ export class ThreadTemplateRepository {
           .prepare(
             `INSERT INTO thread_templates(
             tenant_id, owner_principal_id, id, name, workspace_id, target_id,
-            execution_workspace_json, agent_id, environment_variables_json, captured_agent_name,
+            execution_workspace_json, agent_id, environment_variables_json, tool_policy_selection_json, tool_presentation_json, captured_agent_name,
             captured_workspace_name, captured_target_name, revision,
             created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
           )
           .run(
             scope.tenantId,
@@ -310,6 +320,8 @@ export class ThreadTemplateRepository {
             JSON.stringify(selection.executionWorkspace),
             selection.agentId,
             JSON.stringify(selection.environmentVariables ?? {}),
+            JSON.stringify(selection.toolPolicySelection ?? {kind: "inherit"}),
+            selection.toolPresentation ? JSON.stringify(selection.toolPresentation) : null,
             selection.capturedAgentName,
             selection.capturedWorkspaceName,
             selection.capturedTargetName,
@@ -353,7 +365,7 @@ export class ThreadTemplateRepository {
           .prepare(
             `UPDATE thread_templates
            SET name = ?, workspace_id = ?, target_id = ?,
-             execution_workspace_json = ?, agent_id = ?, environment_variables_json = ?,
+             execution_workspace_json = ?, agent_id = ?, environment_variables_json = ?, tool_policy_selection_json = ?, tool_presentation_json = ?,
              captured_agent_name = ?, captured_workspace_name = ?,
              captured_target_name = ?, revision = revision + 1,
              updated_at = ?
@@ -367,6 +379,8 @@ export class ThreadTemplateRepository {
             JSON.stringify(selection.executionWorkspace),
             selection.agentId,
             JSON.stringify(selection.environmentVariables ?? {}),
+            JSON.stringify(selection.toolPolicySelection ?? {kind: "inherit"}),
+            selection.toolPresentation ? JSON.stringify(selection.toolPresentation) : null,
             selection.capturedAgentName,
             selection.capturedWorkspaceName,
             selection.capturedTargetName,
@@ -426,6 +440,8 @@ export class ThreadTemplateRepository {
       executionWorkspace: canonicalExecutionWorkspace(input.executionWorkspace),
       agentId: savedAgentIdSchema.parse(input.agentId),
       environmentVariables: environmentVariableOverridesSchema.parse(input.environmentVariables ?? {}),
+      toolPolicySelection: toolPolicySelectionSchema.parse(input.toolPolicySelection ?? {kind: "inherit"}),
+      ...(input.toolPresentation ? {toolPresentation: agentToolPresentationSchema.parse(input.toolPresentation)} : {}),
       capturedAgentName: threadTemplateCapturedAgentNameSchema.parse(
         input.capturedAgentName,
       ),
@@ -485,6 +501,8 @@ export class ThreadTemplateRepository {
         targetId,
         executionWorkspace,
         environmentVariables: environmentVariableOverridesSchema.parse(JSON.parse(row.environmentVariablesJson)),
+        toolPolicySelection: toolPolicySelectionSchema.parse(JSON.parse(row.toolPolicySelectionJson)),
+        ...(row.toolPresentationJson ? {toolPresentation: agentToolPresentationSchema.parse(JSON.parse(row.toolPresentationJson))} : {}),
         agentId,
         capturedAgentName,
         capturedWorkspaceName,

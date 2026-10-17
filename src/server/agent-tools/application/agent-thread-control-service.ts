@@ -40,6 +40,7 @@ export class AgentThreadControlService {
       kind: "thread",
       id: target.thread.id,
       environmentId: target.thread.environmentId,
+      projectId: target.thread.projectId,
       workspaceId: target.thread.workspaceId,
     });
     return this.gateway.sendDirect(scope, {

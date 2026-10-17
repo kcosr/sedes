@@ -84,7 +84,7 @@ export function createEnvironmentListToolDefinition(
         items: service.listEnvironments({
           tenantId: context.tenantId,
           principalId: context.principalId,
-        }),
+        }, context.environmentAuthority),
       };
     },
   };

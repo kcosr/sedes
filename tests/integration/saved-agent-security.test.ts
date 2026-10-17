@@ -39,7 +39,7 @@ function createScopedAgent(
     backendTypeId: "pi",
     backendOverridesSchemaVersion: 1,
     backendOverrides: [{ id: "model", value: "grok" }],
-    sedesTools: null,
+    toolPolicySelection: { kind: "inherit" },
     now: 1_000,
   });
 }

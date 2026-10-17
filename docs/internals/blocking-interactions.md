@@ -1,7 +1,7 @@
 # Blocking-interaction subsystem contract
 
-Sedes presents provider approvals, application-owned decisions, and
-structured questions through one backend-neutral blocking-interaction
+Sedes presents provider approvals and structured questions through one
+backend-neutral blocking-interaction
 contract. A provider still owns its native request and response protocol;
 Sedes owns browser-safe identity, single-resolution authority, durable
 mutation recovery where applicable, and the conversation-pane interaction
@@ -10,14 +10,15 @@ panel.
 For the user-facing workflow, see
 [Provider features](../user/provider-features.md). For backend implementation requirements,
 see the [backend integration contract](backend-integration-contract-rules.md).
-[Agent-tool environment decisions](agent-tools.md#access-boundary)
-reuse this presentation but have different ownership and recovery semantics.
+[Agent-tool resource scope](agent-tools.md#resource-scope) is enforced without
+application approval prompts; provider-native permission requests still use
+this interaction system.
 
 ## Contents
 
 - [Normalized interaction kinds](#normalized-contract)
 - [Identity and response authority](#identity-and-response-authority)
-- [Lifetime and application decisions](#interaction-lifetime-and-questionnaire-resolution)
+- [Interaction lifetime](#interaction-lifetime-and-questionnaire-resolution)
 - [Secrets and client presentation](#secrets)
 - [Backend dispositions](#compiled-backend-audit)
 - [Verification](#verification-surfaces)
@@ -127,27 +128,16 @@ Sedes ignores a cancellation that the backend rejects, that fails, or that is
 still unconfirmed at the bound. The request stays abandoned, a replay of it in
 the same generation is dropped. Replacing the application runtime does not prove
 that a resident native server released an uncancelled request.
-Application-owned decisions are rejected locally and reach no provider. Each
-backend's disposition is listed in the
+Each backend's disposition is listed in the
 [compiled backend audit](#compiled-backend-audit).
 
-### Application-owned environment decisions
+### Agent tool resource scope
 
-A Sedes agent tool that reaches another execution environment under **Ask
-before access** uses the same normalized decision panel, but the decision is
-application-owned rather than a provider-native request. **Allow once** admits
-only the exact resolved invocation and **Deny** rejects it; no provider identity
-or durable interaction receipt is created. Sedes revalidates the application
-approval runtime, source authority, policy, tool contract, input, resources,
-and effects after approval.
-
-The application decision waits indefinitely for the user. It is cancelled only
-when the exact invoking request is aborted, its application approval runtime is
-replaced, or Sedes shuts that runtime down. Browser navigation, disconnect,
-or absence does not cancel it, and Sedes does not poll client connectivity.
-Provider-native turn identity and origin are not authorization inputs.
-Delegated agent-control work uses the destination thread's own environment
-policy.
+Cross-project and cross-environment Sedes tool access uses user-configured
+resource scope, not an interactive decision. Lists filter to the permitted
+scope; direct outside-scope requests fail with an explanation. Only a user
+policy edit can widen the scope. Provider-native permission dialogs remain
+separate and retain their ordinary response and cancellation rules.
 
 Submitting explicit `unanswered` answers lets the provider continue. Escape in
 an ordinary questionnaire invokes the normalized active-turn interrupt when
@@ -317,9 +307,7 @@ response validation. A backend with no advertised kinds does not enter this
 runtime path.
 Configuration, discovery, conversation identity, history projection,
 pagination, usage, provider features, and runtime topology gain no
-blocking-interaction-specific shape. Agent-tool environment decisions use the
-shared application-owned path described above rather than a backend-specific
-shape. Response receipts already store the backend-neutral provider-interaction
+blocking-interaction-specific shape. Response receipts already store the backend-neutral provider-interaction
 operation envelope, and secret-bearing responses already have an ephemeral
 path.
 

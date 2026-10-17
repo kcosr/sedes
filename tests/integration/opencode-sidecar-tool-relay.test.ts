@@ -27,7 +27,7 @@ async function fixture(presentation: "mcp" | "cli" = "mcp", openCodeTools = true
   const invoke = vi.fn(async (_value: unknown) => ({ invocationId: "invocation", state: "completed" as const, output: { ok: true } }));
   const tools: BackendAgentToolFacade = {
     eligibleCatalog: () => [], catalogSummaries: () => [], describeMany: () => [],
-    readPolicy: () => ({ enabled: true, presentation: { surface: presentation === "mcp" ? "native" : "cli", mode: "progressive" }, accessBoundary: "environment", enabledToolIds: ["agent.context"] }),
+    readPolicy: () => ({ enabled: true, presentation: { surface: presentation === "mcp" ? "native" : "cli", mode: "progressive" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true }, enabledToolIds: ["agent.context"] }),
     invoke: <Output>(input: unknown) => invoke(input) as Promise<SedesToolInvocationResult<Output>>,
   };
   const resolve = vi.fn(async () => {

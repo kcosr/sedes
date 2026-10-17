@@ -35,13 +35,7 @@ type InteractionFixtureRecord = {
   };
 };
 
-type ApplicationDecisionFixtureRecord = {
-  readonly requestId: number;
-  readonly applicationThreadId: string;
-  readonly state: "pending" | "resolved" | "cancelled" | "failed";
-  readonly decision?: "allow" | "deny";
-  readonly failure?: string;
-};
+
 
 test.describe.serial("blocking interaction panel", () => {
   let codexThreadPath = "";
@@ -350,90 +344,6 @@ test.describe.serial("blocking interaction panel", () => {
     } finally {
       expect(
         (await page.request.post("/__e2e/codex/turn-completion/reset")).ok(),
-      ).toBe(true);
-    }
-  });
-
-  test("cross-environment approval uses application-owned allow, deny, and cancellation", async ({
-    page,
-  }, testInfo) => {
-    codexThreadPath = await ensureImportedThread(page, codexThreadPath);
-    const threadId = threadIdFromPath(codexThreadPath);
-    expect(
-      (await page.request.post("/__e2e/codex/turn-completion/arm")).ok(),
-    ).toBe(true);
-    await startCodexFixtureTurn(page, "Exercise application-owned approval");
-
-    try {
-      const allowRequestId = await openApplicationDecision(page, threadId);
-      const approval = page.getByRole("dialog", {
-        name: "Allow Open workspace?",
-      });
-      await expect(approval).toBeVisible();
-      await expect(approval).toContainText(
-        "This tool wants to access Review environment for the review workspace.",
-      );
-      await expect(
-        approval.getByTestId("interaction-prompt-code"),
-      ).toContainText("workspace.open@3 · write");
-      await expect(
-        approval.getByRole("button", { name: "Allow once", exact: true }),
-      ).toBeVisible();
-      await expect(
-        approval.getByRole("button", { name: "Deny", exact: true }),
-      ).toBeVisible();
-      await capture(
-        page,
-        testInfo,
-        "blocking-application-environment-approval-desktop.png",
-      );
-      await approval
-        .getByRole("button", { name: "Allow once", exact: true })
-        .click();
-      await expect
-        .poll(
-          async () =>
-            (await applicationDecisionRecord(page, allowRequestId)).state,
-        )
-        .toBe("resolved");
-      expect(
-        (await applicationDecisionRecord(page, allowRequestId)).decision,
-      ).toBe("allow");
-      await expect(approval).toHaveCount(0);
-
-      const denyRequestId = await openApplicationDecision(page, threadId);
-      await expect(approval).toBeVisible();
-      await approval.getByRole("button", { name: "Deny", exact: true }).click();
-      await expect
-        .poll(
-          async () =>
-            (await applicationDecisionRecord(page, denyRequestId)).state,
-        )
-        .toBe("resolved");
-      expect(
-        (await applicationDecisionRecord(page, denyRequestId)).decision,
-      ).toBe("deny");
-      await expect(approval).toHaveCount(0);
-
-      const cancelledRequestId = await openApplicationDecision(page, threadId);
-      await expect(approval).toBeVisible();
-      expect(
-        (
-          await page.request.post(
-            `/__e2e/interactions/cancel-application/${cancelledRequestId}`,
-          )
-        ).ok(),
-      ).toBe(true);
-      await expect
-        .poll(
-          async () =>
-            (await applicationDecisionRecord(page, cancelledRequestId)).state,
-        )
-        .toBe("cancelled");
-      await expect(approval).toHaveCount(0);
-    } finally {
-      expect(
-        (await page.request.post("/__e2e/codex/turn-completion/release")).ok(),
       ).toBe(true);
     }
   });
@@ -767,38 +677,6 @@ async function releaseInteraction(
     `/__e2e/interactions/release/${requestId}`,
   );
   expect(response.ok()).toBe(true);
-}
-
-async function openApplicationDecision(
-  page: Page,
-  threadId: string,
-): Promise<number> {
-  const response = await page.request.post(
-    `/__e2e/interactions/open-application/${threadId}`,
-  );
-  expect(response.status()).toBe(202);
-  const result = (await response.json()) as { readonly requestId: number };
-  return result.requestId;
-}
-
-async function applicationDecisionRecord(
-  page: Page,
-  requestId: number,
-): Promise<ApplicationDecisionFixtureRecord> {
-  const response = await page.request.get(
-    "/__e2e/interactions/application-state",
-  );
-  expect(response.ok()).toBe(true);
-  const state = (await response.json()) as {
-    readonly records: readonly ApplicationDecisionFixtureRecord[];
-  };
-  const record = state.records.find(
-    (candidate) => candidate.requestId === requestId,
-  );
-  if (!record) {
-    throw new Error(`e2e_application_decision_record_missing:${requestId}`);
-  }
-  return record;
 }
 
 async function interactionFixtureState(

@@ -1,3 +1,4 @@
+import { testAgentToolExecutionAuthority } from "../support/agent-tool-execution-authority.js";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
@@ -135,14 +136,15 @@ async function fixture() {
   const policies = new ThreadAgentToolPolicyRepository(database, createThreadAgentToolPolicyDependencies().eligibility);
   const initialPolicy = policies.get(scope, source.thread.id);
   policies.update(scope, source.thread.id, { expectedRevision: initialPolicy.revision, enabled: true,
-    presentation: { surface: "cli", mode: "individual" }, accessBoundary: "thread",
+    presentation: { surface: "cli", mode: "individual" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
     enabledToolIds: ["page.publish", "page.get", "page.list", "page.revisions", "page.preview"], now: 300 });
   const canonical = new CanonicalInlineAgentToolService({ application,
     pages: new PageAgentToolService({ pages, capturePublication: (requestedScope, threadId) => actors.captureApplicationPublication(requestedScope, threadId) }) });
   cleanups.push(async () => { await canonical.close(); });
-  const scoped = new SourceScopedAgentToolService(canonical, policies, new AgentToolEnvironmentAuthorityResolver(sourceAuthority), sourceAuthority,
-    { acquireAgentToolApprovalAuthority: async () => { throw new Error("same-thread pages must not request approval"); } },
-    { requestApplicationDecision: async () => { throw new Error("unexpected approval"); } });
+  const scoped = new SourceScopedAgentToolService(canonical,
+policies,
+new AgentToolEnvironmentAuthorityResolver(sourceAuthority),
+sourceAuthority, testAgentToolExecutionAuthority);
   const sourceCapability = sourceAuthority.issue(sourceAuthority.resolveInScope(scope, source.thread.id, new AbortController().signal), "management_http", "cli");
   const config: AppConfig = { authenticationRequired: true, experimentalUsageEnabled: false, host: "127.0.0.1", port: 4784,
     stateDirectory: root, allowedTailscaleHosts: [], packagedClientOrigins: ["capacitor-electron://localhost"],

@@ -6,6 +6,7 @@ import {
 } from "../../shared/protocol/api.js";
 import { BackendError } from "../backends/contracts.js";
 import { projectRemovalAdmissionError } from "../db/project-removal-errors.js";
+import { ToolPolicyResolutionError } from "../tool-policies/tool-policy-errors.js";
 import { DomainError } from "../domain/errors.js";
 import { TerminalServiceError } from "../terminals/terminal-service-error.js";
 
@@ -104,6 +105,9 @@ function projectApiErrorAt(
         retryable: false,
       },
     });
+  }
+  if (error instanceof ToolPolicyResolutionError) {
+    return projected(404, {error:{code:error.code,message:error.message,retryable:false,toolPolicyIssue:error.issue}});
   }
   if (error instanceof DomainError) {
     const status =

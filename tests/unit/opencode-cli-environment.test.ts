@@ -13,7 +13,7 @@ function fixture(availability: AgentToolCliAvailability = { availability: "avail
     source_kind TEXT,source_automation_id TEXT,source_automation_run_id TEXT,creation_kind TEXT,force_reset_at INTEGER,attempt_id TEXT)`);
   const issue = vi.fn(() => "exact-thread-reference");
   const policy = { enabled: true, presentation: { surface: "cli" as "cli" | "native", mode: "progressive" as "progressive" | "individual" },
-    accessBoundary: "thread" as const, enabledToolIds: ["agent.context"] };
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, enabledToolIds: ["agent.context"] };
   const cli = new OpenCodeCliEnvironment({ ownership: "owned", availability, tools: { readPolicy: () => policy } });
   const seed = () => {
     f.context.settings.updateDesired(scope, threadID, { desired: { providerID: "provider", id: "model" }, expectedRevision: 0, now: 1 });

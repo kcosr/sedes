@@ -3,6 +3,7 @@ import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { SavedAgentRepository } from "../../src/server/db/repositories/saved-agent-repository.js";
+import { ToolPolicyRepository } from "../../src/server/db/repositories/tool-policy-repository.js";
 import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 function fixture() {
@@ -35,6 +36,52 @@ function insertAgent(current: ReturnType<typeof fixture>, id: string, policy: un
 }
 
 describe("agent tool access boundary migration", () => {
+  it("preserves dormant tools and presentation for legacy thread-only and disabled Agents", () => {
+    const current = fixture();
+    try {
+      const threadOnlyId = "11111111-1111-4111-8111-111111111111";
+      const disabledId = "22222222-2222-4222-8222-222222222222";
+      insertAgent(current, threadOnlyId, legacyPolicy("allow"));
+      insertAgent(current, disabledId, { ...legacyPolicy("ask"), enabled: false });
+      applyDatabaseMigrations(current.database, backendNormalizedMigrations.filter(migration => migration.version <= 147));
+      const threadOnlyPolicy = {
+        enabled: true, enabledToolIds: ["thread.status", "agent.context"],
+        presentation: { surface: "cli", mode: "individual" }, accessBoundary: "thread",
+      };
+      const disabledPolicy = {
+        enabled: false, enabledToolIds: ["task.list"],
+        presentation: { surface: "native", mode: "individual" }, accessBoundary: "environment",
+      };
+      for (const [id, policy] of [[threadOnlyId, threadOnlyPolicy], [disabledId, disabledPolicy]] as const) {
+        current.database.prepare("UPDATE saved_agents SET sedes_tools_json=? WHERE tenant_id=? AND owner_principal_id=? AND id=?")
+          .run(JSON.stringify(policy), current.scope.tenantId, current.scope.principalId, id);
+      }
+      const thread = current.createThread();
+      current.database.prepare("UPDATE thread_agent_tool_policies SET enabled=1, access_boundary='thread', revision=4 WHERE application_thread_id=?").run(thread.id);
+      current.database.prepare("INSERT INTO thread_agent_tool_policy_entries VALUES (?, ?, ?, 'thread.status')")
+        .run(current.scope.tenantId, current.scope.principalId, thread.id);
+      applyDatabaseMigrations(current.database, backendNormalizedMigrations);
+      const agents = new SavedAgentRepository(current.database);
+      const policies = new ToolPolicyRepository(current.database);
+      for (const [id, legacy, resourceScope] of [
+        [threadOnlyId, threadOnlyPolicy, { allowOtherEnvironments: false, allowOtherProjects: false }],
+        [disabledId, disabledPolicy, { allowOtherEnvironments: false, allowOtherProjects: true }],
+      ] as const) {
+        expect(agents.get(current.scope, id)).toMatchObject({
+          toolPolicySelection: { kind: "disabled" }, toolPresentation: legacy.presentation, revision: 7,
+        });
+        expect(policies.get(current.scope, id)).toMatchObject({ enabledToolIds: legacy.enabledToolIds, resourceScope, revision: 0 });
+        expect(current.database.prepare("SELECT tool_presentation_json AS presentation FROM saved_agents WHERE id=?").get(id))
+          .toEqual({ presentation: JSON.stringify(legacy.presentation) });
+      }
+      expect(current.database.prepare("SELECT enabled,allow_other_environments,allow_other_projects,revision FROM thread_agent_tool_policies WHERE application_thread_id=?").get(thread.id))
+        .toEqual({ enabled: 0, allow_other_environments: 0, allow_other_projects: 0, revision: 4 });
+      expect(current.database.prepare("SELECT tool_id FROM thread_agent_tool_policy_entries WHERE application_thread_id=?").all(thread.id))
+        .toEqual([{ tool_id: "thread.status" }]);
+      expect(current.database.pragma("foreign_key_check")).toEqual([]);
+    } finally { current.database.close(); }
+  });
+
   it("maps both existing boundaries, preserves policy entries and revisions, and defaults new threads to environment", () => {
     const current = fixture();
     try {
@@ -44,11 +91,12 @@ describe("agent tool access boundary migration", () => {
         current.database.prepare("INSERT INTO thread_agent_tool_policy_entries VALUES (?, ?, ?, 'agent.context')").run(current.scope.tenantId, current.scope.principalId, threads[index]!.id);
         insertAgent(current, `99999999-9999-4999-8999-99999999999${index}`, legacyPolicy(oldValue));
       }
-      applyDatabaseMigrations(current.database, backendNormalizedMigrations);
+      applyDatabaseMigrations(current.database, backendNormalizedMigrations.filter(migration => migration.version <= 92));
       for (const [index, boundary] of (["environment", "unrestricted"] as const).entries()) {
         expect(current.database.prepare("SELECT access_boundary, revision FROM thread_agent_tool_policies WHERE application_thread_id = ?").get(threads[index]!.id)).toEqual({ access_boundary: boundary, revision: 4 });
-        const agent = new SavedAgentRepository(current.database).get(current.scope, `99999999-9999-4999-8999-99999999999${index}`);
-        expect(agent.sedesTools).toEqual({ enabled: true, enabledToolIds: ["agent.context"], presentation: { surface: "native", mode: "progressive" }, accessBoundary: boundary });
+        const agent = current.database.prepare("SELECT sedes_tools_json AS policy, revision FROM saved_agents WHERE id = ?")
+          .get(`99999999-9999-4999-8999-99999999999${index}`) as { policy: string; revision: number };
+        expect(JSON.parse(agent.policy)).toEqual({ enabled: true, enabledToolIds: ["agent.context"], presentation: { surface: "native", mode: "progressive" }, accessBoundary: boundary });
         expect(agent.revision).toBe(7);
       }
       expect(current.database.prepare("SELECT count(*) AS count FROM thread_agent_tool_policy_entries").get()).toEqual({ count: 2 });
@@ -56,6 +104,17 @@ describe("agent tool access boundary migration", () => {
       expect(current.database.prepare("SELECT access_boundary FROM thread_agent_tool_policies WHERE application_thread_id = ?").get(thread.id)).toEqual({ access_boundary: "environment" });
       current.database.prepare("UPDATE thread_agent_tool_policies SET access_boundary = 'thread' WHERE application_thread_id = ?").run(thread.id);
       expect(() => current.database.prepare("UPDATE thread_agent_tool_policies SET access_boundary = 'ask'").run()).toThrow();
+      applyDatabaseMigrations(current.database, backendNormalizedMigrations);
+      for (const [index, allowOtherEnvironments] of [false, true].entries()) {
+        const id = `99999999-9999-4999-8999-99999999999${index}`;
+        const agent = new SavedAgentRepository(current.database).get(current.scope, id);
+        expect(agent.toolPolicySelection).toEqual({ kind: "policy_set", policySetId: id });
+        expect(new ToolPolicyRepository(current.database).get(current.scope, id)).toMatchObject({
+          enabledToolIds: ["agent.context"], resourceScope: { allowOtherEnvironments, allowOtherProjects: true },
+        });
+      }
+      expect(current.database.prepare("SELECT enabled, allow_other_environments, allow_other_projects FROM thread_agent_tool_policies WHERE application_thread_id = ?")
+        .get(thread.id)).toEqual({ enabled: 0, allow_other_environments: 0, allow_other_projects: 0 });
       expect(current.database.pragma("foreign_key_check")).toEqual([]);
     } finally { current.database.close(); }
   });

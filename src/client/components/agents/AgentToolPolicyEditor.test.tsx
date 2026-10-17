@@ -12,17 +12,20 @@ beforeEach(() => {
 afterEach(cleanup);
 
 const catalog: AgentToolBootstrapDescriptor = {
+  defaultPresentation: { surface: "native", mode: "progressive" },
   defaultPolicy: {
     enabled: false,
     enabledToolIds: [],
+    source: "default",
     presentation: { surface: "native", mode: "progressive" },
-    accessBoundary: "environment",
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
   },
   resolvedPolicy: {
     enabled: false,
     enabledToolIds: [],
+    source: "default",
     presentation: { surface: "native", mode: "progressive" },
-    accessBoundary: "environment",
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
   },
   presentationOptions: [
     { surface: "native", modes: ["progressive", "individual"] },
@@ -53,231 +56,73 @@ const catalog: AgentToolBootstrapDescriptor = {
   ],
 };
 
+const policySet = {
+  id: "33333333-3333-4333-8333-333333333333",
+  name: "Reviewer",
+  enabledToolIds: ["thread.status"],
+  resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },
+  revision: 2, createdAt: "2026-10-17T00:00:00Z", updatedAt: "2026-10-17T00:00:00Z",
+};
+
 describe("AgentToolPolicyEditor", () => {
-  it("describes inherited, global, and group policy controls", () => {
-    render(
-      <AgentToolPolicyEditor
-        catalog={catalog}
-        value={{
-          enabled: true,
-          enabledToolIds: [],
-          presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "environment",
-        }}
-        onChange={vi.fn()}
-      />,
-    );
-
-    expect(
-      screen.getByRole("switch", { name: "Use default tool policy" }),
-    ).toHaveAccessibleDescription(
-      "Use the selected target’s ordinary new-thread settings.",
-    );
-    expect(
-      screen.getByRole("switch", { name: "Enable Sedes tools" }),
-    ).toHaveAccessibleDescription("Expose the selected tools on new threads.");
-    expect(
-      screen.getByRole("checkbox", { name: "Select all Threads tools" }),
-    ).toHaveAccessibleDescription("Thread operations");
-    // Tool groups start collapsed behind a summary of their selection.
-    const threads = screen.getByRole("button", { name: "Threads" });
-    expect(threads).toHaveAttribute("aria-expanded", "false");
-    expect(threads).toHaveAccessibleDescription("0 of 1 tool Thread operations");
-    expect(
-      screen.queryByRole("checkbox", { name: "Thread status" }),
-    ).not.toBeInTheDocument();
+  it("names the inherited source, policy and saved revision", () => {
+    render(<AgentToolPolicyEditor catalog={{ ...catalog, defaultPolicy: {
+      ...catalog.defaultPolicy!, enabled: true, enabledToolIds: policySet.enabledToolIds,
+      source: "backend", policySet: { id: policySet.id, name: policySet.name, revision: policySet.revision },
+    } }} value={{ kind: "inherit" }} policySets={[policySet]} onChange={vi.fn()} onPresentationChange={vi.fn()} />);
+    expect(screen.getByText("Inherited from backend settings · Reviewer · revision 2")).toBeInTheDocument();
   });
 
-  it("switches between inherited and explicit complete policy", () => {
+  it("keeps presentation controls available when an inherited set is missing", () => {
+    const issue = { kind: "missing_policy_set" as const, source: "backend" as const, policySetId: policySet.id };
+    render(<AgentToolPolicyEditor catalog={{ ...catalog, defaultPolicy: null, resolvedPolicy: null, defaultIssue: issue, resolvedIssue: issue }}
+      value={{ kind: "inherit" }} policySets={[]} onChange={vi.fn()} onPresentationChange={vi.fn()} />);
+    expect(screen.getByRole("switch", { name: "Use backend presentation" })).toBeEnabled();
+    expect(screen.getByText(/Needs attention: the backend policy set/)).toBeInTheDocument();
+    expect(screen.queryByText("The effective policy is resolved when a thread is created.")).not.toBeInTheDocument();
+  });
+
+  it("selects a reusable policy without duplicating its tools in the Agent", () => {
     const onChange = vi.fn();
-    render(<AgentToolPolicyEditor id="agent-tools" catalog={catalog} onChange={onChange} />);
-    // The section is the target of the Agent editor's "Sedes tools" anchor.
+    render(<AgentToolPolicyEditor id="agent-tools" catalog={catalog}
+      value={{ kind: "inherit" }} policySets={[policySet]} onChange={onChange} onPresentationChange={vi.fn()} />);
     expect(screen.getByRole("region", { name: "Sedes tools" })).toHaveAttribute("id", "agent-tools");
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Use default tool policy" }),
-    );
-    expect(onChange).toHaveBeenCalledWith({
-      enabled: false,
-      enabledToolIds: [],
-      presentation: { surface: "native", mode: "progressive" },
-      accessBoundary: "environment",
-    });
+    expect(screen.getByText("No Sedes tools are exposed.")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Tool policy" }), { target: { value: policySet.id } });
+    expect(onChange).toHaveBeenCalledWith({ kind: "policy_set", policySetId: policySet.id });
+    expect(screen.queryByRole("checkbox", { name: "Thread status" })).not.toBeInTheDocument();
   });
 
-  it("retains and permits removing unavailable selected tools", () => {
-    const onChange = vi.fn();
-    render(
-      <AgentToolPolicyEditor
-        catalog={catalog}
-        value={{
-          enabled: true,
-          enabledToolIds: ["missing.tool"],
-          presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "unrestricted",
-        }}
-        onChange={onChange}
-      />,
-    );
-    fireEvent.click(
-      screen.getByRole("checkbox", {
-        name: "Remove unavailable tool missing.tool",
-      }),
-    );
-    expect(onChange).toHaveBeenCalledWith({
-      enabled: true,
-      enabledToolIds: [],
-      presentation: { surface: "native", mode: "progressive" },
-      accessBoundary: "unrestricted",
-    });
+  it("shows the selected policy scope and keeps presentation at the backend default", () => {
+    render(<AgentToolPolicyEditor catalog={catalog}
+      value={{ kind: "policy_set", policySetId: policySet.id }} policySets={[policySet]} onChange={vi.fn()} onPresentationChange={vi.fn()} />);
+    expect(screen.getByText(/1 tool · This project across all environments/)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Use backend presentation" })).toBeChecked();
+    expect(screen.queryByRole("combobox", { name: "Sedes tool surface" })).not.toBeInTheDocument();
   });
 
-  it("edits the relative environment rule and explains allow", () => {
+  it("distinguishes inherit from explicitly disabled", () => {
     const onChange = vi.fn();
-    const view = render(
-      <AgentToolPolicyEditor
-        catalog={catalog}
-        value={{
-          enabled: true,
-          enabledToolIds: [],
-          presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "environment",
-        }}
-        onChange={onChange}
-      />,
-    );
-
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "Access boundary" }),
-    );
-    fireEvent.click(
-      screen.getByRole("option", { name: "Allow without asking" }),
-    );
-    expect(onChange).toHaveBeenCalledWith({
-      enabled: true,
-      enabledToolIds: [],
-      presentation: { surface: "native", mode: "progressive" },
-      accessBoundary: "unrestricted",
-    });
-    expect(
-      screen.getByRole("combobox", { name: "Access boundary" }),
-    ).toHaveAccessibleDescription(
-      "For each thread created from this Agent, that thread’s execution environment is treated as its current environment. Thread access asks before accessing project, global, or other-thread resources.",
-    );
-
-    view.rerender(
-      <AgentToolPolicyEditor
-        catalog={catalog}
-        value={{
-          enabled: true,
-          enabledToolIds: [],
-          presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "unrestricted",
-        }}
-        onChange={onChange}
-      />,
-    );
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Threads created from this Agent may use enabled Sedes tools in other environments without asking. Existing threads are not changed when this Agent is edited.",
-    );
+    render(<AgentToolPolicyEditor value={{ kind: "disabled" }} policySets={[policySet]} onChange={onChange} onPresentationChange={vi.fn()} />);
+    expect(screen.getByText("Explicitly disabled")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Tool policy" }), { target: { value: "inherit" } });
+    expect(onChange).toHaveBeenCalledWith({ kind: "inherit" });
   });
 
-  it("renders independent surface and presentation selectors", () => {
-    const onChange = vi.fn();
-    render(
-      <AgentToolPolicyEditor
-        catalog={catalog}
-        value={{
-          enabled: true,
-          enabledToolIds: [],
-          presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "environment",
-        }}
-        onChange={onChange}
-      />,
-    );
+  it("keeps a deleted policy visible until the user replaces it", () => {
+    render(<AgentToolPolicyEditor value={{ kind: "policy_set", policySetId: policySet.id }} policySets={[]} onChange={vi.fn()} onPresentationChange={vi.fn()} />);
+    expect(screen.getByRole("combobox", { name: "Tool policy" })).toHaveValue(policySet.id);
+    expect(screen.getByText(/New threads cannot use this selection/)).toBeInTheDocument();
+  });
 
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "Sedes tool surface" }),
-    );
+  it("changes presentation separately from the reusable policy", () => {
+    const onPresentationChange = vi.fn();
+    render(<AgentToolPolicyEditor catalog={catalog} value={{ kind: "inherit" }} policySets={[]}
+      toolPresentation={{ surface: "native", mode: "individual" }} onChange={vi.fn()} onPresentationChange={onPresentationChange} />);
+    fireEvent.click(screen.getByRole("combobox", { name: "Sedes tool surface" }));
     fireEvent.click(screen.getByRole("option", { name: "Sedes CLI" }));
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        presentation: { surface: "cli", mode: "progressive" },
-      }),
-    );
-
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "Sedes tool presentation" }),
-    );
-    expect(
-      screen.getByRole("option", {
-        name: "Progressive discovery (recommended)",
-      }),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("option", { name: "Individual operations" }),
-    ).toBeVisible();
-  });
-
-  it("hides fixed selectors and falls back when a surface lacks the current mode", () => {
-    const onChange = vi.fn();
-    const fixedCatalog: AgentToolBootstrapDescriptor = {
-      ...catalog,
-      defaultPolicy: {
-        ...catalog.defaultPolicy,
-        presentation: { surface: "cli", mode: "progressive" },
-      },
-      resolvedPolicy: {
-        ...catalog.resolvedPolicy,
-        presentation: { surface: "cli", mode: "progressive" },
-      },
-      presentationOptions: [{ surface: "cli", modes: ["progressive"] }],
-    };
-    const view = render(
-      <AgentToolPolicyEditor
-        catalog={fixedCatalog}
-        value={{
-          enabled: true,
-          enabledToolIds: [],
-          presentation: { surface: "cli", mode: "progressive" },
-          accessBoundary: "environment",
-        }}
-        onChange={onChange}
-      />,
-    );
-    expect(
-      screen.queryByRole("combobox", { name: "Sedes tool surface" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("combobox", { name: "Sedes tool presentation" }),
-    ).not.toBeInTheDocument();
-
-    view.rerender(
-      <AgentToolPolicyEditor
-        catalog={{
-          ...catalog,
-          presentationOptions: [
-            { surface: "native", modes: ["progressive", "individual"] },
-            { surface: "cli", modes: ["individual"] },
-          ],
-        }}
-        value={{
-          enabled: true,
-          enabledToolIds: [],
-          presentation: { surface: "native", mode: "progressive" },
-          accessBoundary: "environment",
-        }}
-        onChange={onChange}
-      />,
-    );
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "Sedes tool surface" }),
-    );
-    fireEvent.click(screen.getByRole("option", { name: "Sedes CLI" }));
-    expect(onChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        presentation: { surface: "cli", mode: "individual" },
-      }),
-    );
+    expect(onPresentationChange).toHaveBeenCalledWith({ surface: "cli", mode: "individual" });
+    fireEvent.click(screen.getByRole("switch", { name: "Use backend presentation" }));
+    expect(onPresentationChange).toHaveBeenLastCalledWith(undefined);
   });
 });

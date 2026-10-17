@@ -40,6 +40,7 @@ const source = {
   environmentAuthority: {
     id: "grant-1",
     callerKind: "thread_agent" as const,
+    resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
     defaults: {
       kind: "thread_agent" as const,
       environmentId: "environment-1",
@@ -836,6 +837,8 @@ describe("CanonicalInlineAgentToolService", () => {
   it("rejects a blank automation prompt as invalid input before domain mutation", async () => {
     const create = vi.fn();
     const automations = new AutomationAgentToolService({
+      toolPolicies: {} as never,
+      principalToolClients: {} as never,
       automations: { create } as never,
       mutationRecords: {} as never,
       threads: { snapshot: vi.fn() } as never,

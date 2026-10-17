@@ -141,9 +141,10 @@ function makeSnapshot({
     attention: { automationContexts: [] },
     stashes: [],
     agentTools: {
+      policySet: null,
       runtimeAvailability: { availability: "available" },
       enabled: false,
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       groups: [],
       presentation: { surface: "cli", mode: "progressive" },
       presentationOptions: [
@@ -332,6 +333,7 @@ function fixture(
     forkTurn: vi.fn(),
     forkLatestProviderSnapshot: vi.fn(),
     observePublishedBookmarkRevision: vi.fn(),
+    listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
   } as unknown as ThreadClientStore;
   return { applicationStore, threadStore, publishPin };
 }

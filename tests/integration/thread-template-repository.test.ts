@@ -17,6 +17,7 @@ function selection(name = "Reviewer") {
     targetId: "local-primary",
     executionWorkspace: { kind: "direct" as const },
     agentId,
+    toolPolicySelection: { kind: "inherit" as const },
     capturedAgentName: name,
     capturedWorkspaceName: "Sedes",
     capturedTargetName: "Local Pi",
@@ -132,7 +133,7 @@ describe("ThreadTemplateRepository", () => {
         backendTypeId: "pi",
         backendOverridesSchemaVersion: 1,
         backendOverrides: [],
-        sedesTools: null,
+        toolPolicySelection: { kind: "inherit" },
         now: 1_000,
       });
       const templates = new ThreadTemplateRepository(current.database);

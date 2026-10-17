@@ -2,8 +2,16 @@ import type Database from "better-sqlite3";
 import type { BackendKind } from "../../backends/contracts.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
+import {
+  appliedToolPolicySetReferenceSchema,
+  appliedToolPolicySetSchema,
+} from "../../../shared/protocol/conversation.js";
+import { ThreadAppliedToolPolicySetRepository } from "./thread-applied-tool-policy-set-repository.js";
+import { ToolPolicyRepository } from "./tool-policy-repository.js";
 import type {
-  AgentToolAccessBoundary,
+  AppliedToolPolicySet,
+  AppliedToolPolicySetReference,
+  AgentToolResourceScope,
   AgentToolPresentation,
   AgentToolPresentationOption,
 } from "../../../shared/protocol/conversation.js";
@@ -24,10 +32,11 @@ export interface ThreadAgentToolPolicyRecord {
   readonly applicationThreadId: string;
   readonly enabled: boolean;
   readonly presentation: ThreadAgentToolPresentation;
-  readonly accessBoundary: AgentToolAccessBoundary;
+  readonly resourceScope: AgentToolResourceScope;
   readonly revision: number;
   readonly updatedAt: number;
   readonly enabledToolIds: readonly string[];
+  readonly policySet: AppliedToolPolicySet | null;
 }
 
 type PolicyRow = {
@@ -37,12 +46,18 @@ type PolicyRow = {
   readonly enabled: 0 | 1;
   readonly presentationSurface: ThreadAgentToolPresentation["surface"];
   readonly presentationMode: ThreadAgentToolPresentation["mode"];
-  readonly accessBoundary: AgentToolAccessBoundary;
+  readonly allowOtherEnvironments: 0 | 1;
+  readonly allowOtherProjects: 0 | 1;
   readonly revision: number;
   readonly updatedAt: number;
   readonly backendKind: BackendKind;
   readonly environmentKind: "local" | "ssh" | "outbound";
 };
+
+type PolicyContent = Pick<
+  ThreadAgentToolPolicyRecord,
+  "enabled" | "enabledToolIds" | "resourceScope"
+>;
 
 const policyColumns = `
   policy.tenant_id AS tenantId,
@@ -51,7 +66,8 @@ const policyColumns = `
   policy.enabled,
   policy.presentation_surface AS presentationSurface,
   policy.presentation_mode AS presentationMode,
-  policy.access_boundary AS accessBoundary,
+  policy.allow_other_environments AS allowOtherEnvironments,
+  policy.allow_other_projects AS allowOtherProjects,
   policy.revision,
   policy.updated_at AS updatedAt,
   backend.kind AS backendKind,
@@ -80,7 +96,12 @@ export class ThreadAgentToolPolicyRepository {
   constructor(
     readonly database: Database.Database,
     readonly eligibility: ThreadAgentToolEligibilityPolicy,
-  ) {}
+    readonly appliedToolPolicySets = new ThreadAppliedToolPolicySetRepository(database),
+  ) {
+    if (appliedToolPolicySets.database !== database) {
+      throw new Error("thread_agent_tool_policy_database_mismatch");
+    }
+  }
 
   get(
     scope: RequestScope,
@@ -126,8 +147,9 @@ export class ThreadAgentToolPolicyRepository {
     input: {
       readonly enabled: boolean;
       readonly presentation: ThreadAgentToolPresentation;
-      readonly accessBoundary: AgentToolAccessBoundary;
+      readonly resourceScope: AgentToolResourceScope;
       readonly enabledToolIds: readonly string[];
+      readonly policySet?: AppliedToolPolicySet | null;
       readonly now: number;
     },
   ): ThreadAgentToolPolicyRecord {
@@ -166,13 +188,22 @@ export class ThreadAgentToolPolicyRepository {
       input.presentation,
       input.enabledToolIds,
     );
-    this.#validateAccessBoundary(input.accessBoundary);
+    this.#validateResourceScope(input.resourceScope);
+    const appliedSet = input.policySet == null
+      ? null
+      : appliedToolPolicySetSchema.parse(input.policySet);
+    if (appliedSet && !input.enabled) {
+      throw new DomainError(
+        "invalid_transition",
+        "A disabled tool policy cannot be associated with a named set.",
+      );
+    }
     const changed = this.database
       .prepare(
         `
           UPDATE thread_agent_tool_policies
           SET enabled = ?, presentation_surface = ?, presentation_mode = ?,
-            access_boundary = ?, updated_at = ?
+            allow_other_environments = ?, allow_other_projects = ?, updated_at = ?
           WHERE tenant_id = ? AND owner_principal_id = ?
             AND application_thread_id = ? AND revision = 0
         `,
@@ -181,7 +212,8 @@ export class ThreadAgentToolPolicyRepository {
         input.enabled ? 1 : 0,
         input.presentation.surface,
         input.presentation.mode,
-        input.accessBoundary,
+        input.resourceScope.allowOtherEnvironments ? 1 : 0,
+        input.resourceScope.allowOtherProjects ? 1 : 0,
         input.now,
         scope.tenantId,
         scope.principalId,
@@ -208,6 +240,7 @@ export class ThreadAgentToolPolicyRepository {
         toolId,
       );
     }
+    this.appliedToolPolicySets.set(scope, applicationThreadId, appliedSet, input.now);
     return this.get(scope, applicationThreadId);
   }
 
@@ -218,8 +251,9 @@ export class ThreadAgentToolPolicyRepository {
       readonly expectedRevision: number;
       readonly enabled: boolean;
       readonly presentation: ThreadAgentToolPresentation;
-      readonly accessBoundary: AgentToolAccessBoundary;
+      readonly resourceScope: AgentToolResourceScope;
       readonly enabledToolIds: readonly string[];
+      readonly policySet?: AppliedToolPolicySetReference | null;
       readonly now: number;
     },
   ): ThreadAgentToolPolicyRecord {
@@ -231,19 +265,58 @@ export class ThreadAgentToolPolicyRepository {
           "The thread agent tool policy was not found.",
         );
       }
-      const enabledToolIds = this.#validate(
+      if (
+        row.revision !== input.expectedRevision ||
+        row.revision >= Number.MAX_SAFE_INTEGER
+      ) {
+        throw new DomainError(
+          "conflict",
+          "The thread agent tool policy changed in another client.",
+        );
+      }
+      const current = this.#record(scope, row, false);
+      const requestedToolIds = this.#validate(
         row.backendKind,
         row.environmentKind,
         input.presentation,
         input.enabledToolIds,
       );
-      this.#validateAccessBoundary(input.accessBoundary);
+      this.#validateResourceScope(input.resourceScope);
+      const projectedContent = {
+        ...current,
+        enabledToolIds: current.enabledToolIds.filter((toolId) =>
+          this.eligibility.eligibleToolIds.has(toolId),
+        ),
+      };
+      const keepsAssociationInstruction = input.policySet == null || (
+        input.policySet.id === current.policySet?.id &&
+        input.policySet.revision === current.policySet.revision
+      );
+      // Browser snapshots hide tools removed from the catalog. A save of that
+      // unchanged projection must keep the durable snapshot; hidden stored IDs
+      // are never accepted as newly requested grants.
+      const preservesDurableContent = keepsAssociationInstruction && this.#sameContent(
+        projectedContent,
+        { ...input, enabledToolIds: requestedToolIds },
+      );
+      const enabledToolIds = preservesDurableContent
+        ? current.enabledToolIds
+        : requestedToolIds;
+      const desiredContent = { ...input, enabledToolIds };
+      const sameContent = this.#sameContent(current, desiredContent);
+      const appliedSet = this.#resolveAppliedSet(
+        scope,
+        input.policySet,
+        current,
+        sameContent,
+        desiredContent,
+      );
       const changed = this.database
         .prepare(
           `
             UPDATE thread_agent_tool_policies
             SET enabled = ?, presentation_surface = ?, presentation_mode = ?,
-              access_boundary = ?,
+              allow_other_environments = ?, allow_other_projects = ?,
               revision = revision + 1, updated_at = ?
             WHERE tenant_id = ? AND owner_principal_id = ?
               AND application_thread_id = ? AND revision = ?
@@ -253,7 +326,8 @@ export class ThreadAgentToolPolicyRepository {
           input.enabled ? 1 : 0,
           input.presentation.surface,
           input.presentation.mode,
-          input.accessBoundary,
+          input.resourceScope.allowOtherEnvironments ? 1 : 0,
+          input.resourceScope.allowOtherProjects ? 1 : 0,
           input.now,
           scope.tenantId,
           scope.principalId,
@@ -290,6 +364,7 @@ export class ThreadAgentToolPolicyRepository {
           toolId,
         );
       }
+      this.appliedToolPolicySets.set(scope, applicationThreadId, appliedSet, input.now);
       return this.get(scope, applicationThreadId);
     });
     return update.immediate();
@@ -362,8 +437,8 @@ export class ThreadAgentToolPolicyRepository {
     // Eligibility is enforced when policy is written. On read, omit entries
     // that are no longer in the current catalog so a later catalog shrink
     // cannot make the thread snapshot (and therefore runtime attach) fail.
-    // The durable rows remain available for operator inspection and a later
-    // revision-checked update replaces the exact set.
+    // The durable rows remain available for capture and unchanged-projection
+    // saves. Content edits replace the exact submitted eligible set.
     const durableToolIds = sortedDistinctToolIds(storedToolIds);
     const enabledToolIds = filterCurrentEligibility
       ? durableToolIds.filter((toolId) =>
@@ -379,11 +454,74 @@ export class ThreadAgentToolPolicyRepository {
         surface: row.presentationSurface,
         mode: row.presentationMode,
       },
-      accessBoundary: row.accessBoundary,
+      resourceScope: {
+        allowOtherEnvironments: row.allowOtherEnvironments === 1,
+        allowOtherProjects: row.allowOtherProjects === 1,
+      },
       revision: row.revision,
       updatedAt: row.updatedAt,
       enabledToolIds,
+      policySet: this.appliedToolPolicySets.get(scope, row.applicationThreadId),
     };
+  }
+
+  #sameContent(
+    left: PolicyContent,
+    right: PolicyContent,
+  ): boolean {
+    const leftIds = sortedDistinctToolIds(left.enabledToolIds);
+    const rightIds = sortedDistinctToolIds(right.enabledToolIds);
+    return (
+      left.enabled === right.enabled &&
+      left.resourceScope.allowOtherEnvironments === right.resourceScope.allowOtherEnvironments &&
+      left.resourceScope.allowOtherProjects === right.resourceScope.allowOtherProjects &&
+      leftIds.length === rightIds.length &&
+      leftIds.every((id, index) => id === rightIds[index])
+    );
+  }
+
+  #resolveAppliedSet(
+    scope: RequestScope,
+    requested: AppliedToolPolicySetReference | null | undefined,
+    current: ThreadAgentToolPolicyRecord,
+    sameContent: boolean,
+    desired: PolicyContent,
+  ): AppliedToolPolicySet | null {
+    if (requested === undefined) return sameContent ? current.policySet : null;
+    if (requested === null) return null;
+    const reference = appliedToolPolicySetReferenceSchema.parse(requested);
+    if (
+      sameContent && desired.enabled &&
+      current.policySet?.id === reference.id &&
+      current.policySet.revision === reference.revision
+    ) {
+      return current.policySet;
+    }
+    if (!desired.enabled) {
+      throw new DomainError(
+        "invalid_transition",
+        "A disabled tool policy cannot be associated with a named set.",
+      );
+    }
+    const definition = new ToolPolicyRepository(this.database).get(scope, reference.id);
+    if (definition.revision !== reference.revision) {
+      throw new DomainError(
+        "conflict",
+        "The selected tool policy set changed. Reload it before applying.",
+      );
+    }
+    const definitionContent = {
+      enabled: true,
+      enabledToolIds: definition.enabledToolIds,
+      resourceScope: definition.resourceScope,
+    };
+    if (!this.#sameContent(definitionContent, desired)) {
+      throw new DomainError(
+        "invalid_transition",
+        "The thread tool settings do not match the selected policy set.",
+      );
+    }
+    return { id: definition.id, name: definition.name, revision: definition.revision };
   }
 
   #validate(
@@ -460,15 +598,12 @@ export class ThreadAgentToolPolicyRepository {
     return Object.freeze([...options]);
   }
 
-  #validateAccessBoundary(value: AgentToolAccessBoundary): void {
-    if (
-      value !== "thread" &&
-      value !== "environment" &&
-      value !== "unrestricted"
-    ) {
+  #validateResourceScope(value: AgentToolResourceScope): void {
+    if (!value || typeof value.allowOtherEnvironments !== "boolean" ||
+        typeof value.allowOtherProjects !== "boolean") {
       throw new DomainError(
         "invalid_transition",
-        "The agent tool access boundary is invalid.",
+        "The agent tool resource scope is invalid.",
       );
     }
   }

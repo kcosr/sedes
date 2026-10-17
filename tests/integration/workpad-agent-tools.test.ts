@@ -110,6 +110,7 @@ function fixture(latestVersion = backendNormalizedMigrations.at(-1)!.version) {
     firstWorkspaceId: firstWorkspace.id,
     secondWorkspaceId: secondWorkspace.id,
     firstProjectId: projectOf(firstWorkspace.id),
+    secondProjectId: projectOf(secondWorkspace.id),
     firstThreadId: firstThread.thread.id,
     secondThreadId: secondThread.thread.id,
     workpads: new WorkpadRepository(database),
@@ -125,14 +126,15 @@ function toolsFixture() {
   const registry = new AgentToolRegistry();
   definitions.forEach(definition => registry.register(definition));
   const defaults = { kind: "thread_agent" as const, threadId: f.firstThreadId, workspaceId: f.firstWorkspaceId, projectId: f.firstProjectId, environmentId: f.environmentId };
+  const resourceScope = {allowOtherEnvironments:true,allowOtherProjects:true};
   const policyIdentity = { ownerKind: "thread" as const, ownerId: f.firstThreadId, revision: 0 };
-  const context = (id: string, input: unknown): TrustedToolInvocationContext => {
+  const context = (id: string, input: unknown, policy = resourceScope): TrustedToolInvocationContext => {
     const definition = definitions.find(definition => definition.id === id)!;
-    const authority = new AgentToolEnvironmentAuthorityResolver(authorityReader).resolve({ tool: definition, input, scope: f.scope, defaults });
+    const authority = new AgentToolEnvironmentAuthorityResolver(authorityReader).resolve({ tool: definition, input, scope: f.scope, defaults, resourceScope:policy });
     return {
       ...f.scope, invocationId: "invocation", mutationId: "mutation", requestId: "request", adapter: "http",
       subject: { kind: "thread_agent", sourceThreadId: f.firstThreadId, backendKind: "pi" }, defaults, policyIdentity,
-      environmentAuthority: createTrustedEnvironmentAuthorityGrant({ ...authority, tool: { id: definition.id, schemaVersion: definition.schemaVersion }, callerKind: "thread_agent", defaults, policyIdentity, admittedEnvironmentIds: [f.environmentId] }),
+      environmentAuthority: createTrustedEnvironmentAuthorityGrant({ ...authority, tool: { id: definition.id, schemaVersion: definition.schemaVersion }, callerKind: "thread_agent", defaults, resourceScope:policy, policyIdentity, admittedEnvironmentIds: [f.environmentId] }),
       effectiveCapabilities: [], hasCapability: () => false, abortSignal: new AbortController().signal, reportProgress: () => {},
     };
   };
@@ -229,7 +231,7 @@ describe("canonical Workpad tools", () => {
       expect((await f.invoke("workpad.get", { workpadId: workpad.id })).workpad.content).toBe("Plan");
       await expect(f.invoke("workpad.create", { title: "Old shape", scope: { kind: "workspace" } })).rejects.toBeDefined();
 
-      // A project hosted only on another environment is outside this caller's admitted environment.
+      // Project-owned documents are shared independently of member environments.
       const remote = "019196f7-a0a8-7bc4-a89b-8cf013978499";
       f.database.prepare(`INSERT INTO execution_environments(
           tenant_id, owner_principal_id, id, kind, label, availability, diagnostic_code, revision,
@@ -242,12 +244,45 @@ describe("canonical Workpad tools", () => {
         project: { kind: "new", name: "Remote only" }, available: true, trustState: "trusted",
         environmentConfigurationRevision: 0, now: 5_000,
       });
-      await expect(f.invoke("workpad.create", { title: "Remote", scope: { kind: "project", projectId: location.projectId } }))
-        .rejects.toMatchObject({ code: "permission_denied" });
-      await expect(f.invoke("workpad.update", { workpadId: workpad.id, expectedRevision: 0, scope: { kind: "project", projectId: location.projectId } }))
-        .rejects.toMatchObject({ code: "permission_denied" });
-      expect((await f.invoke("workpad.get", { workpadId: workpad.id })).workpad.scope).toEqual({ kind: "project", projectId: f.firstProjectId });
+      const remoteInput={ title:"Remote",scope:{kind:"project",projectId:location.projectId} };
+      const restricted=f.context("workpad.create",remoteInput);
+      await expect(f.invoke("workpad.create",remoteInput,{...restricted,environmentAuthority:{...restricted.environmentAuthority,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}}})).rejects.toMatchObject({code:"permission_denied"});
+      await expect(f.invoke("workpad.create",remoteInput)).resolves.toMatchObject({workpad:{scope:remoteInput.scope}});
+      await expect(f.invoke("workpad.update", { workpadId:workpad.id,expectedRevision:0,scope:remoteInput.scope })).resolves.toMatchObject({workpad:{scope:remoteInput.scope}});
+      expect((await f.invoke("workpad.get",{workpadId:workpad.id})).workpad.scope).toEqual(remoteInput.scope);
     } finally { f.database.close(); }
+  });
+
+  it("filters Off/On Workpad discovery and denies remote-only or unlocated project IDs", async () => {
+    const f=toolsFixture();try {
+      const remoteId="019196f7-a0a8-7bc4-a89b-8cf013978499";
+      f.database.prepare(`INSERT INTO execution_environments(tenant_id,owner_principal_id,id,kind,label,availability,diagnostic_code,revision,configuration_revision,configuration_fingerprint,created_at,updated_at)
+        SELECT tenant_id,owner_principal_id,?,'ssh','Remote',availability,diagnostic_code,revision,configuration_revision,configuration_fingerprint,created_at,updated_at FROM execution_environments WHERE id=?`).run(remoteId,f.environmentId);
+      const inventory=new InventoryRepository(f.database);
+      const location=(environmentId:string,path:string)=>inventory.upsertWorkspace(f.scope,{environmentId,canonicalPath:path,displayName:path,project:{kind:"new",name:path},available:true,trustState:"trusted",environmentConfigurationRevision:0,now:5000});
+      const remote=location(remoteId,"/remote-only");const empty=location(f.environmentId,"/empty-project");
+      inventory.removeWorkspace(f.scope,empty.id,{expectedRevision:empty.revision,expectedThreadIds:[],now:5100});
+      const pads=[];
+      for(const [title,projectId] of [["A remote",remote.projectId],["B unlocated",empty.projectId],["C local",f.firstProjectId],["D other local",f.secondProjectId]]) {
+        pads.push(f.workpads.create(f.scope,{title:title!,scope:{kind:"project",projectId:projectId!}},undefined,7000-pads.length));
+      }
+      const localPad=pads[2];const otherLocalPad=pads[3];
+      if(!localPad || !otherLocalPad) throw new Error("Local Workpad fixtures were not created.");
+      const offOn={allowOtherEnvironments:false,allowOtherProjects:true};
+      for(const pad of pads.slice(0,2)) {
+        expect(()=>f.context("workpad.get",{workpadId:pad.id},offOn)).toThrow(expect.objectContaining({code:"permission_denied"}));
+        expect(()=>f.context("workpad.update",{workpadId:pad.id,expectedRevision:0,title:"Edit"},offOn)).toThrow(expect.objectContaining({code:"permission_denied"}));
+        expect(()=>f.context("workpad.create",{title:"Denied",scope:pad.scope},offOn)).toThrow(expect.objectContaining({code:"permission_denied"}));
+        const input={scope:pad.scope,scopeMode:"exact"};
+        expect((await f.invoke("workpad.list",input,f.context("workpad.list",input,offOn))).items).toEqual([]);
+      }
+      const input={scope:{kind:"global"},scopeMode:"subtree",limit:1};
+      const first=await f.invoke("workpad.list",input,f.context("workpad.list",input,offOn));
+      expect(first.items.map((pad:{id:string})=>pad.id)).toEqual([localPad.id]);
+      const next={...input,cursor:first.nextCursor};
+      expect((await f.invoke("workpad.list",next,f.context("workpad.list",next,offOn))).items.map((pad:{id:string})=>pad.id)).toEqual([otherLocalPad.id]);
+      expect((await f.invoke("workpad.list",{...input,limit:10})).items.map((pad:{id:string})=>pad.id)).toEqual(pads.map(pad=>pad.id));
+    } finally {f.database.close();}
   });
 
   it("bounds search cursors to query and authority, and rejects caller supplied attribution", async () => {

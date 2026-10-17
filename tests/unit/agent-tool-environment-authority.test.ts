@@ -11,6 +11,7 @@ import {
   requireAdmittedResource,
   requireAdmittedResources,
   requireExactScopeQuery,
+  resourceWithinScope,
   scopeAuthorityRefs,
   type AgentToolEnvironmentAuthorityReader,
   type EnvironmentAuthorityProjectFact,
@@ -156,6 +157,7 @@ function request(id: string, input: unknown) {
     tool,
     input,
     scope,
+    resourceScope: {allowOtherEnvironments:true,allowOtherProjects:true},
     defaults: {
       kind: "thread_agent" as const,
       environmentId: "env-a",
@@ -167,6 +169,7 @@ function request(id: string, input: unknown) {
 }
 
 const grantAuthority = {
+  resourceScope: {allowOtherEnvironments:true,allowOtherProjects:true},
   callerKind: "thread_agent" as const,
   defaults: {
     kind: "thread_agent" as const,
@@ -183,6 +186,13 @@ const grantAuthority = {
 };
 
 describe("agent-tool environment authority", () => {
+  it("fails closed when a thread grant or resolution omits resource scope",()=>{
+    const requestWithoutScope={...request("thread.status",{threadId:"thread-a"}),resourceScope:undefined};
+    expect(()=>new AgentToolEnvironmentAuthorityResolver(reader).resolve(requestWithoutScope)).toThrow(expect.objectContaining({code:"permission_denied"}));
+    const resolved=new AgentToolEnvironmentAuthorityResolver(reader).resolve(request("thread.status",{threadId:"thread-a"}));
+    expect(()=>createTrustedEnvironmentAuthorityGrant({...resolved,...grantAuthority,resourceScope:undefined,tool:{id:"thread.status",schemaVersion:1},admittedEnvironmentIds:["env-a"]})).toThrow(expect.objectContaining({code:"permission_denied"}));
+  });
+
   it("declares an explicit disposition for the complete canonical catalog", () => {
     expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(52);
     expect(
@@ -232,7 +242,7 @@ describe("agent-tool environment authority", () => {
         request(toolId, input),
       );
       expect(plan.targetEnvironmentIds).toEqual(["env-a"]);
-      expect(plan.resolvedResourceRefs).toEqual([
+      expect(plan.resolvedResourceRefs).toMatchObject([
         { kind: "thread", id: "thread-a", environmentId: "env-a" },
       ]);
       expect(reachesOutsideEveryEnvironment(plan)).toBe(false);
@@ -244,7 +254,7 @@ describe("agent-tool environment authority", () => {
     const input = request("automation.get", { automationId: "automation-b" });
     const plan = resolver.resolve(input);
     expect(plan.targetEnvironmentIds).toEqual(["env-b"]);
-    expect(plan.resolvedResourceRefs).toEqual([
+    expect(plan.resolvedResourceRefs).toMatchObject([
       {
         kind: "automation",
         id: "automation-b",
@@ -267,7 +277,7 @@ describe("agent-tool environment authority", () => {
       request("thread.messages", { threadId: "thread-b", pageSize: 10 }),
     );
     expect(plan.targetEnvironmentIds).toEqual(["env-b"]);
-    expect(plan.resolvedResourceRefs).toEqual([
+    expect(plan.resolvedResourceRefs).toMatchObject([
       {
         kind: "thread",
         id: "thread-b",
@@ -353,7 +363,7 @@ describe("agent-tool environment authority", () => {
     });
 
     expect(plan.targetEnvironmentIds).toEqual(["env-a"]);
-    expect(plan.resolvedResourceRefs).toEqual([
+    expect(plan.resolvedResourceRefs).toMatchObject([
       {
         kind: "environment",
         id: "env-a",
@@ -372,11 +382,11 @@ describe("agent-tool environment authority", () => {
           scopeMode: "exact",
         }),
       ).resolvedResourceRefs,
-    ).toEqual([
+    ).toMatchObject([
       {
         kind: "project",
         id: "project-a",
-        environmentId: "env-a",
+        projectId: "project-a",
         revision: 3,
         label: "Alpha project",
       },
@@ -388,7 +398,7 @@ describe("agent-tool environment authority", () => {
           scope: { kind: "thread" },
         }),
       ).resolvedResourceRefs,
-    ).toEqual([
+    ).toMatchObject([
       {
         kind: "thread",
         id: "thread-a",
@@ -408,21 +418,22 @@ describe("agent-tool environment authority", () => {
     ).toContainEqual({
       kind: "project",
       id: "project-a",
-      environmentId: "env-a",
+      projectId: "project-a",
       revision: 3,
       label: "Alpha project",
     });
   });
 
-  it("keeps installation-directory and neutral commands environment empty", () => {
+  it("resolves the environment directory and keeps account resources environment neutral", () => {
     const resolver = new AgentToolEnvironmentAuthorityResolver(reader);
     expect(
       resolver.resolve(request("environment.list", {})).targetEnvironmentIds,
-    ).toEqual([]);
+    ).toEqual(["env-a", "env-b"]);
     expect(
       resolver.resolve(request("saved_agent.get", { agentId: "agent-a" }))
         .targetEnvironmentIds,
     ).toEqual([]);
+    expect(resolver.resolve({...request("environment.list",{}), defaults:{kind:"principal_client",environmentId:"env-a"},admittedEnvironmentIds:["env-a"]}).targetEnvironmentIds).toEqual([]);
   });
 
   it("keeps descriptive saved Agent updates neutral and resolves configuration authoring context", () => {
@@ -493,7 +504,7 @@ describe("agent-tool environment authority", () => {
           includeDescendants: false,
         }),
       ).resolvedResourceRefs,
-    ).toEqual([
+    ).toMatchObject([
       {
         kind: "thread",
         id: "thread-a",
@@ -740,6 +751,7 @@ describe("agent-tool environment authority", () => {
       id: "task-b",
       threadId: "thread-b",
       environmentId: "env-b",
+      projectId: "project-b",
       revision: 4,
       label: "Remote task",
     });
@@ -764,6 +776,7 @@ describe("agent-tool environment authority", () => {
       id: "task-b",
       threadId: "thread-b",
       environmentId: "env-b",
+      projectId: "project-b",
       revision: 4,
       label: "Remote task",
     });
@@ -843,41 +856,49 @@ describe("project access", () => {
     kind: "project",
     id,
     revision: projects.get(id)!.membershipRevision,
+    projectId:id,
     ...(environmentId ? { environmentId } : {}),
     label: projects.get(id)!.label,
   });
 
-  it("puts a thread agent on a member environment inside the project", () => {
+  it("Off/On reaches only projects with an active location on the source environment", () => {
+    const resourceScope={allowOtherEnvironments:false,allowOtherProjects:true};
+    for(const projectId of ["project-a","project-ab"]) {
+      const resolved=resolver.resolve({...request("task.get",{taskId:`task-of-${projectId}`}),resourceScope});
+      expect(resolved.targetEnvironmentIds).toEqual(["env-a"]);
+    }
+    for(const projectId of ["project-b","project-empty"]) {
+      expect(()=>resolver.resolve({...request("task.get",{taskId:`task-of-${projectId}`}),resourceScope})).toThrow(expect.objectContaining({code:"permission_denied"}));
+      const query=resolver.resolve({...request("task.list",exactList(projectId)),resourceScope});
+      expect(query.resolvedResourceRefs).toEqual([]);
+      expect(query.targetEnvironmentIds).toEqual([]);
+    }
+  });
+
+  it.each(["task","workpad"] as const)("fails closed for a thread-owned %s without its project identity",kind=>{
+    const caller={defaults:grantAuthority.defaults,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}};
+    expect(resourceWithinScope({kind,id:"record",threadId:"thread-a",environmentId:"env-a"},caller)).toBe(false);
+    expect(resourceWithinScope({kind,id:"global-record"},caller)).toBe(true);
+  });
+
+  it("allows all-environment callers to reach shared project data independently of its member locations", () => {
     for (const projectId of ["project-a", "project-ab"]) {
       const resolved = resolveFor(
         "thread_agent",
         "task.list",
         exactList(projectId),
       );
-      expect(resolved.resolvedResourceRefs).toEqual([
-        projectRef(projectId, "env-a"),
+      expect(resolved.resolvedResourceRefs).toMatchObject([
+        projectRef(projectId),
       ]);
-      expect(resolved.targetEnvironmentIds).toEqual(["env-a"]);
-      expect(reachesOutsideEveryEnvironment(resolved)).toBe(false);
+      expect(resolved.targetEnvironmentIds).toEqual([]);
     }
   });
 
-  it("targets every member environment for a thread agent outside the project", () => {
-    const resolved = resolveFor(
-      "thread_agent",
-      "task.list",
-      exactList("project-bc"),
-    );
-    expect(resolved.resolvedResourceRefs).toEqual([
-      projectRef("project-bc", "env-b"),
-      projectRef("project-bc", "env-c"),
-    ]);
-    // The approval prompt names every member environment.
-    expect(resolved.targetEnvironmentIds).toEqual(["env-b", "env-c"]);
-    expect(resolved.display.targetEnvironmentLabels).toEqual([
-      "Build server",
-      "env-c",
-    ]);
+  it("does not enumerate member environments for an all-environment shared project read", () => {
+    const resolved=resolveFor("thread_agent","task.list",exactList("project-bc"));
+    expect(resolved.resolvedResourceRefs).toEqual([projectRef("project-bc")]);
+    expect(resolved.targetEnvironmentIds).toEqual([]);
   });
 
   it("marks an empty project outside every environment and denies Tool clients", () => {
@@ -886,7 +907,7 @@ describe("project access", () => {
       "task.list",
       exactList("project-empty"),
     );
-    expect(resolved.resolvedResourceRefs).toEqual([
+    expect(resolved.resolvedResourceRefs).toMatchObject([
       projectRef("project-empty"),
     ]);
     expect(resolved.targetEnvironmentIds).toEqual([]);
@@ -925,7 +946,7 @@ describe("project access", () => {
         "task.list",
         exactList("project-ab"),
       ).resolvedResourceRefs,
-    ).toEqual([projectRef("project-ab", "env-a")]);
+    ).toMatchObject([projectRef("project-ab", "env-a")]);
     // ANY: one allowlisted member suffices for an exact project query.
     expect(
       resolveFor(
@@ -933,14 +954,14 @@ describe("project access", () => {
         "task.list",
         exactList("project-bc"),
       ).resolvedResourceRefs,
-    ).toEqual([projectRef("project-bc", "env-b")]);
+    ).toMatchObject([projectRef("project-bc", "env-b")]);
     expect(
       resolveFor(
         toolClient(["env-c"], { environmentId: "env-c" }),
         "task.list",
         exactList("project-bc"),
       ).resolvedResourceRefs,
-    ).toEqual([projectRef("project-bc", "env-c")]);
+    ).toMatchObject([projectRef("project-bc", "env-c")]);
     expect(() =>
       resolveFor(toolClient(["env-a"]), "task.list", exactList("project-bc")),
     ).toThrow(expect.objectContaining({ code: "permission_denied" }));
@@ -953,7 +974,7 @@ describe("project access", () => {
     };
     expect(
       resolveFor("thread_agent", "task.list", subtree).targetEnvironmentIds,
-    ).toEqual(["env-a", "env-b"]);
+    ).toEqual([]);
     expect(
       resolveFor(toolClient(["env-a"]), "workpad.list", subtree)
         .targetEnvironmentIds,
@@ -966,7 +987,7 @@ describe("project access", () => {
         title: "T",
         scope: { kind: "project" },
       }).resolvedResourceRefs,
-    ).toEqual([projectRef("project-a", "env-a")]);
+    ).toMatchObject([projectRef("project-a")]);
     expect(() =>
       resolveFor(toolClient(["env-a"]), "task.create", {
         title: "T",
@@ -982,20 +1003,20 @@ describe("project access", () => {
           scope: { kind: "project" },
         },
       ).resolvedResourceRefs,
-    ).toEqual([projectRef("project-ab", "env-a")]);
+    ).toMatchObject([projectRef("project-ab", "env-a")]);
   });
 
   it("binds a project resource to its project's membership revision", () => {
     const admitted = resolveFor("thread_agent", "task.get", {
       taskId: "task-of-project-ab",
     });
-    expect(admitted.resolvedResourceRefs).toEqual([
-      projectRef("project-ab", "env-a"),
+    expect(admitted.resolvedResourceRefs).toMatchObject([
+      projectRef("project-ab"),
       {
         kind: "task",
         id: "task-of-project-ab",
         revision: 6,
-        environmentId: "env-a",
+        projectId: "project-ab",
         label: "Project task",
       },
     ]);
@@ -1066,17 +1087,17 @@ describe("project access", () => {
       path: "/srv/new",
       projectId: "project-b",
     });
-    expect(resolved.resolvedResourceRefs).toEqual([
+    expect(resolved.resolvedResourceRefs).toMatchObject([
       {
         kind: "environment",
         id: "env-a",
         environmentId: "env-a",
         label: "Local",
       },
-      projectRef("project-b", "env-b"),
+      projectRef("project-b"),
     ]);
     // An agent on env-a needs approval to attach its directory to a project hosted only on env-b.
-    expect(resolved.targetEnvironmentIds).toEqual(["env-a", "env-b"]);
+    expect(resolved.targetEnvironmentIds).toEqual(["env-a"]);
     expect(() =>
       resolveFor(toolClient(["env-a"]), "workspace.open", {
         environmentId: "env-a",
@@ -1097,7 +1118,7 @@ describe("project access", () => {
       path: "/srv/removed",
       projectId: "project-empty",
     });
-    expect(empty.resolvedResourceRefs).toEqual([
+    expect(empty.resolvedResourceRefs).toMatchObject([
       {
         kind: "environment",
         id: "env-a",
@@ -1152,7 +1173,7 @@ describe("project access", () => {
           "subtree",
         ),
       ),
-    ).toThrow(expect.objectContaining({ code: "not_found" }));
+    ).toThrow(expect.objectContaining({ code: "permission_denied" }));
     expect(() =>
       requireExactScopeQuery(
         grant,

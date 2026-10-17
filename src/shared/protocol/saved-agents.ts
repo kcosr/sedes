@@ -1,13 +1,13 @@
 import { environmentVariableOverridesSchema } from "./environment-variables.js";
 import { z } from "zod";
 import {
-  agentToolAccessBoundarySchema,
-  agentToolIdSchema,
+  type AgentToolPresentation,
   agentToolPresentationSchema,
   agentToolPresentationOptionsSchema,
   backendBrandSchema,
   normalizedThreadAgentToolGroupSchema,
 } from "./conversation.js";
+import { type ResolvedToolPolicy, toolPolicySelectionSchema, toolPolicyResolutionIssueSchema, resolvedToolPolicySchema } from "./tool-policies.js";
 import { workspaceIdSchema } from "./domain.js";
 import {
   boundedDisplayTextSchema,
@@ -22,7 +22,6 @@ export const SAVED_AGENT_OVERRIDE_ID_MAX_CHARACTERS = 128;
 export const SAVED_AGENT_OVERRIDE_VALUE_MAX_CHARACTERS = 240;
 export const SAVED_AGENT_OVERRIDES_MAX_BYTES = 32 * 1_024;
 export const SAVED_AGENT_SEDES_TOOLS_MAX_COUNT = 512;
-export const SAVED_AGENT_SEDES_TOOLS_MAX_BYTES = 128 * 1_024;
 export const SAVED_AGENT_PAGE_MAX_ITEMS = 100;
 export const SAVED_AGENT_CURSOR_MAX_CHARACTERS = 2_048;
 
@@ -115,34 +114,6 @@ export type NormalizedAgentConfigurationOverrides = z.infer<
   typeof normalizedAgentConfigurationOverridesSchema
 >;
 
-export const agentToolBootstrapPolicySchema = z
-  .strictObject({
-    enabled: z.boolean(),
-    enabledToolIds: z
-      .array(agentToolIdSchema)
-      .max(SAVED_AGENT_SEDES_TOOLS_MAX_COUNT),
-    presentation: agentToolPresentationSchema,
-    accessBoundary: agentToolAccessBoundarySchema,
-  })
-  .superRefine((policy, context) => {
-    if (new Set(policy.enabledToolIds).size !== policy.enabledToolIds.length) {
-      context.addIssue({
-        code: "custom",
-        message: "Saved Agent Sedes tool IDs must be unique.",
-        path: ["enabledToolIds"],
-      });
-    }
-    requireSerializedByteLimit(
-      policy,
-      context,
-      SAVED_AGENT_SEDES_TOOLS_MAX_BYTES,
-      "Saved Agent Sedes tool policy exceeds the serialized byte limit.",
-    );
-  });
-export type AgentToolBootstrapPolicy = z.infer<
-  typeof agentToolBootstrapPolicySchema
->;
-
 export const savedAgentSchema = z.strictObject({
   environmentVariables: environmentVariableOverridesSchema.optional(),
   id: savedAgentIdSchema,
@@ -151,7 +122,8 @@ export const savedAgentSchema = z.strictObject({
   backendTypeId: savedAgentBackendTypeIdSchema,
   backend: savedAgentBackendPresentationSchema,
   backendOverrides: normalizedAgentConfigurationOverridesSchema,
-  sedesTools: agentToolBootstrapPolicySchema.optional(),
+  toolPolicySelection: toolPolicySelectionSchema,
+  toolPresentation: agentToolPresentationSchema.optional(),
   revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -169,18 +141,8 @@ export const savedAgentSummarySchema = z.strictObject({
     .int()
     .nonnegative()
     .max(SAVED_AGENT_OVERRIDE_MAX_COUNT),
-  sedesTools: z
-    .strictObject({
-      enabled: z.boolean(),
-      selectedToolCount: z
-        .number()
-        .int()
-        .nonnegative()
-        .max(SAVED_AGENT_SEDES_TOOLS_MAX_COUNT),
-      presentation: agentToolPresentationSchema,
-      accessBoundary: agentToolAccessBoundarySchema,
-    })
-    .nullable(),
+  toolPolicySelection: toolPolicySelectionSchema,
+  toolPresentation: agentToolPresentationSchema.optional(),
   revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -296,7 +258,8 @@ export const createSavedAgentRequestSchema = z.strictObject({
   description: savedAgentDescriptionSchema.optional(),
   authoringContext: savedAgentAuthoringContextSchema,
   backendOverrides: normalizedAgentConfigurationOverridesSchema,
-  sedesTools: agentToolBootstrapPolicySchema.optional(),
+  toolPolicySelection: toolPolicySelectionSchema.optional(),
+  toolPresentation: agentToolPresentationSchema.optional(),
 });
 export type CreateSavedAgentRequest = z.infer<
   typeof createSavedAgentRequestSchema
@@ -310,12 +273,13 @@ export const updateSavedAgentRequestSchema = z
     description: savedAgentDescriptionSchema.nullable().optional(),
     authoringContext: savedAgentAuthoringContextSchema.optional(),
     backendOverrides: normalizedAgentConfigurationOverridesSchema.optional(),
-    sedesTools: agentToolBootstrapPolicySchema.nullable().optional(),
+    toolPolicySelection: toolPolicySelectionSchema.optional(),
+    toolPresentation: agentToolPresentationSchema.nullable().optional(),
   })
   .superRefine((request, context) => {
     const changesConfiguration =
       request.backendOverrides !== undefined ||
-      request.sedesTools !== undefined || request.environmentVariables !== undefined;
+      request.toolPolicySelection !== undefined || request.toolPresentation !== undefined || request.environmentVariables !== undefined;
     if (
       request.name === undefined &&
       request.description === undefined &&
@@ -326,7 +290,8 @@ export const updateSavedAgentRequestSchema = z
         message: "A Saved Agent update must change at least one field.",
       });
     }
-    if (changesConfiguration !== (request.authoringContext !== undefined)) {
+    const requiresAuthoringContext = request.backendOverrides !== undefined || request.toolPresentation !== undefined || request.environmentVariables !== undefined;
+    if (requiresAuthoringContext && request.authoringContext === undefined) {
       context.addIssue({
         code: "custom",
         message:
@@ -370,21 +335,21 @@ export type SavedAgentTargetDescriptor = z.infer<
   typeof savedAgentTargetDescriptorSchema
 >;
 
-export const resolvedAgentToolBootstrapPolicySchema = z.strictObject({
-  enabled: z.boolean(),
-  enabledToolIds: z
-    .array(agentToolIdSchema)
-    .max(SAVED_AGENT_SEDES_TOOLS_MAX_COUNT),
+export type ResolvedAgentToolBootstrapPolicy = Pick<
+  ResolvedToolPolicy,
+  "enabled" | "enabledToolIds" | "resourceScope"
+> & { readonly presentation: AgentToolPresentation };
+
+const describedToolPolicySchema = resolvedToolPolicySchema.extend({
   presentation: agentToolPresentationSchema,
-  accessBoundary: agentToolAccessBoundarySchema,
 });
-export type ResolvedAgentToolBootstrapPolicy = z.infer<
-  typeof resolvedAgentToolBootstrapPolicySchema
->;
 
 export const agentToolBootstrapDescriptorSchema = z.strictObject({
-  defaultPolicy: resolvedAgentToolBootstrapPolicySchema,
-  resolvedPolicy: resolvedAgentToolBootstrapPolicySchema,
+  defaultPolicy: describedToolPolicySchema.nullable(),
+  resolvedPolicy: describedToolPolicySchema.nullable(),
+  defaultIssue: toolPolicyResolutionIssueSchema.optional(),
+  resolvedIssue: toolPolicyResolutionIssueSchema.optional(),
+  defaultPresentation: agentToolPresentationSchema,
   groups: z.array(normalizedThreadAgentToolGroupSchema).max(64),
   presentationOptions: agentToolPresentationOptionsSchema,
 });
@@ -397,12 +362,13 @@ export const savedAgentOptionsRequestSchema = z
     workspaceId: workspaceIdSchema,
     targetId: targetIdSchema.optional(),
     overrides: normalizedAgentConfigurationOverridesSchema.optional(),
-    sedesTools: agentToolBootstrapPolicySchema.optional(),
+    toolPolicySelection: toolPolicySelectionSchema.optional(),
+  toolPresentation: agentToolPresentationSchema.optional(),
   })
   .superRefine((request, context) => {
     if (
       request.targetId === undefined &&
-      (request.overrides !== undefined || request.sedesTools !== undefined)
+      (request.overrides !== undefined || request.toolPolicySelection !== undefined || request.toolPresentation !== undefined)
     ) {
       context.addIssue({
         code: "custom",
@@ -445,6 +411,8 @@ export type SavedAgentOptionsResult = z.infer<
 export const resolveSavedAgentRequestSchema = z.strictObject({
   workspaceId: workspaceIdSchema,
   targetId: targetIdSchema.optional(),
+  toolPolicySelection: toolPolicySelectionSchema.optional(),
+  toolPresentation: agentToolPresentationSchema.optional(),
 });
 export type ResolveSavedAgentRequest = z.infer<
   typeof resolveSavedAgentRequestSchema

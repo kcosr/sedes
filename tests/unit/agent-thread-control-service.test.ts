@@ -15,7 +15,7 @@ describe("AgentThreadControlService", () => {
         getThread: vi.fn(
           () =>
             ({
-              thread: { id: "thread-2", environmentId: "environment-2" },
+              thread: { id: "thread-2", environmentId: "environment-2", projectId: "project-1" },
             }) as never,
         ),
       },
@@ -46,6 +46,7 @@ describe("AgentThreadControlService", () => {
             ownerId: "thread-1",
             revision: 1,
           },
+          resourceScope: {allowOtherEnvironments:false,allowOtherProjects:false},
           admittedEnvironmentIds: ["environment-1"],
           targetEnvironmentIds: [],
           resolvedResourceRefs: [],
@@ -74,6 +75,7 @@ describe("AgentThreadControlService", () => {
                 id: "thread-2",
                 environmentId: "environment-1",
                 workspaceId: "workspace-1",
+                projectId: "project-1",
               },
             }) as never,
         ),
@@ -94,6 +96,7 @@ describe("AgentThreadControlService", () => {
         ownerId: "thread-1",
         revision: 1,
       },
+      resourceScope: {allowOtherEnvironments:false,allowOtherProjects:false},
       admittedEnvironmentIds: ["environment-1"],
       targetEnvironmentIds: [],
       resolvedResourceRefs: [
@@ -102,6 +105,7 @@ describe("AgentThreadControlService", () => {
           id: "thread-2",
           environmentId: "environment-1",
           workspaceId: "workspace-1",
+          projectId: "project-1",
         },
       ],
       canonicalInputDigest: "input-digest",

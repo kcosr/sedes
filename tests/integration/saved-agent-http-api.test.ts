@@ -1,3 +1,6 @@
+import { ToolPolicyService } from "../../src/server/tool-policies/tool-policy-service.js";
+import { ToolPolicyRepository } from "../../src/server/db/repositories/tool-policy-repository.js";
+import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { createNormalizedApp } from "../../src/server/normalized-app.js";
@@ -23,6 +26,7 @@ const agent = {
   backendTypeId,
   backend,
   backendOverrides: [],
+  toolPolicySelection: { kind: "inherit" as const },
   revision: 0,
   createdAt: "2026-08-08T00:00:00.000Z",
   updatedAt: "2026-08-08T00:00:00.000Z",
@@ -30,17 +34,20 @@ const agent = {
 const target = { id: "target-1", label: { text: "Local Pi" }, backend };
 const sedesTools = {
   defaultPolicy: {
+    source: "default" as const,
     enabled: false,
     enabledToolIds: [],
     presentation: { surface: "native" as const, mode: "progressive" as const },
-    accessBoundary: "environment" as const,
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
   },
   resolvedPolicy: {
+    source: "default" as const,
     enabled: false,
     enabledToolIds: [],
     presentation: { surface: "native" as const, mode: "progressive" as const },
-    accessBoundary: "environment" as const,
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
   },
+  defaultPresentation: { surface: "native" as const, mode: "progressive" as const },
   groups: [],
   presentationOptions: [
     {
@@ -56,7 +63,7 @@ const configuration = {
   canonicalOverrides: [],
 };
 
-function fixture() {
+function fixture(options: { policySets?: ToolPolicyService; requestScope?: {tenantId:string;principalId:string} } = {}) {
   const handoffThreadChange = vi.fn();
   const savedAgents = {
     list: vi.fn(() => ({
@@ -67,7 +74,7 @@ function fixture() {
           backendTypeId,
           backend,
           overrideCount: 0,
-          sedesTools: null,
+          toolPolicySelection: { kind: "inherit" as const },
           revision: 0,
           createdAt: agent.createdAt,
           updatedAt: agent.updatedAt,
@@ -102,6 +109,19 @@ function fixture() {
       targetId: target.id,
     })),
   };
+  const policySet = {
+    id: "60000000-0000-4000-8000-000000000001", name: "Everyday",
+    enabledToolIds: ["thread.list"], resourceScope: {allowOtherEnvironments:false,allowOtherProjects:false},
+    revision: 0, createdAt: agent.createdAt, updatedAt: agent.updatedAt,
+  };
+  const policySets = {
+    list: vi.fn(() => ({items:[policySet]})), get: vi.fn(() => policySet),
+    options: vi.fn(() => ({groups:[]})), create: vi.fn(() => policySet),
+    update: vi.fn(() => ({...policySet,revision:1})), delete: vi.fn(() => ({deleted:true})),
+    listSelections: vi.fn(() => ({items:[]})),
+    updateSelection: vi.fn((_scope, input) => ({target:input.target,selection:input.selection,revision:1})),
+    preview: vi.fn(() => ({enabled:true,enabledToolIds:policySet.enabledToolIds,resourceScope:policySet.resourceScope,source:"account",policySet:{id:policySet.id,name:policySet.name,revision:0},defaultPresentation:{surface:"native",mode:"progressive"},presentationOptions:[{surface:"native",modes:["progressive","individual"]}]})),
+  };
   const unused = () => {
     throw new Error("route_not_configured_for_test");
   };
@@ -124,7 +144,7 @@ function fixture() {
       conversationRuntimeBudget: 8,
     },
     csrfToken: "saved-agent-csrf",
-    identity: { resolve: async () => scope },
+    identity: { resolve: async () => options.requestScope ?? scope },
     notifications: {} as never,
     principalPreferences: {} as never,
     executionTargets: {
@@ -132,6 +152,7 @@ function fixture() {
       requireSelectable: async () => undefined,
     },
     savedAgents: savedAgents as never,
+    policySets: (options.policySets ?? policySets) as never,
     threadTemplates: {} as never,
     composerAttachments: {} as never,
     outputArtifacts: {} as never,
@@ -161,15 +182,71 @@ function fixture() {
   });
   const get = (path: string) =>
     request(app).get(path).set("Host", "127.0.0.1:4783");
-  const mutate = (method: "post" | "patch" | "delete", path: string) =>
+  const mutate = (method: "post" | "patch" | "delete" | "put", path: string) =>
     request(app)
       [method](path)
       .set("Host", "127.0.0.1:4783")
       .set("X-CSRF-Token", "saved-agent-csrf");
-  return { app, savedAgents, handoffThreadChange, get, mutate };
+  return { app, savedAgents, policySets, policySet, handoffThreadChange, get, mutate };
 }
 
 describe("Saved Agent normalized HTTP API", () => {
+  it("keeps policy data and mutations within the authenticated principal", async () => {
+    const state = savedAgentDatabase();
+    try {
+      const service = new ToolPolicyService(new ToolPolicyRepository(state.database));
+      const definition = {name:"Private tools",enabledToolIds:["thread.list"],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}};
+      const policy = service.create(state.scope,definition);
+      const foreignScope = {...state.scope,principalId:"other-principal"};
+      state.database.prepare("INSERT INTO principals(tenant_id,id,kind,created_at) VALUES (?,?,'local_human',100)").run(foreignScope.tenantId,foreignScope.principalId);
+      const owner = fixture({policySets:service,requestScope:state.scope});
+      const other = fixture({policySets:service,requestScope:foreignScope});
+      await owner.get(`/api/tool-policies/${policy.id}`).expect(200);
+      await other.get("/api/tool-policies").expect(200).expect({items:[]});
+      await other.get(`/api/tool-policies/${policy.id}`).expect(404);
+      await other.mutate("patch",`/api/tool-policies/${policy.id}`).send({...definition,expectedRevision:0}).expect(404);
+      await other.mutate("delete",`/api/tool-policies/${policy.id}`).send({expectedRevision:0}).expect(404);
+      await other.mutate("put","/api/tool-policy-selections").send({target:{kind:"account"},selection:{kind:"policy_set",policySetId:policy.id},expectedRevision:0}).expect(404);
+      await other.mutate("post","/api/tool-policies").send({...definition,principalId:state.scope.principalId}).expect(400);
+      expect(service.get(state.scope,policy.id)).toEqual(policy);
+      expect(service.listSelections(foreignScope)).toEqual({items:[]});
+    } finally { state.database.close(); }
+  });
+
+  it("returns an actionable missing-level issue and permits a thread override", async () => {
+    const state = savedAgentDatabase();
+    try {
+      const service = new ToolPolicyService(new ToolPolicyRepository(state.database));
+      const policy = service.create(state.scope,{name:"Daily tools",enabledToolIds:["thread.list"],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}});
+      service.updateSelection(state.scope,{target:{kind:"account"},selection:{kind:"policy_set",policySetId:policy.id},expectedRevision:0});
+      service.delete(state.scope,policy.id,0);
+      const owner = fixture({policySets:service,requestScope:state.scope});
+      const {id:targetId} = state.database.prepare("SELECT id FROM agent_connection_profiles LIMIT 1").get() as {id:string};
+      await owner.mutate("post","/api/tool-policies/resolve").send({targetId}).expect(404).expect(({body}) => {
+        expect(body.error).toMatchObject({code:"not_found",retryable:false,toolPolicyIssue:{kind:"missing_policy_set",source:"account",policySetId:policy.id}});
+      });
+      await owner.mutate("post","/api/tool-policies/resolve").send({targetId,threadSelection:{kind:"disabled"}}).expect(200).expect(({body}) => {
+        expect(body).toMatchObject({enabled:false,source:"thread"});
+      });
+    } finally {state.database.close();}
+  });
+
+  it("validates policy set and default-selection routes under server-derived ownership", async () => {
+    const current = fixture();
+    const {id,revision,createdAt,updatedAt,...definition} = current.policySet;
+    await current.get("/api/tool-policies").expect(200).expect({items:[current.policySet]});
+    await current.get("/api/tool-policies/options").expect(200).expect({groups:[]});
+    await current.mutate("post","/api/tool-policies").send(definition).expect(201);
+    expect(current.policySets.create).toHaveBeenCalledWith(scope,definition);
+    await current.mutate("post","/api/tool-policies").send({...definition,principalId:"foreign"}).expect(400);
+    await current.get(`/api/tool-policies/${id}`).expect(200);
+    await current.mutate("patch",`/api/tool-policies/${id}`).send({...definition,expectedRevision:0}).expect(200);
+    const selection = {target:{kind:"account"},selection:{kind:"policy_set",policySetId:id},expectedRevision:0};
+    await current.mutate("put","/api/tool-policy-selections").send(selection).expect(200);
+    expect(current.policySets.updateSelection).toHaveBeenCalledWith(scope,selection);
+    await current.mutate("post","/api/tool-policies/resolve").send({targetId:target.id}).expect(200);
+    await current.mutate("delete",`/api/tool-policies/${id}`).send({expectedRevision:1}).expect(200).expect({deleted:true});
+  });
   it("normalizes CRUD, options, and resolution envelopes", async () => {
     const current = fixture();
     await current.get("/api/agents?pageSize=10").expect(200);

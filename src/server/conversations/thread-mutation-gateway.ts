@@ -3108,25 +3108,38 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       scope,
       applicationThreadId,
     );
+    const currentIds = [...currentPolicy.enabledToolIds].sort();
+    const requestedIds = [...operation.enabledToolIds].sort();
+    // Applying an equal set or detaching its label does not change anything
+    // captured by the loaded runtime, even while work is queued or running.
+    const metadataOnly =
+      currentPolicy.enabled === operation.enabled &&
+      currentPolicy.presentation.surface === operation.presentation.surface &&
+      currentPolicy.presentation.mode === operation.presentation.mode &&
+      currentPolicy.resourceScope.allowOtherEnvironments === operation.resourceScope.allowOtherEnvironments &&
+      currentPolicy.resourceScope.allowOtherProjects === operation.resourceScope.allowOtherProjects &&
+      currentIds.length === requestedIds.length &&
+      currentIds.every((id, index) => id === requestedIds[index]);
     // CLI credentials identify the thread, not its grants. Only presentation
     // changes require replacing the runtime that captured its CLI environment.
     const liveCliPolicy =
       currentPolicy.presentation.surface === "cli" &&
       operation.presentation.surface === "cli" &&
       currentPolicy.presentation.mode === operation.presentation.mode;
+    const preservesRuntime = metadataOnly || liveCliPolicy;
     if (
       aggregate.thread.availability !== "available" ||
       aggregate.inventory.inventoryState === "archived" ||
       (aggregate.thread.backingState !== "unbound" &&
         aggregate.thread.backingState !== "bound") ||
-      (!liveCliPolicy && this.#hasActiveQueuedInput(scope, applicationThreadId))
+      (!preservesRuntime && this.#hasActiveQueuedInput(scope, applicationThreadId))
     ) {
       throw new DomainError(
         "invalid_transition",
         "Agent tool exposure can change only while the thread is idle.",
       );
     }
-    if (aggregate.thread.backingState === "bound" && !liveCliPolicy) {
+    if (aggregate.thread.backingState === "bound" && !preservesRuntime) {
       try {
         await this.input.runtimes.runWithRuntimeRetired(
           scope,
@@ -3143,7 +3156,10 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
                 enabled: operation.enabled,
                 enabledToolIds: operation.enabledToolIds,
                 presentation: operation.presentation,
-                accessBoundary: operation.accessBoundary,
+                resourceScope: operation.resourceScope,
+                ...(operation.policySet !== undefined
+                  ? { policySet: operation.policySet }
+                  : {}),
                 now: this.#now(),
               },
             );
@@ -3190,7 +3206,10 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         enabled: operation.enabled,
         enabledToolIds: operation.enabledToolIds,
         presentation: operation.presentation,
-        accessBoundary: operation.accessBoundary,
+        resourceScope: operation.resourceScope,
+        ...(operation.policySet !== undefined
+          ? { policySet: operation.policySet }
+          : {}),
         now: this.#now(),
       });
     }

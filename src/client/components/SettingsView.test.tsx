@@ -81,15 +81,17 @@ function navLink(name: string): HTMLElement {
 function agentsApplicationStore(api: Record<string, unknown> = {}) {
   const agent = {
     id: "11111111-1111-4111-8111-111111111111", name: "Careful reviewer", description: "Reviews carefully",
+    toolPolicySelection: { kind: "inherit" },
     backendTypeId: "pi", backend: { typeId: "pi", label: { text: "Pi" }, brand: "pi" }, backendOverrides: [],
     revision: 0, createdAt: "2026-08-08T00:00:00.000Z", updatedAt: "2026-08-08T00:00:00.000Z",
   };
   const { backendOverrides: _overrides, description: _description, ...rest } = agent;
-  const summary = { ...rest, overrideCount: 0, sedesTools: null };
+  const summary = { ...rest, overrideCount: 0 };
   const state = { snapshot: { environments: [], workspaces: [], threads: [], tasks: [] } } as unknown as ApplicationClientState;
   const applicationStore = {
     api: {
       listProjects: vi.fn(async () => ({ projects: [] })),
+      listToolPolicySets: vi.fn(async () => ({ items: [] })),
       listSavedAgents: vi.fn(async () => ({ items: [summary] })),
       getSavedAgent: vi.fn(async () => agent),
       getSavedAgentOptions: vi.fn(async () => ({ kind: "targets", targets: [] })),
@@ -164,7 +166,7 @@ describe("SettingsView", () => {
     const listProjects = vi.fn(async () => ({ projects: [] }));
     const state = { snapshot: { environments: [], workspaces: [], threads: [], tasks: [] } } as unknown as ApplicationClientState;
     const applicationStore = {
-      api: { listProjects }, normalized: { subscribeWorkpadChanges: () => () => {} },
+      api: { listProjects, listToolPolicySets: vi.fn(async () => ({ items: [] })), listToolPolicySelections: vi.fn(async () => ({ items: [] })) }, normalized: { subscribeWorkpadChanges: () => () => {} },
       getSnapshot: () => state, subscribe: () => () => {},
     } as unknown as ApplicationClientStore;
     renderSettings({ configuration: controls, applicationStore, page: "projects" });
@@ -446,7 +448,7 @@ describe("SettingsView", () => {
     expect(screen.queryByRole("navigation", { name: "Settings pages" })).toBeNull();
     expect(
       screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent),
-    ).toEqual(["Preferences", "Execution", "Support"]);
+    ).toEqual(["Preferences", "Execution", "Access", "Support"]);
     const general = screen.getByRole("link", { name: "General" });
     expect(general).toHaveAttribute("href", "/settings/general");
     expect(general).toHaveAccessibleDescription("Sidebar, panels, history and the composer.");

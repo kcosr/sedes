@@ -343,6 +343,8 @@ describe("normalized application components", () => {
     const store = {
       createThread,
       api: {
+        listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
+        resolveToolPolicy: vi.fn().mockResolvedValue({ enabled: false, enabledToolIds: [], source: "default", resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, defaultPresentation: { surface: "native", mode: "progressive" }, presentationOptions: [{ surface: "native", modes: ["progressive", "individual"] }] }),
         listSavedAgents: vi.fn().mockResolvedValue({ items: [] }),
         getEnvironmentVariablePreview: vi.fn().mockResolvedValue({ snapshot: { version: 1, layers: { environment: {}, backend: {}, agent: {}, thread: {} } }, revision: { configurationRevision: 1 }, startup: { supported: true } }),
       },
@@ -376,12 +378,14 @@ describe("normalized application components", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "Target" }));
     fireEvent.click(screen.getByRole("option", { name: "Local SDK · Pi" }));
     fireEvent.click(await screen.findByRole("button", { name: "Use Custom" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Create thread" }));
     await waitFor(() =>
       expect(createThread).toHaveBeenCalledWith({
         workspaceId: "workspace-b",
         environmentVariables: {},
         environmentVariablesRevision: { configurationRevision: 1 },
+        toolPolicySelection: { kind: "inherit" },
         title: "New thread",
         executionWorkspace: { kind: "direct" },
         configuration: { kind: "custom", targetId: "target-1" },

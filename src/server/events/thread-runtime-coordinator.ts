@@ -159,7 +159,7 @@ export interface AcquiredThreadRuntime {
   release(): void;
 }
 
-export interface AgentToolApprovalAuthorityLease {
+export interface AgentToolExecutionAuthorityLease {
   readonly generation: string;
   /** Aborts when this application runtime generation is replaced or shuts down. */
   readonly signal: AbortSignal;
@@ -789,11 +789,11 @@ export class ThreadRuntimeCoordinator {
     return { actorKey: oldest.key, completion };
   }
 
-  /** Borrows the application runtime only when a cross-environment decision is needed. */
-  async acquireAgentToolApprovalAuthority(
+  /** Keeps an accepted tool invocation on its source runtime until execution settles. */
+  async acquireAgentToolExecutionAuthority(
     scope: RequestScope,
     applicationThreadId: string,
-  ): Promise<AgentToolApprovalAuthorityLease> {
+  ): Promise<AgentToolExecutionAuthorityLease> {
     const acquired = await this.acquire(scope, applicationThreadId);
     let unsubscribe: (() => void) | undefined;
     let unsubscribeClosed: (() => void) | undefined;
@@ -806,7 +806,7 @@ export class ThreadRuntimeCoordinator {
       let initializing = true;
       unsubscribe = acquired.actor.subscribe(() => {
         if (!initializing && !isCurrent() && !changed.signal.aborted) {
-          changed.abort(new Error("agent_tool_approval_runtime_changed"));
+          changed.abort(new Error("agent_tool_execution_runtime_changed"));
         }
       });
       unsubscribeClosed =
@@ -817,7 +817,7 @@ export class ThreadRuntimeCoordinator {
         }) ?? (() => undefined);
       initializing = false;
       if (!isCurrent()) {
-        throw new Error("agent_tool_approval_runtime_changed");
+        throw new Error("agent_tool_execution_runtime_changed");
       }
       let released = false;
       return {

@@ -20,6 +20,7 @@ import {
   type ElectronConnectionSettingsControls,
 } from "./ElectronConnectionSettings.js";
 import { ExecutionSettings, isExecutionPage } from "./execution-settings/ExecutionSettings.js";
+import { ToolPoliciesSettingsPage } from "./tool-policies/ToolPoliciesSettingsPage.js";
 import { AgentsSettingsPage } from "./agents/AgentsView.js";
 import { ProjectsSettingsPage } from "./execution-settings/ProjectsSettingsPage.js";
 import type { HostPairingControls } from "./execution-settings/useHostPairings.js";
@@ -207,6 +208,8 @@ export function SettingsView({
             <ProjectsSettingsPage store={applicationStore} />
           ) : page === "agents" && applicationStore ? (
             <AgentsSettingsPage applicationStore={applicationStore} />
+          ) : page === "tool_policies" && applicationStore ? (
+            <ToolPoliciesSettingsPage api={applicationStore.api} />
           ) : page === "tool_clients" && toolClients ? (
             <ToolClientsSettingsPage controls={toolClients} />
           ) : page === "paired_clients" ? (
@@ -220,7 +223,7 @@ export function SettingsView({
             <ServerSettingsPage controls={serverSettings} />
           ) : null}
           {configuration ? <div hidden={!isExecutionPage(page)}>
-            <ExecutionSettings controls={configuration} />
+            <ExecutionSettings controls={configuration} toolPolicyApi={applicationStore?.api} />
           </div> : null}
         </section>
       </SettingsBackSlotContext.Provider>

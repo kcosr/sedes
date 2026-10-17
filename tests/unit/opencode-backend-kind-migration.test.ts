@@ -27,15 +27,18 @@ describe("OpenCode v2 identity migration", () => {
         workspaceId: workspace.id, connectionProfileId: profile.id,
         title: "Existing Pi thread", now: 160,
       });
-      const policies = new ThreadAgentToolPolicyRepository(
-        database, createThreadAgentToolPolicyDependencies().eligibility,
-      );
-      const existingPolicy = policies.get(scope, existing.id);
+      // Read schema-121 rows through their historical contract. The current
+      // repository reads the resource-scope columns introduced by migration 148.
+      const historicalPolicy = (threadId: string) => ({
+        policy: database.prepare("SELECT * FROM thread_agent_tool_policies WHERE application_thread_id=?").get(threadId),
+        entries: database.prepare("SELECT * FROM thread_agent_tool_policy_entries WHERE application_thread_id=? ORDER BY tool_id").all(threadId),
+      });
+      const existingPolicy = historicalPolicy(existing.id);
       const applied = database.prepare("SELECT * FROM schema_migrations WHERE version <= 121 ORDER BY version").all();
 
-      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 122));
       expect(database.prepare("SELECT * FROM schema_migrations WHERE version <= 121 ORDER BY version").all()).toEqual(applied);
-      expect(policies.get(scope, existing.id)).toEqual(existingPolicy);
+      expect(historicalPolicy(existing.id)).toEqual(existingPolicy);
       database.prepare(`INSERT INTO agent_backend_instances
         (tenant_id,owner_principal_id,id,kind,label,enabled,protocol_release,created_at,updated_at)
         VALUES (?,?,'opencode-v2','opencode','OpenCode v2',1,'2.0.18',200,200)`)
@@ -49,16 +52,40 @@ describe("OpenCode v2 identity migration", () => {
         title: "OpenCode thread", now: 210,
       });
 
+      expect(historicalPolicy(thread.id)).toMatchObject({
+        policy: { enabled: 0, presentation_surface: "native", presentation_mode: "progressive",
+          access_boundary: "environment", revision: 0, updated_at: 210 },
+        entries: [],
+      });
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      const policies = new ThreadAgentToolPolicyRepository(
+        database, createThreadAgentToolPolicyDependencies().eligibility,
+      );
+      expect(policies.get(scope, existing.id)).toMatchObject({
+        enabled: false, presentation: { surface: "native", mode: "progressive" },
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
+        revision: 0, updatedAt: 160, enabledToolIds: [],
+      });
+
       expect(policies.get(scope, thread.id)).toEqual({
         tenantId: scope.tenantId,
         ownerPrincipalId: scope.principalId,
         applicationThreadId: thread.id,
         enabled: false,
         presentation: { surface: "native", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         revision: 0,
         updatedAt: 210,
         enabledToolIds: [],
+      });
+      const currentThread = bindings.createUnboundThread(scope, {
+        workspaceId: workspace.id, connectionProfileId: "opencode-profile",
+        title: "Current OpenCode thread", now: 220,
+      });
+      expect(policies.get(scope, currentThread.id)).toMatchObject({
+        enabled: false, presentation: { surface: "native", mode: "progressive" },
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
+        revision: 0, updatedAt: 220, enabledToolIds: [],
       });
       expect(database.pragma("foreign_key_check")).toEqual([]);
     } finally { database.close(); }

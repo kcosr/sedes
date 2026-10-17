@@ -132,12 +132,8 @@ describe("SavedAgentService", () => {
           description: "Description",
           backendTypeId: "pi",
           backendOverrides: [{ id: "model", value: "one" }],
-          sedesTools: {
-            enabled: true,
-            enabledToolIds: ["thread.status"],
-            presentation: { surface: "native", mode: "progressive" },
-            accessBoundary: "unrestricted",
-          },
+          toolPolicySelection: { kind: "policy_set", policySetId: "99999999-9999-4999-8999-999999999999" },
+          toolPresentation: { surface: "native", mode: "progressive" },
         },
         1_000,
       );
@@ -148,7 +144,8 @@ describe("SavedAgentService", () => {
           expectedRevision: 0,
           description: null,
           backendOverrides: [{ id: "thinking", value: "low" }],
-          sedesTools: null,
+          toolPolicySelection: { kind: "inherit" },
+          toolPresentation: null,
         },
         2_000,
       );
@@ -156,7 +153,8 @@ describe("SavedAgentService", () => {
       expect(updated.backendOverrides).toEqual([
         { id: "thinking", value: "low" },
       ]);
-      expect(updated.sedesTools).toBeUndefined();
+      expect(updated.toolPolicySelection).toEqual({ kind: "inherit" });
+      expect(updated.toolPresentation).toBeUndefined();
       expect(() => service.delete(current.scope, created.id, 0)).toThrow();
       expect(service.delete(current.scope, created.id, 1)).toEqual({
         deleted: true,

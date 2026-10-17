@@ -12,6 +12,8 @@ import {
 test.describe.serial("Saved Agents and thread bootstrap", () => {
   let agentId = "";
   let threadPath = "";
+  let policyId = "";
+  let localPolicyId = "";
 
   test.afterEach(async ({ page }) => {
     const reset = await page.request.post(
@@ -23,8 +25,28 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
   test("creates and edits a complete Agent in the responsive management UI", async ({
     page,
   }, testInfo) => {
+    const captureTools = async (name: string) => {
+      const tools = page.getByRole("region", { name: "Sedes tools", exact: true });
+      await tools.scrollIntoViewIfNeeded();
+      // Wait for the actual control after scrolling before capturing its section.
+      const policy = tools.getByRole("combobox", { name: "Tool policy", exact: true });
+      await expect(policy).toBeVisible();
+      await expect(policy).toBeInViewport();
+      await expect(policy).toHaveValue(policyId);
+      await capture(page, testInfo, name);
+    };
     await page.setViewportSize({ width: 1440, height: 900 });
     await openSedesWorkspace(page);
+    const session = await (await page.request.get("/api/application/session")).json();
+    const createPolicy = async (name: string, allowOtherEnvironments: boolean) => {
+      const response = await page.request.post("/api/tool-policies", { headers: { "X-CSRF-Token": session.csrfToken }, data: {
+        name, enabledToolIds: ["agent.context"], resourceScope: { allowOtherEnvironments, allowOtherProjects: true },
+      } });
+      expect(response.status()).toBe(201);
+      return (await response.json()).policySet.id as string;
+    };
+    policyId = await createPolicy("Reviewer everywhere", true);
+    localPolicyId = await createPolicy("Reviewer local", false);
     await page
       .getByTestId("desktop-sidebar")
       .getByRole("button", { name: "More" })
@@ -81,33 +103,8 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       "Ask before changes",
     );
 
-    const useDefaultTools = page.getByRole("switch", {
-      name: "Use default tool policy",
-    });
-    await expect(useDefaultTools).toBeEnabled();
-    await useDefaultTools.click();
-    const enableTools = page.getByRole("switch", {
-      name: "Enable Sedes tools",
-    });
-    await expect(enableTools).toBeEnabled();
-    await enableTools.click();
-    // Tool groups are collapsed: open Context to reach its tools.
-    await page.getByRole("button", { name: "Context", exact: true }).click();
-    const agentContext = page.getByRole("checkbox", { name: "Agent context" });
-    await expect(agentContext).toBeEnabled();
-    await agentContext.click();
-    await selectRadixOption(
-      page,
-      page.getByRole("combobox", {
-        name: "Access boundary",
-      }),
-      "Allow without asking",
-    );
-    await expect(
-      page.getByRole("status").filter({ hasText: "Threads created from this Agent" }),
-    ).toContainText(
-      "Threads created from this Agent may use enabled Sedes tools in other environments without asking",
-    );
+    await page.getByRole("combobox", { name: "Tool policy", exact: true }).selectOption(policyId);
+    await expect(page.getByText("1 tool · All projects across all environments")).toBeVisible();
 
     const variables = page.getByRole("region", { name: "Environment variables" });
     await variables.getByRole("button", { name: "Add variable" }).click();
@@ -136,12 +133,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
         { id: "thinking_level", value: "high" },
         { id: "tool_access", value: "ask" },
       ],
-      sedesTools: {
-        enabled: true,
-        enabledToolIds: ["agent.context"],
-        presentation: { surface: "native", mode: "progressive" },
-        accessBoundary: "unrestricted",
-      },
+      toolPolicySelection: { kind: "policy_set", policySetId: policyId },
     });
     const createdAgent = (await createResponse.json()) as {
       agent: { id: string };
@@ -162,15 +154,29 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       page.getByRole("combobox", { name: "Configure using" }),
       "Pi SDK",
     );
-    await expect(
-      page.getByRole("combobox", {
-        name: "Access boundary",
-      }),
-    ).toContainText("Allow without asking");
-    await expect(
-      page.getByRole("link", { name: "Careful reviewer", exact: true }),
-    ).toHaveAccessibleDescription(/1 enabled · Allow without asking/u);
+    await expect(page.getByRole("combobox", { name: "Tool policy", exact: true })).toHaveValue(policyId);
+    await expect(page.getByRole("link", { name: "Careful reviewer", exact: true })).toHaveAccessibleDescription(/Reviewer everywhere/u);
+    // The selected project includes a long workspace path. Its complete
+    // value stays in the tooltip while the control clips it before the chevron.
+    const projectControl = page.getByRole("combobox", { name: "Project", exact: true });
+    const selectedProject = projectControl.locator("span[title]");
+    const projectLayout = await selectedProject.evaluate(element => {
+      const control = element.closest("button")!;
+      return {
+        title: element.getAttribute("title"),
+        text: element.textContent?.trim(),
+        textOverflow: getComputedStyle(element).textOverflow,
+        overflow: getComputedStyle(element).overflow,
+        right: element.getBoundingClientRect().right,
+        controlRight: control.getBoundingClientRect().right,
+      };
+    });
+    expect(projectLayout.title).toBe(projectLayout.text);
+    expect(projectLayout.textOverflow).toBe("ellipsis");
+    expect(projectLayout.overflow).toBe("hidden");
+    expect(projectLayout.right).toBeLessThanOrEqual(projectLayout.controlRight);
     await capture(page, testInfo, "saved-agent-editor-desktop.png");
+    await captureTools("saved-agent-tools-desktop.png");
 
     const name = page.getByRole("textbox", { name: "Name" });
     await name.fill("Careful reviewer updated");
@@ -192,6 +198,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await expect(savedAgents).toBeHidden();
     await expect(page.getByTestId("settings-view").locator(".settings-view-header").getByRole("link")).toHaveText(["Agents"]);
     await capture(page, testInfo, "saved-agent-editor-mobile.png");
+    await captureTools("saved-agent-tools-mobile.png");
     await page.setViewportSize({ width: 390, height: 430 });
     await expectNoPageOverflow(page);
     const cancel = page.getByRole("button", { name: "Cancel", exact: true });
@@ -236,9 +243,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await page
       .getByRole("option", { name: /Careful reviewer updated/ })
       .click();
-    await expect(page.getByRole("dialog", { name: "New thread", exact: true }).getByRole("status")).toContainText(
-      "Sedes tools: Allow without asking.",
-    );
+    await expect(page.getByRole("dialog", { name: "New thread", exact: true }).getByText("1 tool · All projects across all environments")).toBeVisible();
     await page.getByRole("button", { name: /1 effective variables/ }).click();
     const variables = page.getByRole("dialog", { name: "Environment variables", exact: true });
     await expect(variables.getByText("Inherited from agent", { exact: true })).toBeVisible();
@@ -289,7 +294,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     expect(snapshot.agentTools).toMatchObject({
       enabled: true,
       presentation: { surface: "native", mode: "progressive" },
-      accessBoundary: "unrestricted",
+      resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
     });
     const enabledToolIds = snapshot.agentTools.groups.flatMap(({ tools }) =>
       tools.filter(({ enabled }) => enabled).map(({ id }) => id),
@@ -328,18 +333,8 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       page.getByRole("combobox", { name: "Configure using" }),
       "Pi SDK",
     );
-    await expect(
-      page.getByRole("combobox", {
-        name: "Access boundary",
-      }),
-    ).toContainText("Allow without asking");
-    await selectRadixOption(
-      page,
-      page.getByRole("combobox", {
-        name: "Access boundary",
-      }),
-      "Ask outside this environment",
-    );
+    await expect(page.getByRole("combobox", { name: "Tool policy", exact: true })).toHaveValue(policyId);
+    await page.getByRole("combobox", { name: "Tool policy", exact: true }).selectOption(localPolicyId);
     await page.getByLabel("Value for CI", { exact: true }).fill("updated-agent-value");
     const policyUpdated = page.waitForResponse(
       (updateResponse) =>
@@ -351,13 +346,9 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     const policyUpdateResponse = await policyUpdated;
     expect(policyUpdateResponse.request().postDataJSON()).toMatchObject({
       environmentVariables: { CI: { kind: "literal", value: "updated-agent-value" } },
-      sedesTools: {
-        accessBoundary: "environment",
-      },
+      toolPolicySelection: { kind: "policy_set", policySetId: localPolicyId },
     });
-    await expect(
-      page.getByRole("link", { name: "Careful reviewer updated", exact: true }),
-    ).toHaveAccessibleDescription(/1 enabled · Ask outside this environment/u);
+    await expect(page.getByRole("combobox", { name: "Tool policy", exact: true })).toHaveValue(localPolicyId);
 
     const retainedVariablesResponse = await page.request.get(`/api${threadPath}/environment-variables`);
     expect(retainedVariablesResponse.ok()).toBe(true);
@@ -372,7 +363,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     const retainedAfterAgentEdit = normalizedThreadSnapshotSchema.parse(
       await retainedAfterAgentEditResponse.json(),
     );
-    expect(retainedAfterAgentEdit.agentTools.accessBoundary).toEqual("unrestricted");
+    expect(retainedAfterAgentEdit.agentTools.resourceScope).toEqual({ allowOtherEnvironments: true, allowOtherProjects: true });
 
     await page.getByRole("button", { name: "Delete…", exact: true }).click();
     const deleted = page.waitForResponse(
@@ -408,7 +399,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     );
     expect(retained.settings.values).toEqual(snapshot.settings.values);
     expect(retained.agentTools.enabled).toBe(true);
-    expect(retained.agentTools.accessBoundary).toEqual("unrestricted");
+    expect(retained.agentTools.resourceScope).toEqual({ allowOtherEnvironments: true, allowOtherProjects: true });
     expect(
       retained.agentTools.groups.flatMap(({ tools }) =>
         tools.filter(({ enabled }) => enabled).map(({ id }) => id),
@@ -498,7 +489,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     expect(child.agentTools).toMatchObject({
       enabled: source.agentTools.enabled,
       presentation: source.agentTools.presentation,
-      accessBoundary: source.agentTools.accessBoundary,
+      resourceScope: source.agentTools.resourceScope,
       revision: 0,
     });
     expect(

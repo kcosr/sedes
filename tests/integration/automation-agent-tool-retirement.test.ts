@@ -16,6 +16,9 @@ import {
 } from "../../src/server/identity/identity-provider.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { AutomationRepository } from "../../src/server/db/repositories/automation-repository.js";
+import { ThreadAgentToolPolicyRepository } from "../../src/server/db/repositories/thread-agent-tool-policy-repository.js";
+import { PrincipalAgentToolClientRepository } from "../../src/server/db/repositories/principal-agent-tool-client-repository.js";
+import { createThreadAgentToolPolicyDependencies, createPrincipalAgentToolClientEligibility } from "../../src/server/conversations/thread-agent-tool-policy-dependencies.js";
 import {
   AutomationService,
   type AutomationDefinitionFields,
@@ -94,6 +97,7 @@ describe("automation agent tools after one-shot retirement", () => {
     repository: AutomationRepository,
     inventory: InventoryRepository,
     service: AutomationService,
+    policies: ThreadAgentToolPolicyRepository,
     tools: AutomationAgentToolService,
     registry: AgentToolRegistry;
   beforeEach(() => {
@@ -107,7 +111,10 @@ describe("automation agent tools after one-shot retirement", () => {
       publisher: { publish: () => {}, publishAutomation: () => {} },
       executionPolicy: { assertCanAutomate: () => {} },
     });
+    policies = new ThreadAgentToolPolicyRepository(db, createThreadAgentToolPolicyDependencies().eligibility);
     tools = new AutomationAgentToolService({
+      toolPolicies: policies,
+      principalToolClients: new PrincipalAgentToolClientRepository(db, createPrincipalAgentToolClientEligibility()),
       automations: service,
       mutationRecords: repository,
       threads: {
@@ -161,13 +168,13 @@ describe("automation agent tools after one-shot retirement", () => {
       kind: "thread_agent" as const,
       environmentId: thread.environmentId,
       workspaceId: thread.workspaceId,
-      projectId: "project-1",
+      projectId: thread.projectId,
       threadId,
     };
     const policyIdentity = {
       ownerKind: "thread" as const,
       ownerId: threadId,
-      revision: 1,
+      revision: policies.getDurable(scope, threadId).revision,
     };
     return {
       invocationId: randomUUID(),
@@ -183,6 +190,7 @@ describe("automation agent tools after one-shot retirement", () => {
       environmentAuthority: {
         id: "authority-1",
         callerKind: "thread_agent",
+        resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
         defaults,
         policyIdentity,
         admittedEnvironmentIds: [thread.environmentId],
@@ -192,6 +200,7 @@ describe("automation agent tools after one-shot retirement", () => {
           id,
           environmentId: thread.environmentId,
           workspaceId: thread.workspaceId,
+          projectId: thread.projectId,
         })),
         display: { targetEnvironmentLabels: [], resourceLabels: [] },
         canonicalInputDigest: "input-digest",

@@ -142,7 +142,7 @@ function policyRefreshGateway(client: ClaudePersistentRuntimeClient, sessionId: 
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) }) },
     bridge: {}, interactions: {}, hubs: new ScopedThreadEventHubRegistry(), retentionMilliseconds: 60_000,
   } as unknown as ConstructorParameters<typeof ThreadRuntimeCoordinator>[0]);
-  let policy = { ...initial, accessBoundary: "environment" as const, revision: 1 };
+  let policy = { ...initial, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true }, revision: 1 };
   const database = { prepare: () => ({ get: () => undefined }) };
   const update = vi.fn((_scope, _threadId, input) => {
     expect(input.expectedRevision).toBe(policy.revision);
@@ -161,7 +161,7 @@ function policyRefreshGateway(client: ClaudePersistentRuntimeClient, sessionId: 
   cleanups.push(async () => { await coordinator.close(); await driver.close(); });
   return { update, policy: () => policy, mutate: async (next: typeof initial) => gateway.mutate(scope, threadId, {
     kind: "set_agent_tool_policy", mutationId: randomUUID(), expectedPolicyRevision: policy.revision,
-    ...next, enabledToolIds: [...next.enabledToolIds], accessBoundary: "environment",
+    ...next, enabledToolIds: [...next.enabledToolIds], resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
   }) };
 }
 

@@ -1,8 +1,7 @@
+import { toolPolicyDefinitionSchema, toolPolicySelectionSchema } from "../../src/shared/protocol/tool-policies.js";
 import { describe, expect, it } from "vitest";
 import {
-  SAVED_AGENT_SEDES_TOOLS_MAX_BYTES,
   SAVED_AGENT_OVERRIDES_MAX_BYTES,
-  agentToolBootstrapPolicySchema,
   normalizedAgentConfigurationOverridesSchema,
   resolveSavedAgentResultSchema,
   savedAgentListQuerySchema,
@@ -62,74 +61,25 @@ describe("Saved Agent protocol bounds", () => {
     }
   });
 
-  it("enforces the Sedes tool policy aggregate serialized bound", () => {
-    const oversized = agentToolBootstrapPolicySchema.safeParse({
-      enabled: true,
-      enabledToolIds: Array.from(
-        { length: 512 },
-        (_, index) =>
-          `tool${index}${"x".repeat(
-            Math.ceil(SAVED_AGENT_SEDES_TOOLS_MAX_BYTES / 512),
-          )}`,
-      ),
-      presentation: { surface: "cli", mode: "progressive" },
-      accessBoundary: "environment",
-    });
-    expect(oversized.success).toBe(false);
-    if (!oversized.success) {
-      expect(oversized.error.issues).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            message:
-              "Saved Agent Sedes tool policy exceeds the serialized byte limit.",
-          }),
-        ]),
-      );
-    }
+  it("bounds policy tool lists and rejects duplicate IDs", () => {
+    const base = { name: "Everyday", resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } };
+    expect(toolPolicyDefinitionSchema.safeParse({ ...base, enabledToolIds: Array.from({length:513}, (_,index) => `tool${index}`) }).success).toBe(false);
+    expect(toolPolicyDefinitionSchema.safeParse({ ...base, enabledToolIds: ["x".repeat(129)] }).success).toBe(false);
+    expect(toolPolicyDefinitionSchema.safeParse({ ...base, enabledToolIds: ["thread.list", "thread.list"] }).success).toBe(false);
   });
 
-  it("requires one closed cross-environment rule on explicit tool policies", () => {
-    const base = {
-      enabled: false,
-      enabledToolIds: [],
-      presentation: { surface: "cli" as const, mode: "progressive" as const },
-    };
-    expect(agentToolBootstrapPolicySchema.safeParse(base).success).toBe(false);
-    expect(
-      agentToolBootstrapPolicySchema.parse({
-        ...base,
-        accessBoundary: "environment",
-      }),
-    ).toMatchObject({
-      accessBoundary: "environment",
-    });
-    expect(
-      agentToolBootstrapPolicySchema.parse({
-        ...base,
-        accessBoundary: "unrestricted",
-      }),
-    ).toMatchObject({
-      accessBoundary: "unrestricted",
-    });
-    expect(agentToolBootstrapPolicySchema.parse({
-      ...base,
-      accessBoundary: "thread",
-    }).accessBoundary).toBe("thread");
-    expect(
-      agentToolBootstrapPolicySchema.safeParse({
-        ...base,
-        accessBoundary: "deny",
-      }).success,
-    ).toBe(false);
-    expect(
-      agentToolBootstrapPolicySchema.safeParse({
-        ...base,
-        accessBoundary: {
-          accessBoundary: "environment",
-          environmentIds: ["environment-a"],
-        },
-      }).success,
-    ).toBe(false);
+  it("requires both closed resource-scope switches on policy sets", () => {
+    const base = { name: "Everyday", enabledToolIds: [] };
+    expect(toolPolicyDefinitionSchema.safeParse(base).success).toBe(false);
+    for (const allowOtherEnvironments of [false,true]) for (const allowOtherProjects of [false,true]) {
+      const resourceScope = {allowOtherEnvironments,allowOtherProjects};
+      expect(toolPolicyDefinitionSchema.parse({...base,resourceScope})).toEqual({...base,resourceScope});
+    }
+    expect(toolPolicyDefinitionSchema.safeParse({...base,resourceScope:{allowOtherEnvironments:"ask",allowOtherProjects:false}}).success).toBe(false);
+    expect(toolPolicyDefinitionSchema.safeParse({...base,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false,environmentIds:["environment-a"]}}).success).toBe(false);
+    expect(toolPolicySelectionSchema.parse({kind:"inherit"})).toEqual({kind:"inherit"});
+    expect(toolPolicySelectionSchema.parse({kind:"disabled"})).toEqual({kind:"disabled"});
+    expect(toolPolicySelectionSchema.safeParse({kind:"policy_set",policySetId:"not-an-id"}).success).toBe(false);
   });
 
   it("requires a selected target before accepting target-specific inputs", () => {
@@ -142,11 +92,7 @@ describe("Saved Agent protocol bounds", () => {
     expect(
       savedAgentOptionsRequestSchema.safeParse({
         workspaceId,
-        sedesTools: {
-          enabled: false,
-          enabledToolIds: [],
-          accessBoundary: "environment",
-        },
+        toolPolicySelection: { kind: "disabled" },
       }).success,
     ).toBe(false);
     expect(

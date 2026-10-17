@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AppliedToolPolicySet } from "../../src/shared/protocol/conversation.js";
 import { BackendError } from "../../src/server/backends/contracts.js";
 import type { AcquiredConversationControl } from "../../src/server/conversations/conversation-actor-manager.js";
 import type { PreparedInteractionResponse } from "../../src/server/conversations/interaction-broker.js";
@@ -5311,6 +5312,11 @@ describe("ThreadMutationGateway provider-feature concurrency", () => {
 });
 
 function agentToolPolicyMutationFixture(input: {
+  readonly currentEnabled?: boolean;
+  readonly currentToolIds?: readonly string[];
+  readonly currentPolicySet?: AppliedToolPolicySet;
+  readonly availability?: "available" | "unavailable";
+  readonly inventoryState?: "active" | "archived";
   readonly presentation?: {
     readonly surface: "native" | "cli";
     readonly mode: "progressive" | "individual";
@@ -5337,12 +5343,13 @@ function agentToolPolicyMutationFixture(input: {
     tenantId: scope.tenantId,
     ownerPrincipalId: scope.principalId,
     applicationThreadId: "thread-1",
-    enabled: false,
-    enabledToolIds: [],
+    enabled: input.currentEnabled ?? false,
+    enabledToolIds: input.currentToolIds ?? [],
+    policySet: input.currentPolicySet ?? null,
     presentation: input.presentation ?? {
       surface: "native", mode: "individual",
     },
-    accessBoundary: "environment",
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
     revision: 2,
     updatedAt: 100,
   });
@@ -5357,10 +5364,11 @@ function agentToolPolicyMutationFixture(input: {
         applicationThreadId,
         enabled: request.enabled,
         presentation: request.presentation,
-        accessBoundary: request.accessBoundary,
+        resourceScope: request.resourceScope,
         revision: request.expectedRevision + 1,
         updatedAt: request.now,
         enabledToolIds: request.enabledToolIds,
+        policySet: null,
       };
     });
   const runWithRuntimeRetired = vi.fn(
@@ -5396,10 +5404,10 @@ function agentToolPolicyMutationFixture(input: {
       database,
       getThread: vi.fn(() => ({
         thread: {
-          availability: "available",
+          availability: input.availability ?? "available",
           backingState: input.backingState ?? "bound",
         },
-        inventory: { inventoryState: "active" },
+        inventory: { inventoryState: input.inventoryState ?? "active" },
       })),
     } as never,
     lifecycle: {} as never,
@@ -5436,7 +5444,7 @@ function agentToolPolicyMutationFixture(input: {
     presentation: input.presentation ?? {
       surface: "native" as const, mode: "individual" as const,
     },
-    accessBoundary: "environment" as const,
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
   };
   return {
     gateway,
@@ -5450,6 +5458,88 @@ function agentToolPolicyMutationFixture(input: {
 }
 
 describe("ThreadMutationGateway agent-tool policy", () => {
+  it.each([
+    { name: "detach to Custom", policySet: null },
+    { name: "apply an equal-content set", policySet: { id: "88888888-8888-4888-8888-888888888888", revision: 3 } },
+  ])("preserves a bound native runtime and queued work for $name", async ({ policySet }) => {
+    const subject = agentToolPolicyMutationFixture({
+      currentEnabled: true,
+      currentToolIds: ["thread.status"],
+      currentPolicySet: { id: "99999999-9999-4999-8999-999999999999", name: "Previously applied", revision: 2 },
+      runState: "running",
+      queued: true,
+    });
+    await expect(subject.gateway.mutate(scope, "thread-1", {
+      ...subject.operation,
+      policySet,
+    })).resolves.toMatchObject({ status: "accepted" });
+    expect(subject.update).toHaveBeenCalledWith(scope, "thread-1", expect.objectContaining({ policySet }));
+    expect(subject.runWithRuntimeRetired).not.toHaveBeenCalled();
+    expect(subject.releaseProviderResidency).not.toHaveBeenCalled();
+    expect(subject.lifecycle).toEqual(["policy_updated"]);
+    expect(subject.publishThreadSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("compares native effective tool IDs independently of their order", async () => {
+    const subject = agentToolPolicyMutationFixture({
+      currentEnabled: true,
+      currentToolIds: ["thread.status", "agent.context"],
+      queued: true,
+    });
+    await subject.gateway.mutate(scope, "thread-1", {
+      ...subject.operation,
+      enabledToolIds: ["agent.context", "thread.status"],
+      policySet: null,
+    });
+    expect(subject.lifecycle).toEqual(["policy_updated"]);
+    expect(subject.releaseProviderResidency).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "unavailable thread", input: { availability: "unavailable" as const }, code: "invalid_transition" },
+    { name: "archived thread", input: { inventoryState: "archived" as const }, code: "invalid_transition" },
+    { name: "thread creation", input: { backingState: "creating" as const }, code: "invalid_transition" },
+    { name: "uncertain work", input: { uncertain: true }, code: "operation_outcome_uncertain" },
+  ])("retains metadata-save authority checks for $name", async ({ input, code }) => {
+    const subject = agentToolPolicyMutationFixture({
+      ...input,
+      currentEnabled: true,
+      currentToolIds: ["thread.status"],
+    });
+    await expect(subject.gateway.mutate(scope, "thread-1", {
+      ...subject.operation,
+      policySet: null,
+    })).rejects.toMatchObject({ code });
+    expect(subject.update).not.toHaveBeenCalled();
+    expect(subject.runWithRuntimeRetired).not.toHaveBeenCalled();
+    expect(subject.releaseProviderResidency).not.toHaveBeenCalled();
+  });
+
+  it("preserves revision conflicts for native metadata-only updates without unloading the provider", async () => {
+    const subject = agentToolPolicyMutationFixture({
+      currentEnabled: true,
+      currentToolIds: ["thread.status"],
+      queued: true,
+      updateError: new DomainError("conflict", "stale policy"),
+    });
+    await expect(subject.gateway.mutate(scope, "thread-1", {
+      ...subject.operation,
+      policySet: null,
+    })).rejects.toMatchObject({ code: "conflict" });
+    expect(subject.runWithRuntimeRetired).not.toHaveBeenCalled();
+    expect(subject.releaseProviderResidency).not.toHaveBeenCalled();
+    expect(subject.publishThreadSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each(["bound", "unbound"] as const)("forwards current association changes for %s threads", async backingState => {
+    const subject = agentToolPolicyMutationFixture({backingState});
+    const reference = {id:"88888888-8888-4888-8888-888888888888",revision:3};
+    await subject.gateway.mutate(scope,"thread-1",{...subject.operation,policySet:reference});
+    expect(subject.update).toHaveBeenLastCalledWith(scope,"thread-1",expect.objectContaining({policySet:reference}));
+    await subject.gateway.mutate(scope,"thread-1",{...subject.operation,policySet:null});
+    expect(subject.update).toHaveBeenLastCalledWith(scope,"thread-1",expect.objectContaining({policySet:null}));
+  });
+
   it.each(["progressive", "individual"] as const)(
     "updates CLI %s grants and master access during a turn without retiring it",
     async (mode) => {
@@ -5534,7 +5624,7 @@ describe("ThreadMutationGateway agent-tool policy", () => {
         enabled: true,
         enabledToolIds: ["thread.status"],
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         now: 500,
       });
       expect(subject.runWithRuntimeRetired).toHaveBeenCalledWith(

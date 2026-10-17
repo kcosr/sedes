@@ -283,7 +283,8 @@ export class DatabaseThreadApplicationInventoryReader implements ThreadApplicati
           applicationThreadId,
           agentTools.presentation,
         ),
-        accessBoundary: agentTools.accessBoundary,
+        resourceScope: agentTools.resourceScope,
+        policySet: agentTools.policySet,
         groups: [...agentToolCatalog.groups]
           .sort(
             (left, right) =>

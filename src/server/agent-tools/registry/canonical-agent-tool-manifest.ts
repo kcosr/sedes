@@ -291,7 +291,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       inputField: "workspaceId",
     },
     id: "thread.create",
-    schemaVersion: 5,
+    schemaVersion: 6,
     description:
       "Creates an unbound Sedes draft thread without sending a prompt or starting model work.",
     catalog: { groupId: "threads", label: "Create thread", order: 30 },
@@ -361,7 +361,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "saved_agent.list": manifestEntry({
     environmentAuthority: { kind: "environment_neutral" },
     id: "saved_agent.list",
-    schemaVersion: 5,
+    schemaVersion: 6,
     description:
       "Lists bounded database-backed summaries of principal-owned saved Agents.",
     catalog: { groupId: "agents", label: "List Agents", order: 10 },
@@ -371,7 +371,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     environmentAuthority: { kind: "direct_resource", resource: "saved_agent", inputField: "agentId",
     },
     id: "saved_agent.get",
-    schemaVersion: 5,
+    schemaVersion: 6,
     description: "Returns one complete principal-owned saved Agent definition.",
     catalog: { groupId: "agents", label: "Get Agent", order: 20 },
     effects: { application: "read", modelUsage: "none", external: "none" },
@@ -383,7 +383,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       inputField: "workspaceId",
     },
     id: "saved_agent.options",
-    schemaVersion: 5,
+    schemaVersion: 6,
     description:
       "Returns bounded dynamic authoring options for a workspace and optional target.",
     catalog: { groupId: "agents", label: "Agent options", order: 30 },
@@ -396,7 +396,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       inputField: "authoringContext.workspaceId",
     },
     id: "saved_agent.create",
-    schemaVersion: 5,
+    schemaVersion: 6,
     description:
       "Creates a principal-owned saved Agent after validating one authoring context.",
     catalog: { groupId: "agents", label: "Create Agent", order: 40 },
@@ -410,7 +410,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       defaultToSource: false,
     },
     id: "saved_agent.update",
-    schemaVersion: 5,
+    schemaVersion: 6,
     description:
       "Revision-checks and atomically updates selected saved Agent fields.",
     catalog: { groupId: "agents", label: "Update Agent", order: 50 },

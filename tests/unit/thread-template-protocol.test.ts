@@ -16,6 +16,7 @@ const template = {
     networkProfile: "isolated" as const,
   },
   agentId: "30000000-0000-4000-8000-000000000001",
+  toolPolicySelection: { kind: "inherit" as const },
   capturedAgentName: "Reviewer",
   capturedWorkspaceName: "Sedes",
   capturedTargetName: "Local Pi",

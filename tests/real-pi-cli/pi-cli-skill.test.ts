@@ -1,3 +1,4 @@
+import { testAgentToolExecutionAuthority } from "../support/agent-tool-execution-authority.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { randomUUID } from "node:crypto";
 import { unavailableTurnBookmarks } from "../support/unavailable-turn-bookmarks.js";
@@ -77,7 +78,7 @@ const noAgentTools = {
   readPolicy: () => ({
     enabled: false,
     presentation: { surface: "native" as const, mode: "individual" as const },
-    accessBoundary: "environment" as const,
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
     enabledToolIds: [],
   }),
   invoke: async () => {
@@ -565,26 +566,15 @@ describeRealPiCli("real Pi repository-skill CLI verification", () => {
         expectedRevision: 0,
         enabled: true,
         presentation: { surface: "cli", mode: "progressive" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: ["agent.context"],
         now: 300,
       });
       const canonical = new CanonicalInlineAgentToolService({ application });
-      const scopedTools = new SourceScopedAgentToolService(
-        canonical,
-        policies,
-        new AgentToolEnvironmentAuthorityResolver(sources),
-        sources,
-        {
-          acquireAgentToolApprovalAuthority: async () => ({
-            generation: "generation-1",
-            signal: new AbortController().signal,
-            isCurrent: () => true,
-            release: () => undefined,
-          }),
-        },
-        { requestApplicationDecision: async () => "allow" },
-      );
+      const scopedTools = new SourceScopedAgentToolService(canonical,
+policies,
+new AgentToolEnvironmentAuthorityResolver(sources),
+sources, testAgentToolExecutionAuthority);
       const applicationSnapshots = new ApplicationSnapshotPublicationBoundary(
         {
           capture: async () => ({

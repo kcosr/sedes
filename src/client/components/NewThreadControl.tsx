@@ -15,6 +15,9 @@ import {
   type ResolveSavedAgentResult,
   type SavedAgentSummary,
   type ThreadTemplate,
+  type ToolPolicySelection,
+  type ToolPolicySet,
+  type AgentToolPresentation,
   type UpdateThreadTemplateRequest,
 } from "../../shared/index.js";
 import { navigate, settingsPath } from "../app/router.js";
@@ -60,6 +63,11 @@ import {
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
 import "./new-thread-control.css";
+import { ApiError } from "../api/ApiClient.js";
+import { toolPolicyResolutionIssueSchema, type ToolPolicyResolutionIssue, type ToolPolicyPreview } from "../../shared/protocol/tool-policies.js";
+import { missingToolPolicyMessage, toolPolicySourceLabel } from "./tool-policies/tool-policy-messages.js";
+import { NativeSelect } from "./ui/native-select.js";
+import { ToolPolicySelector } from "./tool-policies/ToolPolicySelector.js";
 
 const AGENT_PAGE_SIZE = 50;
 const TEMPLATE_PAGE_SIZE = 100;
@@ -172,7 +180,7 @@ export function NewThreadControl({
     kind: "custom",
   });
   const [selectedAgentSummary, setSelectedAgentSummary] =
-    useState<Pick<SavedAgentSummary, "id" | "name" | "backend">>();
+    useState<Pick<SavedAgentSummary, "id" | "name" | "backend" | "toolPresentation">>();
   const [selectedTargetId, setSelectedTargetId] = useState<string>();
   const [executionWorkspace, setExecutionWorkspace] =
     useState<ExecutionWorkspaceSelection>();
@@ -189,6 +197,16 @@ export function NewThreadControl({
   const [resolutionLoading, setResolutionLoading] = useState(false);
   const [environmentVariables, setEnvironmentVariables] = useState<EnvironmentVariableOverrides>({});
   const [variablesOpen, setVariablesOpen] = useState(false);
+  const [toolPolicySelection, setToolPolicySelection] = useState<ToolPolicySelection>({ kind: "inherit" });
+  const [toolPresentation, setToolPresentation] = useState<AgentToolPresentation>();
+  const [policySets, setPolicySets] = useState<readonly ToolPolicySet[]>([]);
+  const [policiesLoading, setPoliciesLoading] = useState(false);
+  const [policiesError, setPoliciesError] = useState("");
+  const [toolPolicyPreview, setToolPolicyPreview] = useState<ToolPolicyPreview>();
+  const [toolPolicyLoading, setToolPolicyLoading] = useState(false);
+  const [toolPolicyError, setToolPolicyError] = useState("");
+  const [toolPolicyIssue, setToolPolicyIssue] = useState<ToolPolicyResolutionIssue>();
+  const [policyRefresh, setPolicyRefresh] = useState(0);
   const [variablesRefresh, setVariablesRefresh] = useState(0);
   const variablesTrigger = useRef<HTMLButtonElement>(null);
   const [pending, setPending] = useState(false);
@@ -429,8 +447,102 @@ export function NewThreadControl({
     selection.kind === "saved_agent" ? selection.agentId : undefined, variablesRefresh);
   const variablesSnapshot = variablesPreview.result ? { ...variablesPreview.result.snapshot, layers: { ...variablesPreview.result.snapshot.layers, thread: environmentVariables } } : undefined;
   const effectiveVariableCount = variablesSnapshot ? variableRows(Object.entries(variablesSnapshot.layers).map(([scope, values]) => ({ scope: scope as "environment" | "backend" | "agent" | "thread", values }))).filter(row => row.entry.kind !== "unset").length : 0;
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const abort = new AbortController();
+    setPoliciesLoading(true);
+    setPoliciesError("");
+    void store.api.listToolPolicySets(abort.signal).then(
+      ({ items }) => {
+        if (abort.signal.aborted) return;
+        setPolicySets(items);
+        setPoliciesLoading(false);
+      },
+      (cause: unknown) => {
+        if (abort.signal.aborted) return;
+        setPoliciesError(messageFrom(cause));
+        setPoliciesLoading(false);
+      },
+    );
+    return () => abort.abort();
+  }, [pickerOpen, store, policyRefresh]);
+
+  useEffect(() => {
+    setToolPolicyPreview(undefined);
+    setToolPolicyError("");
+    setToolPolicyIssue(undefined);
+    if (!pickerOpen || !selectedTarget?.available || !previewAgentAvailable) {
+      setToolPolicyLoading(false);
+      return;
+    }
+    const abort = new AbortController();
+    setToolPolicyLoading(true);
+    void store.api.resolveToolPolicy({
+      targetId: selectedTarget.id,
+      ...(selection.kind === "saved_agent" ? { agentId: selection.agentId } : {}),
+      threadSelection: toolPolicySelection,
+    }, abort.signal).then(
+      (result) => {
+        if (abort.signal.aborted) return;
+        setToolPolicyPreview(result);
+        setToolPolicyLoading(false);
+      },
+      (cause: unknown) => {
+        if (abort.signal.aborted) return;
+        const issue = cause instanceof ApiError ? toolPolicyResolutionIssueSchema.safeParse(cause.details) : undefined;
+        setToolPolicyIssue(issue?.success ? issue.data : undefined);
+        setToolPolicyError(messageFrom(cause));
+        setToolPolicyLoading(false);
+      },
+    );
+    return () => abort.abort();
+  }, [
+    pickerOpen,
+    selectedTarget?.id,
+    selectedTarget?.available,
+    selection,
+    previewAgentAvailable,
+    toolPolicySelection,
+    store,
+    policyRefresh,
+  ]);
+
+  const policySource = toolPolicyPreview
+    ? toolPolicySourceLabel(toolPolicyPreview.source)
+    : "Agent, backend, environment, or account defaults";
+  // An unsupported saved presentation can prevent Agent resolution. Keep the
+  // target's choices available so the thread override can repair that failure.
+  const presentationCatalog = selection.kind === "saved_agent"
+    ? selectedResolvedTarget?.sedesTools ?? (selectedWorkspace?.available ? toolPolicyPreview : undefined)
+    : toolPolicyPreview;
+  const presentationLoading = selection.kind === "saved_agent" && selectedResolvedTarget
+    ? resolutionLoading
+    : toolPolicyLoading;
+  const presentations = presentationCatalog?.presentationOptions.flatMap(({ surface, modes }) =>
+    modes.map((mode) => ({ surface, mode })),
+  ) ?? [];
+  const presentationAvailabilityKnown = Boolean(presentationCatalog) && !presentationLoading;
+  const presentationIsAvailable = !toolPresentation || !presentationAvailabilityKnown || presentations.some(({ surface, mode }) =>
+    surface === toolPresentation.surface && mode === toolPresentation.mode,
+  );
+  const inheritedPresentation = selectedResolvedTarget?.sedesTools.resolvedPolicy?.presentation
+    ?? selectedAgentSummary?.toolPresentation
+    ?? presentationCatalog?.defaultPresentation;
+  const presentationReady = !toolPresentation || Boolean(
+    presentationAvailabilityKnown && presentationIsAvailable,
+  );
+  const presentationNeedsAttention = Boolean(toolPresentation) && !presentationLoading && (
+    presentationAvailabilityKnown && !presentationIsAvailable
+  );
+  const refreshToolPolicies = () => {
+    setToolPolicyPreview(undefined);
+    setToolPolicyLoading(true);
+    setPolicyRefresh((current) => current + 1);
+  };
+
   const canCreate = Boolean(
-    variablesPreview.result &&
+    toolPolicyPreview && !toolPolicyLoading && !policiesError && !policiesLoading &&
+    presentationReady && variablesPreview.result &&
     !pendingLocation &&
     !scopeConflict &&
     selectedWorkspace?.available &&
@@ -449,6 +561,8 @@ export function NewThreadControl({
     selection.kind === "saved_agent" &&
     selection.agentId === selectedTemplate.agentId &&
     JSON.stringify(environmentVariables) === JSON.stringify(selectedTemplate.environmentVariables ?? {}) &&
+    JSON.stringify(toolPolicySelection) === JSON.stringify(selectedTemplate.toolPolicySelection) &&
+    JSON.stringify(toolPresentation) === JSON.stringify(selectedTemplate.toolPresentation) &&
     executionWorkspacesMatch(
       selectedExecutionWorkspace,
       selectedTemplate.executionWorkspace,
@@ -458,6 +572,8 @@ export function NewThreadControl({
   const templateNeedsAttention = Boolean(
     selectedTemplate &&
     (templateAgentMissing ||
+      Boolean(toolPolicyIssue) ||
+      presentationNeedsAttention ||
       !selectedWorkspace?.available ||
       !selectedTarget?.available ||
       (selection.kind === "saved_agent" &&
@@ -468,7 +584,7 @@ export function NewThreadControl({
   const canSaveTemplate = Boolean(
     selectedWorkspace?.available &&
     selectedTarget?.available &&
-    selectedExecutionWorkspace &&
+    selectedExecutionWorkspace && presentationReady &&
     selection.kind === "saved_agent" &&
     !resolutionLoading &&
     selectedResolvedTarget,
@@ -531,8 +647,13 @@ export function NewThreadControl({
   }, []);
 
   const resetPanel = () => {
+    setToolPolicyIssue(undefined);
+    setToolPolicyError("");
+    setToolPolicyPreview(undefined);
     setVariablesOpen(false);
     setEnvironmentVariables({});
+    setToolPolicySelection({ kind: "inherit" });
+    setToolPresentation(undefined);
     templateSelectionGeneration.current += 1;
     agentRequest.current?.abort();
     resolutionRequest.current?.abort();
@@ -770,6 +891,8 @@ export function NewThreadControl({
         agentId,
         {
           workspaceId,
+          toolPolicySelection,
+          ...(toolPresentation ? { toolPresentation } : {}),
           ...(selectedTarget ? { targetId: selectedTarget.id } : {}),
         },
         controller.signal,
@@ -790,7 +913,10 @@ export function NewThreadControl({
         setExecutionWorkspace(undefined);
       }
     } catch (cause) {
-      if (!controller.signal.aborted) setError(messageFrom(cause));
+      if (!controller.signal.aborted) {
+        const issue = cause instanceof ApiError ? toolPolicyResolutionIssueSchema.safeParse(cause.details) : undefined;
+        if (!issue?.success) setError(messageFrom(cause));
+      }
     } finally {
       if (resolutionRequest.current === controller) {
         setResolutionLoading(false);
@@ -816,6 +942,9 @@ export function NewThreadControl({
     selectedWorkspace?.available,
     selectedTarget?.id,
     selectedTarget?.available,
+    toolPolicySelection,
+    toolPresentation,
+    policyRefresh,
   ]);
 
   const closePicker = (restoreFocus: boolean) => {
@@ -879,6 +1008,8 @@ export function NewThreadControl({
     );
     setSelectedTemplate(undefined);
     setEnvironmentVariables({});
+    setToolPolicySelection({ kind: "inherit" });
+    setToolPresentation(undefined);
     setSelectedProjectId(undefined);
     setSelectedWorkspaceId(undefined);
     setSelectedTargetId(target?.available ? target.id : undefined);
@@ -901,6 +1032,8 @@ export function NewThreadControl({
     const workspace = workspaces.find(({ id }) => id === template.workspaceId);
     setSelectedTemplate(template);
     setEnvironmentVariables(template.environmentVariables ?? {});
+    setToolPolicySelection(template.toolPolicySelection);
+    setToolPresentation(template.toolPresentation);
     setSelectedProjectId(workspace?.projectId);
     setSelectedWorkspaceId(workspace?.available ? workspace.id : undefined);
     setSelectedTargetId(target?.available ? target.id : undefined);
@@ -926,6 +1059,7 @@ export function NewThreadControl({
             id: agent.id,
             name: agent.name,
             backend: agent.backend,
+            ...(agent.toolPresentation ? { toolPresentation: agent.toolPresentation } : {}),
           });
           return;
         }
@@ -983,6 +1117,8 @@ export function NewThreadControl({
           targetId: selectedTarget.id,
           executionWorkspace: selectedExecutionWorkspace,
           agentId: selection.agentId,
+          toolPolicySelection,
+          toolPresentation: toolPresentation ?? null,
           ...(Object.keys(environmentVariables).length > 0 || selectedTemplate?.environmentVariables ? { environmentVariables } : {}),
         };
         saved = await store.api.updateThreadTemplate(
@@ -996,6 +1132,8 @@ export function NewThreadControl({
           targetId: selectedTarget.id,
           executionWorkspace: selectedExecutionWorkspace,
           agentId: selection.agentId,
+          toolPolicySelection,
+          ...(toolPresentation ? { toolPresentation } : {}),
           ...(Object.keys(environmentVariables).length > 0 || selectedTemplate?.environmentVariables ? { environmentVariables } : {}),
         };
         saved = await store.api.createThreadTemplate(request);
@@ -1046,6 +1184,8 @@ export function NewThreadControl({
         title: normalized,
         executionWorkspace: selectedExecutionWorkspace!,
         environmentVariables,
+        toolPolicySelection,
+        ...(toolPresentation ? { toolPresentation } : {}),
         environmentVariablesRevision: variablesPreview.result!.revision,
         configuration:
           selection.kind === "saved_agent"
@@ -1060,8 +1200,10 @@ export function NewThreadControl({
       resetPanel();
       onCreated(result.threadId);
     } catch (cause) {
-      const creationError = messageFrom(cause);
+      const issue = cause instanceof ApiError ? toolPolicyResolutionIssueSchema.safeParse(cause.details) : undefined;
+      const creationError = issue?.success ? "" : messageFrom(cause);
       setError(creationError);
+      refreshToolPolicies();
       if (selection.kind === "saved_agent") {
         const agentId = selection.agentId;
         void loadAgents({
@@ -1114,17 +1256,9 @@ export function NewThreadControl({
     }
     if (resolution.candidates.length === 1) {
       const candidate = resolution.candidates[0]!;
-      const toolPolicy = candidate.sedesTools.resolvedPolicy;
       const resolved = executionTargets.find(
         ({ id }) => id === candidate.target.id,
       );
-      const toolPolicySummary = !toolPolicy.enabled
-        ? "Off"
-        : {
-      thread: "Ask outside this thread",
-      environment: "Ask outside this environment",
-      unrestricted: "Allow without asking",
-    }[toolPolicy.accessBoundary];
       return `Runs on ${
         resolved
           ? targetDisplayLabel({
@@ -1134,7 +1268,7 @@ export function NewThreadControl({
               includeEnvironment: false,
             })
           : candidate.target.label.text
-      }. Sedes tools: ${toolPolicySummary}.`;
+      }.`;
     }
     return "Choose where this Agent should run.";
   })();
@@ -1733,7 +1867,7 @@ export function NewThreadControl({
               </div>
             )}
             {(agentLoadError ||
-              (!templateNeedsAttention && resolutionMessage)) &&
+              (!toolPolicyError && presentationIsAvailable && resolutionMessage)) &&
               (resolution?.candidates.length === 0 || agentLoadError ? (
                 <DialogAlert tone="danger" aria-live="assertive">
                   {agentLoadError || resolutionMessage}
@@ -1743,6 +1877,45 @@ export function NewThreadControl({
                   {resolutionMessage}
                 </p>
               ))}
+            <section className="new-thread-tool-policy" aria-label="Sedes tools">
+              <ToolPolicySelector
+                layout="stacked"
+                value={toolPolicySelection}
+                onChange={setToolPolicySelection}
+                policySets={policySets}
+                disabled={pending}
+                catalogState={policiesLoading ? "loading" : policiesError ? "error" : "ready"}
+                label="Sedes tool policy"
+                inheritedLabel={policySource}
+                inheritedPolicy={toolPolicyPreview}
+                hidePreview={toolPolicyLoading || Boolean(toolPolicyError)}
+                suppressMissingMessage={Boolean(toolPolicyIssue)}
+                description="The nearest selected policy replaces the whole list. New threads keep a snapshot of these settings."
+              />
+              {toolPolicyLoading && (
+                <p className="new-thread-field-note" role="status">Resolving tool policy…</p>
+              )}
+              {(policiesError || toolPolicyError) && (
+                <DialogAlert tone="danger" action={
+                  <Button type="button" size="sm" variant="outline" onClick={refreshToolPolicies}>Retry tool policies</Button>
+                }>{policiesError || (toolPolicyIssue ? missingToolPolicyMessage(toolPolicyIssue, "thread") : toolPolicyError)}</DialogAlert>
+              )}
+              <Field label="Tool presentation" id={`${pickerId}-tool-presentation`}
+                description={!toolPresentation && inheritedPresentation ? `Inherited presentation: ${presentationLabel(inheritedPresentation)}.` : "Choose how this target exposes Sedes tools."}>
+                <NativeSelect value={toolPresentation ? presentationKey(toolPresentation) : "inherit"}
+                  disabled={pending}
+                  onChange={(event) => {
+                    const next = presentations.find((item) => presentationKey(item) === event.target.value);
+                    setToolPresentation(next);
+                  }}>
+                  <option value="inherit">Inherit</option>
+                  {toolPresentation && (!presentationAvailabilityKnown || !presentationIsAvailable) && <option value={presentationKey(toolPresentation)} disabled>{presentationLabel(toolPresentation)} ({presentationAvailabilityKnown ? "unavailable" : presentationLoading ? "checking…" : "not verified"})</option>}
+                  {presentations.map((item) => <option key={presentationKey(item)} value={presentationKey(item)}>{presentationLabel(item)}</option>)}
+                </NativeSelect>
+              </Field>
+              {presentationAvailabilityKnown && !presentationIsAvailable && <DialogAlert tone="danger">This tool presentation is unavailable on the selected target. Choose Inherit or a supported presentation.</DialogAlert>}
+
+            </section>
             <section
               className="new-thread-variables"
               aria-labelledby={`${pickerId}-variables`}
@@ -1781,8 +1954,11 @@ export function NewThreadControl({
                     </strong>
                     {templateNeedsAttention && (
                       <small>
-                        Choose an available Project, Location, Target, and
-                        saved Agent, then update the template.
+                        {toolPolicyIssue
+                          ? "Review the Sedes tool policy above, then update the template."
+                          : presentationNeedsAttention
+                            ? "Choose Inherit or a supported tool presentation, then update the template."
+                            : "Choose an available Project, Location, Target, and saved Agent, then update the template."}
                       </small>
                     )}
                   </div>
@@ -1991,4 +2167,12 @@ export function NewThreadControl({
       )}
     </Dialog>
   );
+}
+
+function presentationKey(presentation: AgentToolPresentation): string {
+  return `${presentation.surface}:${presentation.mode}`;
+}
+
+function presentationLabel(presentation: AgentToolPresentation): string {
+  return `${presentation.surface === "native" ? "Native tools" : "Sedes CLI"} · ${presentation.mode === "progressive" ? "Progressive discovery" : "Individual operations"}`;
 }

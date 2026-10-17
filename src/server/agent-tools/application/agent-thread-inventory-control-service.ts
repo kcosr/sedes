@@ -75,6 +75,7 @@ export class AgentThreadInventoryControlService {
         kind: input.includeDescendants ? "thread_family" : "thread",
         id: member.id,
         environmentId: member.environmentId,
+      projectId: member.projectId,
         workspaceId: member.workspaceId,
       });
     }
@@ -108,6 +109,7 @@ export class AgentThreadInventoryControlService {
       kind: "thread",
       id: thread.id,
       environmentId: thread.environmentId,
+      projectId: thread.projectId,
       workspaceId: thread.workspaceId,
     });
     await this.input.transitions.transition(scope, input.threadId, {

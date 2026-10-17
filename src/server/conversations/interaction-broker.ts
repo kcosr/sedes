@@ -15,8 +15,6 @@ import {
 import type { ThreadInteractionResponse } from "../../shared/protocol/api.js";
 import {
   PAYLOAD_LIMITS,
-  type BoundedDisplayText,
-  type BoundedText,
 } from "../../shared/protocol/payload.js";
 import {
   BackendError,
@@ -75,31 +73,7 @@ export type PreparedInteractionResponse =
       readonly owner: "provider";
       readonly persistence: "ephemeral";
       readonly backendResponse: InteractionResponseInput;
-    }
-  | {
-      readonly owner: "application";
-      readonly persistence: "ephemeral";
-      readonly interactionId: string;
-      readonly decision: ApplicationDecision;
     };
-
-export type ApplicationDecision = "allow" | "deny";
-
-export interface ApplicationDecisionPresentation {
-  readonly sourceLabel: BoundedDisplayText;
-  readonly title: BoundedDisplayText;
-  readonly message?: BoundedText;
-  readonly code?: BoundedText;
-  readonly destructive: boolean;
-}
-
-export interface RequestApplicationDecisionInput {
-  readonly scope: RequestScope;
-  readonly applicationThreadId: string;
-  readonly generation: string;
-  readonly presentation: ApplicationDecisionPresentation;
-  readonly signal: AbortSignal;
-}
 
 interface PendingInteractionBase {
   readonly scope: RequestScope;
@@ -123,17 +97,7 @@ interface PendingProviderInteraction extends PendingInteractionBase {
   readonly conversation: InteractionConversation;
 }
 
-interface PendingApplicationInteraction extends PendingInteractionBase {
-  readonly owner: "application";
-  readonly actionIds: ReadonlyMap<string, ApplicationDecision>;
-  readonly resolve: (decision: ApplicationDecision) => void;
-  readonly reject: (error: Error) => void;
-  readonly signal: AbortSignal;
-  readonly abortListener: () => void;
-}
-
-type PendingInteraction =
-  PendingProviderInteraction | PendingApplicationInteraction;
+type PendingInteraction = PendingProviderInteraction;
 
 const MAX_PENDING_INTERACTIONS_PER_THREAD = 32;
 
@@ -503,97 +467,6 @@ export class InteractionBroker {
       .map(({ interaction }) => structuredClone(interaction));
   }
 
-  requestApplicationDecision(
-    input: RequestApplicationDecisionInput,
-  ): Promise<ApplicationDecision> {
-    this.#assertOpen();
-    if (input.signal.aborted) {
-      return Promise.reject(abortError());
-    }
-    const binding = this.#bindings.get(
-      ownerKey(input.scope, input.applicationThreadId),
-    );
-    if (!binding || binding.state !== "active") {
-      return Promise.reject(interactionBrokerUnavailable());
-    }
-    if (
-      this.#ownerPendingCount(input.scope, input.applicationThreadId) >=
-      MAX_PENDING_INTERACTIONS_PER_THREAD
-    ) {
-      return Promise.reject(interactionBrokerUnavailable());
-    }
-
-    const interactionId = randomUUID();
-    const allowActionId = randomUUID();
-    const denyActionId = randomUUID();
-    const interaction = backendInteractionSchema.parse({
-      id: interactionId,
-      threadId: input.applicationThreadId,
-      sourceLabel: input.presentation.sourceLabel,
-      title: input.presentation.title,
-      openedAt: new Date().toISOString(),
-      secret: false,
-      destructive: input.presentation.destructive,
-      cancellable: true,
-      kind: "decision",
-      ...(input.presentation.message
-        ? { message: input.presentation.message }
-        : {}),
-      ...(input.presentation.code ? { code: input.presentation.code } : {}),
-      actions: [
-        {
-          id: allowActionId,
-          label: { text: "Allow once" },
-          role: "primary",
-        },
-        { id: denyActionId, label: { text: "Deny" }, role: "reject" },
-      ],
-    });
-
-    let resolve!: (decision: ApplicationDecision) => void;
-    let reject!: (error: Error) => void;
-    const decision = new Promise<ApplicationDecision>((onResolve, onReject) => {
-      resolve = onResolve;
-      reject = onReject;
-    });
-    const pending = {
-      owner: "application" as const,
-      scope: input.scope,
-      applicationThreadId: input.applicationThreadId,
-      generation: input.generation,
-      interaction,
-      actionIds: new Map([
-        [allowActionId, "allow" as const],
-        [denyActionId, "deny" as const],
-      ]),
-      resolve,
-      reject,
-      signal: input.signal,
-      abortListener: () => this.#abortApplication(interactionId, true),
-    } satisfies PendingApplicationInteraction;
-    this.#pending.set(interactionId, pending);
-    input.signal.addEventListener("abort", pending.abortListener, {
-      once: true,
-    });
-    if (input.signal.aborted) {
-      this.#abortApplication(interactionId, false);
-      return decision;
-    }
-    try {
-      binding.publisher.opened(
-        input.scope,
-        input.applicationThreadId,
-        input.generation,
-        structuredClone(interaction),
-      );
-      this.#observeOpened(pending);
-    } catch {
-      this.#remove(pending);
-      pending.reject(interactionBrokerUnavailable());
-    }
-    return decision;
-  }
-
   /**
    * Force reset: abandon exact pending interactions in Sedes after the durable
    * reset commits, and send each provider-owned one the backend-neutral
@@ -603,7 +476,7 @@ export class InteractionBroker {
    * records no receipt, and a failed or rejected delivery is swallowed.
    * Validation is synchronous; the returned promise never rejects and settles
    * once every cancellation is delivered or has failed. The caller bounds the
-   * wait. Application-owned decisions are rejected locally instead.
+   * wait.
    */
   abandonPending(
     scope: RequestScope,
@@ -655,7 +528,6 @@ export class InteractionBroker {
         );
       }
       this.#remove(current);
-      if (current.owner === "application") current.reject(abortError());
       this.#safePublishResolved(
         current.scope,
         current.applicationThreadId,
@@ -729,36 +601,6 @@ export class InteractionBroker {
         "The interaction request cannot be cancelled.",
       );
     }
-    if (pending.owner === "application") {
-      if (response.kind === "cancel") {
-        return {
-          owner: "application",
-          persistence: "ephemeral",
-          interactionId: pending.interaction.id,
-          decision: "deny",
-        };
-      }
-      if (response.kind !== "decision") {
-        throw new DomainError(
-          "invalid_transition",
-          "The response does not match the interaction kind.",
-        );
-      }
-      const decision = pending.actionIds.get(response.selectedActionId);
-      if (!decision) {
-        throw new DomainError(
-          "invalid_transition",
-          "The selected decision action is invalid.",
-        );
-      }
-      return {
-        owner: "application",
-        persistence: "ephemeral",
-        interactionId: pending.interaction.id,
-        decision,
-      };
-    }
-
     let backendResponse: InteractionResponseInput;
     if (response.kind === "choice") {
       if (pending.interaction.kind !== "choice") {
@@ -1012,25 +854,6 @@ export class InteractionBroker {
     prepared: PreparedInteractionResponse,
   ): Promise<void> {
     this.#assertOpen();
-    if (prepared.owner === "application") {
-      const pending = this.#pending.get(prepared.interactionId);
-      if (
-        !pending ||
-        pending.owner !== "application" ||
-        !sameScope(pending.scope, scope) ||
-        pending.applicationThreadId !== applicationThreadId
-      ) {
-        throw new DomainError(
-          "not_found",
-          "The interaction request was not found.",
-        );
-      }
-      if (prepared.persistence !== "ephemeral") {
-        throw new Error("interaction_response_persistence_mismatch");
-      }
-      await this.#settleApplication(pending, prepared.decision, true);
-      return;
-    }
     const response = prepared.backendResponse;
     const browserInteractionId = this.#byBackend.get(
       backendKey(scope, applicationThreadId, response.interactionId),
@@ -1097,7 +920,6 @@ export class InteractionBroker {
     }
     for (const pending of [...this.#pending.values()]) {
       this.#remove(pending);
-      if (pending.owner === "application") pending.reject(abortError());
     }
     this.#byBackend.clear();
     this.#abandonedBackend.clear();
@@ -1148,7 +970,6 @@ export class InteractionBroker {
         pending.applicationThreadId === applicationThreadId
       ) {
         this.#remove(pending);
-        if (pending.owner === "application") pending.reject(abortError());
       }
     }
     this.#bindings.delete(key);
@@ -1334,19 +1155,6 @@ export class InteractionBroker {
       await pending.settling.catch(() => undefined);
       if (this.#pending.get(pending.interaction.id) !== pending) return;
     }
-    if (pending.owner === "application") {
-      this.#remove(pending);
-      pending.reject(abortError());
-      if (publish) {
-        this.#safePublishResolved(
-          pending.scope,
-          pending.applicationThreadId,
-          pending.generation,
-          pending.interaction.id,
-        );
-      }
-      return;
-    }
     const correlation = backendKey(
       pending.scope,
       pending.applicationThreadId,
@@ -1438,61 +1246,6 @@ export class InteractionBroker {
     }
   }
 
-  async #settleApplication(
-    pending: PendingApplicationInteraction,
-    decision: ApplicationDecision,
-    publish: boolean,
-  ): Promise<void> {
-    if (
-      pending.settling ||
-      this.#pending.get(pending.interaction.id) !== pending
-    ) {
-      throw new DomainError(
-        "invalid_transition",
-        "The interaction request is already resolved.",
-      );
-    }
-    const settlement = Promise.resolve().then(() => {
-      if (this.#pending.get(pending.interaction.id) !== pending) {
-        throw new DomainError(
-          "invalid_transition",
-          "The interaction request is already resolved.",
-        );
-      }
-      this.#remove(pending);
-      if (publish) {
-        this.#safePublishResolved(
-          pending.scope,
-          pending.applicationThreadId,
-          pending.generation,
-          pending.interaction.id,
-        );
-      }
-      pending.resolve(decision);
-    });
-    pending.settling = settlement;
-    try {
-      await settlement;
-    } finally {
-      if (pending.settling === settlement) pending.settling = undefined;
-    }
-  }
-
-  #abortApplication(interactionId: string, publish: boolean): void {
-    const pending = this.#pending.get(interactionId);
-    if (!pending || pending.owner !== "application" || pending.settling) return;
-    this.#remove(pending);
-    if (publish) {
-      this.#safePublishResolved(
-        pending.scope,
-        pending.applicationThreadId,
-        pending.generation,
-        pending.interaction.id,
-      );
-    }
-    pending.reject(abortError());
-  }
-
   #ownerPendingCount(scope: RequestScope, applicationThreadId: string): number {
     let count = 0;
     for (const pending of this.#pending.values()) {
@@ -1549,17 +1302,9 @@ export class InteractionBroker {
 
   #remove(pending: PendingInteraction): void {
     this.#pending.delete(pending.interaction.id);
-    if (pending.owner === "provider") {
-      this.#byBackend.delete(
-        backendKey(
-          pending.scope,
-          pending.applicationThreadId,
-          pending.backendInteractionId,
-        ),
-      );
-    } else {
-      pending.signal.removeEventListener("abort", pending.abortListener);
-    }
+    this.#byBackend.delete(
+      backendKey(pending.scope, pending.applicationThreadId, pending.backendInteractionId),
+    );
   }
 
   #clearAbandonedOwner(scope: RequestScope, applicationThreadId: string): void {
@@ -1663,19 +1408,4 @@ export class InteractionBroker {
       await Promise.allSettled([...(this.#operationsByOwner.get(key) ?? [])]);
     }
   }
-}
-
-function abortError(): Error {
-  return new DOMException(
-    "The interaction request was cancelled.",
-    "AbortError",
-  );
-}
-
-function interactionBrokerUnavailable(): DomainError {
-  return new DomainError(
-    "runtime_unavailable",
-    "The thread cannot accept another interaction request right now.",
-    true,
-  );
 }

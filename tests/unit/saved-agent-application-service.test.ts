@@ -4,7 +4,9 @@ import { SavedAgentApplicationService } from "../../src/server/application/saved
 import { SavedAgentBackendAdapterRegistry } from "../../src/server/backends/saved-agent-adapter-registry.js";
 import type { SavedAgentBackendAdapter } from "../../src/server/backends/saved-agent-adapter.js";
 import { savedAgentBackendTypeIdSchema } from "../../src/shared/protocol/saved-agents.js";
-import type { AgentToolBootstrapPolicy } from "../../src/shared/protocol/saved-agents.js";
+import type { ResolvedAgentToolBootstrapPolicy } from "../../src/shared/protocol/saved-agents.js";
+import type { AppliedToolPolicySet } from "../../src/shared/protocol/conversation.js";
+import type { ResolvedToolPolicy, ToolPolicySelection } from "../../src/shared/protocol/tool-policies.js";
 import { DomainError } from "../../src/server/domain/errors.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 
@@ -26,8 +28,9 @@ const agentAuthority = {
   policyIdentity: {
     ownerKind: "thread",
     ownerId: "source-thread",
-    revision: 1,
+    revision: 3,
   },
+  resourceScope: {allowOtherEnvironments:false,allowOtherProjects:true},
   admittedEnvironmentIds: ["environment-1"],
   targetEnvironmentIds: ["environment-1"],
   resolvedResourceRefs: [
@@ -35,6 +38,7 @@ const agentAuthority = {
       kind: "workspace",
       id: workspaceId,
       environmentId: "environment-1",
+      projectId: "project-1",
     },
   ],
   display: { targetEnvironmentLabels: [], resourceLabels: [] },
@@ -91,7 +95,7 @@ function adapter(fails: boolean): SavedAgentBackendAdapter {
 
 function fixture(
   input: {
-    readonly sedesTools?: AgentToolBootstrapPolicy;
+    readonly toolSnapshot?: ResolvedAgentToolBootstrapPolicy;
     readonly adapterAFails?: boolean;
     readonly adapterBFails?: boolean;
     readonly sourceWorkspaceId?: string;
@@ -100,6 +104,8 @@ function fixture(
     readonly sourceAvailable?: boolean;
     readonly sourceBackingState?: "unbound" | "creating" | "bound";
     readonly toolPolicyChangesBeforeFence?: boolean;
+    readonly appliedPolicySet?: AppliedToolPolicySet | null;
+    readonly appliedPolicySetChangesBeforeFence?: boolean;
     readonly isolationUnavailable?: boolean;
     readonly agentBackendTypeId?: string;
     readonly admittedIsolationNetworkProfiles?: ReadonlySet<
@@ -181,6 +187,10 @@ function fixture(
     draftInput.bootstrap?.assertDurableFences({
       assertActive: vi.fn(),
     });
+    if (draftInput.initializeApplicationThread) {
+      const profile = profiles.find(item => item.id === draftInput.connectionProfileId)!;
+      draftInput.initializeApplicationThread({transaction:{assertActive:vi.fn()},applicationThreadId:"30000000-0000-4000-8000-000000000001",target:{connection:profile,workspace:{summary:{id:draftInput.workspaceId},canonicalPath:"/workspace"}},now:1});
+    }
     lifecycleCreateCompleted = true;
     return {
       applicationThreadId: "30000000-0000-4000-8000-000000000001",
@@ -204,6 +214,7 @@ function fixture(
     getWorkspace: (_scope: unknown, requestedWorkspaceId: string) => ({
       id: requestedWorkspaceId,
       environmentId: workspaceEnvironmentId,
+      projectId: "project-1",
       canonicalPath: "/workspace",
       revision: 0,
       environmentConfigurationRevision: 0,
@@ -241,10 +252,11 @@ function fixture(
       applicationThreadId: "source-thread",
       enabled: true,
       presentation: { surface: "native", mode: "individual" },
-      accessBoundary: "unrestricted",
+      resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
       revision: 3,
       updatedAt: 1,
       enabledToolIds: ["task.list"],
+      policySet: input.appliedPolicySet ?? null,
     })
     .mockImplementation(() => ({
       tenantId: scope.tenantId,
@@ -252,13 +264,30 @@ function fixture(
       applicationThreadId: "source-thread",
       enabled: true,
       presentation: { surface: "native", mode: "individual" },
-      accessBoundary: "unrestricted",
+      resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
       revision: input.toolPolicyChangesBeforeFence ? 4 : 3,
       updatedAt: input.toolPolicyChangesBeforeFence ? 2 : 1,
       enabledToolIds: ["task.list"],
+      policySet: input.appliedPolicySetChangesBeforeFence ? null : input.appliedPolicySet ?? null,
     }));
   const reserveWorkspace = vi.fn();
+  const resolvePolicy = (_scope: RequestScope, selection: {
+    agentSelection?: ToolPolicySelection;
+    threadSelection?: ToolPolicySelection;
+  }): ResolvedToolPolicy => selection.agentSelection?.kind === "policy_set" && input.toolSnapshot
+    ? {...structuredClone(input.toolSnapshot),source:"agent",policySet:{id:selection.agentSelection.policySetId,name:"Tools",revision:0}}
+    : {enabled:false,enabledToolIds:[],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false},source:selection.threadSelection?.kind === "disabled" ? "thread" : "default"};
   const service = new SavedAgentApplicationService({
+    principalToolClients: {get: vi.fn()} as never,
+    policySets: {
+      repository: {database},
+      assertSelection: vi.fn(),
+      resolvePolicy,
+      inspectPolicy: (requestedScope: RequestScope, selection: Parameters<typeof resolvePolicy>[1]) => ({
+        kind: "resolved",
+        policy: resolvePolicy(requestedScope, selection),
+      }),
+    } as never,
     agents: {
       list: listAgents,
       get: () => ({
@@ -267,7 +296,8 @@ function fixture(
         backendTypeId: input.agentBackendTypeId ?? typeId,
         backend: adapter(false).presentation,
         backendOverrides: [],
-        ...(input.sedesTools ? { sedesTools: input.sedesTools } : {}),
+        toolPolicySelection: input.toolSnapshot ? {kind:"policy_set",policySetId:"50000000-0000-4000-8000-000000000001"} : {kind:"inherit"},
+        toolPresentation: input.toolSnapshot?.presentation,
         revision: 0,
         createdAt: "2026-08-08T00:00:00.000Z",
         updatedAt: "2026-08-08T00:00:00.000Z",
@@ -440,7 +470,8 @@ describe("SavedAgentApplicationService", () => {
           enabled: true,
           enabledToolIds: ["task.list"],
           presentation: { surface: "native", mode: "individual" },
-          accessBoundary: "unrestricted",
+          resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
+          policySet: null,
           now: 123,
         },
       );
@@ -451,6 +482,35 @@ describe("SavedAgentApplicationService", () => {
     } finally {
       current.database.close();
     }
+  });
+
+  it("copies the current applied set snapshot without consulting its live definition", async () => {
+    const policySet = {id: "50000000-0000-4000-8000-000000000001", name: "Previously applied", revision: 3};
+    const current = fixture({adapterAFails: false, eligibleToolIds: new Set(["task.list"]), appliedPolicySet: policySet});
+    try {
+      await current.service.createThreadFromSettings(scope, "source-thread", {
+        title: "Copied tools", mutationId: "30000000-0000-4000-8000-000000000008",
+      });
+      current.createServerDraft.mock.calls[0]![1].bootstrap.initializeAgentTools({
+        transaction: {assertActive: vi.fn()}, applicationThreadId: "copied-thread", now: 123,
+      });
+      expect(current.initializeToolPolicy).toHaveBeenCalledWith(scope, "copied-thread", expect.objectContaining({policySet}));
+    } finally {current.database.close();}
+  });
+
+  it("fails the copy fence when the source applied set changes", async () => {
+    const current = fixture({
+      adapterAFails: false, eligibleToolIds: new Set(["task.list"]),
+      appliedPolicySet: {id: "50000000-0000-4000-8000-000000000001", name: "Applied", revision: 3},
+      appliedPolicySetChangesBeforeFence: true,
+    });
+    try {
+      await expect(current.service.createThreadFromSettings(scope, "source-thread", {
+        title: "Copied tools", mutationId: "30000000-0000-4000-8000-000000000009",
+      })).rejects.toMatchObject({code: "conflict"});
+      expect(current.initializeToolPolicy).not.toHaveBeenCalled();
+      expect(current.handoffThreadChange).not.toHaveBeenCalled();
+    } finally {current.database.close();}
   });
 
   it("refuses an automation settings copy when the source starts before its reservation", async () => {
@@ -611,6 +671,7 @@ describe("SavedAgentApplicationService", () => {
               ownerId: "source-thread",
               revision: 1,
             },
+            resourceScope: {allowOtherEnvironments:false,allowOtherProjects:false},
             admittedEnvironmentIds: ["environment-1"],
             targetEnvironmentIds: [],
             resolvedResourceRefs: [],
@@ -661,11 +722,12 @@ describe("SavedAgentApplicationService", () => {
       expect(result.targetId).toBe("target-a");
       expect(current.createServerDraft).toHaveBeenCalledWith(
         scope,
-        {
+        expect.objectContaining({
           workspaceId,
           connectionProfileId: "target-a",
           title: "Configure after creation",
-        },
+          initializeApplicationThread: expect.any(Function),
+        }),
         undefined,
       );
       expect(current.createServerDraft.mock.calls[0]![1]).not.toHaveProperty(
@@ -750,6 +812,8 @@ describe("SavedAgentApplicationService", () => {
         ),
       ).resolves.toMatchObject({ targetId: "target-a" });
       expect(admitted.createServerDraft).toHaveBeenCalledOnce();
+      expect(admitted.reserveWorkspace).toHaveBeenCalledOnce();
+      expect(admitted.initializeToolPolicy).toHaveBeenCalledOnce();
     } finally {
       admitted.database.close();
     }
@@ -923,7 +987,7 @@ describe("SavedAgentApplicationService", () => {
               sourceWorkspaceId,
             },
             mutationId: "mutation-cross-workspace",
-            environmentAuthority: agentAuthority,
+            environmentAuthority: { ...agentAuthority, defaults: { ...agentAuthority.defaults, workspaceId: sourceWorkspaceId } },
           },
         ),
       ).resolves.toMatchObject({ workspaceId, targetId: "target-b" });
@@ -948,6 +1012,7 @@ describe("SavedAgentApplicationService", () => {
       ) => ({
         id: requestedWorkspaceId,
         environmentId: "environment-2",
+        projectId: "project-1",
         canonicalPath: "/workspace",
         revision: 1,
         environmentConfigurationRevision: 1,
@@ -971,7 +1036,7 @@ describe("SavedAgentApplicationService", () => {
               sourceWorkspaceId,
             },
             mutationId: "mutation-changed-destination",
-            environmentAuthority: agentAuthority,
+            environmentAuthority: { ...agentAuthority, defaults: { ...agentAuthority.defaults, workspaceId: sourceWorkspaceId } },
           },
         ),
       ).rejects.toMatchObject({ code: "not_found" });
@@ -983,15 +1048,15 @@ describe("SavedAgentApplicationService", () => {
 
   it("bootstraps an active CLI tool policy without requiring CLI provisioning", async () => {
     const toolId = "task.list";
-    const sedesTools = {
+    const toolSnapshot = {
       enabled: true,
       enabledToolIds: [toolId],
       presentation: { surface: "cli" as const, mode: "progressive" as const },
-      accessBoundary: "unrestricted" as const,
+      resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
     };
     const current = fixture({
       eligibleToolIds: new Set([toolId]),
-      sedesTools,
+      toolSnapshot,
     });
     try {
       await current.service.createThread(
@@ -1016,7 +1081,7 @@ describe("SavedAgentApplicationService", () => {
 
       // Materialization owns a complete policy copy. A later Saved Agent edit
       // cannot retroactively change the thread policy waiting to be committed.
-      (sedesTools as { accessBoundary: string }).accessBoundary = "environment";
+      toolSnapshot.resourceScope.allowOtherEnvironments = false;
 
       const transaction = { assertActive: vi.fn() };
       lifecycleInput.bootstrap.initializeAgentTools({
@@ -1032,7 +1097,8 @@ describe("SavedAgentApplicationService", () => {
           enabled: true,
           enabledToolIds: [toolId],
           presentation: { surface: "cli", mode: "progressive" },
-          accessBoundary: "unrestricted",
+          resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
+          policySet: {id: "50000000-0000-4000-8000-000000000001", name: "Tools", revision: 0},
           now: 123,
         },
       );

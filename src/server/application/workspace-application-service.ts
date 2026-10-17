@@ -15,6 +15,7 @@ import {
   projectScopeRefs,
   requireAdmittedResource,
   requireAdmittedResources,
+  resourceWithinScope,
   type AgentToolEnvironmentAuthorityReader,
   type TrustedEnvironmentAuthorityGrant,
 } from "../agent-tools/environment/environment-authority.js";
@@ -68,7 +69,7 @@ export class WorkspaceApplicationService {
         "validateWorkspace"
       >;
       readonly publications: WorkspaceApplicationPublication;
-      /** Live project facts for an agent that adds a directory to a project. */
+      /** Live project facts for agent admission and conflict visibility. */
       readonly projectAuthority?: Pick<
         AgentToolEnvironmentAuthorityReader,
         "resolveProject"
@@ -122,15 +123,9 @@ export class WorkspaceApplicationService {
   }
 
   /**
-   * An agent adds a new directory to a project, or restores a removed
-   * location of one, only with that project's authority: either changes the
-   * project's membership, and so the environments it is reachable from. An
-   * agent on one host therefore cannot make a project hosted elsewhere
-   * reachable from its own host without approval. Without a project, a new
-   * directory becomes its own project, an active location is returned
-   * unchanged, and a removed location is a conflict naming its project. A
-   * known directory keeps its project: naming another is a conflict, never
-   * an implicit move.
+   * Opening a location requires its environment and the assigned project.
+   * Shared project membership does not grant access to other hosts. Without
+   * an explicit project, creating a project requires other-project access.
    */
   async openWorkspaceForAgent(
     scope: RequestScope,
@@ -147,6 +142,30 @@ export class WorkspaceApplicationService {
       id: request.environmentId,
       environmentId: request.environmentId,
     });
+    if (request.projectId === undefined && environmentAuthority.resourceScope && !environmentAuthority.resourceScope.allowOtherProjects) {
+      throw new CanonicalAgentToolRequestError("permission_denied", "Access to other projects is disabled for this thread. Specify the current projectId when opening a workspace, or enable access to other projects in tool settings.");
+    }
+    const requireProject = (projectId: string) => {
+      const project = this.input.projectAuthority?.resolveProject(scope, projectId);
+      if (!project) throw new DomainError("not_found", "The project was not found.");
+      requireAdmittedResources(environmentAuthority, projectScopeRefs(project, grantProjectAccessCaller(environmentAuthority), "exact"));
+      return project;
+    };
+    const canDiscloseProject = (projectId: string): boolean => {
+      const project = this.input.projectAuthority?.resolveProject(scope, projectId);
+      if (!project) return false;
+      const caller = grantProjectAccessCaller(environmentAuthority);
+      try {
+        return projectScopeRefs(project, caller, "exact").every((ref) =>
+          resourceWithinScope(ref, caller) &&
+          (ref.environmentId === undefined || environmentAuthority.admittedEnvironmentIds.includes(ref.environmentId)),
+        );
+      } catch (error) {
+        if (error instanceof CanonicalAgentToolRequestError && error.code === "permission_denied") return false;
+        throw error;
+      }
+    };
+    if (request.projectId !== undefined) requireProject(request.projectId);
     const validated = await this.#validate(
       scope,
       request,
@@ -161,30 +180,19 @@ export class WorkspaceApplicationService {
         });
       } catch (error) {
         if (!(error instanceof RemovedLocationError)) throw error;
+        // A visible conflict may identify the project for a new, explicitly
+        // admitted retry. This grants no authority to restore the location.
         throw new CanonicalAgentToolRequestError(
           "conflict",
-          `This directory is a removed location of project ${error.location.projectId}. To restore it there, retry with that projectId.`,
+          canDiscloseProject(error.location.projectId)
+            ? `This directory is a removed location of project ${error.location.projectId}. To restore it there, retry with that projectId.`
+            : error.message,
         );
       }
     }
-    // Rechecked in the admitting turn against the project's current
-    // membership, and bound to that membership at commit: a location edit
-    // since admission changes the project's refs and fails closed.
-    const project = this.input.projectAuthority?.resolveProject(
-      scope,
-      request.projectId,
-    );
-    if (!project) {
-      throw new DomainError("not_found", "The project was not found.");
-    }
-    requireAdmittedResources(
-      environmentAuthority,
-      projectScopeRefs(
-        project,
-        grantProjectAccessCaller(environmentAuthority),
-        "exact",
-      ),
-    );
+    // Repeat the check after host validation: membership may have changed
+    // while validating the path. Neither check grants a new project.
+    const project = requireProject(request.projectId);
     return this.#admit(scope, validated, {
       project: {
         kind: "existing",

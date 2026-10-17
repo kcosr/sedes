@@ -8,7 +8,7 @@ import type { RequestScope } from "../../identity/identity-provider.js";
 import type { TrustedToolInvocationContext } from "../contracts/agent-tool-contracts.js";
 import {
   currentScopedResourceRefs, environmentAuthorityContinuationDigest, grantProjectAccessCaller,
-  requireAdmittedResources, scopeAuthorityRefs, type AgentToolEnvironmentAuthorityReader,
+  requireAdmittedResources, requireExactScopeQuery, requireThreadResourceScope, scopeAuthorityRefs, type AgentToolEnvironmentAuthorityReader,
 } from "../environment/environment-authority.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 import { resolveTaskTargetScope } from "./management-tool-schemas.js";
@@ -27,6 +27,7 @@ export class WorkpadAgentToolService {
   }) {}
 
   async execute(operation: "list" | "get" | "revisions" | "create" | "update", raw: unknown, context: TrustedToolInvocationContext): Promise<unknown> {
+    requireThreadResourceScope(context.environmentAuthority);
     const scope = { tenantId: context.tenantId, principalId: context.principalId };
     const actor = context.subject.kind === "thread_agent"
       ? { kind: "agent" as const, threadId: context.subject.sourceThreadId }
@@ -37,9 +38,13 @@ export class WorkpadAgentToolService {
       const resolved = resolveTaskTargetScope(target.parse(input.scope), context);
       if (operation === "list") {
         const request = listWorkpadsRequestSchema.parse({ ...input, scope: resolved });
-        this.assertScope(scope, resolved, request.scopeMode, context);
+        requireExactScopeQuery(context.environmentAuthority, scopeAuthorityRefs(this.input.authorityReader, scope, resolved, grantProjectAccessCaller(context.environmentAuthority), request.scopeMode));
         return this.input.workpads.list(scope, request, {
-          environmentIds: context.environmentAuthority.targetEnvironmentIds,
+          environmentIds: context.environmentAuthority.admittedEnvironmentIds,
+          projectEnvironmentIds: context.environmentAuthority.callerKind === "thread_agent"
+            ? context.environmentAuthority.resourceScope!.allowOtherEnvironments ? null : [context.environmentAuthority.defaults.environmentId]
+            : resolved.kind === "project" ? null : context.environmentAuthority.admittedEnvironmentIds,
+          ...(context.environmentAuthority.resourceScope && !context.environmentAuthority.resourceScope.allowOtherProjects ? {projectId: context.environmentAuthority.defaults.projectId!} : {}),
           continuationKey: environmentAuthorityContinuationDigest(context.environmentAuthority, tool),
         });
       }

@@ -55,7 +55,7 @@ const agentTools: BackendAgentToolFacade = {
   readPolicy: () => ({
     enabled: false,
     presentation: { surface: "cli", mode: "progressive" },
-    accessBoundary: "environment",
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
     enabledToolIds: [],
   }),
   invoke: async () => {

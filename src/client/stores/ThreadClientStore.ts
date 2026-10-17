@@ -13,6 +13,7 @@ import type {
 import { useSyncExternalStore } from "react";
 import type {
   ActivityDetailMode,
+  AppliedToolPolicySetReference,
   SteerTarget,
   ComposerSkillCatalog,
   ComposerAttachmentDescriptor,
@@ -297,10 +298,11 @@ type InteractionResponse = Extract<
 
 export interface SetAgentToolPolicyInput {
   readonly expectedPolicyRevision: number;
+  readonly policySet?: AppliedToolPolicySetReference | null;
   readonly enabled: boolean;
   readonly enabledToolIds: readonly string[];
   readonly presentation: NormalizedThreadSnapshot["agentTools"]["presentation"];
-  readonly accessBoundary: NormalizedThreadSnapshot["agentTools"]["accessBoundary"];
+  readonly resourceScope: NormalizedThreadSnapshot["agentTools"]["resourceScope"];
 }
 
 export class ThreadClientStore {
@@ -2095,6 +2097,14 @@ export class ThreadClientStore {
     });
   }
 
+  listToolPolicySets(signal?: AbortSignal) {
+    return this.#api.listToolPolicySets(signal);
+  }
+
+  getToolPolicySet(policySetId: string, signal?: AbortSignal) {
+    return this.#api.getToolPolicySet(policySetId, signal);
+  }
+
   setAgentToolPolicy(
     input: SetAgentToolPolicyInput,
   ): Promise<
@@ -2130,27 +2140,26 @@ export class ThreadClientStore {
       ) {
         throw new Error("The selected agent tool presentation is unavailable.");
       }
-      const eligibleToolIds = new Set(
+      const knownToolIds = new Set(
         snapshot.agentTools.groups.flatMap(({ tools }) =>
-          tools
-            .filter(({ available }) => available !== false)
-            .map(({ id }) => id),
+          tools.map(({ id }) => id),
         ),
       );
       if (
         new Set(input.enabledToolIds).size !== input.enabledToolIds.length ||
-        input.enabledToolIds.some((id) => !eligibleToolIds.has(id))
+        input.enabledToolIds.some((id) => !knownToolIds.has(id))
       ) {
         throw new Error("The selected agent tool set is no longer available.");
       }
       return await this.#api.operateThread(this.threadId, {
         kind: "set_agent_tool_policy",
+        ...(input.policySet !== undefined ? { policySet: input.policySet } : {}),
         mutationId: crypto.randomUUID(),
         expectedPolicyRevision: input.expectedPolicyRevision,
         enabled: input.enabled,
         enabledToolIds: [...input.enabledToolIds],
         presentation: input.presentation,
-        accessBoundary: input.accessBoundary,
+        resourceScope: input.resourceScope,
       });
     });
   }

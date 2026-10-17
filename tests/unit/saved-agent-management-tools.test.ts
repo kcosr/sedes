@@ -18,6 +18,11 @@ import { createPiAgentToolSet } from "../../src/server/backends/pi/pi-agent-tool
 import { PiToolAccessController } from "../../src/server/backends/pi/pi-tool-access.js";
 import { OPENCODE_SAVED_AGENT_PRESENTATION } from "../../src/server/backends/opencode/opencode-saved-agent-adapter.js";
 import { backendBrandSchema } from "../../src/shared/protocol/conversation.js";
+import type { SavedAgentBackendAdapter } from "../../src/server/backends/saved-agent-adapter.js";
+import { SavedAgentBackendAdapterRegistry } from "../../src/server/backends/saved-agent-adapter-registry.js";
+import { SavedAgentRepository } from "../../src/server/db/repositories/saved-agent-repository.js";
+import { SavedAgentService } from "../../src/server/domain/saved-agent-service.js";
+import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 const agentId = "10000000-0000-4000-8000-000000000001";
 const workspaceId = "10000000-0000-4000-8000-000000000002";
@@ -32,6 +37,7 @@ function service(
     backendTypeId: "pi",
     backend: { typeId: "pi", label: { text: "Pi" }, brand: "pi" as const },
     backendOverrides: [],
+    toolPolicySelection: { kind: "inherit" as const },
     revision: 0,
     createdAt: "2026-08-08T00:00:00.000Z",
     updatedAt: "2026-08-08T00:00:00.000Z",
@@ -84,6 +90,7 @@ function context(): TrustedToolInvocationContext {
     environmentAuthority: {
       id: "authority-1",
       callerKind: "thread_agent",
+      resourceScope: {allowOtherEnvironments:true,allowOtherProjects:true},
       defaults: {
         kind: "thread_agent",
         environmentId: "environment-1",
@@ -100,6 +107,7 @@ function context(): TrustedToolInvocationContext {
       targetEnvironmentIds: [],
       resolvedResourceRefs: [
         { kind: "workspace", id: workspaceId, environmentId: "environment-1" },
+        { kind: "saved_agent", id: agentId, revision: 0 },
       ],
       display: { targetEnvironmentLabels: [], resourceLabels: [] },
       canonicalInputDigest: "input-digest",
@@ -127,7 +135,7 @@ describe("Saved Agent canonical tools", () => {
     const value = service({
       list: () => ({ items: [{
         id: agent.id, name: agent.name, backendTypeId: agent.backendTypeId,
-        backend, overrideCount: 0, sedesTools: null, revision: agent.revision,
+        backend, overrideCount: 0, toolPolicySelection: {kind:"inherit"}, revision: agent.revision,
         createdAt: agent.createdAt, updatedAt: agent.updatedAt,
       }] }),
       optionsForAgentTool: async () => ({
@@ -152,6 +160,118 @@ describe("Saved Agent canonical tools", () => {
     expect(registry.validatesOutput(create.id, create.schemaVersion, {
       ...createOutput, backend: { ...backend, brand: "unknown" },
     })).toBe(false);
+  });
+
+  it("describes a missing inherited policy without losing presentation choices", async () => {
+    const missing = { kind: "missing_policy_set" as const, source: "account" as const, policySetId: agentId };
+    const result = {
+      kind: "configuration" as const,
+      target: { id: targetId, label: { text: "Target" }, backend: { typeId: "pi", label: { text: "Pi" }, brand: "pi" as const } },
+      configuration: { backendTypeId: "pi", fields: [], canonicalOverrides: [] },
+      sedesTools: {
+        defaultPolicy: null,
+        defaultIssue: missing,
+        resolvedPolicy: { enabled: false, enabledToolIds: [], resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
+          presentation: { surface: "cli" as const, mode: "progressive" as const }, source: "thread" as const },
+        defaultPresentation: { surface: "cli" as const, mode: "progressive" as const },
+        groups: [],
+        presentationOptions: [{ surface: "cli" as const, modes: ["progressive" as const] }],
+      },
+    };
+    const options = createSavedAgentOptionsToolDefinition(service({ optionsForAgentTool: async () => result }));
+    const registry = new AgentToolRegistry();
+    registry.register(options);
+    const output = await options.execute({ targetId }, context());
+    expect(output).toEqual(result);
+    expect(registry.validatesOutput(options.id, options.schemaVersion, output)).toBe(true);
+  });
+
+  it("never exposes or accepts Saved Agent environment-variable bindings", async () => {
+    const agent = await service().get({ tenantId: "tenant-1", principalId: "principal-1" }, agentId);
+    const configured = { ...agent, environmentVariables: {
+      PRIVATE: { kind: "literal" as const, value: "private-literal-value" },
+      TOKEN: { kind: "secret" as const, source: { kind: "environment" as const, name: "HOST_TOKEN" } },
+    } };
+    const value = service({ createAgentForAgentTool: () => configured, updateAgentForAgentTool: () => configured, get: () => configured });
+    const create = createSavedAgentCreateToolDefinition(value);
+    const update = createSavedAgentUpdateToolDefinition(value);
+    const get = createSavedAgentGetToolDefinition(value);
+    const registry = new AgentToolRegistry();
+    registry.register(create);
+    registry.register(update);
+    registry.register(get);
+    const request = { name: "Review", authoringContext: { workspaceId, targetId }, backendOverrides: [] };
+    for (const environmentVariables of [configured.environmentVariables,
+      [{ name: "TOKEN", binding: { kind: "secret", source: { kind: "protected_file", path: "/private/secret" } } }]]) {
+      expect(registry.validatesInput(create.id, create.schemaVersion, { ...request, environmentVariables })).toBe(false);
+      expect(registry.validatesInput(update.id, update.schemaVersion, { agentId, expectedRevision: 0, ...request, environmentVariables })).toBe(false);
+    }
+    const outputs = [await create.execute(request, context()),
+      await update.execute({ agentId, expectedRevision: 0, name: "Updated" }, context()),
+      await get.execute({ agentId }, context())];
+    for (const output of outputs) {
+      expect(output).not.toHaveProperty("environmentVariables");
+      expect(JSON.stringify(output)).not.toContain("private-literal-value");
+      expect(JSON.stringify(output)).not.toContain("HOST_TOKEN");
+      expect(registry.validatesOutput(get.id, get.schemaVersion, output)).toBe(true);
+    }
+  });
+
+  it("preserves persisted user bindings when the canonical tool updates an Agent name", async () => {
+    const current = savedAgentDatabase();
+    try {
+      const unused = () => { throw new Error("Metadata updates must not resolve a backend target."); };
+      const adapter: SavedAgentBackendAdapter = {
+        typeId: "pi", backendKind: "pi", overrideSchemaVersion: 1,
+        presentation: { typeId: "pi", label: { text: "Pi" }, brand: "pi" },
+        validateOverrides: ({ overrides }) => ({ backendTypeId: "pi", schemaVersion: 1, overrides: [...overrides] }),
+        prepareResolutionContext: unused, describeEditor: unused, resolve: unused,
+        captureThreadConfiguration: unused, assertThreadConfigurationCapture: unused,
+        initializeNewThread: unused,
+      };
+      const repository = new SavedAgentRepository(current.database);
+      const agents = new SavedAgentService(repository, new SavedAgentBackendAdapterRegistry([
+        { backendInstanceId: "pi-primary", adapter },
+      ]));
+      const bindings = {
+        PRIVATE: { kind: "literal" as const, value: "stored-private-literal" },
+        TOKEN: { kind: "secret" as const, source: { kind: "environment" as const, name: "STORED_HOST_TOKEN" } },
+      };
+      repository.create(current.scope, {
+        id: agentId, name: "User configured Agent", description: "", backendTypeId: "pi",
+        backendOverridesSchemaVersion: 1, backendOverrides: [],
+        environmentVariables: bindings, toolPolicySelection: { kind: "inherit" }, now: 100,
+      });
+      const storedBindings = () => current.database.prepare(
+        "SELECT environment_variables_json AS bindings FROM saved_agents WHERE tenant_id=? AND owner_principal_id=? AND id=?",
+      ).get(current.scope.tenantId, current.scope.principalId, agentId);
+      const before = storedBindings();
+      const value = service({
+        get: (scope, id) => agents.get(scope, id),
+        updateAgentForAgentTool: (scope, id, input) => agents.update(scope, id, input, 200),
+      });
+      const update = createSavedAgentUpdateToolDefinition(value);
+      const get = createSavedAgentGetToolDefinition(value);
+      const registry = new AgentToolRegistry();
+      registry.register(update);
+      registry.register(get);
+      const invocation = { ...context(), ...current.scope };
+      const output = await update.execute({ agentId, expectedRevision: 0, name: "Renamed by agent" }, invocation);
+
+      expect(output).toMatchObject({ id: agentId, name: "Renamed by agent", revision: 1 });
+      expect(repository.get(current.scope, agentId).environmentVariables).toEqual(bindings);
+      expect(storedBindings()).toEqual(before);
+      const readInvocation = { ...invocation, environmentAuthority: {
+        ...invocation.environmentAuthority,
+        resolvedResourceRefs: [{ kind: "saved_agent" as const, id: agentId, revision: 1 }],
+      } };
+      for (const response of [output, await get.execute({ agentId }, readInvocation)]) {
+        expect(response).not.toHaveProperty("environmentVariables");
+        expect(JSON.stringify(response)).not.toContain("stored-private-literal");
+        expect(JSON.stringify(response)).not.toContain("STORED_HOST_TOKEN");
+        expect(registry.validatesOutput(update.id, update.schemaVersion, response)).toBe(true);
+      }
+    } finally { current.database.close(); }
   });
 
   it("registers six independently exposable contracts with truthful effects", () => {
@@ -181,7 +301,7 @@ describe("Saved Agent canonical tools", () => {
       "saved_agent.create",
       "saved_agent.update",
     ]) {
-      expect(registry.get(id, 5).schemaVersion).toBe(5);
+      expect(registry.get(id, 6).schemaVersion).toBe(6);
       expect(() => registry.get(id, 4)).toThrow();
     }
     expect(
@@ -212,7 +332,7 @@ describe("Saved Agent canonical tools", () => {
           enabled: true,
           presentation: { surface: "native", mode: "progressive" },
           enabledToolIds: artifacts.map(({ id }) => id),
-          accessBoundary: "environment",
+          resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
           revision: 1,
         }),
         invoke: vi.fn(),
@@ -350,19 +470,19 @@ describe("Saved Agent canonical tools", () => {
     expect(updateAgent).not.toHaveBeenCalled();
   });
 
-  it("publishes only strict thread.create@5 saved-Agent and Custom branches", () => {
+  it("publishes only strict thread.create@6 saved-Agent and Custom branches", () => {
     const registry = new AgentToolRegistry();
     registry.register(
       createThreadCreateToolDefinition({ createThread: vi.fn() }),
     );
     expect(
-      registry.validatesInput("thread.create", 5, {
+      registry.validatesInput("thread.create", 6, {
         title: "Review",
         configuration: { kind: "saved_agent", agentId },
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("thread.create", 5, {
+      registry.validatesInput("thread.create", 6, {
         title: "Review",
         configuration: {
           kind: "custom",
@@ -372,28 +492,26 @@ describe("Saved Agent canonical tools", () => {
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("thread.create", 5, {
+      registry.validatesInput("thread.create", 6, {
         title: "Legacy",
         targetId,
       }),
     ).toBe(false);
+    expect(registry.validatesInput("thread.create", 6, {
+      title: "No old inline policy", configuration: {kind:"custom", targetId, sedesTools:{enabled:true}},
+    })).toBe(false);
+    expect(registry.validatesInput("thread.create", 6, {
+      title:"Review", toolPolicySelection:{kind:"policy_set",policySetId:agentId},
+      configuration:{kind:"saved_agent",agentId},
+    })).toBe(true);
     expect(() => registry.get("thread.create", 4)).toThrow();
-    expect(registry.get("thread.create", 5).execution.maximumInputBytes).toBe(
+    expect(registry.get("thread.create", 6).execution.maximumInputBytes).toBe(
       256 * 1_024,
     );
 
-    const largestToolPolicy = {
-      enabled: true,
-      enabledToolIds: Array.from(
-        { length: 512 },
-        (_, index) =>
-          `tool.${index.toString().padStart(3, "0")}.${"x".repeat(118)}`,
-      ),
-      presentation: { surface: "native", mode: "progressive" },
-      accessBoundary: "unrestricted",
-    };
     const largestCustomRequest = {
       title: "Review",
+      toolPolicySelection: { kind: "policy_set", policySetId: agentId },
       configuration: {
         kind: "custom",
         targetId,
@@ -401,11 +519,10 @@ describe("Saved Agent canonical tools", () => {
           id: `field.${index}`,
           value: "x".repeat(240),
         })),
-        sedesTools: largestToolPolicy,
       },
     };
     expect(
-      registry.validatesInput("thread.create", 5, largestCustomRequest),
+      registry.validatesInput("thread.create", 6, largestCustomRequest),
     ).toBe(true);
     const serializedBytes = Buffer.byteLength(
       JSON.stringify(largestCustomRequest),
@@ -413,7 +530,7 @@ describe("Saved Agent canonical tools", () => {
     );
     expect(serializedBytes).toBeGreaterThan(4_096);
     expect(serializedBytes).toBeLessThan(
-      registry.get("thread.create", 5).execution.maximumInputBytes,
+      registry.get("thread.create", 6).execution.maximumInputBytes,
     );
   });
 

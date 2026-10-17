@@ -4,11 +4,18 @@ import {
   backendNormalizedMigrations,
 } from "../../src/server/db/migrate.js";
 import {
-  SAVED_AGENT_SEDES_TOOLS_MAX_BYTES,
   SAVED_AGENT_OVERRIDES_MAX_BYTES,
 } from "../../src/shared/protocol/saved-agents.js";
-import { SavedAgentRepository } from "../../src/server/db/repositories/saved-agent-repository.js";
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+
+// Frozen pre-149 storage contract; current Agents reference reusable policy sets.
+const LEGACY_SAVED_AGENT_TOOLS_MAX_BYTES = 128 * 1_024;
+function legacyTools(current: ReturnType<typeof savedAgentDatabase>, id: string) {
+  const row = current.database.prepare("SELECT sedes_tools_json AS policy FROM saved_agents WHERE tenant_id=? AND owner_principal_id=? AND id=?")
+    .get(current.scope.tenantId, current.scope.principalId, id) as { policy: string };
+  return { sedesTools: JSON.parse(row.policy) };
+}
+const throughAccessBoundary = backendNormalizedMigrations.filter(migration => migration.version <= 92);
 
 describe("saved agents migration", () => {
   it("rewrites legacy explicit tool policies into canonical strict bytes", () => {
@@ -66,10 +73,10 @@ describe("saved agents migration", () => {
           '{"enabled":true,"enabledToolIds":["agent.context"]}',
         );
 
-      applyDatabaseMigrations(current.database, backendNormalizedMigrations);
+      applyDatabaseMigrations(current.database, throughAccessBoundary);
 
       expect(
-        new SavedAgentRepository(current.database).get(current.scope, id),
+        legacyTools(current, id),
       ).toMatchObject({
         sedesTools: {
           enabled: true,
@@ -89,10 +96,7 @@ describe("saved agents migration", () => {
           '{"enabled":true,"enabledToolIds":["agent.context","thread.status"],"presentation":{"surface":"native","mode":"progressive"},"accessBoundary":"environment"}',
       });
       expect(
-        new SavedAgentRepository(current.database).get(
-          current.scope,
-          cliOnlyId,
-        ),
+        legacyTools(current, cliOnlyId),
       ).toMatchObject({
         sedesTools: {
           enabled: true,
@@ -112,10 +116,7 @@ describe("saved agents migration", () => {
           '{"enabled":true,"enabledToolIds":["agent.context"],"presentation":{"surface":"cli","mode":"progressive"},"accessBoundary":"environment"}',
       });
       expect(
-        new SavedAgentRepository(current.database).get(
-          current.scope,
-          implicitPiId,
-        ),
+        legacyTools(current, implicitPiId),
       ).toMatchObject({
         sedesTools: {
           enabled: true,
@@ -200,7 +201,7 @@ describe("saved agents migration", () => {
         )
         .run(current.scope.tenantId, current.scope.principalId, id, policy);
 
-      applyDatabaseMigrations(current.database, backendNormalizedMigrations);
+      applyDatabaseMigrations(current.database, throughAccessBoundary);
 
       expect(
         current.database
@@ -227,7 +228,7 @@ describe("saved agents migration", () => {
           '{"enabled":true,"enabledToolIds":["agent.context"],"presentation":{"surface":"cli","mode":"progressive"},"accessBoundary":"environment"}',
       });
       expect(
-        new SavedAgentRepository(current.database).get(current.scope, id),
+        legacyTools(current, id),
       ).toMatchObject({
         sedesTools: {
           enabled: true,
@@ -270,7 +271,7 @@ describe("saved agents migration", () => {
           '{"enabled":true,"enabledToolIds":["agent.context"],"environmentAccess":{"otherEnvironments":"ask"}}',
         );
 
-      applyDatabaseMigrations(current.database, backendNormalizedMigrations);
+      applyDatabaseMigrations(current.database, throughAccessBoundary);
 
       expect(
         current.database
@@ -283,7 +284,7 @@ describe("saved agents migration", () => {
           '{"enabled":true,"enabledToolIds":["agent.context"],"presentation":{"surface":"native","mode":"progressive"},"accessBoundary":"environment"}',
       });
       expect(
-        new SavedAgentRepository(current.database).get(current.scope, agentId),
+        legacyTools(current, agentId),
       ).toMatchObject({
         sedesTools: {
           presentation: { surface: "native", mode: "progressive" },
@@ -338,7 +339,7 @@ describe("saved agents migration", () => {
   });
 
   it("enforces strict scalar and serialized storage bounds", () => {
-    const current = savedAgentDatabase();
+    const current = savedAgentDatabase(147);
     try {
       const base = [
         current.scope.tenantId,
@@ -443,7 +444,7 @@ describe("saved agents migration", () => {
           1,
           "[]",
           JSON.stringify({
-            padding: "x".repeat(SAVED_AGENT_SEDES_TOOLS_MAX_BYTES),
+            padding: "x".repeat(LEGACY_SAVED_AGENT_TOOLS_MAX_BYTES),
           }),
           0,
           100,

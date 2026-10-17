@@ -10,6 +10,7 @@ const template = {
   targetId: "target-pi",
   executionWorkspace: { kind: "direct" },
   agentId: "11111111-1111-4111-8111-111111111111",
+  toolPolicySelection: { kind: "inherit" },
   capturedAgentName: "Careful",
   capturedWorkspaceName: "Sedes",
   capturedTargetName: "Local SDK",

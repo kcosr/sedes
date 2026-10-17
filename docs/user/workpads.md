@@ -175,15 +175,12 @@ create, or update workpads, including archiving them. No tool deletes a
 workpad. Agents can address other threads' workpads by scope and thread ID,
 then use a workpad ID for individual reads and updates.
 
-The thread's **Access boundary** controls which access requires approval.
-**Ask outside this thread** requires approval for other threads, project
-workpads, and global workpads. **Ask outside this environment** reaches a
-project's workpads without asking from any environment that hosts one of the
-project's locations, and asks otherwise, including for a project with no
-active location; project scope alone does not isolate agents in the same
-environment. **Allow without asking** removes boundary prompts. Enabled tools
-and principal ownership still apply. See
-[Provider features](provider-features.md).
+The thread's **Allow other environments** and **Allow other projects** rules
+control which records its enabled Workpad tools can access. Lists and searches
+filter to the permitted scope; exact outside-scope reads or edits fail without
+an approval popup. Project Workpads remain shared project documents, and global
+Workpads remain shared account documents. Project subtree searches include
+only permitted thread Workpads. See [Tool policy sets](tool-policies.md).
 
 Moving a workpad changes the scope used to authorize both its current content
 and history. There are no separate per-workpad sharing grants. Agent edits

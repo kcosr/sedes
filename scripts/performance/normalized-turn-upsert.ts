@@ -70,8 +70,9 @@ function snapshot(): NormalizedThreadSnapshot {
     composerCommands: [],
     agentTools: {
       runtimeAvailability: { availability: "available" },
+      policySet: null,
       enabled: false,
-      accessBoundary: "environment",
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       groups: [],
       presentation: { surface: "native", mode: "individual" },
       presentationOptions: [

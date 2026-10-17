@@ -48,7 +48,7 @@ const noAgentTools = {
   readPolicy: () => ({
     enabled: false,
     presentation: { surface: "native" as const, mode: "individual" as const },
-    accessBoundary: "environment" as const,
+    resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
     enabledToolIds: [],
   }),
   invoke: async () => {
@@ -530,7 +530,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       readPolicy: () => ({
         enabled: true,
         presentation: { surface: "native", mode: "individual" },
-        accessBoundary: "environment",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
         enabledToolIds: [toolId],
       }),
       invoke: (input) =>
@@ -556,6 +556,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
           environmentAuthority: {
             id: "real-pi-source-environment-grant",
             callerKind: "thread_agent",
+            resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
             defaults: {
               kind: "thread_agent",
               environmentId: input.source.sourceEnvironmentId,

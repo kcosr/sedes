@@ -1,3 +1,4 @@
+import { testAgentToolExecutionAuthority } from "../support/agent-tool-execution-authority.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { ClientControlService } from "../../src/server/domain/client-control-service.js";
@@ -48,12 +49,14 @@ function fixture(backendKind: BackendKind = "pi", adapter: AgentToolAdapter = "c
   const release = vi.fn();
   const acquire = vi.fn(async () => ({ signal: new AbortController().signal, isCurrent: () => true, release }));
   const canonical = new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined }, clientControls: controls });
-  const gate = new SourceScopedAgentToolService(canonical, { get: () => ({ enabled: true, revision: 1,
+  const gate = new SourceScopedAgentToolService(canonical,
+{ get: () => ({ enabled: true, revision: 1,
     enabledToolIds: options.enabledToolIds ?? allClientTools,
-    presentation: { surface: adapter === "cli" ? "cli" : "native", mode: "progressive" }, accessBoundary: boundary,
-  }) } as unknown as ThreadAgentToolPolicyRepository, new AgentToolEnvironmentAuthorityResolver(reader), { resolveInScope: () => source },
-  { acquireAgentToolApprovalAuthority: async () => ({ generation: "generation", signal: new AbortController().signal, isCurrent: () => true, release: () => {} }) },
-  { requestApplicationDecision: approve }, controls);
+    presentation: { surface: adapter === "cli" ? "cli" : "native", mode: "progressive" }, resourceScope: {allowOtherEnvironments: boundary === "unrestricted", allowOtherProjects: true},
+  }) } as unknown as ThreadAgentToolPolicyRepository,
+new AgentToolEnvironmentAuthorityResolver(reader),
+{ resolveInScope: () => source },
+testAgentToolExecutionAuthority, controls);
   const invoke = (toolId = "client.settings.get", input = {}) => gate.invoke({ source, adapter,
     request: { toolId, schemaVersion: 2, requestId: randomUUID(), input }, signal: new AbortController().signal,
     ...(backendKind === "opencode" ? { accessDecisionAuthority: { acquire } } : {}) });
@@ -62,6 +65,18 @@ function fixture(backendKind: BackendKind = "pi", adapter: AgentToolAdapter = "c
 }
 
 describe("canonical client controls", () => {
+  it("redacts out-of-scope voice-thread IDs from device lists and returned settings",async()=>{
+    const current=fixture("pi","cli","environment");
+    const hiddenState={...state,settings:{revision:2,voice:{audioMode:"off" as const,voiceThreadId:destination,pinDefaultVoiceThread:false,autoListen:false,onlyVoiceThread:false,ignoreOtherDevices:false,followComposerMode:false}}};
+    const hidden=current.clients.register(scope,undefined,{platform:"browser",capabilities:{navigate:true,voice:true,voiceSettings:true},state:hiddenState});
+    const listed=await current.invoke("client.list");
+    expect(listed).toMatchObject({state:"completed",output:{clients:expect.arrayContaining([expect.objectContaining({clientId:hidden.clientId,settings:expect.objectContaining({voice:expect.objectContaining({voiceThreadId:null})})})])}});
+    current.request.mockImplementation(async target=>({status:"applied",state:hiddenState,client:{...current.clients.describe(target),settings:hiddenState.settings}}));
+    const result=await current.invoke("client.settings.get");
+    expect(result).toMatchObject({state:"completed",output:{state:{settings:{voice:{voiceThreadId:null}}},client:{settings:{voice:{voiceThreadId:null}}}}});
+    expect(current.clients.list(scope).find(client=>client.clientId===hidden.clientId)?.settings?.voice.voiceThreadId).toBe(destination);
+  });
+
   it("identifies the turn's starting client in discovery without selecting another connected client", async () => {
     const current = fixture();
     const result = await current.invoke("client.list");
@@ -104,20 +119,19 @@ describe("canonical client controls", () => {
     ["loseAuthority", "client.replay_turn", { threadId: destination, turnId: "ended-turn" }],
     ["changeTurn", "client.replay_turn", { threadId: destination }],
     ["loseAuthority", "client.replay_turn", { threadId: destination }],
-  ] as const)("rejects %s during destination approval for %s rather than retargeting", async (change, toolId, input) => {
+  ] as const)("denies out-of-scope %s attempts for %s without a user approval", async (change, toolId, input) => {
     const current = fixture("pi", "cli", "environment");
-    current.approve.mockImplementation(async () => { current[change](); return "allow"; });
+
     await expect(current.invoke(toolId, input)).rejects.toBeDefined();
     expect(current.request).not.toHaveBeenCalled(); expect(current.select).not.toHaveBeenCalled();
-    expect(current.latestReplyTurnId).not.toHaveBeenCalled(); expect(current.approve).toHaveBeenCalledOnce();
+    expect(current.latestReplyTurnId).not.toHaveBeenCalled(); expect(current.approve).not.toHaveBeenCalled();
   });
 
   it("authorizes a nested default-thread patch and does not let it bypass the environment boundary", async () => {
     const current = fixture("pi", "cli", "environment");
-    await current.invoke("client.settings.update", { expectedRevision: 7, patch: { voice: { voiceThreadId: destination, pinDefaultVoiceThread: true } } });
-    expect(current.approve).toHaveBeenCalledOnce();
-    expect(current.request.mock.calls[0]?.[1]).toMatchObject({ action: "settings.update", expectedRevision: 7,
-      patch: { voiceThreadId: destination, pinDefaultVoiceThread: true }, threadTitle: "Destination" });
+    await expect(current.invoke("client.settings.update", { expectedRevision: 7, patch: { voice: { voiceThreadId: destination, pinDefaultVoiceThread: true } } })).rejects.toMatchObject({toolError:{code:"permission_denied"}});
+    expect(current.approve).not.toHaveBeenCalled();
+    expect(current.request).not.toHaveBeenCalled();
   });
 
   it("sends a blank inventory title as null and bounds a long one without splitting a surrogate pair", async () => {

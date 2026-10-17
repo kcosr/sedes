@@ -1,6 +1,6 @@
 import type { BackendKind } from "../../backends/contracts.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
-import type { AgentToolPresentation } from "../../../shared/protocol/conversation.js";
+import type { AgentToolPresentation, AgentToolResourceScope } from "../../../shared/protocol/conversation.js";
 import type {
   AgentToolAdapter,
   AgentToolCatalogSummary,
@@ -68,11 +68,11 @@ export function agentToolPresentationPermitsAdapter(
 export interface BackendAgentToolPolicy {
   readonly enabled: boolean;
   readonly presentation: AgentToolPresentation;
-  readonly accessBoundary: "thread" | "environment" | "unrestricted";
+  readonly resourceScope: AgentToolResourceScope;
   readonly enabledToolIds: readonly string[];
 }
 
-/** Trusted provider-side provenance for interactive access decisions and client controls. */
+/** Trusted provider-side current-user proof for client controls. */
 export interface BackendAgentToolAccessDecisionAuthority {
   acquire(signal: AbortSignal): Promise<{
     readonly signal: AbortSignal;
