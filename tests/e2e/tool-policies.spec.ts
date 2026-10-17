@@ -3,6 +3,7 @@ import { test, expect } from "./fixtures";
 import { configurationSnapshotSchema } from "../../src/shared/protocol/configuration-admin.js";
 import { normalizedApplicationSnapshotSchema } from "../../src/shared/protocol/application.js";
 import { normalizedThreadSnapshotSchema } from "../../src/shared/protocol/conversation.js";
+import { savedAgentOptionsResultSchema, type NormalizedAgentConfigurationOverrides } from "../../src/shared/protocol/saved-agents.js";
 import { capture, expectNoPageOverflow, openSedesWorkspace, openSettingsPage, returnFromSettings, repositoryLabel, selectProjectIfNeeded, selectRadixOption } from "./helpers";
 
 async function sessionToken(page: Page): Promise<string> {
@@ -24,7 +25,7 @@ test("policy sets replace inherited tools across levels and snapshot new threads
   const applicationResponse = await page.request.get("/api/application/snapshot");
   expect(applicationResponse.ok()).toBe(true);
   const application = normalizedApplicationSnapshotSchema.parse(await applicationResponse.json());
-  const executionTarget = application.executionTargets.find(item => item.label.text === target.label && item.environmentId === target.executionEnvironmentId && item.backend.brand === "pi");
+  const executionTarget = application.executionTargets.find(item => item.available && item.label.text === target.label && item.environmentId === target.executionEnvironmentId && item.backend.brand === "pi");
   expect(executionTarget).toBeDefined();
   if (!executionTarget) throw new Error("policy_e2e_execution_target_unavailable");
 
@@ -136,12 +137,35 @@ test("policy sets replace inherited tools across levels and snapshot new threads
   await expect(page.getByRole("region", { name: "Policy sets", exact: true })).toBeHidden();
   await capture(page, testInfo, "tool-policy-editor-mobile.png");
 
-  const workspace = application.workspaces.find(item => item.environmentId === target.executionEnvironmentId && item.available)!;
+  const workspace = application.workspaces.find(item => item.environmentId === target.executionEnvironmentId && item.available && item.label.text === repositoryLabel);
+  expect(workspace).toBeDefined();
+  if (!workspace) throw new Error("policy_e2e_workspace_unavailable");
+  const authoringContext = { workspaceId: workspace.id, targetId: executionTarget.id };
+  const agentOptions = async (overrides: NormalizedAgentConfigurationOverrides) => {
+    const response = await page.request.post("/api/agents/options", { headers: { "X-CSRF-Token": token }, data: { ...authoringContext, overrides } });
+    expect(response.ok(), await response.text()).toBe(true);
+    const result = savedAgentOptionsResultSchema.parse(await response.json());
+    expect(result.kind).toBe("configuration");
+    if (result.kind !== "configuration") throw new Error("policy_e2e_agent_configuration_unavailable");
+    return result.configuration;
+  };
+  // A fresh target has no saved model preference. Author a complete Agent from
+  // its advertised choices, then verify policy repair independently of defaults.
+  const modelOptions = await agentOptions([]);
+  const model = modelOptions.fields.find(field => field.id === "model")?.options.find(option => option.available);
+  expect(model).toBeDefined();
+  if (!model) throw new Error("policy_e2e_model_unavailable");
+  const backendOverrides = [{ id: "model", value: model.value }];
+  const configuredOptions = await agentOptions(backendOverrides);
+  const thinking = configuredOptions.fields.find(field => field.id === "thinking_level")?.options.find(option => option.available);
+  expect(thinking).toBeDefined();
+  if (!thinking) throw new Error("policy_e2e_thinking_level_unavailable");
+  backendOverrides.push({ id: "thinking_level", value: thinking.value });
   const agentResponse = await page.request.post("/api/agents", { headers: { "X-CSRF-Token": token }, data: {
-    name: "Policy review Agent", authoringContext: { workspaceId: workspace.id, targetId: executionTarget.id },
-    backendOverrides: [], toolPolicySelection: { kind: "policy_set", policySetId: reviewer.id },
+    name: "Policy review Agent", authoringContext,
+    backendOverrides, toolPolicySelection: { kind: "policy_set", policySetId: reviewer.id },
   } });
-  expect(agentResponse.status()).toBe(201);
+  expect(agentResponse.status(), await agentResponse.text()).toBe(201);
 
   await page.getByRole("button", { name: "Delete policy set…", exact: true }).click();
   const deletion = page.getByRole("dialog", { name: "Delete Reviewer?", exact: true });
