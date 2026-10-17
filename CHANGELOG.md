@@ -13,6 +13,7 @@ User-facing changes are collected here before release. See the
   outside requests are denied. Legacy thread-only policies are disabled for
   review rather than broadened. Saved Agent and thread-create tool contracts
   advance to version 6. See [tool policy sets](docs/user/tool-policies.md).
+  ([#96](https://github.com/kcosr/sedes/pull/96))
 
 - Upgrade OpenCode execution sidecars with the server for private OpenCode
   runtime protocol **3**, which reports the observed native version. See
@@ -49,6 +50,7 @@ User-facing changes are collected here before release. See the
 - Reuse named Sedes tool policy sets across backends, with Account → Environment
   → Backend → Agent → Thread defaults and template selections. New threads,
   forks and same-settings copies retain independent policy snapshots.
+  ([#96](https://github.com/kcosr/sedes/pull/96))
 
 - Download the selected saved HTML page revision from the expanded viewer or
   Pages library on web, desktop, and Android. Images are embedded in one UTF-8
