@@ -10,7 +10,9 @@ export function missingToolPolicyMessage(
 ): string {
   const level = issue.source === "agent" ? "Agent" : issue.source;
   const remedy = context === "thread"
-    ? "Choose a thread policy below or repair that selection in Settings."
+    ? issue.source === "thread"
+      ? "Choose another policy above. If this came from a template, update the template to save the change."
+      : "Choose a thread policy above or repair that selection in Settings."
     : "Choose another Agent policy or repair that selection in Settings.";
   return `Needs attention: the ${level} policy set was deleted or is unavailable. ${remedy}`;
 }

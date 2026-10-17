@@ -378,6 +378,34 @@ async function chooseTemplate(
 }
 
 describe("NewThreadControl", () => {
+  it.each(["target", "location"] as const)("keeps an explicit template presentation unverified when its %s is missing", async (missing) => {
+    const user = userEvent.setup();
+    control({ templates: [{ ...carefulTemplate,
+      ...(missing === "target" ? { targetId: "missing-target" } : { workspaceId: "missing-workspace" }),
+      toolPresentation: { surface: "native", mode: "individual" },
+    }] });
+    await openPicker(user);
+    await chooseTemplate(user);
+    expect(screen.getByRole("combobox", { name: "Tool presentation" })).toHaveValue("native:individual");
+    expect(screen.getByRole("option", { name: "Native tools · Individual operations (not verified)" })).toBeInTheDocument();
+    expect(screen.queryByText(/This tool presentation is unavailable/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Choose an available Project, Location, Target, and saved Agent/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Tool presentation" }), "inherit");
+    expect(screen.getByRole("combobox", { name: "Tool presentation" })).toHaveValue("inherit");
+  });
+
+  it("does not describe an explicit Agent-path presentation as inherited", async () => {
+    const user = userEvent.setup();
+    control();
+    await openPicker(user);
+    await chooseCareful(user);
+    expect(await screen.findByText(/^Inherited presentation:/)).toBeInTheDocument();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Tool presentation" }), "cli:individual");
+    expect(screen.queryByText(/^Inherited presentation:/)).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Tool presentation" })).toHaveValue("cli:individual");
+  });
+
   it("creates a Custom inherited draft when optional presentation options fail", async () => {
     const user = userEvent.setup();
     const { createThread } = control({ getSavedAgentOptions: vi.fn().mockRejectedValue(new Error("Model catalog unavailable")) });
@@ -509,7 +537,8 @@ describe("NewThreadControl", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Sedes tool policy" }), policy.id);
     await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Create thread" }));
-    expect(await screen.findByText(/Needs attention: the thread policy set was deleted/)).toBeInTheDocument();
+    expect(await screen.findByText(/Needs attention: the thread policy set was deleted/)).toHaveTextContent("Choose another policy above. If this came from a template, update the template to save the change.");
+    expect(screen.getByText(/Needs attention: the thread policy set was deleted/)).not.toHaveTextContent("Settings");
     await waitFor(() => expect(api.listToolPolicySets).toHaveBeenCalledTimes(2));
     expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
     expect(createThread).toHaveBeenCalledOnce();

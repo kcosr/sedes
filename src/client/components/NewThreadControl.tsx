@@ -545,17 +545,18 @@ export function NewThreadControl({
   const presentations = presentationCatalog?.presentationOptions.flatMap(({ surface, modes }) =>
     modes.map((mode) => ({ surface, mode })),
   ) ?? [];
-  const presentationIsAvailable = !toolPresentation || presentations.some(({ surface, mode }) =>
+  const presentationAvailabilityKnown = Boolean(presentationCatalog) && !presentationLoading && !presentationError;
+  const presentationIsAvailable = !toolPresentation || !presentationAvailabilityKnown || presentations.some(({ surface, mode }) =>
     surface === toolPresentation.surface && mode === toolPresentation.mode,
   );
   const inheritedPresentation = selectedResolvedTarget?.sedesTools.resolvedPolicy?.presentation
     ?? selectedAgentSummary?.toolPresentation
     ?? presentationCatalog?.defaultPresentation;
   const presentationReady = !toolPresentation || Boolean(
-    presentationCatalog && !presentationLoading && !presentationError && presentationIsAvailable,
+    presentationAvailabilityKnown && presentationIsAvailable,
   );
   const presentationNeedsAttention = Boolean(toolPresentation) && !presentationLoading && (
-    Boolean(presentationError) || Boolean(presentationCatalog && !presentationIsAvailable)
+    Boolean(presentationError) || (presentationAvailabilityKnown && !presentationIsAvailable)
   );
   const refreshToolPolicies = () => {
     setToolPolicyPreview(undefined);
@@ -1926,7 +1927,7 @@ export function NewThreadControl({
                 }>{policiesError || (toolPolicyIssue ? missingToolPolicyMessage(toolPolicyIssue, "thread") : toolPolicyError)}</DialogAlert>
               )}
               <Field label="Tool presentation" id={`${pickerId}-tool-presentation`}
-                description={inheritedPresentation ? `Inherited presentation: ${presentationLabel(inheritedPresentation)}.` : "Choose how this target exposes Sedes tools."}>
+                description={!toolPresentation && inheritedPresentation ? `Inherited presentation: ${presentationLabel(inheritedPresentation)}.` : "Choose how this target exposes Sedes tools."}>
                 <NativeSelect value={toolPresentation ? presentationKey(toolPresentation) : "inherit"}
                   disabled={pending}
                   onChange={(event) => {
@@ -1934,11 +1935,11 @@ export function NewThreadControl({
                     setToolPresentation(next);
                   }}>
                   <option value="inherit">Inherit</option>
-                  {!presentationIsAvailable && toolPresentation && <option value={presentationKey(toolPresentation)} disabled>{presentationLabel(toolPresentation)} ({presentationLoading ? "checking…" : presentationError ? "not verified" : "unavailable"})</option>}
+                  {toolPresentation && (!presentationAvailabilityKnown || !presentationIsAvailable) && <option value={presentationKey(toolPresentation)} disabled>{presentationLabel(toolPresentation)} ({presentationAvailabilityKnown ? "unavailable" : presentationLoading ? "checking…" : "not verified"})</option>}
                   {presentations.map((item) => <option key={presentationKey(item)} value={presentationKey(item)}>{presentationLabel(item)}</option>)}
                 </NativeSelect>
               </Field>
-              {presentationCatalog && !presentationIsAvailable && !presentationLoading && <DialogAlert tone="danger">This tool presentation is unavailable on the selected target. Choose Inherit or a supported presentation.</DialogAlert>}
+              {presentationAvailabilityKnown && !presentationIsAvailable && <DialogAlert tone="danger">This tool presentation is unavailable on the selected target. Choose Inherit or a supported presentation.</DialogAlert>}
               {presentationError && <DialogAlert tone={toolPresentation ? "danger" : "warning"} action={
                 <Button type="button" size="sm" variant="outline" onClick={refreshToolPolicies}>Retry tool presentation</Button>
               }>{presentationError} {toolPresentation ? "Choose Inherit or retry to verify this presentation." : "You can still create this thread with inherited presentation."}</DialogAlert>}
