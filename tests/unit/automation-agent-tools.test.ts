@@ -1168,14 +1168,14 @@ describe("automation canonical tool service", () => {
 
 describe("clone automation caller authority", () => {
   type Action = "create" | "update" | "run_now" | "enable";
-  function caller(kind: "thread_agent" | "principal_client") {
+  function caller(kind: "thread_agent" | "principal_client"): TrustedToolInvocationContext {
     const current = context();
     if (kind === "thread_agent") return current;
     const defaults = {kind:"principal_client" as const,environmentId:"environment-1"};
     const policyIdentity = {ownerKind:"principal_client" as const,ownerId:"client-1",revision:1,credentialGeneration:1};
     return {
       ...current,
-      subject:{kind:"principal_client" as const,clientId:"client-1"},
+      subject:{kind:"principal_client" as const,clientId:"client-1",credentialGeneration:1},
       defaults,
       policyIdentity,
       environmentAuthority:{...current.environmentAuthority,callerKind:"principal_client" as const,defaults,policyIdentity},
