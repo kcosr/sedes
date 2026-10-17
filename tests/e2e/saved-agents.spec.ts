@@ -25,6 +25,16 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
   test("creates and edits a complete Agent in the responsive management UI", async ({
     page,
   }, testInfo) => {
+    const captureTools = async (name: string) => {
+      const tools = page.getByRole("region", { name: "Sedes tools", exact: true });
+      await tools.scrollIntoViewIfNeeded();
+      // Wait for the actual control after scrolling before capturing its section.
+      const policy = tools.getByRole("combobox", { name: "Tool policy", exact: true });
+      await expect(policy).toBeVisible();
+      await expect(policy).toBeInViewport();
+      await expect(policy).toHaveValue(policyId);
+      await capture(page, testInfo, name);
+    };
     await page.setViewportSize({ width: 1440, height: 900 });
     await openSedesWorkspace(page);
     const session = await (await page.request.get("/api/application/session")).json();
@@ -166,8 +176,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     expect(projectLayout.overflow).toBe("hidden");
     expect(projectLayout.right).toBeLessThanOrEqual(projectLayout.controlRight);
     await capture(page, testInfo, "saved-agent-editor-desktop.png");
-    await page.getByRole("region", { name: "Sedes tools", exact: true }).scrollIntoViewIfNeeded();
-    await capture(page, testInfo, "saved-agent-tools-desktop.png");
+    await captureTools("saved-agent-tools-desktop.png");
 
     const name = page.getByRole("textbox", { name: "Name" });
     await name.fill("Careful reviewer updated");
@@ -189,8 +198,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await expect(savedAgents).toBeHidden();
     await expect(page.getByTestId("settings-view").locator(".settings-view-header").getByRole("link")).toHaveText(["Agents"]);
     await capture(page, testInfo, "saved-agent-editor-mobile.png");
-    await page.getByRole("region", { name: "Sedes tools", exact: true }).scrollIntoViewIfNeeded();
-    await capture(page, testInfo, "saved-agent-tools-mobile.png");
+    await captureTools("saved-agent-tools-mobile.png");
     await page.setViewportSize({ width: 390, height: 430 });
     await expectNoPageOverflow(page);
     const cancel = page.getByRole("button", { name: "Cancel", exact: true });
