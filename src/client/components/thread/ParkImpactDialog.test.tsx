@@ -5,7 +5,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -63,7 +62,7 @@ describe("ParkImpactDialog", () => {
     expect(
       screen.getByRole("dialog", { name: "Park this thread" }),
     ).toHaveAccessibleDescription(
-      "Review unfinished work before parking this thread.",
+      "Review stashed prompts before parking this thread.",
     );
     expect(screen.getByText("2 stashed prompts")).toBeVisible();
     expect(
@@ -98,7 +97,7 @@ describe("ParkImpactDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it("combines the confirmed stash count with the selected task disposition", async () => {
+  it("keeps open tasks attached when confirming a stash warning", async () => {
     const onPark = vi.fn().mockResolvedValue(undefined);
     render(
       <ParkImpactDialog
@@ -110,12 +109,13 @@ describe("ParkImpactDialog", () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole("radio", { name: "Keep" }));
+    expect(
+      screen.queryByRole("radiogroup", { name: "Open task handling" }),
+    ).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Park" }));
 
     expect(onPark).toHaveBeenCalledWith({
       expectedStashedPromptCount: 1,
-      openTaskDisposition: "keep",
     });
   });
 
@@ -146,74 +146,6 @@ describe("ParkImpactDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Park" }));
     expect(onPark).toHaveBeenLastCalledWith({
       expectedStashedPromptCount: 3,
-    });
-  });
-  it("lists only this thread's tasks and confirms completion against the refreshed snapshot", async () => {
-    const initial = impact({ openTasks: 2 });
-    initial.openTasks.root.items.push({
-      id: "task-1",
-      title: "First task",
-      threadId: "thread-1",
-    });
-    initial.openTasks.root.omitted = 1;
-    initial.openTasks.descendants = {
-      snapshot: "c".repeat(64),
-      items: [
-        { id: "task-child", title: "Child task", threadId: "thread-child" },
-      ],
-      total: 1,
-      omitted: 0,
-    };
-    const refreshed = impact({ openTasks: 2 });
-    refreshed.openTasks.root = {
-      snapshot: "d".repeat(64),
-      items: [
-        { id: "task-2", title: "Replacement task", threadId: "thread-1" },
-      ],
-      total: 2,
-      omitted: 1,
-    };
-    const onPark = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new Error("Open tasks changed. Review the updated list."),
-      )
-      .mockResolvedValueOnce(undefined);
-    const loadImpact = vi.fn().mockResolvedValue(refreshed);
-    render(
-      <ParkImpactDialog
-        open
-        onOpenChange={vi.fn()}
-        impact={initial}
-        loadImpact={loadImpact}
-        onPark={onPark}
-      />,
-    );
-
-    const tasks = screen.getByRole("region", {
-      name: "2 open tasks affected by this park",
-    });
-    expect(within(tasks).getByText("First task")).toBeVisible();
-    expect(within(tasks).getByText("1 more task not shown")).toBeVisible();
-    expect(screen.queryByText("Child task")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("radio", { name: "Complete all" }));
-    expect(screen.getByRole("note")).toHaveTextContent(
-      "including those not shown",
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Park" }));
-    expect(onPark).toHaveBeenLastCalledWith({
-      expectedStashedPromptCount: 0,
-      openTaskDisposition: "complete",
-      expectedOpenTaskSnapshot: "a".repeat(64),
-    });
-    expect(await screen.findByText("Replacement task")).toBeVisible();
-    expect(screen.queryByText("First task")).not.toBeInTheDocument();
-    expect(onPark).toHaveBeenCalledTimes(1);
-    await userEvent.click(screen.getByRole("button", { name: "Park" }));
-    expect(onPark).toHaveBeenLastCalledWith({
-      expectedStashedPromptCount: 0,
-      openTaskDisposition: "complete",
-      expectedOpenTaskSnapshot: "d".repeat(64),
     });
   });
 });

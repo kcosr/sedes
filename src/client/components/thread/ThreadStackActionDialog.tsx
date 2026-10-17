@@ -113,9 +113,8 @@ export function ThreadStackActionDialog({
             </DialogAlert>
           ) : null}
 
-          {impact && action && action !== "unsettle" ? (
+          {impact && action === "archive" ? (
             <ThreadTaskDisposition
-              action={action === "settle" ? "park" : "archive"}
               description={`The affected threads have ${impact.openTasks.total} open ${impact.openTasks.total === 1 ? "task" : "tasks"}. Choose what should happen before ${actionPresent.toLocaleLowerCase()}.`}
               groups={[
                 {
@@ -132,6 +131,7 @@ export function ThreadStackActionDialog({
           ) : null}
 
           {impact &&
+          action === "archive" &&
           impact.openTasks.total > MAXIMUM_BULK_INVENTORY_OPEN_TASKS ? (
             <DialogAlert tone="danger">
               This stack has too many open tasks for one bulk action. Reduce it
@@ -195,7 +195,7 @@ export function ThreadStackActionDialog({
             onClick={() =>
               onConfirm({
                 ...(impact &&
-                action !== "unsettle" &&
+                action === "archive" &&
                 impact.openTasks.total > 0
                   ? { openTaskDisposition: disposition }
                   : {}),

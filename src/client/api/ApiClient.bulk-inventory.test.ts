@@ -82,7 +82,6 @@ describe("ApiClient bulk inventory", () => {
       action: "settle" as const,
       targets: impact.targets,
       expectedStashedPromptCount: 0,
-      expectedOpenTaskCount: 0,
       mutationId: "11111111-1111-4111-8111-111111111111",
     };
 

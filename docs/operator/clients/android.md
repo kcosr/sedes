@@ -378,7 +378,7 @@ sidecar interruption retains truthful history until removal.
   saved filename.
   Page downloads contain the selected immutable revision and its embedded
   images in one UTF-8 HTML file. They do not open automatically. Rebuild the
-  client with the server for client protocol 163 and the shared
+  client with the server for client protocol 164 and the shared
   `X-Sedes-Download-Revision` metadata contract. See
   [Download a page](../../user/html-previews.md#download-a-page).
 - Output-image copy/save revalidates the closed image MIME set, byte count,
