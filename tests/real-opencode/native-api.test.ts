@@ -14,6 +14,7 @@ it.skipIf(!RUN_REAL_OPENCODE)("uses the production parser and SSE-first stream a
     const password = entries.find(value => value.startsWith("OPENCODE_PASSWORD="))?.slice("OPENCODE_PASSWORD=".length);
     if (!password) throw new Error("fixture credential unavailable");
     client = new OpenCodeHttpClient({ endpoint: fixture.url, password });
+    await expect(client.info()).resolves.toMatchObject({ version: fixture.account.runtimeVersion, pid: fixture.pid });
     const api = new OpenCodeNativeApi(createOpenCodeNativePortFixture(client, { directory: fixture.workspace, sessionID: "ses_api_read_fixture" }));
     observation = api.observe(); await observation.ready;
     // Fixture-only creation/import seeds durable data; the production API

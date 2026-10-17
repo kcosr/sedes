@@ -1,3 +1,4 @@
+import { OPENCODE_RELEASE } from "../../src/server/backends/opencode/opencode-release.js";
 import Database from "better-sqlite3";
 import type { ModelInfo } from "@opencode/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -198,7 +199,7 @@ describe("OpenCode desired settings authority", () => {
     persistence.initializeNewThread(scope, "thread", connection, read.catalog);
     database.prepare("UPDATE application_threads SET backing_state='bound' WHERE id='thread'").run();
     const args = { scope, applicationThreadId: "thread", connection, workspace, catalog: read.catalog,
-      backend: { id: backendInstanceId, tenantId: scope.tenantId, kind: "opencode" as const, label: "OpenCode", enabled: true, configurationRevision: 1, protocolRelease: "2.0.18" } };
+      backend: { id: backendInstanceId, tenantId: scope.tenantId, kind: "opencode" as const, label: "OpenCode", enabled: true, configurationRevision: 1, protocolRelease: OPENCODE_RELEASE } };
     const before = await presentation.read(args); const revision = settings.get(scope, "thread").revision;
     settings.beginObservation(scope, "thread", { expectedRevision: revision, generation: "generation", now: 2 });
     settings.recordObserved(scope, "thread", { expectedRevision: revision, generation: "generation", observed: classifyObserved({ selection: { ...selection, variant: "low" }, catalog: read }), now: 3 });

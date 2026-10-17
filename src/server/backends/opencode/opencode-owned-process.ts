@@ -9,6 +9,7 @@ import { admitOpenCodeExecutable, openCodeOwnedEnvironment, probeOpenCodeRelease
 export interface OpenCodeOwnedProcess {
   readonly pid: number;
   readonly executablePath: string;
+  readonly runtimeVersion: string;
   readonly endpoint: string;
   readonly client: OpenCodeHttpClient;
   readonly exited: Promise<void>;
@@ -73,7 +74,7 @@ export async function startOpenCodeOwnedProcess(input: {
   try {
     assertActive();
     input.assertLaunchAdmission?.();
-    await probeOpenCodeRelease(executablePath, environment, input.signal);
+    const runtimeVersion = await probeOpenCodeRelease(executablePath, environment, input.signal);
     assertActive();
     input.assertLaunchAdmission?.();
     assertActive();
@@ -130,7 +131,7 @@ export async function startOpenCodeOwnedProcess(input: {
     assertActive();
     if (!launched.pid || exited) throw new OpenCodeRuntimeError("opencode_startup_exited");
     client = new OpenCodeHttpClient({ endpoint, password });
-    return Object.freeze({ pid: launched.pid, executablePath, endpoint, client, exited: exit, shellEnvironment, stop });
+    return Object.freeze({ pid: launched.pid, executablePath, runtimeVersion, endpoint, client, exited: exit, shellEnvironment, stop });
   } catch (cause) {
     try { await stop(); }
     catch { throw new OpenCodeOwnedCleanupUnprovedError(stop); }

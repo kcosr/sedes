@@ -34,7 +34,7 @@ it.runIf(RUN_REAL_OPENCODE)("installs complete isolated shell maps with cleanup 
       nativeStorePath, configDirectory, environment,
       agentTools: { cli: () => ({ endpoint: "http://127.0.0.1:4784", executableDirectory: "/fixture/helper" }),
         invoke: async () => { throw new Error("fixture has no tool calls"); } }, connection: { ownership: "owned", channel: { type: "process_stdio", workingDirectory: workspace,
-        executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2" } } });
+        executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE } } });
     await runtime.start();
     let lease = runtime.acquire({ directory: workspace });
     const native = new OpenCodeNativeMutations(lease.client);

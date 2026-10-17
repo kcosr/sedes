@@ -62,7 +62,7 @@ it.skipIf(!enabled)("cleans confirmed detached native children despite an unrela
         XDG_DATA_HOME: path.join(root, "data"), XDG_STATE_HOME: path.join(root, "state"), XDG_CACHE_HOME: path.join(root, "cache"),
         OPENCODE_DISABLE_MODELS_FETCH: "1", OPENCODE_MODELS_PATH: path.join(root, "models.json"), OPENCODE_DISABLE_FFF: "1", OPENCODE_FILEWATCHER_DISABLE: "1" },
       connection: { ownership: "owned", channel: { type: "process_stdio",
-        executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2", workingDirectory: root } },
+        executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE, workingDirectory: root } },
     });
     await runtime.start();
     const lease = runtime.acquire({ directory: root });

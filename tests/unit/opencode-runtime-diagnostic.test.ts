@@ -20,7 +20,7 @@ describe("OpenCode safe Settings diagnostics", () => {
     expect(openCodeRuntimeDiagnostic(new OpenCodeRuntimeError("opencode_runtime_capability_unavailable"))).toMatchObject({
       connectionState: "unknown", message: expect.stringContaining("Linux execution host"),
     });
-    expect(openCodeRuntimeDiagnostic(decodeOpenCodeNativeFailure(encodeOpenCodeNativeFailure(new OpenCodeRuntimeError("opencode_release_incompatible"), false)))?.message).toContain("opencode2 2.0.18");
+    expect(openCodeRuntimeDiagnostic(decodeOpenCodeNativeFailure(encodeOpenCodeNativeFailure(new OpenCodeRuntimeError("opencode_release_incompatible"), false)))?.message).toContain("opencode2 2.0.29 or newer (stable release)");
   });
   it.each([
     ["opencode_executable_unavailable", "Advanced executable path", "startup PATH"],

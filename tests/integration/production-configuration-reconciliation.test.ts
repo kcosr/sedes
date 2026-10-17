@@ -94,7 +94,7 @@ function installOpenCodeFixture(observedStorePath: string, start: (signal?: Abor
       start: async (signal?: AbortSignal) => { await start(signal); ready = true; },
       health: async () => ({ available: ready, checkedAt: new Date().toISOString() }),
       snapshot: () => ({ state: ready ? "ready" : "stopped", ownership: "owned", references: 0,
-        ...(ready ? { generation: "fixture-opencode" } : {}) }),
+        ...(ready ? { generation: "fixture-opencode", runtimeVersion: "2.0.29" } : {}) }),
       acquire: (): never => { throw new Error("unexpected_conversation_acquisition"); },
       assertCurrent: async () => { if (!ready) throw new Error("fixture_opencode_not_started"); },
       admitToolSession: async (): Promise<never> => { throw new Error("unexpected_tool_admission"); },

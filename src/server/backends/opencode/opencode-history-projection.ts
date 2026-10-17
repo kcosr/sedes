@@ -218,8 +218,8 @@ export class OpenCodeHistoryProjection {
               items: orderedBackendItemIds.slice(visibleStart).map(id => builtItems[id]!), bytes: projectedBytes - beforeMessageBytes });
           }
         }
-        let diagnostic: string | undefined;
-        for (let index = period.length - 1; index >= 0; index--) {
+        let diagnostic = boundary?.error?.message;
+        for (let index = period.length - 1; diagnostic === undefined && index >= 0; index--) {
           const message = period[index]!;
           if (message.type === "assistant" && message.error || message.type === "compaction" && message.status === "failed") {
             diagnostic = message.error!.message; break;

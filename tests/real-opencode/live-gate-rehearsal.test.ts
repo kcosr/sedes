@@ -4,11 +4,12 @@ import { expect, it } from "vitest";
 import { runOpenCodeReadonlyGate } from "../support/opencode-live-gate-runner.js";
 import { startOpencodeModelFixture } from "../support/opencode-model-fixture.js";
 import { RUN_REAL_OPENCODE } from "../support/opencode-native-fixture.js";
+import { admitOpenCodeExecutable } from "../../src/server/backends/opencode/opencode-release.js";
 
 it.runIf(RUN_REAL_OPENCODE).each([undefined, "chat-template"] as const)("rehearses the live gate against stock OpenCode with %s reasoning, bounded wire output and an allowed canary read", async (reasoningFormat) => {
   const model = await startOpencodeModelFixture();
   try {
-    await runOpenCodeReadonlyGate({ executable: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2",
+    await runOpenCodeReadonlyGate({ executable: await admitOpenCodeExecutable(process.env.SEDES_REAL_OPENCODE_EXECUTABLE, { PATH: process.env.PATH }),
       model: "probe-model", baseURL: model.config.providers.probe.settings.baseURL,
       tokenField: "max_tokens", keyName: "FIXTURE_ONLY", ...(reasoningFormat ? { reasoningFormat } : {}) }, "fixture-only", {
       canary: "Fixture response",
@@ -16,7 +17,8 @@ it.runIf(RUN_REAL_OPENCODE).each([undefined, "chat-template"] as const)("rehears
     });
     expect(model.requestCount).toBe(2);
     expect(model.requests.map(request => request.model)).toEqual(["probe-model", "probe-model"]);
-    expect(model.requests.every(request => request.maxTokens === 256 && request.maxCompletionTokens === undefined)).toBe(true);
+    expect(model.requests.map(request => ({ maxTokens: request.maxTokens, maxCompletionTokens: request.maxCompletionTokens })))
+      .toEqual(Array.from({ length: 2 }, () => ({ maxTokens: 256, maxCompletionTokens: undefined })));
     expect(model.requests.map(request => request.chatTemplateKwargs)).toEqual(reasoningFormat
       ? Array.from({ length: 2 }, () => ({ enable_thinking: true, preserve_thinking: true, reasoning_effort: "low" }))
       : [undefined, undefined]);
@@ -31,7 +33,7 @@ it.runIf(RUN_REAL_OPENCODE)("fails qualification when the model attempts a read 
   try {
     let failure: unknown;
     try {
-      await runOpenCodeReadonlyGate({ executable: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2",
+      await runOpenCodeReadonlyGate({ executable: await admitOpenCodeExecutable(process.env.SEDES_REAL_OPENCODE_EXECUTABLE, { PATH: process.env.PATH }),
         model: "probe-model", baseURL: model.config.providers.probe.settings.baseURL,
         tokenField: "max_completion_tokens", keyName: "FIXTURE_ONLY" }, "fixture-only", {
         canary: "Fixture response",
@@ -45,7 +47,8 @@ it.runIf(RUN_REAL_OPENCODE)("fails qualification when the model attempts a read 
     expect(failure).toBeInstanceOf(AggregateError);
     expect((failure as AggregateError).errors).toEqual([expect.objectContaining({ message: "Canary read did not complete" })]);
     expect(model.requestCount).toBe(2);
-    expect(model.requests.every(request => request.maxCompletionTokens === 256 && request.maxTokens === undefined)).toBe(true);
+    expect(model.requests.map(request => ({ maxTokens: request.maxTokens, maxCompletionTokens: request.maxCompletionTokens })))
+      .toEqual(Array.from({ length: 2 }, () => ({ maxTokens: undefined, maxCompletionTokens: 256 })));
     expect(model.requests[0]!.toolNames).toEqual(["read"]);
     expect(model.requests[1]!.toolResults.join("\n")).toMatch(/denied|permission|Unable to read/iu);
     expect(model.requests[1]!.toolResults.join("\n")).not.toContain("THIS MUST NOT REACH THE MODEL");

@@ -6,7 +6,8 @@ import { boundedOpenCodeProcessFile, canonicalOpenCodeStore, readOpenCodeNativeI
 import { openCodeNativeStoreNamespaceKey } from "./opencode-native-store.js";
 import { createOpenCodeRuntimeOwnershipLifecycle, openCodeRuntimeAuthorityKey, type OpenCodeRuntimeOwnershipLease } from "./opencode-runtime-ownership.js";
 import { startOpenCodeOwnedProcess, OpenCodeOwnedCleanupUnprovedError, type OpenCodeOwnedProcess } from "./opencode-owned-process.js";
-import { admitOpenCodeNativeProfile, OpenCodeRuntimeError } from "./opencode-release.js";
+import { admitOpenCodeNativeProfile, assessOpenCodeRuntimeVersion, haveSameOpenCodeRuntimeVersionPrecedence,
+  OpenCodeRuntimeError, type VerifiedOpenCodeRuntimeVersion } from "./opencode-release.js";
 import { mergeResolvedEnvironment, resolveEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { OpenCodeHttpNativeAdapter } from "./opencode-http-native-adapter.js";
 import { OpenCodeNativeHost, type OpenCodeRuntimeTarget } from "./opencode-native-host.js";
@@ -28,6 +29,7 @@ export type OpenCodeRuntimeConnection =
   | { readonly ownership: "external"; readonly channel: { readonly type: "http"; readonly url: string } };
 export interface OpenCodeRuntimeInput {
   readonly hostIncarnation: string;
+  readonly onRuntimeVersionAssessment?: (assessment: VerifiedOpenCodeRuntimeVersion | undefined) => void;
   /** Host admission is checked synchronously immediately before every launch. */
   readonly assertLaunchAdmission?: () => void;
   readonly authority: OpenCodeRuntimeAuthority;
@@ -48,6 +50,7 @@ export interface OpenCodeRuntimeSnapshot {
   readonly generation?: string;
   readonly references: number;
   readonly identity?: OpenCodeNativeIdentity;
+  readonly runtimeVersion?: string;
 }
 export interface OpenCodeRuntimeLease {
   readonly client: OpenCodeNativePort;
@@ -75,6 +78,7 @@ export class OpenCodeRuntime {
   #state: OpenCodeRuntimeSnapshot["state"] = "stopped";
   #generation?: string;
   #identity?: OpenCodeNativeIdentity;
+  #runtimeVersion?: string;
   #client?: OpenCodeHttpClient;
   #adapter?: OpenCodeHttpNativeAdapter;
   #host?: OpenCodeNativeHost;
@@ -110,7 +114,8 @@ export class OpenCodeRuntime {
   snapshot(): OpenCodeRuntimeSnapshot {
     return Object.freeze({ state: this.#state, ownership: this.#input.connection.ownership,
       references: this.#references, ...(this.#generation ? { generation: this.#generation } : {}),
-      ...(this.#identity ? { identity: this.#identity } : {}) });
+      ...(this.#identity ? { identity: this.#identity } : {}),
+      ...(this.#runtimeVersion ? { runtimeVersion: this.#runtimeVersion } : {}) });
   }
 
   async health(): Promise<{ readonly available: boolean; readonly checkedAt: string }> {
@@ -240,6 +245,7 @@ export class OpenCodeRuntime {
       await this.#client.requireAuthentication(signal);
       const info = await this.#client.info(signal);
       if (this.#owned && info.pid !== this.#owned.pid) throw new OpenCodeRuntimeError("opencode_owned_pid_mismatch");
+      if (this.#owned && !haveSameOpenCodeRuntimeVersionPrecedence(info.version, this.#owned.runtimeVersion)) throw new OpenCodeRuntimeError("opencode_release_incompatible");
       const identity = await readOpenCodeNativeIdentity({ pid: info.pid, ...(store === undefined ? {} : { nativeStorePath: store }),
         ...(this.#owned ? { expectedExecutablePath: this.#owned.executablePath } : {}) });
       await this.#admitNativeProfile(identity);
@@ -250,6 +256,8 @@ export class OpenCodeRuntime {
       this.#identity = identity;
       this.#generation = randomUUID();
       this.#state = "ready";
+      this.#runtimeVersion = info.version;
+      this.#input.onRuntimeVersionAssessment?.(assessOpenCodeRuntimeVersion(info.version));
       this.#adapter = new OpenCodeHttpNativeAdapter(this.#client);
       if (this.#input.agentTools) this.#tools = new OpenCodeHostAgentTools({ adapter: this.#adapter,
         cli: this.#input.agentTools.cli, invoke: this.#input.agentTools.invoke,
@@ -267,9 +275,11 @@ export class OpenCodeRuntime {
       if (owned) void owned.exited.then(() => {
         if (this.#owned !== owned || this.#stopping) return;
         this.#state = "disconnected";
+        this.#input.onRuntimeVersionAssessment?.(undefined);
         this.#client?.close();
       });
     } catch (cause) {
+      this.#input.onRuntimeVersionAssessment?.(undefined);
       this.#client?.close();
       // A launcher cleanup failure may occur before it can return an owner.
       if (cause instanceof OpenCodeRuntimeError && cause.code === "opencode_owned_cleanup_unproved") {
@@ -325,6 +335,7 @@ export class OpenCodeRuntime {
     const identity = this.#identity;
     try {
       const info = await client.info(signal);
+      if (!this.#runtimeVersion || !haveSameOpenCodeRuntimeVersionPrecedence(info.version, this.#runtimeVersion)) throw new Error();
       const observed = await readOpenCodeNativeIdentity({ pid: info.pid, nativeStorePath: identity.nativeStorePath,
         ...(this.#owned ? { expectedExecutablePath: this.#owned.executablePath } : {}) });
       if (this.#client !== client || this.#identity !== identity || !sameOpenCodeNativeIdentity(identity, observed)) throw new Error();
@@ -337,6 +348,7 @@ export class OpenCodeRuntime {
           cause.code === "opencode_request_aborted") throw cause;
       // A delayed observation must never disconnect a replacement generation.
       if (this.#client === client && this.#identity === identity) this.#state = "disconnected";
+      if (this.#client === client && this.#identity === identity) this.#input.onRuntimeVersionAssessment?.(undefined);
       client.close();
       throw new OpenCodeRuntimeError("opencode_runtime_identity_changed");
     }
@@ -351,6 +363,7 @@ export class OpenCodeRuntime {
   close(): Promise<OpenCodeRuntimeStopResult> {
     if (this.#stopping) return this.#stopping;
     this.#startupLifetime?.abort();
+    this.#input.onRuntimeVersionAssessment?.(undefined);
     // Fence existing leases synchronously, before native cleanup takes its
     // active-session snapshot. Cleanup alone retains the raw control client.
     this.#host?.close();
@@ -396,6 +409,7 @@ export class OpenCodeRuntime {
     this.#host = undefined; this.#adapter = undefined; this.#tools = undefined;
     this.#client = undefined;
     this.#identity = undefined;
+    this.#runtimeVersion = undefined;
     this.#generation = undefined;
     this.#state = "stopped";
     return { cleanup: "proved", nativeInterrupts };

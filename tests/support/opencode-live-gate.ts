@@ -51,6 +51,7 @@ export function liveConfiguration(input: ReturnType<typeof parseLiveInput>, cana
       package: "aisdk:@ai-sdk/openai-compatible",
       settings: { apiKey: "{env:OPENCODE_LIVE_GATE_API_KEY}", baseURL: input.baseURL, timeout: 20_000, chunkTimeout: 10_000 },
       models: { [input.model]: { capabilities: { tools: true, input: ["text"], output: ["text"] },
+        compatibility: { maxTokensField: input.tokenField },
         limit: { context: 32_768, output: LIVE_GATE_LIMITS.outputTokens }, body: { [input.tokenField]: LIVE_GATE_LIMITS.outputTokens,
           ...(input.reasoningFormat === "chat-template" ? { chat_template_kwargs: { enable_thinking: true, preserve_thinking: true, reasoning_effort: "low" } } : {}) } } },
     } },

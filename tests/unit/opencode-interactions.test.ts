@@ -64,6 +64,48 @@ function fixture() {
 }
 
 describe("OpenCode exact interaction controller", () => {
+  it("drains form events that arrive as the previous refresh completes", async () => {
+    const f = fixture(); f.forms.set("frm_first", form("frm_first"));
+    let arrived!: () => void;
+    const arrival = new Promise<void>(resolve => { arrived = resolve; });
+    f.events.mockImplementationOnce(() => {
+      // The first microtask precedes the empty child-inventory continuation;
+      // the second follows the final inventory pass but precedes its caller.
+      queueMicrotask(() => queueMicrotask(() => {
+        const detail = { ...form("frm_second"), title: "Next native form" };
+        f.forms.set(detail.id, detail);
+        const { state: _state, ...request } = detail;
+        f.controller.observe(parseOpenCodeNativeEvent({ id: "evt_second", created: 1, type: "form.created", data: { form: request } }));
+        arrived();
+      }));
+    });
+    await f.controller.refresh(); await arrival;
+    await vi.waitFor(() => expect(f.controller.snapshotInteractions()).toHaveLength(2));
+    expect(f.events.mock.calls.filter(([event]) => event.type === "interaction_opened")).toHaveLength(2);
+  });
+
+  it("discards an in-flight inventory superseded by an accepted form response", async () => {
+    const f = fixture(); f.forms.set("frm_owned", form()); await f.controller.refresh();
+    const response = f.response("form"); f.events.mockClear();
+    let entered!: () => void, release!: () => void;
+    const captured = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const original = OpenCodeNativeApi.prototype.getInteractions;
+    const read = vi.spyOn(OpenCodeNativeApi.prototype, "getInteractions").mockImplementationOnce(async function (this: OpenCodeNativeApi, sessionID, signal) {
+      const inventory = await original.call(this, sessionID, signal);
+      entered(); await held; return inventory;
+    });
+    try {
+      const refreshing = f.controller.refresh(); await captured;
+      await f.controller.respond(response);
+      expect(f.controller.snapshotInteractions()).toEqual([]);
+      release(); await refreshing;
+      expect(f.controller.snapshotInteractions()).toEqual([]);
+      expect(f.events.mock.calls.filter(([event]) => event.type === "interaction_opened")).toEqual([]);
+      expect(f.events.mock.calls.filter(([event]) => event.type === "interaction_resolved")).toHaveLength(1);
+    } finally { release(); read.mockRestore(); }
+  });
+
   it.each(["replay", "reconcile"] as const)("retries a lost terminal interaction ACK on %s without answering twice", async mode => {
     const f = fixture(); f.permissions.set("per_owned", permission()); await f.controller.refresh();
     const input = f.response("permission");
@@ -204,7 +246,9 @@ describe("OpenCode exact interaction controller", () => {
   it("does not answer or cancel global forms or foreign-session permissions", async () => {
     const f = fixture(); const global: FormInfo = { ...form(), sessionID: "global" }; delete (global as Partial<FormDetail>).state;
     f.controller.observe(parseOpenCodeNativeEvent({ id: "evt_global", created: 1, type: "form.created", data: { form: global } }));
-    await f.controller.refresh({ forms: [global], permissions: [{ ...permission(), sessionID: "ses_foreign" }] });
+    f.forms.set(global.id, { ...global, state: { status: "pending" } });
+    f.permissions.set("per_foreign", { ...permission("per_foreign"), sessionID: "ses_foreign" });
+    await f.controller.refresh();
     expect(f.controller.snapshotInteractions()).toEqual([]); expect(f.effects()).toHaveLength(0);
     expect(f.events.mock.calls.filter(([event]) => event.type === "notice").length).toBeGreaterThan(0);
   });
@@ -299,7 +343,7 @@ describe("OpenCode exact interaction controller", () => {
     f.forms.set("frm_child", { ...form("frm_child"), sessionID: child.id });
     f.wire.sessions.push(child);
     await new OpenCodeNativeApi(f.port).getActivity(f.wire.sessionID, f.wire.directory);
-    await f.controller.refresh(undefined, [child]);
+    await f.controller.refresh([child]);
     const notices = f.events.mock.calls.filter(([event]) => event.type === "notice").map(([event]) => event.notice.message.text);
     expect(notices.some(text => text.includes("subagent is waiting for permission"))).toBe(true);
     expect(notices.some(text => text.includes("subagent is waiting for a form response"))).toBe(true);
@@ -315,7 +359,7 @@ describe("OpenCode exact interaction controller", () => {
     f.permissions.set("per_active_child", { ...permission("per_active_child"), sessionID: active.id });
     f.wire.sessions.push(...children);
     await new OpenCodeNativeApi(f.port).getActivity(f.wire.sessionID, f.wire.directory);
-    await expect(f.controller.refresh({ permissions: [], forms: [] }, children, [active.id])).resolves.toBeUndefined();
+    await expect(f.controller.refresh(children, [active.id])).resolves.toEqual({ permissions: [], forms: [] });
     const childReads = f.requests.filter(request => request.path.includes("/ses_child_"));
     expect(childReads[0]?.path).toBe(`/api/session/${active.id}/permission`);
     expect(childReads).toHaveLength(64);

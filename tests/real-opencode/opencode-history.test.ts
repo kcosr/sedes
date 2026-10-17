@@ -8,7 +8,8 @@ import {
 import { startOpencodeModelFixture } from "../support/opencode-model-fixture.js";
 
 // These are consumed fixture fields, not a production OpenCode wire decoder.
-// The admitted protocol is 2.0.18 / cd9a14a6b688d4021bee381dfd39d2cef9c0f862.
+// Runtime qualification uses the selected stock executable admitted by the
+// production version policy.
 const message = z.object({
   id: z.string().startsWith("msg_"),
   type: z.enum([

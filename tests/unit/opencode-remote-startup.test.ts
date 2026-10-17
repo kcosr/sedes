@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SidecarRuntimeChannel, SidecarRuntimeLease } from "../../src/server/sidecar/runtime-channel.js";
 import type { SidecarRuntimeBody } from "../../src/server/sidecar/runtime-body-channel.js";
+import { OPENCODE_RELEASE, OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import { OpenCodeRemoteRuntime } from "../../src/server/backends/opencode/opencode-remote-runtime.js";
 import { openCodeRuntimeNamespaceKey } from "../../src/server/backends/opencode/opencode-runtime.js";
 import type { OpenCodeRuntimeConfiguration } from "../../src/server/backends/opencode/opencode-runtime-configuration.js";
@@ -27,14 +28,14 @@ function untilAbort<T>(signal: AbortSignal): Promise<T> {
 function fixture(enabled = true) {
   const configuration: OpenCodeRuntimeConfiguration = {
     instance: { id: "backend", tenantId: "tenant", kind: "opencode", label: "OpenCode", enabled,
-      configurationRevision: 1, protocolRelease: "2.0.18" },
+      configurationRevision: 1, protocolRelease: OPENCODE_RELEASE },
     connections: [{ id: "connection", tenantId: "tenant", ownerPrincipalId: "principal", templateId: "template",
       kind: "opencode_http", backendInstanceId: "backend", executionEnvironmentId: "remote", label: "OpenCode", enabled,
       configurationRevision: 1 }],
     connection: { ownership: "owned", channel: { type: "process_stdio" } },
   };
   const info: OpenCodeRuntimeInfo = { runtimeId: "native-owner", nativeNamespaceKey: openCodeRuntimeNamespaceKey("remote", "/native/opencode.db"),
-    snapshot: { state: "ready", ownership: "owned", generation: "native-generation", references: 0,
+    snapshot: { state: "ready", ownership: "owned", generation: "native-generation", references: 0, runtimeVersion: "2.0.29",
       identity: { pid: 123, startTime: "start", uid: 1000, executablePath: "/bin/opencode2", executable: { device: "1", inode: "2" },
         nativeStorePath: "/native/opencode.db", store: { device: "1", inode: "3" }, storeObservation: "open_file" } } };
   const respond = vi.fn(async (command: OpenCodeRuntimeCommand, _signal?: AbortSignal): Promise<unknown> => {
@@ -51,22 +52,81 @@ function fixture(enabled = true) {
       return { type: "inline", value: { status: "ok", value: await respond(body.value as OpenCodeRuntimeCommand, options?.signal) } };
     },
   } as unknown as SidecarRuntimeChannel;
+  const disconnected = deferred<void>();
   const leases: SidecarRuntimeLease[] = [];
   const lease = (): SidecarRuntimeLease => {
-    const value: SidecarRuntimeLease = { channel, controllerEpoch: 1, serviceIncarnation: "service", closed: new Promise(() => {}), release: vi.fn() };
+    const value: SidecarRuntimeLease = { channel, controllerEpoch: 1, serviceIncarnation: "service", closed: disconnected.promise, release: vi.fn() };
     leases.push(value);
     return value;
   };
   const acquire = vi.fn(async (signal?: AbortSignal) => { signal?.throwIfAborted(); return lease(); });
   const acquireExisting = vi.fn(async (signal?: AbortSignal) => { signal?.throwIfAborted(); return lease(); });
   const acquireRecovery = vi.fn(async (signal?: AbortSignal) => { signal?.throwIfAborted(); return lease(); });
-  const runtime = new OpenCodeRemoteRuntime({ configuration, provider: { acquire, acquireExisting }, acquireRecovery });
+  const observeVersion = vi.fn();
+  const runtime = new OpenCodeRemoteRuntime({ onRuntimeVersionAssessment: observeVersion, configuration, provider: { acquire, acquireExisting }, acquireRecovery });
   cleanups.push(() => runtime.close());
-  return { runtime, acquire, acquireExisting, acquireRecovery, lease, leases, respond, info,
+  return { runtime, observeVersion, disconnected, acquire, acquireExisting, acquireRecovery, lease, leases, respond, info,
     actions: () => respond.mock.calls.map(([command]) => command.action) };
 }
 
 describe("OpenCode remote startup cancellation", () => {
+  it("clears stale remote assessment after failed health and requires a new attachment", async () => {
+    const f = fixture(); f.info.snapshot.runtimeVersion = "2.0.33";
+    await f.runtime.start();
+    f.respond.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_runtime_identity_changed"));
+    expect(await f.runtime.health()).toMatchObject({ available: false });
+    expect(f.runtime.snapshot().state).toBe("disconnected");
+    expect(f.observeVersion).toHaveBeenLastCalledWith(undefined);
+    await f.runtime.start();
+    expect(f.acquire).toHaveBeenCalledTimes(2);
+    expect(f.observeVersion).toHaveBeenLastCalledWith({ version: "2.0.33", newerThanTested: true });
+  });
+
+  it("retains valid remote version evidence when only the current observation is cancelled", async () => {
+    const f = fixture(), controller = new AbortController();
+    f.info.snapshot.runtimeVersion = "2.0.33"; await f.runtime.start();
+    const reason = new Error("caller cancelled");
+    f.respond.mockImplementationOnce(async () => { controller.abort(reason); throw reason; });
+    await expect(f.runtime.assertCurrent(controller.signal)).rejects.toBe(reason);
+    expect(f.runtime.snapshot().state).toBe("ready");
+    expect(f.observeVersion).toHaveBeenCalledTimes(1);
+    expect(f.leases[0]!.release).not.toHaveBeenCalled();
+  });
+
+  it("rejects a different runtime version when promoting retained ownership within one generation", async () => {
+    const f = fixture(); await f.runtime.startRetained();
+    f.info.snapshot.runtimeVersion = "2.0.33";
+    await expect(f.runtime.start()).rejects.toThrow("opencode_runtime_unavailable");
+    expect(f.runtime.snapshot().state).toBe("disconnected");
+    expect(f.observeVersion).toHaveBeenLastCalledWith(undefined);
+    expect(f.leases[0]!.release).toHaveBeenCalledOnce();
+    expect(f.leases[1]!.release).toHaveBeenCalledOnce();
+  });
+  it("reports the observed remote version and clears its assessment when disconnected", async () => {
+    const f = fixture(); f.info.snapshot.runtimeVersion = "2.0.33+vendor.1";
+    await f.runtime.start();
+    expect(f.observeVersion).toHaveBeenLastCalledWith({ version: "2.0.33+vendor.1", newerThanTested: true });
+    expect(f.runtime.snapshot().runtimeVersion).toBe("2.0.33+vendor.1");
+    f.disconnected.resolve();
+    await vi.waitFor(() => expect(f.runtime.snapshot().state).toBe("disconnected"));
+    expect(f.observeVersion).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it.each([undefined, "2.0.18", "2.0.28", "2.0.33-rc.1", "not-a-version"])("rejects unproved or incompatible remote runtime evidence %s", async runtimeVersion => {
+    const f = fixture(); f.info.snapshot.runtimeVersion = runtimeVersion;
+    await expect(f.runtime.start()).rejects.toThrow();
+    expect(f.observeVersion).not.toHaveBeenCalled();
+    expect(f.leases[0]!.release).toHaveBeenCalledOnce();
+    expect(f.actions()).toEqual(["lookup"]);
+  });
+
+  it("clears a newer-than-tested remote assessment on close", async () => {
+    const f = fixture(); f.info.snapshot.runtimeVersion = "3.0.0";
+    await f.runtime.start();
+    await f.runtime.close();
+    expect(f.observeVersion.mock.calls).toEqual([[{ version: "3.0.0", newerThanTested: true }], [undefined]]);
+  });
+
   it.each(["normal", "retained", "disabled", "revision"] as const)("cancels %s carrier acquisition and permits a fresh retry", async mode => {
     const f = fixture(mode !== "disabled"), entered = deferred<AbortSignal>(), controller = new AbortController();
     if (mode === "revision") f.acquire.mockRejectedValueOnce(new Error("sidecar_revision_changed"));

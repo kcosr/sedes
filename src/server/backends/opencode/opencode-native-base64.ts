@@ -6,7 +6,7 @@ const expectedPattern = "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+
 const officialBase64Check = Base64.ast.checks?.[0];
 if (Base64.ast._tag !== "String" || Base64.ast.checks?.length !== 1 || officialBase64Check?._tag !== "Filter" ||
     !isDeepStrictEqual(officialBase64Check.annotations?.representation,
-      { id: "effect/schema/isPattern", payload: { source: expectedPattern, flags: "" } })) {
+      { id: "effect/schema/isPattern", payload: { source: expectedPattern, flags: "u" } })) {
   throw new Error("opencode_base64_schema_changed");
 }
 
@@ -47,7 +47,7 @@ export function openCodeStackSafeEncodedSchema(schema: Schema.Constraint, json: 
       result = new SchemaAST.Arrays(ast.isMutable, ast.elements.map(visit), ast.rest.map(visit),
         ast.annotations, ast.checks, ast.encoding, ast.context, ast.encodingChecks);
     } else if (ast._tag === "Union") {
-      result = new SchemaAST.Union(ast.types.map(visit), ast.mode, ast.annotations, ast.checks, ast.encoding, ast.context, ast.encodingChecks);
+      result = new SchemaAST.Union(ast.types.map(visit), ast.options, ast.annotations, ast.checks, ast.encoding, ast.context, ast.encodingChecks);
     } else if (ast._tag === "Suspend") {
       result = new SchemaAST.Suspend(() => visit(ast.thunk()), ast.annotations, ast.checks, ast.encoding, ast.context);
     }

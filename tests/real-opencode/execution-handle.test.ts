@@ -29,9 +29,12 @@ it.runIf(RUN_REAL_OPENCODE)("qualifies production handle input, steering, Stop, 
   const submit = (id: string, text: string): SubmitTurnInput => ({ applicationOperationId: id, mutationId: id,
     reconciliationToken: id, source: { kind: "user" }, text, contextExcerpts: [], taskContexts: [], attachments: [] });
   const pendingInteraction = (kind: DriverInteraction["kind"], title?: string) => {
-    const resolved = new Set(events.filter(event => event.type === "interaction_resolved").map(event => event.backendInteractionId));
-    return events.filter(event => event.type === "interaction_opened").map(event => event.interaction)
-      .find(interaction => interaction.kind === kind && !resolved.has(interaction.backendInteractionId) && (!title || interaction.title.text.includes(title)));
+    const pending = new Map<string, DriverInteraction>();
+    for (const event of events) {
+      if (event.type === "interaction_opened") pending.set(event.interaction.backendInteractionId, event.interaction);
+      else if (event.type === "interaction_resolved") pending.delete(event.backendInteractionId);
+    }
+    return [...pending.values()].find(interaction => interaction.kind === kind && (!title || interaction.title.text.includes(title)));
   };
   try {
     native = await startOpencodeNativeFixture({ config: model.config });
@@ -135,7 +138,9 @@ it.runIf(RUN_REAL_OPENCODE)("qualifies production handle input, steering, Stop, 
     const question = await native.api("POST", `/api/session/${session.id}/form`, { title: "Handle native question", fields: [{ key: "name", type: "string", required: true }] });
     expect(question.status).toBe(200);
     await vi.waitFor(() => expect(pendingInteraction("form", "Handle native question")).toBeDefined(), { timeout: 10_000, interval: 25 });
-    const answerForm = { applicationOperationId: "native-handle-form", interactionId: pendingInteraction("form", "Handle native question")!.backendInteractionId,
+    const formGate = pendingInteraction("form", "Handle native question")!;
+    expect(events.filter(event => event.type === "interaction_resolved" && event.backendInteractionId === formGate.backendInteractionId)).toEqual([]);
+    const answerForm = { applicationOperationId: "native-handle-form", interactionId: formGate.backendInteractionId,
       kind: "form" as const, answers: [{ fieldId: "field_0", value: "Ada" }] };
     await handle.respond(answerForm); await expect(handle.reconcileInteractionResponse(answerForm)).resolves.toEqual({ outcome: "accepted" });
     expect(await mutations.getForm({ sessionID: session.id, formID: question.body.data.id })).toMatchObject({ state: { status: "answered", answer: { name: "Ada" } } });

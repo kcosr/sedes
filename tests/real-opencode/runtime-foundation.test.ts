@@ -12,6 +12,7 @@ import { startOpencodeNativeFixture } from "../support/opencode-native-fixture.j
 
 import * as ownedProcesses from "../../src/server/backends/opencode/opencode-owned-process.js";
 import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
+import { probeOpenCodeRelease } from "../../src/server/backends/opencode/opencode-release.js";
 afterEach(() => vi.restoreAllMocks());
 
 const enabled = process.platform === "linux" && process.env.SEDES_RUN_REAL_OPENCODE === "1";
@@ -47,7 +48,7 @@ it.skipIf(!enabled).each(["opencode.db", "opencode.db (deleted)"])("rejects repl
     await writeFile(path.join(root, "models.json"), "{}");
     await writeFile(path.join(configDirectory, "opencode.json"), JSON.stringify({ update: "disable" }));
     native = await startOpenCodeOwnedProcess({ processMarker: randomBytes(32).toString("hex"),
-      executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2",
+      executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE,
       workingDirectory: root, nativeStorePath, configDirectory,
       environment: { HOME: root, PATH: process.env.PATH, SHELL: "/bin/sh",
         XDG_DATA_HOME: path.join(root, "data"), XDG_STATE_HOME: path.join(root, "state"), XDG_CACHE_HOME: path.join(root, "cache"),
@@ -111,7 +112,7 @@ it.skipIf(!enabled)("owned opencode2 preserves native configuration, remains res
       authority: { tenantId: "qualification", principalId: "qualification", backendInstanceId: "fixture", executionEnvironmentId: "local" },
       nativeStorePath, environment,
       connection: { ownership: "owned", channel: { type: "process_stdio",
-        executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2", workingDirectory: workspace } },
+        executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE, workingDirectory: workspace } },
     });
     await runtime.start();
     const first = runtime.acquire({ directory: workspace });
@@ -122,7 +123,8 @@ it.skipIf(!enabled)("owned opencode2 preserves native configuration, remains res
     // shell setup; application leases expose only the closed native port.
     const nativeClient = (await (launched.mock.results.at(-1)!.value as ReturnType<typeof ownedProcesses.startOpenCodeOwnedProcess>)).client;
     await nativeClient.requireAuthentication();
-    expect((await nativeClient.info()).version).toBe("2.0.18");
+    const runtimeVersion = await probeOpenCodeRelease(original.identity!.executablePath, environment);
+    expect((await nativeClient.info()).version).toBe(runtimeVersion);
     expect((await new OpenCodeNativeApi(first.client).listSessions({ directory: workspace })).data).toEqual([]);
     const wrongAuth = await fetch(`${nativeClient.endpoint}/api/info`, {
       headers: { authorization: `Basic ${Buffer.from("opencode:inherited-password-canary").toString("base64")}` },
@@ -190,7 +192,7 @@ it.skipIf(!enabled)("external stock opencode2 keeps its daemon and background sh
     await writeFile(path.join(root, "models.json"), "{}");
     await writeFile(path.join(configDirectory, "opencode.json"), JSON.stringify({ update: "disable" }));
     native = await startOpenCodeOwnedProcess({ processMarker: randomBytes(32).toString("hex"),
-      executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2",
+      executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE,
       workingDirectory: root, nativeStorePath, configDirectory,
       environment: { HOME: root, PATH: process.env.PATH, SHELL: "/bin/sh",
         XDG_DATA_HOME: path.join(root, "data"), XDG_STATE_HOME: path.join(root, "state"), XDG_CACHE_HOME: path.join(root, "cache"),
@@ -227,7 +229,8 @@ it.skipIf(!enabled)("external stock opencode2 keeps its daemon and background sh
     await expect(runtime.close()).resolves.toEqual({ cleanup: "proved", nativeInterrupts: "not_owned" });
     expect(await alive(native.pid)).toBe(true);
     expect(await alive(shell.data.pid)).toBe(true);
-    await expect(native.client.info()).resolves.toMatchObject({ version: "2.0.18", pid: native.pid });
+    const runtimeVersion = await probeOpenCodeRelease(native.executablePath, { HOME: root, PATH: process.env.PATH });
+    await expect(native.client.info()).resolves.toMatchObject({ version: runtimeVersion, pid: native.pid });
     await native.stop(); proved = true;
     expect(await alive(shell.data.pid)).toBe(false);
   } finally {

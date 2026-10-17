@@ -1,3 +1,4 @@
+import { OPENCODE_RELEASE } from "../../src/server/backends/opencode/opencode-release.js";
 import { openCodeObservationCursorsMigration } from "../../src/server/db/migrations/125-opencode-observation-cursors.js";
 import { randomUUID } from "node:crypto";
 import { OpenCodeNativeHost, type OpenCodeNativeHostHooks } from "../../src/server/backends/opencode/opencode-native-host.js";
@@ -81,7 +82,7 @@ export function createOpenCodeConversationFixture(input: {
   const binding: ConversationBinding = { tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, applicationThreadId: threadID,
     backendInstanceId: backend, connectionProfileId: connectionID, executionEnvironmentId: environmentID,
     backendConversationId: sessionID, createdAt: "2026-09-27T00:00:00.000Z" };
-  const instance: AgentBackendInstance = { id: backend, tenantId: scope.tenantId, kind: "opencode", label: "Fixture", enabled: true, configurationRevision: 1, protocolRelease: "2.0.18" };
+  const instance: AgentBackendInstance = { id: backend, tenantId: scope.tenantId, kind: "opencode", label: "Fixture", enabled: true, configurationRevision: 1, protocolRelease: OPENCODE_RELEASE };
   const connection: AgentConnectionProfile = { id: connectionID, tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
     backendInstanceId: backend, executionEnvironmentId: environmentID, kind: "opencode_http", label: "Fixture", templateId: "fixture", enabled: true, configurationRevision: 1 };
   let references = 0;

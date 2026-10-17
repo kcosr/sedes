@@ -1,3 +1,4 @@
+import { OPENCODE_RELEASE } from "../../src/server/backends/opencode/opencode-release.js";
 import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
@@ -21,7 +22,7 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
   const wire = createOpenCodeApiFixture();
   const actualNativeStorePath = "/native/opencode.db";
   const configuration: OpenCodeRuntimeConfiguration = {
-    instance: { id: "opencode", tenantId: scope.tenantId, kind: "opencode", label: "OpenCode", enabled: true, configurationRevision: 1, protocolRelease: "2.0.18" },
+    instance: { id: "opencode", tenantId: scope.tenantId, kind: "opencode", label: "OpenCode", enabled: true, configurationRevision: 1, protocolRelease: OPENCODE_RELEASE },
     connections: [{ id: "profile", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template",
       kind: "opencode_http", backendInstanceId: "opencode", executionEnvironmentId, label: "OpenCode", enabled: true, configurationRevision: 1 }],
     nativeStorePath: "/native/opencode.db", configDirectory: "/native/config",
@@ -71,7 +72,7 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
       this.nativeHost.close(); this.state = "stopped";
       return { cleanup: "proved", nativeInterrupts: ownership === "owned" ? "complete" : "not_owned" }; });
     async assertCurrent() { if (this.state !== "ready") throw new Error("not ready"); }
-    snapshot(): OpenCodeRuntimeSnapshot { return { state: this.state, ownership, generation: this.generation, references: 0,
+    snapshot(): OpenCodeRuntimeSnapshot { return { state: this.state, runtimeVersion: "2.0.29", ownership, generation: this.generation, references: 0,
       identity: { pid: process.pid, startTime: "1", uid: process.getuid!(), executablePath: "/native/opencode2", executable: { device: "1", inode: "2" },
         nativeStorePath: actualNativeStorePath, store: { device: "1", inode: "3" }, storeObservation: "open_file" } }; }
   }

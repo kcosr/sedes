@@ -15,7 +15,7 @@ async function alive(pid: number): Promise<boolean> {
     return !["Z", "X"].includes(value.slice(value.lastIndexOf(")") + 2).split(" ")[0]!);
   } catch (cause) { if (["ENOENT", "ESRCH"].includes((cause as NodeJS.ErrnoException).code ?? "")) return false; throw cause; }
 }
-async function fake(source: string, version = "2.0.18") {
+async function fake(source: string, version = "2.0.29") {
   const root = await mkdtemp(path.join(os.tmpdir(), "sedes-opencode-launch-"));
   const executablePath = path.join(root, "opencode2");
   const evidence = path.join(root, "pid.json");
