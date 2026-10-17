@@ -1819,7 +1819,7 @@ describe("ThreadContextMenu actions", () => {
     expect(store.archiveThreadFamily).not.toHaveBeenCalled();
   });
 
-  it("prompts for open-task disposition before parking", async () => {
+  it("parks a thread with open tasks without prompting or changing task disposition", async () => {
     const store = makeStore();
     store.getThreadArchiveImpact.mockResolvedValueOnce({
       descendantCount: 0,
@@ -1835,20 +1835,14 @@ describe("ThreadContextMenu actions", () => {
     const menu = await openMenu(trigger);
 
     await userEvent.click(within(menu).getByText("Park"));
-    const dialog = await screen.findByRole("dialog", {
-      name: "Park this thread",
-    });
-    expect(within(dialog).getByText(/2 open tasks/)).toBeInTheDocument();
-    expect(store.mutateInventory).not.toHaveBeenCalledWith(thread, "settle");
-    await userEvent.click(
-      within(dialog).getByRole("button", { name: "Park" }),
-    );
     await waitFor(() =>
       expect(store.mutateInventory).toHaveBeenCalledWith(thread, "settle", {
         expectedStashedPromptCount: 0,
-        openTaskDisposition: "move_to_project",
       }),
     );
+    expect(
+      screen.queryByRole("dialog", { name: "Park this thread" }),
+    ).not.toBeInTheDocument();
   });
 
   it("requires confirmation before parking a thread with stashed prompts", async () => {

@@ -408,7 +408,9 @@ function renderSidebar(
           ? {}
           : {
               expectedStashedPromptCount: impact.stashedPromptCount,
-              expectedOpenTaskCount: impact.openTasks.total,
+              ...(impact.action === "archive"
+                ? { expectedOpenTaskCount: impact.openTasks.total }
+                : {}),
             }),
         mutationId: "11111111-1111-4111-8111-111111111111",
       }),

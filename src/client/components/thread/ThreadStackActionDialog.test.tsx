@@ -10,7 +10,7 @@ afterEach(cleanup);
 
 function makeImpact(): BulkInventoryImpact {
   return {
-    action: "settle",
+    action: "archive",
     targets: [{ threadId: "thread-1", expectedRevision: 1 }],
     targetCount: 1,
     affectedCount: 1,
@@ -35,7 +35,7 @@ function props() {
     open: true,
     onOpenChange: vi.fn(),
     label: "Release",
-    action: "settle" as const,
+    action: "archive" as const,
     impact: makeImpact(),
     loading: false,
     pending: false,
@@ -49,51 +49,39 @@ function props() {
 }
 
 describe("ThreadStackActionDialog", () => {
-  it.each([
-    { action: "settle", word: "park", label: "Park" },
-    { action: "archive", word: "archive", label: "Archive" },
-  ] as const)(
-    "lists affected tasks and offers completion for $label",
-    async ({ action, word, label }) => {
-      const initial = props();
-      render(
-        <ThreadStackActionDialog
-          {...initial}
-          action={action}
-          impact={{ ...initial.impact, action }}
-        />,
-      );
-      expect(
-        screen.getByRole("dialog", { name: `${label} threads in Release` }),
-      ).toHaveAccessibleDescription(`${label} 1 thread.`);
-      const tasks = screen.getByRole("region", {
-        name: `2 open tasks affected by this ${word}`,
-      });
-      expect(within(tasks).getByText("Check the release")).toBeVisible();
-      expect(within(tasks).getByText("Release thread")).toHaveAttribute(
-        "title",
-        "Owned by thread thread-1",
-      );
-      expect(within(tasks).getByText("1 more task not shown")).toBeVisible();
-      expect(screen.getByRole("radio", { name: "To project" })).toBeChecked();
-      await userEvent.click(
-        screen.getByRole("radio", { name: "Complete all" }),
-      );
-      expect(screen.getByRole("note")).toHaveTextContent(
-        `All open tasks on the threads you ${word}, including those not shown, will be marked completed`,
-      );
-      await userEvent.click(screen.getByRole("button", { name: label }));
-      expect(initial.onConfirm).toHaveBeenCalledWith({
-        openTaskDisposition: "complete",
-      });
-    },
-  );
+  it("lists affected tasks and offers completion for Archive", async () => {
+    const initial = props();
+    render(<ThreadStackActionDialog {...initial} />);
+    expect(
+      screen.getByRole("dialog", { name: "Archive threads in Release" }),
+    ).toHaveAccessibleDescription("Archive 1 thread.");
+    const tasks = screen.getByRole("region", {
+      name: "2 open tasks affected by this archive",
+    });
+    expect(within(tasks).getByText("Check the release")).toBeVisible();
+    expect(within(tasks).getByText("Release thread")).toHaveAttribute(
+      "title",
+      "Owned by thread thread-1",
+    );
+    expect(within(tasks).getByText("1 more task not shown")).toBeVisible();
+    expect(screen.getByRole("radio", { name: "To project" })).toBeChecked();
+    await userEvent.click(
+      screen.getByRole("radio", { name: "Complete all" }),
+    );
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "All open tasks on the threads you archive, including those not shown, will be marked completed",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(initial.onConfirm).toHaveBeenCalledWith({
+      openTaskDisposition: "complete",
+    });
+  });
 
   it("keeps completion locked for an exact retry and shows refreshed tasks after reload", async () => {
     const initial = props();
     const { rerender } = render(<ThreadStackActionDialog {...initial} />);
     await userEvent.click(screen.getByRole("radio", { name: "Complete all" }));
-    await userEvent.click(screen.getByRole("button", { name: "Park" }));
+    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
     rerender(
       <ThreadStackActionDialog
         {...initial}
@@ -137,22 +125,54 @@ describe("ThreadStackActionDialog", () => {
     expect(screen.getByRole("button", { name: progress })).toBeDisabled();
   });
 
-  it("does not offer task changes for Unpark", () => {
+  it.each([
+    { action: "settle", label: "Park" },
+    { action: "unsettle", label: "Unpark" },
+  ] as const)("does not offer task changes for $label", async ({ action, label }) => {
     const initial = props();
     render(
       <ThreadStackActionDialog
         {...initial}
-        action="unsettle"
-        impact={{ ...initial.impact, action: "unsettle" }}
+        action={action}
+        impact={{ ...initial.impact, action }}
       />,
     );
     expect(
-      screen.getByRole("dialog", { name: "Unpark threads in Release" }),
+      screen.getByRole("dialog", { name: `${label} threads in Release` }),
     ).toBeVisible();
-    expect(screen.getByRole("button", { name: "Unpark" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: label })).toBeEnabled();
     expect(
       screen.queryByRole("radiogroup", { name: "Open task handling" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Check the release")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: label }));
+    expect(initial.onConfirm).toHaveBeenCalledWith({});
   });
+
+  it.each(["settle", "unsettle", "archive"] as const)(
+    "applies the task limit only to archive when the action is %s",
+    (action) => {
+      const initial = props();
+      render(
+        <ThreadStackActionDialog
+          {...initial}
+          action={action}
+          impact={{
+            ...initial.impact,
+            action,
+            openTasks: { snapshot: "a".repeat(64), items: [], total: 10_001, omitted: 10_001 },
+            available: action !== "archive",
+          }}
+        />,
+      );
+      const warning = screen.queryByText(/too many open tasks/);
+      if (action === "archive") {
+        expect(warning).toBeVisible();
+        expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled();
+      } else {
+        expect(warning).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: action === "settle" ? "Park" : "Unpark" })).toBeEnabled();
+      }
+    },
+  );
 });

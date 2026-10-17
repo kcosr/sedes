@@ -142,7 +142,8 @@ export class ThreadBulkInventoryService {
       available:
         affectedStates.length > 0 &&
         blocked.size === 0 &&
-        openTasks.total <= MAXIMUM_BULK_INVENTORY_OPEN_TASKS,
+        (input.action !== "archive" ||
+          openTasks.total <= MAXIMUM_BULK_INVENTORY_OPEN_TASKS),
     };
   }
 
@@ -187,31 +188,31 @@ export class ThreadBulkInventoryService {
         ? new Map<string, BulkInventoryBlockerReason>()
         : (await this.#inspectThreads(scope, affectedThreadIds, true)).blocked;
     const disposition =
-      input.action === "unsettle"
-        ? "keep"
-        : (input.openTaskDisposition ?? "keep");
+      input.action === "archive"
+        ? (input.openTaskDisposition ?? "keep")
+        : "keep";
     const transition = async () =>
       this.input.inventory.bulkInventoryTransition(scope, {
         ...input,
         blockedThreadIds: new Set(blocked.keys()),
         now,
-        assertOpenTasks: (ids) =>
-          this.input.tasks.assertOpenThreadTaskSnapshot(
-            scope,
-            ids,
-            disposition,
-            input.action === "unsettle" ? undefined : input.expectedOpenTaskSnapshot,
-          ),
-        ...(input.action === "unsettle"
-          ? {}
-          : {
+        ...(input.action === "archive"
+          ? {
+              assertOpenTasks: (ids: readonly string[]) =>
+                this.input.tasks.assertOpenThreadTaskSnapshot(
+                  scope,
+                  ids,
+                  disposition,
+                  input.expectedOpenTaskSnapshot,
+                ),
               countOpenTasks: (threadIds: readonly string[]) =>
                 this.input.tasks.listOpenThreadTaskSummaries(
                   scope,
                   threadIds,
                   0,
                 ).total,
-            }),
+            }
+          : {}),
         ...(disposition === "keep"
           ? {}
           : {

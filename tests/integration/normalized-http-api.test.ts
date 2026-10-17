@@ -5720,7 +5720,6 @@ describe("normalized HTTP application contract", () => {
           action: "settle",
           targets: impact.body.targets,
           expectedStashedPromptCount: 0,
-          expectedOpenTaskCount: 0,
           mutationId: randomUUID(),
         })
         .expect(404);
@@ -5738,7 +5737,6 @@ describe("normalized HTTP application contract", () => {
           action: "settle",
           targets: impact.body.targets,
           expectedStashedPromptCount: 0,
-          expectedOpenTaskCount: 0,
           mutationId: randomUUID(),
         })
         .expect(200)

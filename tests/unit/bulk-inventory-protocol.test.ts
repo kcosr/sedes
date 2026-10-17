@@ -13,7 +13,7 @@ const secondThreadId = "10000000-0000-4000-8000-000000000002";
 
 describe("bulk inventory protocol", () => {
   it("advances the browser protocol fence", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(164);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(165);
   });
 
   it("accepts only strict, unique, bounded impact target sets", () => {
@@ -57,7 +57,7 @@ describe("bulk inventory protocol", () => {
     ).toThrow();
   });
 
-  it("requires confirmed counts only for settle and archive mutations", () => {
+  it("requires stash counts for park and task confirmation only for archive", () => {
     const targets = [
       { threadId: firstThreadId, expectedRevision: 1 },
       { threadId: secondThreadId, expectedRevision: 2 },
@@ -76,6 +76,22 @@ describe("bulk inventory protocol", () => {
         mutationId: "20000000-0000-4000-8000-000000000002",
       }),
     ).toThrow();
+    const park = {
+      action: "settle",
+      targets,
+      expectedStashedPromptCount: 0,
+      mutationId: "20000000-0000-4000-8000-000000000002",
+    };
+    expect(bulkInventoryMutationRequestSchema.parse(park)).toEqual(park);
+    for (const taskFields of [
+      { expectedOpenTaskCount: 0 },
+      { openTaskDisposition: "keep" },
+      { expectedOpenTaskSnapshot: "a".repeat(64) },
+    ]) {
+      expect(
+        bulkInventoryMutationRequestSchema.safeParse({ ...park, ...taskFields }).success,
+      ).toBe(false);
+    }
     expect(
       bulkInventoryMutationRequestSchema.parse({
         action: "archive",
@@ -103,14 +119,12 @@ describe("bulk inventory protocol", () => {
       expect(inventoryTransitionSchema.safeParse({ ...request, expectedOpenTaskSnapshot: "a".repeat(64) }).success).toBe(true);
       expect(inventoryTransitionSchema.safeParse({ ...request, expectedOpenTaskSnapshot: "not-a-snapshot" }).success).toBe(false);
     }
-    for (const action of ["settle", "archive"]) {
-      const request = {
-        ...common, action, expectedOpenTaskCount: 0,
-        targets: [{ threadId: firstThreadId, expectedRevision: 0 }, { threadId: secondThreadId, expectedRevision: 0 }],
-      };
-      expect(bulkInventoryMutationRequestSchema.safeParse(request).success).toBe(false);
-      expect(bulkInventoryMutationRequestSchema.safeParse({ ...request, expectedOpenTaskSnapshot: "a".repeat(64) }).success).toBe(true);
-    }
+    const bulkArchive = {
+      ...common, action: "archive", expectedOpenTaskCount: 0,
+      targets: [{ threadId: firstThreadId, expectedRevision: 0 }, { threadId: secondThreadId, expectedRevision: 0 }],
+    };
+    expect(bulkInventoryMutationRequestSchema.safeParse(bulkArchive).success).toBe(false);
+    expect(bulkInventoryMutationRequestSchema.safeParse({ ...bulkArchive, expectedOpenTaskSnapshot: "a".repeat(64) }).success).toBe(true);
   });
 
   it("rejects inconsistent impact counts and availability", () => {
@@ -147,10 +161,20 @@ describe("bulk inventory protocol", () => {
     expect(
       bulkInventoryImpactSchema.parse({
         ...base,
+        action: "archive",
         openTasks: { snapshot: "a".repeat(64), items: [], total: 10_001, omitted: 10_001 },
         available: false,
       }),
     ).toMatchObject({ available: false, openTasks: { total: 10_001 } });
+    for (const action of ["settle", "unsettle"]) {
+      expect(
+        bulkInventoryImpactSchema.parse({
+          ...base,
+          action,
+          openTasks: { snapshot: "a".repeat(64), items: [], total: 10_001, omitted: 10_001 },
+        }),
+      ).toMatchObject({ available: true });
+    }
   });
 
   it("keeps a worst-case confirmed target list below the HTTP JSON limit", () => {

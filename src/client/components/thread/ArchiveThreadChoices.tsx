@@ -360,7 +360,6 @@ export function ArchiveTaskDisposition({
       : "";
   return (
     <ThreadTaskDisposition
-      action="archive"
       description={`${total} open ${total === 1 ? "task" : "tasks"}${descendantNote}`}
       groups={[
         { label: "This thread", tasks: impact.openTasks.root },

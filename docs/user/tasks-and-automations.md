@@ -345,21 +345,23 @@ Chat for that prompt.
 
 ## Park or archive threads with open Tasks
 
-Park and archive previews list the affected open Tasks and let you choose
+Parking keeps open Tasks unchanged and attached to their threads without a
+task-handling prompt, including when parking a stack.
+
+Archive previews list the affected open Tasks and let you choose
 **To project**, **To global**, **Keep**, or **Complete all**. The choice applies
 to every open Task in the selected scope. **To project** moves each open
 Thread Task to its thread's project. **Complete all** marks those Tasks
 done and keeps them attached to their original threads. Tasks already completed
 remain unchanged.
 
-Parking one thread affects only its own Tasks. Archiving can also include
-descendant forks; the preview groups their Tasks separately. Bulk stack actions
-show Tasks from the affected stack members. Lists show up to 100 Tasks per group
-and state how many additional Tasks are not shown; **Complete all** includes
-those additional Tasks too.
+Archiving can also include descendant forks; the preview groups their Tasks
+separately. Bulk stack archives show Tasks from the affected stack members.
+Lists show up to 100 Tasks per group and state how many additional Tasks are not
+shown; **Complete all** includes those additional Tasks too.
 
 If the Tasks change after you open the preview, completion is rejected. Single-thread
-park and archive previews refresh automatically; for bulk stack actions, select
+archive previews refresh automatically; for bulk stack archives, select
 **Refresh impact** to review the updated Tasks before confirming again. Stashes
 remain separate: completing Tasks does not consume stashed prompts.
 

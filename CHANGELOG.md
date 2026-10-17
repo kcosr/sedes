@@ -8,7 +8,7 @@ User-facing changes are collected here before release. See the
 ### Breaking Changes
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **164**. Sedes tool policies replace cross-boundary approval modes with
+  **165**. Sedes tool policies replace cross-boundary approval modes with
   independent project/environment limits: queries filter to scope and direct
   outside requests are denied. Legacy thread-only policies are disabled for
   review rather than broadened. Saved Agent and thread-create tool contracts
@@ -31,16 +31,18 @@ User-facing changes are collected here before release. See the
   See [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
-- Client protocol **164** also includes Page responses, HTML page downloads and shared download metadata,
+- Client protocol **165** also includes Page responses, HTML page downloads
+  and shared download metadata,
   larger composer reference lists, the updated
   native voice bridge, Windows notification script paths, multiple named
   automations per thread, dismissal of automation results, and removal of
-  unused global inventory totals. Rebuild Android
+  unused global inventory totals and bulk Park task confirmation fields.
+  Rebuild Android
   and Electron with their bundled clients. See
   [Page responses](docs/user/html-previews.md#send-a-page-response),
   [voice input](docs/operator/clients/voice.md), and
   [notification scripts](docs/operator/configuration.md#notification-scripts).
-  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92))
+  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95))
 
 ### Added
 
@@ -90,6 +92,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Changed
+
+- Parking threads keeps open Tasks attached without prompting for task handling,
+  including stack parking. Archive task choices remain available. See
+  [parking](docs/user/organize-work.md#park-quiet-work).
+  ([#95](https://github.com/kcosr/sedes/pull/95))
 
 - OpenCode accepts stable stock releases **2.0.29 or newer**, tested through
   **2.0.32**, with an updated SDK/schema profile and an active advisory for
