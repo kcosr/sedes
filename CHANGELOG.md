@@ -29,7 +29,7 @@ User-facing changes are collected here before release. See the
   [Page responses](docs/user/html-previews.md#send-a-page-response),
   [voice input](docs/operator/clients/voice.md), and
   [notification scripts](docs/operator/configuration.md#notification-scripts).
-  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88))
+  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92))
 
 ### Added
 
@@ -37,6 +37,7 @@ User-facing changes are collected here before release. See the
   Pages library on web, desktop, and Android. Images are embedded in one UTF-8
   HTML file; unsaved interaction state and Sedes host controls are excluded.
   See [page downloads](docs/user/html-previews.md#download-a-page).
+  ([#92](https://github.com/kcosr/sedes/pull/92))
 
 - Threads support multiple named recurring schedules and one-time reminders.
   Run on **This thread**, or **Fork** a fresh result each time, copying saved
