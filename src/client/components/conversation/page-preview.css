@@ -192,6 +192,10 @@
   color: var(--destructive);
   margin: var(--space-2);
 }
+.page-preview-download-status {
+  color: var(--muted-foreground);
+  margin: var(--space-2);
+}
 .page-frame-expanded {
   display: flex;
   min-height: 0;

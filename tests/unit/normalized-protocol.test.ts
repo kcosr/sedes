@@ -2384,7 +2384,7 @@ describe("application sidebar background-work wire contract", () => {
     }).success).toBe(true);
   });
   it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(162);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(163);
     expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
       .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
     expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread }))

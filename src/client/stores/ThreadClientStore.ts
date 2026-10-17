@@ -3,7 +3,7 @@ import type { EnvironmentVariableOverrides } from "../../shared/protocol/environ
 import type { TurnReplySpeech } from "../../shared/protocol/turn-reply-speech.js";
 import type { PageRevision, PageRevisionPage } from "../../shared/protocol/pages.js";
 import type { DirectInputRequest, DirectInputReceipt, DirectInputReceiptLookup } from "../../shared/protocol/thread-input.js";
-import type { PageListOptions, PageRenderAdmission } from "../api/ApiClient.js";
+import type { PageListOptions, PageRenderAdmission, PreparedPageDownload } from "../api/ApiClient.js";
 import type {
   QuestionRequest,
   QuestionRequestsResult,
@@ -841,6 +841,11 @@ export class ThreadClientStore {
 
   getPageRevision(pageId: string, revision: number, signal?: AbortSignal): Promise<PageRevision> {
     return this.#api.getPageRevision(this.threadId, pageId, revision, signal);
+  }
+
+  preparePageDownload(page: PageRevision, signal?: AbortSignal): Promise<PreparedPageDownload> {
+    if (this.#disposed || this.#paused) return Promise.reject(new Error("This thread is no longer active."));
+    return this.#api.preparePageDownload(this.threadId, page, signal);
   }
 
   createPageRenderAdmission(pageId: string, revision: number, signal?: AbortSignal): Promise<PageRenderAdmission> {

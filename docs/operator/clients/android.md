@@ -22,7 +22,8 @@ comparison, compatibility policy, and security boundary.
 - Android Back and keyboard behavior integrated with the mobile shell.
 - The system file chooser for composer uploads, with no storage or media
   permission.
-- System document-picker downloads that stream workspace files without holding
+- System document-picker downloads that stream workspace files and saved HTML
+  pages without holding
   a complete file in WebView memory.
 - Bounded native copy/save actions for provider-generated PNG, JPEG, GIF, and
   WebP images.
@@ -366,7 +367,7 @@ sidecar interruption retains truthful history until removal.
 - Choosing a composer file uses the system picker; Sedes copies the selected
   bytes into server-owned attachment storage and receives no durable Android
   path authority.
-- Workspace downloads use a metadata preflight followed by a native streaming
+- Workspace and saved HTML page downloads use a metadata preflight followed by a native streaming
   GET into the selected document. Redirects, changed revision/length/media
   metadata, responses over the 1 GiB ceiling, and stalled reads fail closed.
   The save picker uses Android's extension-to-MIME mapping for the sanitized
@@ -375,6 +376,11 @@ sidecar interruption retains truthful history until removal.
   suggested names retain their extension within the 128-code-point name limit.
   Android's document provider controls duplicate-name handling and the final
   saved filename.
+  Page downloads contain the selected immutable revision and its embedded
+  images in one UTF-8 HTML file. They do not open automatically. Rebuild the
+  client with the server for client protocol 163 and the shared
+  `X-Sedes-Download-Revision` metadata contract. See
+  [Download a page](../../user/html-previews.md#download-a-page).
 - Output-image copy/save revalidates the closed image MIME set, byte count,
   signature, SHA-256, and 16 MiB ceiling. Clipboard data is exposed from an
   app-cache file through a non-exported, read-granting provider.

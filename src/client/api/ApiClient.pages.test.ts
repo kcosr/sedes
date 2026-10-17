@@ -2,6 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SEDES_CLIENT_PROTOCOL_VERSION } from "../../shared/index.js";
 import { SEDES_VERSION } from "../../shared/version.js";
+import { attachmentContentDisposition, SEDES_DOWNLOAD_REVISION_HEADER } from "../../shared/downloads.js";
+import { pageDownloadFileName } from "../../shared/page-download.js";
 import { configuredSedesServer } from "../app/server-endpoint.js";
 import { ApiClient } from "./ApiClient.js";
 
@@ -99,6 +101,71 @@ describe("page API", () => {
     await expect(
       new ApiClient().createPageRenderAdmission(page.threadId, page.pageId, 1),
     ).rejects.toMatchObject({ code: "invalid_response" });
+  });
+});
+
+describe("page download preflight", () => {
+  function headers(): Record<string, string> {
+    return {
+      "Content-Type": "application/octet-stream",
+      "Content-Disposition": attachmentContentDisposition("attachment", pageDownloadFileName(page.title, page.revision)),
+      "Content-Length": String(page.byteSize + 3),
+      [SEDES_DOWNLOAD_REVISION_HEADER]: page.sha256,
+    };
+  }
+
+  it.each([false, true])("authenticates an exact saved revision without reading its body (configured=%s)", async (configured) => {
+    const fetch = vi.fn(async (_input: string, _init?: RequestInit) => new Response(null, { headers: headers() }));
+    vi.stubGlobal("fetch", fetch);
+    const controller = new AbortController();
+    const client = configured
+      ? new ApiClient(configuredSedesServer("https://sedes.example"), "paired-credential")
+      : new ApiClient();
+    const prepared = await client.preparePageDownload(page.threadId, page, controller.signal);
+    const path = `/api/threads/thread%2Fone/pages/${page.pageId}/revisions/1/download`;
+    expect(prepared).toEqual({
+      url: configured ? `https://sedes.example${path}` : path,
+      serverOrigin: configured ? "https://sedes.example" : window.location.origin,
+      suggestedFileName: pageDownloadFileName(page.title, 1),
+      contentDisposition: headers()["Content-Disposition"],
+      contentLength: page.byteSize + 3,
+      revision: page.sha256,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: "HEAD", redirect: "error", credentials: configured ? "omit" : "same-origin", signal: controller.signal });
+    const sentHeaders = new Headers(fetch.mock.calls[0]?.[1]?.headers);
+    expect(sentHeaders.get("Accept")).toBe("application/octet-stream");
+    expect(sentHeaders.get("Authorization")).toBe(configured ? "Bearer paired-credential" : null);
+    expect(String(fetch.mock.calls[0]?.[0])).not.toContain("credential");
+  });
+
+  it.each([
+    { "Content-Type": "text/html" },
+    { "Content-Length": String(page.byteSize) },
+    { "Content-Length": "3.23e2" },
+    { "Content-Length": "" },
+    { "Content-Disposition": 'inline; filename="page.html"' },
+    { "Content-Disposition": attachmentContentDisposition("attachment", "wrong.html") },
+    { [SEDES_DOWNLOAD_REVISION_HEADER]: "b".repeat(64) },
+    { [SEDES_DOWNLOAD_REVISION_HEADER]: "" },
+  ])("rejects inconsistent preflight metadata %j", async (invalidHeaders) => {
+    const responseHeaders = new Headers(headers());
+    for (const [name, value] of Object.entries(invalidHeaders))
+      if (value !== undefined) responseHeaders.set(name, value);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { headers: responseHeaders })));
+    await expect(new ApiClient().preparePageDownload(page.threadId, page)).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects partial responses, HTTP failure, and a descriptor from another thread", async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 206, headers: headers() }));
+    vi.stubGlobal("fetch", fetch);
+    const client = new ApiClient();
+    await expect(client.preparePageDownload(page.threadId, page)).rejects.toMatchObject({ code: "invalid_response" });
+    fetch.mockImplementation(async () => new Response(null, { status: 404 }));
+    await expect(client.preparePageDownload(page.threadId, page)).rejects.toMatchObject({ code: "page_download_unavailable", retryable: false });
+    fetch.mockClear();
+    await expect(client.preparePageDownload("wrong-thread", page)).rejects.toThrow("selected thread");
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 

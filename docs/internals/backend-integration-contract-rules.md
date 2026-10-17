@@ -3999,6 +3999,23 @@ string slicing and concatenation, without parsing or re-encoding its authored
 payload on each request. Thus security updates protect existing revisions
 without changing their authored content, digest, revision, or source text.
 
+HTML page downloads are shared application reads for Pi, Codex, Claude, Grok,
+and OpenCode. Authenticate and resolve the exact tenant, principal, owning
+thread, page, and immutable revision without acquiring a provider runtime or
+rereading workspace files. Export the captured authored HTML and embedded
+images with a UTF-8 byte-order mark; exclude trusted rendering code, viewport
+wrappers, response channels, and transient widget state. The saved descriptor's
+digest and byte count continue to describe captured HTML before the export
+encoding marker. Attachment length must describe the actual exported bytes.
+Keep downloads available independently of frame support or render admission.
+Only the trusted application offers the download; authored frames gain no
+download or native plugin authority. Downloaded files run outside Sedes's
+rendering isolation. Both page and workspace downloads use the neutral
+`X-Sedes-Download-Revision` header through the authenticated preflight/native
+transfer contract; browser/client protocol changes fence separately deployed
+packaged clients. Test exact revisions, captured assets, wrong-scope rejection,
+and byte/metadata validation at the HTTP and native boundaries.
+
 Committed Workpad writes publish revision invalidations on the existing
 principal application stream. Browser panels subscribe and reconcile after
 stream replay/replacement; they must not poll continuously or depend on a

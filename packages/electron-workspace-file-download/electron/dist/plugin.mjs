@@ -8,6 +8,10 @@ import { BrowserWindow, dialog, net } from "electron";
 
 const ELECTRON_ORIGIN = "capacitor-electron://localhost";
 const MAXIMUM_DOWNLOAD_BYTES = 1_024 * 1_024 * 1_024;
+const MAXIMUM_PAGE_DOWNLOAD_BYTES = 16 * 1_024 * 1_024 + 3;
+const UUID_PATH = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const WORKSPACE_DOWNLOAD_PATH = new RegExp(`^/api/workspaces/${UUID_PATH}/files/download$`, "u");
+const PAGE_DOWNLOAD_PATH = new RegExp(`^/api/threads/${UUID_PATH}/pages/${UUID_PATH}/revisions/([1-9][0-9]*)/download$`, "u");
 
 function pluginError(code, message, cause) {
   const error = new Error(message, cause === undefined ? undefined : { cause });
@@ -40,7 +44,7 @@ function exactByteCounter(expectedByteSize) {
           ? null
           : pluginError(
               "workspace_file_download_byte_size_exceeded",
-              "The workspace file exceeded its expected size.",
+              "The download exceeded its expected size.",
             ),
         chunk,
       );
@@ -51,7 +55,7 @@ function exactByteCounter(expectedByteSize) {
           ? null
           : pluginError(
               "workspace_file_download_byte_size_mismatch",
-              "The workspace file did not match its expected size.",
+              "The download did not match its expected size.",
             ),
       );
     },
@@ -80,6 +84,11 @@ function validatedInput(input) {
     requiredString(input.serverOrigin, "serverOrigin"),
   );
   const requestUrl = new URL(requiredString(input.url, "url", 16_384));
+  // URL normalizes dot segments before exposing pathname. Match the original
+  // path as well so malformed native input cannot become an allowed route.
+  const rawPath = /^https?:\/\/[^/?#]+([^?#]*)/u.exec(input.url)?.[1];
+  const pageMatch = PAGE_DOWNLOAD_PATH.exec(requestUrl.pathname);
+  const isPageDownload = pageMatch !== null && Number.isSafeInteger(Number(pageMatch[1]));
   if (
     (serverOrigin.protocol !== "http:" && serverOrigin.protocol !== "https:") ||
     serverOrigin.origin !== input.serverOrigin ||
@@ -89,7 +98,10 @@ function validatedInput(input) {
     requestUrl.origin !== serverOrigin.origin ||
     requestUrl.username ||
     requestUrl.password ||
-    !requestUrl.pathname.startsWith("/api/")
+    rawPath !== requestUrl.pathname ||
+    input.url.includes("#") ||
+    !(WORKSPACE_DOWNLOAD_PATH.test(requestUrl.pathname) || isPageDownload) ||
+    (isPageDownload && input.url.includes("?"))
   ) {
     throw pluginError(
       "workspace_file_download_input_invalid",
@@ -114,12 +126,20 @@ function validatedInput(input) {
   if (
     !Number.isSafeInteger(input.expectedContentLength) ||
     input.expectedContentLength < 0 ||
-    input.expectedContentLength > MAXIMUM_DOWNLOAD_BYTES
+    input.expectedContentLength > (isPageDownload ? MAXIMUM_PAGE_DOWNLOAD_BYTES : MAXIMUM_DOWNLOAD_BYTES)
   ) {
     throw pluginError(
       "workspace_file_download_input_invalid",
       "The expected content length is invalid.",
     );
+  }
+  const expectedContentDisposition = requiredString(
+    input.expectedContentDisposition,
+    "expectedContentDisposition",
+    1_024,
+  );
+  if (!/^attachment;/iu.test(expectedContentDisposition)) {
+    throw pluginError("workspace_file_download_input_invalid", "The download disposition is invalid.");
   }
   return {
     transferId,
@@ -127,11 +147,7 @@ function validatedInput(input) {
     serverOrigin: serverOrigin.origin,
     requestUrl: requestUrl.href,
     suggestedFileName,
-    expectedContentDisposition: requiredString(
-      input.expectedContentDisposition,
-      "expectedContentDisposition",
-      1_024,
-    ),
+    expectedContentDisposition,
     expectedContentLength: input.expectedContentLength,
     expectedRevision: requiredString(
       input.expectedRevision,
@@ -149,7 +165,7 @@ class WorkspaceFileDownloadImpl {
     if (this.activeDownloads.size !== 0) {
       throw pluginError(
         "workspace_file_download_busy",
-        "Another workspace file download is active.",
+        "Another file download is active.",
       );
     }
     const window =
@@ -187,14 +203,19 @@ class WorkspaceFileDownloadImpl {
         .catch(() => ({ credential: null }));
       const response = await net.fetch(download.requestUrl, {
         method: "GET",
-        headers: { Origin: ELECTRON_ORIGIN, ...(credential ? { Authorization: `Bearer ${credential}` } : {}) },
+        headers: {
+          Origin: ELECTRON_ORIGIN,
+          Accept: "application/octet-stream",
+          "Accept-Encoding": "identity",
+          ...(credential ? { Authorization: `Bearer ${credential}` } : {}),
+        },
         redirect: "error",
         signal: controller.signal,
       });
       if (response.status !== 200) {
         throw pluginError(
           "download_http_status_invalid",
-          "The server refused the workspace file download.",
+          "The server refused the file download.",
         );
       }
       if (
@@ -204,32 +225,34 @@ class WorkspaceFileDownloadImpl {
       ) {
         throw pluginError(
           "download_content_disposition_mismatch",
-          "The server returned invalid workspace file metadata.",
+          "The server returned invalid download metadata.",
         );
       }
       if (
-        response.headers.get("x-sedes-workspace-file-revision") !==
+        response.headers.get("x-sedes-download-revision") !==
         download.expectedRevision
       ) {
         throw pluginError(
           "download_revision_mismatch",
-          "The workspace file changed before download.",
+          "The download revision changed before download.",
         );
       }
-      const contentLength = Number(response.headers.get("content-length"));
+      const contentLengthHeader = response.headers.get("content-length");
+      const contentLength = Number(contentLengthHeader);
       if (
+        contentLengthHeader === null || !/^[0-9]+$/u.test(contentLengthHeader) ||
         !Number.isSafeInteger(contentLength) ||
         contentLength !== download.expectedContentLength
       ) {
         throw pluginError(
           "download_content_length_mismatch",
-          "The workspace file length changed before download.",
+          "The download length changed before download.",
         );
       }
       if (!response.body) {
         throw pluginError(
           "workspace_file_download_unavailable",
-          "The workspace file response has no body.",
+          "The download response has no body.",
         );
       }
       await pipeline(
@@ -258,14 +281,14 @@ class WorkspaceFileDownloadImpl {
       if (controller.signal.aborted) {
         throw pluginError(
           "workspace_file_download_cancelled",
-          "The workspace file download was cancelled.",
+          "The file download was cancelled.",
           error,
         );
       }
       if (error && typeof error === "object" && "code" in error) throw error;
       throw pluginError(
         "workspace_file_download_destination_unavailable",
-        "The workspace file could not be written to the selected destination.",
+        "The file could not be written to the selected destination.",
         error,
       );
     } finally {

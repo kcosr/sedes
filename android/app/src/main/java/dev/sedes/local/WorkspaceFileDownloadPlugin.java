@@ -41,10 +41,10 @@ public final class WorkspaceFileDownloadPlugin extends Plugin {
             );
             String fileName = WorkspaceFileDownloadPolicy.safeFileName(call.getString("suggestedFileName"));
             long expectedByteSize = WorkspaceFileDownloadPolicy.validatedByteSize(
-                call.getData().opt("expectedContentLength")
+                call.getData().opt("expectedContentLength"), requestUri
             );
             String expectedContentDisposition = WorkspaceFileDownloadPolicy.validatedContentDisposition(
-                call.getString("expectedContentDisposition")
+                call.getString("expectedContentDisposition"), requestUri
             );
             String expectedRevision = WorkspaceFileDownloadPolicy.validatedRevision(call.getString("expectedRevision"));
 
@@ -155,7 +155,7 @@ public final class WorkspaceFileDownloadPlugin extends Plugin {
                 connection.getContentLengthLong(),
                 connection.getHeaderField("Content-Type"),
                 connection.getHeaderField("Content-Disposition"),
-                connection.getHeaderField("X-Sedes-Workspace-File-Revision"),
+                connection.getHeaderField("X-Sedes-Download-Revision"),
                 transfer.expectedByteSize,
                 transfer.expectedContentDisposition,
                 transfer.expectedRevision

@@ -35,7 +35,6 @@ import {
 import { prepareFileTreeInput } from "@pierre/trees";
 import { FileTree, useFileTree } from "@pierre/trees/react";
 import {
-  WORKSPACE_FILE_DOWNLOAD_MAX_DURATION_MILLISECONDS,
   WORKSPACE_FILE_MAX_IMAGE_CONTENT_BYTES,
   contextExcerptSchema,
   workspaceFileAbsolutePathSchema,
@@ -59,9 +58,10 @@ import {
 import { ApiError, type ApiClient } from "../api/ApiClient.js";
 import { useApplicationStore } from "../stores/ApplicationClientStore.js";
 import {
-  downloadWorkspaceFileInPackagedClient,
-  supportsPackagedWorkspaceFileDownloads,
-} from "../app/packaged-workspace-file-download.js";
+  downloadInPackagedClient,
+  supportsPackagedDownloads,
+} from "../app/packaged-download.js";
+import { startBrowserDownload } from "../app/browser-download.js";
 import { ConfirmDialog } from "../components/ui/confirm-dialog.js";
 import {
   Dialog,
@@ -1499,8 +1499,8 @@ export function WorkspaceFilesPanel({
         });
         if (controller.signal.aborted) return;
         const suggestedFileName = fileDisplayName(target.path);
-        if (supportsPackagedWorkspaceFileDownloads()) {
-          await downloadWorkspaceFileInPackagedClient({
+        if (supportsPackagedDownloads()) {
+          await downloadInPackagedClient({
             serverOrigin: prepared.serverOrigin,
             url: prepared.url,
             suggestedFileName,
@@ -1514,16 +1514,26 @@ export function WorkspaceFilesPanel({
           }
         } else {
           setDownloadState({ key, phase: "started" });
-          startBrowserWorkspaceFileDownload(prepared.url, (message) => {
-            if (downloadFeedbackTimerRef.current !== undefined) {
-              window.clearTimeout(downloadFeedbackTimerRef.current);
-              downloadFeedbackTimerRef.current = undefined;
-            }
-            setDownloadState((current) =>
-              current?.key === key
-                ? { key, phase: "idle", error: message }
-                : current,
-            );
+          startBrowserDownload({
+            url: prepared.url,
+            className: "workspace-file-download-frame",
+            failureMessage: "The file could not be downloaded. Refresh it and try again.",
+            redirectMessage: "The file download was redirected unexpectedly.",
+            errorMessages: {
+              workspace_file_revision_conflict: "The file changed on disk. Refresh it before downloading.",
+              workspace_file_download_too_large: "This file is larger than the download limit.",
+            },
+            onFailure: (message) => {
+              if (downloadFeedbackTimerRef.current !== undefined) {
+                window.clearTimeout(downloadFeedbackTimerRef.current);
+                downloadFeedbackTimerRef.current = undefined;
+              }
+              setDownloadState((current) =>
+                current?.key === key
+                  ? { key, phase: "idle", error: message }
+                  : current,
+              );
+            },
           });
           downloadFeedbackTimerRef.current = window.setTimeout(() => {
             downloadFeedbackTimerRef.current = undefined;
@@ -4734,83 +4744,4 @@ function visibleWorkspaceFileRootTabs(
     }
     return [root];
   });
-}
-
-const WORKSPACE_FILE_DOWNLOAD_FRAME_CLEANUP_GRACE_MILLISECONDS = 5 * 60 * 1_000;
-
-function startBrowserWorkspaceFileDownload(
-  url: string,
-  onFailure: (message: string) => void,
-): void {
-  const frame = document.createElement("iframe");
-  frame.className = "workspace-file-download-frame";
-  frame.hidden = true;
-  frame.setAttribute("aria-hidden", "true");
-  const cleanupTimer = window.setTimeout(
-    () => frame.remove(),
-    WORKSPACE_FILE_DOWNLOAD_MAX_DURATION_MILLISECONDS +
-      WORKSPACE_FILE_DOWNLOAD_FRAME_CLEANUP_GRACE_MILLISECONDS,
-  );
-  frame.addEventListener("load", () => {
-    const failure = browserWorkspaceFileDownloadFailure(frame, url);
-    if (!failure) return;
-    window.clearTimeout(cleanupTimer);
-    frame.remove();
-    onFailure(failure);
-  });
-  frame.src = url;
-  document.body.append(frame);
-}
-
-function browserWorkspaceFileDownloadFailure(
-  frame: HTMLIFrameElement,
-  expectedUrl: string,
-): string | undefined {
-  try {
-    const loadedUrl = frame.contentWindow?.location.href;
-    const absoluteExpectedUrl = new URL(expectedUrl, window.location.href).href;
-    if (!loadedUrl || loadedUrl === "about:blank") return undefined;
-    if (loadedUrl !== absoluteExpectedUrl) {
-      return "The file download was redirected unexpectedly.";
-    }
-    const body = frame.contentDocument?.body?.textContent?.trim();
-    if (body) {
-      try {
-        const parsed = JSON.parse(body) as unknown;
-        if (
-          typeof parsed === "object" &&
-          parsed !== null &&
-          "error" in parsed &&
-          typeof parsed.error === "object" &&
-          parsed.error !== null &&
-          "message" in parsed.error &&
-          typeof parsed.error.message === "string" &&
-          parsed.error.message.trim()
-        ) {
-          if (
-            "code" in parsed.error &&
-            parsed.error.code === "workspace_file_revision_conflict"
-          ) {
-            return "The file changed on disk. Refresh it before downloading.";
-          }
-          if (
-            "code" in parsed.error &&
-            parsed.error.code === "workspace_file_download_too_large"
-          ) {
-            return "This file is larger than the download limit.";
-          }
-          return parsed.error.message.trim();
-        }
-      } catch {
-        // The route should return a normalized JSON error. Keep malformed
-        // documents private and present a stable fallback instead.
-      }
-    }
-    return "The file could not be downloaded. Refresh it and try again.";
-  } catch {
-    // A response-level frame policy can make even a same-origin error
-    // document opaque. The navigation still failed to become an attachment,
-    // so report the failure without guessing at its private body.
-    return "The file could not be downloaded. Refresh it and try again.";
-  }
 }

@@ -4800,7 +4800,7 @@ describe("normalized HTTP application contract", () => {
         .expect("Content-Length", String(bytes.byteLength))
         .expect("Cache-Control", "private, no-store")
         .expect("X-Content-Type-Options", "nosniff")
-        .expect("X-Sedes-Workspace-File-Revision", revision)
+        .expect("X-Sedes-Download-Revision", revision)
         .expect(
           "Content-Disposition",
           "attachment; filename=\"large.bin\"; filename*=UTF-8''large.bin",

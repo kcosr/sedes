@@ -378,7 +378,7 @@ describe("ApiClient normalized contract", () => {
             "Content-Disposition":
               "attachment; filename=\"file.txt\"; filename*=UTF-8''file.txt",
             "Content-Length": "1234",
-            "X-Sedes-Workspace-File-Revision": "revision-1",
+            "X-Sedes-Download-Revision": "revision-1",
           },
         });
       },
@@ -438,7 +438,7 @@ describe("ApiClient normalized contract", () => {
               "Content-Type": "text/plain",
               "Content-Disposition": 'attachment; filename="file.txt"',
               "Content-Length": "1073741825",
-              "X-Sedes-Workspace-File-Revision": "revision-1",
+              "X-Sedes-Download-Revision": "revision-1",
             },
           }),
       ),

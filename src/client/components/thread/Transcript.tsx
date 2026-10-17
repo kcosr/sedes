@@ -349,6 +349,10 @@ export function Transcript({
     (pageId: string, revision: number, signal?: AbortSignal) => store.getPageRevision(pageId, revision, signal),
     [store],
   );
+  const preparePageDownload = useCallback(
+    (page: import("../../../shared/protocol/pages.js").PageRevision, signal?: AbortSignal) => store.preparePageDownload(page, signal),
+    [store],
+  );
   const itemRenderContext = useMemo(
     () =>
       assistantLabel && providerFeatureCapabilities
@@ -359,6 +363,7 @@ export function Transcript({
             createPageRenderAdmission,
             listPageRevisions,
             getPageRevision,
+            preparePageDownload,
             pageResponse,
             providerFeatureCapabilities,
           }
@@ -370,6 +375,7 @@ export function Transcript({
       createPageRenderAdmission,
       listPageRevisions,
       getPageRevision,
+      preparePageDownload,
       pageResponse,
       providerFeatureCapabilities,
     ],

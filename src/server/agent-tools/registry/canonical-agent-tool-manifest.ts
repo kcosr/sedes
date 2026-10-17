@@ -131,7 +131,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   }),
   "page.publish": threadOnlyManifestEntry({
     id: "page.publish", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
-    description: "Publish HTML from exactly one path (execution-environment file, max 1 MiB) or html (max 65,536 characters). Inline CSS/JS only. Files capture local PNG/JPEG/GIF/WebP; html needs data images. No HTTP resources. Optional viewport fixes width/height; update with pageId and expectedRevision. For controls or canvas, register window.sedes.onSubmit(() => string): synchronously return all answers as one nonblank plain-text string, max 65,536 UTF-8 bytes, with no separate summary. User's host Send captures once and sends or queues to the owning thread, never Steer. Unsent state is transient with no agent readback; pages cannot send themselves.",
+    description: "Publish HTML from exactly one path (execution-environment file, max 1 MiB) or html (max 65,536 characters). Inline CSS/JS only. Files capture local PNG/JPEG/GIF/WebP; html needs data images. No HTTP resources. Optional viewport fixes width/height; update with pageId and expectedRevision. For controls or canvas, register window.sedes?.onSubmit(() => string): synchronously return all answers as one nonblank plain-text string, max 65,536 UTF-8 bytes, with no separate summary. Optional registration lets downloaded HTML run without the Sedes API. User's host Send captures once and sends or queues to the owning thread, never Steer. Unsent state is transient with no agent readback; pages cannot send themselves.",
     catalog: { groupId: "pages", label: "Publish HTML page", order: 10 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),

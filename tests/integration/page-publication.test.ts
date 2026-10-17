@@ -28,6 +28,9 @@ import { ThreadAgentToolPolicyRepository } from "../../src/server/db/repositorie
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { createNormalizedApp, type NormalizedAppDependencies } from "../../src/server/normalized-app.js";
 import { PageService } from "../../src/server/pages/page-service.js";
+import { HttpRequestOperationGate } from "../../src/server/runtime/application-shutdown.js";
+import { downloadPageDocument } from "../../src/server/pages/html-download.js";
+import { pageDownloadFileName } from "../../src/shared/page-download.js";
 import type { BackendCapabilityDocument, BackendConversationSnapshot } from "../../src/shared/protocol/backend.js";
 import { pagePublicationResultSchema } from "../../src/shared/protocol/pages.js";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
@@ -71,8 +74,13 @@ async function fixture() {
     clientName: "Owner", kind: "device" })!;
   const otherPrincipal = authenticationRepository.exchangePairing({ token: authenticationRepository.createPairing({ kind: "management" }).token,
     clientName: "Other principal", kind: "device" })!;
-  const identity = { resolve: async (incoming: Request) => authentication.clientForRequest(incoming)?.name === "Other principal"
-    ? { ...scope, principalId: "different-principal" } : scope };
+  const otherTenant = authenticationRepository.exchangePairing({ token: authenticationRepository.createPairing({ kind: "management" }).token,
+    clientName: "Other tenant", kind: "device" })!;
+  const identity = { resolve: async (incoming: Request) => {
+    const name = authentication.clientForRequest(incoming)?.name;
+    return name === "Other principal" ? { ...scope, principalId: "different-principal" }
+      : name === "Other tenant" ? { ...scope, tenantId: "different-tenant" } : scope;
+  } };
   const csrf = (credential: string) => authentication.csrfForRequest({ headers: { authorization: `Bearer ${credential}` },
     rawHeaders: ["Authorization", `Bearer ${credential}`] } as IncomingMessage);
 
@@ -139,18 +147,87 @@ async function fixture() {
   const config: AppConfig = { authenticationRequired: true, experimentalUsageEnabled: false, host: "127.0.0.1", port: 4784,
     stateDirectory: root, allowedTailscaleHosts: [], packagedClientOrigins: ["capacitor-electron://localhost"],
     conversationRetentionMilliseconds: 60_000, conversationRuntimeBudget: 2 };
-  const app = createNormalizedApp({ workpads: {}, pages, config, csrfToken: "tool-csrf", identity, authentication,
+  const requestOperations = new HttpRequestOperationGate();
+  const app = createNormalizedApp({ workpads: {}, pages, requestOperations, config, csrfToken: "tool-csrf", identity, authentication,
     agentTools: { sources: application, clients: unavailablePrincipalAgentToolClientService(), tools: new PolicyCheckedAgentToolHttpService(scoped) },
   } as unknown as NormalizedAppDependencies);
   const invoke = (toolId: string, input: unknown) => request(app).post("/api/agent-tool-invocations")
     .set(SEDES_AGENT_TOOL_SOURCE_CAPABILITY_HEADER, sourceCapability).set("X-CSRF-Token", "tool-csrf")
     .send({ requestId: randomUUID(), toolId, schemaVersion: 1, input });
   const restartActor = async () => { acquired.release(); await actors.close(); await startActor(); };
-  return { root, database, scope, repository, app, invoke, owner, otherPrincipal, csrf, filesRead,
+  return { root, database, scope, repository, app, invoke, owner, otherPrincipal, otherTenant, csrf, filesRead, requestOperations,
     threadId: source.thread.id, otherThreadId: other.thread.id, actor: () => acquired.actor, restartActor };
 }
 
 describe("page publishing through normalized application", () => {
+  it("downloads exact saved revisions with captured images after source deletion, without the preview runtime", async () => {
+    const current = await fixture();
+    const filename = path.join(current.root, "export.html");
+    const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/i8AAAAASUVORK5CYII=", "base64");
+    await writeFile(path.join(current.root, "logo.png"), imageBytes);
+    await writeFile(filename, '<!doctype html><html><head><meta charset="windows-1252"><style>.picture{background:url(logo.png)}</style></head><body><h1>Résumé 世界 🌍</h1><img src="logo.png"><input value="saved"></body></html>');
+    const result = await current.invoke("page.publish", { path: filename, title: "Résumé 世界" }).expect(200);
+    const { page } = pagePublicationResultSchema.parse(result.body.output);
+    await rm(filename);
+    await rm(path.join(current.root, "logo.png"));
+    const newer = await current.invoke("page.publish", { html: "<h1>Newer revision</h1>", title: "Changed title", pageId: page.pageId, expectedRevision: 1 }).expect(200);
+    const newerPage = pagePublicationResultSchema.parse(newer.body.output).page;
+    const route = `/api/threads/${current.threadId}/pages/${page.pageId}/revisions/1/download`;
+    const expected = downloadPageDocument(current.repository.content(current.scope, current.threadId, page.pageId, 1));
+    const head = await request(current.app).head(route).auth(current.owner.credential, { type: "bearer" })
+      .set("Origin", "capacitor-electron://localhost").expect(200)
+      .expect("Content-Type", "application/octet-stream")
+      .expect("Cache-Control", "private, no-store")
+      .expect("Content-Length", String(page.byteSize + 3))
+      .expect("X-Content-Type-Options", "nosniff")
+      .expect("X-Sedes-Download-Revision", page.sha256);
+    expect(head.text).toBeUndefined();
+    expect(head.headers["x-sedes-workspace-file-revision"]).toBeUndefined();
+    expect(head.headers["content-disposition"]).toContain(`filename*=UTF-8''${encodeURIComponent(pageDownloadFileName(page.title, 1))}`);
+    expect(head.headers["access-control-expose-headers"]).toBe("Content-Disposition, Content-Length, X-Sedes-Download-Revision");
+    const download = await request(current.app).get(route).auth(current.owner.credential, { type: "bearer" }).expect(200);
+    expect(download.body).toEqual(expected);
+    const html = (download.body as Buffer).subarray(3).toString("utf8");
+    expect(html).toContain("Résumé 世界 🌍");
+    expect(html).not.toContain("Newer revision");
+    expect(html).toContain(`data:image/png;base64,${imageBytes.toString("base64")}`);
+    expect(html).toContain('<input value="saved">');
+    expect(html).not.toContain("sedes-page-document");
+    expect(html).not.toContain("sedes:page-submit");
+    expect(current.filesRead).toHaveBeenCalledTimes(2);
+    const second = await request(current.app).get(route.replace("/1/download", "/2/download"))
+      .auth(current.owner.credential, { type: "bearer" }).expect(200)
+      .expect("X-Sedes-Download-Revision", newerPage.sha256);
+    expect((second.body as Buffer).toString("utf8")).toContain("Newer revision");
+    expect((second.body as Buffer).toString("utf8")).not.toContain("data:image/png");
+    await request(current.app).get(route).auth(current.owner.credential, { type: "bearer" }).set("Range", "bytes=0-1").expect(416);
+    await request(current.app).head(route).auth(current.owner.credential, { type: "bearer" }).set("Range", "bytes=0-1").expect(416);
+  });
+
+  it("requires scoped authentication for page downloads and denies deleted, missing, and shutdown revisions", async () => {
+    const current = await fixture();
+    const result = await current.invoke("page.publish", { html: "<h1>Private export</h1>", title: "Private" }).expect(200);
+    const { page } = pagePublicationResultSchema.parse(result.body.output);
+    const route = `/api/threads/${current.threadId}/pages/${page.pageId}/revisions/1/download`;
+    for (const method of ["head", "get"] as const) {
+      await request(current.app)[method](route).expect(401);
+      await request(current.app)[method](route).auth(current.otherPrincipal.credential, { type: "bearer" }).expect(404);
+      await request(current.app)[method](route).auth(current.otherTenant.credential, { type: "bearer" }).expect(404);
+      await request(current.app)[method](route.replace(current.threadId, current.otherThreadId)).auth(current.owner.credential, { type: "bearer" }).expect(404);
+      await request(current.app)[method](route.replace("/1/download", "/2/download")).auth(current.owner.credential, { type: "bearer" }).expect(404);
+    }
+    const mint = await request(current.app).post(route.replace("/download", "/render-token"))
+      .auth(current.owner.credential, { type: "bearer" }).set("X-CSRF-Token", current.csrf(current.owner.credential)).expect(200);
+    await request(current.app).get(route).auth(mint.body.url.split("/").at(-1), { type: "bearer" }).expect(401);
+    current.database.prepare("DELETE FROM html_pages WHERE tenant_id=? AND owner_principal_id=? AND thread_id=? AND id=?")
+      .run(current.scope.tenantId, current.scope.principalId, current.threadId, page.pageId);
+    await request(current.app).get(route).auth(current.owner.credential, { type: "bearer" }).expect(404);
+    await current.requestOperations.close();
+    const read = vi.spyOn(current.repository, "content");
+    await request(current.app).get(route).auth(current.owner.credential, { type: "bearer" }).expect(500);
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("publishes file and inline revisions through authenticated tools, preserves chat anchors, and renders immutable scoped content", async () => {
     const current = await fixture();
     const filename = path.join(current.root, "mockup.html");
