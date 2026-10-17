@@ -124,6 +124,7 @@ User-facing changes are collected here before release. See the
 
 - Restore supported OpenCode reasoning-effort choices after native model
   catalog validation. See [OpenCode settings](docs/operator/backends/opencode.md#conversations-and-settings).
+  ([#94](https://github.com/kcosr/sedes/pull/94))
 
 - OpenCode pending forms stay visible during concurrent history refreshes, and
   answered forms cannot reappear from an older interaction read.
