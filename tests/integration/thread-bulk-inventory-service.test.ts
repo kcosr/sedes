@@ -247,9 +247,12 @@ describe("thread bulk inventory service", () => {
       const impact = await current.service.impact(current.scope, { action, threadIds: ids });
       expect(impact).toMatchObject({ available: true, blockers: { total: 0 } });
       await current.service.transition(current.scope, {
-        action, targets: impact.targets,
+        targets: impact.targets,
         mutationId: `bulk-${action}-${availability}`,
-        expectedStashedPromptCount: 0, expectedOpenTaskCount: 0,
+        expectedStashedPromptCount: 0,
+        ...(action === "archive"
+          ? { action: "archive", expectedOpenTaskCount: 0 }
+          : { action: "settle" }),
       });
       for (const id of ids) {
         expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe(action === "archive" ? "archived" : "settled");
@@ -303,7 +306,7 @@ describe("thread bulk inventory service", () => {
     }
   });
 
-  it("reports ordered mixed-state impact and atomically settles affected members with task replay", async () => {
+  it("reports ordered mixed-state impact and parks affected members while retaining tasks on replay", async () => {
     const current = fixture();
     try {
       const [first, second, third] = current.ids as [string, string, string];
@@ -314,7 +317,7 @@ describe("thread bulk inventory service", () => {
         now: 450,
       });
       const task = current.tasks.create(current.scope, {
-        title: "Move with settled stack",
+        title: "Stay with parked thread",
         scope: { kind: "thread", threadId: first },
         mutationId: "bulk-task-create",
         now: 451,
@@ -338,13 +341,20 @@ describe("thread bulk inventory service", () => {
         first,
       ]);
       expect(current.listSummariesByIds).toHaveBeenCalledTimes(1);
+      const addedTask = current.tasks.create(current.scope, {
+        title: "Added after the park preview",
+        scope: { kind: "thread", threadId: third },
+        mutationId: "bulk-task-after-impact",
+        now: 452,
+      });
+      const listOpenTasks = vi.spyOn(current.tasks, "listOpenThreadTaskSummaries");
+      const assertOpenTasks = vi.spyOn(current.tasks, "assertOpenThreadTaskSnapshot");
+      const applyOpenTasks = vi.spyOn(current.tasks, "applyOpenThreadTaskDisposition");
       const request = {
         action: "settle" as const,
         targets: impact.targets,
         mutationId: "bulk-settle-mutation",
         expectedStashedPromptCount: 0,
-        expectedOpenTaskCount: 1,
-        openTaskDisposition: "move_to_project" as const,
       };
       await expect(
         current.service.transition(current.scope, request),
@@ -358,9 +368,15 @@ describe("thread bulk inventory service", () => {
         inventoryRevision: 1,
       });
       expect(current.tasks.get(current.scope, task.id)).toMatchObject({
-        scopeKind: "project",
-        projectId: current.projectIds[0],
-        revision: 1,
+        scopeKind: "thread",
+        threadId: first,
+        revision: 0,
+      });
+      expect(current.tasks.get(current.scope, addedTask.id)).toMatchObject({
+        scopeKind: "thread",
+        threadId: third,
+        revision: 0,
+        completedAt: null,
       });
       await expect(
         current.service.transition(current.scope, {
@@ -371,11 +387,37 @@ describe("thread bulk inventory service", () => {
         changedThreadIds: [third, first],
       });
       expect(current.publishCommitted).toHaveBeenCalledTimes(2);
-      expect(current.publishTaskChange).toHaveBeenCalledTimes(2);
+      expect(current.publishTaskChange).not.toHaveBeenCalled();
+      expect(listOpenTasks).not.toHaveBeenCalled();
+      expect(assertOpenTasks).not.toHaveBeenCalled();
+      expect(applyOpenTasks).not.toHaveBeenCalled();
     } finally {
       current.database.close();
     }
   });
+
+  it.each(["settle", "unsettle", "archive"] as const)(
+    "applies the task limit only to archive for %s impact",
+    async (action) => {
+      const current = fixture();
+      try {
+        const ids = current.ids.slice(0, 2);
+        if (action === "unsettle") {
+          for (const threadId of ids) current.inventory.transitionInventory(current.scope, threadId, {
+            expectedRevision: 0, mutationId: `prepare-task-limit-${threadId}`,
+            change: { action: "settle" }, now: 450,
+          });
+        }
+        vi.spyOn(current.tasks, "listOpenThreadTaskSummaries").mockReturnValue({
+          snapshot: "a".repeat(64), items: [], total: 10_001, omitted: 10_001,
+        });
+        const impact = await current.service.impact(current.scope, { action, threadIds: ids });
+        expect(impact).toMatchObject({
+          openTasks: { total: 10_001 }, available: action !== "archive",
+        });
+      } finally { current.database.close(); }
+    },
+  );
 
   it("blocks the complete settle and fences revisions for unchanged targets", async () => {
     const current = fixture();
@@ -402,7 +444,6 @@ describe("thread bulk inventory service", () => {
           targets: impact.targets,
           mutationId: "bulk-settle-blocked",
           expectedStashedPromptCount: 0,
-          expectedOpenTaskCount: 0,
         }),
       ).rejects.toThrow("active or unresolved work");
       expect(
@@ -425,7 +466,6 @@ describe("thread bulk inventory service", () => {
           targets: impact.targets,
           mutationId: "bulk-settle-stale-noop",
           expectedStashedPromptCount: 0,
-          expectedOpenTaskCount: 0,
         }),
       ).rejects.toThrow("changed in another client");
       expect(
@@ -618,12 +658,12 @@ describe("thread bulk inventory service", () => {
     }
   });
 
-  it("rolls back every inventory and task change when confirmed stash or task counts become stale", async () => {
+  it("rolls back every inventory and task change when archive stash or task counts become stale", async () => {
     const current = fixture();
     try {
       const [first, second] = current.ids as [string, string, string];
       const impact = await current.service.impact(current.scope, {
-        action: "settle",
+        action: "archive",
         threadIds: [first, second],
       });
       const draft = current.inventory.getDraft(current.scope, first);
@@ -643,7 +683,7 @@ describe("thread bulk inventory service", () => {
       });
       await expect(
         current.service.transition(current.scope, {
-          action: "settle",
+          action: "archive",
           targets: impact.targets,
           mutationId: "bulk-stale-stash",
           expectedStashedPromptCount: impact.stashedPromptCount,
@@ -659,7 +699,7 @@ describe("thread bulk inventory service", () => {
       ).toEqual(["active", "active"]);
 
       const refreshed = await current.service.impact(current.scope, {
-        action: "settle",
+        action: "archive",
         threadIds: [first, second],
       });
       const task = current.tasks.create(current.scope, {
@@ -670,7 +710,7 @@ describe("thread bulk inventory service", () => {
       });
       await expect(
         current.service.transition(current.scope, {
-          action: "settle",
+          action: "archive",
           targets: refreshed.targets,
           mutationId: "bulk-stale-task",
           expectedStashedPromptCount: refreshed.stashedPromptCount,
@@ -737,8 +777,6 @@ describe("thread bulk inventory service", () => {
           blockedThreadIds: new Set(),
           now: 452,
           expectedStashedPromptCount: 0,
-          expectedOpenTaskCount: 0,
-          countOpenTasks: () => 0,
         }),
       ).toThrow("active or unresolved work");
       expect(
@@ -771,13 +809,13 @@ describe("thread bulk inventory service", () => {
         }),
       );
       const impact = await current.service.impact(current.scope, {
-        action: "settle",
+        action: "archive",
         threadIds: [fourth, first],
       });
       await current.service.transition(current.scope, {
-        action: "settle",
+        action: "archive",
         targets: impact.targets,
-        mutationId: "bulk-cross-project-settle",
+        mutationId: "bulk-cross-project-archive",
         expectedStashedPromptCount: 0,
         expectedOpenTaskCount: 2,
         openTaskDisposition: "move_to_project",
@@ -796,19 +834,16 @@ describe("thread bulk inventory service", () => {
 });
 
 describe("reviewed bulk task completion", () => {
-  it.each(["settle", "archive"] as const)("%s completes affected tasks and supports durable replay", async (action) => {
+  it("archive completes affected tasks and supports durable replay", async () => {
     const current = fixture();
     try {
       const [first, second, third] = current.ids as [string, string, string];
-      if (action === "settle") current.inventory.transitionInventory(current.scope, second, {
-        expectedRevision: 0, mutationId: "settle-before-impact", change: { action: "settle" }, now: 440,
-      });
       const tasks = [first, second, third].map((threadId, index) => current.tasks.create(current.scope, {
         title: `Task ${index}`, scope: { kind: "thread", threadId }, mutationId: `bulk-complete-task-${index}`, now: 450,
       }));
-      const impact = await current.service.impact(current.scope, { action, threadIds: [first, second] });
+      const impact = await current.service.impact(current.scope, { action: "archive", threadIds: [first, second] });
       const input = {
-        action, targets: impact.targets, mutationId: "bulk-complete", expectedStashedPromptCount: 0,
+        action: "archive" as const, targets: impact.targets, mutationId: "bulk-complete", expectedStashedPromptCount: 0,
         expectedOpenTaskCount: impact.openTasks.total, expectedOpenTaskSnapshot: impact.openTasks.snapshot,
         openTaskDisposition: "complete" as const,
       };
@@ -816,7 +851,7 @@ describe("reviewed bulk task completion", () => {
       await expect(current.service.transition(current.scope, input)).rejects.toThrow("interrupted publication");
       await current.service.transition(current.scope, input);
       expect(current.tasks.get(current.scope, tasks[0]!.id)).toMatchObject({ scopeKind: "thread", threadId: first, completedAt: 500, revision: 1 });
-      expect(current.tasks.get(current.scope, tasks[1]!.id).completedAt).toBe(action === "settle" ? null : 500);
+      expect(current.tasks.get(current.scope, tasks[1]!.id).completedAt).toBe(500);
       expect(current.tasks.get(current.scope, tasks[2]!.id).completedAt).toBeNull();
       expect(current.publishTaskChange).toHaveBeenCalledWith(current.scope, tasks[0]!.id);
     } finally { current.database.close(); }

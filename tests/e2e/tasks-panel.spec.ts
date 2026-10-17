@@ -737,7 +737,10 @@ test.describe.serial("Tasks panel", () => {
 });
 
 for (const action of ["Park", "Archive"] as const) {
-  test(`${action.toLowerCase()} lists tasks and completes them without moving ownership`, async ({ page }, testInfo) => {
+  const description = action === "Park"
+    ? "park keeps tasks open and attached without a task prompt"
+    : "archive lists tasks and completes them without moving ownership";
+  test(description, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openTaskWorkspace(page);
     const threadPath = await createDraftThread(page);
@@ -755,26 +758,42 @@ for (const action of ["Park", "Archive"] as const) {
     }
 
     await page.getByRole("button", { name: "Thread actions" }).click();
+    const parked = action === "Park"
+      ? page.waitForResponse((response) =>
+          response.request().method() === "PATCH" &&
+          response.url().endsWith(`/api/threads/${threadId}/inventory`) &&
+          response.ok(),
+        )
+      : undefined;
     await page.getByTestId("thread-actions-menu").getByRole("menuitem", { name: action, exact: true }).click();
     const dialog = page.getByRole("dialog", { name: `${action} this thread` });
-    for (const task of tasks) await expect(dialog.getByText(task.title, { exact: true })).toBeVisible();
-    await dialog.getByRole("radio", { name: "Complete all", exact: true }).click();
-    if (action === "Archive") await page.setViewportSize({ width: 412, height: 700 });
-    await expect(dialog.getByRole("radio", { name: "Complete all", exact: true })).toBeVisible();
-    await capture(page, testInfo, `tasks-${action.toLowerCase()}-complete-preview.png`);
-    await dialog.getByRole("button", { name: action, exact: true }).click();
-    await expect(dialog).toBeHidden();
+    if (action === "Park") {
+      await parked;
+      await expect(dialog).toHaveCount(0);
+    } else {
+      for (const task of tasks) await expect(dialog.getByText(task.title, { exact: true })).toBeVisible();
+      await dialog.getByRole("radio", { name: "Complete all", exact: true }).click();
+      await page.setViewportSize({ width: 412, height: 700 });
+      await expect(dialog.getByRole("radio", { name: "Complete all", exact: true })).toBeVisible();
+      await capture(page, testInfo, "tasks-archive-complete-preview.png");
+      await dialog.getByRole("button", { name: action, exact: true }).click();
+      await expect(dialog).toBeHidden();
+    }
 
     const snapshot = normalizedApplicationSnapshotSchema.parse(
       await (await page.request.get("/api/application/snapshot")).json(),
     );
     for (const task of tasks) {
-      const completed = snapshot.tasks.find(({ id }) => id === task.id);
-      expect(completed).toMatchObject({
-        scope: { kind: "thread", threadId },
-        revision: task.revision + 1,
-      });
-      expect(completed?.completedAt).toEqual(expect.any(String));
+      const current = snapshot.tasks.find(({ id }) => id === task.id);
+      if (action === "Park") {
+        expect(current).toMatchObject(task);
+      } else {
+        expect(current).toMatchObject({
+          scope: { kind: "thread", threadId },
+          revision: task.revision + 1,
+        });
+        expect(current?.completedAt).toEqual(expect.any(String));
+      }
     }
     expect(snapshot.threads.find(({ id }) => id === threadId)?.inventoryState).toBe(
       action === "Park" ? "settled" : "archived",

@@ -312,9 +312,9 @@ The action location determines the action scope:
   the stack face.
 
 Every stack action requires confirmation. The preview states how many visible
-members the stack contains, how many will change, and whether Tasks, stashes,
-or active work need attention. A mixed stack can offer both Park and Unpark;
-members already in the requested state remain unchanged.
+members the stack contains, how many will change, and whether stashes or active
+work need attention. Archive previews also show Tasks. A mixed stack can offer
+both Park and Unpark; members already in the requested state remain unchanged.
 
 The confirmed target is exactly the roster visible when confirmation begins,
 after Scope, search, visibility, organization, and sorting have been applied.
@@ -364,10 +364,9 @@ Parked is a manual label, not a claim about provider success. New manual or
 automated input returns the thread to Active, so a parked thread with an
 automation comes back when a run sends it a prompt or fails; see
 [Park an automated thread](tasks-and-automations.md#park-an-automated-thread).
-Park never pauses an automation; snooze the thread to skip runs. Stashes
-remain attached. If open Tasks exist, the park preview lists them. Choose
-whether to move them to the project or global list, keep them open, or
-**Complete all** while leaving them attached to the thread.
+Park never pauses an automation; snooze the thread to skip runs. Open Tasks
+remain unchanged and attached to their threads, without a task-handling prompt.
+Stashes also remain attached, with a warning before parking.
 
 ## Archive finished work
 

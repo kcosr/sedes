@@ -804,11 +804,11 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   await expect(stackActionDialog).toContainText(
     "Park 2 threads.",
   );
-  await expect(stackActionDialog.getByText("Finish selected thread", { exact: true })).toBeVisible();
-  await expect(stackActionDialog.getByText("Finish sibling thread", { exact: true })).toBeVisible();
+  await expect(stackActionDialog.getByText("Finish selected thread", { exact: true })).toHaveCount(0);
+  await expect(stackActionDialog.getByText("Finish sibling thread", { exact: true })).toHaveCount(0);
   await expect(stackActionDialog.getByText("Keep filtered thread task open", { exact: true })).toHaveCount(0);
-  await stackActionDialog.getByRole("radio", { name: "Complete all", exact: true }).click();
-  await capture(page, testInfo, "sidebar-thread-stack-complete-tasks.png");
+  await expect(stackActionDialog.getByRole("radiogroup", { name: "Open task handling" })).toHaveCount(0);
+  await capture(page, testInfo, "sidebar-thread-stack-park.png");
   await stackActionDialog.getByRole("button", { name: "Park" }).click();
   await parkRequest;
   await expect(stackActionDialog).toBeHidden();
@@ -817,15 +817,10 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
     [siblingId]: "settled",
     [filteredId]: "snoozed",
   });
-  const afterCompletion = await currentSnapshot(page);
+  const afterPark = await currentSnapshot(page);
   for (const task of stackTasks) {
-    const current = afterCompletion.tasks.find(({ id }) => id === task.id);
-    expect(current?.scope).toEqual(task.scope);
-    expect(current?.completedAt).toEqual(
-      task.scope.kind === "thread" && task.scope.threadId === filteredId
-        ? null
-        : expect.any(String),
-    );
+    const current = afterPark.tasks.find(({ id }) => id === task.id);
+    expect(current).toMatchObject(task);
   }
 
   await groupStack.click({ button: "right" });

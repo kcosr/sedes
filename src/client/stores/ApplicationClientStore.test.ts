@@ -779,7 +779,6 @@ describe("ApplicationClientStore bulk inventory", () => {
       action: "settle",
       targets: impact.targets,
       expectedStashedPromptCount: 2,
-      expectedOpenTaskCount: 0,
       mutationId: expect.any(String),
     });
     expect(Object.isFrozen(request)).toBe(true);
@@ -801,6 +800,7 @@ describe("ApplicationClientStore bulk inventory", () => {
     );
     const reviewed = {
       ...impact,
+      action: "archive" as const,
       openTasks: { snapshot: "a".repeat(64), items: [], total: 1, omitted: 1 },
     };
     const request = store.createBulkInventoryMutationRequest(reviewed, {
@@ -817,6 +817,23 @@ describe("ApplicationClientStore bulk inventory", () => {
     });
     expect(refreshed).toMatchObject({ expectedOpenTaskSnapshot: "b".repeat(64) });
     expect(refreshed.mutationId).not.toBe(request.mutationId);
+  });
+
+  it("omits all task confirmation fields when parking even with a supplied task choice", () => {
+    const store = new ApplicationClientStore(
+      {} as ApiClient,
+      {} as EventStreamTransport,
+    );
+    const request = store.createBulkInventoryMutationRequest({
+      ...impact,
+      openTasks: { snapshot: "a".repeat(64), items: [], total: 10_001, omitted: 10_001 },
+    }, { openTaskDisposition: "complete" });
+    expect(request).toEqual({
+      action: "settle",
+      targets: impact.targets,
+      expectedStashedPromptCount: impact.stashedPromptCount,
+      mutationId: expect.any(String),
+    });
   });
 
   it.each(["settle", "archive"] as const)(

@@ -2434,7 +2434,10 @@ export class InventoryRepository {
         affectedThreadIds,
         input.expectedStashedPromptCount,
       );
-      if (input.expectedOpenTaskCount !== undefined) {
+      if (
+        input.action === "archive" &&
+        input.expectedOpenTaskCount !== undefined
+      ) {
         if (!input.countOpenTasks) {
           throw new Error("bulk_inventory_open_task_counter_required");
         }
@@ -2449,10 +2452,14 @@ export class InventoryRepository {
         }
       }
 
-      if (input.openTaskDisposition === "complete" && !input.assertOpenTasks) {
+      if (
+        input.action === "archive" &&
+        input.openTaskDisposition === "complete" &&
+        !input.assertOpenTasks
+      ) {
         throw new Error("inventory_task_completion_confirmation_required");
       }
-      input.assertOpenTasks?.(affectedThreadIds);
+      if (input.action === "archive") input.assertOpenTasks?.(affectedThreadIds);
       const transition: InventoryTransition = { action: input.action };
       const nextStates = affectedStates.map((current) => {
         this.#assertTransitionNotBlocked(scope, current.threadId, transition);
@@ -2463,7 +2470,9 @@ export class InventoryRepository {
 
       const disposition = input.openTaskDisposition ?? "keep";
       const movedTaskIds =
-        disposition !== "keep" && input.applyOpenTasks
+        input.action === "archive" &&
+        disposition !== "keep" &&
+        input.applyOpenTasks
           ? input.applyOpenTasks(affectedThreadIds)
           : ([] as readonly string[]);
       const changedThreadIds = nextStates.map(({ threadId }) => threadId);

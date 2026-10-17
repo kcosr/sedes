@@ -329,11 +329,13 @@ Bulk sidebar inventory changes are application-owned rather than provider
 side effects. The server derives tenant/principal scope, freezes revisioned
 targets during authoritative impact calculation, and rechecks runtime and
 durable blockers before commit. Park (`settle`), unpark (`unsettle`), or archive
-changes every eligible target, moves or completes any explicitly disposed open Tasks, advances the
-principal inventory generation, and records one replay receipt in one SQLite
+changes every eligible target, advances the principal inventory generation,
+and records one replay receipt in one SQLite
 transaction. A stale revision, changed confirmation count, invalid target, or
 single blocker aborts the complete database mutation; publications occur only
-after commit. Pi, Codex, Claude, and Grok therefore share this exact path and
+after commit. Park and unpark leave Tasks attached to their threads and do not
+confirm or limit open Tasks; bulk archive alone can move or complete them.
+Pi, Codex, Claude, Grok, and OpenCode therefore share this exact path and
 need no provider-specific implementation or capability. Bulk archive retains
 isolated execution workspaces because filesystem deletion cannot join the
 database transaction, and archived threads have no bulk-stack restore path.
@@ -343,8 +345,8 @@ If a stream or direct actor borrower remains busy, or closure cannot be proven,
 the archive does not commit. Receipt replay retires only threads that are still
 archived before republishing the receipted state.
 
-Single-thread park, single/family archive, and bulk inventory previews include
-bounded open-Task summaries and opaque snapshots of the full scoped Task set.
+Single-thread inventory, single/family archive, and bulk inventory previews
+include bounded open-Task summaries and opaque snapshots of the full scoped Task set.
 Completion requires the reviewed snapshot, covering tenant/principal, affected
 thread membership, and every open Task's ID and revision, including rows omitted
 from the preview. The snapshot is rechecked inside the inventory transaction;
@@ -352,8 +354,8 @@ changed membership or edits reject completion before any changes commit.
 Completion sets Task completion/update timestamps and advances revisions without
 moving ownership. The durable receipt's existing `movedTaskIds` field records
 all changed Tasks, including completions, for post-commit and replay publication.
-Pi, Codex, Claude, and Grok share this application-owned behavior without native
-provider calls. The agent archive tool intentionally offers only move/keep:
+Pi, Codex, Claude, Grok, and OpenCode share this application-owned behavior
+without native provider calls. The agent archive tool intentionally offers only move/keep:
 it has no reviewed-impact token and must not synthesize completion consent.
 
 The browser's requested delivery intent and the server's admitted mode are

@@ -10,10 +10,9 @@ import "./archive-choices.css";
 
 type TaskCollection = ThreadArchiveImpact["openTasks"]["root"];
 
-/** The same bounded task preview and handling choices for every lifecycle action. */
+/** The same bounded task preview and handling choices for thread and stack archives. */
 export function ThreadTaskDisposition({
   groups,
-  action,
   description,
   value,
   onChange,
@@ -25,7 +24,6 @@ export function ThreadTaskDisposition({
     readonly tasks: TaskCollection;
     readonly showOwningThread?: boolean;
   }[];
-  readonly action: "archive" | "park";
   readonly description?: React.ReactNode;
   readonly value: OpenTaskDisposition;
   readonly onChange: (value: OpenTaskDisposition) => void;
@@ -46,7 +44,7 @@ export function ThreadTaskDisposition({
       <div
         className="archive-task-summary-scroll"
         role="region"
-        aria-label={`${total} open ${total === 1 ? "task" : "tasks"} affected by this ${action}`}
+        aria-label={`${total} open ${total === 1 ? "task" : "tasks"} affected by this archive`}
         tabIndex={0}
       >
         {groups
@@ -122,7 +120,7 @@ export function ThreadTaskDisposition({
       </SegmentedControl>
       {value === "complete" && (
         <p className="archive-task-completion-note" role="note">
-          All open tasks on the threads you {action}
+          All open tasks on the threads you archive
           {omitted > 0 ? ", including those not shown," : ""} will be marked
           completed and remain attached to their threads.
         </p>

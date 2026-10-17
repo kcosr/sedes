@@ -434,19 +434,23 @@ export class ApplicationClientStore {
     const confirmed = {
       targets,
       expectedStashedPromptCount: impact.stashedPromptCount,
-      expectedOpenTaskCount: impact.openTasks.total,
-      ...(impact.openTasks.total > 0 && options.openTaskDisposition === "complete"
-        ? { expectedOpenTaskSnapshot: impact.openTasks.snapshot }
-        : {}),
-      ...(impact.openTasks.total > 0 && options.openTaskDisposition
-        ? { openTaskDisposition: options.openTaskDisposition }
-        : {}),
       mutationId,
     };
     const request: BulkInventoryMutationRequest =
       impact.action === "settle"
         ? { action: "settle", ...confirmed }
-        : { action: "archive", ...confirmed };
+        : {
+            action: "archive",
+            ...confirmed,
+            expectedOpenTaskCount: impact.openTasks.total,
+            ...(impact.openTasks.total > 0 &&
+            options.openTaskDisposition === "complete"
+              ? { expectedOpenTaskSnapshot: impact.openTasks.snapshot }
+              : {}),
+            ...(impact.openTasks.total > 0 && options.openTaskDisposition
+              ? { openTaskDisposition: options.openTaskDisposition }
+              : {}),
+          };
     Object.freeze(request);
     return request;
   }

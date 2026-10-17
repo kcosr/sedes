@@ -652,11 +652,12 @@ export const bulkInventoryImpactSchema = z
     "Bulk inventory impact counts must match its frozen targets.",
   )
   .refine(
-    ({ available, blockers, affectedCount, openTasks }) =>
+    ({ action, available, blockers, affectedCount, openTasks }) =>
       available ===
       (blockers.total === 0 &&
         affectedCount > 0 &&
-        openTasks.total <= MAXIMUM_BULK_INVENTORY_OPEN_TASKS),
+        (action !== "archive" ||
+          openTasks.total <= MAXIMUM_BULK_INVENTORY_OPEN_TASKS)),
     "Bulk inventory availability must match its blockers and affected threads.",
   );
 export type BulkInventoryImpact = z.infer<typeof bulkInventoryImpactSchema>;
@@ -683,7 +684,8 @@ export const bulkInventoryMutationRequestSchema = z.discriminatedUnion(
       action: z.literal("settle"),
       targets: bulkInventoryTargetsSchema,
       mutationId: mutationIdSchema,
-      ...confirmedBulkInventoryCountsSchema,
+      expectedStashedPromptCount:
+        confirmedBulkInventoryCountsSchema.expectedStashedPromptCount,
     }),
     z.strictObject({
       action: z.literal("unsettle"),
@@ -698,7 +700,7 @@ export const bulkInventoryMutationRequestSchema = z.discriminatedUnion(
     }),
   ]).refine(
   (request) =>
-    request.action === "unsettle" ||
+    request.action !== "archive" ||
     request.openTaskDisposition !== "complete" ||
     request.expectedOpenTaskSnapshot !== undefined,
   {
