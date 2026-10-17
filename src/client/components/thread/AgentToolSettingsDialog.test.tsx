@@ -239,6 +239,7 @@ describe("AgentToolSettingsDialog", () => {
 
     await applyPolicy(listed);
     expect(await screen.findByText(/Loaded Focused review \(revision 4\) into this draft/)).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Policy set" })).toHaveAccessibleDescription(/Draft policy set: Focused review \(revision 4\)/);
     expect(getToolPolicySet).toHaveBeenCalledWith(listed.id, expect.any(AbortSignal));
     expect(screen.getByRole("switch", { name: "Enable agent tools" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Agent context" })).not.toBeChecked();
@@ -431,6 +432,59 @@ describe("AgentToolSettingsDialog", () => {
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
   });
 
+  it("keeps the local Custom choice usable while the policy-set list is loading", async () => {
+    const applied = reusablePolicy({ name: "Everyday" });
+    const list = deferred<{ items: ToolPolicySet[] }>();
+    subject(policySnapshot({ policySet: applied }), {
+      storeOverrides: { listToolPolicySets: vi.fn().mockReturnValue(list.promise) },
+    });
+    const selector = screen.getByRole("combobox", { name: "Policy set" });
+    expect(selector).toBeEnabled();
+    expect(selector).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByText("Loading policy sets…")).not.toBeInTheDocument();
+    expect(selector).toHaveValue(applied.id);
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+    fireEvent.change(selector, { target: { value: "" } });
+    expect(selector).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    await act(async () => list.resolve({ items: [applied] }));
+    expect(selector).toHaveAttribute("aria-busy", "false");
+    expect(selector).toHaveValue("");
+    expect(selector).toHaveAccessibleDescription(/Custom tools and access settings/);
+    expect(screen.getByRole("checkbox", { name: "Agent context" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+  });
+
+  it("allows detaching the current set as Custom after the policy-set list fails", async () => {
+    const applied = reusablePolicy({ name: "Everyday", revision: 3 });
+    const getToolPolicySet = vi.fn();
+    const { setAgentToolPolicy } = subject(policySnapshot({ policySet: applied, presentationSurface: "cli" }), {
+      storeOverrides: {
+        listToolPolicySets: vi.fn().mockRejectedValue(new Error("Policy sets are unavailable.")),
+        getToolPolicySet,
+      },
+    });
+    expect(await screen.findByText("Policy sets are unavailable.")).toBeVisible();
+    const selector = screen.getByRole("combobox", { name: "Policy set" });
+    expect(selector).toBeEnabled();
+    expect(selector).toHaveValue(applied.id);
+    expect(selector).toHaveAccessibleDescription(/Current policy set: Everyday \(revision 3\)/);
+    const apply = screen.getByRole("button", { name: "Apply" });
+    expect(apply).toBeDisabled();
+    fireEvent.click(apply);
+    expect(getToolPolicySet).not.toHaveBeenCalled();
+    fireEvent.change(selector, { target: { value: "" } });
+    expect(selector).toHaveValue("");
+    expect(selector).toHaveAccessibleDescription(/Custom tools and access settings/);
+    expect(screen.getByRole("checkbox", { name: "Agent context" })).toBeChecked();
+    expect(apply).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledWith(expect.objectContaining({
+      enabledToolIds: ["agent.context"], policySet: null,
+    })));
+    expect(screen.getByText("Policy sets are unavailable.")).toBeVisible();
+  });
+
   it("returns keyboard focus to Retry after a policy-set list retry fails", async () => {
     const retryRequest = deferred<{ items: ToolPolicySet[] }>();
     const listToolPolicySets = vi.fn()
@@ -615,6 +669,7 @@ describe("AgentToolSettingsDialog", () => {
     expect(screen.getByRole("option", { name: "Everyday" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Renamed policy" })).not.toBeInTheDocument();
     expect(screen.getByText(/Current policy set: Everyday \(revision 2\)/)).toHaveTextContent("Later policy-set changes do not update these settings.");
+    expect(selector).toHaveAccessibleDescription(/Current policy set: Everyday \(revision 2\)/);
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
@@ -688,6 +743,9 @@ describe("AgentToolSettingsDialog", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "Agent tool presentation" }));
     fireEvent.click(screen.getByRole("option", { name: "Individual operations" }));
     expect(screen.getByRole("combobox", { name: "Policy set" })).toHaveValue(applied.id);
+    expect(screen.getByText(/Current policy set: Everyday \(revision 3\)/)).toBeVisible();
+    expect(screen.queryByText(/Draft policy set/)).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Policy set" })).toHaveAccessibleDescription(/Current policy set: Everyday \(revision 3\)/);
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledWith(expect.objectContaining({
       enabledToolIds: ["agent.context"], presentation: { surface: "cli", mode: "individual" },

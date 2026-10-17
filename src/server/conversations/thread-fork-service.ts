@@ -30,7 +30,6 @@ import type { InventoryRepository } from "../db/repositories/inventory-repositor
 import type { ConversationOperationRepository } from "../db/repositories/conversation-operation-repository.js";
 import type { DeliveryInputSnapshotRepository } from "../db/repositories/delivery-input-snapshot-repository.js";
 import type { ThreadAgentToolPolicyRepository } from "../db/repositories/thread-agent-tool-policy-repository.js";
-import type { ThreadAppliedToolPolicySetRepository } from "../db/repositories/thread-applied-tool-policy-set-repository.js";
 import type { PrincipalAgentToolClientRepository } from "../db/repositories/principal-agent-tool-client-repository.js";
 import { assertToolPolicyWithinCaller } from "../agent-tools/application/assert-tool-policy-within-caller.js";
 import { DomainError } from "../domain/errors.js";
@@ -252,7 +251,6 @@ export class ThreadForkService {
       readonly inventory: InventoryRepository;
       readonly operations: ConversationOperationRepository;
       readonly toolPolicies: ThreadAgentToolPolicyRepository;
-      readonly appliedToolPolicySets: ThreadAppliedToolPolicySetRepository;
       readonly principalToolClients: PrincipalAgentToolClientRepository;
       readonly deliveryInputSnapshots?: DeliveryInputSnapshotRepository;
       readonly outputArtifacts: Pick<OutputArtifactService, "collectGarbage">;
@@ -285,7 +283,6 @@ export class ThreadForkService {
       input.inventory.database !== database ||
       input.operations.database !== database ||
       input.toolPolicies.database !== database ||
-      input.appliedToolPolicySets.database !== database ||
       input.principalToolClients.database !== database ||
       (input.deliveryInputSnapshots !== undefined &&
         input.deliveryInputSnapshots.database !== database) ||
@@ -1446,7 +1443,7 @@ export class ThreadForkService {
           enabledToolIds: toolPolicy.enabledToolIds,
           presentation: toolPolicy.presentation,
           resourceScope: toolPolicy.resourceScope,
-          policySet: this.input.appliedToolPolicySets.get(input.scope, input.sourceThreadId),
+          policySet: toolPolicy.policySet,
           now: this.#now(),
         });
         this.input.executionWorkspaces?.copySelection(

@@ -1,4 +1,5 @@
 import { ToolPolicyRepository } from "../../src/server/db/repositories/tool-policy-repository.js";
+import { ThreadAppliedToolPolicySetRepository } from "../../src/server/db/repositories/thread-applied-tool-policy-set-repository.js";
 import { describe, expect, it } from "vitest";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
 import {
@@ -176,6 +177,21 @@ function fixture(): {
 }
 
 describe("thread agent tool policy persistence", () => {
+  it("requires the policy and its current association to share one database transaction", () => {
+    const database = openOverlayDatabaseConnection(":memory:");
+    const another = openOverlayDatabaseConnection(":memory:");
+    try {
+      expect(() => new ThreadAgentToolPolicyRepository(
+        database,
+        eligibility,
+        new ThreadAppliedToolPolicySetRepository(another),
+      )).toThrow("thread_agent_tool_policy_database_mismatch");
+    } finally {
+      database.close();
+      another.close();
+    }
+  });
+
   it("tracks the current named association and preserves it only for unchanged policy content", async () => {
     const value = fixture();
     try {
@@ -440,6 +456,151 @@ describe("thread agent tool policy persistence", () => {
           now: 401,
         })).toThrow(/ineligible tool/i);
       }
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("retains the exact durable snapshot for unchanged projected saves after catalog shrink", () => {
+    const value = fixture();
+    try {
+      const hiddenToolId = "automation.acknowledge";
+      const previous = new ThreadAgentToolPolicyRepository(value.database, {
+        ...eligibility,
+        eligibleToolIds: new Set([...eligibleToolIds, hiddenToolId]),
+      });
+      const definitions = new ToolPolicyRepository(value.database);
+      const definition = definitions.create(value.scope, {
+        name: "Captured review",
+        enabledToolIds: [hiddenToolId, "thread.status"],
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
+      }, 400);
+      const reference = { id: definition.id, revision: definition.revision };
+      const applied = previous.update(value.scope, value.piThreadId, {
+        expectedRevision: 0,
+        enabled: true,
+        enabledToolIds: definition.enabledToolIds,
+        presentation: { surface: "native", mode: "individual" },
+        resourceScope: definition.resourceScope,
+        policySet: reference,
+        now: 401,
+      });
+      const current = new ThreadAgentToolPolicyRepository(value.database, eligibility);
+      const projection = current.get(value.scope, value.piThreadId);
+      expect(projection.enabledToolIds).toEqual(["thread.status"]);
+
+      definitions.update(value.scope, definition.id, {
+        name: "Edited reusable set",
+        enabledToolIds: ["agent.context"],
+        resourceScope: definition.resourceScope,
+      }, 0, 402);
+      let saved = current.update(value.scope, value.piThreadId, {
+        enabled: projection.enabled,
+        enabledToolIds: projection.enabledToolIds,
+        resourceScope: projection.resourceScope,
+        expectedRevision: projection.revision,
+        presentation: { surface: "native", mode: "progressive" },
+        now: 403,
+      });
+      expect(saved.policySet).toEqual(applied.policySet);
+      expect(current.getDurable(value.scope, value.piThreadId).enabledToolIds).toEqual(applied.enabledToolIds);
+      saved = current.update(value.scope, value.piThreadId, {
+        ...saved,
+        expectedRevision: saved.revision,
+        policySet: reference,
+        now: 404,
+      });
+      expect(saved.policySet).toEqual(applied.policySet);
+      definitions.delete(value.scope, definition.id, 1);
+      saved = current.update(value.scope, value.piThreadId, {
+        ...saved,
+        expectedRevision: saved.revision,
+        presentation: { surface: "cli", mode: "individual" },
+        policySet: reference,
+        now: 405,
+      });
+      expect(saved.policySet).toEqual(applied.policySet);
+      expect(current.getDurable(value.scope, value.piThreadId).enabledToolIds).toEqual(applied.enabledToolIds);
+
+      for (const unknown of [hiddenToolId, "newly.unknown"]) {
+        const before = current.getDurable(value.scope, value.piThreadId);
+        expect(() => current.update(value.scope, value.piThreadId, {
+          ...saved,
+          expectedRevision: saved.revision,
+          enabledToolIds: ["thread.status", unknown],
+          policySet: reference,
+          now: 406,
+        })).toThrow(/ineligible tool/i);
+        expect(current.getDurable(value.scope, value.piThreadId)).toEqual(before);
+      }
+
+      const containingHidden = definitions.create(value.scope, {
+        name: "Requires unavailable tool",
+        enabledToolIds: definition.enabledToolIds,
+        resourceScope: definition.resourceScope,
+      }, 407);
+      expect(() => current.update(value.scope, value.piThreadId, {
+        ...saved,
+        expectedRevision: saved.revision,
+        policySet: { id: containingHidden.id, revision: containingHidden.revision },
+        now: 408,
+      })).toThrow(/do not match/i);
+      expect(current.getDurable(value.scope, value.piThreadId).enabledToolIds).toEqual(applied.enabledToolIds);
+
+      saved = current.update(value.scope, value.piThreadId, {
+        ...saved,
+        expectedRevision: saved.revision,
+        policySet: null,
+        now: 409,
+      });
+      expect(saved.policySet).toBeNull();
+      expect(current.getDurable(value.scope, value.piThreadId).enabledToolIds).toEqual(applied.enabledToolIds);
+      const replacement = definitions.create(value.scope, {
+        name: "Available tools only",
+        enabledToolIds: ["thread.status"],
+        resourceScope: definition.resourceScope,
+      }, 410);
+      const replaced = current.update(value.scope, value.piThreadId, {
+        ...saved,
+        expectedRevision: saved.revision,
+        policySet: { id: replacement.id, revision: replacement.revision },
+        now: 411,
+      });
+      expect(replaced.policySet).toEqual({ id: replacement.id, name: replacement.name, revision: replacement.revision });
+      expect(current.getDurable(value.scope, value.piThreadId).enabledToolIds).toEqual(["thread.status"]);
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it.each([
+    { name: "enabled flag", change: { enabled: false } },
+    { name: "resource scope", change: { resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true } } },
+    { name: "visible tool list", change: { enabledToolIds: [] } },
+  ])("replaces hidden durable tool IDs when the $name is manually changed", ({ change }) => {
+    const value = fixture();
+    try {
+      const previous = new ThreadAgentToolPolicyRepository(value.database, {
+        ...eligibility,
+        eligibleToolIds: new Set([...eligibleToolIds, "automation.acknowledge"]),
+      });
+      previous.update(value.scope, value.piThreadId, {
+        expectedRevision: 0,
+        enabled: true,
+        enabledToolIds: ["thread.status", "automation.acknowledge"],
+        presentation: { surface: "native", mode: "individual" },
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
+        now: 400,
+      });
+      const current = new ThreadAgentToolPolicyRepository(value.database, eligibility);
+      const projected = current.get(value.scope, value.piThreadId);
+      current.update(value.scope, value.piThreadId, {
+        ...projected,
+        ...change,
+        expectedRevision: projected.revision,
+        now: 401,
+      });
+      expect(current.getDurable(value.scope, value.piThreadId).enabledToolIds).toEqual(change.enabledToolIds ?? projected.enabledToolIds);
     } finally {
       value.database.close();
     }

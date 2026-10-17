@@ -97,7 +97,11 @@ export class ThreadAgentToolPolicyRepository {
     readonly database: Database.Database,
     readonly eligibility: ThreadAgentToolEligibilityPolicy,
     readonly appliedToolPolicySets = new ThreadAppliedToolPolicySetRepository(database),
-  ) {}
+  ) {
+    if (appliedToolPolicySets.database !== database) {
+      throw new Error("thread_agent_tool_policy_database_mismatch");
+    }
+  }
 
   get(
     scope: RequestScope,
@@ -271,13 +275,33 @@ export class ThreadAgentToolPolicyRepository {
         );
       }
       const current = this.#record(scope, row, false);
-      const enabledToolIds = this.#validate(
+      const requestedToolIds = this.#validate(
         row.backendKind,
         row.environmentKind,
         input.presentation,
         input.enabledToolIds,
       );
       this.#validateResourceScope(input.resourceScope);
+      const projectedContent = {
+        ...current,
+        enabledToolIds: current.enabledToolIds.filter((toolId) =>
+          this.eligibility.eligibleToolIds.has(toolId),
+        ),
+      };
+      const keepsAssociationInstruction = input.policySet == null || (
+        input.policySet.id === current.policySet?.id &&
+        input.policySet.revision === current.policySet.revision
+      );
+      // Browser snapshots hide tools removed from the catalog. A save of that
+      // unchanged projection must keep the durable snapshot; hidden stored IDs
+      // are never accepted as newly requested grants.
+      const preservesDurableContent = keepsAssociationInstruction && this.#sameContent(
+        projectedContent,
+        { ...input, enabledToolIds: requestedToolIds },
+      );
+      const enabledToolIds = preservesDurableContent
+        ? current.enabledToolIds
+        : requestedToolIds;
       const desiredContent = { ...input, enabledToolIds };
       const sameContent = this.#sameContent(current, desiredContent);
       const appliedSet = this.#resolveAppliedSet(
@@ -303,7 +327,7 @@ export class ThreadAgentToolPolicyRepository {
           input.presentation.surface,
           input.presentation.mode,
           input.resourceScope.allowOtherEnvironments ? 1 : 0,
-        input.resourceScope.allowOtherProjects ? 1 : 0,
+          input.resourceScope.allowOtherProjects ? 1 : 0,
           input.now,
           scope.tenantId,
           scope.principalId,
@@ -413,8 +437,8 @@ export class ThreadAgentToolPolicyRepository {
     // Eligibility is enforced when policy is written. On read, omit entries
     // that are no longer in the current catalog so a later catalog shrink
     // cannot make the thread snapshot (and therefore runtime attach) fail.
-    // The durable rows remain available for operator inspection and a later
-    // revision-checked update replaces the exact set.
+    // The durable rows remain available for capture and unchanged-projection
+    // saves. Content edits replace the exact submitted eligible set.
     const durableToolIds = sortedDistinctToolIds(storedToolIds);
     const enabledToolIds = filterCurrentEligibility
       ? durableToolIds.filter((toolId) =>

@@ -106,7 +106,6 @@ function fixture(input: {
   const service = new SavedAgentApplicationService({
     policySets,
     principalToolClients: {get: () => ({enabled:true,policyRevision:2,credentialGeneration:1,toolIds:["task.list"]})} as never,
-    appliedToolPolicySets: {database, get: () => null} as never,
     agents: {get: () => ({id:"20000000-0000-4000-8000-000000000001",name:"Reviewer",backendTypeId,backendOverrides:[],revision:0,toolPolicySelection:agentSelection})} as never,
     repository: { database, assertRevision: () => undefined } as never,
     adapters: new SavedAgentBackendAdapterRegistry([

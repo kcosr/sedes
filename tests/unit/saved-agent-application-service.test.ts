@@ -199,9 +199,6 @@ function fixture(
     };
   });
   const initializeToolPolicy = vi.fn();
-  const getAppliedPolicySet = vi.fn()
-    .mockImplementationOnce(() => input.appliedPolicySet ?? null)
-    .mockImplementation(() => input.appliedPolicySetChangesBeforeFence ? null : input.appliedPolicySet ?? null);
   const handoffThreadChange = vi.fn();
   const listAgents = vi.fn(() => ({ items: [] }));
   const requireAgentSelectable = vi.fn(async () => undefined);
@@ -259,6 +256,7 @@ function fixture(
       revision: 3,
       updatedAt: 1,
       enabledToolIds: ["task.list"],
+      policySet: input.appliedPolicySet ?? null,
     })
     .mockImplementation(() => ({
       tenantId: scope.tenantId,
@@ -270,6 +268,7 @@ function fixture(
       revision: input.toolPolicyChangesBeforeFence ? 4 : 3,
       updatedAt: input.toolPolicyChangesBeforeFence ? 2 : 1,
       enabledToolIds: ["task.list"],
+      policySet: input.appliedPolicySetChangesBeforeFence ? null : input.appliedPolicySet ?? null,
     }));
   const reserveWorkspace = vi.fn();
   const resolvePolicy = (_scope: RequestScope, selection: {
@@ -289,7 +288,6 @@ function fixture(
         policy: resolvePolicy(requestedScope, selection),
       }),
     } as never,
-    appliedToolPolicySets: {database,get:getAppliedPolicySet} as never,
     agents: {
       list: listAgents,
       get: () => ({

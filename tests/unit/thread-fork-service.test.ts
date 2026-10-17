@@ -33,7 +33,6 @@ import { codexBackendTurnId } from "../../src/server/backends/codex/codex-histor
 import { OverlayRepository } from "../support/schema9/overlay-repository.js";
 import { ThreadInventoryService } from "../support/schema9/thread-inventory-service.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
-import { ThreadAppliedToolPolicySetRepository } from "../../src/server/db/repositories/thread-applied-tool-policy-set-repository.js";
 import { threadAgentToolPolicyRepository } from "../support/thread-agent-tool-policy.js";
 
 const configuration = parseResolvedBackendConfiguration({
@@ -346,7 +345,6 @@ function fixture(withEnvironmentVariables = false) {
     inventory,
     operations: new ConversationOperationRepository(database),
     toolPolicies,
-    appliedToolPolicySets: new ThreadAppliedToolPolicySetRepository(database),
     principalToolClients: new PrincipalAgentToolClientRepository(database, createPrincipalAgentToolClientEligibility()),
     deliveryInputSnapshots,
     outputArtifacts: { collectGarbage: collectOutputArtifactGarbage },
@@ -586,7 +584,8 @@ describe("ThreadForkService", () => {
     async (boundary) => {
       const current = fixture();
       try {
-        const { toolPolicies, appliedToolPolicySets } = current.service.input;
+        const { toolPolicies } = current.service.input;
+        const { appliedToolPolicySets } = toolPolicies;
         const policySet = {
           id: "11111111-1111-4111-8111-111111111111", name: "Everyday", revision: 4,
         };

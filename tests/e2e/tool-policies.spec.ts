@@ -131,13 +131,24 @@ test("policy sets replace inherited tools across levels and snapshot new threads
 
   // Applying a reusable policy copies into the existing thread's editable draft.
   // Presentation remains independent; the applied-set name follows the draft.
+  const initialPolicyListing = page.waitForResponse(response => response.request().method() === "GET" && /\/api\/tool-policies(?:\?|$)/.test(response.url()) && response.ok());
   await page.getByRole("button", { name: "Thread actions", exact: true }).click();
   await page.getByRole("menuitem", { name: /^Agent tools…/ }).click();
   const toolsDialog = page.getByRole("dialog", { name: "Agent tools", exact: true });
   const policyChooser = toolsDialog.getByRole("combobox", { name: "Policy set", exact: true });
+  await (await initialPolicyListing).finished();
+  await expect(policyChooser).toHaveAttribute("aria-busy", "false");
   await expect(policyChooser).toBeEnabled();
   await expect(policyChooser).toHaveValue(everyday.id);
   await expect(toolsDialog.getByText(/Original policy:/)).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "thread-current-policy-desktop.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(policyChooser).toBeVisible();
+  await expect(policyChooser).toBeInViewport();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "thread-current-policy-mobile.png");
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await policyChooser.selectOption(reviewer.id);
   await policyChooser.scrollIntoViewIfNeeded();
   await expect(policyChooser).toBeVisible();
@@ -191,8 +202,11 @@ test("policy sets replace inherited tools across levels and snapshot new threads
     return response.request().postDataJSON();
   };
   const reopenPolicy = async () => {
+    const listing = page.waitForResponse(response => response.request().method() === "GET" && /\/api\/tool-policies(?:\?|$)/.test(response.url()) && response.ok());
     await page.getByRole("button", { name: "Thread actions", exact: true }).click();
     await page.getByRole("menuitem", { name: /^Agent tools…/ }).click();
+    await (await listing).finished();
+    await expect(policyChooser).toHaveAttribute("aria-busy", "false");
     await expect(policyChooser).toBeEnabled();
   };
   // Saving an applied set records its identity even though the tools are a snapshot.
@@ -232,6 +246,14 @@ test("policy sets replace inherited tools across levels and snapshot new threads
   await reopenPolicy();
   await expect(policyChooser).toHaveValue("");
   await expect(policyChooser.locator("option:checked")).toHaveText("Custom");
+  await toolsDialog.locator('[data-slot="dialog-body"]').evaluate(body => body.scrollTo({ top: 0 }));
+  await capture(page, testInfo, "thread-custom-policy-desktop.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await toolsDialog.locator('[data-slot="dialog-body"]').evaluate(body => body.scrollTo({ top: 0 }));
+  await expect(policyChooser).toBeInViewport();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "thread-custom-policy-mobile.png");
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await toolsDialog.getByRole("button", { name: "Cancel", exact: true }).click();
 
   await openSettingsPage(page, "tool_policies");

@@ -55,17 +55,6 @@ export class ThreadAppliedToolPolicySetRepository {
     `).run(scope.tenantId, scope.principalId, threadId);
   }
 
-  copy(
-    scope: RequestScope,
-    sourceThreadId: string,
-    childThreadId: string,
-    now: number,
-  ): AppliedToolPolicySet | null {
-    this.#assertTransaction();
-    this.#assertThread(scope, sourceThreadId);
-    return this.set(scope, childThreadId, this.get(scope, sourceThreadId), now);
-  }
-
   #assertThread(scope: RequestScope, threadId: string): void {
     const thread = this.database.prepare(`
       SELECT 1 FROM application_threads WHERE tenant_id=? AND owner_principal_id=? AND id=?

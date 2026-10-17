@@ -53,26 +53,19 @@ describe("current applied thread tool policy sets", () => {
     } finally { current.database.close(); }
   });
 
-  it("preserves independent metadata after named-set edits and deletion, including copies", () => {
+  it("preserves independent metadata after named-set edits and deletion", () => {
     const current = fixture();
     try {
-      const { database, scope, threads: [source, child], associations } = current;
+      const { database, scope, threads: [source], associations } = current;
       const policies = new ToolPolicyRepository(database);
       const policy = policies.create(scope, definition, 130);
       const applied = { id: policy.id, name: policy.name, revision: policy.revision };
       database.transaction(() => associations.set(scope, source!.id, applied, 140))();
       policies.update(scope, policy.id, { ...definition, name: "Changed" }, 0, 150);
       policies.delete(scope, policy.id, 1);
-      database.transaction(() => {
-        expect(associations.copy(scope, source!.id, child!.id, 160)).toEqual(applied);
-        associations.clear(scope, source!.id);
-      })();
-      expect(associations.get(scope, child!.id)).toEqual(applied);
+      expect(associations.get(scope, source!.id)).toEqual(applied);
+      database.transaction(() => associations.clear(scope, source!.id))();
       expect(associations.get(scope, source!.id)).toBeNull();
-      database.transaction(() => {
-        expect(associations.copy(scope, source!.id, child!.id, 170)).toBeNull();
-      })();
-      expect(associations.get(scope, child!.id)).toBeNull();
       expect(database.pragma("foreign_key_check")).toEqual([]);
     } finally { current.database.close(); }
   });
@@ -86,7 +79,6 @@ describe("current applied thread tool policy sets", () => {
         expect(associations.get(wrongScope, source!.id)).toBeNull();
         expect(() => database.transaction(() => associations.set(wrongScope, source!.id, metadata, 130))()).toThrow(/thread was not found/);
         expect(() => database.transaction(() => associations.clear(wrongScope, source!.id))()).toThrow(/thread was not found/);
-        expect(() => database.transaction(() => associations.copy(wrongScope, source!.id, child!.id, 130))()).toThrow(/thread was not found/);
       }
       expect(associations.get(scope, source!.id)).toEqual(metadata);
       database.transaction(() => associations.clear(scope, source!.id))();
@@ -95,7 +87,7 @@ describe("current applied thread tool policy sets", () => {
         throw new Error("rollback marker");
       })()).toThrow("rollback marker");
       expect(associations.get(scope, source!.id)).toBeNull();
-      expect(() => database.transaction(() => associations.copy(scope, source!.id, "missing-thread", 140))()).toThrow(/thread was not found/);
+      expect(() => database.transaction(() => associations.set(scope, "missing-thread", metadata, 140))()).toThrow(/thread was not found/);
       database.transaction(() => associations.set(scope, child!.id, metadata, 150))();
       database.prepare("DELETE FROM thread_drafts WHERE tenant_id=? AND principal_id=? AND thread_id=?")
         .run(scope.tenantId, scope.principalId, child!.id);

@@ -549,8 +549,9 @@ export function AgentToolSettingsDialog({
           <label htmlFor={`${dialogId}-policy-set`}>Policy set</label>
           <div className="agent-tool-policy-apply-controls">
             <NativeSelect ref={policySetSelectRef} id={`${dialogId}-policy-set`}
-              aria-describedby={`${dialogId}-policy-set-description`}
-              value={selectedPolicySetId} disabled={!editable || policySetsLoading || Boolean(policySetsError)}
+              aria-describedby={`${dialogId}-policy-set-description ${dialogId}-policy-set-association`}
+              aria-busy={policySetsLoading}
+              value={selectedPolicySetId} disabled={!editable}
               onChange={event => {
                 const nextId = event.target.value;
                 setSelectedPolicySetId(nextId);
@@ -567,10 +568,10 @@ export function AgentToolSettingsDialog({
               onClick={() => void applyPolicySet()}>{applyingPolicy ? "Applying…" : "Apply"}</Button>
           </div>
           <p id={`${dialogId}-policy-set-description`}>Replace this draft’s tools and access settings. Presentation stays unchanged; Save applies the changes to this thread.</p>
-          <p>{draft.policySet
-            ? `${isDirty ? "Draft policy set" : "Current policy set"}: ${draft.policySet.name} (revision ${draft.policySet.revision}). Later policy-set changes do not update these settings.`
+          <p id={`${dialogId}-policy-set-association`}>{draft.policySet
+            ? `${samePolicySet(draft.policySet, draft.basePolicySet) ? "Current policy set" : "Draft policy set"}: ${draft.policySet.name} (revision ${draft.policySet.revision}). Later policy-set changes do not update these settings.`
             : "Custom tools and access settings."}</p>
-          <p className="agent-tool-policy-apply-status" role="status" aria-live="polite">{policySetsLoading ? "Loading policy sets…" : selectedPolicySetId && selectedPolicySetId !== draft.policySet?.id
+          <p className="agent-tool-policy-apply-status" role="status" aria-live="polite">{selectedPolicySetId && selectedPolicySetId !== draft.policySet?.id
             ? "Select Apply to load the chosen policy set into this draft."
             : appliedPolicyMessage}</p>
           {policySetsError && <DialogAlert tone="danger" action={
