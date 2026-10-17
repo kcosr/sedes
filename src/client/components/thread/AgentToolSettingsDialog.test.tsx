@@ -441,9 +441,10 @@ describe("AgentToolSettingsDialog", () => {
     const selector = screen.getByRole("combobox", { name: "Policy set" });
     expect(selector).toBeEnabled();
     expect(selector).toHaveAttribute("aria-busy", "true");
-    expect(screen.queryByText("Loading policy sets…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Loading…" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Loading…" })).toBeDisabled();
+    expect(screen.getAllByRole("status").every(status => !status.textContent?.includes("Loading"))).toBe(true);
     expect(selector).toHaveValue(applied.id);
-    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
     fireEvent.change(selector, { target: { value: "" } });
     expect(selector).toHaveValue("");
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();

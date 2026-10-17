@@ -565,7 +565,7 @@ export function AgentToolSettingsDialog({
             </NativeSelect>
             <Button ref={applyButtonRef} type="button" variant="outline"
               disabled={!editable || stale || policySetsLoading || Boolean(policySetsError) || !selectedPolicySetId}
-              onClick={() => void applyPolicySet()}>{applyingPolicy ? "Applying…" : "Apply"}</Button>
+              onClick={() => void applyPolicySet()}>{policySetsLoading ? "Loading…" : applyingPolicy ? "Applying…" : "Apply"}</Button>
           </div>
           <p id={`${dialogId}-policy-set-description`}>Replace this draft’s tools and access settings. Presentation stays unchanged; Save applies the changes to this thread.</p>
           <p id={`${dialogId}-policy-set-association`}>{draft.policySet
