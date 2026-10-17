@@ -10,6 +10,7 @@ User-facing changes are collected here before release. See the
 - Upgrade OpenCode execution sidecars with the server for private OpenCode
   runtime protocol **3**, which reports the observed native version. See
   [OpenCode setup](docs/operator/backends/opencode.md).
+  ([#93](https://github.com/kcosr/sedes/pull/93))
 
 - Automation management now uses explicit automation IDs and the
   `/api/automations` collection. Update automation agent-tool versions and
@@ -76,6 +77,7 @@ User-facing changes are collected here before release. See the
 - OpenCode accepts stable stock releases **2.0.29 or newer**, tested through
   **2.0.32**, with an updated SDK/schema profile and an active advisory for
   newer-than-tested runtimes. See [OpenCode compatibility](docs/operator/backends/opencode.md).
+  ([#93](https://github.com/kcosr/sedes/pull/93))
 
 - Archiving and restoring Codex threads also updates their native archive state
   by default, while preserving local archive controls when a backend is missing
@@ -115,6 +117,7 @@ User-facing changes are collected here before release. See the
 
 - OpenCode pending forms stay visible during concurrent history refreshes, and
   answered forms cannot reappear from an older interaction read.
+  ([#93](https://github.com/kcosr/sedes/pull/93))
 
 - Codex 0.163.0 no longer disconnects discovery, history reads, or turn
   completion when native read-state metadata arrives. The generated protocol
