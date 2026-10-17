@@ -52,7 +52,10 @@ resolved thread state. Existing threads never follow later set/default changes.
 Deleting a set leaves its selections needing attention; a missing effective
 reference fails creation rather than inheriting another set. A more specific
 explicit choice may replace a missing earlier reference. Templates store the
-thread selection alongside the Saved Agent reference.
+thread selection alongside the Saved Agent reference. Missing-policy errors
+identify the effective source level and set ID. Read-only Agent option catalogs
+remain available with structured `defaultIssue`/`resolvedIssue` diagnostics,
+so users can replace an invalid selection without losing configuration controls.
 
 UI groups and select-all controls are conveniences. Durable policy stores the
 master flag, exact enabled IDs, two independent project/environment resource-scope flags,
@@ -88,10 +91,9 @@ Claude, Grok, and OpenCode share this publication path.
 Named policy management is a browser/API operation; ordinary tool callers
 select an existing policy through `thread.create@6` or Saved Agent contracts.
 `saved_agent.list/get/options/create/update@6` use `toolPolicySelection` and
-optional `toolPresentation` instead of an embedded policy. Canonical tools
-represent environment variables as bounded `{ name, binding }` entries and
-convert them explicitly to the browser API's map; duplicate names are rejected.
-The output preserves the same bindings without resolving secret references.
+optional `toolPresentation` instead of an embedded policy. Environment-variable
+bindings remain user-managed browser/API configuration: canonical Saved Agent
+tools neither accept them nor expose stored literal values or secret references.
 
 Each named set is limited to 128 KiB of serialized JSON. Policy lists use
 principal-bound keyset cursors with at most 100 sets and 512 KiB per page;
@@ -164,10 +166,13 @@ project membership revisions. An earlier cursor cannot broaden a later query.
 
 Global Tasks and Workpads and Saved Agent definitions remain shared account
 resources. Project Tasks and Workpads are shared within their project: the
-project flag determines which projects can be reached, and a shared document
-is not divided by host. For project subtree lists, project records remain shared
-while thread records are filtered by both flags. No-active-location projects
-remain subject to the project boundary; they do not become global records.
+project flag determines which project identities can be reached. With other
+environments disabled, a project also needs an active location on the source
+environment; projects hosted only elsewhere or with no active location are
+outside scope. Once admitted, the project's shared documents are not divided
+by host. Thread-owned records remain filtered by both flags. Enabling other
+environments permits shared records in unlocated projects only when the
+project rule also admits them.
 
 The environment directory is filtered to permitted environments. Registered
 client devices remain account resources, while their returned default-thread
@@ -205,9 +210,8 @@ environments under [Resource scope](#resource-scope).
   optional `projectId`. Without it, a directory Sedes does not know becomes a
   new single-location project named after the directory. With it, the new
   directory joins that active project, which is authorized as a project ref,
-  so attaching a directory to a project hosted elsewhere needs the same
-  approval or allowlisted member as reaching it; a removed project is not
-  found. A known directory keeps its project, and naming a different project
+  so attaching a directory requires the same project scope or allowlisted
+  member environment as reaching it; a removed project is not found. A known directory keeps its project, and naming a different project
   for it is a conflict, never a move: an active location is revalidated, and a
   removed location of an active project is restored only when the call names
   that project, authorized against its current membership; without
@@ -300,9 +304,9 @@ surfaces. Standalone Tool clients cannot invoke them. Their group and individual
 controls use the existing agent-tool policy UI.
 
 The source facade captures the active normalized turn and starting client at
-Sedes invocation admission, before any asynchronous check, approval, or execution.
+Sedes invocation admission, before any asynchronous check or execution.
 Later Steer input does not retarget it. OpenCode additionally supplies a provider
-current-input lease, checked even without an environment approval. Pi, Codex,
+current-input lease, independent of resource-scope checks. Pi, Codex,
 Claude, and Grok use normalized turn/owner-generation revalidation and their
 existing invocation cancellation. CLI/MCP source references identify a thread;
 they do not carry a historical issuing turn before Sedes receives the request.
@@ -534,10 +538,10 @@ Native Individual, managed remote CLI and remote execution are unsupported.
 
 OpenCode CLI uses the existing local per-thread source capability and requires
 an owned root with a frozen execution environment. Both surfaces obtain a
-server-owned current-input approval hook at ingress. Access-boundary approvals
-require live consumption of an exact Sedes user input; native-only, automated,
-interrupted or no-longer-observed inputs cannot acquire a decision on behalf of
-an older user input. Calls already within configured access remain available.
+server-owned current-input proof hook at ingress. Client-control tools require
+live consumption of an exact Sedes user input; native-only, automated,
+interrupted or no-longer-observed inputs cannot borrow an older user input.
+Ordinary tools use the configured resource scope without requiring that proof.
 Native operator permission rules still govern gateway invocation independently.
 OpenCode's other configured tools and MCP servers do not grant Sedes authority.
 The shared CLI implements both CLI modes for every supported row: local Pi,
@@ -620,11 +624,11 @@ the runtime. Input that fails its canonical schema, policy denials, failed
 invocations, and transport failures return `isError` tool results carrying
 `{ "error": { "code", "message", "retryable" } }`, so the model can correct
 itself; an unknown tool name or malformed request is a JSON-RPC error.
-`notifications/cancelled` aborts the exact invocation, including a pending
-access approval, and suppresses its response.
+`notifications/cancelled` aborts the exact invocation and suppresses its
+response.
 
 The provider's own permission controls govern each MCP call before Sedes
-applies the thread's access boundary. Codex's default approval mode runs
+applies the thread's resource scope. Codex's default approval mode runs
 read-only tools without asking and asks before destructive or open-world ones;
 Claude's permission mode applies to `mcp__sedes__*` tools like any other MCP
 tool.
@@ -635,7 +639,7 @@ Injection is per thread and never changes operator configuration:
   `thread/resume`, and `thread/fork`, with the command, `--mode`, an
   environment containing only the endpoint and reference, a 30-second startup
   timeout, and a 24-hour call timeout so Codex's 60-second default cannot
-  cancel a pending access approval. The shell policy still strips every Sedes
+  interrupt an admitted long-running operation. The shell policy still strips every Sedes
   variable. The server lives while Codex keeps the thread loaded; a resume
   that carries config rebuilds an idle, unsubscribed loaded thread with the
   current entry. Tool-policy retirement unsubscribes Sedes and invalidates the
@@ -942,10 +946,9 @@ request still resolves the thread's current workspace, environment, backend,
 inventory, and policy from application state. Provider-native turn identity is
 not an authorization input: discovery and invocation are governed by the
 resolved thread and its current policy. Request cancellation aborts the exact
-invocation. A cross-environment **Ask** decision additionally borrows the
-application runtime that presents that prompt, and runtime replacement cancels
-only that pending decision. Deleting or archiving the thread or changing the
-installation key makes the reference unusable.
+invocation. Every admitted invocation retains its source application runtime;
+runtime replacement cancels that invocation. Deleting or archiving the thread
+or changing the installation key makes the reference unusable.
 
 A Tool client token is a separate HTTP bearer credential. Authentication
 resolves its tenant/principal, current generation, enabled state, exact policy,
@@ -982,8 +985,8 @@ native session stay on the Sedes host while only its seven built-in workspace
 tools execute remotely. See [Remote Pi workspace tools](pi-remote-workspace-tools.md).
 
 `thread.create@6` and `saved_agent.list/get/options/create/update@6` expose
-`resourceScope: { allowOtherEnvironments, allowOtherProjects }` in their policy contracts.
-Their previous v4 schemas are no longer admitted; callers must describe the
+`toolPolicySelection` and optional `toolPresentation` in their contracts.
+Their previous v5 schemas are no longer admitted; callers must describe the
 current tool before invocation. `saved_agent.delete` retains its version because
 its wire shape is unchanged.
 
@@ -995,17 +998,13 @@ and may already have applied; repeating it is a new invocation and can create a
 second resource/run or fail a domain revision check. Adapters do not retry
 writes automatically.
 
-A cross-environment decision has no approval deadline; it waits until the user
-chooses **Allow once** or **Deny**, just like a normal blocking tool permission.
-The pending decision is cancelled when its exact invoking request/process is
-aborted, its application approval runtime is replaced, or Sedes shuts that
-runtime down. Cancelling a background Bash command therefore propagates through
-the command's existing cancellation path when it aborts the CLI invocation.
-Sedes does not poll browser connectivity, and closing or disconnecting a
-browser alone does not cancel a prompt. Tool execution deadlines begin only
-after admission; CLI `list` and `describe` remain bounded discovery operations,
-while `invoke` follows caller cancellation rather than imposing a transport
-approval timeout.
+A direct resource outside the configured scope fails admission immediately.
+For admitted work, caller cancellation and source-runtime replacement abort
+that exact invocation. Cancelling a background Bash command propagates through
+the command's existing cancellation path to the CLI invocation. Browser
+connectivity is not invocation authority. CLI `list` and `describe` remain
+bounded discovery operations; `invoke` follows caller cancellation without an
+additional transport execution deadline.
 
 Optional workspace, project, or thread inputs may default from trusted caller
 context. Explicit IDs are still resolved under the server-derived principal.
@@ -1059,8 +1058,8 @@ Changes must cover generated schema parity, exact-ID catalog filtering,
 thread-policy and Tool-client revision conflicts, token rotation/disable/
 revocation, wrong-principal and wrong-environment denial, default resolution,
 project member, non-member, empty, and removed cases for both caller classes,
-cross-environment approval revalidation, application-decision cancellation,
-and automation fail-closed behavior. Adapter tests must exercise both modes on
+cross-project/environment scope filtering and denial, source-runtime
+cancellation, and automation fail-closed behavior. Adapter tests must exercise both modes on
 native Pi, both CLI modes for local Codex, Claude, and Grok, both Native MCP
 modes for Codex and Claude, the `sedes mcp` protocol subset against the MCP
 SDK client, presentation-bound references, remote

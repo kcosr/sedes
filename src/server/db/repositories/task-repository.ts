@@ -379,6 +379,8 @@ export class TaskRepository {
       readonly authorityBinding?: {
         readonly sourceEnvironmentId: string;
         readonly projectId?: string;
+        /** Null removes the location restriction for shared project records. */
+        readonly projectEnvironmentIds: readonly string[] | null;
         readonly targetEnvironmentIds: readonly string[];
         readonly policyRevision: number;
         readonly continuationAuthorityDigest: string;
@@ -473,6 +475,11 @@ export class TaskRepository {
       const placeholders = authority.targetEnvironmentIds.map(() => "?").join(",");
       authorityFilters.push(`(scope_kind <> 'thread' OR EXISTS (SELECT 1 FROM application_threads AS allowed_thread WHERE allowed_thread.tenant_id=tasks.tenant_id AND allowed_thread.owner_principal_id=tasks.owner_principal_id AND allowed_thread.id=tasks.thread_id AND allowed_thread.environment_id IN (${placeholders})))`);
       authorityParameters.push(...authority.targetEnvironmentIds);
+      if (authority.projectEnvironmentIds !== null) {
+        const placeholders = authority.projectEnvironmentIds.map(() => "?").join(",");
+        authorityFilters.push(`(scope_kind <> 'project' OR EXISTS (SELECT 1 FROM workspaces AS project_location WHERE project_location.tenant_id=tasks.tenant_id AND project_location.owner_principal_id=tasks.owner_principal_id AND project_location.project_id=tasks.project_id AND project_location.removed_at IS NULL AND project_location.environment_id IN (${placeholders})))`);
+        authorityParameters.push(...authority.projectEnvironmentIds);
+      }
       if (authority.projectId !== undefined) {
         authorityFilters.push(`(scope_kind='global' OR (scope_kind='project' AND project_id=?) OR (scope_kind='thread' AND EXISTS (SELECT 1 FROM application_threads AS allowed_thread JOIN workspaces AS location ON location.tenant_id=allowed_thread.tenant_id AND location.owner_principal_id=allowed_thread.owner_principal_id AND location.id=allowed_thread.workspace_id WHERE allowed_thread.tenant_id=tasks.tenant_id AND allowed_thread.owner_principal_id=tasks.owner_principal_id AND allowed_thread.id=tasks.thread_id AND location.project_id=?)))`);
         authorityParameters.push(authority.projectId, authority.projectId);

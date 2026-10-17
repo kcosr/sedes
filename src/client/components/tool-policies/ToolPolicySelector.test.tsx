@@ -34,3 +34,23 @@ describe("ToolPolicySelector", () => {
     expect(describeToolPolicyScope({ allowOtherEnvironments: true, allowOtherProjects: true })).toBe("All projects across all environments");
   });
 });
+
+it.each(["loading", "error"] as const)("does not mistake %s policy choices for a missing set", state => {
+  render(<ToolPolicySelector value={{ kind: "policy_set", policySetId: policy.id }} policySets={[]} catalogState={state} onChange={vi.fn()} />);
+  expect(screen.getByRole("combobox")).toBeDisabled();
+  expect(screen.queryByText(/Needs attention/)).toBeNull();
+  expect(screen.getByRole("option", { name: /Selected policy/ })).toHaveValue(policy.id);
+});
+
+it("names the inherited set and revision alongside its source", () => {
+  render(<ToolPolicySelector value={{ kind: "inherit" }} policySets={[policy]} inheritedLabel="environment defaults"
+    inheritedPolicy={{ ...policy, enabled: true, policySet: { name: policy.name, revision: policy.revision } }} onChange={vi.fn()} />);
+  expect(screen.getByText("Inherited from environment defaults · Reviewer · revision 3")).toBeTruthy();
+});
+
+it("lets the parent show one source-aware missing-policy message", () => {
+  render(<ToolPolicySelector value={{ kind: "policy_set", policySetId: policy.id }} policySets={[]} hidePreview suppressMissingMessage onChange={vi.fn()} />);
+  expect(screen.getByRole("option", { name: "Needs attention — missing policy set" })).toBeTruthy();
+  expect(screen.queryByText(/New threads cannot use/)).toBeNull();
+  expect(screen.queryByText(/Choose another policy or inherit/)).toBeNull();
+});

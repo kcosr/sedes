@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolPolicySet, ToolPolicyDefinition, ToolPolicySelectionSetting } from "../../../shared/protocol/tool-policies.js";
-import type { ApiClient } from "../../api/ApiClient.js";
+import { ApiError, type ApiClient } from "../../api/ApiClient.js";
 import { navigate } from "../../app/router.js";
 import { ToolPoliciesSettingsPage } from "./ToolPoliciesSettingsPage.js";
 import { ToolPolicyScopeSettings } from "./ToolPolicyScopeSettings.js";
@@ -74,7 +74,7 @@ describe("Tool policy settings", () => {
   it("saves a backend replacement separately and previews its account inheritance", async () => {
     const api = mockApi();
     render(<ToolPolicyScopeSettings api={api} target={{ kind: "backend", backendId: "codex-build" }} environmentId="build" />);
-    await screen.findByText("Inherited from account defaults");
+    await screen.findByText("Inherited from account defaults · Everyday · revision 3");
     expect(screen.getByText("1 tool · This project in this environment")).toBeTruthy();
     fireEvent.change(screen.getByRole("combobox", { name: "Tool policy" }), { target: { value: "disabled" } });
     fireEvent.click(screen.getByRole("button", { name: "Save default" }));
@@ -83,7 +83,7 @@ describe("Tool policy settings", () => {
   });
   it("keeps edits visible on a revision conflict", async () => {
     const api = mockApi();
-    api.updateToolPolicySet.mockRejectedValueOnce(new Error("The policy changed in another session. Reload before saving."));
+    api.updateToolPolicySet.mockRejectedValueOnce(new ApiError(409, "conflict", "The policy changed in another session. Reload before saving.", false));
     navigate(`/settings/tool-policies/${policy.id}`, { replace: true });
     render(<ToolPoliciesSettingsPage api={api} />);
     await screen.findByRole("textbox", { name: "Name" });
@@ -92,5 +92,82 @@ describe("Tool policy settings", () => {
     await screen.findByRole("button", { name: "Reload latest" });
     expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("My unsaved revision");
     expect(api.updateToolPolicySet).toHaveBeenCalledWith(policy.id, expect.objectContaining({ expectedRevision: 3 }));
+  });
+});
+
+
+describe("policy editor recovery", () => {
+  it("treats a tool toggle round trip as clean regardless of catalog order", async () => {
+    const api = mockApi();
+    api.listToolPolicySets.mockResolvedValue({ items: [{ ...policy, enabledToolIds: ["thread.list", "workspace.list"] }] });
+    api.getToolPolicyOptions.mockResolvedValue({ groups: [{ ...groups[0]!, id: "context", label: { text: "Context" }, tools: [{ ...groups[0]!.tools[0]!, id: "workspace.list", label: { text: "List workspaces" } }] }, ...groups] });
+    navigate(`/settings/tool-policies/${policy.id}`, { replace: true });
+    render(<ToolPoliciesSettingsPage api={api} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Threads" }));
+    await user.click(screen.getByRole("checkbox", { name: "Read thread" }));
+    await user.click(screen.getByRole("checkbox", { name: "Read thread" }));
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete policy set…" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Account default" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.updateToolPolicySet).not.toHaveBeenCalled();
+  });
+
+  it("shows a single validation failure without a destructive reload action", async () => {
+    const api = mockApi();
+    api.updateToolPolicySet.mockRejectedValue(new ApiError(400, "bad_request", "This name is invalid.", false));
+    navigate(`/settings/tool-policies/${policy.id}`, { replace: true });
+    render(<ToolPoliciesSettingsPage api={api} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Name" }), { target: { value: "Changed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByText("This name is invalid.");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Reload latest" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("Changed");
+  });
+
+  it("recovers a delete conflict in-page using the refreshed revision", async () => {
+    const api = mockApi();
+    api.deleteToolPolicySet.mockRejectedValueOnce(new ApiError(409, "conflict", "Changed in another client.", false));
+    api.getToolPolicySet.mockResolvedValue({ ...policy, revision: 9 });
+    navigate(`/settings/tool-policies/${policy.id}`, { replace: true });
+    render(<ToolPoliciesSettingsPage api={api} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Delete policy set…" }));
+    await user.click(screen.getByRole("button", { name: "Delete policy set" }));
+    const deletion = screen.getByRole("dialog", { name: "Delete Everyday?" });
+    await within(deletion).findByText("Changed in another client.");
+    await user.click(within(deletion).getByRole("button", { name: "Reload latest" }));
+    await user.click(screen.getByRole("button", { name: "Discard and reload" }));
+    await screen.findByText(/Revision 9\./);
+    await user.click(screen.getByRole("button", { name: "Delete policy set…" }));
+    await user.click(screen.getByRole("button", { name: "Delete policy set" }));
+    await waitFor(() => expect(api.deleteToolPolicySet).toHaveBeenLastCalledWith(policy.id, { expectedRevision: 9 }));
+  });
+
+  it.each(["list", "options"])("does not label a valid deep link missing when %s loading fails", async failure => {
+    const api = mockApi();
+    if (failure === "list") api.listToolPolicySets.mockRejectedValueOnce(new Error("Catalog unavailable"));
+    else api.getToolPolicyOptions.mockRejectedValueOnce(new Error("Catalog unavailable"));
+    navigate(`/settings/tool-policies/${policy.id}`, { replace: true });
+    render(<ToolPoliciesSettingsPage api={api} />);
+    await screen.findByText("Catalog unavailable");
+    expect(screen.queryByText("Policy unavailable")).toBeNull();
+    expect(screen.queryByText("Create your first policy set")).toBeNull();
+    expect(screen.queryByText(/Needs attention/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await screen.findByRole("textbox", { name: "Name" });
+  });
+
+  it("retries a failed scope catalog without a false missing selection", async () => {
+    const api = mockApi();
+    api.listToolPolicySets.mockRejectedValueOnce(new Error("Offline"));
+    render(<ToolPolicyScopeSettings api={api} target={{ kind: "account" }} />);
+    await screen.findByText("Offline");
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByText(/Needs attention/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading policy" }));
+    expect(await screen.findByRole("combobox", { name: "Default tool policy" })).toHaveValue(policy.id);
   });
 });

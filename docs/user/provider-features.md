@@ -269,10 +269,9 @@ Read-only workspaces do not offer branch import or outside handoff. See the
 [Pi isolated workspace contract](../internals/pi-workspace-sandbox.md) for the
 complete isolation and lifecycle boundary.
 
-Pi tool access and Sedes agent-tool access boundary are separate approval
-layers. Allowing a Pi tool does not grant a Sedes tool access to another
-environment, and allowing a Sedes cross-environment operation does not broaden
-Pi's read-only or ask mode.
+Pi tool permissions and Sedes resource scope apply independently. Allowing a
+Pi tool does not grant access to another project or environment through Sedes.
+Changing Sedes resource scope does not broaden Pi's read-only or ask mode.
 
 Composer files use staged paths. A selected Pi model that advertises image
 input can also receive verified native image content. Pi does not currently

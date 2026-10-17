@@ -17,6 +17,7 @@ import type {
   NormalizedWorkspaceSummary,
   ThreadTemplate,
 } from "../../shared/index.js";
+import { ApiError } from "../api/ApiClient.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { TOUCH_DENSITY_QUERY } from "../app/use-touch-density.js";
 import { navigate } from "../app/router.js";
@@ -142,15 +143,18 @@ function candidate(
       canonicalOverrides: [],
     },
     sedesTools: {
+      defaultPresentation: { surface: "native", mode: "progressive" },
       defaultPolicy: {
         enabled: false,
         enabledToolIds: [],
+        source: "default",
         presentation: { surface: "native", mode: "progressive" },
         resourceScope: { allowOtherEnvironments: scope === "all", allowOtherProjects: scope === "all" },
       },
       resolvedPolicy: {
         enabled: toolsEnabled,
         enabledToolIds: [],
+        source: "agent",
         presentation: { surface: "native", mode: "progressive" },
         resourceScope: { allowOtherEnvironments: scope === "all", allowOtherProjects: scope === "all" },
       },
@@ -218,6 +222,7 @@ function control(options?: {
   readonly templates?: readonly ThreadTemplate[];
   readonly listToolPolicySets?: ReturnType<typeof vi.fn>;
   readonly resolveToolPolicy?: ReturnType<typeof vi.fn>;
+  readonly getSavedAgentOptions?: ReturnType<typeof vi.fn>;
   readonly createThreadTemplate?: ReturnType<typeof vi.fn>;
   readonly updateThreadTemplate?: ReturnType<typeof vi.fn>;
   readonly deleteThreadTemplate?: ReturnType<typeof vi.fn>;
@@ -234,6 +239,7 @@ function control(options?: {
       targetId: "target-pi",
     });
   const api = {
+    getSavedAgentOptions: options?.getSavedAgentOptions ?? vi.fn().mockResolvedValue({ kind: "configuration", target: candidate("target-pi", "Local SDK").target, configuration: candidate("target-pi", "Local SDK").configuration, sedesTools: candidate("target-pi", "Local SDK").sedesTools }),
     listToolPolicySets: options?.listToolPolicySets ?? vi.fn().mockResolvedValue({ items: [] }),
     resolveToolPolicy: options?.resolveToolPolicy ?? vi.fn().mockResolvedValue({
       enabled: false, enabledToolIds: [], source: "default",
@@ -372,6 +378,86 @@ async function chooseTemplate(
 }
 
 describe("NewThreadControl", () => {
+  it.each(["custom", "agent"] as const)("explains and retries a missing inherited policy on the %s path", async (path) => {
+    const user = userEvent.setup();
+    const missing = new ApiError(404, "not_found", "The tool policy set was not found.", false,
+      { kind: "missing_policy_set", source: "backend", policySetId: "33333333-3333-4333-8333-333333333333" });
+    let repaired = false;
+    const resolveToolPolicy = vi.fn(async () => {
+      if (!repaired) throw missing;
+      return { enabled: false, enabledToolIds: [], source: "backend", resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } };
+    });
+    control({ resolveToolPolicy });
+    await openPicker(user);
+    if (path === "agent") await chooseCareful(user);
+    expect(await screen.findByText(/Needs attention: the backend policy set was deleted/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Needs attention: the backend policy set was deleted/)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
+    expect(screen.queryByText("The effective policy is resolved when a thread is created.")).not.toBeInTheDocument();
+    repaired = true;
+    await user.click(screen.getByRole("button", { name: "Retry tool policies" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
+  });
+
+  it("exposes an explicit presentation for Custom creation", async () => {
+    const user = userEvent.setup();
+    const { createThread } = control();
+    await openPicker(user);
+    const presentation = screen.getByRole("combobox", { name: "Tool presentation" });
+    await waitFor(() => expect(presentation).toBeEnabled());
+    await user.selectOptions(presentation, "cli:individual");
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    await waitFor(() => expect(createThread).toHaveBeenCalledWith(expect.objectContaining({
+      toolPresentation: { surface: "cli", mode: "individual" },
+      configuration: { kind: "custom", targetId: "target-pi" },
+    })));
+  });
+
+  it("keeps an unsupported template presentation visible until the user fixes it", async () => {
+    const user = userEvent.setup();
+    const descriptor = candidate("target-pi", "Local SDK");
+    descriptor.sedesTools.presentationOptions = [{ surface: "cli", modes: ["progressive"] }];
+    const { createThread } = control({
+      templates: [{ ...carefulTemplate, toolPresentation: { surface: "native", mode: "individual" } }],
+      getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "configuration", ...descriptor }),
+    });
+    await openPicker(user);
+    await chooseTemplate(user);
+    expect(await screen.findByText(/This tool presentation is unavailable/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Tool presentation" })).toHaveValue("native:individual");
+    expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Tool presentation" }), "inherit");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    await waitFor(() => expect(createThread).toHaveBeenCalledOnce());
+    expect(createThread.mock.calls[0]![0]).not.toHaveProperty("toolPresentation");
+  });
+
+  it("refreshes policy choices after a failed create instead of repeating stale selection", async () => {
+    const user = userEvent.setup();
+    const policy = { id: "33333333-3333-4333-8333-333333333333", name: "Review", enabledToolIds: ["thread.list"],
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, revision: 0, createdAt: "2026-10-17T00:00:00Z", updatedAt: "2026-10-17T00:00:00Z" };
+    const missing = new ApiError(404, "not_found", "The tool policy set was not found.", false,
+      { kind: "missing_policy_set", source: "thread", policySetId: policy.id });
+    let deleted = false;
+    const { api, createThread } = control({
+      listToolPolicySets: vi.fn(async () => ({ items: deleted ? [] : [policy] })),
+      resolveToolPolicy: vi.fn(async () => {
+        if (deleted) throw missing;
+        return { enabled: true, enabledToolIds: policy.enabledToolIds, resourceScope: policy.resourceScope, source: "thread" };
+      }),
+      createThread: vi.fn(async () => { deleted = true; throw missing; }),
+    });
+    await openPicker(user);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Sedes tool policy" }), policy.id);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    expect(await screen.findByText(/Needs attention: the thread policy set was deleted/)).toBeInTheDocument();
+    await waitFor(() => expect(api.listToolPolicySets).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
+    expect(createThread).toHaveBeenCalledOnce();
+  });
+
   it("saves an independent policy selection in templates and applies it to new threads", async () => {
     const user = userEvent.setup();
     const policy = {
@@ -1104,7 +1190,7 @@ describe("NewThreadControl", () => {
     }) });
     await openPicker(user);
     expect(await screen.findByText("1 tool · This project across all environments")).toBeInTheDocument();
-    expect(screen.getByText("Inherited from account settings · Everyday")).toBeInTheDocument();
+    expect(screen.getByText("Inherited from account settings · Everyday · revision 2")).toBeInTheDocument();
   });
 
   it("previews Sedes tools as off without implying an environment grant", async () => {

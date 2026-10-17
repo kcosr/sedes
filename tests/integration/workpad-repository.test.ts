@@ -238,11 +238,11 @@ describe("WorkpadRepository", () => {
       expect(JSON.parse((f.database.prepare("SELECT document_json AS json FROM workpads WHERE id = ?").get(project.id) as { json: string }).json).scope)
         .toEqual({ kind: "project", projectId: f.firstProjectId });
       // An agent reaches project workpads through its project, not as global ones.
-      const agent = { environmentIds: [f.environmentId], continuationKey: "agent" };
+      const agent = { environmentIds: [f.environmentId], projectEnvironmentIds: [f.environmentId], continuationKey: "agent" };
       expect(ids(f.workpads.list(f.scope, { scope: { kind: "project", projectId: f.firstProjectId } }, agent))).toEqual([project.id]);
       expect(ids(f.workpads.list(f.scope, { scope: { kind: "global" }, scopeMode: "subtree" }, agent)))
         .toEqual([global.id, project.id, thread.id, other.id].sort());
-      expect(ids(f.workpads.list(f.scope, { scope: { kind: "global" }, scopeMode: "subtree" }, { environmentIds: [], continuationKey: "none" })))
+      expect(ids(f.workpads.list(f.scope, { scope: { kind: "global" }, scopeMode: "subtree" }, { environmentIds: [], projectEnvironmentIds: [], continuationKey: "none" })))
         .toEqual([global.id]);
 
       // A removed location hides its threads' workpads; its project's stay.
@@ -292,12 +292,12 @@ describe("WorkpadRepository", () => {
       const local = f.workpads.create(f.scope, { title: "Local", scope: { kind: "thread", threadId: f.firstThreadId }, content: "Local content" }, undefined, 2000);
       const other = f.workpads.create(f.scope, { title: "Other", scope: { kind: "thread", threadId: f.secondThreadId } }, undefined, 3000);
       const input = { scope: { kind: "global" as const }, scopeMode: "subtree" as const };
-      expect(f.workpads.list(f.scope, input, { environmentIds: [], continuationKey: "no-environments" }).items.map(item => item.id)).toEqual([global.id]);
-      expect(f.workpads.list(f.scope, input, { environmentIds: [f.environmentId], continuationKey: "local" }).items.map(item => item.id)).toEqual([other.id, local.id, global.id]);
-      const page = f.workpads.list(f.scope, { ...input, limit: 1 }, { environmentIds: [f.environmentId], continuationKey: "first-policy" });
+      expect(f.workpads.list(f.scope, input, { environmentIds: [], projectEnvironmentIds: [], continuationKey: "no-environments" }).items.map(item => item.id)).toEqual([global.id]);
+      expect(f.workpads.list(f.scope, input, { environmentIds: [f.environmentId], projectEnvironmentIds: [f.environmentId], continuationKey: "local" }).items.map(item => item.id)).toEqual([other.id, local.id, global.id]);
+      const page = f.workpads.list(f.scope, { ...input, limit: 1 }, { environmentIds: [f.environmentId], projectEnvironmentIds: [f.environmentId], continuationKey: "first-policy" });
       expect(page.nextCursor).toBeDefined();
-      expect(() => f.workpads.list(f.scope, { ...input, limit: 1, cursor: page.nextCursor }, { environmentIds: [f.environmentId], continuationKey: "changed-policy" })).toThrow(errorCode("cursor_invalid"));
-      expect(() => f.workpads.list({ ...f.scope, principalId: "another-owner" }, { ...input, limit: 1, cursor: page.nextCursor }, { environmentIds: [f.environmentId], continuationKey: "first-policy" })).toThrow(errorCode("cursor_invalid"));
+      expect(() => f.workpads.list(f.scope, { ...input, limit: 1, cursor: page.nextCursor }, { environmentIds: [f.environmentId], projectEnvironmentIds: [f.environmentId], continuationKey: "changed-policy" })).toThrow(errorCode("cursor_invalid"));
+      expect(() => f.workpads.list({ ...f.scope, principalId: "another-owner" }, { ...input, limit: 1, cursor: page.nextCursor }, { environmentIds: [f.environmentId], projectEnvironmentIds: [f.environmentId], continuationKey: "first-policy" })).toThrow(errorCode("cursor_invalid"));
       for (const item of page.items) {
         expect(item).not.toHaveProperty("content");
         expect(item).not.toHaveProperty("attribution");

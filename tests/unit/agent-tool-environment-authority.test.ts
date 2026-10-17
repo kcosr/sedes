@@ -11,6 +11,7 @@ import {
   requireAdmittedResource,
   requireAdmittedResources,
   requireExactScopeQuery,
+  resourceWithinScope,
   scopeAuthorityRefs,
   type AgentToolEnvironmentAuthorityReader,
   type EnvironmentAuthorityProjectFact,
@@ -860,7 +861,27 @@ describe("project access", () => {
     label: projects.get(id)!.label,
   });
 
-  it("treats shared project data independently of its member environments", () => {
+  it("Off/On reaches only projects with an active location on the source environment", () => {
+    const resourceScope={allowOtherEnvironments:false,allowOtherProjects:true};
+    for(const projectId of ["project-a","project-ab"]) {
+      const resolved=resolver.resolve({...request("task.get",{taskId:`task-of-${projectId}`}),resourceScope});
+      expect(resolved.targetEnvironmentIds).toEqual(["env-a"]);
+    }
+    for(const projectId of ["project-b","project-empty"]) {
+      expect(()=>resolver.resolve({...request("task.get",{taskId:`task-of-${projectId}`}),resourceScope})).toThrow(expect.objectContaining({code:"permission_denied"}));
+      const query=resolver.resolve({...request("task.list",exactList(projectId)),resourceScope});
+      expect(query.resolvedResourceRefs).toEqual([]);
+      expect(query.targetEnvironmentIds).toEqual([]);
+    }
+  });
+
+  it.each(["task","workpad"] as const)("fails closed for a thread-owned %s without its project identity",kind=>{
+    const caller={defaults:grantAuthority.defaults,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}};
+    expect(resourceWithinScope({kind,id:"record",threadId:"thread-a",environmentId:"env-a"},caller)).toBe(false);
+    expect(resourceWithinScope({kind,id:"global-record"},caller)).toBe(true);
+  });
+
+  it("allows all-environment callers to reach shared project data independently of its member locations", () => {
     for (const projectId of ["project-a", "project-ab"]) {
       const resolved = resolveFor(
         "thread_agent",
@@ -874,7 +895,7 @@ describe("project access", () => {
     }
   });
 
-  it("allows shared project records without expanding access to its remote threads", () => {
+  it("does not enumerate member environments for an all-environment shared project read", () => {
     const resolved=resolveFor("thread_agent","task.list",exactList("project-bc"));
     expect(resolved.resolvedResourceRefs).toEqual([projectRef("project-bc")]);
     expect(resolved.targetEnvironmentIds).toEqual([]);

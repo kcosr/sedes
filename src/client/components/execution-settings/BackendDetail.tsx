@@ -84,7 +84,7 @@ export function BackendDetail({ backend, toolPolicyApi, selected, tab, onTab, he
         <TabsTrigger value="related">Connections{" "}<CountBadge count={targets.length} /></TabsTrigger>
         <TabsTrigger value="activity">Activity</TabsTrigger>
       </TabsList>
-      <TabsContent value="overview" className="execution-tab">
+      <TabsContent value="overview" forceMount hidden={tab !== "overview"} className="execution-tab">
         <RuntimeHealth controller={controller} status={status}>
           {unsupported ? <Callout tone="warning" role="status">Remote execution is unsupported. This retained configuration cannot run here.</Callout> : null}
         </RuntimeHealth>

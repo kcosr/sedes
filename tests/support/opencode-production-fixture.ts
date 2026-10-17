@@ -1,3 +1,5 @@
+import { createThreadRequestSchema, createThreadResultSchema, threadApplicationOperationSchema } from "../../src/shared/protocol/api.js";
+import { toolPolicySetMutationResultSchema } from "../../src/shared/protocol/tool-policies.js";
 import { boundedOpenCodeProcessFile } from "../../src/server/backends/opencode/opencode-native-identity.js";
 import { savedAgentOptionsResultSchema } from "../../src/shared/protocol/saved-agents.js";
 import { qualifiedOpenCodeModelId } from "../../src/server/backends/opencode/opencode-model-selection.js";
@@ -215,7 +217,19 @@ export class OpenCodeProductionFixture {
       const options = savedAgentOptionsResultSchema.parse(value);
       return options.kind === "configuration" && options.configuration.fields.some(field => field.id === "model" && field.options.some(option => option.available && String(option.value) === qualifiedOpenCodeModelId({ providerID: "probe", id: "probe-model" })));
     });
-    const created = await this.json("/api/threads", "POST", { workspaceId: workspace.id, title, executionWorkspace: { kind: "direct" }, configuration: { kind: "custom", targetId: this.targetId, sedesTools: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "progressive" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } } } }) as { threadId: string };
+    const { policySet } = toolPolicySetMutationResultSchema.parse(await this.json("/api/tool-policies", "POST", {
+      name: "Stock qualification tools",
+      enabledToolIds: ["thread.status"],
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
+    }));
+    const created = createThreadResultSchema.parse(await this.json("/api/threads", "POST", {
+      workspaceId: workspace.id,
+      title,
+      executionWorkspace: { kind: "direct" },
+      configuration: { kind: "custom", targetId: this.targetId },
+      toolPolicySelection: { kind: "policy_set", policySetId: policySet.id },
+      toolPresentation: { surface: "native", mode: "progressive" },
+    }));
     await this.openStream(created.threadId);
     return created.threadId;
   }
@@ -261,7 +275,12 @@ export class OpenCodeProductionFixture {
   async request(route: string, method = "GET", body?: unknown, extraHeaders: Record<string, string> = {}, credential = this.credential) {
     const headers: Record<string, string> = { ...extraHeaders, Authorization: `Bearer ${credential}` };
     if (method !== "GET") { headers["X-CSRF-Token"] = normalizedApplicationSessionSchema.parse(await this.json("/api/application/session", "GET", undefined, {}, credential)).csrfToken; headers["Content-Type"] = "application/json"; }
-    return fetch(`${this.url}${route}`, { method, headers, signal: AbortSignal.timeout(30_000), ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const requestBody = method === "POST" && route === "/api/threads"
+      ? createThreadRequestSchema.parse(body)
+      : method === "POST" && /^\/api\/threads\/[^/]+\/operations$/u.test(route)
+        ? threadApplicationOperationSchema.parse(body)
+        : body;
+    return fetch(`${this.url}${route}`, { method, headers, signal: AbortSignal.timeout(30_000), ...(requestBody === undefined ? {} : { body: JSON.stringify(requestBody) }) });
   }
   async json(route: string, method = "GET", body?: unknown, extraHeaders: Record<string, string> = {}, credential = this.credential): Promise<unknown> {
     const response = await this.request(route, method, body, extraHeaders, credential); const value = await response.json();

@@ -49,6 +49,7 @@
 
 /* ── Detail ── */
 .execution-detail { display: grid; min-width: 0; align-content: start; gap: var(--space-5); }
+.execution-tab[hidden] { display: none; }
 .execution-tab { display: grid; gap: var(--space-6); padding-top: var(--space-1); }
 .execution-runtime-feedback { display: grid; gap: var(--space-2); }
 

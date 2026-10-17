@@ -122,7 +122,7 @@ describe("Workpad list order", () => {
     }
     // Callers that name no sort, including agent tools, keep recently updated.
     expect(readAll(cursor => f.workpads.list(f.scope, { ...all, limit: 3, ...(cursor ? { cursor } : {}) })).ids).toEqual(expected.updated);
-    const agent: WorkpadListAuthority = { environmentIds: [f.environmentId], continuationKey: "agent" };
+    const agent: WorkpadListAuthority = { environmentIds: [f.environmentId], projectEnvironmentIds: [f.environmentId], continuationKey: "agent" };
     expect(readAll(cursor => f.workpads.list(f.scope, { ...all, limit: 3, ...(cursor ? { cursor } : {}) }, agent)).ids).toEqual(expected.updated);
   });
 
@@ -134,7 +134,7 @@ describe("Workpad list order", () => {
       expect(() => f.workpads.list(f.scope, { ...all, limit: 2, ...changed, cursor })).toThrow(errorCode("cursor_invalid"));
     }
     expect(() => f.workpads.list({ ...f.scope, principalId: "another-owner" }, { ...all, limit: 2, cursor })).toThrow(errorCode("cursor_invalid"));
-    expect(() => f.workpads.list(f.scope, { ...all, limit: 2, cursor }, { environmentIds: [f.environmentId], continuationKey: "agent" })).toThrow(errorCode("cursor_invalid"));
+    expect(() => f.workpads.list(f.scope, { ...all, limit: 2, cursor }, { environmentIds: [f.environmentId], projectEnvironmentIds: [f.environmentId], continuationKey: "agent" })).toThrow(errorCode("cursor_invalid"));
     expect(() => f.workpads.list(f.scope, { ...all, cursor: "a".repeat(257) })).toThrow(errorCode("bad_request"));
 
     // Malformed and altered cursors are refused, never interpreted.

@@ -123,15 +123,18 @@ export function AgentsView({
   const [policySets, setPolicySets] = useState<readonly ToolPolicySet[]>([]);
   const [policiesLoading, setPoliciesLoading] = useState(true);
   const [policiesError, setPoliciesError] = useState("");
+  const [policiesAttempt, setPoliciesAttempt] = useState(0);
   useEffect(() => {
     const abort = new AbortController();
+    setPoliciesLoading(true);
+    setPoliciesError("");
     void store.api.listToolPolicySets(abort.signal).then(({ items }) => {
       if (!abort.signal.aborted) { setPolicySets(items); setPoliciesLoading(false); }
     }, (cause: unknown) => {
       if (!abort.signal.aborted) { setPoliciesError(messageFrom(cause)); setPoliciesLoading(false); }
     });
     return () => abort.abort();
-  }, [store]);
+  }, [store, policiesAttempt]);
   const policyCatalog = { policySets, policiesLoading, policiesError };
   const [search, setSearch] = useState("");
   const root = useRef<HTMLDivElement>(null);
@@ -179,7 +182,7 @@ export function AgentsView({
               data-resource-id={agent.id}
               icon={<BackendBrandIcon brand={agent.backend.brand} />}
               title={agent.name}
-              subtitle={`${agent.backend.label.text} · ${agent.overrideCount} override${agent.overrideCount === 1 ? "" : "s"} · ${toolSummary(agent.toolPolicySelection, policySets)}`}
+              subtitle={`${agent.backend.label.text} · ${agent.overrideCount} override${agent.overrideCount === 1 ? "" : "s"} · ${toolSummary(agent.toolPolicySelection, policySets, !policiesLoading && !policiesError)}`}
               selected={agentId === agent.id}
               href={agentPath(agent.id)}
               onSelect={(event) => followLink(event, agentPath(agent.id))}
@@ -230,6 +233,11 @@ export function AgentsView({
           ) : undefined
         }
       >
+        {policiesError && (
+          <Callout tone="danger" role="alert" action={
+            <Button variant="outline" size="sm" onClick={() => setPoliciesAttempt((value) => value + 1)}>Retry tool policies</Button>
+          }>{policiesError}</Callout>
+        )}
         <SettingsSplit listLabel="Saved Agents" list={list} empty={empty}>
           {empty ? (
             <EmptyState
@@ -436,6 +444,8 @@ function AgentEditor({
     nextWorkspaceId: string,
     nextTargetId: string,
     nextOverrides = overrides,
+    nextPolicySelection = toolPolicySelection,
+    nextPresentation: AgentToolPresentation | null = toolPresentation ?? null,
   ): void => {
     optionsAbort.current?.abort();
     if (!nextWorkspaceId) {
@@ -456,8 +466,8 @@ function AgentEditor({
             ? {
                 targetId: nextTargetId,
                 overrides: nextOverrides,
-                toolPolicySelection,
-                ...(toolPresentation ? { toolPresentation } : {}),
+                toolPolicySelection: nextPolicySelection,
+                ...(nextPresentation ? { toolPresentation: nextPresentation } : {}),
               }
             : {}),
         },
@@ -575,7 +585,13 @@ function AgentEditor({
     setError("");
     setNameError("");
     if (workspaceId && targetId) {
-      loadOptions(workspaceId, targetId, agent?.backendOverrides ?? []);
+      loadOptions(
+        workspaceId,
+        targetId,
+        agent?.backendOverrides ?? [],
+        agent?.toolPolicySelection ?? { kind: "inherit" },
+        agent?.toolPresentation ?? null,
+      );
     }
   };
 
@@ -771,12 +787,19 @@ function AgentEditor({
               { scope: "backend", values: variablesPreview.result.snapshot.layers.backend },
             ] : []} onChange={setEnvironmentVariables} />
         </SettingsSection>
-        {policiesError && <Callout tone="danger" role="alert">{policiesError}</Callout>}
         <AgentToolPolicyEditor
           id="agent-tools" catalog={toolCatalog} value={toolPolicySelection}
           toolPresentation={toolPresentation} policySets={policySets}
-          disabled={pending || optionsLoading || policiesLoading || Boolean(policiesError)}
-          onChange={setToolPolicySelection} onPresentationChange={setToolPresentation}
+          catalogState={policiesLoading ? "loading" : policiesError ? "error" : "ready"}
+          disabled={pending || optionsLoading}
+          onChange={(next) => {
+            setToolPolicySelection(next);
+            if (workspaceId && targetId) loadOptions(workspaceId, targetId, overrides, next, toolPresentation);
+          }}
+          onPresentationChange={(next) => {
+            setToolPresentation(next);
+            if (workspaceId && targetId) loadOptions(workspaceId, targetId, overrides, toolPolicySelection, next ?? null);
+          }}
         />
         {agent && (
           <DangerZone>
@@ -827,8 +850,8 @@ function AgentEditor({
   );
 }
 
-function toolSummary(selection: ToolPolicySelection, policySets: readonly ToolPolicySet[]): string {
+function toolSummary(selection: ToolPolicySelection, policySets: readonly ToolPolicySet[], catalogReady: boolean): string {
   if (selection.kind === "inherit") return "Inherited tools";
   if (selection.kind === "disabled") return "Tools disabled";
-  return policySets.find(({ id }) => id === selection.policySetId)?.name ?? "Policy needs attention";
+  return policySets.find(({ id }) => id === selection.policySetId)?.name ?? (catalogReady ? "Policy needs attention" : "Saved tool policy");
 }

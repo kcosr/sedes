@@ -31,17 +31,18 @@ export function ToolPolicyScopeSettings({ api, target, environmentId, policySets
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [savedAt, setSavedAt] = useState<number>();
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const abort = new AbortController();
-    setLoading(true); setError("");
+    setLoading(true); setError(""); setLoadError("");
     void Promise.all([api.listToolPolicySets(abort.signal), api.listToolPolicySelections(abort.signal)]).then(([sets, selections]) => {
       if (abort.signal.aborted) return;
       setPolicies(sets.items); setSettings(selections.items);
       setValue(selections.items.find(item => sameToolPolicyTarget(item.target, target))?.selection ?? inherit);
       setLoading(false);
-    }, cause => { if (!abort.signal.aborted) { setError(messageFrom(cause)); setLoading(false); } });
+    }, cause => { if (!abort.signal.aborted) { setLoadError(messageFrom(cause)); setLoading(false); } });
     return () => abort.abort();
   }, [api, key, attempt]);
   const policies = policySets ?? fetchedPolicies;
@@ -54,7 +55,7 @@ export function ToolPolicyScopeSettings({ api, target, environmentId, policySets
     .find(item => item && item.selection.kind !== "inherit");
   const inheritedSet = inherited?.selection.kind === "policy_set" ? policies.find(policy => inherited.selection.kind === "policy_set" && policy.id === inherited.selection.policySetId) : undefined;
   const inheritedLabel = inherited ? inherited.target.kind === "account" ? "account defaults" : "environment defaults" : "built-in defaults";
-  const inheritedPreview = inheritedSet ? { ...inheritedSet, enabled: true } : !inherited || inherited.selection.kind === "disabled" ? disabledPreview : undefined;
+  const inheritedPreview = inheritedSet ? { ...inheritedSet, enabled: true, policySet: { name: inheritedSet.name, revision: inheritedSet.revision } } : !inherited || inherited.selection.kind === "disabled" ? disabledPreview : undefined;
   const save = async () => {
     setSaving(true); setError("");
     try {
@@ -65,14 +66,14 @@ export function ToolPolicyScopeSettings({ api, target, environmentId, policySets
     finally { setSaving(false); }
   };
   return <div className="tool-policy-scope-settings">
-    {loading ? <p className="tool-policy-hint" role="status">Loading tool policy…</p> : <>
+    {loading ? <p className="tool-policy-hint" role="status">Loading tool policy…</p> : loadError ? <Callout tone="danger" role="alert" action={<Button type="button" size="sm" variant="outline" onClick={() => setAttempt(previous => previous + 1)}>Retry loading policy</Button>}>{loadError}</Callout> : <>
       <ToolPolicySelector value={value} onChange={setValue} policySets={policies} disabled={saving}
         label={target.kind === "account" ? "Default tool policy" : "Tool policy"} inheritedLabel={inheritedLabel} inheritedPolicy={inheritedPreview}
         description="Applies to new threads. Agents and individual threads can override this selection." />
       <SaveBar dirty={dirty} saving={saving} savedAt={savedAt} onSave={() => void save()} onCancel={() => { setValue(current?.selection ?? inherit); setError(""); }}
         saveLabel="Save default" placement="pane" />
     </>}
-    {inherited?.selection.kind === "policy_set" && !inheritedSet && value.kind === "inherit" ? <Callout tone="warning">Needs attention: the inherited policy set is unavailable. Choose a policy here or repair the parent default before creating threads.</Callout> : null}
+    {!loading && !loadError && inherited?.selection.kind === "policy_set" && !inheritedSet && value.kind === "inherit" ? <Callout tone="warning">Needs attention: the inherited policy set is unavailable. Choose a policy here or repair the parent default before creating threads.</Callout> : null}
     <DiscardChangesDialog open={Boolean(guard.pendingRoute)} confirmDisabled={saving} onOpenChange={open => { if (!open) guard.cancel(); }} onDiscard={guard.discardAndContinue} />
     {error ? <Callout tone="danger" role="alert" action={<Button type="button" size="sm" variant="outline" disabled={saving} onClick={() => setAttempt(previous => previous + 1)}>{dirty ? "Discard and reload" : "Reload"}</Button>}>{error}</Callout> : null}
   </div>;

@@ -15,6 +15,15 @@ export const toolPolicySelectionSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("policy_set"), policySetId: toolPolicySetIdSchema }),
 ]);
 export type ToolPolicySelection = z.infer<typeof toolPolicySelectionSchema>;
+export const toolPolicySourceSchema = z.enum(["default", "account", "environment", "backend", "agent", "thread"]);
+export type ToolPolicySource = z.infer<typeof toolPolicySourceSchema>;
+export const toolPolicyResolutionIssueSchema = z.strictObject({
+  kind: z.literal("missing_policy_set"),
+  source: z.enum(["account", "environment", "backend", "agent", "thread"]),
+  policySetId: toolPolicySetIdSchema,
+});
+export type ToolPolicyResolutionIssue = z.infer<typeof toolPolicyResolutionIssueSchema>;
+
 const toolPolicyDefinitionObjectSchema = z.strictObject({
   name: z.string().trim().min(1).max(160).refine(value => !/[\uD800-\uDFFF]/u.test(value), "Policy names must be well-formed display text."),
   enabledToolIds: z.array(agentToolIdSchema).max(512).refine(ids => new Set(ids).size === ids.length, "Tool IDs must be unique."),
@@ -76,10 +85,15 @@ export const resolvedToolPolicySchema = z.strictObject({
   enabled: z.boolean(),
   enabledToolIds: z.array(agentToolIdSchema).max(512),
   resourceScope: agentToolResourceScopeSchema,
-  source: z.enum(["default", "account", "environment", "backend", "agent", "thread"]),
+  source: toolPolicySourceSchema,
   policySet: z.strictObject({ id: toolPolicySetIdSchema, name: toolPolicyDefinitionSchema.shape.name, revision: revisionSchema }).optional(),
 });
 export type ResolvedToolPolicy = z.infer<typeof resolvedToolPolicySchema>;
+export const toolPolicyInspectionSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("resolved"), policy: resolvedToolPolicySchema }),
+  toolPolicyResolutionIssueSchema,
+]);
+export type ToolPolicyInspection = z.infer<typeof toolPolicyInspectionSchema>;
 export const resolveToolPolicyRequestSchema = z.strictObject({
   targetId: z.string().min(1).max(160),
   agentId: z.uuid().optional(),

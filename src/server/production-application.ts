@@ -1144,6 +1144,7 @@ export async function startProductionApplication(
     const forks = new ThreadForkService({
       toolPolicies: agentToolPolicies,
       toolPolicyOrigins,
+      principalToolClients: principalAgentToolClients,
       environmentVariables,
       database,
       targets,

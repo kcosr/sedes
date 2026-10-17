@@ -9,16 +9,19 @@ import {
   type ToolPolicySelectionTarget,
   type ToolPolicySelectionSetting,
   type ResolvedToolPolicy,
+  type ToolPolicyInspection,
 } from "../../shared/protocol/tool-policies.js";
 import type { ConfigurationRepository } from "../configuration-admin/configuration-repository.js";
 import { ToolPolicyRepository } from "../db/repositories/tool-policy-repository.js";
 import { DomainError } from "../domain/errors.js";
+import { ToolPolicyResolutionError } from "./tool-policy-errors.js";
+export { ToolPolicyResolutionError } from "./tool-policy-errors.js";
 import { createThreadAgentToolPolicyDependencies } from "../conversations/thread-agent-tool-policy-dependencies.js";
 import type { ThreadAgentToolCatalogReader } from "../conversations/database-thread-application-readers.js";
 import { boundDisplayText } from "../conversations/payload-policy.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 
-type PolicyResolutionInput = {
+export type PolicyResolutionInput = {
   readonly target: { readonly backendId: string; readonly executionEnvironmentId: string };
   readonly agentSelection?: ToolPolicySelection;
   readonly threadSelection?: ToolPolicySelection;
@@ -124,7 +127,14 @@ export class ToolPolicyService {
     const [source, selection] = selected;
     if (selection.kind === "disabled") return { ...disabled, source };
     if (selection.kind !== "policy_set") throw new Error("tool_policy_selection_invalid");
-    const policy = this.repository.get(scope, selection.policySetId);
+    let policy: ToolPolicySet;
+    try {
+      policy = this.repository.get(scope, selection.policySetId);
+    } catch (error) {
+      if (!(error instanceof DomainError) || error.code !== "not_found") throw error;
+      if (source === "default") throw new Error("default_policy_selection_invalid");
+      throw new ToolPolicyResolutionError({kind:"missing_policy_set",source,policySetId:selection.policySetId});
+    }
     return resolvedToolPolicySchema.parse({
       enabled: true,
       enabledToolIds: [...policy.enabledToolIds],
@@ -132,6 +142,15 @@ export class ToolPolicyService {
       source,
       policySet: { id: policy.id, name: policy.name, revision: policy.revision },
     });
+  }
+
+  inspectPolicy(scope: RequestScope, input: PolicyResolutionInput): ToolPolicyInspection {
+    try {
+      return {kind:"resolved",policy:this.resolvePolicy(scope,input)};
+    } catch (error) {
+      if (!(error instanceof ToolPolicyResolutionError)) throw error;
+      return error.issue;
+    }
   }
 
   preview(scope: RequestScope, input: {

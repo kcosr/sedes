@@ -816,6 +816,40 @@ describe("AgentManagementService task authority", () => {
       }
     } finally {f.database.close();}
   });
+  it("limits Off/On project records to active locations on the source environment", () => {
+    const f=taskFixture();
+    try {
+      const inventory=new InventoryRepository(f.database);
+      const location=(environmentId:string,path:string)=>inventory.upsertWorkspace(f.scope,{environmentId,canonicalPath:path,displayName:path,project:{kind:"new",name:path},available:true,trustState:"trusted",environmentConfigurationRevision:0,now:6000});
+      const remote=location(f.remoteEnvironmentId,"/remote-only");
+      const empty=location(f.environment.id,"/no-active-location");
+      inventory.removeWorkspace(f.scope,empty.id,{expectedRevision:empty.revision,expectedThreadIds:[],now:6100});
+      const remoteTask=f.create("Remote project",{kind:"project",projectId:remote.projectId});
+      const emptyTask=f.create("Unlocated project",{kind:"project",projectId:empty.projectId});
+      const shared=f.create("Shared local and remote project",{kind:"project",projectId:f.workspaceA.projectId});
+      const local=f.create("Other local project",{kind:"project",projectId:f.workspaceB.projectId});
+      const offOn={allowOtherEnvironments:false,allowOtherProjects:true};
+      for(const task of [remoteTask,emptyTask]) {
+        expect(()=>f.admit("task.get",{taskId:task.id},offOn)).toThrow(expect.objectContaining({code:"permission_denied"}));
+        expect(()=>f.admit("task.update",{taskId:task.id,expectedRevision:0,title:"Changed"},offOn)).toThrow(expect.objectContaining({code:"permission_denied"}));
+        const target={kind:"project" as const,projectId:task.projectId!};
+        expect(()=>f.admit("task.create",{title:"Denied",scope:target},offOn)).toThrow(expect.objectContaining({code:"permission_denied"}));
+        const grant=f.admit("task.list",{scope:target,scopeMode:"exact"},offOn);
+        expect(f.list(grant,target,"exact").items).toEqual([]);
+      }
+      const query={scope:{kind:"global" as const},scopeMode:"subtree" as const};
+      const grant=f.admit("task.list",query,offOn);
+      const page=f.list(grant,query.scope,"subtree",undefined,1);
+      expect(page.items.map(task=>task.id)).toEqual([shared.id]);
+      expect(f.list(grant,query.scope,"subtree",page.nextCursor,1).items.map(task=>task.id)).toEqual([local.id]);
+      const unrestricted=f.admit("task.list",query,{allowOtherEnvironments:true,allowOtherProjects:true});
+      // Global Task discovery keeps its existing active-location filter;
+      // an explicit all-environment project read can still reach an empty project.
+      expect(f.list(unrestricted,query.scope,"subtree").items.map(task=>task.id)).toEqual([remoteTask.id,shared.id,local.id]);
+      expect(f.management.getTask(f.scope,emptyTask.id,f.admit("task.get",{taskId:emptyTask.id})).id).toBe(emptyTask.id);
+    } finally {f.database.close();}
+  });
+
   it("deletes only completed tasks at the admitted revision", async () => {
     const f = taskFixture();
     try {

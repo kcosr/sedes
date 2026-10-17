@@ -30,7 +30,9 @@ Both switches start off. The two rules are independent:
 
 The switches affect only enabled Sedes tools. Ordinary ownership, runtime
 availability, and provider permissions still apply. Project Tasks and Workpads
-are shared project records, not separate documents per host. Global Tasks,
+are shared project records, not separate documents per host. With other
+environments off, a project needs an active location on the current environment
+before its shared records are accessible. Global Tasks,
 global Workpads, Saved Agents, and client devices remain shared account
 resources. A client result hides an out-of-scope default-thread reference.
 HTML Pages, image display, and worktree operations keep their narrower
@@ -67,7 +69,9 @@ Thread creation copies the effective exact tool list, access switches, and
 backend-supported presentation into independent thread state. The recorded
 policy name, revision, and source level describe that creation snapshot.
 Editing a policy, Agent, template, or default does not update existing threads.
-Forks and **New with same settings** copy the source thread's current policy.
+User forks and **New with same settings** copy the source thread's current
+policy. Agent and Tool-client forks may copy it only when it does not exceed
+the caller's own tools and resource scope.
 
 Use **Thread actions → Agent tools** to edit an existing thread's tools and
 access switches. You can enable broader access temporarily and turn it off
@@ -92,6 +96,9 @@ independently configured destination threads keep their own policy.
 A set stores tools and resource scope, not a provider transport. New threads
 normally use their backend's supported presentation default. A Saved Agent or
 New thread can request an explicit supported presentation independently.
+In **New thread → Tool presentation**, choose **Inherit** or one of the target's
+supported modes. A template remembers that choice; if a different target does
+not support it, choose Inherit or another available mode before creating.
 Pi, Codex, Claude, Grok, and OpenCode use the shared policy and scope checks;
 their supported Native/CLI modes and runtime prerequisites still differ. See
 [provider features](provider-features.md#let-an-agent-use-sedes-tools).

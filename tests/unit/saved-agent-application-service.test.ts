@@ -5,6 +5,7 @@ import { SavedAgentBackendAdapterRegistry } from "../../src/server/backends/save
 import type { SavedAgentBackendAdapter } from "../../src/server/backends/saved-agent-adapter.js";
 import { savedAgentBackendTypeIdSchema } from "../../src/shared/protocol/saved-agents.js";
 import type { ResolvedAgentToolBootstrapPolicy } from "../../src/shared/protocol/saved-agents.js";
+import type { ResolvedToolPolicy, ToolPolicySelection } from "../../src/shared/protocol/tool-policies.js";
 import { DomainError } from "../../src/server/domain/errors.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 
@@ -265,14 +266,22 @@ function fixture(
       enabledToolIds: ["task.list"],
     }));
   const reserveWorkspace = vi.fn();
+  const resolvePolicy = (_scope: RequestScope, selection: {
+    agentSelection?: ToolPolicySelection;
+    threadSelection?: ToolPolicySelection;
+  }): ResolvedToolPolicy => selection.agentSelection?.kind === "policy_set" && input.toolSnapshot
+    ? {...structuredClone(input.toolSnapshot),source:"agent",policySet:{id:selection.agentSelection.policySetId,name:"Tools",revision:0}}
+    : {enabled:false,enabledToolIds:[],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false},source:selection.threadSelection?.kind === "disabled" ? "thread" : "default"};
   const service = new SavedAgentApplicationService({
     principalToolClients: {get: vi.fn()} as never,
     policySets: {
       repository: {database},
       assertSelection: vi.fn(),
-      resolvePolicy: (_scope: RequestScope, selection: {agentSelection?: {kind:string;policySetId?:string};threadSelection?: {kind:string}}) => selection.agentSelection?.kind === "policy_set" && input.toolSnapshot
-        ? {...structuredClone(input.toolSnapshot),source:"agent",policySet:{id:selection.agentSelection.policySetId,name:"Tools",revision:0}}
-        : {enabled:false,enabledToolIds:[],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false},source:selection.threadSelection?.kind === "disabled" ? "thread" : "default"},
+      resolvePolicy,
+      inspectPolicy: (requestedScope: RequestScope, selection: Parameters<typeof resolvePolicy>[1]) => ({
+        kind: "resolved",
+        policy: resolvePolicy(requestedScope, selection),
+      }),
     } as never,
     toolPolicyOrigins: {database,record:vi.fn(),copy:vi.fn()} as never,
     agents: {

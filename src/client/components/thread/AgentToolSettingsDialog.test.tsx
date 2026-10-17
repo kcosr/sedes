@@ -194,7 +194,12 @@ function deferred<T>() {
 describe("AgentToolSettingsDialog", () => {
   it("shows immutable creation provenance without implying current settings still match", () => {
     subject(policySnapshot({ revision: 8, origin: { source: "account", policySet: { id: "33333333-3333-4333-8333-333333333333", name: "Everyday", revision: 2 } } }));
-    expect(screen.getByText(/Original policy: Everyday \(revision 2\)/)).toHaveTextContent("later default or policy-set changes do not update it");
+    expect(screen.getByText(/Original policy: Everyday \(revision 2\) · from Account/)).toHaveTextContent("later default or policy-set changes do not update it");
+  });
+
+  it.each(["agent", "thread"] as const)("identifies a disabled original %s policy", (source) => {
+    subject(policySnapshot({ origin: { source } }));
+    expect(screen.getByText(new RegExp(`Original policy: Disabled · from ${source === "agent" ? "Agent" : "Thread"}`))).toBeInTheDocument();
   });
 
   it("shows a runtime-unavailable tool disabled with its startup diagnostic", () => {

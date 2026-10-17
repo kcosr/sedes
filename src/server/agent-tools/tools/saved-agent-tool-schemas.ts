@@ -82,32 +82,6 @@ const agentToolPresentationOptionToolSchema = Type.Object(
   { additionalProperties: false, maxProperties: 2 },
 );
 
-export const savedAgentSedesToolsToolSchema = Type.Object(
-  {
-    enabled: Type.Boolean(),
-    enabledToolIds: Type.Array(Type.String({ minLength: 1, maxLength: 128 }), {
-      maxItems: SAVED_AGENT_SEDES_TOOLS_MAX_COUNT,
-      uniqueItems: true,
-    }),
-    presentation: agentToolPresentationToolSchema,
-    resourceScope: agentToolResourceScopeToolSchema,
-  },
-  { additionalProperties: false, maxProperties: 4 },
-);
-
-/** Canonical tools use bounded named entries; the browser API uses a map. */
-export const environmentVariableEntriesToolSchema = Type.Array(Type.Object({
-  name: Type.String({ minLength: 1, maxLength: 128 }),
-  binding: Type.Union([
-    Type.Object({ kind: Type.String({ enum: ["literal"], maxLength: 7 }), value: Type.String({ maxLength: 8192 }) }, { additionalProperties: false, maxProperties: 2 }),
-    Type.Object({ kind: Type.String({ enum: ["unset"], maxLength: 5 }) }, { additionalProperties: false, maxProperties: 1 }),
-    Type.Object({ kind: Type.String({ enum: ["secret"], maxLength: 6 }), source: Type.Union([
-      Type.Object({ kind: Type.String({ enum: ["environment"], maxLength: 11 }), name: Type.String({ minLength: 1, maxLength: 128 }) }, { additionalProperties: false, maxProperties: 2 }),
-      Type.Object({ kind: Type.String({ enum: ["protected_file"], maxLength: 14 }), path: Type.String({ minLength: 1, maxLength: 4096 }) }, { additionalProperties: false, maxProperties: 2 }),
-    ]) }, { additionalProperties: false, maxProperties: 2 }),
-  ]),
-}, { additionalProperties: false, maxProperties: 2 }), { maxItems: 64 });
-
 export const savedAgentAuthoringContextToolSchema = Type.Object(
   {
     workspaceId: identifierSchema,
@@ -162,7 +136,6 @@ export const savedAgentOutputToolSchema = Type.Object(
     backendTypeId: savedAgentBackendTypeIdToolSchema,
     backend: savedAgentBackendPresentationToolSchema,
     backendOverrides: savedAgentOverridesToolSchema,
-    environmentVariables: Type.Optional(environmentVariableEntriesToolSchema),
     toolPolicySelection: toolPolicySelectionToolSchema,
     toolPresentation: Type.Optional(agentToolPresentationToolSchema),
     revision: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
@@ -172,7 +145,7 @@ export const savedAgentOutputToolSchema = Type.Object(
   {
     $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
     additionalProperties: false,
-    maxProperties: 12,
+    maxProperties: 11,
   },
 );
 
@@ -277,8 +250,24 @@ export const savedAgentTargetDescriptorToolSchema = Type.Object(
   { additionalProperties: false, maxProperties: 3 },
 );
 
+const toolPolicySourceToolSchema = Type.String({
+  enum: ["default", "account", "environment", "backend", "agent", "thread"], maxLength: 11,
+});
+const toolPolicySetOriginToolSchema = Type.Object({
+  id: identifierSchema,
+  name: Type.String({ minLength: 1, maxLength: 160 }),
+  revision: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+}, { additionalProperties: false, maxProperties: 3 });
+const toolPolicyResolutionIssueToolSchema = Type.Object({
+  kind: Type.String({ enum: ["missing_policy_set"], maxLength: 18 }),
+  source: Type.String({ enum: ["account", "environment", "backend", "agent", "thread"], maxLength: 11 }),
+  policySetId: identifierSchema,
+}, { additionalProperties: false, maxProperties: 3 });
+
 const resolvedSedesToolPolicySchema = Type.Object(
   {
+    source: toolPolicySourceToolSchema,
+    policySet: Type.Optional(toolPolicySetOriginToolSchema),
     enabled: Type.Boolean(),
     enabledToolIds: Type.Array(Type.String({ minLength: 1, maxLength: 128 }), {
       maxItems: SAVED_AGENT_SEDES_TOOLS_MAX_COUNT,
@@ -287,7 +276,7 @@ const resolvedSedesToolPolicySchema = Type.Object(
     presentation: agentToolPresentationToolSchema,
     resourceScope: agentToolResourceScopeToolSchema,
   },
-  { additionalProperties: false, maxProperties: 4 },
+  { additionalProperties: false, maxProperties: 6 },
 );
 
 const agentToolEffectsToolSchema = Type.Object(
@@ -340,15 +329,17 @@ const agentToolGroupToolSchema = Type.Object(
 export const savedAgentSedesToolDescriptorToolSchema = Type.Object(
   {
     defaultPolicy: Type.Union([resolvedSedesToolPolicySchema, Type.Null()]),
-    defaultUnavailableReason: Type.Optional(savedAgentDisplayTextToolSchema),
-    resolvedPolicy: resolvedSedesToolPolicySchema,
+    defaultIssue: Type.Optional(toolPolicyResolutionIssueToolSchema),
+    resolvedIssue: Type.Optional(toolPolicyResolutionIssueToolSchema),
+    defaultPresentation: agentToolPresentationToolSchema,
+    resolvedPolicy: Type.Union([resolvedSedesToolPolicySchema, Type.Null()]),
     groups: Type.Array(agentToolGroupToolSchema, { maxItems: 64 }),
     presentationOptions: Type.Array(agentToolPresentationOptionToolSchema, {
       minItems: 1,
       maxItems: 2,
     }),
   },
-  { additionalProperties: false, maxProperties: 5 },
+  { additionalProperties: false, maxProperties: 7 },
 );
 
 export const savedAgentOptionsResultToolSchema = Type.Object(

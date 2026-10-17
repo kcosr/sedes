@@ -1,7 +1,7 @@
 # Blocking-interaction subsystem contract
 
-Sedes presents provider approvals, application-owned decisions, and
-structured questions through one backend-neutral blocking-interaction
+Sedes presents provider approvals and structured questions through one
+backend-neutral blocking-interaction
 contract. A provider still owns its native request and response protocol;
 Sedes owns browser-safe identity, single-resolution authority, durable
 mutation recovery where applicable, and the conversation-pane interaction
@@ -18,7 +18,7 @@ this interaction system.
 
 - [Normalized interaction kinds](#normalized-contract)
 - [Identity and response authority](#identity-and-response-authority)
-- [Lifetime and application decisions](#interaction-lifetime-and-questionnaire-resolution)
+- [Interaction lifetime](#interaction-lifetime-and-questionnaire-resolution)
 - [Secrets and client presentation](#secrets)
 - [Backend dispositions](#compiled-backend-audit)
 - [Verification](#verification-surfaces)
@@ -128,8 +128,7 @@ Sedes ignores a cancellation that the backend rejects, that fails, or that is
 still unconfirmed at the bound. The request stays abandoned, a replay of it in
 the same generation is dropped. Replacing the application runtime does not prove
 that a resident native server released an uncancelled request.
-Application-owned decisions are rejected locally and reach no provider. Each
-backend's disposition is listed in the
+Each backend's disposition is listed in the
 [compiled backend audit](#compiled-backend-audit).
 
 ### Agent tool resource scope

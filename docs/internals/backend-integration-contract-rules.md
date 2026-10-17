@@ -2304,8 +2304,7 @@ must not overwrite an application waiting state while an interaction remains
 pending. Interaction open, resolution, capability refresh, and reconnect
 checkpoints must all agree; test producer output through the real client
 authority reducer rather than only constructing matching fixtures. This shared
-rule applies to Pi, Codex, and Claude interactions and application-owned
-decisions. Grok intentionally has no provider blocking-interaction capability.
+rule applies to provider interactions across Pi, Codex, Claude, and OpenCode. Grok intentionally has no provider blocking-interaction capability.
 
 Optional invocation context belongs to the exact thread-scoped pending
 interaction and is read-only presentation, never response or execution
@@ -2537,7 +2536,7 @@ input acceptance after any pre-check. Transport errors and uncertain operations
 must not masquerade as terminal failures.
 
 Interaction notifications observe first acceptance of a normalized pending
-request in the shared interaction broker, including application-owned decisions.
+provider request in the shared interaction broker.
 `decision` and `confirmation` produce `approval.requested`; `choice`, `text_input`,
 `editor`, and `questionnaire` produce `input.requested`. Never infer the category
 from provider names, display labels, or option text. Pending-dialog publication,
@@ -3707,8 +3706,8 @@ satisfying the other's surface. The remote relay uses only the
 strict `agent_tools_cli@6` contract advertised for the enabled
 `agent_tools_cli` capability; unsupported or stale versions fail closed.
 Discovery may retain a bounded transport deadline, but invocation
-must propagate caller abort so an indefinitely waiting approval is not turned
-into an artificial CLI timeout.
+must propagate caller abort without imposing an additional transport execution
+deadline on admitted work.
 
 Sidecar CLI callback endpoints remain private to the execution runtime. Unix
 uses an owner-only directory and socket with inode-checked retirement. Windows
@@ -3774,8 +3773,8 @@ restart; application authorization never depends on their apparent readiness.
 
 A resident execution host must capture a reverse tool call's native input and
 observation position before awaiting source resolution. Main catches up to that
-exact cut before asking for a scoped approval; a later user input cannot lend
-an earlier native-only call authority. Use the canonical source/policy facade,
+exact cut before checking current-user proof for client controls; a later user
+input cannot lend an earlier native-only call that authority. Use the canonical source/policy facade,
 with a private provenance envelope, for local and all remote carriers. Retained
 recovery may borrow an existing normal carrier without replacing the carrier
 that carries the reverse call. Promotion can change controller epoch only after
@@ -3783,7 +3782,7 @@ validating the same service, runtime and native identity; invalidate old ports.
 Host routes outlive main presentation. Detached tools fail unavailable and lost
 sent results remain uncertain; no buffering or replay. OpenCode implements this
 private provenance path. Pi, Codex, Claude and Grok retain their own existing
-source/approval contracts and do not consume OpenCode stamps.
+source and provider-permission contracts and do not consume OpenCode stamps.
 
 Compiled backend modules may map known private runtime failures to bounded
 normalized Settings guidance through `runtimeDiagnostic`. A lazy module runtime
@@ -3805,7 +3804,7 @@ authorization without trusting or rotating the environment hint.
 
 Provision the CLI environment for an eligible CLI presentation independently
 of the master enable flag or selected IDs. For unchanged CLI surface/mode,
-allow revision-checked edits to enablement, exact IDs, and access boundary
+allow revision-checked edits to enablement, exact IDs, and resource scope
 during active turns and queued input without retiring the runtime. This shared
 application-policy path applies to local Pi SDK, local/Sidecar SSH Codex and Claude,
 local Grok, and qualified Sedes-created owned OpenCode roots locally or on
@@ -3884,8 +3883,10 @@ Agent tool policy uses `resourceScope` with required booleans
 not interactive approval modes. All compiled backends share the same admission:
 lists intersect requested scope, and direct outside IDs fail without a prompt.
 Global resources and Saved Agent definitions retain their explicit shared
-account classification; project documents are shared project records. Page and
-worktree source-only restrictions remain narrower than this policy.
+account classification; project documents are shared project records. With
+other environments disabled, project resources require an active location on
+the source environment, including shared Tasks and Workpads. Page and worktree
+source-only restrictions remain narrower than this policy.
 
 Resolve the source project from its current location on every request, bind
 mutable scope facts and revisions into grants/continuations, and recheck exact
@@ -3896,8 +3897,10 @@ scope. Principal Tool clients retain their independent environment allowlists.
 
 Named sets, scope defaults and selections are principal-owned. The effective
 policy is resolved and fenced transactionally at creation, stored as independent
-thread state, and copied intact by forks. Policy metadata names and IDs are
-provenance rather than live authority. Missing selected sets fail closed;
+thread state, and copied intact by user forks. Agent and Tool-client forks
+must additionally prove that the copied policy is a subset of the caller's
+current authority before reservation commits. Policy metadata names and IDs
+are provenance rather than live authority. Missing selected sets fail closed;
 existing thread snapshots remain usable after set deletion.
 
 Workpads are application-owned Markdown documents, revision history,

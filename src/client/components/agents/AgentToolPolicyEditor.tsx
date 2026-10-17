@@ -14,6 +14,7 @@ import {
 } from "@client/components/ui/select";
 import { SettingsField, SwitchField } from "../settings/SettingsField.js";
 import { SettingsSection } from "../settings/SettingsSection.js";
+import { missingToolPolicyMessage, toolPolicySourceLabel } from "../tool-policies/tool-policy-messages.js";
 import { ToolPolicySelector } from "../tool-policies/ToolPolicySelector.js";
 
 export function AgentToolPolicyEditor({
@@ -23,6 +24,7 @@ export function AgentToolPolicyEditor({
   policySets,
   toolPresentation,
   disabled = false,
+  catalogState = "ready",
   onChange,
   onPresentationChange,
 }: {
@@ -32,10 +34,11 @@ export function AgentToolPolicyEditor({
   readonly policySets: readonly ToolPolicySet[];
   readonly toolPresentation?: AgentToolPresentation;
   readonly disabled?: boolean;
+  readonly catalogState?: "loading" | "ready" | "error";
   readonly onChange: (value: ToolPolicySelection) => void;
   readonly onPresentationChange: (value: AgentToolPresentation | undefined) => void;
 }): React.JSX.Element {
-  const presentation = toolPresentation ?? catalog?.resolvedPolicy.presentation;
+  const presentation = toolPresentation ?? catalog?.defaultPresentation;
   const selectedOption = catalog?.presentationOptions.find(
     ({ surface }) => surface === presentation?.surface,
   );
@@ -50,12 +53,15 @@ export function AgentToolPolicyEditor({
         value={value}
         policySets={policySets}
         disabled={disabled}
-        inheritedLabel="backend, environment, or account defaults"
+        catalogState={catalogState}
+        inheritedLabel={catalog?.defaultPolicy ? toolPolicySourceLabel(catalog.defaultPolicy.source) : "backend, environment, or account defaults"}
         inheritedPolicy={catalog?.defaultPolicy ?? undefined}
+        hidePreview={Boolean(catalog?.defaultIssue && value.kind === "inherit")}
+        suppressMissingMessage={Boolean(catalog?.resolvedIssue)}
         onChange={onChange}
       />
-      {value.kind === "inherit" && catalog?.defaultUnavailableReason && (
-        <Callout tone="warning">{catalog.defaultUnavailableReason.text}</Callout>
+      {catalog?.resolvedIssue && (
+        <Callout tone="warning">{missingToolPolicyMessage(catalog.resolvedIssue, "agent")}</Callout>
       )}
       {catalog && presentation && (
         <>

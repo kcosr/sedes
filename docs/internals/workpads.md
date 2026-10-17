@@ -14,12 +14,13 @@ Workpads reuse Task scopes: `global`, `project`, and `thread`. A project
 workpad is shared by every location of its project, on every environment.
 Scope organizes content and resolves authority; it is not an independent
 project isolation mechanism. Agent access uses the shared
-[Agent tools](agent-tools.md#project-resources) policy and Access boundary.
-`thread` requires approval outside the calling thread, including global and
-project resources; `environment` reaches a project workpad from the project's
-member environments, those hosting one of its active locations, and asks
-otherwise; `unrestricted` does not require boundary approval. These do not
-override tool enablement or owner checks.
+[Agent tools](agent-tools.md#project-resources) resource scope. Project and
+environment access must both permit the document. When other-environment
+access is disabled, another project's shared workpad is reachable only through
+an active project location on the source environment. Global workpads are
+explicit shared account resources. Lists filter before pagination; direct
+outside-scope requests are denied without a prompt. Tool enablement and owner
+checks still apply.
 
 Authorize historical reads using the workpad's current scope, not the scope
 recorded in an old revision. Moving requires authority for source and

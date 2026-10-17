@@ -12,15 +12,18 @@ beforeEach(() => {
 afterEach(cleanup);
 
 const catalog: AgentToolBootstrapDescriptor = {
+  defaultPresentation: { surface: "native", mode: "progressive" },
   defaultPolicy: {
     enabled: false,
     enabledToolIds: [],
+    source: "default",
     presentation: { surface: "native", mode: "progressive" },
     resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
   },
   resolvedPolicy: {
     enabled: false,
     enabledToolIds: [],
+    source: "default",
     presentation: { surface: "native", mode: "progressive" },
     resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
   },
@@ -62,6 +65,23 @@ const policySet = {
 };
 
 describe("AgentToolPolicyEditor", () => {
+  it("names the inherited source, policy and saved revision", () => {
+    render(<AgentToolPolicyEditor catalog={{ ...catalog, defaultPolicy: {
+      ...catalog.defaultPolicy!, enabled: true, enabledToolIds: policySet.enabledToolIds,
+      source: "backend", policySet: { id: policySet.id, name: policySet.name, revision: policySet.revision },
+    } }} value={{ kind: "inherit" }} policySets={[policySet]} onChange={vi.fn()} onPresentationChange={vi.fn()} />);
+    expect(screen.getByText("Inherited from backend settings · Reviewer · revision 2")).toBeInTheDocument();
+  });
+
+  it("keeps presentation controls available when an inherited set is missing", () => {
+    const issue = { kind: "missing_policy_set" as const, source: "backend" as const, policySetId: policySet.id };
+    render(<AgentToolPolicyEditor catalog={{ ...catalog, defaultPolicy: null, resolvedPolicy: null, defaultIssue: issue, resolvedIssue: issue }}
+      value={{ kind: "inherit" }} policySets={[]} onChange={vi.fn()} onPresentationChange={vi.fn()} />);
+    expect(screen.getByRole("switch", { name: "Use backend presentation" })).toBeEnabled();
+    expect(screen.getByText(/Needs attention: the backend policy set/)).toBeInTheDocument();
+    expect(screen.queryByText("The effective policy is resolved when a thread is created.")).not.toBeInTheDocument();
+  });
+
   it("selects a reusable policy without duplicating its tools in the Agent", () => {
     const onChange = vi.fn();
     render(<AgentToolPolicyEditor id="agent-tools" catalog={catalog}

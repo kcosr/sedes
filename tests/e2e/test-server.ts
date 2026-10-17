@@ -1622,15 +1622,6 @@ type E2eInteractionRecord = {
   readonly controller: AbortController;
 };
 
-type E2eApplicationDecisionRecord = {
-  readonly requestId: number;
-  readonly applicationThreadId: string;
-  state: "pending" | "resolved" | "cancelled" | "failed";
-  decision?: "allow" | "deny";
-  failure?: string;
-  readonly controller: AbortController;
-};
-
 type E2eHeldSteerMaterialization = {
   readonly generation: number;
   readonly nativeThreadId: string;
@@ -4661,6 +4652,7 @@ async function main(): Promise<void> {
   const forks = new ThreadForkService({
     toolPolicies: agentToolPolicyDependencies.agentTools,
     toolPolicyOrigins,
+    principalToolClients: new PrincipalAgentToolClientRepository(database, createPrincipalAgentToolClientEligibility()),
     environmentVariables,
     database,
     targets,
@@ -5231,23 +5223,6 @@ async function main(): Promise<void> {
   const drain = new ApplicationDrainController();
   const longLivedConnections = new LongLivedHttpConnectionRegistry();
   const app = express();
-  const applicationDecisionRecords = new Map<
-    number,
-    E2eApplicationDecisionRecord
-  >();
-  let applicationDecisionOrdinal = 20_000;
-
-  const resetApplicationDecisions = () => {
-    for (const record of applicationDecisionRecords.values()) {
-      if (record.state === "pending" && !record.controller.signal.aborted) {
-        record.controller.abort(
-          new Error("e2e_application_decision_fixture_reset"),
-        );
-      }
-    }
-    applicationDecisionRecords.clear();
-  };
-
   app.post("/__e2e/automations/reconcile", async (_request, response, next) => {
     try {
       await automations.reconcileDue(Date.now());
@@ -5289,113 +5264,6 @@ async function main(): Promise<void> {
     },
   );
 
-  app.post(
-    "/__e2e/interactions/open-application/:threadId",
-    async (request, response) => {
-      const applicationThreadId = request.params.threadId;
-      const binding = bindings.getBinding(scope, applicationThreadId);
-      if (!binding || binding.backendInstanceId !== codexBackend.id) {
-        response.status(409).json({
-          error: "e2e_application_decision_thread_invalid",
-        });
-        return;
-      }
-      let runtime;
-      try {
-        runtime = await runtimes.acquire(scope, applicationThreadId);
-        if (
-          runtime.actor.timeline.runState !== "running" ||
-          !runtime.actor.timeline.activeTurnId
-        ) {
-          runtime.release();
-          response.status(409).json({
-            error: "e2e_application_decision_turn_not_active",
-          });
-          return;
-        }
-      } catch (error) {
-        response.status(409).json({
-          error:
-            error instanceof Error
-              ? error.message
-              : "e2e_application_decision_runtime_unavailable",
-        });
-        return;
-      }
-
-      const requestId = ++applicationDecisionOrdinal;
-      const controller = new AbortController();
-      const record: E2eApplicationDecisionRecord = {
-        requestId,
-        applicationThreadId,
-        state: "pending",
-        controller,
-      };
-      applicationDecisionRecords.set(requestId, record);
-      const generation = runtime.actor.timeline.generation;
-      void interactions
-        .requestApplicationDecision({
-          scope,
-          applicationThreadId,
-          generation,
-          presentation: {
-            sourceLabel: { text: "Local environment" },
-            title: { text: "Allow Open workspace?" },
-            message: {
-              text: "This tool wants to access Review environment for the review workspace.",
-            },
-            code: { text: "workspace.open@3 · write" },
-            destructive: false,
-          },
-          signal: controller.signal,
-        })
-        .then(
-          (decision) => {
-            if (applicationDecisionRecords.get(requestId) !== record) return;
-            record.state = "resolved";
-            record.decision = decision;
-          },
-          (error: unknown) => {
-            if (applicationDecisionRecords.get(requestId) !== record) return;
-            if (controller.signal.aborted) {
-              record.state = "cancelled";
-              return;
-            }
-            record.state = "failed";
-            record.failure =
-              error instanceof Error ? error.message.slice(0, 240) : "unknown";
-          },
-        )
-        .finally(() => runtime.release());
-      response.status(202).json({ requestId });
-    },
-  );
-  app.post(
-    "/__e2e/interactions/cancel-application/:requestId",
-    (request, response) => {
-      const requestId = Number(request.params.requestId);
-      const record = applicationDecisionRecords.get(requestId);
-      if (!record) {
-        response.status(404).json({
-          error: "e2e_application_decision_request_unknown",
-        });
-        return;
-      }
-      record.controller.abort(new Error("e2e_application_decision_cancelled"));
-      response.status(204).end();
-    },
-  );
-  app.get("/__e2e/interactions/application-state", (_request, response) => {
-    response.json({
-      records: [...applicationDecisionRecords.values()].map((record) => ({
-        requestId: record.requestId,
-        applicationThreadId: record.applicationThreadId,
-        state: record.state,
-        ...(record.decision ? { decision: record.decision } : {}),
-        ...(record.failure ? { failure: record.failure } : {}),
-      })),
-    });
-  });
   app.post(
     "/__e2e/interactions/open/:threadId/:scenario",
     (request, response) => {
@@ -5452,7 +5320,6 @@ async function main(): Promise<void> {
   });
   app.post("/__e2e/interactions/reset", (_request, response) => {
     codexRpc.resetInteractions();
-    resetApplicationDecisions();
     response.status(204).end();
   });
   app.post("/__e2e/forks/arm/:sourceThreadId/:mode", (request, response) => {

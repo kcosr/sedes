@@ -41,7 +41,10 @@ export class WorkpadAgentToolService {
         requireExactScopeQuery(context.environmentAuthority, scopeAuthorityRefs(this.input.authorityReader, scope, resolved, grantProjectAccessCaller(context.environmentAuthority), request.scopeMode));
         return this.input.workpads.list(scope, request, {
           environmentIds: context.environmentAuthority.admittedEnvironmentIds,
-          ...(context.environmentAuthority.resourceScope ? {sharedProjects: true, ...(!context.environmentAuthority.resourceScope.allowOtherProjects ? {projectId: context.environmentAuthority.defaults.projectId!} : {})} : {}),
+          projectEnvironmentIds: context.environmentAuthority.callerKind === "thread_agent"
+            ? context.environmentAuthority.resourceScope!.allowOtherEnvironments ? null : [context.environmentAuthority.defaults.environmentId]
+            : resolved.kind === "project" ? null : context.environmentAuthority.admittedEnvironmentIds,
+          ...(context.environmentAuthority.resourceScope && !context.environmentAuthority.resourceScope.allowOtherProjects ? {projectId: context.environmentAuthority.defaults.projectId!} : {}),
           continuationKey: environmentAuthorityContinuationDigest(context.environmentAuthority, tool),
         });
       }

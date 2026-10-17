@@ -141,15 +141,22 @@ export class WorkspaceApplicationService {
       id: request.environmentId,
       environmentId: request.environmentId,
     });
+    if (request.projectId === undefined && environmentAuthority.resourceScope && !environmentAuthority.resourceScope.allowOtherProjects) {
+      throw new CanonicalAgentToolRequestError("permission_denied", "Access to other projects is disabled for this thread. Specify the current projectId when opening a workspace, or enable access to other projects in tool settings.");
+    }
+    const requireProject = (projectId: string) => {
+      const project = this.input.projectAuthority?.resolveProject(scope, projectId);
+      if (!project) throw new DomainError("not_found", "The project was not found.");
+      requireAdmittedResources(environmentAuthority, projectScopeRefs(project, grantProjectAccessCaller(environmentAuthority), "exact"));
+      return project;
+    };
+    if (request.projectId !== undefined) requireProject(request.projectId);
     const validated = await this.#validate(
       scope,
       request,
       environmentAuthority,
       signal,
     );
-    if (request.projectId === undefined && environmentAuthority.resourceScope && !environmentAuthority.resourceScope.allowOtherProjects) {
-      throw new CanonicalAgentToolRequestError("permission_denied", "Access to other projects is disabled for this thread. Specify the current projectId when opening a workspace, or enable access to other projects in tool settings.");
-    }
     if (request.projectId === undefined) {
       // Admission authorized only the environment, not any existing project.
       try {
@@ -164,24 +171,9 @@ export class WorkspaceApplicationService {
         );
       }
     }
-    // Rechecked in the admitting turn against the project's current
-    // membership, and bound to that membership at commit: a location edit
-    // since admission changes the project's refs and fails closed.
-    const project = this.input.projectAuthority?.resolveProject(
-      scope,
-      request.projectId,
-    );
-    if (!project) {
-      throw new DomainError("not_found", "The project was not found.");
-    }
-    requireAdmittedResources(
-      environmentAuthority,
-      projectScopeRefs(
-        project,
-        grantProjectAccessCaller(environmentAuthority),
-        "exact",
-      ),
-    );
+    // Repeat the check after host validation: membership may have changed
+    // while validating the path. Neither check grants a new project.
+    const project = requireProject(request.projectId);
     return this.#admit(scope, validated, {
       project: {
         kind: "existing",

@@ -613,6 +613,9 @@ export class AgentManagementService {
       authorityBinding: {
         sourceEnvironmentId: authority.defaults.environmentId,
         targetEnvironmentIds: authority.admittedEnvironmentIds,
+        projectEnvironmentIds: authority.callerKind === "thread_agent"
+          ? authority.resourceScope!.allowOtherEnvironments ? null : [authority.defaults.environmentId]
+          : taskScope.kind === "project" ? null : authority.admittedEnvironmentIds,
         ...(authority.resourceScope && !authority.resourceScope.allowOtherProjects ? {projectId: authority.defaults.projectId!} : {}),
         policyRevision: authority.policyIdentity.revision,
         continuationAuthorityDigest: environmentAuthorityContinuationDigest(

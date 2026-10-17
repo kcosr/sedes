@@ -156,7 +156,7 @@ export function EnvironmentDetail({ environment, toolPolicyApi, selected, tab, o
         <TabsTrigger value="related">Backends{" "}<CountBadge count={backends.length} /></TabsTrigger>
         <TabsTrigger value="activity">Activity</TabsTrigger>
       </TabsList>
-      <TabsContent value="overview" className="execution-tab">
+      <TabsContent value="overview" forceMount hidden={tab !== "overview"} className="execution-tab">
         <RuntimeHealth controller={controller} status={status}>
           {remote && controller.presentation.recoveryEmphasis ? <Callout tone="warning"
             action={<Button type="button" size="sm" variant="outline" onClick={() => setRecoveryOpen(true)}>Review</Button>}>

@@ -8,7 +8,7 @@ import {
   backendBrandSchema,
   normalizedThreadAgentToolGroupSchema,
 } from "./conversation.js";
-import { toolPolicySelectionSchema } from "./tool-policies.js";
+import { toolPolicySelectionSchema, toolPolicyResolutionIssueSchema, resolvedToolPolicySchema } from "./tool-policies.js";
 import { workspaceIdSchema } from "./domain.js";
 import {
   boundedDisplayTextSchema,
@@ -23,7 +23,6 @@ export const SAVED_AGENT_OVERRIDE_ID_MAX_CHARACTERS = 128;
 export const SAVED_AGENT_OVERRIDE_VALUE_MAX_CHARACTERS = 240;
 export const SAVED_AGENT_OVERRIDES_MAX_BYTES = 32 * 1_024;
 export const SAVED_AGENT_SEDES_TOOLS_MAX_COUNT = 512;
-export const SAVED_AGENT_SEDES_TOOLS_MAX_BYTES = 128 * 1_024;
 export const SAVED_AGENT_PAGE_MAX_ITEMS = 100;
 export const SAVED_AGENT_CURSOR_MAX_CHARACTERS = 2_048;
 
@@ -349,10 +348,16 @@ export type ResolvedAgentToolBootstrapPolicy = z.infer<
   typeof resolvedAgentToolBootstrapPolicySchema
 >;
 
+const describedToolPolicySchema = resolvedToolPolicySchema.extend({
+  presentation: agentToolPresentationSchema,
+});
+
 export const agentToolBootstrapDescriptorSchema = z.strictObject({
-  defaultPolicy: resolvedAgentToolBootstrapPolicySchema.nullable(),
-  defaultUnavailableReason: boundedDisplayTextSchema.optional(),
-  resolvedPolicy: resolvedAgentToolBootstrapPolicySchema,
+  defaultPolicy: describedToolPolicySchema.nullable(),
+  resolvedPolicy: describedToolPolicySchema.nullable(),
+  defaultIssue: toolPolicyResolutionIssueSchema.optional(),
+  resolvedIssue: toolPolicyResolutionIssueSchema.optional(),
+  defaultPresentation: agentToolPresentationSchema,
   groups: z.array(normalizedThreadAgentToolGroupSchema).max(64),
   presentationOptions: agentToolPresentationOptionsSchema,
 });

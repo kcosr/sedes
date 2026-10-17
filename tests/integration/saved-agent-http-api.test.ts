@@ -34,17 +34,20 @@ const agent = {
 const target = { id: "target-1", label: { text: "Local Pi" }, backend };
 const sedesTools = {
   defaultPolicy: {
+    source: "default" as const,
     enabled: false,
     enabledToolIds: [],
     presentation: { surface: "native" as const, mode: "progressive" as const },
     resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
   },
   resolvedPolicy: {
+    source: "default" as const,
     enabled: false,
     enabledToolIds: [],
     presentation: { surface: "native" as const, mode: "progressive" as const },
     resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
   },
+  defaultPresentation: { surface: "native" as const, mode: "progressive" as const },
   groups: [],
   presentationOptions: [
     {
@@ -208,6 +211,24 @@ describe("Saved Agent normalized HTTP API", () => {
       expect(service.get(state.scope,policy.id)).toEqual(policy);
       expect(service.listSelections(foreignScope)).toEqual({items:[]});
     } finally { state.database.close(); }
+  });
+
+  it("returns an actionable missing-level issue and permits a thread override", async () => {
+    const state = savedAgentDatabase();
+    try {
+      const service = new ToolPolicyService(new ToolPolicyRepository(state.database));
+      const policy = service.create(state.scope,{name:"Daily tools",enabledToolIds:["thread.list"],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}});
+      service.updateSelection(state.scope,{target:{kind:"account"},selection:{kind:"policy_set",policySetId:policy.id},expectedRevision:0});
+      service.delete(state.scope,policy.id,0);
+      const owner = fixture({policySets:service,requestScope:state.scope});
+      const {id:targetId} = state.database.prepare("SELECT id FROM agent_connection_profiles LIMIT 1").get() as {id:string};
+      await owner.mutate("post","/api/tool-policies/resolve").send({targetId}).expect(404).expect(({body}) => {
+        expect(body.error).toMatchObject({code:"not_found",retryable:false,toolPolicyIssue:{kind:"missing_policy_set",source:"account",policySetId:policy.id}});
+      });
+      await owner.mutate("post","/api/tool-policies/resolve").send({targetId,threadSelection:{kind:"disabled"}}).expect(200).expect(({body}) => {
+        expect(body).toMatchObject({enabled:false,source:"thread"});
+      });
+    } finally {state.database.close();}
   });
 
   it("validates policy set and default-selection routes under server-derived ownership", async () => {

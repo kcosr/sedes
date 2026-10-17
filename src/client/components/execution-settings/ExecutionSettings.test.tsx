@@ -1150,3 +1150,39 @@ describe("execution configuration administration", () => {
     expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull();
   });
 });
+
+describe("tool defaults across detail tabs", () => {
+  it.each(["environment", "backend"] as const)("preserves an unsaved %s policy through Activity and related tabs", async kind => {
+    const document = configuration();
+    const backend = backendEditors.pi.createBackend("pi-remote");
+    backend.label = "Build Pi";
+    document.backends.push(backend);
+    document.targets.push(backendEditors.pi.createTarget("pi-target", backend.id, remoteId));
+    const api = controls(document, [runtime()]);
+    const policies = {
+      listToolPolicySets: vi.fn(async () => ({ items: [] })),
+      listToolPolicySelections: vi.fn(async () => ({ items: [] })),
+      setToolPolicySelection: vi.fn(),
+    };
+    act(() => navigate(kind === "environment" ? environmentPath(remoteId) : "/settings/backends/pi-remote", { replace: true }));
+    render(<ExecutionSettings controls={api} toolPolicyApi={policies} />);
+    const user = userEvent.setup();
+    const view = await screen.findByRole("region", { name: kind === "environment" ? "Build host details" : "Build Pi details" });
+    const selection = await within(view).findByRole("combobox", { name: "Tool policy" });
+    await user.selectOptions(selection, "disabled");
+    expect(within(view).getByRole("button", { name: "Save default" })).toBeEnabled();
+    await user.click(within(view).getByRole("tab", { name: "Activity" }));
+    expect(selection).not.toBeVisible();
+    await user.click(within(view).getByRole("tab", { name: kind === "environment" ? /Backends/ : /Connections/ }));
+    await user.click(within(view).getByRole("tab", { name: "Overview" }));
+    expect(within(view).getByRole("combobox", { name: "Tool policy" })).toHaveValue("disabled");
+    expect(within(view).getByRole("button", { name: "Save default" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: kind === "environment" ? "Actions for Build host" : "Actions for Build Pi" }));
+    await user.click(await screen.findByRole("menuitem", { name: "View activity" }));
+    expect(within(view).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+    await user.click(within(view).getByRole("tab", { name: "Overview" }));
+    expect(within(view).getByRole("combobox", { name: "Tool policy" })).toHaveValue("disabled");
+    expect(policies.listToolPolicySets).toHaveBeenCalledTimes(1);
+    expect(policies.setToolPolicySelection).not.toHaveBeenCalled();
+  });
+});

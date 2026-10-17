@@ -2227,6 +2227,7 @@ export class ApiClient {
         parsed.data.error.code,
         parsed.data.error.message,
         parsed.data.error.retryable,
+        parsed.data.error.toolPolicyIssue,
       );
     }
     return response.blob();
@@ -2837,6 +2838,7 @@ export class ApiClient {
         parsed.data.error.code,
         parsed.data.error.message,
         parsed.data.error.retryable,
+        parsed.data.error.toolPolicyIssue,
       );
     }
     const parsed = schema.safeParse(body);

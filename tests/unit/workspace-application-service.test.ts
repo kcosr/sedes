@@ -222,6 +222,16 @@ describe("WorkspaceApplicationService", () => {
     );
   });
 
+  it("denies an omitted project before validating any host path", async () => {
+    const current = fixture({ validateWorkspace: vi.fn(async () => { throw new Error("host path must not be probed"); }) });
+    await expect(current.service.openWorkspaceForAgent(scope, {environmentId:"environment-a",path:"/private/unknown"}, {
+      ...agentAuthority, resourceScope:{allowOtherEnvironments:true,allowOtherProjects:false},
+    })).rejects.toMatchObject({code:"permission_denied",message:expect.stringContaining("Specify the current projectId")});
+    expect(current.getEnvironment).not.toHaveBeenCalled();
+    expect(current.validateWorkspace).not.toHaveBeenCalled();
+    expect(current.upsertWorkspace).not.toHaveBeenCalled();
+  });
+
   it("requires agent environment authority before probing a workspace path", async () => {
     const denied = fixture();
     await expect(
@@ -335,6 +345,7 @@ describe("WorkspaceApplicationService", () => {
     await expect(
       unauthorized.service.openWorkspaceForAgent(scope, input, agentAuthority),
     ).rejects.toMatchObject({ code: "permission_denied" });
+    expect(unauthorized.validateWorkspace).not.toHaveBeenCalled();
     expect(unauthorized.upsertWorkspace).not.toHaveBeenCalled();
 
     // A location edit since admission changes the project's refs.

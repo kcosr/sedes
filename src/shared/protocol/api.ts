@@ -1,4 +1,4 @@
-import { toolPolicySelectionSchema } from "./tool-policies.js";
+import { toolPolicySelectionSchema, toolPolicyResolutionIssueSchema } from "./tool-policies.js";
 import { formAnswersSchema } from "./interactions.js";
 import { clientOriginSchema } from "./thread-input.js";
 import {
@@ -140,6 +140,7 @@ export const apiErrorCodeSchema = z.enum([
 ]);
 
 export const apiErrorDetailSchema = z.strictObject({
+  toolPolicyIssue: toolPolicyResolutionIssueSchema.optional(),
   code: apiErrorCodeSchema,
   message: z.string().min(1).max(500),
   retryable: z.boolean(),

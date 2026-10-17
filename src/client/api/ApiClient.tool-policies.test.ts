@@ -19,6 +19,12 @@ describe("ApiClient tool policy pages", () => {
     expect(String(fetch.mock.calls[1]![0])).toContain("/api/tool-policies?cursor=next-page");
   });
 
+  it("preserves structured missing-policy details on API errors", async () => {
+    const issue = {kind:"missing_policy_set",source:"backend",policySetId:policy.id};
+    vi.stubGlobal("fetch",vi.fn().mockResolvedValue(new Response(JSON.stringify({error:{code:"not_found",message:"The backend policy set was not found.",retryable:false,toolPolicyIssue:issue}}),{status:404,headers:{"Content-Type":"application/json"}})));
+    await expect(new ApiClient().getToolPolicySet(policy.id)).rejects.toMatchObject({code:"not_found",details:issue});
+  });
+
   it("rejects a repeated continuation rather than loop forever", async () => {
     vi.stubGlobal("fetch",vi.fn().mockImplementation(async () => response({items:[policy],nextCursor:"same-page"})));
     await expect(new ApiClient().listToolPolicySets()).rejects.toThrow("did not advance");

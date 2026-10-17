@@ -400,7 +400,7 @@ export function AgentToolSettingsDialog({
 
         <DialogBody>
         {policy.origin && <p className="agent-tool-policy-origin">
-          Original policy: {policy.origin.policySet ? `${policy.origin.policySet.name} (revision ${policy.origin.policySet.revision})` : `${policy.origin.source} settings`}.
+          Original policy: {originalPolicyDescription(policy.origin)}.
           {" "}These settings are saved on this thread; later default or policy-set changes do not update it.
         </p>}
         {policy.runtimeAvailability.availability === "unavailable" && (
@@ -677,4 +677,10 @@ export function AgentToolSettingsDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function originalPolicyDescription(origin: NonNullable<AgentToolPolicy["origin"]>): string {
+  const source = origin.source.charAt(0).toUpperCase() + origin.source.slice(1);
+  if (origin.policySet) return `${origin.policySet.name} (revision ${origin.policySet.revision}) · from ${source}`;
+  return origin.source === "default" ? "No policy selected (default)" : `Disabled · from ${source}`;
 }

@@ -36,6 +36,52 @@ function insertAgent(current: ReturnType<typeof fixture>, id: string, policy: un
 }
 
 describe("agent tool access boundary migration", () => {
+  it("preserves dormant tools and presentation for legacy thread-only and disabled Agents", () => {
+    const current = fixture();
+    try {
+      const threadOnlyId = "11111111-1111-4111-8111-111111111111";
+      const disabledId = "22222222-2222-4222-8222-222222222222";
+      insertAgent(current, threadOnlyId, legacyPolicy("allow"));
+      insertAgent(current, disabledId, { ...legacyPolicy("ask"), enabled: false });
+      applyDatabaseMigrations(current.database, backendNormalizedMigrations.filter(migration => migration.version <= 147));
+      const threadOnlyPolicy = {
+        enabled: true, enabledToolIds: ["thread.status", "agent.context"],
+        presentation: { surface: "cli", mode: "individual" }, accessBoundary: "thread",
+      };
+      const disabledPolicy = {
+        enabled: false, enabledToolIds: ["task.list"],
+        presentation: { surface: "native", mode: "individual" }, accessBoundary: "environment",
+      };
+      for (const [id, policy] of [[threadOnlyId, threadOnlyPolicy], [disabledId, disabledPolicy]] as const) {
+        current.database.prepare("UPDATE saved_agents SET sedes_tools_json=? WHERE tenant_id=? AND owner_principal_id=? AND id=?")
+          .run(JSON.stringify(policy), current.scope.tenantId, current.scope.principalId, id);
+      }
+      const thread = current.createThread();
+      current.database.prepare("UPDATE thread_agent_tool_policies SET enabled=1, access_boundary='thread', revision=4 WHERE application_thread_id=?").run(thread.id);
+      current.database.prepare("INSERT INTO thread_agent_tool_policy_entries VALUES (?, ?, ?, 'thread.status')")
+        .run(current.scope.tenantId, current.scope.principalId, thread.id);
+      applyDatabaseMigrations(current.database, backendNormalizedMigrations);
+      const agents = new SavedAgentRepository(current.database);
+      const policies = new ToolPolicyRepository(current.database);
+      for (const [id, legacy, resourceScope] of [
+        [threadOnlyId, threadOnlyPolicy, { allowOtherEnvironments: false, allowOtherProjects: false }],
+        [disabledId, disabledPolicy, { allowOtherEnvironments: false, allowOtherProjects: true }],
+      ] as const) {
+        expect(agents.get(current.scope, id)).toMatchObject({
+          toolPolicySelection: { kind: "disabled" }, toolPresentation: legacy.presentation, revision: 7,
+        });
+        expect(policies.get(current.scope, id)).toMatchObject({ enabledToolIds: legacy.enabledToolIds, resourceScope, revision: 0 });
+        expect(current.database.prepare("SELECT tool_presentation_json AS presentation FROM saved_agents WHERE id=?").get(id))
+          .toEqual({ presentation: JSON.stringify(legacy.presentation) });
+      }
+      expect(current.database.prepare("SELECT enabled,allow_other_environments,allow_other_projects,revision FROM thread_agent_tool_policies WHERE application_thread_id=?").get(thread.id))
+        .toEqual({ enabled: 0, allow_other_environments: 0, allow_other_projects: 0, revision: 4 });
+      expect(current.database.prepare("SELECT tool_id FROM thread_agent_tool_policy_entries WHERE application_thread_id=?").all(thread.id))
+        .toEqual([{ tool_id: "thread.status" }]);
+      expect(current.database.pragma("foreign_key_check")).toEqual([]);
+    } finally { current.database.close(); }
+  });
+
   it("maps both existing boundaries, preserves policy entries and revisions, and defaults new threads to environment", () => {
     const current = fixture();
     try {

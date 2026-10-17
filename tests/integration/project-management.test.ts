@@ -361,11 +361,11 @@ describe("workspace.open restores a location only with its project's authority",
   type CrossHost=ReturnType<typeof crossHostFixture>;
 
   /** A thread agent on the local host, with an explicit project boundary. */
-  function threadAgent(f:CrossHost,allowOtherProjects:boolean) {
+  function threadAgent(f:CrossHost,allowOtherProjects:boolean,allowOtherEnvironments=false) {
     const source={scope:f.scope,sourceThreadId:f.thread.id,sourceWorkspaceId:f.workspace.id,sourceEnvironmentId:f.environment.id,backendKind:"pi" as const};
     const service=new SourceScopedAgentToolService(f.canonical,
       {get:()=>({enabled:true,enabledToolIds:["workspace.open"],presentation:{surface:"cli",mode:"progressive"},
-        resourceScope:{allowOtherEnvironments:false,allowOtherProjects},revision:1})} as unknown as ThreadAgentToolPolicyRepository,
+        resourceScope:{allowOtherEnvironments,allowOtherProjects},revision:1})} as unknown as ThreadAgentToolPolicyRepository,
       f.resolver,{resolveInScope:()=>source}, testAgentToolExecutionAuthority);
     const open=(canonicalPath:string,projectId?:string)=>service.invoke<WorkspaceOpenOutput>({source,adapter:"cli",signal:new AbortController().signal,
       request:{toolId:"workspace.open",schemaVersion:3,requestId:randomUUID(),input:f.input(canonicalPath,projectId)}});
@@ -394,10 +394,11 @@ describe("workspace.open restores a location only with its project's authority",
     await expect(denied.open("/srv/shared",f.local.projectId)).rejects.toMatchObject({toolError:{code:"permission_denied"}});
     expect(f.state(f.local)).toEqual({removed:true,members:[buildServer]});
 
-    // Shared project data has no owning host. Restoring this local location needs
-    // other-project access but does not need access to the remote location.
-    const allowed=threadAgent(f,true);
-    await expect(allowed.open("/srv/shared")).rejects.toMatchObject({toolError:{code:"conflict",message:removedMessage(f.local.projectId)}});
+    const localOnly=threadAgent(f,true);
+    await expect(localOnly.open("/srv/shared")).rejects.toMatchObject({toolError:{code:"conflict",message:removedMessage(f.local.projectId)}});
+    await expect(localOnly.open("/srv/shared",f.local.projectId)).rejects.toMatchObject({toolError:{code:"permission_denied"}});
+    expect(f.state(f.local)).toEqual({removed:true,members:[buildServer]});
+    const allowed=threadAgent(f,true,true);
     await expect(allowed.open("/srv/shared",f.local.projectId)).resolves.toMatchObject({state:"completed",output:{workspaceId:f.local.id,projectId:f.local.projectId}});
     expect(f.state(f.local)).toEqual({removed:false,members:[buildServer,f.environment.id].sort()});
   });
@@ -408,7 +409,8 @@ describe("workspace.open restores a location only with its project's authority",
     await expect(denied.open("/srv/lone")).rejects.toMatchObject({toolError:{code:"permission_denied"}});
     await expect(denied.open("/srv/lone",f.lone.projectId)).rejects.toMatchObject({toolError:{code:"permission_denied"}});
     expect(f.state(f.lone)).toEqual({removed:true,members:[]});
-    await expect(threadAgent(f,true).open("/srv/lone",f.lone.projectId)).resolves.toMatchObject({state:"completed",output:{workspaceId:f.lone.id,projectId:f.lone.projectId}});
+    await expect(threadAgent(f,true).open("/srv/lone",f.lone.projectId)).rejects.toMatchObject({toolError:{code:"permission_denied"}});
+    await expect(threadAgent(f,true,true).open("/srv/lone",f.lone.projectId)).resolves.toMatchObject({state:"completed",output:{workspaceId:f.lone.id,projectId:f.lone.projectId}});
     expect(f.state(f.lone)).toEqual({removed:false,members:[f.environment.id]});
   });
 

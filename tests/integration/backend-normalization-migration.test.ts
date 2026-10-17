@@ -1,3 +1,5 @@
+import { PrincipalAgentToolClientRepository } from "../../src/server/db/repositories/principal-agent-tool-client-repository.js";
+import { createPrincipalAgentToolClientEligibility } from "../../src/server/conversations/thread-agent-tool-policy-dependencies.js";
 import { ThreadToolPolicyOriginRepository } from "../../src/server/db/repositories/thread-tool-policy-origin-repository.js";
 import { threadAgentToolPolicyRepository } from "../support/thread-agent-tool-policy.js";
 import { randomUUID } from "node:crypto";
@@ -2411,6 +2413,7 @@ describe("inactive backend-normalization migration", () => {
         operations: new ConversationOperationRepository(database),
         toolPolicies: threadAgentToolPolicyRepository(database),
         toolPolicyOrigins: new ThreadToolPolicyOriginRepository(database),
+        principalToolClients: new PrincipalAgentToolClientRepository(database, createPrincipalAgentToolClientEligibility()),
         outputArtifacts: { collectGarbage: async () => undefined },
         automations,
         automationExecutionPolicy: { assertCanAutomate: () => undefined },
@@ -2676,6 +2679,7 @@ describe("inactive backend-normalization migration", () => {
         operations: new ConversationOperationRepository(database),
         toolPolicies: threadAgentToolPolicyRepository(database),
         toolPolicyOrigins: new ThreadToolPolicyOriginRepository(database),
+        principalToolClients: new PrincipalAgentToolClientRepository(database, createPrincipalAgentToolClientEligibility()),
         outputArtifacts: { collectGarbage: async () => undefined },
         automations,
         automationExecutionPolicy: { assertCanAutomate: () => undefined },

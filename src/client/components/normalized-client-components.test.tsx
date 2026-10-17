@@ -343,6 +343,7 @@ describe("normalized application components", () => {
     const store = {
       createThread,
       api: {
+        getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "configuration", sedesTools: { defaultPresentation: { surface: "native", mode: "progressive" }, presentationOptions: [{ surface: "native", modes: ["progressive", "individual"] }] } }),
         listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
         resolveToolPolicy: vi.fn().mockResolvedValue({ enabled: false, enabledToolIds: [], source: "default", resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } }),
         listSavedAgents: vi.fn().mockResolvedValue({ items: [] }),

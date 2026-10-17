@@ -157,23 +157,59 @@ describe("Saved Agent canonical tools", () => {
     })).toBe(false);
   });
 
-  it("roundtrips bounded environment entries and rejects duplicate variable names", async () => {
-    const agent = await service().get({tenantId:"tenant-1",principalId:"principal-1"},agentId);
-    const configured = {...agent, environmentVariables:{REVIEW:{kind:"literal" as const,value:"strict"}}};
-    const createAgent = vi.fn(() => configured);
-    const value = service({createAgentForAgentTool:createAgent,get:()=>configured});
+  it("describes a missing inherited policy without losing presentation choices", async () => {
+    const missing = { kind: "missing_policy_set" as const, source: "account" as const, policySetId: agentId };
+    const result = {
+      kind: "configuration" as const,
+      target: { id: targetId, label: { text: "Target" }, backend: { typeId: "pi", label: { text: "Pi" }, brand: "pi" as const } },
+      configuration: { backendTypeId: "pi", fields: [], canonicalOverrides: [] },
+      sedesTools: {
+        defaultPolicy: null,
+        defaultIssue: missing,
+        resolvedPolicy: { enabled: false, enabledToolIds: [], resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
+          presentation: { surface: "cli" as const, mode: "progressive" as const }, source: "thread" as const },
+        defaultPresentation: { surface: "cli" as const, mode: "progressive" as const },
+        groups: [],
+        presentationOptions: [{ surface: "cli" as const, modes: ["progressive" as const] }],
+      },
+    };
+    const options = createSavedAgentOptionsToolDefinition(service({ optionsForAgentTool: async () => result }));
+    const registry = new AgentToolRegistry();
+    registry.register(options);
+    const output = await options.execute({ targetId }, context());
+    expect(output).toEqual(result);
+    expect(registry.validatesOutput(options.id, options.schemaVersion, output)).toBe(true);
+  });
+
+  it("never exposes or accepts Saved Agent environment-variable bindings", async () => {
+    const agent = await service().get({ tenantId: "tenant-1", principalId: "principal-1" }, agentId);
+    const configured = { ...agent, environmentVariables: {
+      PRIVATE: { kind: "literal" as const, value: "private-literal-value" },
+      TOKEN: { kind: "secret" as const, source: { kind: "environment" as const, name: "HOST_TOKEN" } },
+    } };
+    const value = service({ createAgentForAgentTool: () => configured, updateAgentForAgentTool: () => configured, get: () => configured });
     const create = createSavedAgentCreateToolDefinition(value);
+    const update = createSavedAgentUpdateToolDefinition(value);
     const get = createSavedAgentGetToolDefinition(value);
-    const registry = new AgentToolRegistry();registry.register(create);registry.register(get);
-    const request={name:"Review",authoringContext:{workspaceId,targetId},backendOverrides:[],environmentVariables:[{name:"REVIEW",binding:{kind:"literal" as const,value:"strict"}}]};
-    expect(registry.validatesInput(create.id,create.schemaVersion,request)).toBe(true);
-    const output=await create.execute(request,context());
-    expect(createAgent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({environmentVariables:configured.environmentVariables}), expect.anything(), expect.anything());
-    expect(output).toMatchObject({environmentVariables:request.environmentVariables});
-    expect(registry.validatesOutput(create.id,create.schemaVersion,output)).toBe(true);
-    const read=await get.execute({agentId},context());
-    expect(registry.validatesOutput(get.id,get.schemaVersion,read)).toBe(true);
-    await expect(create.execute({...request,environmentVariables:[...request.environmentVariables,{name:"review",binding:{kind:"unset"}}]},context())).rejects.toThrow("unique");
+    const registry = new AgentToolRegistry();
+    registry.register(create);
+    registry.register(update);
+    registry.register(get);
+    const request = { name: "Review", authoringContext: { workspaceId, targetId }, backendOverrides: [] };
+    for (const environmentVariables of [configured.environmentVariables,
+      [{ name: "TOKEN", binding: { kind: "secret", source: { kind: "protected_file", path: "/private/secret" } } }]]) {
+      expect(registry.validatesInput(create.id, create.schemaVersion, { ...request, environmentVariables })).toBe(false);
+      expect(registry.validatesInput(update.id, update.schemaVersion, { agentId, expectedRevision: 0, ...request, environmentVariables })).toBe(false);
+    }
+    const outputs = [await create.execute(request, context()),
+      await update.execute({ agentId, expectedRevision: 0, name: "Updated" }, context()),
+      await get.execute({ agentId }, context())];
+    for (const output of outputs) {
+      expect(output).not.toHaveProperty("environmentVariables");
+      expect(JSON.stringify(output)).not.toContain("private-literal-value");
+      expect(JSON.stringify(output)).not.toContain("HOST_TOKEN");
+      expect(registry.validatesOutput(get.id, get.schemaVersion, output)).toBe(true);
+    }
   });
 
   it("registers six independently exposable contracts with truthful effects", () => {

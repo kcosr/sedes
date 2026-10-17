@@ -759,9 +759,10 @@ export function grantProjectAccessCaller(
 }
 
 /**
- * Shared project records are environment-neutral for thread agents. Tool
- * clients retain their explicit environment grants: exact access needs one
- * member, while subtree authority names every member environment.
+ * A thread with cross-environment access disabled reaches shared project
+ * records through an active location on its own environment. Cross-environment
+ * access removes that location restriction. Tool clients retain their explicit
+ * allowlists: exact access needs one member; subtrees name every member.
  */
 export function projectAccessEnvironmentIds(
   project: EnvironmentAuthorityProjectFact,
@@ -769,7 +770,15 @@ export function projectAccessEnvironmentIds(
   mode: "exact" | "subtree",
 ): readonly string[] {
   const members = [...new Set(project.memberEnvironmentIds)].sort();
-  if (caller.defaults.kind === "thread_agent") return [];
+  if (caller.defaults.kind === "thread_agent") {
+    requireThreadResourceScope(caller);
+    if (caller.resourceScope!.allowOtherEnvironments) return [];
+    // Keep inaccessible references for admission to deny, or query resolution
+    // to filter. A shared project spanning hosts needs only the local member.
+    return members.includes(caller.defaults.environmentId)
+      ? [caller.defaults.environmentId]
+      : members;
+  }
   if (members.length === 0) {
     return deny();
   }
@@ -975,8 +984,11 @@ export function resourceWithinScope(ref: ResolvedEnvironmentResourceRef, caller:
   if (caller.defaults.kind !== "thread_agent") return true;
   if (!policy) return false;
   if (ref.kind === "global" || ref.kind === "saved_agent") return true;
-  if (ref.environmentId && !policy.allowOtherEnvironments && ref.environmentId !== caller.defaults.environmentId) return false;
-  if (!policy.allowOtherProjects && !ref.projectId && ["workspace", "thread", "thread_family", "automation"].includes(ref.kind)) return false;
+  if (!policy.allowOtherEnvironments && (ref.outsideEveryEnvironment ||
+      ref.environmentId && ref.environmentId !== caller.defaults.environmentId)) return false;
+  const projectOwned = ["workspace", "thread", "thread_family", "automation", "project", "project_subtree"].includes(ref.kind) ||
+    ((ref.kind === "task" || ref.kind === "workpad") && (ref.threadId !== undefined || ref.environmentId !== undefined));
+  if (!policy.allowOtherProjects && !ref.projectId && projectOwned) return false;
   if (ref.projectId && !policy.allowOtherProjects && ref.projectId !== caller.defaults.projectId) return false;
   return true;
 }
@@ -986,7 +998,8 @@ export function filterResourceScopeRefs(refs: readonly ResolvedEnvironmentResour
 export function assertResourceScope(refs: readonly ResolvedEnvironmentResourceRef[], caller: ProjectAccessCaller): void {
   const outside = refs.find(ref => !resourceWithinScope(ref, caller));
   if (!outside) return;
-  const environment = outside.environmentId && !caller.resourceScope?.allowOtherEnvironments && outside.environmentId !== caller.defaults.environmentId;
+  const environment = !caller.resourceScope?.allowOtherEnvironments && (outside.outsideEveryEnvironment ||
+    outside.environmentId && outside.environmentId !== caller.defaults.environmentId);
   throw new CanonicalAgentToolRequestError("permission_denied", environment
     ? "Cross-environment access is disabled for this thread. Enable access to other environments in its tool settings to continue."
     : "Access to other projects is disabled for this thread. Enable access to other projects in its tool settings to continue.");

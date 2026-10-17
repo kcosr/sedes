@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
 import { ToolPolicyRepository } from "../../src/server/db/repositories/tool-policy-repository.js";
-import { ToolPolicyService } from "../../src/server/tool-policies/tool-policy-service.js";
+import { ToolPolicyService, ToolPolicyResolutionError } from "../../src/server/tool-policies/tool-policy-service.js";
 import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/server/db/migrate.js";
 import { SavedAgentRepository } from "../../src/server/db/repositories/saved-agent-repository.js";
 import { toolPolicySetListSchema, TOOL_POLICY_MAX_BYTES } from "../../src/shared/protocol/tool-policies.js";
@@ -109,16 +109,39 @@ describe("principal-owned tool policies", () => {
     expect(service.resolvePolicy(scope,{target,agentSelection:choose(review.id),threadSelection:{kind:"disabled"}})).toEqual({source:"thread",enabled:false,enabledToolIds:[],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}});
   });
 
-  it("preserves missing selections after deletion and never silently inherits", () => {
+  it("reports the missing effective level and keeps more-specific overrides usable", () => {
     const {scope,service,target,repository} = fixture();
     const policy = service.create(scope,definition);
-    service.updateSelection(scope,{target:{kind:"account"},selection:{kind:"policy_set",policySetId:policy.id},expectedRevision:0});
+    const selected = {kind:"policy_set" as const,policySetId:policy.id};
+    const account = {kind:"account" as const};
+    const environment = {kind:"environment" as const,executionEnvironmentId:target.executionEnvironmentId};
+    const backend = {kind:"backend" as const,backendId:target.backendId};
+    for (const target of [account,environment,backend]) service.updateSelection(scope,{target,selection:selected,expectedRevision:0});
     const snapshot = service.resolvePolicy(scope,{target});
     service.delete(scope,policy.id,policy.revision);
-    expect(repository.getSelection(scope,{kind:"account"}).selection).toEqual({kind:"policy_set",policySetId:policy.id});
-    expect(() => service.resolvePolicy(scope,{target})).toThrow("not found");
+    const expectMissing = (source:string, input = {}) => {
+      const request = {target,...input};
+      expect(service.inspectPolicy(scope,request)).toEqual({kind:"missing_policy_set",source,policySetId:policy.id});
+      try { service.resolvePolicy(scope,request); throw new Error("resolution should fail"); }
+      catch (error) {
+        expect(error).toBeInstanceOf(ToolPolicyResolutionError);
+        expect(error).toMatchObject({code:"not_found",issue:{kind:"missing_policy_set",source,policySetId:policy.id}});
+      }
+    };
+    expectMissing("thread",{threadSelection:selected});
+    expectMissing("agent",{agentSelection:selected});
+    expectMissing("backend");
+    service.updateSelection(scope,{target:backend,selection:{kind:"inherit"},expectedRevision:1});
+    expectMissing("environment");
+    service.updateSelection(scope,{target:environment,selection:{kind:"inherit"},expectedRevision:1});
+    expectMissing("account");
+    expect(repository.getSelection(scope,account).selection).toEqual(selected);
     expect(snapshot.enabledToolIds).toEqual(["thread.list"]);
-    expect(service.resolvePolicy(scope,{target,threadSelection:{kind:"disabled"}}).enabled).toBe(false);
+    expect(service.inspectPolicy(scope,{target,threadSelection:{kind:"disabled"}})).toMatchObject({kind:"resolved",policy:{enabled:false,source:"thread"}});
+    const replacement = service.create(scope,{...definition,name:"Replacement"});
+    expect(service.inspectPolicy(scope,{target,threadSelection:{kind:"policy_set",policySetId:replacement.id}})).toMatchObject({
+      kind:"resolved",policy:{source:"thread",policySet:{id:replacement.id,name:"Replacement",revision:0}},
+    });
   });
 
   it("denies foreign targets and unknown tools before saving", () => {

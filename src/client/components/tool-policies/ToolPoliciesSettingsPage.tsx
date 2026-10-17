@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus, ShieldCheck } from "lucide-react";
 import { toolPolicyDefinitionSchema, type ToolPolicyDefinition, type ToolPolicySet } from "../../../shared/protocol/tool-policies.js";
-import type { ApiClient } from "../../api/ApiClient.js";
+import { ApiError, type ApiClient } from "../../api/ApiClient.js";
 import { navigate, settingsPath, useRoute } from "../../app/router.js";
 import { useDirtyNavigationGuard } from "../../app/use-dirty-navigation-guard.js";
 import { messageFrom } from "../../stores/ApplicationClientStore.js";
@@ -67,8 +67,9 @@ export function ToolPoliciesSettingsPage({ api }: { readonly api: PolicyApi }): 
       {creating || policyId ? <Button type="button" variant="outline" onClick={() => navigate(listPath)}>Account default</Button> : null}
       {action}
     </>}>
+    {error && (creating || policyId) ? <SettingsBackLink stackOnly href={listPath} label="Tool policies" /> : null}
     {error ? <Callout tone="danger" role="alert" action={<Button type="button" variant="outline" size="sm" onClick={() => setRefresh(value => value + 1)}>Reload</Button>}>{error}</Callout> : null}
-    {loading ? <p role="status">Loading tool policies…</p> : <>
+    {loading ? <p role="status">Loading tool policies…</p> : error ? null : <>
       {!creating && !policyId ? <div data-stack="list"><SettingsSection title="Account default" description="Account → Environment → Backend → Agent → Thread. The nearest explicit selection wins." card>
         <ToolPolicyScopeSettings api={api} target={{ kind: "account" }} policySets={policies} />
       </SettingsSection></div> : null}
@@ -89,7 +90,7 @@ export function ToolPoliciesSettingsPage({ api }: { readonly api: PolicyApi }): 
 }
 
 function definitionOf(policy?: ToolPolicySet): ToolPolicyDefinition {
-  return policy ? { name: policy.name, enabledToolIds: [...policy.enabledToolIds], resourceScope: { ...policy.resourceScope } }
+  return policy ? { name: policy.name, enabledToolIds: [...policy.enabledToolIds].sort(), resourceScope: { ...policy.resourceScope } }
     : { name: "", enabledToolIds: [], resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } };
 }
 
@@ -104,7 +105,8 @@ function PolicyEditor({ api, policy, groups, onSaved, onCreated, onDeleted }: {
   const [draft, setDraft] = useState(() => definitionOf(policy));
   const [base, setBase] = useState(policy);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<{ message: string; conflict: boolean }>();
+  const [deleteConflict, setDeleteConflict] = useState(false);
   const [savedAt, setSavedAt] = useState<number>();
   const [removing, setRemoving] = useState(false);
   const [reloading, setReloading] = useState(false);
@@ -118,13 +120,13 @@ function PolicyEditor({ api, policy, groups, onSaved, onCreated, onDeleted }: {
   const save = async () => {
     setAttempted(true);
     if (!parsed.success || saving) return;
-    setSaving(true); setError("");
+    setSaving(true); setError(undefined);
     try {
       const result = base ? await api.updateToolPolicySet(base.id, { ...parsed.data, expectedRevision: base.revision }) : await api.createToolPolicySet(parsed.data);
       setBase(result.policySet); setDraft(definitionOf(result.policySet)); setSavedAt(Date.now());
       if (base) onSaved(result.policySet);
       else { onCreated(result.policySet); guard.proceed(policyPath(result.policySet.id), { replace: true }); }
-    } catch (cause) { setError(messageFrom(cause)); }
+    } catch (cause) { setError({ message: messageFrom(cause), conflict: cause instanceof ApiError && cause.code === "conflict" }); }
     finally { setSaving(false); }
   };
   return <>
@@ -132,10 +134,10 @@ function PolicyEditor({ api, policy, groups, onSaved, onCreated, onDeleted }: {
       back={<SettingsBackLink stackOnly href={listPath} label="Tool policies" />}
       description={base ? `Revision ${base.revision}. Changes apply to future threads; existing threads keep their snapshot.` : "Start with no tools and access limited to this project and environment."}
       className="tool-policy-editor" onSubmit={() => void save()}
-      errors={error && base ? <Callout tone="danger" role="alert" action={<Button type="button" variant="outline" size="sm" onClick={() => setReloading(true)}>Reload latest</Button>}>{error}</Callout> : undefined}
-      saveBar={<SaveBar dirty={dirty} creating={!base} saving={saving} savedAt={savedAt} error={error || undefined} onCancel={() => {
+      errors={error ? <Callout tone="danger" role="alert" action={error.conflict && base ? <Button type="button" variant="outline" size="sm" onClick={() => setReloading(true)}>Reload latest</Button> : undefined}>{error.message}</Callout> : undefined}
+      saveBar={<SaveBar dirty={dirty} creating={!base} saving={saving} savedAt={savedAt} onCancel={() => {
         if (!base) guard.proceed(listPath, { up: true });
-        else { setDraft(definitionOf(base)); setError(""); setAttempted(false); }
+        else { setDraft(definitionOf(base)); setError(undefined); setAttempted(false); }
       }} saveLabel={base ? "Save changes" : "Create policy set"} saveDisabled={!parsed.success && attempted} />}>
       <SettingsSection title="Details" card><SettingsField label="Name" error={nameError} description="A clear name for this reusable tool list."><Input value={draft.name} maxLength={160} disabled={saving} onChange={event => setDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="For example, Everyday" /></SettingsField></SettingsSection>
       <div className="tool-policy-editor-summary" aria-label="Policy summary">
@@ -150,17 +152,23 @@ function PolicyEditor({ api, policy, groups, onSaved, onCreated, onDeleted }: {
       </SettingsSection>
       <SettingsSection title="Sedes tools" description="Select only the tools this policy should expose. Backend presentation is chosen separately." card>
         <ExactToolSelector groups={groups} selectedToolIds={draft.enabledToolIds} unavailableToolIds={unavailable} disabled={saving} showEffects
-          onChange={enabledToolIds => setDraft(previous => ({ ...previous, enabledToolIds: [...enabledToolIds] }))} />
+          onChange={enabledToolIds => setDraft(previous => ({ ...previous, enabledToolIds: [...enabledToolIds].sort() }))} />
       </SettingsSection>
       {base ? <DangerZone><DangerZoneItem title="Delete policy set" description="Defaults, Agents and templates using this policy will need a replacement before creating threads. Existing threads keep their snapshot."
-        action={<Button type="button" variant="destructive-outline" disabled={saving || dirty} onClick={() => setRemoving(true)}>Delete policy set…</Button>} /></DangerZone> : null}
+        action={<Button type="button" variant="destructive-outline" disabled={saving || dirty} onClick={() => { setDeleteConflict(false); setRemoving(true); }}>Delete policy set…</Button>} /></DangerZone> : null}
     </SettingsEditor>
     <DiscardChangesDialog open={Boolean(guard.pendingRoute)} confirmDisabled={saving} onOpenChange={open => { if (!open) guard.cancel(); }} onDiscard={guard.discardAndContinue} />
     {base ? <DiscardChangesDialog open={reloading} onOpenChange={setReloading} title="Reload the latest policy?" description="Your unsaved edits will be discarded." discardLabel="Discard and reload" onDiscard={async () => {
       const latest = await api.getToolPolicySet(base.id);
-      setBase(latest); setDraft(definitionOf(latest)); onSaved(latest); setError(""); setAttempted(false);
+      setBase(latest); setDraft(definitionOf(latest)); onSaved(latest); setError(undefined); setAttempted(false);
     }} /> : null}
-    {base ? <ConfirmDialog open={removing} onOpenChange={setRemoving} title={`Delete ${base.name}?`} description="Defaults, Agents and templates using this set will show Needs attention and cannot create threads until you select a replacement. Existing threads keep their saved tools."
-      tone="danger" confirmLabel="Delete policy set" onConfirm={async () => { await api.deleteToolPolicySet(base.id, { expectedRevision: base.revision }); onDeleted(base.id); guard.proceed(listPath, { up: true }); }} /> : null}
+    {base ? <ConfirmDialog open={removing} onOpenChange={setRemoving}
+      errorDetail={deleteConflict ? <Button type="button" variant="outline" size="sm" onClick={() => { setRemoving(false); setReloading(true); }}>Reload latest</Button> : undefined} title={`Delete ${base.name}?`} description="Defaults, Agents and templates using this set will show Needs attention and cannot create threads until you select a replacement. Existing threads keep their saved tools."
+      tone="danger" confirmLabel="Delete policy set" onConfirm={async () => {
+        setDeleteConflict(false);
+        try { await api.deleteToolPolicySet(base.id, { expectedRevision: base.revision }); }
+        catch (cause) { setDeleteConflict(cause instanceof ApiError && cause.code === "conflict"); throw cause; }
+        onDeleted(base.id); guard.proceed(listPath, { up: true });
+      }} /> : null}
   </>;
 }

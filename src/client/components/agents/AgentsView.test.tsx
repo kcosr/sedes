@@ -71,6 +71,62 @@ afterEach(() => {
 });
 
 describe("AgentsView", () => {
+  it.each([true, false])("keeps missing-policy options editable and resets saved presentation (explicit: %s)", async (explicitPresentation) => {
+    Object.assign(window.HTMLElement.prototype, { scrollIntoView: vi.fn() });
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    const selection = { kind: "policy_set" as const, policySetId: "33333333-3333-4333-8333-333333333333" };
+    const presentation = explicitPresentation ? { surface: "native" as const, mode: "individual" as const } : undefined;
+    const target = { id: "target-1", label: { text: "Pi" }, backend };
+    const defaultPolicy = { enabled: false, enabledToolIds: [], source: "account", presentation: { surface: "native", mode: "progressive" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } };
+    const getSavedAgentOptions = vi.fn(async (input) => !input.targetId
+      ? { kind: "targets", targets: [target] }
+      : { kind: "configuration", target, configuration: { backendTypeId: "pi", fields: [], canonicalOverrides: [] }, sedesTools: {
+        defaultPresentation: defaultPolicy.presentation, defaultPolicy,
+        resolvedPolicy: input.toolPolicySelection?.kind === "policy_set" ? null : defaultPolicy,
+        ...(input.toolPolicySelection?.kind === "policy_set" ? { resolvedIssue: { kind: "missing_policy_set", source: "agent", policySetId: selection.policySetId } } : {}),
+        presentationOptions: [{ surface: "native", modes: ["progressive", "individual"] }], groups: [],
+      } });
+    const api = {
+      listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
+      getSavedAgent: vi.fn().mockResolvedValue({ ...detail, toolPolicySelection: selection, toolPresentation: presentation }),
+      getSavedAgentOptions,
+      getEnvironmentVariablePreview: vi.fn().mockResolvedValue({ snapshot: { version: 1, layers: { environment: {}, backend: {}, agent: {}, thread: {} } }, revision: { configurationRevision: 0 }, startup: { supported: true } }),
+    } as unknown as ApiClient;
+    navigate(agentPath(agentId), { replace: true });
+    render(<AgentsView store={new AgentClientStore(api)} {...locations} />);
+    const configure = await screen.findByRole("combobox", { name: "Configure using" });
+    await waitFor(() => expect(configure).toBeEnabled());
+    fireEvent.click(configure);
+    fireEvent.click(await screen.findByRole("option", { name: "Pi" }));
+    expect(await screen.findByRole("region", { name: "Agent configuration" })).toBeVisible();
+    expect(await screen.findByText(/Needs attention: the Agent policy set/)).toBeVisible();
+    fireEvent.change(screen.getByRole("combobox", { name: "Tool policy" }), { target: { value: "inherit" } });
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Use backend presentation" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("switch", { name: "Use backend presentation" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(getSavedAgentOptions).toHaveBeenLastCalledWith({
+      workspaceId: workspace.id, targetId: target.id, overrides: [], toolPolicySelection: selection,
+      ...(presentation ? { toolPresentation: presentation } : {}),
+    }, expect.any(AbortSignal)));
+  });
+
+  it("retries policy loading without falsely reporting a deleted reference", async () => {
+    const id = "33333333-3333-4333-8333-333333333333";
+    const listToolPolicySets = vi.fn().mockRejectedValueOnce(new Error("Policy service unavailable")).mockResolvedValue({ items: [{ id, name: "Reviewer" }] });
+    const store = new AgentClientStore({
+      listSavedAgents: vi.fn().mockResolvedValue({ items: [{ ...summary, toolPolicySelection: { kind: "policy_set", policySetId: id } }] }),
+      listToolPolicySets,
+    } as unknown as ApiClient);
+    navigate(agentsPath(), { replace: true });
+    render(<AgentsView store={store} {...locations} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Policy service unavailable");
+    expect(screen.queryByText("Policy needs attention")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry tool policies" }));
+    await waitFor(() => expect(screen.getByRole("link", { name: "Careful reviewer" })).toHaveAccessibleDescription(/Reviewer$/));
+  });
+
   it("replaces a missing policy without requiring an authoring target", async () => {
     const missingSelection = { kind: "policy_set" as const, policySetId: "33333333-3333-4333-8333-333333333333" };
     const updateSavedAgent = vi.fn().mockResolvedValue({ ...detail, revision: 1 });

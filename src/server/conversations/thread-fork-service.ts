@@ -31,6 +31,8 @@ import type { ConversationOperationRepository } from "../db/repositories/convers
 import type { DeliveryInputSnapshotRepository } from "../db/repositories/delivery-input-snapshot-repository.js";
 import type { ThreadAgentToolPolicyRepository } from "../db/repositories/thread-agent-tool-policy-repository.js";
 import type { ThreadToolPolicyOriginRepository } from "../db/repositories/thread-tool-policy-origin-repository.js";
+import type { PrincipalAgentToolClientRepository } from "../db/repositories/principal-agent-tool-client-repository.js";
+import { assertToolPolicyWithinCaller } from "../agent-tools/application/assert-tool-policy-within-caller.js";
 import { DomainError } from "../domain/errors.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type {
@@ -251,6 +253,7 @@ export class ThreadForkService {
       readonly operations: ConversationOperationRepository;
       readonly toolPolicies: ThreadAgentToolPolicyRepository;
       readonly toolPolicyOrigins: ThreadToolPolicyOriginRepository;
+      readonly principalToolClients: PrincipalAgentToolClientRepository;
       readonly deliveryInputSnapshots?: DeliveryInputSnapshotRepository;
       readonly outputArtifacts: Pick<OutputArtifactService, "collectGarbage">;
       readonly automations: AutomationForkBinder;
@@ -283,6 +286,7 @@ export class ThreadForkService {
       input.operations.database !== database ||
       input.toolPolicies.database !== database ||
       input.toolPolicyOrigins.database !== database ||
+      input.principalToolClients.database !== database ||
       (input.deliveryInputSnapshots !== undefined &&
         input.deliveryInputSnapshots.database !== database) ||
       input.automations.database !== database ||
@@ -1380,6 +1384,22 @@ export class ThreadForkService {
             "Only a bound thread can be forked.",
           );
         }
+        const toolPolicy = this.input.toolPolicies.getDurable(input.scope, input.sourceThreadId);
+        if (input.sourceKind === "agent_control" || input.sourceKind === "principal_client") {
+          const authority = input.environmentAuthority;
+          if (!authority ||
+            (input.sourceKind === "agent_control" && (authority.defaults.kind !== "thread_agent" || authority.defaults.threadId !== input.initiatingAgentThreadId)) ||
+            (input.sourceKind === "principal_client" && (authority.defaults.kind !== "principal_client" || authority.policyIdentity.ownerId !== input.initiatingToolClientId))) {
+            throw new DomainError("conflict", "The fork caller authority changed.");
+          }
+          assertToolPolicyWithinCaller({
+            scope: input.scope,
+            authority,
+            requested: toolPolicy,
+            toolPolicies: this.input.toolPolicies,
+            principalToolClients: this.input.principalToolClients,
+          });
+        }
         const checkpoint = (() => {
           if (captured.boundaryKind === "provider_snapshot_at_acceptance") {
             return this.input.checkpoints.createProviderSnapshot(
@@ -1421,7 +1441,6 @@ export class ThreadForkService {
         });
         this.input.environmentVariables?.copy(input.scope, input.sourceThreadId, child.id, input.environmentVariables);
         // Forks retain the exact source snapshot instead of resolving today's defaults.
-        const toolPolicy = this.input.toolPolicies.getDurable(input.scope, input.sourceThreadId);
         this.input.toolPolicies.initialize(input.scope, child.id, {
           enabled: toolPolicy.enabled,
           enabledToolIds: toolPolicy.enabledToolIds,

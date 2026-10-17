@@ -19,6 +19,7 @@ import {
   type ToolPolicySet,
   type ResolvedToolPolicy,
   type AgentToolPresentation,
+  type AgentToolBootstrapDescriptor,
   type UpdateThreadTemplateRequest,
 } from "../../shared/index.js";
 import { navigate, settingsPath } from "../app/router.js";
@@ -64,6 +65,10 @@ import {
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
 import "./new-thread-control.css";
+import { ApiError } from "../api/ApiClient.js";
+import { toolPolicyResolutionIssueSchema, type ToolPolicyResolutionIssue } from "../../shared/protocol/tool-policies.js";
+import { missingToolPolicyMessage, toolPolicySourceLabel } from "./tool-policies/tool-policy-messages.js";
+import { NativeSelect } from "./ui/native-select.js";
 import { ToolPolicySelector } from "./tool-policies/ToolPolicySelector.js";
 
 const AGENT_PAGE_SIZE = 50;
@@ -202,6 +207,11 @@ export function NewThreadControl({
   const [toolPolicyPreview, setToolPolicyPreview] = useState<ResolvedToolPolicy>();
   const [toolPolicyLoading, setToolPolicyLoading] = useState(false);
   const [toolPolicyError, setToolPolicyError] = useState("");
+  const [toolPolicyIssue, setToolPolicyIssue] = useState<ToolPolicyResolutionIssue>();
+  const [policyRefresh, setPolicyRefresh] = useState(0);
+  const [presentationCatalog, setPresentationCatalog] = useState<AgentToolBootstrapDescriptor>();
+  const [presentationLoading, setPresentationLoading] = useState(false);
+  const [presentationError, setPresentationError] = useState("");
   const [variablesRefresh, setVariablesRefresh] = useState(0);
   const variablesTrigger = useRef<HTMLButtonElement>(null);
   const [pending, setPending] = useState(false);
@@ -460,11 +470,12 @@ export function NewThreadControl({
       },
     );
     return () => abort.abort();
-  }, [pickerOpen, store]);
+  }, [pickerOpen, store, policyRefresh]);
 
   useEffect(() => {
     setToolPolicyPreview(undefined);
     setToolPolicyError("");
+    setToolPolicyIssue(undefined);
     if (!pickerOpen || !selectedTarget?.available || !previewAgentAvailable) {
       setToolPolicyLoading(false);
       return;
@@ -483,6 +494,8 @@ export function NewThreadControl({
       },
       (cause: unknown) => {
         if (abort.signal.aborted) return;
+        const issue = cause instanceof ApiError ? toolPolicyResolutionIssueSchema.safeParse(cause.details) : undefined;
+        setToolPolicyIssue(issue?.success ? issue.data : undefined);
         setToolPolicyError(messageFrom(cause));
         setToolPolicyLoading(false);
       },
@@ -496,13 +509,56 @@ export function NewThreadControl({
     previewAgentAvailable,
     toolPolicySelection,
     store,
+    policyRefresh,
   ]);
-  const toolPolicySourceLabel = toolPolicyPreview
-    ? `${toolPolicyPreview.source === "default" ? "default settings" : `${toolPolicyPreview.source} settings`}${toolPolicyPreview.policySet ? ` · ${toolPolicyPreview.policySet.name}` : ""}`
+
+  useEffect(() => {
+    setPresentationCatalog(undefined);
+    setPresentationError("");
+    if (!pickerOpen || !selectedTarget?.available || !selectedWorkspace?.available) {
+      setPresentationLoading(false);
+      return;
+    }
+    const abort = new AbortController();
+    setPresentationLoading(true);
+    // Presentation capabilities are independent of the selected tool policy.
+    void store.api.getSavedAgentOptions({
+      workspaceId: selectedWorkspace.id,
+      targetId: selectedTarget.id,
+      toolPolicySelection: { kind: "disabled" },
+    }, abort.signal).then((result) => {
+      if (abort.signal.aborted) return;
+      if (result.kind === "configuration") setPresentationCatalog(result.sedesTools);
+      else setPresentationError("Select a target to review its tool presentation.");
+      setPresentationLoading(false);
+    }, (cause: unknown) => {
+      if (abort.signal.aborted) return;
+      setPresentationError(messageFrom(cause));
+      setPresentationLoading(false);
+    });
+    return () => abort.abort();
+  }, [pickerOpen, selectedTarget?.id, selectedTarget?.available, selectedWorkspace?.id, selectedWorkspace?.available, store, policyRefresh]);
+
+  const policySource = toolPolicyPreview
+    ? toolPolicySourceLabel(toolPolicyPreview.source)
     : "Agent, backend, environment, or account defaults";
+  const presentations = presentationCatalog?.presentationOptions.flatMap(({ surface, modes }) =>
+    modes.map((mode) => ({ surface, mode })),
+  ) ?? [];
+  const presentationIsAvailable = !toolPresentation || presentations.some(({ surface, mode }) =>
+    surface === toolPresentation.surface && mode === toolPresentation.mode,
+  );
+  const inheritedPresentation = selectedResolvedTarget?.sedesTools.resolvedPolicy?.presentation
+    ?? presentationCatalog?.defaultPresentation;
+  const refreshToolPolicies = () => {
+    setToolPolicyPreview(undefined);
+    setToolPolicyLoading(true);
+    setPolicyRefresh((current) => current + 1);
+  };
 
   const canCreate = Boolean(
     toolPolicyPreview && !toolPolicyLoading && !policiesError && !policiesLoading &&
+    presentationCatalog && !presentationLoading && !presentationError && presentationIsAvailable &&
     variablesPreview.result &&
     !pendingLocation &&
     !scopeConflict &&
@@ -533,6 +589,8 @@ export function NewThreadControl({
   const templateNeedsAttention = Boolean(
     selectedTemplate &&
     (templateAgentMissing ||
+      Boolean(toolPolicyIssue) ||
+      (Boolean(presentationCatalog) && !presentationIsAvailable) ||
       !selectedWorkspace?.available ||
       !selectedTarget?.available ||
       (selection.kind === "saved_agent" &&
@@ -606,6 +664,11 @@ export function NewThreadControl({
   }, []);
 
   const resetPanel = () => {
+    setToolPolicyIssue(undefined);
+    setToolPolicyError("");
+    setToolPolicyPreview(undefined);
+    setPresentationCatalog(undefined);
+    setPresentationError("");
     setVariablesOpen(false);
     setEnvironmentVariables({});
     setToolPolicySelection({ kind: "inherit" });
@@ -869,7 +932,10 @@ export function NewThreadControl({
         setExecutionWorkspace(undefined);
       }
     } catch (cause) {
-      if (!controller.signal.aborted) setError(messageFrom(cause));
+      if (!controller.signal.aborted) {
+        const issue = cause instanceof ApiError ? toolPolicyResolutionIssueSchema.safeParse(cause.details) : undefined;
+        if (!issue?.success) setError(messageFrom(cause));
+      }
     } finally {
       if (resolutionRequest.current === controller) {
         setResolutionLoading(false);
@@ -897,6 +963,7 @@ export function NewThreadControl({
     selectedTarget?.available,
     toolPolicySelection,
     toolPresentation,
+    policyRefresh,
   ]);
 
   const closePicker = (restoreFocus: boolean) => {
@@ -1151,8 +1218,10 @@ export function NewThreadControl({
       resetPanel();
       onCreated(result.threadId);
     } catch (cause) {
-      const creationError = messageFrom(cause);
+      const issue = cause instanceof ApiError ? toolPolicyResolutionIssueSchema.safeParse(cause.details) : undefined;
+      const creationError = issue?.success ? "" : messageFrom(cause);
       setError(creationError);
+      refreshToolPolicies();
       if (selection.kind === "saved_agent") {
         const agentId = selection.agentId;
         void loadAgents({
@@ -1816,7 +1885,7 @@ export function NewThreadControl({
               </div>
             )}
             {(agentLoadError ||
-              (!templateNeedsAttention && resolutionMessage)) &&
+              (!toolPolicyError && presentationIsAvailable && resolutionMessage)) &&
               (resolution?.candidates.length === 0 || agentLoadError ? (
                 <DialogAlert tone="danger" aria-live="assertive">
                   {agentLoadError || resolutionMessage}
@@ -1832,18 +1901,40 @@ export function NewThreadControl({
                 value={toolPolicySelection}
                 onChange={setToolPolicySelection}
                 policySets={policySets}
-                disabled={pending || policiesLoading || Boolean(policiesError)}
+                disabled={pending}
+                catalogState={policiesLoading ? "loading" : policiesError ? "error" : "ready"}
                 label="Sedes tool policy"
-                inheritedLabel={toolPolicySourceLabel}
+                inheritedLabel={policySource}
                 inheritedPolicy={toolPolicyPreview}
+                hidePreview={toolPolicyLoading || Boolean(toolPolicyError)}
+                suppressMissingMessage={Boolean(toolPolicyIssue)}
                 description="The nearest selected policy replaces the whole list. New threads keep a snapshot of these settings."
               />
               {toolPolicyLoading && (
                 <p className="new-thread-field-note" role="status">Resolving tool policy…</p>
               )}
               {(policiesError || toolPolicyError) && (
-                <DialogAlert tone="danger">{policiesError || toolPolicyError}</DialogAlert>
+                <DialogAlert tone="danger" action={
+                  <Button type="button" size="sm" variant="outline" onClick={refreshToolPolicies}>Retry tool policies</Button>
+                }>{policiesError || (toolPolicyIssue ? missingToolPolicyMessage(toolPolicyIssue, "thread") : toolPolicyError)}</DialogAlert>
               )}
+              <Field label="Tool presentation" id={`${pickerId}-tool-presentation`}
+                description={inheritedPresentation ? `Inherited presentation: ${presentationLabel(inheritedPresentation)}.` : "Choose how this target exposes Sedes tools."}>
+                <NativeSelect value={toolPresentation ? presentationKey(toolPresentation) : "inherit"}
+                  disabled={pending || presentationLoading || !presentationCatalog}
+                  onChange={(event) => {
+                    const next = presentations.find((item) => presentationKey(item) === event.target.value);
+                    setToolPresentation(next);
+                  }}>
+                  <option value="inherit">Inherit</option>
+                  {!presentationIsAvailable && toolPresentation && <option value={presentationKey(toolPresentation)} disabled>{presentationLabel(toolPresentation)} (unavailable)</option>}
+                  {presentations.map((item) => <option key={presentationKey(item)} value={presentationKey(item)}>{presentationLabel(item)}</option>)}
+                </NativeSelect>
+              </Field>
+              {!presentationIsAvailable && !presentationLoading && <DialogAlert tone="danger">This tool presentation is unavailable on the selected target. Choose Inherit or a supported presentation.</DialogAlert>}
+              {presentationError && <DialogAlert tone="danger" action={
+                <Button type="button" size="sm" variant="outline" onClick={refreshToolPolicies}>Retry tool presentation</Button>
+              }>{presentationError}</DialogAlert>}
             </section>
             <section
               className="new-thread-variables"
@@ -1883,8 +1974,11 @@ export function NewThreadControl({
                     </strong>
                     {templateNeedsAttention && (
                       <small>
-                        Choose an available Project, Location, Target, and
-                        saved Agent, then update the template.
+                        {toolPolicyIssue
+                          ? "Review the Sedes tool policy above, then update the template."
+                          : !presentationIsAvailable
+                            ? "Choose a supported tool presentation, then update the template."
+                            : "Choose an available Project, Location, Target, and saved Agent, then update the template."}
                       </small>
                     )}
                   </div>
@@ -2093,4 +2187,12 @@ export function NewThreadControl({
       )}
     </Dialog>
   );
+}
+
+function presentationKey(presentation: AgentToolPresentation): string {
+  return `${presentation.surface}:${presentation.mode}`;
+}
+
+function presentationLabel(presentation: AgentToolPresentation): string {
+  return `${presentation.surface === "native" ? "Native tools" : "Sedes CLI"} · ${presentation.mode === "progressive" ? "Progressive discovery" : "Individual operations"}`;
 }
