@@ -384,6 +384,14 @@ clears the captured draft through the normal composer path; later typing and
 ordinary Send recovery follow the same rules as typed input. No saved-dictation
 Send or Resume action remains for accepted speech.
 
+Queued playback waits while that captured composer submission saves and sends.
+After Sedes accepts the message, older automatic replies on the same thread
+fail their normal freshness check and are skipped. Navigation or backgrounding
+does not release this wait. A failed send or speech retained only as a draft
+allows playback to continue, with recovery owned by the composer. If submission
+cannot be confirmed within 90 seconds, voice reports the uncertainty and lets
+playback continue through its normal checks; check Chat for the message's status.
+
 Pending uploads or another temporary Send restriction leave the speech in the
 composer with a notice to press **Send** when ready. Oversized input, a draft
 conflict, or an in-progress draft mutation refuses the handoff before changing

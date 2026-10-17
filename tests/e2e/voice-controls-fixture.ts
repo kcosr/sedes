@@ -149,7 +149,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           header("NativeVoice", ["setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget", "releaseRetainedVoiceTarget",
             "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "stopPlayback", "skipCurrentPlayback", "recordDuringPlayback", "retryRecordingRecognition",
             "sendRecoveredRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
-            "refreshSpeechCatalog", "openSpeechCredentialDialog", "speakReply", "claimComposerHandoff", "completeComposerHandoff"], true),
+            "refreshSpeechCatalog", "openSpeechCredentialDialog", "speakReply", "claimComposerHandoff", "completeComposerHandoff", "settleComposerSubmission"], true),
         ],
         nativeCallback(plugin: string, method: string, args: { eventName: string }, callback: (value: unknown) => void) {
           if (method !== "addListener") throw new Error(`Unexpected callback: ${plugin}.${method}`);
@@ -183,12 +183,16 @@ export async function installVoiceFixture(page: Page): Promise<void> {
               composerHandoff.claimed = true;
             } else {
               if (!composerHandoff.claimed) throw new Error("The voice handoff is not claimed.");
+              if (typeof args.submissionPending !== "boolean") throw new Error("The composer submission disposition is required.");
               const accepted = args.outcome === "accepted";
               fixture.publish({ active: null, phase: accepted ? "idle" : "recordingRecovery", actions: initial.actions,
                 recordingRecovery: accepted ? null : { ...current.recordingRecovery!, canSend: true,
                   reason: typeof args.message === "string" ? args.message : current.recordingRecovery!.reason } });
               composerHandoff = undefined;
             }
+          } else if (method === "settleComposerSubmission") {
+            if (typeof args.handoffId !== "string" || typeof args.expectedConnectionGeneration !== "number")
+              throw new Error("The composer submission identity is required.");
           } else if (method === "updateSettings") {
             fixture.publish({ settingsRevision: current.settingsRevision + 1, settings: { ...current.settings, ...args.patch as object } });
           } else if (method === "setNextRecordingTarget") {

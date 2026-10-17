@@ -105,7 +105,9 @@ export interface NativeVoicePlugin {
   updateSettings(input: NativeVoiceCommandContext & { expectedRevision: number; patch: Partial<NativeVoiceSettings> }): Promise<NativeVoiceState>;
   setForegroundContext(input: NativeVoiceCommandContext & { visible: boolean; threadId?: string | null; threadTitle?: string | null; composerMode?: "queue" | "steer"; composerAvailable: boolean }): Promise<NativeVoiceState>;
   claimComposerHandoff(input: NativeVoiceCommandContext & { handoffId: string }): Promise<NativeVoiceState>;
-  completeComposerHandoff(input: NativeVoiceCommandContext & { handoffId: string; outcome: "accepted" | "declined"; message?: string }): Promise<NativeVoiceState>;
+  completeComposerHandoff(input: NativeVoiceCommandContext & { handoffId: string; outcome: "accepted" | "declined"; submissionPending: boolean; message?: string }): Promise<NativeVoiceState>;
+  /** Releases presentation after the captured composer send attempt settles, regardless of its outcome. */
+  settleComposerSubmission(input: NativeVoiceCommandContext & { handoffId: string }): Promise<NativeVoiceState>;
   startManualListen(input: NativeVoiceCommandContext & { threadId?: string; threadTitle?: string }): Promise<NativeVoiceState>;
   setNextRecordingTarget(input: NativeVoiceCommandContext & { threadId: string; threadTitle?: string }): Promise<NativeVoiceState>;
   releaseRetainedVoiceTarget(input: NativeVoiceCommandContext & { expectedRetainedRevision: number }): Promise<NativeVoiceState>;

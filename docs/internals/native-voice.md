@@ -716,13 +716,15 @@ carrying profile, origin, authenticated identity, connection generation, handoff
 and recording IDs, target thread, text, and the frozen delivery mode. The client
 claims that exact offer with `claimComposerHandoff` before adopting it; native
 rechecks its binding, generation, visibility, destination, and active ownership.
-`completeComposerHandoff` reports acceptance or refusal. A claimed in-memory
-reservation hides its raw recording from native recovery and admission repair.
+`completeComposerHandoff` reports acceptance or refusal and requires
+`submissionPending`, which can be true only for accepted ownership. A claimed
+in-memory reservation hides its raw recording from native recovery and admission repair.
 It survives visibility changes, Stop, Off, service detachment, and a connection
 or identity change until completion. Only its handoff ID and original expected
 connection generation can settle that reservation's captured binding and
-recording. Settlement cannot mutate the current connection or a newer recording;
-all other bridge commands retain the current-generation fence.
+recording. Ownership and submission settlement use that same original identity;
+neither can mutate a replacement connection or a newer recording. Other bridge
+commands retain the current-generation fence.
 
 Acceptance retires only the original recording. Refusal restores its existing
 raw recovery if the original binding is active, or leaves the adopted recording
@@ -730,6 +732,34 @@ for recovery on that binding's next reconnect, without reporting an error on
 another binding. If no client claims the offer within 15 seconds, native retains
 the recording for explicit recovery; an offered handoff never falls back to a
 separate native submission.
+
+Claiming also establishes a separate, in-memory presentation hold, keyed by the
+original binding, connection generation, and handoff ID. It blocks queue drain
+and all deferred agent client actions, including navigation-only thread switches.
+The hold survives Stop ending the active recording after claim. This lets a
+superseded turn's navigation be discarded with its stale reply. Accepting
+ownership immediately retires the native recording. When `submissionPending`
+is true, the hold remains
+until `settleComposerSubmission` reports that the captured save/send attempt has
+settled; this command does not assert successful admission. The client observes
+the attempt independently of the mounted composer and sends settlement after
+ownership completion, including when a completion acknowledgment was lost.
+Settlement also retires the original claimed recording if the ownership command
+itself never arrived; it is sent only after the composer has adopted the text.
+Draft-only acceptance and refusal release the hold immediately.
+
+Normal settlement releases playback through its existing input-revision check.
+Server admission is sufficient; provider execution and transcript materialization
+are not prerequisites. Save/send failures leave recovery with the composer and
+never restore a native sender for adopted text. Navigation, backgrounding,
+ordinary interaction Stop, and service detachment preserve pending holds. Off
+and connection changes clear presentation holds with their queues. Late or
+duplicate settlements cannot release a newer hold, stop a newer recording, or
+change another connection. Holds expire 90 seconds after claim, reporting
+`composer_submission_uncertain` only in their original current connection and
+releasing presentation without inferring admission or rejection. This preserves
+the existing advisory playback policy during uncertain delivery and does not
+eliminate the documented freshness-read race.
 
 After awaiting the claim, the client rechecks the latest foreground view,
 recording identity, and registered composer before capturing content, with no
