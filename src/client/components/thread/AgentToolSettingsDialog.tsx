@@ -299,7 +299,12 @@ export function AgentToolSettingsDialog({
     if (open && !applyingPolicy && restoreApplyFocus.current) {
       restoreApplyFocus.current = false;
       if (document.activeElement === document.body || document.activeElement === dialogRef.current || document.activeElement === applyButtonRef.current) {
-        applyButtonRef.current?.focus();
+        const target = !applyButtonRef.current?.disabled
+          ? applyButtonRef.current
+          : !policySetSelectRef.current?.disabled
+            ? policySetSelectRef.current
+            : dialogRef.current;
+        target?.focus();
       }
     }
   }, [open, applyingPolicy]);

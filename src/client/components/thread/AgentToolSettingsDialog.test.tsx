@@ -499,7 +499,12 @@ describe("AgentToolSettingsDialog", () => {
       },
     });
     fireEvent.click(screen.getByRole("checkbox", { name: "List workspaces" }));
-    await applyPolicy(selected);
+    await screen.findByRole("option", { name: selected.name });
+    fireEvent.change(screen.getByRole("combobox", { name: "Policy set" }), { target: { value: selected.id } });
+    const apply = screen.getByRole("button", { name: "Apply" });
+    apply.focus();
+    fireEvent.click(apply);
+    act(() => apply.blur());
     rerender(<AgentToolSettingsDialog
       store={store} snapshot={policySnapshot({ revision: 5, presentationSurface: "cli", contextEnabled: false, statusEnabled: true })}
       authoritative disabled={false} open onOpenChange={onOpenChange}
@@ -507,6 +512,7 @@ describe("AgentToolSettingsDialog", () => {
     await act(async () => request.resolve(selected));
     const loadError = await screen.findByText(/changed while the policy loaded/);
     expect(loadError).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Policy set" })).toHaveFocus());
     expect(loadError).toHaveTextContent("Close and reopen Agent tools to load the latest settings before applying a policy set.");
     const staleWarning = await screen.findByText(/changed in another client/i);
     expect(staleWarning).toBeVisible();
@@ -515,7 +521,6 @@ describe("AgentToolSettingsDialog", () => {
     expect(screen.getByRole("checkbox", { name: "List workspaces" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "Allow other environments" })).not.toBeChecked();
     expect(screen.queryByText(/Loaded Focused review|already matches/i)).not.toBeInTheDocument();
-    const apply = screen.getByRole("button", { name: "Apply" });
     expect(apply).toBeDisabled();
     expect(getToolPolicySet).toHaveBeenCalledOnce();
     fireEvent.click(apply);
@@ -538,7 +543,12 @@ describe("AgentToolSettingsDialog", () => {
         getToolPolicySet: vi.fn().mockReturnValue(request.promise),
       },
     });
-    await applyPolicy(selected);
+    await screen.findByRole("option", { name: selected.name });
+    fireEvent.change(screen.getByRole("combobox", { name: "Policy set" }), { target: { value: selected.id } });
+    const apply = screen.getByRole("button", { name: "Apply" });
+    apply.focus();
+    fireEvent.click(apply);
+    act(() => apply.blur());
     rerender(<AgentToolSettingsDialog
       store={store} snapshot={policySnapshot({
         revision: 5, presentationSurface: "cli", presentationMode: "individual",
@@ -549,6 +559,7 @@ describe("AgentToolSettingsDialog", () => {
     />);
     await act(async () => request.resolve(selected));
     expect(await screen.findByText(/changed while the policy loaded/)).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Policy set" })).toHaveFocus());
     expect(screen.queryByText(/already matches|Loaded Focused review/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/changed in another client/i)).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Agent context" })).not.toBeChecked();
