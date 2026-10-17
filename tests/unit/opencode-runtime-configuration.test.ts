@@ -1,3 +1,4 @@
+import { OPENCODE_RELEASE } from "../../src/server/backends/opencode/opencode-release.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -7,7 +8,7 @@ import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execu
 
 const scope = { tenantId: "tenant", principalId: "principal" }, executionEnvironmentId = "host";
 const configuration: OpenCodeRuntimeConfiguration = {
-  instance: { id: "backend", tenantId: scope.tenantId, kind: "opencode", label: "OpenCode", enabled: true, configurationRevision: 1, protocolRelease: "2.0.18" },
+  instance: { id: "backend", tenantId: scope.tenantId, kind: "opencode", label: "OpenCode", enabled: true, configurationRevision: 1, protocolRelease: OPENCODE_RELEASE },
   connections: [{ id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "opencode_http", backendInstanceId: "backend", executionEnvironmentId, label: "OpenCode", enabled: true, configurationRevision: 1 }],
   nativeStorePath: "/host/opencode.db", configDirectory: "/host/config",
   connection: { ownership: "owned", channel: { type: "process_stdio", executablePath: "/host/bin/opencode2", workingDirectory: "/host/workspace" } },

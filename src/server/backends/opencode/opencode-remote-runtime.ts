@@ -15,7 +15,7 @@ import { decodeOpenCodeNativeFailure, OpenCodeNativeMutationDeliveryError, openC
   parseOpenCodeReadInput, parseOpenCodeReadOutput, parseOpenCodeMutationInput, parseOpenCodeMutationControl,
   parseOpenCodeMutationOutput, parseOpenCodeObservationBoundary, parseOpenCodeObservationRecords,
   parseAdmission, parseCompaction, parseMutationSession } from "./opencode-native-codecs.js";
-import { OpenCodeRuntimeError } from "./opencode-release.js";
+import { assessOpenCodeRuntimeVersion, haveSameOpenCodeRuntimeVersionPrecedence, OpenCodeRuntimeError, type VerifiedOpenCodeRuntimeVersion } from "./opencode-release.js";
 import { openCodeToolInvokeOperation } from "./opencode-tool-relay-wire.js";
 import { openCodeRuntimeExecuteOperation, openCodeRuntimeControlOperation, openCodeRuntimeCommandLane,
   openCodeRuntimeResponseSchema, openCodeRuntimeInfoSchema, openCodeRuntimeTargetSchema,
@@ -48,6 +48,7 @@ export class OpenCodeRemoteRuntime {
   #lifetime = new AbortController();
   readonly #ports = new Set<{ release(): Promise<void> }>();
   constructor(readonly input: { readonly configuration: OpenCodeRuntimeConfiguration; readonly provider: SidecarRuntimeProvider;
+    readonly onRuntimeVersionAssessment?: (assessment: VerifiedOpenCodeRuntimeVersion | undefined) => void;
     readonly acquireRecovery: (signal?: AbortSignal) => Promise<SidecarRuntimeLease> }) {}
   get runtimeId(): string | undefined { return this.#info?.runtimeId; }
   snapshot(): OpenCodeRuntimeSnapshot {
@@ -146,6 +147,7 @@ export class OpenCodeRemoteRuntime {
           info.nativeNamespaceKey !== openCodeRuntimeNamespaceKey(this.input.configuration.connections[0]!.executionEnvironmentId, store) ||
           this.#nativeNamespaceKey !== undefined && info.nativeNamespaceKey !== this.#nativeNamespaceKey ||
           this.#info && (this.#info.runtimeId !== info.runtimeId || this.#info.snapshot.generation !== info.snapshot.generation ||
+            !haveSameOpenCodeRuntimeVersionPrecedence(this.#info.snapshot.runtimeVersion ?? "", info.snapshot.runtimeVersion ?? "") ||
             configurationFingerprint(this.#info.snapshot.identity ?? null) !== configurationFingerprint(info.snapshot.identity ?? null) ||
             this.#serviceIncarnation !== attachment.serviceIncarnation) ||
           info.snapshot.state !== "ready" || !info.snapshot.generation || !info.snapshot.identity) throw unavailable();
@@ -154,6 +156,7 @@ export class OpenCodeRemoteRuntime {
       this.#lifetime = new AbortController(); this.#info = info; this.#attachment = attachment;
       this.#recovery = recovery; this.#serviceIncarnation = attachment.serviceIncarnation;
       this.#invocationRecovery = existingOnly;
+      this.input.onRuntimeVersionAssessment?.(assessOpenCodeRuntimeVersion(info.snapshot.runtimeVersion));
       void attachment.closed.then(() => this.#disconnected(attachment), () => this.#disconnected(attachment));
     } catch (error) { attachment.release(); throw error; }
   }
@@ -175,8 +178,16 @@ export class OpenCodeRemoteRuntime {
           fresh.channel !== retained.attachment.channel && fresh.controllerEpoch === retained.attachment.controllerEpoch) throw unavailable();
       const info = openCodeRuntimeInfoSchema.parse(await call(fresh, { action: recovery ? "lookup_recovery" : "lookup", configuration: this.input.configuration }, signal));
       signal.throwIfAborted();
+      if (info.runtimeId === retained.info.runtimeId && info.snapshot.generation === retained.info.snapshot.generation &&
+          !haveSameOpenCodeRuntimeVersionPrecedence(info.snapshot.runtimeVersion ?? "", retained.info.snapshot.runtimeVersion ?? "")) {
+        // New evidence contradicts the retained native generation. It cannot
+        // leave that generation's prior version assessment active.
+        this.#disconnected(retained.attachment);
+        throw unavailable();
+      }
       if (this.#closed || info.nativeNamespaceKey !== this.nativeNamespaceKey || info.runtimeId !== retained.info.runtimeId ||
           info.snapshot.state !== "ready" || info.snapshot.generation !== retained.info.snapshot.generation ||
+          !haveSameOpenCodeRuntimeVersionPrecedence(info.snapshot.runtimeVersion ?? "", retained.info.snapshot.runtimeVersion ?? "") ||
           configurationFingerprint(info.snapshot.identity ?? null) !== configurationFingerprint(retained.info.snapshot.identity ?? null) ||
           this.#attachment !== undefined && this.#attachment !== retained.attachment) throw unavailable();
       if (fresh.channel !== retained.attachment.channel || fresh.controllerEpoch !== retained.attachment.controllerEpoch) {
@@ -188,6 +199,7 @@ export class OpenCodeRemoteRuntime {
         for (const port of [...this.#ports]) void port.release();
         this.#lifetime = new AbortController(); this.#attachment = fresh; this.#info = info;
         this.#serviceIncarnation = fresh.serviceIncarnation; adopted = true;
+        this.input.onRuntimeVersionAssessment?.(assessOpenCodeRuntimeVersion(info.snapshot.runtimeVersion));
         void fresh.closed.then(() => this.#disconnected(fresh), () => this.#disconnected(fresh));
         retained.attachment.release();
       }
@@ -198,6 +210,7 @@ export class OpenCodeRemoteRuntime {
     if (this.#attachment !== attachment) return;
     this.#attachment = undefined; this.#lifetime.abort();
     if (this.#info) this.#info = { ...this.#info, snapshot: { ...this.#info.snapshot, state: "disconnected" } };
+    this.input.onRuntimeVersionAssessment?.(undefined);
     attachment.release();
   }
   async health(): Promise<{ readonly available: boolean; readonly checkedAt: string }> {
@@ -206,9 +219,17 @@ export class OpenCodeRemoteRuntime {
   }
   async assertCurrent(signal?: AbortSignal): Promise<void> {
     const { attachment, info } = this.#ready();
-    const result = await call(attachment, { action: "assert_current", runtimeId: info.runtimeId, nativeGeneration: info.snapshot.generation! }, signal);
-    openCodeRuntimeSuccessSchema.parse(result);
-    if (this.#attachment !== attachment) throw unavailable();
+    try {
+      const result = await call(attachment, { action: "assert_current", runtimeId: info.runtimeId, nativeGeneration: info.snapshot.generation! }, signal);
+      openCodeRuntimeSuccessSchema.parse(result);
+      if (this.#attachment !== attachment) throw unavailable();
+    } catch (error) {
+      // Cancelling this observation does not revoke a previously admitted host.
+      const cancelled = signal?.aborted && (error === signal.reason ||
+        error instanceof OpenCodeRuntimeError && error.code === "opencode_request_aborted");
+      if (!cancelled && this.#attachment === attachment) this.#disconnected(attachment);
+      throw error;
+    }
   }
   acquire(value: OpenCodeRuntimeTarget): OpenCodeRuntimeLease {
     const { attachment, info } = this.#ready(), target = openCodeRuntimeTargetSchema.parse(value), recovery = this.#recovery;
@@ -314,11 +335,13 @@ export class OpenCodeRemoteRuntime {
     openCodeRuntimeSuccessSchema.parse(await call(attachment, { action: "stop", runtimeId: info.runtimeId,
       expectedRevision: inspection.revision, force: true }));
     this.#lifetime.abort(); this.#info = undefined; this.#attachment = undefined; attachment.release();
+    this.input.onRuntimeVersionAssessment?.(undefined);
     return { cleanup: "proved", nativeInterrupts: this.input.configuration.connection.ownership === "owned" ? "incomplete" : "not_owned" };
   }
   /** Main teardown detaches. Only explicit administration may stop the owner. */
   async close(): Promise<{ readonly cleanup: "proved"; readonly nativeInterrupts: "not_owned" }> {
     this.#closed = true; this.#lifetime.abort();
+    this.input.onRuntimeVersionAssessment?.(undefined);
     this.#starting?.controller.abort();
     await this.#starting?.work.catch(() => undefined);
     await Promise.allSettled([...this.#ports].map(port => port.release()));

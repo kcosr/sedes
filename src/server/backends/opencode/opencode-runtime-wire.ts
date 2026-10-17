@@ -7,6 +7,7 @@ import { openCodeNativeAuthoritySchema, openCodeNativeFailureSchema, openCodeMut
   openCodeApplicationOperationIdentitySchema, openCodeReadMethods, openCodeMutationMethods } from "./opencode-native-codecs.js";
 import { OPENCODE_CONTROL_MUTATIONS } from "./opencode-native-port.js";
 import { openCodeHostToolAdmissionSchema, openCodeHostToolTargetSchema } from "./opencode-host-agent-tools.js";
+import { admitOpenCodeRelease } from "./opencode-release.js";
 
 const id = z.string().min(1).max(256);
 const position = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -48,7 +49,7 @@ export type OpenCodeRuntimeCommand = z.infer<typeof openCodeRuntimeCommandSchema
 export type OpenCodeRuntimeCommandInput = OpenCodeRuntimeCommand extends infer Command
   ? Command extends OpenCodeRuntimeCommand ? Omit<Command, "serviceIncarnation" | "controllerEpoch"> : never : never;
 
-const capability = { capabilityId: "opencode_runtime", majorVersion: 2 } as const;
+const capability = { capabilityId: "opencode_runtime", majorVersion: 3 } as const;
 export const openCodeRuntimeExecuteOperation = { ...capability, operation: "runtime.execute",
   requestSchema: sidecarRuntimeBodySchema, responseSchema: sidecarRuntimeBodySchema,
   lane: "operation", maximumDeadlineMilliseconds: 600_000,
@@ -77,9 +78,14 @@ export const openCodeRuntimeInfoSchema = z.strictObject({
   runtimeId: id, nativeNamespaceKey: z.string().regex(/^[a-f0-9]{64}$/u).nullable(),
   snapshot: z.strictObject({ state: z.enum(["stopped", "starting", "ready", "disconnected", "cleanup_unproved"]),
     ownership: z.enum(["owned", "external"]), generation: id.optional(), references: position,
+    runtimeVersion: z.string().max(64).refine(version => { try { admitOpenCodeRelease(version); return true; } catch { return false; } }).optional(),
     identity: z.strictObject({ pid: z.number().int().positive(), startTime: id, uid: z.number().int().nonnegative(),
       executablePath: z.string().min(1).max(4096), executable: fileIdentity, nativeStorePath: z.string().min(1).max(4096),
       store: fileIdentity, storeObservation: z.enum(["open_file", "operator_declared"]) }).optional(),
+  }).superRefine((snapshot, context) => {
+    if (snapshot.state === "ready" && snapshot.runtimeVersion === undefined) context.addIssue({
+      code: "custom", path: ["runtimeVersion"], message: "Ready OpenCode runtime requires admitted version evidence.",
+    });
   }),
 });
 export type OpenCodeRuntimeInfo = z.infer<typeof openCodeRuntimeInfoSchema>;

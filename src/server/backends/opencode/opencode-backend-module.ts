@@ -11,11 +11,12 @@ import { configurationFingerprint } from "../../config/configuration-fingerprint
 import { backendStartupEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { ManagedTerminalCarrierError } from "../../terminal/managed-terminal-carrier.js";
 import type { AgentConnectionProfile } from "../contracts.js";
-import { NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES, type BackendModule, type BackendModuleConfigurationInput, type BackendModuleRuntime, type BackendModuleRuntimeContext, type BackendRuntimeAdministration, type BackendRuntimeInspection, type PreparedBackendModule } from "../module.js";
+import { type BackendModule, type BackendModuleConfigurationInput, type BackendModuleRuntime, type BackendModuleRuntimeContext, type BackendRuntimeAdministration, type BackendRuntimeInspection, type PreparedBackendModule } from "../module.js";
 import { parseOpenCodeBackendConfiguration, type PreparedOpenCodeBackendConfiguration } from "./opencode-backend-configuration.js";
 import { OpenCodeRuntime, type OpenCodeRuntimeInput } from "./opencode-runtime.js";
 import { openCodeRuntimeConfigurationSchema, resolveOpenCodeRuntimeInput } from "./opencode-runtime-configuration.js";
-import { OPENCODE_RELEASE, OpenCodeRuntimeError } from "./opencode-release.js";
+import { OPENCODE_RELEASE, assessOpenCodeRuntimeVersion, OpenCodeRuntimeError, type VerifiedOpenCodeRuntimeVersion } from "./opencode-release.js";
+import { OpenCodeInstallationAdvisorySource } from "./opencode-installation-advisories.js";
 import { openCodeRuntimeDiagnostic } from "./opencode-runtime-diagnostic.js";
 import { BackendRuntimeControlRejectedError } from "../runtime-control.js";
 import { OpenCodeThreadRepository } from "./opencode-thread-repository.js";
@@ -52,7 +53,7 @@ export class OpenCodeBackendModule implements BackendModule {
   readonly backendKind = "opencode" as const;
   readonly connectionKinds = ["opencode_http"] as const;
   readonly protocolRelease = OPENCODE_RELEASE;
-  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "opencode_runtime", majorVersion: 2,
+  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "opencode_runtime", majorVersion: 3,
     operations: Object.freeze(openCodeRuntimeOperations.map(operation => operation.operation)) }]);
   constructor(readonly createNativeRuntime: NativeRuntimeFactory = input => new OpenCodeRuntime(input)) {}
 
@@ -127,7 +128,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   get actionPersistence() { return this.#composed().actionPersistence; }
   get savedAgents() { return this.#composed().savedAgents; }
   get automationExecutionPolicy() { return this.#composed().automationExecutionPolicy; }
-  readonly installationAdvisories = NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES;
+  readonly installationAdvisories = new OpenCodeInstallationAdvisorySource();
   readonly managedProviderTerminals = managedTerminals;
   readonly administration: BackendRuntimeAdministration | undefined;
   readonly stopBeforeConversationCleanup: (() => Promise<void>) | undefined;
@@ -192,6 +193,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
           if (administration) await administration.stop(request);
           else if ((await inspect()).revision !== request.expectedRevision) throw new BackendRuntimeControlRejectedError("confirmation_stale");
           await this.#owner?.close(); this.#owner = undefined;
+          this.installationAdvisories.clear();
           if (restart) await this.#startedNative();
         } finally { this.#administrating = false; }
       };
@@ -260,7 +262,11 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       observeHealth: () => {
         const sequence = ++this.#healthSequence;
         return failure => {
-          if (!this.#closed && sequence === this.#healthSequence) this.#healthDiagnostic = openCodeRuntimeDiagnostic(failure);
+          if (!this.#closed && sequence === this.#healthSequence) {
+            this.#healthDiagnostic = openCodeRuntimeDiagnostic(failure);
+            if (failure) this.installationAdvisories.clear();
+            else this.#refreshRuntimeVersion();
+          }
         };
       },
       runtime: async () => await this.#startedNative() });
@@ -341,7 +347,17 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     if (this.#namespace !== undefined && owner.nativeNamespaceKey !== this.#namespace) {
       throw new OpenCodeRuntimeError("opencode_runtime_namespace_changed");
     }
+    this.#refreshRuntimeVersion();
     return owner;
+  }
+  #observeRuntimeVersion = (assessment: VerifiedOpenCodeRuntimeVersion | undefined): void => {
+    if (this.#closed || !assessment) this.installationAdvisories.clear();
+    else this.installationAdvisories.observe(assessment);
+  };
+  #refreshRuntimeVersion(): void {
+    const snapshot = this.#owner?.snapshot();
+    this.#observeRuntimeVersion(snapshot?.state === "ready" && snapshot.runtimeVersion
+      ? assessOpenCodeRuntimeVersion(snapshot.runtimeVersion) : undefined);
   }
   async startupEnvironmentState(): Promise<"not_started" | "started" | "unknown"> {
     const state = this.#owner?.snapshot().state;
@@ -349,6 +365,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   }
   close(): Promise<void> {
     this.#closed = true;
+    this.installationAdvisories.clear();
     this.#executionEnvironment.close();
     this.#usage.close();
     return this.#closePromise ??= (async () => {
@@ -372,6 +389,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       });
       if (this.context.sidecarRuntime) return this.#owner = new OpenCodeRemoteRuntime({
         configuration: runtimeConfiguration, provider: this.context.sidecarRuntime,
+        onRuntimeVersionAssessment: this.#observeRuntimeVersion,
         acquireRecovery: signal => this.context.sidecarRuntime!.acquire(signal, { existingOnly: true }),
       });
       const resolved = await resolveOpenCodeRuntimeInput({ configuration: runtimeConfiguration,
@@ -384,7 +402,8 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
           invoke: (capability, request, signal, stamp) => this.#tools.callHostTool(capability, request, signal, stamp) },
       });
       this.#assertOpen();
-      const owner = this.createNativeRuntime({ ...resolved, assertLaunchAdmission: () => this.#assertOpen() });
+      const owner = this.createNativeRuntime({ ...resolved, assertLaunchAdmission: () => this.#assertOpen(),
+        onRuntimeVersionAssessment: this.#observeRuntimeVersion });
       return this.#owner = owner;
     })().finally(() => { this.#opening = undefined; });
     return this.#opening;
@@ -423,6 +442,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     } finally { this.#administrating = false; this.#revision++; }
   }
   async #stop(): Promise<void> {
+    this.installationAdvisories.clear();
     await this.#opening;
     if (!this.#owner) return;
     const result = await this.#owner.stop();

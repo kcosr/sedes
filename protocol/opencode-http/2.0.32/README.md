@@ -1,12 +1,30 @@
-# OpenCode v2 2.0.18 protocol profile
+# OpenCode v2 2.0.32 protocol profile
 
-- Native executable: stock `opencode2`, reporting `opencode v2.0.18`.
-- Generated client/schema package: exact `@opencode/client` 2.0.18 in the lockfile.
-- Reviewed upstream revision: `cd9a14a6b688d4021bee381dfd39d2cef9c0f862`.
-- Runtime admission: exact 2.0.18, local Linux, same account, verified native
-  process and declared/observed SQLite store identity.
+- Generated packages: exact `@opencode/client`, `@opencode/protocol` and
+  `@opencode/schema` **2.0.32**, with **Effect 4.0.1**, in both the development
+  and server-runtime lockfiles.
+- Reviewed upstream tag: `v2.0.32`, revision
+  `843a6c514e606b436a7fe713422ace0a93ad3d61`.
+- Runtime admission: stable stock `opencode2` **2.0.29 or newer**, tested through
+  **2.0.32**; Linux execution host, same account, verified native process and
+  declared/observed SQLite store identity. Prereleases and below-floor versions
+  are rejected. Build metadata does not alter precedence.
+- Newer-than-tested versions publish an active installation advisory and use
+  this same compiled profile; protocol and behavioral checks remain required.
+- Private sidecar capability: `opencode_runtime` major **3**, including the
+  observed runtime version; older sidecars must be upgraded with the server.
 - Transport: authenticated HTTP plus SSE; owned `serve --stdio` supplies startup
   endpoint discovery and process lifetime, not conversation JSON-RPC.
+
+Review of the 2.0.18 to 2.0.29 schema delta found optional additions: terminal
+idle errors, nested provider response bodies, form cancellation messages,
+model/provider compatibility settings and server capabilities. The 2.0.32
+profile admits these fields without relaxing unknown-field rejection. The
+2.0.29 to 2.0.32 delta additionally introduces the optional model capability
+`temperature`; existing session, history and mutation routes are unchanged. Terminal
+errors project only the bounded, credential-scrubbed message; raw provider
+response bodies remain native-private. Required session, inbox and location
+shapes remain compatible with 2.0.29.
 
 Provider-private adapters validate the generated native message and event
 schemas, bounded HTTP envelopes, and exact error types. Shared browser
@@ -34,6 +52,9 @@ native database or invent absence proof.
 Deterministic coverage lives in `tests/unit/opencode-*.test.ts`. Opt-in
 `tests/real-opencode` uses a fixture-owned stock daemon, disposable native store,
 and loopback model/MCP endpoints. It does not use paid model inference or an
-operator's existing sessions. See the [operator runbook](../../../docs/operator/backends/opencode.md)
+operator's existing sessions. Both the 2.0.29 minimum and 2.0.32 tested-through
+release are qualified with these fixtures. The separate, explicitly authorized
+`test:live-opencode` gate also qualifies 2.0.32 against the configured AW Qwen
+model using its read-only canary and bounded request limits. See the [operator runbook](../../../docs/operator/backends/opencode.md)
 and [private implementation contract](../../../docs/internals/backends/opencode.md)
 for supported surfaces, ownership, and recovery.

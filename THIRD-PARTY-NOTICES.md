@@ -24,7 +24,7 @@ even when an install with ignored scripts leaves them present in the tree.
 This file is generated. Run `npm run generate:third-party-notices` to refresh it
 and `npm run check:third-party-notices` to verify that it is current.
 
-Packages listed: 616.
+Packages listed: 609.
 
 ## Packages
 
@@ -619,9 +619,9 @@ Packages listed: 616.
 ### @hono/node-server 2.1.1
 
 - License: MIT
-- URL: https://github.com/honojs/node-server
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE`): [35d16fc259cf](#license-text-35d16fc259cf)
+- License text: license text not included in package; see repository
 
 ### @iconify/types 2.0.0
 
@@ -651,13 +651,6 @@ Packages listed: 616.
 - Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [8694aa57bec3](#license-text-8694aa57bec3)
 
-### @msgpackr-extract/msgpackr-extract-linux-x64 3.0.4
-
-- License: MIT
-- URL: http://github.com/kriszyp/msgpackr-extract
-- Shipped by: sedes, @sedes/server-runtime
-- License text: license text not included in package; see repository
-
 ### @noble/hashes 2.4.0
 
 - License: MIT
@@ -665,21 +658,21 @@ Packages listed: 616.
 - Shipped by: sedes
 - License text (`LICENSE`): [4f221aee6e07](#license-text-4f221aee6e07)
 
-### @opencode/client 2.0.18
+### @opencode/client 2.0.32
 
 - License: MIT
 - URL: https://github.com/anomalyco/opencode/tree/HEAD/packages/client
 - Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
-### @opencode/protocol 2.0.18
+### @opencode/protocol 2.0.32
 
 - License: MIT
 - URL: https://github.com/anomalyco/opencode/tree/HEAD/packages/protocol
 - Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
-### @opencode/schema 2.0.18
+### @opencode/schema 2.0.32
 
 - License: MIT
 - URL: https://github.com/anomalyco/opencode/tree/HEAD/packages/schema
@@ -1627,9 +1620,9 @@ Packages listed: 616.
 ### @types/node 26.6.2
 
 - License: MIT
-- URL: https://github.com/DefinitelyTyped/DefinitelyTyped/tree/HEAD/types/node
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE`): [ff82c90f8494](#license-text-ff82c90f8494)
+- License text: license text not included in package; see repository
 
 ### @types/react 19.2.17
 
@@ -1928,9 +1921,9 @@ Packages listed: 616.
 ### content-type 2.1.0
 
 - License: MIT
-- URL: https://github.com/jshttp/content-type
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE`): [fb06d5b872e5](#license-text-fb06d5b872e5)
+- License text: license text not included in package; see repository
 
 ### cookie 0.7.2
 
@@ -2318,13 +2311,6 @@ Packages listed: 616.
 - Shipped by: sedes
 - License text (`license`): [d0a8e5996a99](#license-text-d0a8e5996a99)
 
-### detect-libc 2.1.2
-
-- License: Apache-2.0
-- URL: https://github.com/lovell/detect-libc
-- Shipped by: sedes, @sedes/server-runtime
-- License text (`LICENSE`): [6dc0e068dcf3](#license-text-6dc0e068dcf3)
-
 ### detect-node-es 1.1.0
 
 - License: MIT
@@ -2382,7 +2368,7 @@ Packages listed: 616.
 - Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d68cfda21300](#license-text-d68cfda21300)
 
-### effect 4.0.0-rc.112
+### effect 4.0.1
 
 - License: MIT
 - URL: https://github.com/Effect-TS/effect/tree/HEAD/packages/effect
@@ -2406,9 +2392,9 @@ Packages listed: 616.
 ### entities 8.1.0
 
 - License: BSD-2-Clause
-- URL: https://github.com/fb55/entities
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE`): [0e57eeaccc07](#license-text-0e57eeaccc07)
+- License text: license text not included in package; see repository
 
 ### es-define-property 1.0.1
 
@@ -2490,9 +2476,9 @@ Packages listed: 616.
 ### eventsource-parser 3.1.1
 
 - License: MIT
-- URL: https://github.com/rexxars/eventsource-parser
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE`): [39813fa23b19](#license-text-39813fa23b19)
+- License text: license text not included in package; see repository
 
 ### express 5.2.1
 
@@ -2511,9 +2497,9 @@ Packages listed: 616.
 ### express-rate-limit 8.7.0
 
 - License: MIT
-- URL: https://github.com/express-rate-limit/express-rate-limit
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`license`): [339875e6494e](#license-text-339875e6494e)
+- License text: license text not included in package; see repository
 
 ### extend 3.0.2
 
@@ -2521,13 +2507,6 @@ Packages listed: 616.
 - URL: https://github.com/justmoon/node-extend
 - Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [b079b743d39a](#license-text-b079b743d39a)
-
-### fast-check 4.10.2
-
-- License: MIT
-- URL: https://github.com/dubzzz/fast-check/tree/HEAD/packages/fast-check
-- Shipped by: sedes, @sedes/server-runtime
-- License text (`LICENSE`): [fc7c40e5d55f](#license-text-fc7c40e5d55f)
 
 ### fast-deep-equal 3.1.3
 
@@ -2553,9 +2532,9 @@ Packages listed: 616.
 ### fast-uri 3.1.6
 
 - License: BSD-3-Clause
-- URL: https://github.com/fastify/fast-uri
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE`): [b010b0dfdfdb](#license-text-b010b0dfdfdb)
+- License text: license text not included in package; see repository
 
 ### fetch-blob 3.2.0
 
@@ -2756,9 +2735,9 @@ Packages listed: 616.
 ### hono 4.13.5
 
 - License: MIT
-- URL: https://github.com/honojs/hono
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE`): [2e0a854a1106](#license-text-2e0a854a1106)
+- License text: license text not included in package; see repository
 
 ### hosted-git-info 9.0.3
 
@@ -2875,9 +2854,9 @@ Packages listed: 616.
 ### ip-address 10.5.1
 
 - License: MIT
-- URL: https://github.com/beaugunderson/ip-address
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE`): [02d42589c644](#license-text-02d42589c644)
+- License text: license text not included in package; see repository
 
 ### ipaddr.js 1.9.1
 
@@ -2945,9 +2924,9 @@ Packages listed: 616.
 ### jose 6.2.10
 
 - License: MIT
-- URL: https://github.com/panva/jose
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE.md`): [d6f4fc856b99](#license-text-d6f4fc856b99)
+- License text: license text not included in package; see repository
 
 ### jose 6.2.5
 
@@ -3460,20 +3439,6 @@ Packages listed: 616.
 - Shipped by: sedes, @sedes/server-runtime
 - License text (`license.md`): [e91069c31b4e](#license-text-e91069c31b4e)
 
-### msgpackr 2.1.0
-
-- License: MIT
-- URL: http://github.com/kriszyp/msgpackr
-- Shipped by: sedes, @sedes/server-runtime
-- License text (`LICENSE`): [2b41a50a006f](#license-text-2b41a50a006f)
-
-### msgpackr-extract 3.0.4
-
-- License: MIT
-- URL: http://github.com/kriszyp/msgpackr-extract
-- Shipped by: sedes, @sedes/server-runtime
-- License text (`LICENSE`): [2b41a50a006f](#license-text-2b41a50a006f)
-
 ### negotiator 1.0.0
 
 - License: MIT
@@ -3484,9 +3449,9 @@ Packages listed: 616.
 ### negotiator 1.1.0
 
 - License: MIT
-- URL: https://github.com/jshttp/negotiator
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE`): [8a160f8ccc7b](#license-text-8a160f8ccc7b)
+- License text: license text not included in package; see repository
 
 ### node-addon-api 7.1.1
 
@@ -3505,9 +3470,9 @@ Packages listed: 616.
 ### node-addon-api 8.9.2
 
 - License: MIT
-- URL: https://github.com/nodejs/node-addon-api
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE.md`): [1d660eff8965](#license-text-1d660eff8965)
+- License text: license text not included in package; see repository
 
 ### node-domexception 1.0.0
 
@@ -3522,13 +3487,6 @@ Packages listed: 616.
 - URL: https://github.com/node-fetch/node-fetch
 - Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.md`): [399cbcc4b8a2](#license-text-399cbcc4b8a2)
-
-### node-gyp-build-optional-packages 5.2.2
-
-- License: MIT
-- URL: https://github.com/prebuild/node-gyp-build
-- Shipped by: sedes, @sedes/server-runtime
-- License text (`LICENSE`): [a0fb7883bccf](#license-text-a0fb7883bccf)
 
 ### node-pty 1.1.0
 
@@ -3732,13 +3690,6 @@ Packages listed: 616.
 - URL: https://github.com/TooTallNate/proxy-agents/tree/HEAD/packages/negotiate
 - Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
-
-### pure-rand 8.4.2
-
-- License: MIT
-- URL: https://github.com/dubzzz/pure-rand
-- Shipped by: sedes, @sedes/server-runtime
-- License text (`LICENSE`): [c90820850e2f](#license-text-c90820850e2f)
 
 ### qs 6.15.3
 
@@ -4023,9 +3974,9 @@ Packages listed: 616.
 ### source-map-js 1.2.2
 
 - License: BSD-3-Clause
-- URL: https://github.com/7rulnik/source-map-js
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE`): [6ead954f9672](#license-text-6ead954f9672)
+- License text: license text not included in package; see repository
 
 ### space-separated-tokens 2.0.2
 
@@ -4184,9 +4135,9 @@ Packages listed: 616.
 ### undici-types 8.9.0
 
 - License: MIT
-- URL: https://github.com/nodejs/undici
+- URL: not declared in package metadata
 - Shipped by: @sedes/server-runtime
-- License text (`LICENSE`): [fe64958bfaef](#license-text-fe64958bfaef)
+- License text: license text not included in package; see repository
 
 ### unified 11.0.5
 
@@ -4425,7 +4376,7 @@ Original Author, when distributed with the Software.
 
 ### License text 02d42589c644
 
-Applies to: ip-address 10.4.0, ip-address 10.5.1.
+Applies to: ip-address 10.4.0.
 
 ```text
 Copyright (C) 2011 by Beau Gunderson
@@ -4671,7 +4622,7 @@ SOFTWARE.
 
 ### License text 0e57eeaccc07
 
-Applies to: entities 8.0.0, entities 8.1.0.
+Applies to: entities 8.0.0.
 
 ```text
 Copyright (c) Felix Böhm
@@ -5150,7 +5101,7 @@ SOFTWARE.
 
 ### License text 1d660eff8965
 
-Applies to: node-addon-api 7.1.1, node-addon-api 8.9.0, node-addon-api 8.9.2.
+Applies to: node-addon-api 7.1.1, node-addon-api 8.9.0.
 
 ```text
 The MIT License (MIT)
@@ -5560,34 +5511,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### License text 2b41a50a006f
-
-Applies to: msgpackr 2.1.0, msgpackr-extract 3.0.4.
-
-```text
-MIT License
-
-Copyright (c) 2020 Kris Zyp
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
 ### License text 2bc4beb49d48
 
 Applies to: object-assign 4.1.1.
@@ -5713,7 +5636,7 @@ THE SOFTWARE.
 
 ### License text 2e0a854a1106
 
-Applies to: hono 4.12.32, hono 4.13.5.
+Applies to: hono 4.12.32.
 
 ```text
 MIT License
@@ -6143,37 +6066,9 @@ CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 ```
 
-### License text 339875e6494e
-
-Applies to: express-rate-limit 8.7.0.
-
-```text
-MIT License
-
-Copyright 2023 Nathan Friedly, Vedant K
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
 ### License text 35d16fc259cf
 
-Applies to: @hono/node-server 2.0.12, @hono/node-server 2.1.1.
+Applies to: @hono/node-server 2.0.12.
 
 ```text
 MIT License
@@ -6316,7 +6211,7 @@ IN THE SOFTWARE.
 
 ### License text 39813fa23b19
 
-Applies to: eventsource-parser 3.1.0, eventsource-parser 3.1.1.
+Applies to: eventsource-parser 3.1.0.
 
 ```text
 MIT License
@@ -8081,7 +7976,7 @@ THE SOFTWARE.
 
 ### License text 5f58d41e2a9d
 
-Applies to: effect 4.0.0-rc.112.
+Applies to: effect 4.0.1.
 
 ```text
 MIT License
@@ -8327,214 +8222,6 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### License text 6dc0e068dcf3
-
-Applies to: detect-libc 2.1.2.
-
-```text
-Apache License
-                           Version 2.0, January 2004
-                        http://www.apache.org/licenses/
-
-   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
-
-   1. Definitions.
-
-      "License" shall mean the terms and conditions for use, reproduction,
-      and distribution as defined by Sections 1 through 9 of this document.
-
-      "Licensor" shall mean the copyright owner or entity authorized by
-      the copyright owner that is granting the License.
-
-      "Legal Entity" shall mean the union of the acting entity and all
-      other entities that control, are controlled by, or are under common
-      control with that entity. For the purposes of this definition,
-      "control" means (i) the power, direct or indirect, to cause the
-      direction or management of such entity, whether by contract or
-      otherwise, or (ii) ownership of fifty percent (50%) or more of the
-      outstanding shares, or (iii) beneficial ownership of such entity.
-
-      "You" (or "Your") shall mean an individual or Legal Entity
-      exercising permissions granted by this License.
-
-      "Source" form shall mean the preferred form for making modifications,
-      including but not limited to software source code, documentation
-      source, and configuration files.
-
-      "Object" form shall mean any form resulting from mechanical
-      transformation or translation of a Source form, including but
-      not limited to compiled object code, generated documentation,
-      and conversions to other media types.
-
-      "Work" shall mean the work of authorship, whether in Source or
-      Object form, made available under the License, as indicated by a
-      copyright notice that is included in or attached to the work
-      (an example is provided in the Appendix below).
-
-      "Derivative Works" shall mean any work, whether in Source or Object
-      form, that is based on (or derived from) the Work and for which the
-      editorial revisions, annotations, elaborations, or other modifications
-      represent, as a whole, an original work of authorship. For the purposes
-      of this License, Derivative Works shall not include works that remain
-      separable from, or merely link (or bind by name) to the interfaces of,
-      the Work and Derivative Works thereof.
-
-      "Contribution" shall mean any work of authorship, including
-      the original version of the Work and any modifications or additions
-      to that Work or Derivative Works thereof, that is intentionally
-      submitted to Licensor for inclusion in the Work by the copyright owner
-      or by an individual or Legal Entity authorized to submit on behalf of
-      the copyright owner. For the purposes of this definition, "submitted"
-      means any form of electronic, verbal, or written communication sent
-      to the Licensor or its representatives, including but not limited to
-      communication on electronic mailing lists, source code control systems,
-      and issue tracking systems that are managed by, or on behalf of, the
-      Licensor for the purpose of discussing and improving the Work, but
-      excluding communication that is conspicuously marked or otherwise
-      designated in writing by the copyright owner as "Not a Contribution."
-
-      "Contributor" shall mean Licensor and any individual or Legal Entity
-      on behalf of whom a Contribution has been received by Licensor and
-      subsequently incorporated within the Work.
-
-   2. Grant of Copyright License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      copyright license to reproduce, prepare Derivative Works of,
-      publicly display, publicly perform, sublicense, and distribute the
-      Work and such Derivative Works in Source or Object form.
-
-   3. Grant of Patent License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      (except as stated in this section) patent license to make, have made,
-      use, offer to sell, sell, import, and otherwise transfer the Work,
-      where such license applies only to those patent claims licensable
-      by such Contributor that are necessarily infringed by their
-      Contribution(s) alone or by combination of their Contribution(s)
-      with the Work to which such Contribution(s) was submitted. If You
-      institute patent litigation against any entity (including a
-      cross-claim or counterclaim in a lawsuit) alleging that the Work
-      or a Contribution incorporated within the Work constitutes direct
-      or contributory patent infringement, then any patent licenses
-      granted to You under this License for that Work shall terminate
-      as of the date such litigation is filed.
-
-   4. Redistribution. You may reproduce and distribute copies of the
-      Work or Derivative Works thereof in any medium, with or without
-      modifications, and in Source or Object form, provided that You
-      meet the following conditions:
-
-      (a) You must give any other recipients of the Work or
-          Derivative Works a copy of this License; and
-
-      (b) You must cause any modified files to carry prominent notices
-          stating that You changed the files; and
-
-      (c) You must retain, in the Source form of any Derivative Works
-          that You distribute, all copyright, patent, trademark, and
-          attribution notices from the Source form of the Work,
-          excluding those notices that do not pertain to any part of
-          the Derivative Works; and
-
-      (d) If the Work includes a "NOTICE" text file as part of its
-          distribution, then any Derivative Works that You distribute must
-          include a readable copy of the attribution notices contained
-          within such NOTICE file, excluding those notices that do not
-          pertain to any part of the Derivative Works, in at least one
-          of the following places: within a NOTICE text file distributed
-          as part of the Derivative Works; within the Source form or
-          documentation, if provided along with the Derivative Works; or,
-          within a display generated by the Derivative Works, if and
-          wherever such third-party notices normally appear. The contents
-          of the NOTICE file are for informational purposes only and
-          do not modify the License. You may add Your own attribution
-          notices within Derivative Works that You distribute, alongside
-          or as an addendum to the NOTICE text from the Work, provided
-          that such additional attribution notices cannot be construed
-          as modifying the License.
-
-      You may add Your own copyright statement to Your modifications and
-      may provide additional or different license terms and conditions
-      for use, reproduction, or distribution of Your modifications, or
-      for any such Derivative Works as a whole, provided Your use,
-      reproduction, and distribution of the Work otherwise complies with
-      the conditions stated in this License.
-
-   5. Submission of Contributions. Unless You explicitly state otherwise,
-      any Contribution intentionally submitted for inclusion in the Work
-      by You to the Licensor shall be under the terms and conditions of
-      this License, without any additional terms or conditions.
-      Notwithstanding the above, nothing herein shall supersede or modify
-      the terms of any separate license agreement you may have executed
-      with Licensor regarding such Contributions.
-
-   6. Trademarks. This License does not grant permission to use the trade
-      names, trademarks, service marks, or product names of the Licensor,
-      except as required for reasonable and customary use in describing the
-      origin of the Work and reproducing the content of the NOTICE file.
-
-   7. Disclaimer of Warranty. Unless required by applicable law or
-      agreed to in writing, Licensor provides the Work (and each
-      Contributor provides its Contributions) on an "AS IS" BASIS,
-      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-      implied, including, without limitation, any warranties or conditions
-      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
-      PARTICULAR PURPOSE. You are solely responsible for determining the
-      appropriateness of using or redistributing the Work and assume any
-      risks associated with Your exercise of permissions under this License.
-
-   8. Limitation of Liability. In no event and under no legal theory,
-      whether in tort (including negligence), contract, or otherwise,
-      unless required by applicable law (such as deliberate and grossly
-      negligent acts) or agreed to in writing, shall any Contributor be
-      liable to You for damages, including any direct, indirect, special,
-      incidental, or consequential damages of any character arising as a
-      result of this License or out of the use or inability to use the
-      Work (including but not limited to damages for loss of goodwill,
-      work stoppage, computer failure or malfunction, or any and all
-      other commercial damages or losses), even if such Contributor
-      has been advised of the possibility of such damages.
-
-   9. Accepting Warranty or Additional Liability. While redistributing
-      the Work or Derivative Works thereof, You may choose to offer,
-      and charge a fee for, acceptance of support, warranty, indemnity,
-      or other liability obligations and/or rights consistent with this
-      License. However, in accepting such obligations, You may act only
-      on Your own behalf and on Your sole responsibility, not on behalf
-      of any other Contributor, and only if You agree to indemnify,
-      defend, and hold each Contributor harmless for any liability
-      incurred by, or claims asserted against, such Contributor by reason
-      of your accepting any such warranty or additional liability.
-
-   END OF TERMS AND CONDITIONS
-
-   APPENDIX: How to apply the Apache License to your work.
-
-      To apply the Apache License to your work, attach the following
-      boilerplate notice, with the fields enclosed by brackets "{}"
-      replaced with your own identifying information. (Don't include
-      the brackets!)  The text should be enclosed in the appropriate
-      comment syntax for the file format. We also recommend that a
-      file or class name and description of purpose be included on the
-      same "printed page" as the copyright notice for easier
-      identification within third-party archives.
-
-   Copyright {yyyy} {name of copyright owner}
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
-```
-
 ### License text 6dfc8a41d27c
 
 Applies to: layout-base 1.0.2, layout-base 2.0.1.
@@ -8565,7 +8252,7 @@ SOFTWARE.
 
 ### License text 6ead954f9672
 
-Applies to: source-map-js 1.2.1, source-map-js 1.2.2.
+Applies to: source-map-js 1.2.1.
 
 ```text
 Copyright (c) 2009-2011, Mozilla Foundation and contributors
@@ -9719,7 +9406,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ### License text 8a160f8ccc7b
 
-Applies to: negotiator 1.0.0, negotiator 1.1.0.
+Applies to: negotiator 1.0.0.
 
 ```text
 (The MIT License)
@@ -10373,34 +10060,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### License text a0fb7883bccf
-
-Applies to: node-gyp-build-optional-packages 5.2.2.
-
-```text
-The MIT License (MIT)
-
-Copyright (c) 2017 Mathias Buus
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-```
-
 ### License text a1563f431b1f
 
 Applies to: unist-util-is 6.0.1.
@@ -10938,7 +10597,7 @@ Applies to: @anthropic-ai/claude-agent-sdk 0.3.296.
 
 ### License text b010b0dfdfdb
 
-Applies to: fast-uri 3.1.5, fast-uri 3.1.6.
+Applies to: fast-uri 3.1.5.
 
 ```text
 Copyright (c) 2011-2021, Gary Court until https://github.com/garycourt/uri-js/commit/a1acf730b4bba3f1097c9f52e7d9d3aba8cdcaae
@@ -12014,34 +11673,6 @@ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 ```
 
-### License text c90820850e2f
-
-Applies to: pure-rand 8.4.2.
-
-```text
-MIT License
-
-Copyright (c) 2018 Nicolas DUBIEN
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
 ### License text c9808a775260
 
 Applies to: p-retry 4.6.2, path-key 3.1.1, shebang-regex 3.0.0.
@@ -12415,7 +12046,7 @@ THE SOFTWARE.
 
 ### License text d6f4fc856b99
 
-Applies to: jose 6.2.10, jose 6.2.5.
+Applies to: jose 6.2.5.
 
 ```text
 The MIT License (MIT)
@@ -14222,7 +13853,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ### License text fb06d5b872e5
 
-Applies to: content-type 1.0.5, content-type 2.0.0, content-type 2.1.0.
+Applies to: content-type 1.0.5, content-type 2.0.0.
 
 ```text
 (The MIT License)
@@ -14270,34 +13901,6 @@ LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES
 OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
 WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
 ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-```
-
-### License text fc7c40e5d55f
-
-Applies to: fast-check 4.10.2.
-
-```text
-MIT License
-
-Copyright (c) 2017 Nicolas DUBIEN
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 ```
 
 ### License text fda0e18e4dc7
@@ -14387,7 +13990,7 @@ SOFTWARE.
 
 ### License text fe64958bfaef
 
-Applies to: undici 8.10.2, undici-types 6.21.0, undici-types 8.3.0, undici-types 8.9.0.
+Applies to: undici 8.10.2, undici-types 6.21.0, undici-types 8.3.0.
 
 ```text
 MIT License
@@ -14479,7 +14082,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### License text ff82c90f8494
 
-Applies to: @types/d3 7.4.3, @types/d3-array 3.2.2, @types/d3-axis 3.0.6, @types/d3-brush 3.0.6, @types/d3-chord 3.0.6, @types/d3-color 3.1.3, @types/d3-contour 3.0.6, @types/d3-delaunay 6.0.4, @types/d3-dispatch 3.0.7, @types/d3-drag 3.0.7, @types/d3-dsv 3.0.7, @types/d3-ease 3.0.2, @types/d3-fetch 3.0.7, @types/d3-force 3.0.10, @types/d3-format 3.0.4, @types/d3-geo 3.1.1, @types/d3-hierarchy 3.1.7, @types/d3-interpolate 3.0.4, @types/d3-path 3.1.1, @types/d3-polygon 3.0.2, @types/d3-quadtree 3.0.6, @types/d3-random 3.0.4, @types/d3-scale 4.0.9, @types/d3-scale-chromatic 3.1.0, @types/d3-selection 3.0.11, @types/d3-shape 3.1.8, @types/d3-time 3.0.4, @types/d3-time-format 4.0.3, @types/d3-timer 3.0.2, @types/d3-transition 3.0.9, @types/d3-zoom 3.0.8, @types/debug 4.1.13, @types/estree 1.0.9, @types/estree-jsx 1.0.5, @types/geojson 7946.0.16, @types/hast 3.0.5, @types/mdast 4.0.4, @types/ms 2.1.0, @types/node 22.19.19, @types/node 26.1.2, @types/node 26.6.2, @types/react 19.2.17, @types/trusted-types 2.0.7, @types/unist 2.0.11, @types/unist 3.0.3.
+Applies to: @types/d3 7.4.3, @types/d3-array 3.2.2, @types/d3-axis 3.0.6, @types/d3-brush 3.0.6, @types/d3-chord 3.0.6, @types/d3-color 3.1.3, @types/d3-contour 3.0.6, @types/d3-delaunay 6.0.4, @types/d3-dispatch 3.0.7, @types/d3-drag 3.0.7, @types/d3-dsv 3.0.7, @types/d3-ease 3.0.2, @types/d3-fetch 3.0.7, @types/d3-force 3.0.10, @types/d3-format 3.0.4, @types/d3-geo 3.1.1, @types/d3-hierarchy 3.1.7, @types/d3-interpolate 3.0.4, @types/d3-path 3.1.1, @types/d3-polygon 3.0.2, @types/d3-quadtree 3.0.6, @types/d3-random 3.0.4, @types/d3-scale 4.0.9, @types/d3-scale-chromatic 3.1.0, @types/d3-selection 3.0.11, @types/d3-shape 3.1.8, @types/d3-time 3.0.4, @types/d3-time-format 4.0.3, @types/d3-timer 3.0.2, @types/d3-transition 3.0.9, @types/d3-zoom 3.0.8, @types/debug 4.1.13, @types/estree 1.0.9, @types/estree-jsx 1.0.5, @types/geojson 7946.0.16, @types/hast 3.0.5, @types/mdast 4.0.4, @types/ms 2.1.0, @types/node 22.19.19, @types/node 26.1.2, @types/react 19.2.17, @types/trusted-types 2.0.7, @types/unist 2.0.11, @types/unist 3.0.3.
 
 ```text
 MIT License

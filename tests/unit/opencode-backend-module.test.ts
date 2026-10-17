@@ -6,7 +6,7 @@ import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled
 import { BackendModuleCatalog } from "../../src/server/backends/module-catalog.js";
 import type { BackendModuleConfigurationInput, BackendModuleRuntimeContext } from "../../src/server/backends/module.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
-import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
+import { OPENCODE_RELEASE, OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
@@ -34,7 +34,7 @@ const scope = { tenantId: "tenant", principalId: "principal" };
 const authority = { ...scope, backendInstanceId: "opencode", executionEnvironmentId: "local" };
 function configuration(ownership: "owned" | "external" = "owned"): BackendModuleConfigurationInput {
   return {
-    backend: { id: "opencode", kind: "opencode", protocolRelease: "2.0.18", enabled: true, modelPolicy: { type: "catalog" },
+    backend: { id: "opencode", kind: "opencode", protocolRelease: OPENCODE_RELEASE, enabled: true, modelPolicy: { type: "catalog" },
       moduleConfiguration: { nativeStorePath: "/native/opencode.db", connection: ownership === "owned"
         ? { ownership, channel: { type: "process_stdio", executablePath: "/bin/opencode2", workingDirectory: "/workspace" } }
         : { ownership, channel: { type: "http", url: "http://127.0.0.1:4096", authentication: { type: "basic", username: "opencode", secret: { source: "environment", variable: "SEDES_OPENCODE_PASSWORD" } } } } } },
@@ -45,7 +45,7 @@ function configuration(ownership: "owned" | "external" = "owned"): BackendModule
 }
 function context() {
   const database = new Database(":memory:"); databases.push(database);
-  const instance = { id: "opencode", tenantId: "tenant", kind: "opencode" as const, label: "OpenCode", enabled: true, configurationRevision: 1, protocolRelease: "2.0.18" };
+  const instance = { id: "opencode", tenantId: "tenant", kind: "opencode" as const, label: "OpenCode", enabled: true, configurationRevision: 1, protocolRelease: OPENCODE_RELEASE };
   const connection = { id: "profile", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "profile-template", kind: "opencode_http" as const,
     backendInstanceId: "opencode", executionEnvironmentId: "local", label: "OpenCode", enabled: true, configurationRevision: 1 };
   const discard = vi.fn();
@@ -60,10 +60,11 @@ function context() {
   };
   return { value, connection, resolveSecret, discard };
 }
-function nativeFactory() {
+function nativeFactory(runtimeVersion = "2.0.29") {
   function native(input: OpenCodeRuntimeInput) {
     let state: OpenCodeRuntimeSnapshot["state"] = "stopped";
     const result = {
+      runtimeVersion,
       nativeNamespaceKey: openCodeRuntimeNamespaceKey(input.authority.executionEnvironmentId, input.nativeStorePath ?? "/native/opencode.db"),
       start: vi.fn(async () => { if (input.connection.ownership === "external") await input.externalPassword!(); state = "ready"; }),
       health: vi.fn(async () => ({ available: state === "ready", checkedAt: new Date().toISOString() })),
@@ -71,7 +72,7 @@ function nativeFactory() {
       assertCurrent: vi.fn(async () => undefined),
       admitToolSession: vi.fn(async (): Promise<never> => { throw new Error("unexpected tool admission"); }),
       releaseToolSession: vi.fn(),
-      snapshot: () => ({ state, ownership: input.connection.ownership, references: 0, ...(state === "ready" ? { generation: "owner-generation" } : {}) }),
+      snapshot: () => ({ state, ownership: input.connection.ownership, references: 0, ...(state === "ready" ? { generation: "owner-generation", runtimeVersion: result.runtimeVersion } : {}) }),
       stop: vi.fn(async () => {
         const nativeInterrupts = state === "stopped" ? "not_owned" as const : "incomplete" as const;
         state = "stopped";
@@ -94,7 +95,7 @@ async function persistedInvocationFixture() {
   const connection = { ...base.connection, tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, executionEnvironmentId: environmentId };
   database.prepare(`INSERT INTO agent_backend_instances
     (tenant_id,owner_principal_id,id,kind,label,enabled,configuration_revision,protocol_release,created_at,updated_at)
-    VALUES (?,?,?,'opencode','OpenCode',1,1,'2.0.18',100,100)`).run(scope.tenantId, scope.principalId, instance.id);
+    VALUES (?,?,?,'opencode','OpenCode',1,1,'${OPENCODE_RELEASE}',100,100)`).run(scope.tenantId, scope.principalId, instance.id);
   database.prepare(`INSERT INTO agent_connection_profiles
     (tenant_id,owner_principal_id,id,template_id,backend_instance_id,backend_kind,execution_environment_id,kind,label,enabled,configuration_revision,created_at,updated_at)
     VALUES (?,?,?,?,?,'opencode',?,'opencode_http','OpenCode',1,1,100,100)`)
@@ -124,7 +125,7 @@ async function persistedInvocationFixture() {
   const owner: OpenCodeConversationRuntime & { close(): Promise<{ cleanup: "proved"; nativeInterrupts: "not_owned" }>; stop(): Promise<{ cleanup: "proved"; nativeInterrupts: "not_owned" }> } = {
     nativeNamespaceKey: namespace,
     start: vi.fn(async () => { state = "ready"; }), health: async () => ({ available: state === "ready", checkedAt: new Date().toISOString() }),
-    snapshot: () => ({ state, ownership: "owned", references: 0, generation: "persisted-generation", identity }),
+    snapshot: () => ({ state, ownership: "owned", references: 0, generation: "persisted-generation", identity, runtimeVersion: "2.0.29" }),
     assertCurrent: vi.fn(async () => { if (state !== "ready") throw new Error("not ready"); }),
     acquire: vi.fn(target => { const port = host.acquire(target); let released = false;
       return { client: port, generation: "persisted-generation", identity, release: () => { if (!released) { released = true; host.release(port); } } }; }),
@@ -185,6 +186,37 @@ async function persistedInvocationFixture() {
 }
 
 describe("OpenCode compiled module", () => {
+  it("publishes observed runtime compatibility advisories, refreshes on health, and clears on stop or close", async () => {
+    const factory = nativeFactory("2.0.33+vendor.1"), fixture = context();
+    const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration()).createRuntime(fixture.value);
+    const changed = vi.fn(); runtime.installationAdvisories.subscribe(changed);
+    expect(runtime.installationAdvisories.active()).toEqual([]);
+    await runtime.start();
+    expect(runtime.installationAdvisories.active()).toMatchObject([{ id: "runtime-newer-than-tested",
+      message: { text: "Running 2.0.33+vendor.1; Sedes is tested through 2.0.32." } }]);
+    const owner = factory.instances[0]!, driver = runtime.driverFactory.create(fixture.connection);
+    owner.runtimeVersion = "2.0.32";
+    await driver.health();
+    expect(runtime.installationAdvisories.active()).toEqual([]);
+    owner.runtimeVersion = "3.0.0";
+    await driver.health();
+    expect(runtime.installationAdvisories.active()).toHaveLength(1);
+    owner.start.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_release_incompatible"));
+    expect(await driver.health()).toMatchObject({ available: false });
+    expect(runtime.installationAdvisories.active()).toEqual([]);
+    await driver.health();
+    expect(runtime.installationAdvisories.active()).toHaveLength(1);
+    const state = await runtime.administration!.inspect();
+    await runtime.administration!.stop({ expectedRevision: state.revision, force: true });
+    expect(runtime.installationAdvisories.active()).toEqual([]);
+    const stopped = await runtime.administration!.inspect();
+    await runtime.administration!.restart({ expectedRevision: stopped.revision, force: true });
+    expect(runtime.installationAdvisories.active()).toHaveLength(1);
+    await runtime.close();
+    expect(runtime.installationAdvisories.active()).toEqual([]);
+    expect(changed).toHaveBeenCalledTimes(8);
+  });
+
   it("permits independently configured runtimes to share a native database", () => {
     const first = configuration(), second = { ...first, backend: { ...first.backend, id: "second-opencode" },
       connections: first.connections.map(connection => ({ ...connection, id: "second-profile", backendInstanceId: "second-opencode" })) };

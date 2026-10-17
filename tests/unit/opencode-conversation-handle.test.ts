@@ -308,6 +308,53 @@ describe("OpenCode conversation authority and finite discovery", () => {
 });
 
 describe("OpenCode SSE and native history composition", () => {
+  it("keeps a freshly observed form pending when older history hydration finishes", async () => {
+    const current = await attached([user(), assistant(), idle()]);
+    await current.handle.establishProjection({ signal: signal() });
+    const events: BackendConversationEvent[] = []; current.handle.subscribe(value => events.push(value));
+    const original = OpenCodeNativeApi.prototype.getActivity;
+    let entered!: () => void, release!: () => void;
+    const captured = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const activity = vi.spyOn(OpenCodeNativeApi.prototype, "getActivity").mockImplementationOnce(async function (this: OpenCodeNativeApi, sessionID, directory, requestSignal) {
+      const result = await original.call(this, sessionID, directory, requestSignal);
+      entered(); await held; return result;
+    });
+    try {
+      const hydration = current.handle.establishProjection({ signal: signal() }); await captured;
+      const form = { id: "frm_fresh", sessionID: current.wire.sessionID, title: "Fresh native form",
+        fields: [{ key: "name", type: "string", required: true }] };
+      current.wire.setResponse(`/api/session/${current.wire.sessionID}/form`, 200, { data: [form] });
+      current.wire.send({ id: "evt_fresh_form", created: 1, type: "form.created", data: { form } });
+      await vi.waitFor(() => expect(events.some(value => value.type === "interaction_opened" && value.interaction.title.text === form.title)).toBe(true));
+      const gate = events.find(value => value.type === "interaction_opened" && value.interaction.title.text === form.title);
+      if (gate?.type !== "interaction_opened") throw new Error("Fresh form was not observed");
+      release(); await hydration;
+      expect(events.filter(value => value.type === "interaction_resolved" && value.backendInteractionId === gate.interaction.backendInteractionId)).toEqual([]);
+      expect(events.filter(value => value.type === "interaction_opened" && value.interaction.backendInteractionId === gate.interaction.backendInteractionId)).toHaveLength(1);
+    } finally { release(); activity.mockRestore(); }
+  });
+
+  it("cancels a hydration wait without blocking retained history or cancelling shared interaction observation", async () => {
+    const current = await attached([user(), assistant(), idle()]);
+    await current.handle.establishProjection({ signal: signal() });
+    const events: BackendConversationEvent[] = []; current.handle.subscribe(value => events.push(value));
+    const held = current.wire.hold(`/api/session/${current.wire.sessionID}/form`), abort = new AbortController();
+    try {
+      const hydration = current.handle.establishProjection({ signal: abort.signal });
+      const rejected = expect(hydration).rejects.toBeInstanceOf(Error);
+      await held.entered; abort.abort(); await rejected;
+      await expect(current.handle.history({ limit: 10, signal: AbortSignal.timeout(1_000) })).resolves.toBeDefined();
+      const form = { id: "frm_after_cancel", sessionID: current.wire.sessionID, title: "Form after hydration cancellation",
+        fields: [{ key: "name", type: "string" }] };
+      current.wire.setResponse(`/api/session/${current.wire.sessionID}/form`, 200, { data: [form] });
+      current.wire.send({ id: "evt_form_after_cancel", created: 1, type: "form.created", data: { form } });
+      held.release();
+      await vi.waitFor(() => expect(events.some(value => value.type === "interaction_opened" && value.interaction.title.text === form.title)).toBe(true));
+      expect(current.client.lifetime.aborted).toBe(false);
+    } finally { held.release(); }
+  });
+
   it("waits for SSE readiness before the first history request", async () => {
     const wire = createOpenCodeApiFixture(), held = wire.hold("/api/event"), fixture = setup([], wire);
     const handle = await fixture.driver.attach(fixture.target); cleanup.push(() => handle.close());

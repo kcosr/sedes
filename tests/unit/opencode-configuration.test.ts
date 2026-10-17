@@ -1,3 +1,4 @@
+import { OPENCODE_RELEASE } from "../../src/server/backends/opencode/opencode-release.js";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { opencodeHttpUrlSchema, opencodeModuleConfigurationSchema } from "../../src/shared/protocol/opencode-configuration.js";
@@ -40,14 +41,14 @@ describe("OpenCode v2 operator configuration", () => {
       const document = configuration(external);
       document.backends[0]!.modelPolicy = structuredClone(modelPolicy);
       expect(() => validateConfigurationDocument(document)).toThrow(/configuration or target defaults are invalid/u);
-      expect(() => parseOpenCodeBackendConfiguration({ backend: { ...document.backends[0]!, protocolRelease: "2.0.18" },
+      expect(() => parseOpenCodeBackendConfiguration({ backend: { ...document.backends[0]!, protocolRelease: OPENCODE_RELEASE },
         connections: document.targets, executionEnvironments: document.executionEnvironments, environment: {} })).toThrow(/restrictive_model_policy/u);
     }
   });
   it.each([false, true])("validates the closed configuration with external=%s", external => {
     const value = validateConfigurationDocument(configuration(external));
     const backend = value.backends[0]!;
-    const parsed = parseOpenCodeBackendConfiguration({ backend: { ...backend, protocolRelease: "2.0.18" },
+    const parsed = parseOpenCodeBackendConfiguration({ backend: { ...backend, protocolRelease: OPENCODE_RELEASE },
       connections: value.targets, executionEnvironments: value.executionEnvironments, environment: {} });
     expect(parsed.connection.ownership).toBe(external ? "external" : "owned");
     expect(parsed.defaultsByConnectionId.get("opencode-target")).toEqual({ model: { type: "catalogDefault" }, variant: { type: "modelDefault" } });
@@ -102,7 +103,7 @@ describe("OpenCode v2 operator configuration", () => {
     if (source === "backend") document.backends[0]!.environmentVariables = variables;
     else document.executionEnvironments[0]!.environmentVariables = variables;
     expect(() => validateConfigurationDocument(document)).toThrow(/cannot receive Sedes startup or execution variables/u);
-    expect(() => parseOpenCodeBackendConfiguration({ backend: { ...document.backends[0]!, protocolRelease: "2.0.18" },
+    expect(() => parseOpenCodeBackendConfiguration({ backend: { ...document.backends[0]!, protocolRelease: OPENCODE_RELEASE },
       connections: document.targets, executionEnvironments: document.executionEnvironments, environment: {} })).toThrow(/opencode_external_environment_unsupported/u);
   });
 
@@ -130,7 +131,7 @@ describe("OpenCode v2 operator configuration", () => {
     document.executionEnvironments = [{ id: environmentId, label: "Remote", workspaceRoots: ["/workspace"], operations: { kind: "none" },
       ...(kind === "ssh" ? { kind: "ssh", hostAlias: "execution-host" } : { kind: "outbound", platform: "linux", pairingId: "20000000-0000-4000-8000-000000000001" }) }];
     expect(() => validateConfigurationDocument(document)).toThrow("owner-protected password file on the execution host");
-    expect(() => parseOpenCodeBackendConfiguration({ backend: { ...document.backends[0]!, protocolRelease: "2.0.18" },
+    expect(() => parseOpenCodeBackendConfiguration({ backend: { ...document.backends[0]!, protocolRelease: OPENCODE_RELEASE },
       connections: document.targets, executionEnvironments: document.executionEnvironments, environment: {} })).toThrow("opencode_remote_password_file_required");
   });
 

@@ -499,10 +499,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       // Inbox removal can mean promotion into execution. Read activity after
       // the inbox so that handoff cannot combine old idle with new empty inbox.
       let pending = await this.#api.getPending(this.binding.backendConversationId, signal);
-      let [activity, interactions] = await Promise.all([
-        this.#api.getActivity(this.binding.backendConversationId, this.input.workspace.canonicalPath, signal),
-        this.#api.getInteractions(this.binding.backendConversationId, signal),
-      ]);
+      let activity = await this.#api.getActivity(this.binding.backendConversationId, this.input.workspace.canonicalPath, signal);
       let suffix = retained.messages.slice(retained.messages.findLastIndex(message => message.type === "idle") + 1);
       let unfinished = suffix.some(message => ["user", "assistant", "synthetic", "compaction"].includes(message.type));
       if (!activity.active && unfinished) {
@@ -524,14 +521,12 @@ export class OpenCodeConversationHandle implements ConversationHandle {
           // another input is promoted while confirming completion.
           idleAt = Math.max(idleAt, confirmedIdle.time.created);
           pending = await this.#api.getPending(this.binding.backendConversationId, signal);
-          [activity, interactions] = await Promise.all([
-            this.#api.getActivity(this.binding.backendConversationId, this.input.workspace.canonicalPath, signal),
-            this.#api.getInteractions(this.binding.backendConversationId, signal),
-          ]);
+          activity = await this.#api.getActivity(this.binding.backendConversationId, this.input.workspace.canonicalPath, signal);
         }
       }
       // An inactive inbox can also be deliberately parked. Only allow a bounded
       // promotion window, never masking orphaned work or unresolved interactions.
+      const interactions = await waitOpenCode(this.#interactions.refresh(activity.children, activity.activeChildren), signal);
       const blocked = unfinished || interactions.permissions.length > 0 || interactions.forms.length > 0;
       this.#activity = activity.active ? suffix.length ? "running" : "starting"
         : blocked ? "unknown"
@@ -544,7 +539,6 @@ export class OpenCodeConversationHandle implements ConversationHandle {
           () => this.#activity === "starting" && !this.#pendingPromotion);
       }
       this.#acceptActivity(activity);
-      await this.#interactions.refresh(interactions, activity.children, activity.activeChildren);
       await this.runtime.assertCurrent(signal);
       check();
       this.#inputObservation.observer.observeHistory(retained.messages);

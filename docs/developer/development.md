@@ -248,8 +248,8 @@ shutdown/restart, external UDS/TCP survival, unavailable-target isolation, and
 owned-stdio process-group/native-lock ordering. It currently requires Linux
 x64, procfs, and a compatible operator-installed Codex command.
 
-The OpenCode v2 qualification suite uses an explicitly selected `opencode2`
-2.0.18 binary with disposable configuration/storage and loopback model/MCP
+The OpenCode v2 qualification suite uses an explicitly selected supported
+stable `opencode2` binary (minimum 2.0.29, tested through 2.0.32) with disposable configuration/storage and loopback model/MCP
 fixtures. Its page-preview image qualification uses the pinned Playwright
 Chromium installed for browser tests, with the production preview sandbox
 enabled; it does not require an operator-owned Sedes preview-browser
@@ -276,8 +276,11 @@ The suite combines native characterization with production adapter qualification
 Characterization includes reproducing missing idle filtering, MCP catalog
 readiness races, and synthetic credential environment exposure. Production
 checks exercise native codecs, resident ownership, history, delivery, mutation
-recovery, MCP ingress, scoped shell environments, images, compaction and usage. The compiled OpenCode module admits exactly stock 2.0.18;
-these loopback fixtures do not qualify authenticated external model providers.
+recovery, MCP ingress, scoped shell environments, images, compaction and usage.
+The fixture records the actual admitted executable version. Qualify both the
+minimum and tested-through releases when updating the SDK/profile or runtime
+policy. These loopback fixtures do not qualify authenticated external model
+providers.
 The production-carrier job uses built provider/sidecar artifacts and covers
 local, actual OpenSSH and paired outbound connections in both ownership modes.
 Build first; its SSH cells require an executable `/usr/sbin/sshd` plus `ssh`
@@ -345,7 +348,7 @@ steps, a 45-second total runner deadline including setup, and native 20-second
 request/10-second chunk timeouts. A synchronous check refuses to submit if
 setup exhausted that deadline. The test harness reserves additional time for
 bounded native startup settlement and independent cleanup after cancellation.
-Stock 2.0.18 has internal transient retries which cannot be
+Stock 2.0.29 has internal transient retries which cannot be
 disabled through configuration; the first observed retry fails the gate and
 requests Stop. The gate checks parsed events before closing its observation and
 settles that monitor before success; the local cutoff cannot prove that every
