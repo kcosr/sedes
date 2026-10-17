@@ -143,6 +143,11 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Android voice holds queued playback while foreground dictation is saved and
+  submitted through the composer, so a newly accepted message suppresses the
+  older reply on that thread before it starts speaking. See
+  [voice input](docs/operator/clients/voice.md).
+
 - Restore supported OpenCode reasoning-effort choices after native model
   catalog validation. See [OpenCode settings](docs/operator/backends/opencode.md#conversations-and-settings).
   ([#94](https://github.com/kcosr/sedes/pull/94))

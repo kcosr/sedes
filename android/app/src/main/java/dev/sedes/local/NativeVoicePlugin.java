@@ -56,6 +56,7 @@ public final class NativeVoicePlugin extends Plugin {
     @PluginMethod public void setForegroundContext(PluginCall call) { run("setForegroundContext", call, false); }
     @PluginMethod public void claimComposerHandoff(PluginCall call) { run("claimComposerHandoff", call, false); }
     @PluginMethod public void completeComposerHandoff(PluginCall call) { run("completeComposerHandoff", call, false); }
+    @PluginMethod public void settleComposerSubmission(PluginCall call) { run("settleComposerSubmission", call, false); }
     @PluginMethod public void setNextRecordingTarget(PluginCall call) { run("setNextRecordingTarget", call, true); }
     @PluginMethod public void releaseRetainedVoiceTarget(PluginCall call) { run("releaseRetainedVoiceTarget", call, true); }
     @PluginMethod public void retargetActiveRecognition(PluginCall call) { run("retargetActiveRecognition", call, false); }

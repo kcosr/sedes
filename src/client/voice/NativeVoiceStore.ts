@@ -14,6 +14,8 @@ export interface VoiceClientState {
   readonly dismissedErrors?: { readonly connectionGeneration: number; readonly errors: readonly NativeVoiceError[] };
 }
 export type VoiceSettingsPatch = Partial<NativeVoiceSettings> | ((current: NativeVoiceState) => Partial<NativeVoiceSettings> | null);
+/** Ownership is synchronous; optional submission work outlives the mounted composer. */
+export type VoiceComposerAdoption = { readonly submission?: Promise<void> } | void;
 const RETRY_BASE_MS = 2_000;
 const RETRY_MAX_MS = 60_000;
 /** Entering one of these phases means a new interaction is under way, so an earlier failure no longer describes the bar. */
@@ -40,7 +42,7 @@ export class NativeVoiceStore {
   #stopping = new Map<string, Promise<void>>();
   #composers = new Map<string, (text: string) => void>();
   #composerListeners = new Set<() => void>();
-  #submissionComposers = new Map<string, (event: NativeVoiceComposerHandoff) => void>();
+  #submissionComposers = new Map<string, (event: NativeVoiceComposerHandoff) => VoiceComposerAdoption>();
   #submissionComposerListeners = new Set<() => void>();
   #seenHandoffs = new Set<string>();
   constructor(readonly plugin: NativeVoicePlugin, readonly connection: { profileId: string; serverOrigin: string; identity: string }, readonly openThread: (threadId: string) => void) {}
@@ -65,7 +67,7 @@ export class NativeVoiceStore {
     return () => { if (this.#composers.get(threadId) === append) this.#composers.delete(threadId); };
   }
   /** Separate from recovery insertion: only the current live Chat can take ownership and send. */
-  registerSubmissionComposer(threadId: string, accept: (event: NativeVoiceComposerHandoff) => void): () => void {
+  registerSubmissionComposer(threadId: string, accept: (event: NativeVoiceComposerHandoff) => VoiceComposerAdoption): () => void {
     this.#submissionComposers.set(threadId, accept);
     this.#notifySubmissionComposers();
     return () => {
@@ -108,12 +110,13 @@ export class NativeVoiceStore {
       // this store was disposed or its connection changed while claiming.
       const message = (error instanceof Error ? error.message : "The composer handoff could not be confirmed.").slice(0, 1024);
       try {
-        this.#acceptHandoffCompletion(event, await this.plugin.completeComposerHandoff({ ...context, outcome: "declined", message }));
+        this.#acceptHandoffCompletion(event, await this.plugin.completeComposerHandoff({ ...context, outcome: "declined", submissionPending: false, message }));
       } catch { /* An already cancelled offer needs no further action. */ }
       return;
     }
     let outcome: "accepted" | "declined" = "declined";
     let message: string | undefined;
+    let submission: Promise<{ failed: false } | { failed: true; error: unknown }> | undefined;
     try {
       if (!this.#matchesHandoff(event) || (typeof document !== "undefined" && document.visibilityState === "hidden"))
         throw new Error("Open the recording's live Chat to send it with the composer.");
@@ -127,15 +130,32 @@ export class NativeVoiceStore {
       const accept = this.#submissionComposers.get(event.threadId);
       if (!accept) throw new Error("Open the recording's live Chat to send it with the composer.");
       // No await between checking the latest view and capturing its live draft.
-      accept(event);
+      const adopted = accept(event);
+      // Observe rejection immediately, including while native ownership acknowledgement
+      // is pending. Delivery failure cannot return already adopted speech to recovery.
+      submission = adopted?.submission?.then(() => ({ failed: false as const }), error => ({ failed: true as const, error }));
       outcome = "accepted";
     } catch (error) {
       message = (error instanceof Error ? error.message : "The composer could not accept this dictation.").slice(0, 1024);
     }
+    let ownershipUnconfirmed = false;
     try {
-      this.#acceptHandoffCompletion(event, await this.plugin.completeComposerHandoff({ ...context, outcome, ...(message ? { message } : {}) }));
+      this.#acceptHandoffCompletion(event, await this.plugin.completeComposerHandoff({ ...context, outcome, submissionPending: submission !== undefined, ...(message ? { message } : {}) }));
     } catch (error) {
+      ownershipUnconfirmed = outcome === "accepted";
       if (this.#matchesHandoff(event)) this.#error(error);
+    }
+    if (submission || ownershipUnconfirmed) {
+      const result = await submission;
+      if (result?.failed && this.#matchesHandoff(event)) this.#error(result.error);
+      // Settle the original reservation even after navigation, disposal, or a lost
+      // ownership acknowledgement, including draft-only adoption. Never bind this
+      // completion to a newer connection.
+      try {
+        this.#acceptHandoffCompletion(event, await this.plugin.settleComposerSubmission(context));
+      } catch (error) {
+        if (this.#matchesHandoff(event)) this.#error(error);
+      }
     }
   }
   async addRecordingToComposer(context: NativeRecordingRecoveryCommandContext): Promise<void> {

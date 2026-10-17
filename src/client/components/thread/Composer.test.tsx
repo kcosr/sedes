@@ -5930,6 +5930,56 @@ describe("foreground voice composer ownership", () => {
     await waitFor(() => expect(store.deliver).toHaveBeenCalledWith("submit", expect.objectContaining({ text: "Explain this" }), expect.any(String)));
   });
 
+  it.each(["submit", "queue", "steer"] as const)("keeps playback held through draft saving and the %s admission receipt", async mode => {
+    const { fake } = await native();
+    const base = snapshot(mode === "submit" ? "idle" : "running");
+    if (mode !== "submit") base.capabilities.deliveryModes = [
+      { id: "queue", steerTarget: null, label: { text: "Queue" }, available: true },
+      { id: "steer", steerTarget: "turn", label: { text: "Steer" }, available: true },
+    ];
+    const store = new FakeComposerStore(base, "snippet");
+    let save!: () => void, deliver!: () => void;
+    const saving = new Promise<void>(resolve => { save = resolve; });
+    const delivering = new Promise<void>(resolve => { deliver = resolve; });
+    const saveDraft = store.saveDraft.getMockImplementation()!;
+    const deliverDraft = store.deliver.getMockImplementation()!;
+    store.saveDraft.mockImplementationOnce(async (...args) => { await saving; return saveDraft(...args); });
+    store.deliver.mockImplementationOnce(async (...args) => { await delivering; return deliverDraft(...args); });
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    offer(fake, { mode: mode === "steer" ? "steer" : "queue" });
+    await accepted(fake);
+    expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ submissionPending: true }));
+    expect(store.saveDraft).toHaveBeenCalledOnce();
+    expect(store.deliver).not.toHaveBeenCalled();
+    expect(fake.plugin.settleComposerSubmission).not.toHaveBeenCalled();
+    await act(async () => save());
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledWith(mode, expect.objectContaining({ text: "Explain this\n\nsnippet" }), expect.any(String)));
+    expect(fake.plugin.settleComposerSubmission).not.toHaveBeenCalled();
+    await act(async () => deliver());
+    await waitFor(() => expect(fake.plugin.settleComposerSubmission).toHaveBeenCalledExactlyOnceWith({
+      expectedConnectionGeneration: 1, handoffId: expect.any(String),
+    }));
+  });
+
+  it("settles the captured send after its composer unmounts during saving", async () => {
+    const { fake, voice } = await native();
+    const store = new FakeComposerStore(snapshot(), "snippet");
+    let save!: () => void;
+    const saving = new Promise<void>(resolve => { save = resolve; });
+    const saveDraft = store.saveDraft.getMockImplementation()!;
+    store.saveDraft.mockImplementationOnce(async (...args) => { await saving; return saveDraft(...args); });
+    const view = render(<Composer store={store as unknown as ThreadClientStore} />);
+    offer(fake);
+    await accepted(fake);
+    expect(fake.plugin.settleComposerSubmission).not.toHaveBeenCalled();
+    view.unmount();
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(false);
+    await act(async () => save());
+    await waitFor(() => expect(fake.plugin.settleComposerSubmission).toHaveBeenCalledOnce());
+    expect(store.deliver).toHaveBeenCalledWith("submit", expect.objectContaining({ text: "Explain this\n\nsnippet" }), expect.any(String));
+    expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledOnce();
+  });
+
   it("leaves speech with native when the composer unmounts before its claim reply", async () => {
     const { fake, voice } = await native();
     const store = new FakeComposerStore(snapshot(), "keep draft");
@@ -6021,10 +6071,12 @@ describe("foreground voice composer ownership", () => {
     offer(fake);
     await accepted(fake);
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
+    expect(fake.plugin.settleComposerSubmission).not.toHaveBeenCalled();
     type("new draft");
     await act(async () => reject(new Error("Delivery rejected")));
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Explain this\n\nsnippet\n\nnew draft"));
     expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledOnce();
+    await waitFor(() => expect(fake.plugin.settleComposerSubmission).toHaveBeenCalledOnce());
     expect(fake.plugin.sendRecoveredRecording).not.toHaveBeenCalled();
     expect(store.deliver).toHaveBeenCalledOnce();
   });
@@ -6038,6 +6090,8 @@ describe("foreground voice composer ownership", () => {
     await accepted(fake);
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Explain this\n\nsnippet"));
     expect(store.deliver).not.toHaveBeenCalled();
+    await waitFor(() => expect(fake.plugin.settleComposerSubmission).toHaveBeenCalledOnce());
+    expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "accepted", submissionPending: true }));
   });
 
   it("adopts speech with pending attachments and waits for an explicit Send with the uploaded context", async () => {
@@ -6055,6 +6109,8 @@ describe("foreground voice composer ownership", () => {
     expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Explain this\n\nsnippet");
     expect(screen.getByText("Speech added to the draft. Wait for attachment uploads to finish, then press Send.")).toBeVisible();
     expect(store.deliver).not.toHaveBeenCalled();
+    expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ submissionPending: false }));
+    expect(fake.plugin.settleComposerSubmission).not.toHaveBeenCalled();
     const attachment = { id: store.uploadComposerAttachment.mock.calls[0]![0], fileName: "notes.bin",
       kind: "file" as const, mediaType: "application/octet-stream" as const, byteSize: 7 };
     await act(async () => upload(attachment));
@@ -6072,6 +6128,8 @@ describe("foreground voice composer ownership", () => {
     expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Explain this\n\nsnippet");
     expect(screen.getByText("Speech added to the draft. Resolve the current Send restriction, then press Send.")).toBeVisible();
     expect(store.deliver).not.toHaveBeenCalled();
+    expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ submissionPending: false }));
+    expect(fake.plugin.settleComposerSubmission).not.toHaveBeenCalled();
   });
 
   it.each(["inactive", "history", "tui", "hidden-chat"])("does not register the %s composer for foreground submission", async view => {

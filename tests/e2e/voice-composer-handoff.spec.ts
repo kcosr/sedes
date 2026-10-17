@@ -46,11 +46,28 @@ async function offerSpeech(page: Page, threadId: string, text: string): Promise<
   }, { threadId, text, handoffId: randomUUID(), recordingId: randomUUID() });
 }
 
-async function expectHandoff(page: Page, event: NativeVoiceComposerHandoff, outcome: "accepted" | "declined"): Promise<void> {
+async function expectHandoff(page: Page, event: NativeVoiceComposerHandoff, outcome: "accepted" | "declined", submissionPending = outcome === "accepted"): Promise<void> {
   await expect.poll(() => page.evaluate(handoffId => window.__voiceFixture.calls.find(call =>
-    call.method === "completeComposerHandoff" && call.args.handoffId === handoffId)?.args, event.handoffId)).toMatchObject({ outcome });
+    call.method === "completeComposerHandoff" && call.args.handoffId === handoffId)?.args, event.handoffId)).toMatchObject({ outcome, submissionPending });
   expect(await page.evaluate(handoffId => window.__voiceFixture.calls.filter(call =>
     call.method === "claimComposerHandoff" && call.args.handoffId === handoffId).length, event.handoffId)).toBe(1);
+}
+
+async function submissionSettlements(page: Page, event: NativeVoiceComposerHandoff) {
+  return page.evaluate(handoffId => window.__voiceFixture.calls.filter(call =>
+    call.method === "settleComposerSubmission" && call.args.handoffId === handoffId).map(call => call.args), event.handoffId);
+}
+
+async function expectSubmissionSettled(page: Page, event: NativeVoiceComposerHandoff): Promise<void> {
+  await expect.poll(() => submissionSettlements(page, event)).toEqual([
+    { expectedConnectionGeneration: event.connectionGeneration, handoffId: event.handoffId },
+  ]);
+}
+
+function gate() {
+  let release!: () => void;
+  const promise = new Promise<void>(resolve => { release = resolve; });
+  return { promise, release };
 }
 
 function deliveredTo(page: Page, threadId: string) {
@@ -112,6 +129,23 @@ test("foreground dictation sends the live full draft as one composer input witho
   const speech = "Please inspect this supplemental information.";
   const snippet = "function supplemental() {\n    return 'keep this indentation';\n}\n";
   const combined = formatThreadReferenceText(`${speech}\n\n${snippet}`, references);
+  const saveEntered = gate(), saveGate = gate(), sendEntered = gate(), sendGate = gate();
+  const draftPattern = `**/api/threads/${threadId}/draft`;
+  const sendPattern = `**/api/threads/${threadId}/operations`;
+  await page.route(draftPattern, async route => {
+    if (route.request().method() === "PUT" && route.request().postDataJSON().text === combined) {
+      saveEntered.release();
+      await saveGate.promise;
+    }
+    await route.continue();
+  });
+  await page.route(sendPattern, async route => {
+    if (route.request().method() === "POST" && route.request().postDataJSON().kind === "deliver") {
+      sendEntered.release();
+      await sendGate.promise;
+    }
+    await route.continue();
+  });
   const saved = page.waitForResponse(response => response.request().method() === "PUT" &&
     response.url().endsWith(`/threads/${threadId}/draft`) && response.ok() && response.request().postDataJSON().text === combined);
   const sent = deliveredTo(page, threadId);
@@ -123,10 +157,22 @@ test("foreground dictation sends the live full draft as one composer input witho
     await expect(composer).not.toBeFocused();
     const event = await offerSpeech(page, threadId, speech);
     await expectHandoff(page, event, "accepted");
+    await saveEntered.promise;
+    await expect(composer).toHaveValue("");
+    await expect(page.locator('[data-item-kind="user_message"]').last()).toContainText(speech);
+    await expect(page.locator('[data-item-kind="user_message"]').last()).toContainText("voice-supplement.txt");
+    expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery)).toBeNull();
+    expect(await submissionSettlements(page, event)).toEqual([]);
+    saveGate.release();
     await expect(page.getByRole("button", { name: "Open voice controls", exact: true })).toBeFocused();
     expect((await saved).request().postDataJSON()).toMatchObject({ text: combined, selectedSkillId,
       contextExcerpts: [excerpt], attachmentIds: snapshot.draft.attachments.map(attachment => attachment.id), taskReferenceIds: [taskId] });
+    await sendEntered.promise;
+    await expect(composer).toHaveValue("");
+    expect(await submissionSettlements(page, event)).toEqual([]);
+    sendGate.release();
     expect((await sent).request().postDataJSON()).toMatchObject({ kind: "deliver", mode: "submit" });
+    await expectSubmissionSettled(page, event);
     await expect(composer).toHaveValue("");
     await expect(page.getByTestId("composer").getByLabel("Attachments")).toHaveCount(0);
     await expect(page.getByTestId("composer").getByLabel("Context excerpts")).toHaveCount(0);
@@ -140,6 +186,10 @@ test("foreground dictation sends the live full draft as one composer input witho
     await expect(page.getByRole("button", { name: "Saved dictation", exact: true })).toHaveCount(0);
     await capture(page, testInfo, "voice-full-draft-streaming.png");
   } finally {
+    saveGate.release();
+    sendGate.release();
+    await page.unroute(draftPattern);
+    await page.unroute(sendPattern);
     expect((await page.request.post("/__e2e/codex/turn-completion/release")).status()).toBe(204);
   }
   await expect(page.locator(".conversation-turn").last()).toHaveAttribute("data-turn-status", "completed");
@@ -213,9 +263,11 @@ test("a rejected voice composer send restores the full contribution alongside la
     await expectHandoff(page, event, "accepted");
     await entered;
     await expect(composer).toHaveValue("");
+    expect(await submissionSettlements(page, event)).toEqual([]);
     await composer.fill("New typing while the send is pending.");
     release();
     await expect(composer).toHaveValue("Please examine this snippet.\n\nOriginal pasted context.\n\nNew typing while the send is pending.");
+    await expectSubmissionSettled(page, event);
     await expect(page.getByTestId("composer").getByLabel("Attachments")).toContainText("voice-recovery.txt");
     expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery)).toBeNull();
     await expect(page.getByRole("button", { name: "Saved dictation", exact: true })).toHaveCount(0);
@@ -260,11 +312,12 @@ test("voice holds a pending attachment in the composer until the user sends the 
     });
     await entered;
     const event = await offerSpeech(page, threadId, "Read the uploaded supplement.");
-    await expectHandoff(page, event, "accepted");
+    await expectHandoff(page, event, "accepted", false);
     await expect(composer).toHaveValue("Read the uploaded supplement.\n\nPasted upload context.");
     await expect(page.getByTestId("composer")).toContainText("Wait for attachment uploads to finish, then press Send.");
     await expect(page.getByTestId("composer").getByLabel("Attachments").locator("[data-upload-id]")).toHaveCount(1);
     expect(deliveries).toEqual([]);
+    expect(await submissionSettlements(page, event)).toEqual([]);
     expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery)).toBeNull();
     await capture(page, testInfo, "voice-pending-upload-owned-by-composer.png");
   } finally {

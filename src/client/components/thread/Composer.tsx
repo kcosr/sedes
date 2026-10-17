@@ -2,6 +2,7 @@ import { usePickerFocus } from "../../lib/use-picker-focus.js";
 import { setComposerDeliveryMode, useComposerDeliveryMode } from "../../app/composer-delivery-mode.js";
 import { useComposerReasoningFit } from "./use-composer-reasoning-fit.js";
 import { useNativeVoice } from "../../voice/VoiceProvider.js";
+import type { VoiceComposerAdoption } from "../../voice/NativeVoiceStore.js";
 import { QuestionInboxButton, QuestionInboxPanel } from "./QuestionInbox.js";
 import {
   useCallback,
@@ -1829,7 +1830,7 @@ export function Composer({
     if (!active || !voice || !voiceComposerReady) return;
     return voice.registerComposer(store.threadId, text => appendVoiceText.current(text));
   }, [active, voice, store, voiceComposerReady]);
-  const acceptVoiceHandoff = useRef<(event: NativeVoiceComposerHandoff) => void>(() => {});
+  const acceptVoiceHandoff = useRef<(event: NativeVoiceComposerHandoff) => VoiceComposerAdoption>(() => {});
   // Set before the snapshot early-return as well: an old registration can never
   // use the previous render's eligibility or submission function.
   acceptVoiceHandoff.current = () => { throw new Error("The message composer is unavailable."); };
@@ -2153,11 +2154,11 @@ export function Composer({
     candidate?: DraftValue,
     requestedMode?: "submit" | "steer" | "queue",
     options?: { refocus?: boolean },
-  ): boolean => {
+  ): false | { submission?: Promise<void> } => {
     if (tuiActive) {
       if (requestedMode) return false;
       writeDraftToTerminal("submit");
-      return true;
+      return {};
     }
     const mode = requestedMode ?? (busy ? deliveryMode : "submit");
     const value = candidate ?? currentDraftValue();
@@ -2222,7 +2223,7 @@ export function Composer({
     setDraftMutationPending(true);
     let deliveryStarted = false;
     let rollbackHandled = false;
-    void (async () => {
+    const submission = (async () => {
       await draftQueue.current!.mutation(value, async (persisted) => {
         // Most delivery receipts clear the draft. Pre-mark that expected echo
         // so it does not look like a remote write while the request is active.
@@ -2368,9 +2369,9 @@ export function Composer({
         setDraftMutationPending(false);
         synchronizeRetainedComposerState();
       });
-    return true;
+    return { submission };
   };
-  excerptSendRef.current = (candidate) => send(candidate);
+  excerptSendRef.current = (candidate) => send(candidate) !== false;
   acceptVoiceHandoff.current = event => {
     if (!voiceSubmissionVisible || document.visibilityState === "hidden" || event.threadId !== store.threadId)
       throw new Error("Open the recording's live Chat to send it with the composer.");
@@ -2397,7 +2398,8 @@ export function Composer({
       : event.mode === "steer" && supportedBusyDeliveryModes.some(({ id, available }) => id === "steer" && available)
         ? "steer"
         : "queue";
-    if (send(candidate, mode, { refocus: false })) return;
+    const attempt = send(candidate, mode, { refocus: false });
+    if (attempt) return attempt;
     // An upload or capability fence must keep the entire draft, including its
     // outstanding uploads, rather than send speech with only part of its context.
     textRef.current = next;

@@ -51,7 +51,7 @@ export function fakeVoicePlugin() {
   const plugin = {
     setConnection: state(), getState: state(), updateSettings: state(), disconnect: state(), setForegroundContext: state(),
     claimComposerHandoff: vi.fn(async (): Promise<NativeVoiceState> => latestHandoff ? voiceComposerHandoffSnapshot(latestHandoff) : voiceSnapshot()),
-    completeComposerHandoff: state(),
+    completeComposerHandoff: state(), settleComposerSubmission: state(),
     startManualListen: state(), setNextRecordingTarget: state(), releaseRetainedVoiceTarget: state(), retargetActiveRecognition: state(), recordDuringPlayback: state(), skipCurrentPlayback: state(), stopPlayback: state(), stopCurrentInteraction: state(),
     speakReply: vi.fn(async (_input: Parameters<NativeVoicePlugin["speakReply"]>[0]): Promise<NativeVoiceState> => voiceSnapshot()),
     setKeepListening: state(), sendRecording: state(), retryRecordingRecognition: state(), sendRecoveredRecording: state(),
