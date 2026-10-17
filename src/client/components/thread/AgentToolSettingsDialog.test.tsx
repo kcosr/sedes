@@ -185,7 +185,9 @@ function subject(
 }
 
 function toolPolicyStore(overrides: Partial<Pick<ThreadClientStore,
-  "setAgentToolPolicy" | "listToolPolicySets" | "getToolPolicySet">> = {}): ThreadClientStore {
+  "listToolPolicySets" | "getToolPolicySet">> & {
+    readonly setAgentToolPolicy?: (input: Parameters<ThreadClientStore["setAgentToolPolicy"]>[0]) => Promise<unknown>;
+  } = {}): ThreadClientStore {
   return {
     setAgentToolPolicy: vi.fn().mockResolvedValue(undefined),
     listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
@@ -210,7 +212,7 @@ function reusablePolicy(overrides: Partial<ToolPolicySet> = {}): ToolPolicySet {
 async function applyPolicy(policy = reusablePolicy()): Promise<void> {
   await screen.findByRole("option", { name: policy.name });
   fireEvent.change(screen.getByRole("combobox", { name: "Policy set" }), { target: { value: policy.id } });
-  fireEvent.click(screen.getByRole("button", { name: "Apply", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 }
 
 function deferred<T>() {
@@ -241,7 +243,7 @@ describe("AgentToolSettingsDialog", () => {
     expect(screen.getByRole("switch", { name: "Enable agent tools" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Agent context" })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "List workspaces" })).not.toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "Threads", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Threads" }));
     expect(screen.getByRole("checkbox", { name: "Thread status" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Update task" })).not.toBeChecked();
     expect(screen.getByRole("switch", { name: "Allow other environments" })).not.toBeChecked();
@@ -250,7 +252,7 @@ describe("AgentToolSettingsDialog", () => {
     expect(screen.getByRole("combobox", { name: "Agent tool presentation" })).toHaveTextContent("Individual");
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledExactlyOnceWith({
       expectedPolicyRevision: 4,
       enabled: true,
@@ -272,7 +274,7 @@ describe("AgentToolSettingsDialog", () => {
     expect(screen.getByRole("checkbox", { name: "Agent context" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "List workspaces" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "Allow other environments" })).not.toBeChecked();
-    expect(screen.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     expect(screen.queryByText(/Loaded Focused review/)).not.toBeInTheDocument();
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
   });
@@ -290,7 +292,7 @@ describe("AgentToolSettingsDialog", () => {
     expect(screen.getByRole("checkbox", { name: "Agent context" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "List workspaces" })).not.toBeChecked();
     expect(screen.getByRole("switch", { name: "Allow other environments" })).not.toBeChecked();
-    expect(screen.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
   });
 
@@ -303,7 +305,7 @@ describe("AgentToolSettingsDialog", () => {
       storeOverrides: { listToolPolicySets },
     });
     expect(await screen.findByText("Policy sets are unavailable.")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Retry policy sets" }));
     expect(await screen.findByRole("option", { name: selected.name })).toBeInTheDocument();
     expect(listToolPolicySets).toHaveBeenCalledTimes(2);
@@ -333,7 +335,7 @@ describe("AgentToolSettingsDialog", () => {
     expect(screen.getByRole("checkbox", { name: "Agent context" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "Allow other environments" })).not.toBeChecked();
     expect(screen.queryByText(/Loaded Focused review/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
   });
 
@@ -356,7 +358,7 @@ describe("AgentToolSettingsDialog", () => {
     expect(screen.getByRole("checkbox", { name: "Agent context" })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "List workspaces" })).not.toBeChecked();
     expect(screen.getByRole("switch", { name: "Allow other environments" })).toBeChecked();
-    const save = screen.getByRole("button", { name: "Save", exact: true });
+    const save = screen.getByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
     fireEvent.click(save);
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
