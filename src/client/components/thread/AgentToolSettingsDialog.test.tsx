@@ -428,6 +428,40 @@ describe("AgentToolSettingsDialog", () => {
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
   });
 
+  it("does not defer Retry focus until a running native thread becomes idle", async () => {
+    const selected = reusablePolicy();
+    const retryRequest = deferred<{ items: ToolPolicySet[] }>();
+    const listToolPolicySets = vi.fn()
+      .mockRejectedValueOnce(new Error("Policy sets are unavailable."))
+      .mockReturnValueOnce(retryRequest.promise);
+    const { store, rerender, onOpenChange, setAgentToolPolicy } = subject(policySnapshot(), {
+      storeOverrides: { listToolPolicySets },
+    });
+    await screen.findByText("Policy sets are unavailable.");
+    const retry = screen.getByRole("button", { name: "Retry policy sets" });
+    retry.focus();
+    fireEvent.click(retry);
+    rerender(<AgentToolSettingsDialog
+      store={store} snapshot={policySnapshot({ runState: "running" })}
+      authoritative disabled={false} open onOpenChange={onOpenChange}
+    />);
+    await act(async () => retryRequest.resolve({ items: [selected] }));
+    await screen.findByRole("option", { name: selected.name });
+    const select = screen.getByRole("combobox", { name: "Policy set" });
+    expect(select).toBeDisabled();
+    const dialog = screen.getByRole("dialog");
+    act(() => dialog.focus());
+    rerender(<AgentToolSettingsDialog
+      store={store} snapshot={policySnapshot()}
+      authoritative disabled={false} open onOpenChange={onOpenChange}
+    />);
+    expect(select).toBeEnabled();
+    expect(dialog).toHaveFocus();
+    expect(select).not.toHaveFocus();
+    expect(listToolPolicySets).toHaveBeenCalledTimes(2);
+    expect(setAgentToolPolicy).not.toHaveBeenCalled();
+  });
+
   it("aborts policy requests on close and ignores a late Apply response on reopen", async () => {
     const selected = reusablePolicy();
     const request = deferred<ToolPolicySet>();
@@ -454,7 +488,7 @@ describe("AgentToolSettingsDialog", () => {
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
   });
 
-  it("keeps an Apply draft stale if another client changes the policy while its GET is pending", async () => {
+  it("preserves a stale manual draft when the thread changes during a policy GET", async () => {
     const selected = reusablePolicy();
     const request = deferred<ToolPolicySet>();
     const { store, rerender, onOpenChange, setAgentToolPolicy } = subject(policySnapshot({ presentationSurface: "cli" }), {
@@ -463,19 +497,54 @@ describe("AgentToolSettingsDialog", () => {
         getToolPolicySet: vi.fn().mockReturnValue(request.promise),
       },
     });
+    fireEvent.click(screen.getByRole("checkbox", { name: "List workspaces" }));
     await applyPolicy(selected);
     rerender(<AgentToolSettingsDialog
-      store={store} snapshot={policySnapshot({ revision: 5, presentationSurface: "cli", workspaceEnabled: true })}
+      store={store} snapshot={policySnapshot({ revision: 5, presentationSurface: "cli", contextEnabled: false, statusEnabled: true })}
       authoritative disabled={false} open onOpenChange={onOpenChange}
     />);
     await act(async () => request.resolve(selected));
+    expect(await screen.findByText(/changed while the policy loaded/)).toBeVisible();
     expect(await screen.findByText(/changed in another client/i)).toBeVisible();
-    expect(screen.getByRole("checkbox", { name: "Agent context" })).not.toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "List workspaces" })).not.toBeChecked();
-    expect(screen.getByRole("switch", { name: "Allow other environments" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Agent context" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "List workspaces" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Allow other environments" })).not.toBeChecked();
+    expect(screen.queryByText(/Loaded Focused review|already matches/i)).not.toBeInTheDocument();
     const save = screen.getByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
     fireEvent.click(save);
+    expect(setAgentToolPolicy).not.toHaveBeenCalled();
+  });
+
+  it("adopts the latest clean draft when an equal-original policy finishes loading after a revision change", async () => {
+    const selected = reusablePolicy({
+      enabledToolIds: ["agent.context"],
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
+    });
+    const request = deferred<ToolPolicySet>();
+    const { store, rerender, onOpenChange, setAgentToolPolicy } = subject(policySnapshot({ presentationSurface: "cli", presentationMode: "individual" }), {
+      storeOverrides: {
+        listToolPolicySets: vi.fn().mockResolvedValue({ items: [selected] }),
+        getToolPolicySet: vi.fn().mockReturnValue(request.promise),
+      },
+    });
+    await applyPolicy(selected);
+    rerender(<AgentToolSettingsDialog
+      store={store} snapshot={policySnapshot({
+        revision: 5, presentationSurface: "cli", presentationMode: "individual",
+        contextEnabled: false, workspaceEnabled: true,
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
+      })}
+      authoritative disabled={false} open onOpenChange={onOpenChange}
+    />);
+    await act(async () => request.resolve(selected));
+    expect(await screen.findByText(/changed while the policy loaded/)).toBeVisible();
+    expect(screen.queryByText(/already matches|Loaded Focused review/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/changed in another client/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Agent context" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "List workspaces" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Allow other projects" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
   });
 

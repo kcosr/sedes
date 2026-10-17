@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentToolPresentation,
   AgentToolPresentationMode,
@@ -248,6 +248,7 @@ export function AgentToolSettingsDialog({
   const [applyingPolicy, setApplyingPolicy] = useState(false);
   const [appliedPolicyMessage, setAppliedPolicyMessage] = useState("");
   const applyRequest = useRef<AbortController | null>(null);
+  const currentPolicyRevision = useRef(policy.revision);
   const dialogRef = useRef<HTMLDivElement>(null);
   const policySetSelectRef = useRef<HTMLSelectElement>(null);
   const retryButtonRef = useRef<HTMLButtonElement>(null);
@@ -256,6 +257,11 @@ export function AgentToolSettingsDialog({
   const restoreApplyFocus = useRef(false);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
   const isDirty = dirty(draft);
+
+  useLayoutEffect(() => {
+    currentPolicyRevision.current = policy.revision;
+    setAppliedPolicyMessage("");
+  }, [policy.revision]);
 
   useEffect(() => {
     if (!open) return;
@@ -348,12 +354,12 @@ export function AgentToolSettingsDialog({
   useEffect(() => {
     if (!open || policySetsLoading || !restoreRetryFocus.current) return;
     const target = policySetsError ? retryButtonRef.current : policySetSelectRef.current;
-    if (!target || target.disabled) return;
     restoreRetryFocus.current = false;
+    if (!target || target.disabled) return;
     if (document.activeElement === document.body || document.activeElement === dialogRef.current || document.activeElement === retryButtonRef.current) {
       target.focus();
     }
-  }, [open, policySetsLoading, policySetsError, editable]);
+  }, [open, policySetsLoading, policySetsError]);
 
   const orderedIds = policy.groups.flatMap(({ tools }) =>
     tools.map(({ id }) => id),
@@ -370,6 +376,9 @@ export function AgentToolSettingsDialog({
     try {
       const selected = await store.getToolPolicySet(selectedPolicySetId, request.signal);
       if (request.signal.aborted) return;
+      if (currentPolicyRevision.current !== draft.baseRevision) {
+        throw new Error("This thread’s tool settings changed while the policy loaded. Review them and apply again.");
+      }
       const ids = new Set(selected.enabledToolIds);
       if (selected.enabledToolIds.some(id => !orderedIds.includes(id))) {
         throw new Error("This policy includes tools this thread does not support. Choose another policy set or select tools manually.");
