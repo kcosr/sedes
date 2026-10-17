@@ -120,7 +120,7 @@ function fixture(options: { policySets?: ToolPolicyService; requestScope?: {tena
     update: vi.fn(() => ({...policySet,revision:1})), delete: vi.fn(() => ({deleted:true})),
     listSelections: vi.fn(() => ({items:[]})),
     updateSelection: vi.fn((_scope, input) => ({target:input.target,selection:input.selection,revision:1})),
-    preview: vi.fn(() => ({enabled:true,enabledToolIds:policySet.enabledToolIds,resourceScope:policySet.resourceScope,source:"account",policySet:{id:policySet.id,name:policySet.name,revision:0}})),
+    preview: vi.fn(() => ({enabled:true,enabledToolIds:policySet.enabledToolIds,resourceScope:policySet.resourceScope,source:"account",policySet:{id:policySet.id,name:policySet.name,revision:0},defaultPresentation:{surface:"native",mode:"progressive"},presentationOptions:[{surface:"native",modes:["progressive","individual"]}]})),
   };
   const unused = () => {
     throw new Error("route_not_configured_for_test");

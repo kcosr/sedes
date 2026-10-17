@@ -71,6 +71,51 @@ afterEach(() => {
 });
 
 describe("AgentsView", () => {
+  it("keeps keyboard focus on tool choices while the options catalog refreshes", async () => {
+    Object.assign(window.HTMLElement.prototype, { scrollIntoView: vi.fn() });
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    const target = { id: "target-1", label: { text: "Pi" }, backend };
+    const policy = { id: "33333333-3333-4333-8333-333333333333", name: "Reviewer", revision: 0, enabledToolIds: [], resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } };
+    const disabledPolicy = { enabled: false, enabledToolIds: [], source: "account", resourceScope: policy.resourceScope, presentation: { surface: "native", mode: "progressive" } };
+    const options = { kind: "configuration", target, configuration: { backendTypeId: "pi", fields: [], canonicalOverrides: [] }, sedesTools: {
+      defaultPresentation: disabledPolicy.presentation, defaultPolicy: disabledPolicy, resolvedPolicy: disabledPolicy,
+      presentationOptions: [{ surface: "native", modes: ["progressive", "individual"] }], groups: [],
+    } };
+    let targetedCalls = 0;
+    let finishRefresh!: (value: typeof options) => void;
+    const getSavedAgentOptions = vi.fn((input) => {
+      if (!input.targetId) return Promise.resolve({ kind: "targets", targets: [target] });
+      if (targetedCalls++ === 0) return Promise.resolve(options);
+      return new Promise<typeof options>((resolve) => { finishRefresh = resolve; });
+    });
+    const api = {
+      listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }), listToolPolicySets: vi.fn().mockResolvedValue({ items: [policy] }),
+      getSavedAgent: vi.fn().mockResolvedValue(detail), getSavedAgentOptions,
+      getEnvironmentVariablePreview: vi.fn().mockResolvedValue({ snapshot: { version: 1, layers: { environment: {}, backend: {}, agent: {}, thread: {} } }, revision: { configurationRevision: 0 }, startup: { supported: true } }),
+    } as unknown as ApiClient;
+    navigate(agentPath(agentId), { replace: true });
+    render(<AgentsView store={new AgentClientStore(api)} {...locations} />);
+    const configure = await screen.findByRole("combobox", { name: "Configure using" });
+    await waitFor(() => expect(configure).toBeEnabled());
+    fireEvent.click(configure); fireEvent.click(await screen.findByRole("option", { name: "Pi" }));
+    const selector = await screen.findByRole("combobox", { name: "Tool policy" });
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Use backend presentation" })).toBeEnabled());
+    selector.focus();
+    fireEvent.change(selector, { target: { value: policy.id } });
+    expect(selector).toHaveFocus();
+    expect(selector).toBeEnabled();
+    expect(screen.getByText("Updating available settings…")).toBeInTheDocument();
+    await act(async () => finishRefresh(options));
+    expect(selector).toHaveFocus();
+    const presentation = screen.getByRole("switch", { name: "Use backend presentation" });
+    presentation.focus(); fireEvent.click(presentation);
+    expect(presentation).toHaveFocus();
+    expect(presentation).toBeEnabled();
+    expect(screen.getByText("Updating available settings…")).toBeInTheDocument();
+    await act(async () => finishRefresh(options));
+    expect(presentation).toHaveFocus();
+  });
+
   it.each([true, false])("keeps missing-policy options editable and resets saved presentation (explicit: %s)", async (explicitPresentation) => {
     Object.assign(window.HTMLElement.prototype, { scrollIntoView: vi.fn() });
     vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });

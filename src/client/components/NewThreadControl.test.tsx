@@ -167,6 +167,14 @@ function candidate(
   };
 }
 
+const presentationMetadata = {
+  defaultPresentation: { surface: "native", mode: "progressive" },
+  presentationOptions: [
+    { surface: "native", modes: ["progressive", "individual"] },
+    { surface: "cli", modes: ["progressive", "individual"] },
+  ],
+};
+
 beforeEach(() => {
   vi.stubGlobal(
     "matchMedia",
@@ -244,6 +252,8 @@ function control(options?: {
     resolveToolPolicy: options?.resolveToolPolicy ?? vi.fn().mockResolvedValue({
       enabled: false, enabledToolIds: [], source: "default",
       resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
+      defaultPresentation: candidate("target-pi", "Local SDK").sedesTools.defaultPresentation,
+      presentationOptions: candidate("target-pi", "Local SDK").sedesTools.presentationOptions,
     }),
     getEnvironmentVariablePreview: options?.getEnvironmentVariablePreview ?? vi.fn().mockResolvedValue({ snapshot: { version: 1, layers: { environment: {}, backend: {}, agent: {}, thread: {} } }, revision: { configurationRevision: 1 }, startup: { supported: true } }),
     listThreadTemplates:
@@ -406,27 +416,36 @@ describe("NewThreadControl", () => {
     expect(screen.getByRole("combobox", { name: "Tool presentation" })).toHaveValue("cli:individual");
   });
 
-  it("creates a Custom inherited draft when optional presentation options fail", async () => {
+  it("creates a Custom inherited draft without requesting the provider catalog", async () => {
     const user = userEvent.setup();
-    const { createThread } = control({ getSavedAgentOptions: vi.fn().mockRejectedValue(new Error("Model catalog unavailable")) });
+    const getSavedAgentOptions = vi.fn().mockRejectedValue(new Error("Model catalog unavailable"));
+    const { api, createThread } = control({ getSavedAgentOptions });
     await openPicker(user);
-    expect(await screen.findByText(/You can still create this thread with inherited presentation/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
+    expect(screen.getByText("Inherited presentation: Native tools · Progressive discovery.")).toBeInTheDocument();
+    expect(getSavedAgentOptions).not.toHaveBeenCalled();
+    expect(api.resolveToolPolicy).toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Create thread" }));
     await waitFor(() => expect(createThread).toHaveBeenCalledWith(expect.objectContaining({ configuration: { kind: "custom", targetId: "target-pi" } })));
     expect(createThread.mock.calls[0]![0]).not.toHaveProperty("toolPresentation");
   });
 
-  it("lets a template return to Inherit when its presentation cannot be verified", async () => {
+  it("revalidates template presentation from the cheap preview when switching to Custom", async () => {
     const user = userEvent.setup();
-    const { createThread } = control({
-      templates: [{ ...carefulTemplate, toolPresentation: { surface: "cli", mode: "individual" } }],
-      getSavedAgentOptions: vi.fn().mockRejectedValue(new Error("Model catalog unavailable")),
+    const { api, createThread } = control({
+      templates: [{ ...carefulTemplate, toolPresentation: { surface: "native", mode: "individual" } }],
+      resolveToolPolicy: vi.fn().mockResolvedValue({
+        enabled: false, enabledToolIds: [], source: "default", resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
+        defaultPresentation: { surface: "cli", mode: "progressive" }, presentationOptions: [{ surface: "cli", modes: ["progressive"] }],
+      }),
     });
     await openPicker(user);
     await chooseTemplate(user);
-    expect(await screen.findByText(/Choose Inherit or retry to verify this presentation/)).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Agent" }));
+    await user.click(await screen.findByRole("option", { name: /^Custom/ }));
+    expect(await screen.findByText(/This tool presentation is unavailable/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
+    expect(api.getSavedAgentOptions).not.toHaveBeenCalled();
     await user.selectOptions(screen.getByRole("combobox", { name: "Tool presentation" }), "inherit");
     await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Create thread" }));
@@ -446,7 +465,7 @@ describe("NewThreadControl", () => {
       listToolPolicySets: vi.fn().mockResolvedValue({ items: [policy] }),
       resolveToolPolicy: vi.fn(async ({ threadSelection }) => {
         if (threadSelection.kind === "inherit") throw missing;
-        return { enabled: true, enabledToolIds: policy.enabledToolIds, resourceScope: policy.resourceScope, source: "thread" };
+        return { ...presentationMetadata, enabled: true, enabledToolIds: policy.enabledToolIds, resourceScope: policy.resourceScope, source: "thread" };
       }),
     });
     const descriptor = candidate("target-pi", "Local SDK");
@@ -470,7 +489,7 @@ describe("NewThreadControl", () => {
     let repaired = false;
     const resolveToolPolicy = vi.fn(async () => {
       if (!repaired) throw missing;
-      return { enabled: false, enabledToolIds: [], source: "backend", resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } };
+      return { ...presentationMetadata, enabled: false, enabledToolIds: [], source: "backend", resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } };
     });
     control({ resolveToolPolicy });
     await openPicker(user);
@@ -504,7 +523,7 @@ describe("NewThreadControl", () => {
     descriptor.sedesTools.presentationOptions = [{ surface: "cli", modes: ["progressive"] }];
     const { createThread } = control({
       templates: [{ ...carefulTemplate, toolPresentation: { surface: "native", mode: "individual" } }],
-      getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "configuration", ...descriptor }),
+      resolution: { candidates: [descriptor], failures: [] },
     });
     await openPicker(user);
     await chooseTemplate(user);
@@ -529,7 +548,7 @@ describe("NewThreadControl", () => {
       listToolPolicySets: vi.fn(async () => ({ items: deleted ? [] : [policy] })),
       resolveToolPolicy: vi.fn(async () => {
         if (deleted) throw missing;
-        return { enabled: true, enabledToolIds: policy.enabledToolIds, resourceScope: policy.resourceScope, source: "thread" };
+        return { ...presentationMetadata, enabled: true, enabledToolIds: policy.enabledToolIds, resourceScope: policy.resourceScope, source: "thread" };
       }),
       createThread: vi.fn(async () => { deleted = true; throw missing; }),
     });
@@ -555,6 +574,7 @@ describe("NewThreadControl", () => {
     const { api, createThread } = control({
       listToolPolicySets: vi.fn().mockResolvedValue({ items: [policy] }),
       resolveToolPolicy: vi.fn().mockImplementation(async ({ threadSelection }) => ({
+        ...presentationMetadata,
         enabled: threadSelection.kind === "policy_set", enabledToolIds: threadSelection.kind === "policy_set" ? policy.enabledToolIds : [],
         resourceScope: policy.resourceScope, source: threadSelection.kind === "policy_set" ? "thread" : "account",
       })),
@@ -1270,6 +1290,7 @@ describe("NewThreadControl", () => {
   it("shows the effective inherited policy and its scope", async () => {
     const user = userEvent.setup();
     control({ resolveToolPolicy: vi.fn().mockResolvedValue({
+      ...presentationMetadata,
       enabled: true, enabledToolIds: ["thread.list"], source: "account",
       policySet: { id: "33333333-3333-4333-8333-333333333333", name: "Everyday", revision: 2 },
       resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },

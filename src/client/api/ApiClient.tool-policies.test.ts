@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SEDES_CLIENT_PROTOCOL_VERSION } from "../../shared/protocol/application.js";
+import { SEDES_VERSION } from "../../shared/version.js";
 import { ApiClient } from "./ApiClient.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -17,6 +19,22 @@ describe("ApiClient tool policy pages", () => {
     vi.stubGlobal("fetch",fetch);
     expect(await new ApiClient().listToolPolicySets()).toEqual({items:[policy,second]});
     expect(String(fetch.mock.calls[1]![0])).toContain("/api/tool-policies?cursor=next-page");
+  });
+
+  it("retains target presentation metadata from the cheap policy preview", async () => {
+    const preview = {
+      enabled:true,enabledToolIds:policy.enabledToolIds,resourceScope:policy.resourceScope,source:"account",
+      policySet:{id:policy.id,name:policy.name,revision:policy.revision},
+      defaultPresentation:{surface:"native",mode:"individual"},
+      presentationOptions:[{surface:"native",modes:["individual","progressive"]},{surface:"cli",modes:["progressive","individual"]}],
+    };
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response({clientProtocolVersion:SEDES_CLIENT_PROTOCOL_VERSION,version:SEDES_VERSION,csrfToken:"a".repeat(32),providerPulseEnabled:false,experimentalUsageEnabled:false}))
+      .mockResolvedValueOnce(response(preview));
+    vi.stubGlobal("fetch",fetch);
+    expect(await new ApiClient().resolveToolPolicy({targetId:"target-a"})).toEqual(preview);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(String(fetch.mock.calls[1]![0])).toContain("/api/tool-policies/resolve");
   });
 
   it("preserves structured missing-policy details on API errors", async () => {

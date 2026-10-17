@@ -11,6 +11,9 @@ import {
   type AutomationSchedule,
 } from "../../../shared/protocol/automation.js";
 import { ZodError, z } from "zod";
+import { assertToolPolicyWithinCaller } from "../application/assert-tool-policy-within-caller.js";
+import type { ThreadAgentToolPolicyRepository } from "../../db/repositories/thread-agent-tool-policy-repository.js";
+import type { PrincipalAgentToolClientRepository } from "../../db/repositories/principal-agent-tool-client-repository.js";
 import type {
   AutomationMisfirePolicy,
   AutomationRunMode,
@@ -149,6 +152,8 @@ export class AutomationAgentToolService {
   readonly #mutationRecords: AutomationMutationRecords;
   readonly #threads: Pick<ThreadApplicationService, "automationCapability">;
   readonly #inventory: Pick<InventoryRepository, "getThread">;
+  readonly #toolPolicies: Pick<ThreadAgentToolPolicyRepository, "getDurable">;
+  readonly #principalToolClients: Pick<PrincipalAgentToolClientRepository, "get">;
   readonly #now: () => number;
 
   constructor(input: {
@@ -156,12 +161,16 @@ export class AutomationAgentToolService {
     readonly mutationRecords: AutomationMutationRecords;
     readonly threads: Pick<ThreadApplicationService, "automationCapability">;
     readonly inventory: Pick<InventoryRepository, "getThread">;
+    readonly toolPolicies: Pick<ThreadAgentToolPolicyRepository, "getDurable">;
+    readonly principalToolClients: Pick<PrincipalAgentToolClientRepository, "get">;
     readonly now?: () => number;
   }) {
     this.#automations = input.automations;
     this.#mutationRecords = input.mutationRecords;
     this.#threads = input.threads;
     this.#inventory = input.inventory;
+    this.#toolPolicies = input.toolPolicies;
+    this.#principalToolClients = input.principalToolClients;
     this.#now = input.now ?? Date.now;
   }
 
@@ -206,6 +215,7 @@ export class AutomationAgentToolService {
   ): Promise<AgentAutomationDefinition> {
     const operationScope = scope(context);
     const threadId = this.#admitTargetThread(input, context);
+    this.#assertClonePolicy(threadId, input.runMode, context);
     const name = automationNameSchema.parse(input.name);
     const prompt = automationPromptSchema.parse(input.prompt);
     const schedule = automationScheduleSchema.parse(input.schedule);
@@ -238,6 +248,10 @@ export class AutomationAgentToolService {
       input.runMode,
       context.abortSignal,
     );
+    if (input.runMode === "clone") {
+      this.#admitTargetThread(input, context);
+      this.#assertClonePolicy(threadId, input.runMode, context);
+    }
     const definition = this.#automations.create(
       operationScope,
       threadId,
@@ -306,6 +320,7 @@ export class AutomationAgentToolService {
         : current.precheck,
     };
     validateMisfirePolicy(merged.schedule, merged.misfirePolicy);
+    this.#assertClonePolicy(threadId, merged.runMode, context);
     const mutation = {
       ...merged,
       expectedRevision: input.expectedRevision,
@@ -329,6 +344,10 @@ export class AutomationAgentToolService {
         context.abortSignal,
       );
     }
+    if (merged.runMode === "clone") {
+      this.#admitTarget(current, context);
+      this.#assertClonePolicy(threadId, merged.runMode, context);
+    }
     const definition = this.#automations.update(
       operationScope,
       input.automationId,
@@ -344,7 +363,10 @@ export class AutomationAgentToolService {
   ): Promise<AgentAutomationMutationResult> {
     const now = this.#now();
     // The domain replays a recorded state mutation before any live lookup.
-    this.#admitMutationTarget(input, context);
+    const { definition: current } = this.#admitMutationTarget(input, context);
+    if (input.action === "enable") {
+      this.#assertClonePolicy(current.threadId, current.runMode, context);
+    }
     const definition = this.#automations.setState(
       scope(context),
       input.automationId,
@@ -362,7 +384,11 @@ export class AutomationAgentToolService {
     input: AutomationRunNowToolInput,
     context: TrustedToolInvocationContext,
   ): Promise<AutomationToolRun> {
-    this.#admitAutomation(input, context);
+    const current = this.#admitAutomation(input, context);
+    this.#assertClonePolicy(current.threadId, current.runMode, context);
+    // The domain reserves or replays its manual run synchronously, before its
+    // first await. The authority check therefore covers that reservation
+    // without adding a capability preflight that could change replay behavior.
     return toolRun(
       await this.#automations.runNow(
         scope(context),
@@ -519,6 +545,21 @@ export class AutomationAgentToolService {
       workspaceId: target.workspaceId,
     });
     return threadId;
+  }
+
+  #assertClonePolicy(
+    threadId: string,
+    runMode: AutomationRunMode,
+    context: TrustedToolInvocationContext,
+  ): void {
+    if (runMode !== "clone") return;
+    assertToolPolicyWithinCaller({
+      scope: scope(context),
+      authority: context.environmentAuthority,
+      requested: this.#toolPolicies.getDurable(scope(context), threadId),
+      toolPolicies: this.#toolPolicies,
+      principalToolClients: this.#principalToolClients,
+    });
   }
 
   async #assertCloneEligible(

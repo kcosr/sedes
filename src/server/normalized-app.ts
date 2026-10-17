@@ -3,7 +3,7 @@ import {
   updateToolPolicySetRequestSchema, deleteToolPolicySetRequestSchema, toolPolicySetRouteParametersSchema,
   toolPolicySetMutationResultSchema, deleteToolPolicySetResultSchema, toolPolicySelectionListSchema,
   updateToolPolicySelectionRequestSchema, toolPolicySelectionMutationResultSchema,
-  resolveToolPolicyRequestSchema, resolvedToolPolicySchema,
+  resolveToolPolicyRequestSchema, toolPolicyPreviewSchema,
 } from "../shared/protocol/tool-policies.js";
 import type { ToolPolicyService } from "./tool-policies/tool-policy-service.js";
 import { registerClientSchema, clientPollRequestSchema } from "../shared/protocol/client-controls.js";
@@ -2929,7 +2929,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   });
   routes.post("/api/tool-policies/resolve", async (request, response) => {
     const requestScope = await scope(request);
-    response.json(resolvedToolPolicySchema.parse(policySets().preview(requestScope, resolveToolPolicyRequestSchema.parse(request.body))));
+    response.json(toolPolicyPreviewSchema.parse(policySets().preview(requestScope, resolveToolPolicyRequestSchema.parse(request.body))));
   });
   routes.get("/api/tool-policies/:policySetId", async (request, response) => {
     const requestScope = await scope(request);

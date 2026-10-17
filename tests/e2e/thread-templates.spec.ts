@@ -325,6 +325,8 @@ test("templates prefill editable thread creation and survive Agent drift", async
   ).toMatch(/^16px 16px/u);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "thread-template-sheet-mobile.png");
+  await mobileSheet.getByRole("region", { name: "Sedes tools", exact: true }).scrollIntoViewIfNeeded();
+  await capture(page, testInfo, "new-thread-tools-mobile.png");
   const mobileTemplatePicker = mobileSheet.getByRole("combobox", { name: "Template", exact: true });
   await mobileTemplatePicker.click();
   await expect(templateSearch).not.toBeFocused();

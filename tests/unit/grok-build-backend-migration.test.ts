@@ -316,7 +316,13 @@ describe("migration 063 Grok Build backend", () => {
         );
       }
 
-      applyDatabaseMigrations(value.database, backendNormalizedMigrations);
+      // Inspect the legacy envelope after its final shape migration. Later
+      // migrations replace this column with policy selections and have their
+      // own migration coverage.
+      applyDatabaseMigrations(
+        value.database,
+        backendNormalizedMigrations.filter(({ version }) => version <= 92),
+      );
 
       const migrated = value.database
         .prepare(

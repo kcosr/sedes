@@ -16,9 +16,9 @@ Scope organizes content and resolves authority; it is not an independent
 project isolation mechanism. Agent access uses the shared
 [Agent tools](agent-tools.md#project-resources) resource scope. Project and
 environment access must both permit the document. When other-environment
-access is disabled, another project's shared workpad is reachable only through
-an active project location on the source environment. Global workpads are
-explicit shared account resources. Lists filter before pagination; direct
+access is disabled, any project's shared workpad (including the current
+project's) is reachable only through an active project location on the source
+environment. Global workpads are explicit shared account resources. Lists filter before pagination; direct
 outside-scope requests are denied without a prompt. Tool enablement and owner
 checks still apply.
 

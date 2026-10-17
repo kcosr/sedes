@@ -71,7 +71,9 @@ policy name, revision, and source level describe that creation snapshot.
 Editing a policy, Agent, template, or default does not update existing threads.
 User forks and **New with same settings** copy the source thread's current
 policy. Agent and Tool-client forks may copy it only when it does not exceed
-the caller's own tools and resource scope.
+the caller's own tools and resource scope. Agent and Tool-client operations that
+create, edit, enable, or run a clone automation apply the same restriction to
+the automation's source thread.
 
 Use **Thread actions → Agent tools** to edit an existing thread's tools and
 access switches. You can enable broader access temporarily and turn it off

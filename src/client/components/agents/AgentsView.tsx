@@ -791,7 +791,8 @@ function AgentEditor({
           id="agent-tools" catalog={toolCatalog} value={toolPolicySelection}
           toolPresentation={toolPresentation} policySets={policySets}
           catalogState={policiesLoading ? "loading" : policiesError ? "error" : "ready"}
-          disabled={pending || optionsLoading}
+          disabled={pending}
+          updating={optionsLoading}
           onChange={(next) => {
             setToolPolicySelection(next);
             if (workspaceId && targetId) loadOptions(workspaceId, targetId, overrides, next, toolPresentation);

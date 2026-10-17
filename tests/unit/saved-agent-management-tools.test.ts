@@ -18,6 +18,11 @@ import { createPiAgentToolSet } from "../../src/server/backends/pi/pi-agent-tool
 import { PiToolAccessController } from "../../src/server/backends/pi/pi-tool-access.js";
 import { OPENCODE_SAVED_AGENT_PRESENTATION } from "../../src/server/backends/opencode/opencode-saved-agent-adapter.js";
 import { backendBrandSchema } from "../../src/shared/protocol/conversation.js";
+import type { SavedAgentBackendAdapter } from "../../src/server/backends/saved-agent-adapter.js";
+import { SavedAgentBackendAdapterRegistry } from "../../src/server/backends/saved-agent-adapter-registry.js";
+import { SavedAgentRepository } from "../../src/server/db/repositories/saved-agent-repository.js";
+import { SavedAgentService } from "../../src/server/domain/saved-agent-service.js";
+import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 const agentId = "10000000-0000-4000-8000-000000000001";
 const workspaceId = "10000000-0000-4000-8000-000000000002";
@@ -210,6 +215,63 @@ describe("Saved Agent canonical tools", () => {
       expect(JSON.stringify(output)).not.toContain("HOST_TOKEN");
       expect(registry.validatesOutput(get.id, get.schemaVersion, output)).toBe(true);
     }
+  });
+
+  it("preserves persisted user bindings when the canonical tool updates an Agent name", async () => {
+    const current = savedAgentDatabase();
+    try {
+      const unused = () => { throw new Error("Metadata updates must not resolve a backend target."); };
+      const adapter: SavedAgentBackendAdapter = {
+        typeId: "pi", backendKind: "pi", overrideSchemaVersion: 1,
+        presentation: { typeId: "pi", label: { text: "Pi" }, brand: "pi" },
+        validateOverrides: ({ overrides }) => ({ backendTypeId: "pi", schemaVersion: 1, overrides: [...overrides] }),
+        prepareResolutionContext: unused, describeEditor: unused, resolve: unused,
+        captureThreadConfiguration: unused, assertThreadConfigurationCapture: unused,
+        initializeNewThread: unused,
+      };
+      const repository = new SavedAgentRepository(current.database);
+      const agents = new SavedAgentService(repository, new SavedAgentBackendAdapterRegistry([
+        { backendInstanceId: "pi-primary", adapter },
+      ]));
+      const bindings = {
+        PRIVATE: { kind: "literal" as const, value: "stored-private-literal" },
+        TOKEN: { kind: "secret" as const, source: { kind: "environment" as const, name: "STORED_HOST_TOKEN" } },
+      };
+      repository.create(current.scope, {
+        id: agentId, name: "User configured Agent", description: "", backendTypeId: "pi",
+        backendOverridesSchemaVersion: 1, backendOverrides: [],
+        environmentVariables: bindings, toolPolicySelection: { kind: "inherit" }, now: 100,
+      });
+      const storedBindings = () => current.database.prepare(
+        "SELECT environment_variables_json AS bindings FROM saved_agents WHERE tenant_id=? AND owner_principal_id=? AND id=?",
+      ).get(current.scope.tenantId, current.scope.principalId, agentId);
+      const before = storedBindings();
+      const value = service({
+        get: (scope, id) => agents.get(scope, id),
+        updateAgentForAgentTool: (scope, id, input) => agents.update(scope, id, input, 200),
+      });
+      const update = createSavedAgentUpdateToolDefinition(value);
+      const get = createSavedAgentGetToolDefinition(value);
+      const registry = new AgentToolRegistry();
+      registry.register(update);
+      registry.register(get);
+      const invocation = { ...context(), ...current.scope };
+      const output = await update.execute({ agentId, expectedRevision: 0, name: "Renamed by agent" }, invocation);
+
+      expect(output).toMatchObject({ id: agentId, name: "Renamed by agent", revision: 1 });
+      expect(repository.get(current.scope, agentId).environmentVariables).toEqual(bindings);
+      expect(storedBindings()).toEqual(before);
+      const readInvocation = { ...invocation, environmentAuthority: {
+        ...invocation.environmentAuthority,
+        resolvedResourceRefs: [{ kind: "saved_agent" as const, id: agentId, revision: 1 }],
+      } };
+      for (const response of [output, await get.execute({ agentId }, readInvocation)]) {
+        expect(response).not.toHaveProperty("environmentVariables");
+        expect(JSON.stringify(response)).not.toContain("stored-private-literal");
+        expect(JSON.stringify(response)).not.toContain("STORED_HOST_TOKEN");
+        expect(registry.validatesOutput(update.id, update.schemaVersion, response)).toBe(true);
+      }
+    } finally { current.database.close(); }
   });
 
   it("registers six independently exposable contracts with truthful effects", () => {

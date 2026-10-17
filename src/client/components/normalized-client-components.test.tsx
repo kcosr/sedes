@@ -343,9 +343,8 @@ describe("normalized application components", () => {
     const store = {
       createThread,
       api: {
-        getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "configuration", sedesTools: { defaultPresentation: { surface: "native", mode: "progressive" }, presentationOptions: [{ surface: "native", modes: ["progressive", "individual"] }] } }),
         listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
-        resolveToolPolicy: vi.fn().mockResolvedValue({ enabled: false, enabledToolIds: [], source: "default", resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false } }),
+        resolveToolPolicy: vi.fn().mockResolvedValue({ enabled: false, enabledToolIds: [], source: "default", resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, defaultPresentation: { surface: "native", mode: "progressive" }, presentationOptions: [{ surface: "native", modes: ["progressive", "individual"] }] }),
         listSavedAgents: vi.fn().mockResolvedValue({ items: [] }),
         getEnvironmentVariablePreview: vi.fn().mockResolvedValue({ snapshot: { version: 1, layers: { environment: {}, backend: {}, agent: {}, thread: {} } }, revision: { configurationRevision: 1 }, startup: { supported: true } }),
       },

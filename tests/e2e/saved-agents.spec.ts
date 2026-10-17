@@ -166,6 +166,8 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     expect(projectLayout.overflow).toBe("hidden");
     expect(projectLayout.right).toBeLessThanOrEqual(projectLayout.controlRight);
     await capture(page, testInfo, "saved-agent-editor-desktop.png");
+    await page.getByRole("region", { name: "Sedes tools", exact: true }).scrollIntoViewIfNeeded();
+    await capture(page, testInfo, "saved-agent-tools-desktop.png");
 
     const name = page.getByRole("textbox", { name: "Name" });
     await name.fill("Careful reviewer updated");
@@ -187,6 +189,8 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await expect(savedAgents).toBeHidden();
     await expect(page.getByTestId("settings-view").locator(".settings-view-header").getByRole("link")).toHaveText(["Agents"]);
     await capture(page, testInfo, "saved-agent-editor-mobile.png");
+    await page.getByRole("region", { name: "Sedes tools", exact: true }).scrollIntoViewIfNeeded();
+    await capture(page, testInfo, "saved-agent-tools-mobile.png");
     await page.setViewportSize({ width: 390, height: 430 });
     await expectNoPageOverflow(page);
     const cancel = page.getByRole("button", { name: "Cancel", exact: true });

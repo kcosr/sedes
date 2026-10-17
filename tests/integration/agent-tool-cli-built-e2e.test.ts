@@ -327,6 +327,8 @@ describe("built Sedes agent-tool CLI", () => {
         executionPolicy: { assertCanAutomate: () => undefined },
       });
       const automations = new AutomationAgentToolService({
+        toolPolicies: policies,
+        principalToolClients: new PrincipalAgentToolClientRepository(database, createPrincipalAgentToolClientEligibility()),
         automations: automationDomain,
         mutationRecords: automationRepository,
         threads: {} as never,

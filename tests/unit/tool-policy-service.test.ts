@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type Database from "better-sqlite3";
 import { ToolPolicyRepository } from "../../src/server/db/repositories/tool-policy-repository.js";
-import { ToolPolicyService, ToolPolicyResolutionError } from "../../src/server/tool-policies/tool-policy-service.js";
+import { ToolPolicyService } from "../../src/server/tool-policies/tool-policy-service.js";
+import { ToolPolicyResolutionError } from "../../src/server/tool-policies/tool-policy-errors.js";
 import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/server/db/migrate.js";
 import { SavedAgentRepository } from "../../src/server/db/repositories/saved-agent-repository.js";
 import { toolPolicySetListSchema, TOOL_POLICY_MAX_BYTES } from "../../src/shared/protocol/tool-policies.js";
@@ -52,6 +53,24 @@ describe("principal-owned tool policies", () => {
     const policy = repository.create(scope,definition);
     expect(() => repository.update(scope,policy.id,oversized,0)).toThrow();
     expect(repository.get(scope,policy.id)).toEqual(policy);
+  });
+
+  it("reads presentation metadata without provider catalogs or lifecycle work", () => {
+    const {scope,repository,database,target} = fixture();
+    const catalog = {list:vi.fn(() => { throw new Error("Provider catalog must not be consulted by this preview."); })};
+    const savedAgentBackendType = vi.fn(() => { throw new Error("Saved Agent resolution must not run for a Custom preview."); });
+    const service = new ToolPolicyService(repository,undefined,catalog,savedAgentBackendType);
+    const profile = database.prepare("SELECT id FROM agent_connection_profiles LIMIT 1").get() as {id:string};
+    const before = database.prepare("SELECT total_changes() AS changes").get();
+    const preview = service.preview(scope,{targetId:profile.id});
+    expect(preview).toMatchObject({defaultPresentation:{surface:"native",mode:"progressive"},presentationOptions:[
+      {surface:"native",modes:["progressive","individual"]},
+      {surface:"cli",modes:["progressive","individual"]},
+    ]});
+    expect(catalog.list).not.toHaveBeenCalled();
+    expect(savedAgentBackendType).not.toHaveBeenCalled();
+    expect(database.prepare("SELECT total_changes() AS changes").get()).toEqual(before);
+    expect(service.resolvePolicy(scope,{target})).not.toHaveProperty("presentationOptions");
   });
 
   it("keeps preview read-only and rejects incompatible or foreign Saved Agents", () => {

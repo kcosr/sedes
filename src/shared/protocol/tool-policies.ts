@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { MAXIMUM_BROWSER_ENTITY_BYTES, requireSerializedByteLimit } from "./payload.js";
-import { agentToolIdSchema, agentToolResourceScopeSchema, normalizedThreadAgentToolGroupSchema } from "./conversation.js";
+import { agentToolIdSchema, agentToolResourceScopeSchema, agentToolPresentationSchema, agentToolPresentationOptionsSchema, normalizedThreadAgentToolGroupSchema } from "./conversation.js";
 
 export const TOOL_POLICY_PAGE_MAX_ITEMS = 100;
 export const TOOL_POLICY_SELECTION_MAX_ITEMS = 2048;
@@ -89,11 +89,15 @@ export const resolvedToolPolicySchema = z.strictObject({
   policySet: z.strictObject({ id: toolPolicySetIdSchema, name: toolPolicyDefinitionSchema.shape.name, revision: revisionSchema }).optional(),
 });
 export type ResolvedToolPolicy = z.infer<typeof resolvedToolPolicySchema>;
-export const toolPolicyInspectionSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("resolved"), policy: resolvedToolPolicySchema }),
-  toolPolicyResolutionIssueSchema,
-]);
-export type ToolPolicyInspection = z.infer<typeof toolPolicyInspectionSchema>;
+/** Target presentation metadata is preview-only; durable policy snapshots remain backend-neutral. */
+export const toolPolicyPreviewSchema = resolvedToolPolicySchema.extend({
+  presentationOptions: agentToolPresentationOptionsSchema,
+  defaultPresentation: agentToolPresentationSchema,
+});
+export type ToolPolicyPreview = z.infer<typeof toolPolicyPreviewSchema>;
+export type ToolPolicyInspection =
+  | { readonly kind: "resolved"; readonly policy: ResolvedToolPolicy }
+  | ToolPolicyResolutionIssue;
 export const resolveToolPolicyRequestSchema = z.strictObject({
   targetId: z.string().min(1).max(160),
   agentId: z.uuid().optional(),

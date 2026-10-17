@@ -167,7 +167,7 @@ export class WorkspaceApplicationService {
         if (!(error instanceof RemovedLocationError)) throw error;
         throw new CanonicalAgentToolRequestError(
           "conflict",
-          `This directory is a removed location of project ${error.location.projectId}. To restore it there, retry with that projectId.`,
+          error.message,
         );
       }
     }

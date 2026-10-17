@@ -270,7 +270,7 @@ describe("WorkspaceApplicationService", () => {
     );
   });
 
-  it("reports a removed location to an agent with its project instead of restoring it", async () => {
+  it("reports a removed location without disclosing its unrequested project", async () => {
     const current = fixture({
       upsertWorkspace: vi.fn(() => {
         throw new RemovedLocationError({
@@ -288,8 +288,42 @@ describe("WorkspaceApplicationService", () => {
     ).rejects.toMatchObject({
       code: "conflict",
       message:
-        "This directory is a removed location of project project-elsewhere. To restore it there, retry with that projectId.",
+        "This directory is a removed location of an existing project. Restore it in that project.",
     });
+    expect(current.handoffAuthoritativeReplacement).not.toHaveBeenCalled();
+    expect(current.discoverWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("does not reveal the project of a removed location outside an Off/On scope", async () => {
+    const current = fixture({
+      upsertWorkspace: vi.fn(() => {
+        throw new RemovedLocationError({ workspaceId: "workspace-hidden", projectId: "project-hidden" });
+      }),
+      resolveProject: vi.fn(() => ({
+        id: "project-hidden",
+        membershipRevision: 2,
+        memberEnvironmentIds: ["environment-elsewhere"],
+      })),
+    });
+    const localAuthority = createTrustedEnvironmentAuthorityGrant({
+      ...agentAuthority,
+      tool: { id: "workspace.open", schemaVersion: 3 },
+      defaults: { ...agentAuthority.defaults, environmentId: "environment-a" },
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
+      admittedEnvironmentIds: ["environment-a"],
+    });
+    const error = await current.service.openWorkspaceForAgent(
+      scope,
+      { environmentId: "environment-a", path: "/srv/projects/sedes" },
+      localAuthority,
+    ).catch((error: unknown) => error);
+    expect(error).toMatchObject({
+      code: "conflict",
+      message: "This directory is a removed location of an existing project. Restore it in that project.",
+    });
+    expect(JSON.stringify(error)).not.toContain("project-hidden");
+    expect(JSON.stringify(error)).not.toContain("workspace-hidden");
+    expect(current.upsertWorkspace).toHaveBeenCalledWith(scope, expect.not.objectContaining({ restoreRemoved: true }));
     expect(current.handoffAuthoritativeReplacement).not.toHaveBeenCalled();
     expect(current.discoverWorkspace).not.toHaveBeenCalled();
   });

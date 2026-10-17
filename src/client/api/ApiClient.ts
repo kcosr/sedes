@@ -1,9 +1,9 @@
 import {
   toolPolicySetListSchema, toolPolicySetSchema, toolPolicySetMutationResultSchema, toolPolicyOptionsSchema,
   deleteToolPolicySetResultSchema, toolPolicySelectionListSchema,
-  toolPolicySelectionMutationResultSchema, resolvedToolPolicySchema,
+  toolPolicySelectionMutationResultSchema, toolPolicyPreviewSchema,
   type ToolPolicyDefinition, type ToolPolicySelection, type ToolPolicySelectionTarget,
-  type ToolPolicySet, type ToolPolicySelectionSetting, type ResolvedToolPolicy,
+  type ToolPolicySet, type ToolPolicySelectionSetting, type ToolPolicyPreview,
 } from "../../shared/protocol/tool-policies.js";
 import { usageReportSchema, usageAvailabilitySchema, usageAvailabilityRequestSchema, type UsageAvailability, type UsageReport } from "../../shared/protocol/usage-accounting.js";
 import { usageAnalyticsRequestSchema, usageAnalyticsResponseSchema, type UsageAnalyticsRequest, type UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
@@ -957,8 +957,8 @@ export class ApiClient {
     return this.#mutation("/api/tool-policy-selections", toolPolicySelectionMutationResultSchema, { method: "PUT", body: JSON.stringify(input) });
   }
 
-  resolveToolPolicy(input: { targetId: string; agentId?: string; agentSelection?: ToolPolicySelection; threadSelection?: ToolPolicySelection }, signal?: AbortSignal): Promise<ResolvedToolPolicy> {
-    return this.#mutation("/api/tool-policies/resolve", resolvedToolPolicySchema, { method: "POST", body: JSON.stringify(input), signal });
+  resolveToolPolicy(input: { targetId: string; agentId?: string; agentSelection?: ToolPolicySelection; threadSelection?: ToolPolicySelection }, signal?: AbortSignal): Promise<ToolPolicyPreview> {
+    return this.#mutation("/api/tool-policies/resolve", toolPolicyPreviewSchema, { method: "POST", body: JSON.stringify(input), signal });
   }
 
   listSavedAgents(

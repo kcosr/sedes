@@ -3,6 +3,7 @@ import {
   toolPolicySelectionSchema,
   resolvedToolPolicySchema,
   toolPolicyOptionsSchema,
+  toolPolicyPreviewSchema,
   type ToolPolicyDefinition,
   type ToolPolicySelection,
   type ToolPolicySet,
@@ -10,15 +11,16 @@ import {
   type ToolPolicySelectionSetting,
   type ResolvedToolPolicy,
   type ToolPolicyInspection,
+  type ToolPolicyPreview,
 } from "../../shared/protocol/tool-policies.js";
 import type { ConfigurationRepository } from "../configuration-admin/configuration-repository.js";
 import { ToolPolicyRepository } from "../db/repositories/tool-policy-repository.js";
 import { DomainError } from "../domain/errors.js";
 import { ToolPolicyResolutionError } from "./tool-policy-errors.js";
-export { ToolPolicyResolutionError } from "./tool-policy-errors.js";
-import { createThreadAgentToolPolicyDependencies } from "../conversations/thread-agent-tool-policy-dependencies.js";
+import { createThreadAgentToolPolicyDependencies, presentationOptionsForBackend } from "../conversations/thread-agent-tool-policy-dependencies.js";
 import type { ThreadAgentToolCatalogReader } from "../conversations/database-thread-application-readers.js";
 import { boundDisplayText } from "../conversations/payload-policy.js";
+import type { BackendKind } from "../backends/contracts.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 
 export type PolicyResolutionInput = {
@@ -158,12 +160,25 @@ export class ToolPolicyService {
     agentId?: string;
     agentSelection?: ToolPolicySelection;
     threadSelection?: ToolPolicySelection;
-  }): ResolvedToolPolicy {
+  }): ToolPolicyPreview {
     const profile = this.repository.database.prepare(`
-      SELECT backend_instance_id AS backendId, execution_environment_id AS executionEnvironmentId
-      FROM agent_connection_profiles
-      WHERE tenant_id=? AND owner_principal_id=? AND id=? AND enabled=1
-    `).get(scope.tenantId, scope.principalId, input.targetId) as PolicyResolutionInput["target"] | undefined;
+      SELECT profile.backend_instance_id AS backendId,
+        profile.execution_environment_id AS executionEnvironmentId,
+        backend.kind AS backendKind, environment.kind AS environmentKind
+      FROM agent_connection_profiles AS profile
+      JOIN agent_backend_instances AS backend
+        ON backend.tenant_id=profile.tenant_id
+        AND backend.owner_principal_id=profile.owner_principal_id
+        AND backend.id=profile.backend_instance_id
+      JOIN execution_environments AS environment
+        ON environment.tenant_id=profile.tenant_id
+        AND environment.owner_principal_id=profile.owner_principal_id
+        AND environment.id=profile.execution_environment_id
+      WHERE profile.tenant_id=? AND profile.owner_principal_id=? AND profile.id=? AND profile.enabled=1
+    `).get(scope.tenantId, scope.principalId, input.targetId) as (PolicyResolutionInput["target"] & {
+      backendKind: BackendKind;
+      environmentKind: "local" | "ssh" | "outbound";
+    }) | undefined;
     if (!profile) throw new DomainError("not_found", "The execution target was not found.");
     let agentSelection = input.agentSelection;
     if (input.agentId) {
@@ -177,10 +192,17 @@ export class ToolPolicyService {
       if (agent.backendTypeId !== targetType) throw new DomainError("conflict", "The Saved Agent uses a different backend type.");
       agentSelection ??= toolPolicySelectionSchema.parse(JSON.parse(agent.selection));
     }
-    return this.resolvePolicy(scope, {
-      target: profile,
+    const policy = this.resolvePolicy(scope, {
+      target: {backendId:profile.backendId,executionEnvironmentId:profile.executionEnvironmentId},
       ...(agentSelection ? { agentSelection } : {}),
       ...(input.threadSelection ? { threadSelection: input.threadSelection } : {}),
+    });
+    const presentationOptions = presentationOptionsForBackend(profile.backendKind,profile.environmentKind);
+    const preferred = presentationOptions[0];
+    const mode = preferred?.modes[0];
+    if (!preferred || !mode) throw new DomainError("runtime_unavailable", "Sedes tool presentation is unavailable for this target.");
+    return toolPolicyPreviewSchema.parse({...policy,presentationOptions,
+      defaultPresentation:{surface:preferred.surface,mode},
     });
   }
 

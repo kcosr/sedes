@@ -1,14 +1,13 @@
 import { environmentVariableOverridesSchema } from "./environment-variables.js";
 import { z } from "zod";
 import {
-  agentToolResourceScopeSchema,
-  agentToolIdSchema,
+  type AgentToolPresentation,
   agentToolPresentationSchema,
   agentToolPresentationOptionsSchema,
   backendBrandSchema,
   normalizedThreadAgentToolGroupSchema,
 } from "./conversation.js";
-import { toolPolicySelectionSchema, toolPolicyResolutionIssueSchema, resolvedToolPolicySchema } from "./tool-policies.js";
+import { type ResolvedToolPolicy, toolPolicySelectionSchema, toolPolicyResolutionIssueSchema, resolvedToolPolicySchema } from "./tool-policies.js";
 import { workspaceIdSchema } from "./domain.js";
 import {
   boundedDisplayTextSchema,
@@ -336,17 +335,10 @@ export type SavedAgentTargetDescriptor = z.infer<
   typeof savedAgentTargetDescriptorSchema
 >;
 
-export const resolvedAgentToolBootstrapPolicySchema = z.strictObject({
-  enabled: z.boolean(),
-  enabledToolIds: z
-    .array(agentToolIdSchema)
-    .max(SAVED_AGENT_SEDES_TOOLS_MAX_COUNT),
-  presentation: agentToolPresentationSchema,
-  resourceScope: agentToolResourceScopeSchema,
-});
-export type ResolvedAgentToolBootstrapPolicy = z.infer<
-  typeof resolvedAgentToolBootstrapPolicySchema
->;
+export type ResolvedAgentToolBootstrapPolicy = Pick<
+  ResolvedToolPolicy,
+  "enabled" | "enabledToolIds" | "resourceScope"
+> & { readonly presentation: AgentToolPresentation };
 
 const describedToolPolicySchema = resolvedToolPolicySchema.extend({
   presentation: agentToolPresentationSchema,

@@ -970,7 +970,7 @@ export class InteractionBroker {
         pending.applicationThreadId === applicationThreadId
       ) {
         this.#remove(pending);
-        }
+      }
     }
     this.#bindings.delete(key);
     this.#operationsByOwner.delete(key);

@@ -1879,6 +1879,8 @@ export async function startProductionApplication(
       authorityReader: agentToolSources,
     });
     const automationAgentTools = new AutomationAgentToolService({
+      toolPolicies: agentToolPolicies,
+      principalToolClients: principalAgentToolClients,
       automations,
       mutationRecords: automationRepository,
       threads,

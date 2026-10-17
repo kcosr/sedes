@@ -203,14 +203,26 @@ function fixture(input?: {
     ),
     getDefinition: vi.fn((_scope, _id: string) => ({ deletedAt: null })),
   };
+  const sourcePolicy = {
+    enabled:true,
+    enabledToolIds:["automation.create","automation.update","automation.set_state","automation.run_now"],
+    resourceScope:{allowOtherEnvironments:true,allowOtherProjects:true},
+    revision:1,
+  };
+  const targetPolicy = structuredClone(sourcePolicy);
+  const client = {enabled:true,policyRevision:1,credentialGeneration:1,toolIds:[...sourcePolicy.enabledToolIds]};
+  const toolPolicies = {getDurable: vi.fn((_scope,threadId:string) => threadId === sourceThreadId ? sourcePolicy : targetPolicy)};
+  const principalToolClients = {get: vi.fn(() => client)};
   const service = new AutomationAgentToolService({
+    toolPolicies:toolPolicies as never,
+    principalToolClients:principalToolClients as never,
     automations: automations as never,
     mutationRecords: mutationRecords as never,
     threads: threads as never,
     inventory: inventory as never,
     now: () => Date.parse("2026-08-08T00:00:00.000Z"),
   });
-  return { automations, mutationRecords, threads, inventory, service };
+  return { automations, mutationRecords, threads, inventory, service, sourcePolicy, targetPolicy, client, toolPolicies, principalToolClients };
 }
 
 describe("automation canonical tool service", () => {
@@ -1151,4 +1163,95 @@ describe("automation canonical tool service", () => {
     expect(executor.registry.validatesOutput("automation.get",2,{...result,name:longName+"n"})).toBe(false);
   });
 
+});
+
+
+describe("clone automation caller authority", () => {
+  type Action = "create" | "update" | "run_now" | "enable";
+  function caller(kind: "thread_agent" | "principal_client") {
+    const current = context();
+    if (kind === "thread_agent") return current;
+    const defaults = {kind:"principal_client" as const,environmentId:"environment-1"};
+    const policyIdentity = {ownerKind:"principal_client" as const,ownerId:"client-1",revision:1,credentialGeneration:1};
+    return {
+      ...current,
+      subject:{kind:"principal_client" as const,clientId:"client-1"},
+      defaults,
+      policyIdentity,
+      environmentAuthority:{...current.environmentAuthority,callerKind:"principal_client" as const,defaults,policyIdentity},
+    };
+  }
+  function invoke(action:Action, setup:ReturnType<typeof fixture>, authority:TrustedToolInvocationContext) {
+    switch(action) {
+      case "create": return setup.service.create({threadId:targetThreadId,name:"Clone",initialState:"enabled",mutationId:firstMutationId,prompt:"Run",runMode:"clone",schedule:{kind:"date_time",runAt:"2026-08-09T00:00:00.000Z"},misfirePolicy:null},authority);
+      case "update": return setup.service.update({automationId:targetAutomationId,expectedRevision:4,prompt:"Changed",runMode:"clone"},authority);
+      case "run_now": return setup.service.runNow({automationId:targetAutomationId,mutationId:firstMutationId},authority);
+      case "enable": return setup.service.setState({automationId:targetAutomationId,expectedRevision:4,action:"enable"},authority);
+    }
+  }
+  function expectNoMutation(setup:ReturnType<typeof fixture>) {
+    expect(setup.automations.create).not.toHaveBeenCalled();
+    expect(setup.automations.update).not.toHaveBeenCalled();
+    expect(setup.automations.runNow).not.toHaveBeenCalled();
+    expect(setup.automations.setState).not.toHaveBeenCalled();
+  }
+  it.each(["thread_agent","principal_client"] as const)("blocks every clone admission path for a narrower %s", async kind => {
+    for(const action of ["create","update","run_now","enable"] as const) {
+      const setup=fixture({definition:definition({runMode:"clone"})});
+      setup.targetPolicy.enabledToolIds=["thread.create"];
+      await expect(invoke(action,setup,caller(kind))).rejects.toMatchObject({code:"invalid_transition"});
+      expectNoMutation(setup);
+      expect(setup.threads.automationCapability).not.toHaveBeenCalled();
+    }
+  });
+  it.each(["create","update"] as const)("rechecks caller and target policies after %s capability lookup", async action => {
+    for(const change of ["source_revision","target_tools","client_revoked"] as const) {
+      const setup=fixture({definition:definition({runMode:action === "update" ? "same_thread" : "clone"})});
+      // Tool clients can delegate only environment-local policies.
+      setup.targetPolicy.resourceScope.allowOtherEnvironments=false;
+      let resolveCapability!:(value:{canCloneOnRun:boolean})=>void;
+      setup.threads.automationCapability.mockReturnValue(new Promise(resolve => {resolveCapability=resolve;}));
+      const result=invoke(action,setup,caller(change === "client_revoked" ? "principal_client" : "thread_agent"));
+      expect(setup.threads.automationCapability).toHaveBeenCalledOnce();
+      expectNoMutation(setup);
+      if(change === "source_revision") setup.sourcePolicy.revision++;
+      else if(change === "target_tools") setup.targetPolicy.enabledToolIds=["thread.create"];
+      else setup.client.enabled=false;
+      resolveCapability({canCloneOnRun:true});
+      await expect(result).rejects.toMatchObject({code:change === "target_tools" ? "invalid_transition" : "conflict"});
+      expectNoMutation(setup);
+    }
+  });
+  it("checks a permitted run_now without changing capability or replay admission", async () => {
+    const setup=fixture({definition:definition({runMode:"clone"}),canCloneOnRun:false});
+    await invoke("run_now",setup,caller("thread_agent"));
+    await invoke("run_now",setup,caller("thread_agent"));
+    expect(setup.threads.automationCapability).not.toHaveBeenCalled();
+    expect(setup.automations.runNow).toHaveBeenCalledTimes(2);
+    setup.sourcePolicy.revision++;
+    await expect(invoke("run_now",setup,caller("thread_agent"))).rejects.toMatchObject({code:"conflict"});
+    expect(setup.automations.runNow).toHaveBeenCalledTimes(2);
+  });
+  it("caps scope flags as well as tools and allows a permitted clone", async () => {
+    const setup=fixture({definition:definition({runMode:"clone"})});
+    setup.sourcePolicy.resourceScope.allowOtherProjects=false;
+    await expect(invoke("enable",setup,caller("thread_agent"))).rejects.toMatchObject({code:"invalid_transition"});
+    setup.targetPolicy.resourceScope.allowOtherProjects=false;
+    setup.targetPolicy.resourceScope.allowOtherEnvironments=false;
+    await invoke("enable",setup,caller("thread_agent"));
+    expect(setup.automations.setState).toHaveBeenCalledOnce();
+  });
+  it("leaves same-thread actions and pausing a clone independent of cloning authority", async () => {
+    const setup=fixture();
+    setup.targetPolicy.enabledToolIds=["thread.create"];
+    await setup.service.create({threadId:targetThreadId,name:"Same thread",initialState:"enabled",mutationId:firstMutationId,prompt:"Run",runMode:"same_thread",schedule:{kind:"date_time",runAt:"2026-08-09T00:00:00.000Z"},misfirePolicy:null},caller("thread_agent"));
+    await setup.service.update({automationId:targetAutomationId,expectedRevision:4,prompt:"Changed"},caller("thread_agent"));
+    await setup.service.runNow({automationId:targetAutomationId,mutationId:firstMutationId},caller("thread_agent"));
+    await setup.service.setState({automationId:targetAutomationId,expectedRevision:4,action:"enable"},caller("thread_agent"));
+    const clone=fixture({definition:definition({runMode:"clone"})});
+    clone.targetPolicy.enabledToolIds=["thread.create"];
+    await clone.service.setState({automationId:targetAutomationId,expectedRevision:4,action:"pause"},caller("thread_agent"));
+    expect(setup.toolPolicies.getDurable).not.toHaveBeenCalled();
+    expect(clone.toolPolicies.getDurable).not.toHaveBeenCalled();
+  });
 });

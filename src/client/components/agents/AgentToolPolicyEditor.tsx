@@ -24,6 +24,7 @@ export function AgentToolPolicyEditor({
   policySets,
   toolPresentation,
   disabled = false,
+  updating = false,
   catalogState = "ready",
   onChange,
   onPresentationChange,
@@ -34,6 +35,7 @@ export function AgentToolPolicyEditor({
   readonly policySets: readonly ToolPolicySet[];
   readonly toolPresentation?: AgentToolPresentation;
   readonly disabled?: boolean;
+  readonly updating?: boolean;
   readonly catalogState?: "loading" | "ready" | "error";
   readonly onChange: (value: ToolPolicySelection) => void;
   readonly onPresentationChange: (value: AgentToolPresentation | undefined) => void;
@@ -49,6 +51,7 @@ export function AgentToolPolicyEditor({
       description="Choose a reusable policy for new threads. Inherited policies resolve through account, environment, and backend defaults."
       card
     >
+      {updating && <p className="agent-configuration-resolved" role="status">Updating available settings…</p>}
       <ToolPolicySelector
         value={value}
         policySets={policySets}

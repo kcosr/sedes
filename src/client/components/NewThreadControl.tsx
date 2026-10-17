@@ -17,9 +17,7 @@ import {
   type ThreadTemplate,
   type ToolPolicySelection,
   type ToolPolicySet,
-  type ResolvedToolPolicy,
   type AgentToolPresentation,
-  type AgentToolBootstrapDescriptor,
   type UpdateThreadTemplateRequest,
 } from "../../shared/index.js";
 import { navigate, settingsPath } from "../app/router.js";
@@ -66,7 +64,7 @@ import {
 import { AddProjectDialog } from "./AddProjectDialog.js";
 import "./new-thread-control.css";
 import { ApiError } from "../api/ApiClient.js";
-import { toolPolicyResolutionIssueSchema, type ToolPolicyResolutionIssue } from "../../shared/protocol/tool-policies.js";
+import { toolPolicyResolutionIssueSchema, type ToolPolicyResolutionIssue, type ToolPolicyPreview } from "../../shared/protocol/tool-policies.js";
 import { missingToolPolicyMessage, toolPolicySourceLabel } from "./tool-policies/tool-policy-messages.js";
 import { NativeSelect } from "./ui/native-select.js";
 import { ToolPolicySelector } from "./tool-policies/ToolPolicySelector.js";
@@ -204,14 +202,11 @@ export function NewThreadControl({
   const [policySets, setPolicySets] = useState<readonly ToolPolicySet[]>([]);
   const [policiesLoading, setPoliciesLoading] = useState(false);
   const [policiesError, setPoliciesError] = useState("");
-  const [toolPolicyPreview, setToolPolicyPreview] = useState<ResolvedToolPolicy>();
+  const [toolPolicyPreview, setToolPolicyPreview] = useState<ToolPolicyPreview>();
   const [toolPolicyLoading, setToolPolicyLoading] = useState(false);
   const [toolPolicyError, setToolPolicyError] = useState("");
   const [toolPolicyIssue, setToolPolicyIssue] = useState<ToolPolicyResolutionIssue>();
   const [policyRefresh, setPolicyRefresh] = useState(0);
-  const [presentationCatalog, setPresentationCatalog] = useState<AgentToolBootstrapDescriptor>();
-  const [presentationLoading, setPresentationLoading] = useState(false);
-  const [presentationError, setPresentationError] = useState("");
   const [variablesRefresh, setVariablesRefresh] = useState(0);
   const variablesTrigger = useRef<HTMLButtonElement>(null);
   const [pending, setPending] = useState(false);
@@ -512,40 +507,17 @@ export function NewThreadControl({
     policyRefresh,
   ]);
 
-  useEffect(() => {
-    setPresentationCatalog(undefined);
-    setPresentationError("");
-    if (!pickerOpen || !selectedTarget?.available || !selectedWorkspace?.available) {
-      setPresentationLoading(false);
-      return;
-    }
-    const abort = new AbortController();
-    setPresentationLoading(true);
-    // Presentation capabilities are independent of the selected tool policy.
-    void store.api.getSavedAgentOptions({
-      workspaceId: selectedWorkspace.id,
-      targetId: selectedTarget.id,
-      toolPolicySelection: { kind: "disabled" },
-    }, abort.signal).then((result) => {
-      if (abort.signal.aborted) return;
-      if (result.kind === "configuration") setPresentationCatalog(result.sedesTools);
-      else setPresentationError("Select a target to review its tool presentation.");
-      setPresentationLoading(false);
-    }, (cause: unknown) => {
-      if (abort.signal.aborted) return;
-      setPresentationError(messageFrom(cause));
-      setPresentationLoading(false);
-    });
-    return () => abort.abort();
-  }, [pickerOpen, selectedTarget?.id, selectedTarget?.available, selectedWorkspace?.id, selectedWorkspace?.available, store, policyRefresh]);
-
   const policySource = toolPolicyPreview
     ? toolPolicySourceLabel(toolPolicyPreview.source)
     : "Agent, backend, environment, or account defaults";
+  const presentationCatalog = selection.kind === "saved_agent"
+    ? selectedResolvedTarget?.sedesTools
+    : toolPolicyPreview;
+  const presentationLoading = selection.kind === "saved_agent" ? resolutionLoading : toolPolicyLoading;
   const presentations = presentationCatalog?.presentationOptions.flatMap(({ surface, modes }) =>
     modes.map((mode) => ({ surface, mode })),
   ) ?? [];
-  const presentationAvailabilityKnown = Boolean(presentationCatalog) && !presentationLoading && !presentationError;
+  const presentationAvailabilityKnown = Boolean(presentationCatalog) && !presentationLoading;
   const presentationIsAvailable = !toolPresentation || !presentationAvailabilityKnown || presentations.some(({ surface, mode }) =>
     surface === toolPresentation.surface && mode === toolPresentation.mode,
   );
@@ -556,7 +528,7 @@ export function NewThreadControl({
     presentationAvailabilityKnown && presentationIsAvailable,
   );
   const presentationNeedsAttention = Boolean(toolPresentation) && !presentationLoading && (
-    Boolean(presentationError) || (presentationAvailabilityKnown && !presentationIsAvailable)
+    presentationAvailabilityKnown && !presentationIsAvailable
   );
   const refreshToolPolicies = () => {
     setToolPolicyPreview(undefined);
@@ -674,8 +646,6 @@ export function NewThreadControl({
     setToolPolicyIssue(undefined);
     setToolPolicyError("");
     setToolPolicyPreview(undefined);
-    setPresentationCatalog(undefined);
-    setPresentationError("");
     setVariablesOpen(false);
     setEnvironmentVariables({});
     setToolPolicySelection({ kind: "inherit" });
@@ -1940,9 +1910,7 @@ export function NewThreadControl({
                 </NativeSelect>
               </Field>
               {presentationAvailabilityKnown && !presentationIsAvailable && <DialogAlert tone="danger">This tool presentation is unavailable on the selected target. Choose Inherit or a supported presentation.</DialogAlert>}
-              {presentationError && <DialogAlert tone={toolPresentation ? "danger" : "warning"} action={
-                <Button type="button" size="sm" variant="outline" onClick={refreshToolPolicies}>Retry tool presentation</Button>
-              }>{presentationError} {toolPresentation ? "Choose Inherit or retry to verify this presentation." : "You can still create this thread with inherited presentation."}</DialogAlert>}
+
             </section>
             <section
               className="new-thread-variables"

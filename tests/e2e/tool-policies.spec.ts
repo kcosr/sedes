@@ -108,6 +108,9 @@ test("policy sets replace inherited tools across levels and snapshot new threads
   await selectRadixOption(page, page.getByRole("combobox", { name: "Target", exact: true }), target.label);
   await creation.getByRole("combobox", { name: "Sedes tool policy", exact: true }).selectOption(everyday.id);
   await creation.getByRole("combobox", { name: "Tool presentation", exact: true }).selectOption("cli:individual");
+  await creation.getByRole("region", { name: "Sedes tools", exact: true }).scrollIntoViewIfNeeded();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "new-thread-tools-desktop.png");
   const customCreated = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith("/api/threads") && response.status() === 201);
   await creation.getByRole("button", { name: "Create thread", exact: true }).click();
   const customResponse = await customCreated;
