@@ -2095,6 +2095,14 @@ export class ThreadClientStore {
     });
   }
 
+  listToolPolicySets(signal?: AbortSignal) {
+    return this.#api.listToolPolicySets(signal);
+  }
+
+  getToolPolicySet(policySetId: string, signal?: AbortSignal) {
+    return this.#api.getToolPolicySet(policySetId, signal);
+  }
+
   setAgentToolPolicy(
     input: SetAgentToolPolicyInput,
   ): Promise<

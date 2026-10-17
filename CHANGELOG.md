@@ -48,8 +48,9 @@ User-facing changes are collected here before release. See the
 ### Added
 
 - Reuse named Sedes tool policy sets across backends, with Account → Environment
-  → Backend → Agent → Thread defaults and template selections. New threads,
-  forks and same-settings copies retain independent policy snapshots.
+  → Backend → Agent → Thread defaults and template selections. Apply a set to
+  an existing thread and customize it before saving. New threads, forks and
+  same-settings copies retain independent policy snapshots.
   ([#96](https://github.com/kcosr/sedes/pull/96))
 
 - Download the selected saved HTML page revision from the expanded viewer or

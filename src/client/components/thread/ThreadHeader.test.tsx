@@ -333,6 +333,7 @@ function fixture(
     forkTurn: vi.fn(),
     forkLatestProviderSnapshot: vi.fn(),
     observePublishedBookmarkRevision: vi.fn(),
+    listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
   } as unknown as ThreadClientStore;
   return { applicationStore, threadStore, publishPin };
 }

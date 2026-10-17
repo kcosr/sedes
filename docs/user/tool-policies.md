@@ -76,8 +76,13 @@ create, edit, enable, or run a clone automation apply the same restriction to
 the automation's source thread.
 
 Use **Thread actions → Agent tools** to edit an existing thread's tools and
-access switches. You can enable broader access temporarily and turn it off
-again; Sedes does not automatically restore it or let the agent enable it.
+access switches. Choose a saved **Policy set** and **Apply** to replace the
+draft's tools and access settings, keeping its presentation. You can customize
+the draft before **Save** updates the thread. This remains an independent
+snapshot; later edits to the set do not update the thread, and **Original
+policy** continues to describe its creation settings.
+You can enable broader access temporarily and turn it off again; Sedes does
+not automatically restore it or let the agent enable it.
 CLI access edits apply to subsequent requests. Native-tool and presentation
 changes require an idle thread. Work already admitted may finish.
 

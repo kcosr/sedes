@@ -15,6 +15,7 @@ import type {
   AgentToolPresentationOption,
   AgentToolPresentationSurface,
   NormalizedThreadSnapshot,
+  ToolPolicySet,
 } from "../../../shared/index.js";
 import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
 import {
@@ -164,13 +165,15 @@ function subject(
   options: {
     readonly authoritative?: boolean;
     readonly disabled?: boolean;
+    readonly storeOverrides?: Partial<Pick<ThreadClientStore, "listToolPolicySets" | "getToolPolicySet">>;
   } = {},
 ) {
   const setAgentToolPolicy = vi.fn().mockResolvedValue(undefined);
   const onOpenChange = vi.fn();
+  const store = toolPolicyStore({ setAgentToolPolicy, ...options.storeOverrides });
   const view = render(
     <AgentToolSettingsDialog
-      store={{ setAgentToolPolicy } as unknown as ThreadClientStore}
+      store={store}
       snapshot={snapshot}
       authoritative={options.authoritative ?? true}
       disabled={options.disabled ?? false}
@@ -178,7 +181,36 @@ function subject(
       onOpenChange={onOpenChange}
     />,
   );
-  return { ...view, setAgentToolPolicy, onOpenChange };
+  return { ...view, store, setAgentToolPolicy, onOpenChange };
+}
+
+function toolPolicyStore(overrides: Partial<Pick<ThreadClientStore,
+  "setAgentToolPolicy" | "listToolPolicySets" | "getToolPolicySet">> = {}): ThreadClientStore {
+  return {
+    setAgentToolPolicy: vi.fn().mockResolvedValue(undefined),
+    listToolPolicySets: vi.fn().mockResolvedValue({ items: [] }),
+    getToolPolicySet: vi.fn().mockRejectedValue(new Error("Unexpected policy-set request")),
+    ...overrides,
+  } as unknown as ThreadClientStore;
+}
+
+function reusablePolicy(overrides: Partial<ToolPolicySet> = {}): ToolPolicySet {
+  return {
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    name: "Focused review",
+    revision: 2,
+    enabledToolIds: ["thread.status"],
+    resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },
+    createdAt: "2026-10-18T00:00:00.000Z",
+    updatedAt: "2026-10-18T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+async function applyPolicy(policy = reusablePolicy()): Promise<void> {
+  await screen.findByRole("option", { name: policy.name });
+  fireEvent.change(screen.getByRole("combobox", { name: "Policy set" }), { target: { value: policy.id } });
+  fireEvent.click(screen.getByRole("button", { name: "Apply", exact: true }));
 }
 
 function deferred<T>() {
@@ -192,6 +224,144 @@ function deferred<T>() {
 }
 
 describe("AgentToolSettingsDialog", () => {
+  it("loads the latest policy into an exact draft replacement and saves only after review", async () => {
+    const listed = reusablePolicy({ revision: 1, enabledToolIds: ["agent.context", "task.update"] });
+    const latest = reusablePolicy({ revision: 4, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true } });
+    const listToolPolicySets = vi.fn().mockResolvedValue({ items: [listed] });
+    const getToolPolicySet = vi.fn().mockResolvedValue(latest);
+    const { setAgentToolPolicy } = subject(policySnapshot({
+      enabled: false, workspaceEnabled: true, actionEnabled: true,
+      presentationSurface: "cli", presentationMode: "individual",
+      resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },
+    }), { storeOverrides: { listToolPolicySets, getToolPolicySet } });
+
+    await applyPolicy(listed);
+    expect(await screen.findByText(/Loaded Focused review \(revision 4\) into this draft/)).toBeVisible();
+    expect(getToolPolicySet).toHaveBeenCalledWith(listed.id, expect.any(AbortSignal));
+    expect(screen.getByRole("switch", { name: "Enable agent tools" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Agent context" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "List workspaces" })).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Threads", exact: true }));
+    expect(screen.getByRole("checkbox", { name: "Thread status" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Update task" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Allow other environments" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Allow other projects" })).toBeChecked();
+    expect(screen.getByRole("combobox", { name: "Agent tool surface" })).toHaveTextContent("Sedes CLI");
+    expect(screen.getByRole("combobox", { name: "Agent tool presentation" })).toHaveTextContent("Individual");
+    expect(setAgentToolPolicy).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledExactlyOnceWith({
+      expectedPolicyRevision: 4,
+      enabled: true,
+      enabledToolIds: ["thread.status"],
+      presentation: { surface: "cli", mode: "individual" },
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
+    }));
+  });
+
+  it("retains manual draft edits when the latest policy cannot be fetched", async () => {
+    const selected = reusablePolicy();
+    const getToolPolicySet = vi.fn().mockRejectedValue(new Error("This policy set was deleted."));
+    const { setAgentToolPolicy } = subject(policySnapshot({ presentationSurface: "cli" }), {
+      storeOverrides: { listToolPolicySets: vi.fn().mockResolvedValue({ items: [selected] }), getToolPolicySet },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: "List workspaces" }));
+    await applyPolicy(selected);
+    expect(await screen.findByText("This policy set was deleted.")).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "Agent context" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "List workspaces" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Allow other environments" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+    expect(screen.queryByText(/Loaded Focused review/)).not.toBeInTheDocument();
+    expect(setAgentToolPolicy).not.toHaveBeenCalled();
+  });
+
+  it("refuses unsupported tool IDs without partially replacing the draft", async () => {
+    const selected = reusablePolicy();
+    const { setAgentToolPolicy } = subject(policySnapshot({ presentationSurface: "cli" }), {
+      storeOverrides: {
+        listToolPolicySets: vi.fn().mockResolvedValue({ items: [selected] }),
+        getToolPolicySet: vi.fn().mockResolvedValue(reusablePolicy({ enabledToolIds: ["workspace.list", "unsupported.tool"] })),
+      },
+    });
+    await applyPolicy(selected);
+    expect(await screen.findByText(/includes tools this thread does not support/)).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "Agent context" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "List workspaces" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Allow other environments" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    expect(setAgentToolPolicy).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed policy-set list without changing the thread", async () => {
+    const selected = reusablePolicy();
+    const listToolPolicySets = vi.fn()
+      .mockRejectedValueOnce(new Error("Policy sets are unavailable."))
+      .mockResolvedValueOnce({ items: [selected] });
+    const { setAgentToolPolicy } = subject(policySnapshot({ presentationSurface: "cli" }), {
+      storeOverrides: { listToolPolicySets },
+    });
+    expect(await screen.findByText("Policy sets are unavailable.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Retry policy sets" }));
+    expect(await screen.findByRole("option", { name: selected.name })).toBeInTheDocument();
+    expect(listToolPolicySets).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("Policy sets are unavailable.")).not.toBeInTheDocument();
+    expect(setAgentToolPolicy).not.toHaveBeenCalled();
+  });
+
+  it("aborts policy requests on close and ignores a late Apply response on reopen", async () => {
+    const selected = reusablePolicy();
+    const request = deferred<ToolPolicySet>();
+    const listToolPolicySets = vi.fn().mockResolvedValue({ items: [selected] });
+    const getToolPolicySet = vi.fn().mockReturnValue(request.promise);
+    const snapshot = policySnapshot({ presentationSurface: "cli" });
+    const { store, rerender, onOpenChange, setAgentToolPolicy } = subject(snapshot, {
+      storeOverrides: { listToolPolicySets, getToolPolicySet },
+    });
+    await applyPolicy(selected);
+    expect(screen.getByRole("button", { name: "Applying…" })).toBeDisabled();
+    const applySignal = getToolPolicySet.mock.calls[0]![1] as AbortSignal;
+    const listSignal = listToolPolicySets.mock.calls[0]![0] as AbortSignal;
+    rerender(<AgentToolSettingsDialog store={store} snapshot={snapshot} authoritative disabled={false} open={false} onOpenChange={onOpenChange} />);
+    expect(applySignal.aborted).toBe(true);
+    expect(listSignal.aborted).toBe(true);
+    await act(async () => request.resolve(selected));
+    rerender(<AgentToolSettingsDialog store={store} snapshot={snapshot} authoritative disabled={false} open onOpenChange={onOpenChange} />);
+    await screen.findByRole("option", { name: selected.name });
+    expect(screen.getByRole("checkbox", { name: "Agent context" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Allow other environments" })).not.toBeChecked();
+    expect(screen.queryByText(/Loaded Focused review/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    expect(setAgentToolPolicy).not.toHaveBeenCalled();
+  });
+
+  it("keeps an Apply draft stale if another client changes the policy while its GET is pending", async () => {
+    const selected = reusablePolicy();
+    const request = deferred<ToolPolicySet>();
+    const { store, rerender, onOpenChange, setAgentToolPolicy } = subject(policySnapshot({ presentationSurface: "cli" }), {
+      storeOverrides: {
+        listToolPolicySets: vi.fn().mockResolvedValue({ items: [selected] }),
+        getToolPolicySet: vi.fn().mockReturnValue(request.promise),
+      },
+    });
+    await applyPolicy(selected);
+    rerender(<AgentToolSettingsDialog
+      store={store} snapshot={policySnapshot({ revision: 5, presentationSurface: "cli", workspaceEnabled: true })}
+      authoritative disabled={false} open onOpenChange={onOpenChange}
+    />);
+    await act(async () => request.resolve(selected));
+    expect(await screen.findByText(/changed in another client/i)).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "Agent context" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "List workspaces" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Allow other environments" })).toBeChecked();
+    const save = screen.getByRole("button", { name: "Save", exact: true });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(setAgentToolPolicy).not.toHaveBeenCalled();
+  });
+
   it("shows immutable creation provenance without implying current settings still match", () => {
     subject(policySnapshot({ revision: 8, origin: { source: "account", policySet: { id: "33333333-3333-4333-8333-333333333333", name: "Everyday", revision: 2 } } }));
     expect(screen.getByText(/Original policy: Everyday \(revision 2\) · from Account/)).toHaveTextContent("later default or policy-set changes do not update it");
@@ -300,8 +470,9 @@ describe("AgentToolSettingsDialog", () => {
       reason: { text: "Enable network access in this thread's execution settings." },
     };
     const { setAgentToolPolicy } = subject(snapshot);
-    expect(screen.getByRole("status")).toHaveTextContent("Enable network access");
-    expect(screen.getByRole("status")).toHaveTextContent("Your saved tool selections are retained");
+    const runtimeStatus = screen.getByText("Sedes tools are unavailable for this thread.").closest('[role="status"]');
+    expect(runtimeStatus).toHaveTextContent("Enable network access");
+    expect(runtimeStatus).toHaveTextContent("Your saved tool selections are retained");
     expect(agentToolPolicySummary(snapshot.agentTools)).toBe("Unavailable");
     expect(screen.getByRole("switch", { name: "Enable agent tools" })).toBeChecked();
     const grant = screen.getByRole("checkbox", { name: "Agent context" });
@@ -614,7 +785,7 @@ describe("AgentToolSettingsDialog", () => {
     const onOpenChange = vi.fn();
     render(
       <AgentToolSettingsDialog
-        store={{ setAgentToolPolicy } as unknown as ThreadClientStore}
+        store={toolPolicyStore({ setAgentToolPolicy })}
         snapshot={policySnapshot({ runState: "running", presentationSurface: "cli" })}
         authoritative
         disabled={false}
@@ -639,7 +810,7 @@ describe("AgentToolSettingsDialog", () => {
     const mutation = deferred<unknown>();
     const setAgentToolPolicy = vi.fn(() => mutation.promise);
     const onOpenChange = vi.fn();
-    const store = { setAgentToolPolicy } as unknown as ThreadClientStore;
+    const store = toolPolicyStore({ setAgentToolPolicy });
     const { rerender } = render(
       <AgentToolSettingsDialog
         store={store}
@@ -685,7 +856,7 @@ describe("AgentToolSettingsDialog", () => {
 
   it("returns focus and reopens with a clean draft after cancellation", async () => {
     const setAgentToolPolicy = vi.fn().mockResolvedValue(undefined);
-    const store = { setAgentToolPolicy } as unknown as ThreadClientStore;
+    const store = toolPolicyStore({ setAgentToolPolicy });
     function Sedes() {
       const [open, setOpen] = useState(true);
       const triggerRef = useRef<HTMLButtonElement>(null);
@@ -728,7 +899,7 @@ describe("AgentToolSettingsDialog", () => {
 
   it("disables a pending confirmation if the thread starts running", async () => {
     const setAgentToolPolicy = vi.fn().mockResolvedValue(undefined);
-    const store = { setAgentToolPolicy } as unknown as ThreadClientStore;
+    const store = toolPolicyStore({ setAgentToolPolicy });
     const { rerender } = render(
       <AgentToolSettingsDialog
         store={store}
@@ -764,7 +935,7 @@ describe("AgentToolSettingsDialog", () => {
 
   it("keeps a dirty draft bound to its base revision when a newer snapshot arrives", async () => {
     const setAgentToolPolicy = vi.fn().mockResolvedValue(undefined);
-    const store = { setAgentToolPolicy } as unknown as ThreadClientStore;
+    const store = toolPolicyStore({ setAgentToolPolicy });
     const { rerender } = render(
       <AgentToolSettingsDialog
         store={store}
@@ -873,7 +1044,7 @@ describe("AgentToolSettingsDialog", () => {
         name: change === "surface" ? "Native tools" : "Individual operations",
       }));
       rerender(<AgentToolSettingsDialog
-        store={{ setAgentToolPolicy } as unknown as ThreadClientStore}
+        store={toolPolicyStore({ setAgentToolPolicy })}
         snapshot={policySnapshot({ presentationSurface: "cli", runState: "running" })}
         authoritative disabled={false} open onOpenChange={onOpenChange}
       />);
@@ -892,7 +1063,7 @@ describe("AgentToolSettingsDialog", () => {
       .mockRejectedValue(new Error("Policy conflict"));
     render(
       <AgentToolSettingsDialog
-        store={{ setAgentToolPolicy } as unknown as ThreadClientStore}
+        store={toolPolicyStore({ setAgentToolPolicy })}
         snapshot={policySnapshot({ presentationSurface: "cli" })}
         authoritative
         disabled={false}
