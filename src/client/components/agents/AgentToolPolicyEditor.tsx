@@ -51,7 +51,6 @@ export function AgentToolPolicyEditor({
       description="Choose a reusable policy for new threads. Inherited policies resolve through account, environment, and backend defaults."
       card
     >
-      {updating && <p className="agent-configuration-resolved" role="status">Updating available settings…</p>}
       <ToolPolicySelector
         value={value}
         policySets={policySets}
@@ -146,9 +145,14 @@ export function AgentToolPolicyEditor({
           )}
         </>
       )}
-      <p className="agent-configuration-resolved">
-        Policy changes affect future threads. Existing threads keep their saved settings.
-      </p>
+      <div className="agent-tool-policy-footer">
+        <p className="agent-configuration-resolved">
+          Policy changes affect future threads. Existing threads keep their saved settings.
+        </p>
+        <p className="agent-configuration-resolved agent-tool-policy-update-status" role="status" aria-live="polite" aria-atomic="true">
+          {updating ? "Updating available settings…" : ""}
+        </p>
+      </div>
     </SettingsSection>
   );
 }

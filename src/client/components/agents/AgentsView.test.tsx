@@ -100,20 +100,31 @@ describe("AgentsView", () => {
     fireEvent.click(configure); fireEvent.click(await screen.findByRole("option", { name: "Pi" }));
     const selector = await screen.findByRole("combobox", { name: "Tool policy" });
     await waitFor(() => expect(screen.getByRole("switch", { name: "Use backend presentation" })).toBeEnabled());
+    const tools = within(screen.getByRole("region", { name: "Sedes tools" }));
+    const updateStatus = tools.getByRole("status");
+    expect(updateStatus).toBeEmptyDOMElement();
+    expect(updateStatus).toHaveAttribute("aria-live", "polite");
+    expect(updateStatus).toHaveAttribute("aria-atomic", "true");
     selector.focus();
     fireEvent.change(selector, { target: { value: policy.id } });
     expect(selector).toHaveFocus();
     expect(selector).toBeEnabled();
-    expect(screen.getByText("Updating available settings…")).toBeInTheDocument();
+    expect(tools.getByRole("status")).toBe(updateStatus);
+    expect(updateStatus).toHaveTextContent("Updating available settings…");
     await act(async () => finishRefresh(options));
     expect(selector).toHaveFocus();
+    expect(tools.getByRole("status")).toBe(updateStatus);
+    expect(updateStatus).toBeEmptyDOMElement();
     const presentation = screen.getByRole("switch", { name: "Use backend presentation" });
     presentation.focus(); fireEvent.click(presentation);
     expect(presentation).toHaveFocus();
     expect(presentation).toBeEnabled();
-    expect(screen.getByText("Updating available settings…")).toBeInTheDocument();
+    expect(tools.getByRole("status")).toBe(updateStatus);
+    expect(updateStatus).toHaveTextContent("Updating available settings…");
     await act(async () => finishRefresh(options));
     expect(presentation).toHaveFocus();
+    expect(tools.getByRole("status")).toBe(updateStatus);
+    expect(updateStatus).toBeEmptyDOMElement();
   });
 
   it.each([true, false])("keeps missing-policy options editable and resets saved presentation (explicit: %s)", async (explicitPresentation) => {

@@ -15,6 +15,7 @@ import {
   projectScopeRefs,
   requireAdmittedResource,
   requireAdmittedResources,
+  resourceWithinScope,
   type AgentToolEnvironmentAuthorityReader,
   type TrustedEnvironmentAuthorityGrant,
 } from "../agent-tools/environment/environment-authority.js";
@@ -68,7 +69,7 @@ export class WorkspaceApplicationService {
         "validateWorkspace"
       >;
       readonly publications: WorkspaceApplicationPublication;
-      /** Live project facts for an agent that adds a directory to a project. */
+      /** Live project facts for agent admission and conflict visibility. */
       readonly projectAuthority?: Pick<
         AgentToolEnvironmentAuthorityReader,
         "resolveProject"
@@ -150,6 +151,20 @@ export class WorkspaceApplicationService {
       requireAdmittedResources(environmentAuthority, projectScopeRefs(project, grantProjectAccessCaller(environmentAuthority), "exact"));
       return project;
     };
+    const canDiscloseProject = (projectId: string): boolean => {
+      const project = this.input.projectAuthority?.resolveProject(scope, projectId);
+      if (!project) return false;
+      const caller = grantProjectAccessCaller(environmentAuthority);
+      try {
+        return projectScopeRefs(project, caller, "exact").every((ref) =>
+          resourceWithinScope(ref, caller) &&
+          (ref.environmentId === undefined || environmentAuthority.admittedEnvironmentIds.includes(ref.environmentId)),
+        );
+      } catch (error) {
+        if (error instanceof CanonicalAgentToolRequestError && error.code === "permission_denied") return false;
+        throw error;
+      }
+    };
     if (request.projectId !== undefined) requireProject(request.projectId);
     const validated = await this.#validate(
       scope,
@@ -165,9 +180,13 @@ export class WorkspaceApplicationService {
         });
       } catch (error) {
         if (!(error instanceof RemovedLocationError)) throw error;
+        // A visible conflict may identify the project for a new, explicitly
+        // admitted retry. This grants no authority to restore the location.
         throw new CanonicalAgentToolRequestError(
           "conflict",
-          error.message,
+          canDiscloseProject(error.location.projectId)
+            ? `This directory is a removed location of project ${error.location.projectId}. To restore it there, retry with that projectId.`
+            : error.message,
         );
       }
     }

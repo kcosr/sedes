@@ -35,6 +35,18 @@
   line-height: var(--leading-normal);
 }
 
+.agent-tool-policy-footer {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.agent-tool-policy-update-status {
+  min-block-size: 1lh;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── Exact tool selector ──
    One collapsible item per group: the select-all column, then the trigger
    (chevron, title · summary, description). Tool checkboxes sit under the
