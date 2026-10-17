@@ -9495,7 +9495,7 @@ tr.diff-hunk td {
 .agent-tool-policy-apply-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); }
 .agent-tool-policy-apply-controls > button { height: auto; min-height: var(--control-md); }
 .agent-tool-policy-apply p { margin: 0; color: var(--muted-foreground-2); font-size: var(--text-meta); line-height: var(--leading-normal); }
-.agent-tool-policy-apply-status { min-block-size: 1lh; }
+.agent-tool-policy-apply-status:empty { margin-block-start: calc(-1 * var(--space-2)); }
 
 .agent-tool-policy-origin {
   margin: 0;

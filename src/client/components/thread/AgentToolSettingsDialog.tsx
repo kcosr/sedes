@@ -241,12 +241,17 @@ export function AgentToolSettingsDialog({
   const [confirming, setConfirming] = useState(false);
   const [policySets, setPolicySets] = useState<readonly ToolPolicySet[]>([]);
   const [policySetsLoading, setPolicySetsLoading] = useState(false);
-  const [policySetError, setPolicySetError] = useState("");
+  const [policySetsError, setPolicySetsError] = useState("");
+  const [applyError, setApplyError] = useState("");
   const [policySetsRefresh, setPolicySetsRefresh] = useState(0);
   const [selectedPolicySetId, setSelectedPolicySetId] = useState("");
   const [applyingPolicy, setApplyingPolicy] = useState(false);
   const [appliedPolicyMessage, setAppliedPolicyMessage] = useState("");
   const applyRequest = useRef<AbortController | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const policySetSelectRef = useRef<HTMLSelectElement>(null);
+  const retryButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreRetryFocus = useRef(false);
   const applyButtonRef = useRef<HTMLButtonElement>(null);
   const restoreApplyFocus = useRef(false);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
@@ -256,7 +261,7 @@ export function AgentToolSettingsDialog({
     if (!open) return;
     const abort = new AbortController();
     setPolicySetsLoading(true);
-    setPolicySetError("");
+    setPolicySetsError("");
     void store.listToolPolicySets(abort.signal).then(({ items }) => {
       if (abort.signal.aborted) return;
       setPolicySets(items);
@@ -264,7 +269,7 @@ export function AgentToolSettingsDialog({
       setPolicySetsLoading(false);
     }, (cause: unknown) => {
       if (abort.signal.aborted) return;
-      setPolicySetError(messageFrom(cause));
+      setPolicySetsError(messageFrom(cause));
       setPolicySetsLoading(false);
     });
     return () => abort.abort();
@@ -274,8 +279,10 @@ export function AgentToolSettingsDialog({
     setPolicySets([]);
     setSelectedPolicySetId("");
     setAppliedPolicyMessage("");
+    setApplyError("");
     setApplyingPolicy(false);
     restoreApplyFocus.current = false;
+    restoreRetryFocus.current = false;
     return () => {
       applyRequest.current?.abort();
       applyRequest.current = null;
@@ -285,7 +292,7 @@ export function AgentToolSettingsDialog({
   useEffect(() => {
     if (open && !applyingPolicy && restoreApplyFocus.current) {
       restoreApplyFocus.current = false;
-      if (document.activeElement === document.body || document.activeElement === applyButtonRef.current) {
+      if (document.activeElement === document.body || document.activeElement === dialogRef.current || document.activeElement === applyButtonRef.current) {
         applyButtonRef.current?.focus();
       }
     }
@@ -338,6 +345,16 @@ export function AgentToolSettingsDialog({
       ({ surface }) => surface === draft.presentation.surface,
     ) ?? policy.presentationOptions[0]!;
 
+  useEffect(() => {
+    if (!open || policySetsLoading || !restoreRetryFocus.current) return;
+    const target = policySetsError ? retryButtonRef.current : policySetSelectRef.current;
+    if (!target || target.disabled) return;
+    restoreRetryFocus.current = false;
+    if (document.activeElement === document.body || document.activeElement === dialogRef.current || document.activeElement === retryButtonRef.current) {
+      target.focus();
+    }
+  }, [open, policySetsLoading, policySetsError, editable]);
+
   const orderedIds = policy.groups.flatMap(({ tools }) =>
     tools.map(({ id }) => id),
   );
@@ -347,7 +364,7 @@ export function AgentToolSettingsDialog({
     applyRequest.current = request;
     restoreApplyFocus.current = document.activeElement === applyButtonRef.current;
     setApplyingPolicy(true);
-    setPolicySetError("");
+    setApplyError("");
     setAppliedPolicyMessage("");
     setConfirming(false);
     try {
@@ -357,15 +374,18 @@ export function AgentToolSettingsDialog({
       if (selected.enabledToolIds.some(id => !orderedIds.includes(id))) {
         throw new Error("This policy includes tools this thread does not support. Choose another policy set or select tools manually.");
       }
-      setDraft(current => ({
-        ...current,
+      const nextDraft = {
+        ...draft,
         enabled: true,
         enabledToolIds: orderedIds.filter(id => ids.has(id)),
         resourceScope: { ...selected.resourceScope },
-      }));
-      setAppliedPolicyMessage(`Loaded ${selected.name} (revision ${selected.revision}) into this draft. Review the settings, then Save.`);
+      };
+      setDraft(nextDraft);
+      setAppliedPolicyMessage(dirty(nextDraft)
+        ? `Loaded ${selected.name} (revision ${selected.revision}) into this draft. Review the settings, then Save.`
+        : `${selected.name} (revision ${selected.revision}) already matches this thread’s tool settings.`);
     } catch (cause) {
-      if (!request.signal.aborted) setPolicySetError(messageFrom(cause));
+      if (!request.signal.aborted) setApplyError(messageFrom(cause));
     } finally {
       if (applyRequest.current === request) applyRequest.current = null;
       if (!request.signal.aborted) setApplyingPolicy(false);
@@ -461,6 +481,7 @@ export function AgentToolSettingsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        ref={dialogRef}
         size="lg"
         aria-describedby={dialogDescriptionId}
         returnFocusRef={returnFocusRef}
@@ -484,14 +505,14 @@ export function AgentToolSettingsDialog({
           Original policy: {originalPolicyDescription(policy.origin)}.
           {" "}These settings are saved on this thread; later default or policy-set changes do not update it.
         </p>}
-        <section className="agent-tool-policy-apply" aria-label="Apply policy set">
-          <label htmlFor={`${dialogId}-policy-set`}>Apply policy set</label>
+        <div className="agent-tool-policy-apply">
+          <label htmlFor={`${dialogId}-policy-set`}>Policy set</label>
           <div className="agent-tool-policy-apply-controls">
-            <NativeSelect id={`${dialogId}-policy-set`} aria-label="Policy set"
+            <NativeSelect ref={policySetSelectRef} id={`${dialogId}-policy-set`}
               aria-describedby={`${dialogId}-policy-set-description`}
-              value={selectedPolicySetId} disabled={!editable || policySetsLoading || policySets.length === 0}
-              onChange={event => { setSelectedPolicySetId(event.target.value); setPolicySetError(""); }}>
-              <option value="">{policySetsLoading ? "Loading policy sets…" : policySets.length === 0 ? "No policy sets available" : "Choose a policy set…"}</option>
+              value={selectedPolicySetId} disabled={!editable || policySetsLoading || Boolean(policySetsError)}
+              onChange={event => { setSelectedPolicySetId(event.target.value); setApplyError(""); }}>
+              <option value="">{policySetsLoading ? "Loading policy sets…" : policySetsError ? "Policy sets could not be loaded" : policySets.length === 0 ? "No policy sets available" : "Choose a policy set…"}</option>
               {policySets.map(set => <option key={set.id} value={set.id}>{set.name}</option>)}
             </NativeSelect>
             <Button ref={applyButtonRef} type="button" variant="outline"
@@ -500,10 +521,14 @@ export function AgentToolSettingsDialog({
           </div>
           <p id={`${dialogId}-policy-set-description`}>Replace this draft’s tools and access settings. Presentation stays unchanged; Save applies the changes to this thread.</p>
           <p className="agent-tool-policy-apply-status" role="status" aria-live="polite">{appliedPolicyMessage}</p>
-          {policySetError && <DialogAlert tone="danger" action={
-            <Button type="button" size="sm" variant="outline" onClick={() => setPolicySetsRefresh(value => value + 1)}>Retry policy sets</Button>
-          }>{policySetError}</DialogAlert>}
-        </section>
+          {policySetsError && <DialogAlert tone="danger" action={
+            <Button ref={retryButtonRef} type="button" size="sm" variant="outline" onClick={() => {
+              restoreRetryFocus.current = document.activeElement === retryButtonRef.current;
+              setPolicySetsRefresh(value => value + 1);
+            }}>Retry policy sets</Button>
+          }>{policySetsError}</DialogAlert>}
+          {applyError && <DialogAlert tone="danger">{applyError}</DialogAlert>}
+        </div>
         {policy.runtimeAvailability.availability === "unavailable" && (
           <p role="status">
             <strong>Sedes tools are unavailable for this thread.</strong>{" "}
