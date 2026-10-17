@@ -1,6 +1,6 @@
 import { ToolPolicyService } from "../../src/server/tool-policies/tool-policy-service.js";
 import { ToolPolicyRepository } from "../../src/server/db/repositories/tool-policy-repository.js";
-import { ThreadToolPolicyOriginRepository } from "../../src/server/db/repositories/thread-tool-policy-origin-repository.js";
+import { ThreadAppliedToolPolicySetRepository } from "../../src/server/db/repositories/thread-applied-tool-policy-set-repository.js";
 import { AutomationForkTargetResolver } from "../../src/server/runtime/automation-fork-target.js";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { ViewedImageCaptureService } from "../../src/server/output-artifacts/viewed-image-capture.js";
@@ -4647,11 +4647,11 @@ async function main(): Promise<void> {
     },
   );
   const agentToolPolicyDependencies = threadAgentToolPolicyReaderDependencies(database);
-  const toolPolicyOrigins = new ThreadToolPolicyOriginRepository(database);
+  const appliedToolPolicySets = new ThreadAppliedToolPolicySetRepository(database);
   const policySets = new ToolPolicyService(new ToolPolicyRepository(database), configurationFixture.repository, agentToolPolicyDependencies.agentToolCatalog, backendId => savedAgentAdapters.findByBackendInstanceId(backendId)?.typeId);
   const forks = new ThreadForkService({
     toolPolicies: agentToolPolicyDependencies.agentTools,
-    toolPolicyOrigins,
+    appliedToolPolicySets,
     principalToolClients: new PrincipalAgentToolClientRepository(database, createPrincipalAgentToolClientEligibility()),
     environmentVariables,
     database,
@@ -4921,7 +4921,7 @@ async function main(): Promise<void> {
   const savedAgents = new SavedAgentApplicationService({
     policySets,
     principalToolClients: new PrincipalAgentToolClientRepository(database, createPrincipalAgentToolClientEligibility()),
-    toolPolicyOrigins,
+    appliedToolPolicySets,
     environmentVariables,
     agents: new SavedAgentService(savedAgentRepository, savedAgentAdapters),
     repository: savedAgentRepository,

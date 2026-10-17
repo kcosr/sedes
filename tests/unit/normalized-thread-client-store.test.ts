@@ -195,7 +195,7 @@ function snapshot(): NormalizedThreadSnapshot {
     stashes: [],
     composerCommands: [],
     agentTools: {
-      origin: null,
+      policySet: null,
       runtimeAvailability: { availability: "available" },
       enabled: false,
       resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
@@ -3536,7 +3536,7 @@ describe("ThreadClientStore normalized operations", () => {
     ready.capabilities = { ...ready.capabilities, runState: "idle" };
     delete ready.activeTurnId;
     ready.agentTools = {
-      origin: null,
+      policySet: null,
       runtimeAvailability: { availability: "available" },
       enabled: true,
       resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
@@ -3613,6 +3613,38 @@ describe("ThreadClientStore normalized operations", () => {
       presentation: { surface: "native", mode: "individual" },
       resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
     });
+  });
+
+  it("retains known dormant tool IDs and forwards applied-set references or explicit Custom", async () => {
+    const operateThread = vi.fn().mockResolvedValue({ status: "accepted" });
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { operateThread } as unknown as ApiClient, transport);
+    await store.start();
+    const ready = snapshot();
+    const policySet = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "Review", revision: 2 };
+    ready.agentTools = {
+      ...ready.agentTools, policySet, enabled: true,
+      presentation: { surface: "cli", mode: "progressive" },
+      groups: [{ id: "context", label: { text: "Context" }, description: { text: "Inspect context." }, order: 10,
+        tools: [{ id: "agent.context", label: { text: "Agent context" }, order: 10, enabled: true, available: false,
+          effects: { application: "read", modelUsage: "none", external: "none" } }] }],
+    };
+    transport.thread?.onConnection("connected");
+    transport.thread?.onEnvelope({ eventId: `${hubId}.0`, projectionGeneration: "projection-1",
+      event: { type: "snapshot", generation: "projection-1", snapshot: ready } });
+    for (const association of [{ id: policySet.id, revision: policySet.revision }, null]) {
+      const input = { expectedPolicyRevision: ready.agentTools.revision, enabled: true,
+        enabledToolIds: ["agent.context"], presentation: ready.agentTools.presentation,
+        resourceScope: ready.agentTools.resourceScope, policySet: association };
+      await store.setAgentToolPolicy(input);
+      expect(operateThread).toHaveBeenLastCalledWith("thread-1", {
+        kind: "set_agent_tool_policy", mutationId: expect.any(String), ...input,
+      });
+    }
+    await expect(store.setAgentToolPolicy({ expectedPolicyRevision: ready.agentTools.revision,
+      enabled: true, enabledToolIds: ["unknown.tool"], presentation: ready.agentTools.presentation,
+      resourceScope: ready.agentTools.resourceScope, policySet: null })).rejects.toThrow("no longer available");
+    expect(operateThread).toHaveBeenCalledTimes(2);
   });
 
   it.each(["progressive", "individual"] as const)(

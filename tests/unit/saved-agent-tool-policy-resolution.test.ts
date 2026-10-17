@@ -73,7 +73,6 @@ function fixture(input: {
   readonly eligibleToolIds?: ReadonlySet<string>;
 }) {
   const initialized = vi.fn();
-  const originRecorded = vi.fn();
   const {database, scope: realScope} = savedAgentDatabase();
   scope = realScope;
   const policySets = new ToolPolicyService(new ToolPolicyRepository(database));
@@ -107,7 +106,7 @@ function fixture(input: {
   const service = new SavedAgentApplicationService({
     policySets,
     principalToolClients: {get: () => ({enabled:true,policyRevision:2,credentialGeneration:1,toolIds:["task.list"]})} as never,
-    toolPolicyOrigins: {database, record: originRecorded} as never,
+    appliedToolPolicySets: {database, get: () => null} as never,
     agents: {get: () => ({id:"20000000-0000-4000-8000-000000000001",name:"Reviewer",backendTypeId,backendOverrides:[],revision:0,toolPolicySelection:agentSelection})} as never,
     repository: { database, assertRevision: () => undefined } as never,
     adapters: new SavedAgentBackendAdapterRegistry([
@@ -191,7 +190,7 @@ function fixture(input: {
     executionWorkspaces: directThreadExecutionWorkspaceAllocator,
     publications: { handoffThreadChange: () => undefined },
   });
-  return { database, service, policySets, initialized, originRecorded, createServerDraft, sourcePolicy, beforeCreate(callback:()=>void) {beforeCreation = callback;}, setAgentSelection(selection: ToolPolicySelection) {agentSelection = selection;} };
+  return { database, service, policySets, initialized, createServerDraft, sourcePolicy, beforeCreate(callback:()=>void) {beforeCreation = callback;}, setAgentSelection(selection: ToolPolicySelection) {agentSelection = selection;} };
 }
 
 async function options(
@@ -331,13 +330,13 @@ describe("new-thread tool policy snapshots", () => {
     current.policySets.updateSelection(scope,{target,selection:{kind:"policy_set",policySetId:policy.id},expectedRevision:0});
     return policy;
   }
-  it("uses account defaults for custom creation and freezes exact IDs and provenance", async () => {
+  it("uses account defaults for custom creation and freezes exact IDs and applied set metadata", async () => {
     const current = fixture({backendKind:"pi",nativePresentation:true,eligibleToolIds:new Set(["task.list","thread.status"])});
     try {
       const policy = configure(current,"account","Everyday",["task.list"]);
       await current.service.createThread(scope,request(),{kind:"http_ui"});
       expect(current.initialized).toHaveBeenCalledWith(scope,"created-thread",expect.objectContaining({enabled:true,enabledToolIds:["task.list"],presentation:{surface:"native",mode:"progressive"}}));
-      expect(current.originRecorded).toHaveBeenCalledWith(scope,"created-thread",{source:"account",policySet:{id:policy.id,name:"Everyday",revision:0}},1);
+      expect(current.initialized.mock.calls[0]![2].policySet).toEqual({id:policy.id,name:"Everyday",revision:0});
       current.policySets.update(scope,policy.id,{name:policy.name,enabledToolIds:["thread.status"],resourceScope:policy.resourceScope,expectedRevision:0});
       expect(current.initialized.mock.calls[0]![2].enabledToolIds).toEqual(["task.list"]);
     } finally {current.database.close();}
@@ -356,7 +355,7 @@ describe("new-thread tool policy snapshots", () => {
         configuration:{kind:"custom",targetId,backendOverrides:[]},
         toolPolicySelection:{kind:"disabled"},
       },{kind:"http_ui"});
-      expect(current.originRecorded.mock.calls[2]![2]).toEqual({source:"thread"});
+      expect(current.initialized.mock.calls[2]![2].policySet).toBeNull();
     } finally {current.database.close();}
   });
   it("replaces backend defaults with an Agent policy and permits a thread override", async () => {
@@ -369,10 +368,10 @@ describe("new-thread tool policy snapshots", () => {
       const fromAgent: CreateThreadRequest = {...request(),configuration:{kind:"saved_agent",agentId:"20000000-0000-4000-8000-000000000001",targetId}};
       await current.service.createThread(scope,fromAgent,{kind:"http_ui"});
       expect(current.initialized.mock.calls[0]![2].enabledToolIds).toEqual(["thread.status"]);
-      expect(current.originRecorded.mock.calls[0]![2].source).toBe("agent");
+      expect(current.initialized.mock.calls[0]![2].policySet).toEqual({id:agent.id,name:agent.name,revision:0});
       await current.service.createThread(scope,{...fromAgent,toolPolicySelection:{kind:"policy_set",policySetId:account.id}},{kind:"http_ui"});
       expect(current.initialized.mock.calls[1]![2].enabledToolIds).toEqual(["task.list"]);
-      expect(current.originRecorded.mock.calls[1]![2].source).toBe("thread");
+      expect(current.initialized.mock.calls[1]![2].policySet).toEqual({id:account.id,name:account.name,revision:0});
     } finally {current.database.close();}
   });
   it("allows an explicit replacement when an inherited policy was deleted", async () => {

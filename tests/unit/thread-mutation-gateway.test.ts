@@ -5339,6 +5339,7 @@ function agentToolPolicyMutationFixture(input: {
     applicationThreadId: "thread-1",
     enabled: false,
     enabledToolIds: [],
+    policySet: null,
     presentation: input.presentation ?? {
       surface: "native", mode: "individual",
     },
@@ -5361,6 +5362,7 @@ function agentToolPolicyMutationFixture(input: {
         revision: request.expectedRevision + 1,
         updatedAt: request.now,
         enabledToolIds: request.enabledToolIds,
+        policySet: null,
       };
     });
   const runWithRuntimeRetired = vi.fn(
@@ -5450,6 +5452,15 @@ function agentToolPolicyMutationFixture(input: {
 }
 
 describe("ThreadMutationGateway agent-tool policy", () => {
+  it.each(["bound", "unbound"] as const)("forwards current association changes for %s threads", async backingState => {
+    const subject = agentToolPolicyMutationFixture({backingState});
+    const reference = {id:"88888888-8888-4888-8888-888888888888",revision:3};
+    await subject.gateway.mutate(scope,"thread-1",{...subject.operation,policySet:reference});
+    expect(subject.update).toHaveBeenLastCalledWith(scope,"thread-1",expect.objectContaining({policySet:reference}));
+    await subject.gateway.mutate(scope,"thread-1",{...subject.operation,policySet:null});
+    expect(subject.update).toHaveBeenLastCalledWith(scope,"thread-1",expect.objectContaining({policySet:null}));
+  });
+
   it.each(["progressive", "individual"] as const)(
     "updates CLI %s grants and master access during a turn without retiring it",
     async (mode) => {

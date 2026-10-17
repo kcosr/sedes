@@ -141,7 +141,7 @@ function makeSnapshot({
     attention: { automationContexts: [] },
     stashes: [],
     agentTools: {
-      origin: null,
+      policySet: null,
       runtimeAvailability: { availability: "available" },
       enabled: false,
       resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },

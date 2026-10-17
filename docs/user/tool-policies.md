@@ -66,8 +66,10 @@ An explicit later selection can replace an earlier missing reference.
 ## Existing threads keep a snapshot
 
 Thread creation copies the effective exact tool list, access switches, and
-backend-supported presentation into independent thread state. The recorded
-policy name, revision, and source level describe that creation snapshot.
+backend-supported presentation into independent thread state. An unmodified
+named policy retains its applied set ID, name, and revision; customized tools
+or access switches are shown as **Custom**. Presentation is separate from the
+set, so presentation edits retain the named policy.
 Editing a policy, Agent, template, or default does not update existing threads.
 User forks and **New with same settings** copy the source thread's current
 policy. Agent and Tool-client forks may copy it only when it does not exceed
@@ -79,8 +81,10 @@ Use **Thread actions → Agent tools** to edit an existing thread's tools and
 access switches. Choose a saved **Policy set** and **Apply** to replace the
 draft's tools and access settings, keeping its presentation. You can customize
 the draft before **Save** updates the thread. This remains an independent
-snapshot; later edits to the set do not update the thread, and **Original
-policy** continues to describe its creation settings.
+snapshot; later edits or deletion of the set do not update the thread. The
+dialog shows its current named policy or **Custom**, including after reopening.
+Manual tool or access-switch edits clear the set association. Selecting
+**Custom** keeps the current settings and clears the association when saved.
 You can enable broader access temporarily and turn it off again; Sedes does
 not automatically restore it or let the agent enable it.
 CLI access edits apply to subsequent requests. Native-tool and presentation
@@ -119,3 +123,5 @@ Old thread-only policies are disabled for review because project scope would
 be broader than their original restriction. Existing explicit Agent policies
 become named policy sets, retaining their supported presentation separately.
 Server and clients must be upgraded together for the new protocol.
+Historical creation labels become current associations only when the upgrade
+can prove the thread still has that unmodified policy; other threads show Custom.

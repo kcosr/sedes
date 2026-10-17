@@ -40,6 +40,7 @@ import {
 import {
   agentToolResourceScopeSchema,
   agentToolIdSchema,
+  appliedToolPolicySetReferenceSchema,
   agentToolPresentationSchema,
   activityDetailModeSchema,
   executionWorkspaceSelectionSchema,
@@ -1225,6 +1226,7 @@ export const threadApplicationOperationSchema = z.discriminatedUnion("kind", [
   z
     .strictObject({
       kind: z.literal("set_agent_tool_policy"),
+      policySet: appliedToolPolicySetReferenceSchema.nullable().optional(),
       mutationId: mutationIdSchema,
       expectedPolicyRevision: z.number().int().nonnegative(),
       enabled: z.boolean(),

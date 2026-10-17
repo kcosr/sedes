@@ -43,6 +43,8 @@ interface AgentToolPolicyDraft {
   readonly baseEnabledToolIds: readonly string[];
   readonly basePresentation: AgentToolPolicy["presentation"];
   readonly baseResourceScope: AgentToolPolicy["resourceScope"];
+  readonly basePolicySet: AgentToolPolicy["policySet"];
+  readonly policySet: AgentToolPolicy["policySet"];
   readonly enabled: boolean;
   readonly enabledToolIds: readonly string[];
   readonly presentation: AgentToolPolicy["presentation"];
@@ -63,6 +65,8 @@ function draftFrom(policy: AgentToolPolicy): AgentToolPolicyDraft {
     baseEnabledToolIds: ids,
     basePresentation: policy.presentation,
     baseResourceScope: policy.resourceScope,
+    basePolicySet: policy.policySet,
+    policySet: policy.policySet,
     enabled: policy.enabled,
     enabledToolIds: ids,
     presentation: policy.presentation,
@@ -77,6 +81,18 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
   );
 }
 
+function samePolicySet(
+  left: AgentToolPolicy["policySet"],
+  right: AgentToolPolicy["policySet"],
+): boolean {
+  return left === right || Boolean(
+    left && right &&
+    left.id === right.id &&
+    left.revision === right.revision &&
+    left.name === right.name,
+  );
+}
+
 function dirty(draft: AgentToolPolicyDraft): boolean {
   return (
     draft.enabled !== draft.baseEnabled ||
@@ -84,7 +100,8 @@ function dirty(draft: AgentToolPolicyDraft): boolean {
     draft.presentation.mode !== draft.basePresentation.mode ||
     draft.resourceScope.allowOtherEnvironments !== draft.baseResourceScope.allowOtherEnvironments ||
     draft.resourceScope.allowOtherProjects !== draft.baseResourceScope.allowOtherProjects ||
-    !sameIds(draft.enabledToolIds, draft.baseEnabledToolIds)
+    !sameIds(draft.enabledToolIds, draft.baseEnabledToolIds) ||
+    !samePolicySet(draft.policySet, draft.basePolicySet)
   );
 }
 
@@ -219,7 +236,7 @@ export function AgentToolSettingsDialog({
   const dialogId = useId();
   const dialogDescriptionId = `${dialogId}-description`;
   const nativeToolCacheWarningId = `${dialogId}-pi-native-cache-warning`;
-  const policyFingerprint = `${policy.revision}:${policy.enabled}:${policy.presentation.surface}:${policy.presentation.mode}:${policy.resourceScope.allowOtherEnvironments}:${policy.resourceScope.allowOtherProjects}:${policy.groups
+  const policyFingerprint = `${policy.revision}:${policy.policySet?.id ?? ""}:${policy.policySet?.revision ?? ""}:${policy.policySet?.name ?? ""}:${policy.enabled}:${policy.presentation.surface}:${policy.presentation.mode}:${policy.resourceScope.allowOtherEnvironments}:${policy.resourceScope.allowOtherProjects}:${policy.groups
     .flatMap(({ id, order, tools }) => [
       `${id}:${order}`,
       ...tools.map(
@@ -244,7 +261,7 @@ export function AgentToolSettingsDialog({
   const [policySetsError, setPolicySetsError] = useState("");
   const [applyError, setApplyError] = useState("");
   const [policySetsRefresh, setPolicySetsRefresh] = useState(0);
-  const [selectedPolicySetId, setSelectedPolicySetId] = useState("");
+  const [selectedPolicySetId, setSelectedPolicySetId] = useState(() => policy.policySet?.id ?? "");
   const [applyingPolicy, setApplyingPolicy] = useState(false);
   const [appliedPolicyMessage, setAppliedPolicyMessage] = useState("");
   const applyRequest = useRef<AbortController | null>(null);
@@ -271,7 +288,6 @@ export function AgentToolSettingsDialog({
     void store.listToolPolicySets(abort.signal).then(({ items }) => {
       if (abort.signal.aborted) return;
       setPolicySets(items);
-      setSelectedPolicySetId(current => items.some(item => item.id === current) ? current : "");
       setPolicySetsLoading(false);
     }, (cause: unknown) => {
       if (abort.signal.aborted) return;
@@ -283,7 +299,7 @@ export function AgentToolSettingsDialog({
 
   useEffect(() => {
     setPolicySets([]);
-    setSelectedPolicySetId("");
+    setSelectedPolicySetId(policy.policySet?.id ?? "");
     setAppliedPolicyMessage("");
     setApplyError("");
     setApplyingPolicy(false);
@@ -330,6 +346,10 @@ export function AgentToolSettingsDialog({
   }, [open, pending, applyingPolicy, policyFingerprint]);
 
   useEffect(() => {
+    setSelectedPolicySetId(draft.policySet?.id ?? "");
+  }, [draft.baseRevision, draft.policySet?.id, draft.policySet?.revision, open]);
+
+  useEffect(() => {
     if (confirming) confirmButtonRef.current?.focus();
   }, [confirming]);
 
@@ -370,7 +390,7 @@ export function AgentToolSettingsDialog({
     tools.map(({ id }) => id),
   );
   const applyPolicySet = async () => {
-    if (!editable || stale || policySetsLoading || !selectedPolicySetId || applyRequest.current) return;
+    if (!editable || stale || policySetsLoading || policySetsError || !selectedPolicySetId || applyRequest.current) return;
     const request = new AbortController();
     applyRequest.current = request;
     restoreApplyFocus.current = document.activeElement === applyButtonRef.current;
@@ -393,6 +413,7 @@ export function AgentToolSettingsDialog({
       const nextDraft = {
         ...draft,
         enabled: true,
+        policySet: { id: selected.id, name: selected.name, revision: selected.revision },
         enabledToolIds: orderedIds.filter(id => ids.has(id)),
         resourceScope: { ...selected.resourceScope },
       };
@@ -407,8 +428,14 @@ export function AgentToolSettingsDialog({
       if (!request.signal.aborted) setApplyingPolicy(false);
     }
   };
+  const updateCustomDraft = (update: (current: AgentToolPolicyDraft) => AgentToolPolicyDraft) => {
+    setDraft(current => ({ ...update(current), policySet: null }));
+    setSelectedPolicySetId("");
+    setAppliedPolicyMessage("");
+    setApplyError("");
+  };
   const setSelectedIds = (next: ReadonlySet<string>) => {
-    setDraft((current) => ({
+    updateCustomDraft((current) => ({
       ...current,
       enabledToolIds: orderedIds.filter((id) => next.has(id)),
     }));
@@ -456,6 +483,7 @@ export function AgentToolSettingsDialog({
         enabledToolIds: draft.enabledToolIds,
         presentation: draft.presentation,
         resourceScope: draft.resourceScope,
+        policySet: draft.policySet ? { id: draft.policySet.id, revision: draft.policySet.revision } : null,
       })
       .then(
         () => {
@@ -517,26 +545,34 @@ export function AgentToolSettingsDialog({
         </DialogHeader>
 
         <DialogBody>
-        {policy.origin && <p className="agent-tool-policy-origin">
-          Original policy: {originalPolicyDescription(policy.origin)}.
-          {" "}These settings are saved on this thread; later default or policy-set changes do not update it.
-        </p>}
         <div className="agent-tool-policy-apply">
           <label htmlFor={`${dialogId}-policy-set`}>Policy set</label>
           <div className="agent-tool-policy-apply-controls">
             <NativeSelect ref={policySetSelectRef} id={`${dialogId}-policy-set`}
               aria-describedby={`${dialogId}-policy-set-description`}
               value={selectedPolicySetId} disabled={!editable || policySetsLoading || Boolean(policySetsError)}
-              onChange={event => { setSelectedPolicySetId(event.target.value); setApplyError(""); }}>
-              <option value="">{policySetsLoading ? "Loading policy sets…" : policySetsError ? "Policy sets could not be loaded" : policySets.length === 0 ? "No policy sets available" : "Choose a policy set…"}</option>
-              {policySets.map(set => <option key={set.id} value={set.id}>{set.name}</option>)}
+              onChange={event => {
+                const nextId = event.target.value;
+                setSelectedPolicySetId(nextId);
+                setApplyError("");
+                if (!nextId) updateCustomDraft(current => current);
+              }}>
+              <option value="">Custom</option>
+              {draft.policySet && !policySets.some(set => set.id === draft.policySet?.id) && <option value={draft.policySet.id}>{draft.policySet.name}</option>}
+              {selectedPolicySetId && selectedPolicySetId !== draft.policySet?.id && !policySets.some(set => set.id === selectedPolicySetId) && <option value={selectedPolicySetId}>Selected policy set (unavailable)</option>}
+              {policySets.map(set => <option key={set.id} value={set.id}>{set.id === draft.policySet?.id ? draft.policySet.name : set.name}</option>)}
             </NativeSelect>
             <Button ref={applyButtonRef} type="button" variant="outline"
-              disabled={!editable || stale || policySetsLoading || !selectedPolicySetId}
+              disabled={!editable || stale || policySetsLoading || Boolean(policySetsError) || !selectedPolicySetId}
               onClick={() => void applyPolicySet()}>{applyingPolicy ? "Applying…" : "Apply"}</Button>
           </div>
           <p id={`${dialogId}-policy-set-description`}>Replace this draft’s tools and access settings. Presentation stays unchanged; Save applies the changes to this thread.</p>
-          <p className="agent-tool-policy-apply-status" role="status" aria-live="polite">{appliedPolicyMessage}</p>
+          <p>{draft.policySet
+            ? `${isDirty ? "Draft policy set" : "Current policy set"}: ${draft.policySet.name} (revision ${draft.policySet.revision}). Later policy-set changes do not update these settings.`
+            : "Custom tools and access settings."}</p>
+          <p className="agent-tool-policy-apply-status" role="status" aria-live="polite">{policySetsLoading ? "Loading policy sets…" : selectedPolicySetId && selectedPolicySetId !== draft.policySet?.id
+            ? "Select Apply to load the chosen policy set into this draft."
+            : appliedPolicyMessage}</p>
           {policySetsError && <DialogAlert tone="danger" action={
             <Button ref={retryButtonRef} type="button" size="sm" variant="outline" onClick={() => {
               restoreRetryFocus.current = document.activeElement === retryButtonRef.current;
@@ -563,7 +599,7 @@ export function AgentToolSettingsDialog({
               checked={draft.enabled}
               disabled={!editable}
               onCheckedChange={(enabled) =>
-                setDraft((current) => ({ ...current, enabled }))
+                updateCustomDraft((current) => ({ ...current, enabled }))
               }
             />
           </label>
@@ -654,7 +690,7 @@ export function AgentToolSettingsDialog({
               aria-label="Allow other environments"
               checked={draft.resourceScope.allowOtherEnvironments}
               disabled={!editable}
-              onCheckedChange={(allowOtherEnvironments) => setDraft((current) => ({
+              onCheckedChange={(allowOtherEnvironments) => updateCustomDraft((current) => ({
                 ...current,
                 resourceScope: { ...current.resourceScope, allowOtherEnvironments },
               }))}
@@ -669,7 +705,7 @@ export function AgentToolSettingsDialog({
               aria-label="Allow other projects"
               checked={draft.resourceScope.allowOtherProjects}
               disabled={!editable}
-              onCheckedChange={(allowOtherProjects) => setDraft((current) => ({
+              onCheckedChange={(allowOtherProjects) => updateCustomDraft((current) => ({
                 ...current,
                 resourceScope: { ...current.resourceScope, allowOtherProjects },
               }))}
@@ -820,10 +856,4 @@ export function AgentToolSettingsDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-function originalPolicyDescription(origin: NonNullable<AgentToolPolicy["origin"]>): string {
-  const source = origin.source.charAt(0).toUpperCase() + origin.source.slice(1);
-  if (origin.policySet) return `${origin.policySet.name} (revision ${origin.policySet.revision}) · from ${source}`;
-  return origin.source === "default" ? "No policy selected (default)" : `Disabled · from ${source}`;
 }

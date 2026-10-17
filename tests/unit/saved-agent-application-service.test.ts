@@ -5,6 +5,7 @@ import { SavedAgentBackendAdapterRegistry } from "../../src/server/backends/save
 import type { SavedAgentBackendAdapter } from "../../src/server/backends/saved-agent-adapter.js";
 import { savedAgentBackendTypeIdSchema } from "../../src/shared/protocol/saved-agents.js";
 import type { ResolvedAgentToolBootstrapPolicy } from "../../src/shared/protocol/saved-agents.js";
+import type { AppliedToolPolicySet } from "../../src/shared/protocol/conversation.js";
 import type { ResolvedToolPolicy, ToolPolicySelection } from "../../src/shared/protocol/tool-policies.js";
 import { DomainError } from "../../src/server/domain/errors.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
@@ -103,6 +104,8 @@ function fixture(
     readonly sourceAvailable?: boolean;
     readonly sourceBackingState?: "unbound" | "creating" | "bound";
     readonly toolPolicyChangesBeforeFence?: boolean;
+    readonly appliedPolicySet?: AppliedToolPolicySet | null;
+    readonly appliedPolicySetChangesBeforeFence?: boolean;
     readonly isolationUnavailable?: boolean;
     readonly agentBackendTypeId?: string;
     readonly admittedIsolationNetworkProfiles?: ReadonlySet<
@@ -196,6 +199,9 @@ function fixture(
     };
   });
   const initializeToolPolicy = vi.fn();
+  const getAppliedPolicySet = vi.fn()
+    .mockImplementationOnce(() => input.appliedPolicySet ?? null)
+    .mockImplementation(() => input.appliedPolicySetChangesBeforeFence ? null : input.appliedPolicySet ?? null);
   const handoffThreadChange = vi.fn();
   const listAgents = vi.fn(() => ({ items: [] }));
   const requireAgentSelectable = vi.fn(async () => undefined);
@@ -283,7 +289,7 @@ function fixture(
         policy: resolvePolicy(requestedScope, selection),
       }),
     } as never,
-    toolPolicyOrigins: {database,record:vi.fn(),copy:vi.fn()} as never,
+    appliedToolPolicySets: {database,get:getAppliedPolicySet} as never,
     agents: {
       list: listAgents,
       get: () => ({
@@ -467,6 +473,7 @@ describe("SavedAgentApplicationService", () => {
           enabledToolIds: ["task.list"],
           presentation: { surface: "native", mode: "individual" },
           resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
+          policySet: null,
           now: 123,
         },
       );
@@ -477,6 +484,35 @@ describe("SavedAgentApplicationService", () => {
     } finally {
       current.database.close();
     }
+  });
+
+  it("copies the current applied set snapshot without consulting its live definition", async () => {
+    const policySet = {id: "50000000-0000-4000-8000-000000000001", name: "Previously applied", revision: 3};
+    const current = fixture({adapterAFails: false, eligibleToolIds: new Set(["task.list"]), appliedPolicySet: policySet});
+    try {
+      await current.service.createThreadFromSettings(scope, "source-thread", {
+        title: "Copied tools", mutationId: "30000000-0000-4000-8000-000000000008",
+      });
+      current.createServerDraft.mock.calls[0]![1].bootstrap.initializeAgentTools({
+        transaction: {assertActive: vi.fn()}, applicationThreadId: "copied-thread", now: 123,
+      });
+      expect(current.initializeToolPolicy).toHaveBeenCalledWith(scope, "copied-thread", expect.objectContaining({policySet}));
+    } finally {current.database.close();}
+  });
+
+  it("fails the copy fence when the source applied set changes", async () => {
+    const current = fixture({
+      adapterAFails: false, eligibleToolIds: new Set(["task.list"]),
+      appliedPolicySet: {id: "50000000-0000-4000-8000-000000000001", name: "Applied", revision: 3},
+      appliedPolicySetChangesBeforeFence: true,
+    });
+    try {
+      await expect(current.service.createThreadFromSettings(scope, "source-thread", {
+        title: "Copied tools", mutationId: "30000000-0000-4000-8000-000000000009",
+      })).rejects.toMatchObject({code: "conflict"});
+      expect(current.initializeToolPolicy).not.toHaveBeenCalled();
+      expect(current.handoffThreadChange).not.toHaveBeenCalled();
+    } finally {current.database.close();}
   });
 
   it("refuses an automation settings copy when the source starts before its reservation", async () => {
@@ -1064,6 +1100,7 @@ describe("SavedAgentApplicationService", () => {
           enabledToolIds: [toolId],
           presentation: { surface: "cli", mode: "progressive" },
           resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true },
+          policySet: {id: "50000000-0000-4000-8000-000000000001", name: "Tools", revision: 0},
           now: 123,
         },
       );

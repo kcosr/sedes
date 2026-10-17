@@ -3144,6 +3144,9 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
                 enabledToolIds: operation.enabledToolIds,
                 presentation: operation.presentation,
                 resourceScope: operation.resourceScope,
+                ...(operation.policySet !== undefined
+                  ? { policySet: operation.policySet }
+                  : {}),
                 now: this.#now(),
               },
             );
@@ -3191,6 +3194,9 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         enabledToolIds: operation.enabledToolIds,
         presentation: operation.presentation,
         resourceScope: operation.resourceScope,
+        ...(operation.policySet !== undefined
+          ? { policySet: operation.policySet }
+          : {}),
         now: this.#now(),
       });
     }

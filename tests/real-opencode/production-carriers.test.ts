@@ -36,7 +36,7 @@ describe.skipIf(!RUN_REAL_OPENCODE || process.platform !== "linux")("stock OpenC
       expect(first.agentTools).toMatchObject({
         enabled: true,
         resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
-        origin: { source: "thread", policySet: { name: "Stock qualification tools", revision: 0 } },
+        policySet: { name: "Stock qualification tools", revision: 0 },
       });
       expect(first.agentTools.groups.flatMap(group => group.tools).filter(tool => tool.enabled).map(tool => tool.id)).toEqual(["thread.status"]);
       const option = first.capabilities.settings.find(item => item.id === "model")?.options.find(item => item.available && item.label.text.includes("second-model"));

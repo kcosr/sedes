@@ -1,6 +1,6 @@
 import { assertToolPolicyWithinCaller } from "../agent-tools/application/assert-tool-policy-within-caller.js";
 import type { PrincipalAgentToolClientRepository } from "../db/repositories/principal-agent-tool-client-repository.js";
-import type { ThreadToolPolicyOriginRepository } from "../db/repositories/thread-tool-policy-origin-repository.js";
+import type { ThreadAppliedToolPolicySetRepository } from "../db/repositories/thread-applied-tool-policy-set-repository.js";
 import type { ToolPolicyService } from "../tool-policies/tool-policy-service.js";
 import type { ResolvedToolPolicy, ToolPolicySelection, ToolPolicyResolutionIssue } from "../../shared/protocol/tool-policies.js";
 import type { AgentToolPresentation } from "../../shared/protocol/conversation.js";
@@ -219,7 +219,7 @@ export class SavedAgentApplicationService {
       readonly environmentVariables?: EnvironmentVariablesService;
       readonly policySets: ToolPolicyService;
       readonly principalToolClients: Pick<PrincipalAgentToolClientRepository, "get">;
-      readonly toolPolicyOrigins: ThreadToolPolicyOriginRepository;
+      readonly appliedToolPolicySets: ThreadAppliedToolPolicySetRepository;
       readonly agents: SavedAgentService;
       readonly repository: SavedAgentRepository;
       readonly adapters: SavedAgentBackendAdapterRegistry;
@@ -242,7 +242,7 @@ export class SavedAgentApplicationService {
     if (
       input.repository.database !== input.toolPolicies.database ||
       input.repository.database !== input.policySets.repository.database ||
-      input.repository.database !== input.toolPolicyOrigins.database ||
+      input.repository.database !== input.appliedToolPolicySets.database ||
       input.repository.database !== input.configuration.database ||
       input.repository.database !== input.inventory.database
     ) {
@@ -670,8 +670,7 @@ export class SavedAgentApplicationService {
             throw new DomainError("conflict", "The resolved target changed while the thread was created.");
           }
           workspaceInitialization.initializeApplicationThread?.({transaction, applicationThreadId, target, now});
-          this.input.toolPolicies.initialize(scope, applicationThreadId, {...policy, now});
-          this.input.toolPolicyOrigins.record(scope, applicationThreadId, {source: resolved.source, ...(resolved.policySet ? {policySet: resolved.policySet} : {})}, now);
+          this.input.toolPolicies.initialize(scope, applicationThreadId, {...policy, policySet: resolved.policySet ?? null, now});
         },
       }, signal);
       this.input.publications.handoffThreadChange(scope, created.applicationThreadId);
@@ -844,12 +843,8 @@ export class SavedAgentApplicationService {
                   this.input.toolPolicies.initialize(
                     scope,
                     applicationThreadId,
-                    { ...resolved.toolPolicy, now },
+                    { ...resolved.toolPolicy, policySet: resolved.resolvedToolPolicy.policySet ?? null, now },
                   );
-                  this.input.toolPolicyOrigins.record(scope, applicationThreadId, {
-                    source: resolved.resolvedToolPolicy.source,
-                    ...(resolved.resolvedToolPolicy.policySet ? {policySet: resolved.resolvedToolPolicy.policySet} : {}),
-                  }, now);
                 },
         },
       },
@@ -972,6 +967,7 @@ export class SavedAgentApplicationService {
       scope,
       sourceApplicationThreadId,
     );
+    const capturedPolicySet = this.input.appliedToolPolicySets.get(scope, sourceApplicationThreadId);
     const environment = this.input.inventory.getEnvironment(
       scope,
       source.thread.environmentId,
@@ -1063,7 +1059,10 @@ export class SavedAgentApplicationService {
               scope,
               sourceApplicationThreadId,
             );
-            if (!sameToolPolicy(currentTools, capturedTools)) {
+            if (
+              !sameToolPolicy(currentTools, capturedTools) ||
+              JSON.stringify(this.input.appliedToolPolicySets.get(scope, sourceApplicationThreadId)) !== JSON.stringify(capturedPolicySet)
+            ) {
               throw new DomainError(
                 "conflict",
                 "The source Sedes tool policy changed while the new thread was created.",
@@ -1074,9 +1073,9 @@ export class SavedAgentApplicationService {
             transaction.assertActive();
             this.input.toolPolicies.initialize(scope, applicationThreadId, {
               ...resolved.toolPolicy,
+              policySet: capturedPolicySet,
               now,
             });
-            this.input.toolPolicyOrigins.copy(scope, sourceApplicationThreadId, applicationThreadId, now);
           },
         },
       },

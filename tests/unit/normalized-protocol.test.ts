@@ -975,7 +975,7 @@ describe("workspace-file write protocol", () => {
 describe("normalized conversation protocol", () => {
   it("validates one current agent-tool policy and idle mutation shape", () => {
     const policy = {
-      origin: null,
+      policySet: null,
       runtimeAvailability: { availability: "available" },
       enabled: true,
       groups: [
@@ -2077,7 +2077,7 @@ describe("normalized conversation protocol", () => {
         argumentHint: display,
       })),
       agentTools: {
-        origin: null,
+        policySet: null,
         runtimeAvailability: { availability: "available" },
         enabled: false,
         groups: [
@@ -2386,7 +2386,7 @@ describe("application sidebar background-work wire contract", () => {
     }).success).toBe(true);
   });
   it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(165);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(166);
     expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
       .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
     expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread }))

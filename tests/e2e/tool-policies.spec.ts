@@ -125,17 +125,19 @@ test("policy sets replace inherited tools across levels and snapshot new threads
   };
   const customSnapshot = await readCustomSnapshot();
   expect(customSnapshot.agentTools.groups.flatMap(group => group.tools.filter(tool => tool.enabled).map(tool => tool.id)).sort()).toEqual(["agent.context", "thread.list"]);
-  expect(customSnapshot.agentTools.origin).toMatchObject({ source: "thread", policySet: { id: everyday.id } });
+  expect(customSnapshot.agentTools.policySet).toMatchObject({ id: everyday.id, name: "Everyday", revision: everyday.revision });
   expect(initial.agentTools.resourceScope).toEqual({ allowOtherEnvironments: false, allowOtherProjects: false });
   expect(initial.agentTools.groups.flatMap(group => group.tools.filter(tool => tool.enabled).map(tool => tool.id))).toEqual(["thread.list"]);
 
   // Applying a reusable policy copies into the existing thread's editable draft.
-  // Presentation and its original creation policy remain independent.
+  // Presentation remains independent; the applied-set name follows the draft.
   await page.getByRole("button", { name: "Thread actions", exact: true }).click();
   await page.getByRole("menuitem", { name: /^Agent tools…/ }).click();
   const toolsDialog = page.getByRole("dialog", { name: "Agent tools", exact: true });
   const policyChooser = toolsDialog.getByRole("combobox", { name: "Policy set", exact: true });
   await expect(policyChooser).toBeEnabled();
+  await expect(policyChooser).toHaveValue(everyday.id);
+  await expect(toolsDialog.getByText(/Original policy:/)).toHaveCount(0);
   await policyChooser.selectOption(reviewer.id);
   await policyChooser.scrollIntoViewIfNeeded();
   await expect(policyChooser).toBeVisible();
@@ -175,15 +177,41 @@ test("policy sets replace inherited tools across levels and snapshot new threads
   await expect(toolsDialog.getByRole("switch", { name: "Allow other projects", exact: true })).not.toBeChecked();
   await expect(toolsDialog.getByRole("combobox", { name: "Agent tool surface", exact: true })).toContainText("Sedes CLI");
   await expect(toolsDialog.getByRole("combobox", { name: "Agent tool presentation", exact: true })).toContainText("Individual");
-  await expect(toolsDialog.getByText(/Original policy:/)).toContainText("Everyday");
   await toolsDialog.getByRole("button", { name: "Context", exact: true }).click();
   await expect(toolsDialog.getByRole("checkbox", { name: "Agent context", exact: true })).not.toBeChecked();
   await toolsDialog.getByRole("button", { name: "Threads", exact: true }).click();
   await expect(toolsDialog.getByRole("checkbox", { name: "List threads", exact: true })).toBeChecked();
   expect((await readCustomSnapshot()).agentTools).toEqual(customSnapshot.agentTools);
 
+  const savePolicyDraft = async () => {
+    const saved = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/api/threads/${customThreadId}/operations`) && response.ok() && response.request().postDataJSON()?.kind === "set_agent_tool_policy");
+    await toolsDialog.getByRole("button", { name: "Save", exact: true }).click();
+    const response = await saved;
+    await expect(toolsDialog).toBeHidden();
+    return response.request().postDataJSON();
+  };
+  const reopenPolicy = async () => {
+    await page.getByRole("button", { name: "Thread actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^Agent tools…/ }).click();
+    await expect(policyChooser).toBeEnabled();
+  };
+  // Saving an applied set records its identity even though the tools are a snapshot.
+  expect(await savePolicyDraft()).toMatchObject({ policySet: { id: reviewer.id, revision: reviewer.revision } });
+  expect((await readCustomSnapshot()).agentTools.policySet).toEqual({ id: reviewer.id, name: "Reviewer", revision: reviewer.revision });
+  await reopenPolicy();
+  await expect(policyChooser).toHaveValue(reviewer.id);
+  // Presentation belongs to the thread, so changing it keeps the named set.
+  await selectRadixOption(page, toolsDialog.getByRole("combobox", { name: "Agent tool presentation", exact: true }), /Progressive discovery/);
+  await expect(policyChooser).toHaveValue(reviewer.id);
+  expect(await savePolicyDraft()).toMatchObject({ presentation: { surface: "cli", mode: "progressive" }, policySet: { id: reviewer.id, revision: reviewer.revision } });
+  expect((await readCustomSnapshot()).agentTools.policySet).toEqual({ id: reviewer.id, name: "Reviewer", revision: reviewer.revision });
+  await reopenPolicy();
+  await expect(policyChooser).toHaveValue(reviewer.id);
+
   await toolsDialog.getByRole("button", { name: "Context", exact: true }).click();
   await toolsDialog.getByRole("checkbox", { name: "Agent context", exact: true }).check();
+  await expect(policyChooser).toHaveValue("");
+  await expect(policyChooser.locator("option:checked")).toHaveText("Custom");
   await toolsDialog.getByRole("switch", { name: "Allow other projects", exact: true }).check();
   const customized = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/api/threads/${customThreadId}/operations`) && response.ok() && response.request().postDataJSON()?.kind === "set_agent_tool_policy");
   await toolsDialog.getByRole("button", { name: "Save", exact: true }).click();
@@ -191,16 +219,20 @@ test("policy sets replace inherited tools across levels and snapshot new threads
   expect(customizedResponse.request().postDataJSON()).toMatchObject({
     kind: "set_agent_tool_policy", enabled: true, enabledToolIds: ["agent.context", "thread.list"],
     resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
-    presentation: { surface: "cli", mode: "individual" },
+    presentation: { surface: "cli", mode: "progressive" }, policySet: null,
   });
   await expect(toolsDialog).toBeHidden();
   const customizedSnapshot = await readCustomSnapshot();
   const assertCustomizedPolicy = (snapshot: typeof customizedSnapshot) => {
-    expect(snapshot.agentTools).toMatchObject({ enabled: true, presentation: { surface: "cli", mode: "individual" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true } });
-    expect(snapshot.agentTools.origin).toEqual(customSnapshot.agentTools.origin);
+    expect(snapshot.agentTools).toMatchObject({ enabled: true, presentation: { surface: "cli", mode: "progressive" }, resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true } });
+    expect(snapshot.agentTools.policySet).toBeNull();
     expect(snapshot.agentTools.groups.flatMap(group => group.tools.filter(tool => tool.enabled).map(tool => tool.id)).sort()).toEqual(["agent.context", "thread.list"]);
   };
   assertCustomizedPolicy(customizedSnapshot);
+  await reopenPolicy();
+  await expect(policyChooser).toHaveValue("");
+  await expect(policyChooser.locator("option:checked")).toHaveText("Custom");
+  await toolsDialog.getByRole("button", { name: "Cancel", exact: true }).click();
 
   await openSettingsPage(page, "tool_policies");
   await page.getByRole("link", { name: "Reviewer", exact: true }).click();
@@ -211,6 +243,7 @@ test("policy sets replace inherited tools across levels and snapshot new threads
   await policyUpdated;
   expect(await resolve()).toMatchObject({ source: "backend", resourceScope: { allowOtherEnvironments: true, allowOtherProjects: true } });
   expect((await snapshot()).agentTools.resourceScope).toEqual(initial.agentTools.resourceScope);
+  expect((await snapshot()).agentTools.policySet).toEqual(initial.agentTools.policySet);
   assertCustomizedPolicy(await readCustomSnapshot());
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoPageOverflow(page);
@@ -254,6 +287,7 @@ test("policy sets replace inherited tools across levels and snapshot new threads
   await deletion.getByRole("button", { name: "Delete policy set", exact: true }).click();
   await policyDeleted;
   assertCustomizedPolicy(await readCustomSnapshot());
+  expect((await snapshot()).agentTools.policySet).toEqual(initial.agentTools.policySet);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await returnFromSettings(page);
   // This deliberately exercises failed previews, without allowing unrelated browser failures.
@@ -263,11 +297,19 @@ test("policy sets replace inherited tools across levels and snapshot new threads
   await selectRadixOption(page, page.getByRole("combobox", { name: "Target", exact: true }), target.label);
   await expect(creation.getByText(/Needs attention: the backend policy set was deleted/)).toBeVisible();
   await expect(creation.getByRole("button", { name: "Create thread", exact: true })).toBeDisabled();
+  const isAgentResolution = (response: import("@playwright/test").Response) =>
+    response.request().method() === "POST" && /\/api\/agents\/[^/]+\/resolve$/.test(response.url());
+  const missingAgentResolved = page.waitForResponse(response => isAgentResolution(response) && response.request().postDataJSON()?.toolPolicySelection?.kind === "inherit");
   await selectRadixOption(page, creation.getByRole("combobox", { name: "Agent", exact: true }), /Policy review Agent/);
+  await missingAgentResolved;
   await expect(creation.getByText(/Needs attention: the Agent policy set was deleted/)).toHaveCount(1);
   await expect(creation.getByRole("button", { name: "Create thread", exact: true })).toBeDisabled();
+  const repairedAgentResolved = page.waitForResponse(response => isAgentResolution(response) && response.ok() && response.request().postDataJSON()?.toolPolicySelection?.policySetId === everyday.id);
   await creation.getByRole("combobox", { name: "Sedes tool policy", exact: true }).selectOption(everyday.id);
+  await repairedAgentResolved;
+  const presentationResolved = page.waitForResponse(response => isAgentResolution(response) && response.ok() && response.request().postDataJSON()?.toolPresentation?.surface === "native" && response.request().postDataJSON()?.toolPresentation?.mode === "individual");
   await creation.getByRole("combobox", { name: "Tool presentation", exact: true }).selectOption("native:individual");
+  await presentationResolved;
   await expect(creation.getByRole("button", { name: "Create thread", exact: true })).toBeEnabled();
   const agentThreadCreated = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith("/api/threads") && response.status() === 201);
   await creation.getByRole("button", { name: "Create thread", exact: true }).click();
@@ -275,7 +317,7 @@ test("policy sets replace inherited tools across levels and snapshot new threads
   expect(agentCreatedResponse.request().postDataJSON()).toMatchObject({ toolPolicySelection: { kind: "policy_set", policySetId: everyday.id }, toolPresentation: { surface: "native", mode: "individual" }, configuration: { kind: "saved_agent" } });
   const agentThreadId = (await agentCreatedResponse.json()).threadId;
   const agentSnapshot = normalizedThreadSnapshotSchema.parse(await (await page.request.get(`/api/threads/${agentThreadId}?activityDetail=full`)).json());
-  expect(agentSnapshot.agentTools.origin).toMatchObject({ source: "thread", policySet: { id: everyday.id } });
+  expect(agentSnapshot.agentTools.policySet).toMatchObject({ id: everyday.id });
   expect(agentSnapshot.agentTools.groups.flatMap(group => group.tools.filter(tool => tool.enabled).map(tool => tool.id)).sort()).toEqual(["agent.context", "thread.list"]);
   await openSettingsPage(page, "backends");
   await page.getByRole("link", { name: target.label, exact: true }).click();

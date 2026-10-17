@@ -1,4 +1,4 @@
-import { ThreadToolPolicyOriginRepository } from "./db/repositories/thread-tool-policy-origin-repository.js";
+import { ThreadAppliedToolPolicySetRepository } from "./db/repositories/thread-applied-tool-policy-set-repository.js";
 import { ToolPolicyRepository } from "./db/repositories/tool-policy-repository.js";
 import { ToolPolicyService } from "./tool-policies/tool-policy-service.js";
 import { performCompletionFollowUp } from "./conversations/authoritative-completion-follow-up.js";
@@ -585,10 +585,11 @@ export async function startProductionApplication(
     const agentToolPolicyDependencies = createThreadAgentToolPolicyDependencies(
       agentToolRuntimeAvailability,
     );
-    const toolPolicyOrigins = new ThreadToolPolicyOriginRepository(database);
+    const appliedToolPolicySets = new ThreadAppliedToolPolicySetRepository(database);
     const agentToolPolicies = new ThreadAgentToolPolicyRepository(
       database,
       agentToolPolicyDependencies.eligibility,
+      appliedToolPolicySets,
     );
     const principalAgentToolClients = new PrincipalAgentToolClientRepository(
       database,
@@ -1143,7 +1144,7 @@ export async function startProductionApplication(
       );
     const forks = new ThreadForkService({
       toolPolicies: agentToolPolicies,
-      toolPolicyOrigins,
+      appliedToolPolicySets,
       principalToolClients: principalAgentToolClients,
       environmentVariables,
       database,
@@ -1438,7 +1439,7 @@ export async function startProductionApplication(
     const savedAgents = new SavedAgentApplicationService({
       principalToolClients: principalAgentToolClients,
       policySets,
-      toolPolicyOrigins,
+      appliedToolPolicySets,
       environmentVariables,
       agents: savedAgentDomain,
       repository: savedAgentRepository,

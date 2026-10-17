@@ -1,3 +1,4 @@
+import { ToolPolicyRepository } from "../../src/server/db/repositories/tool-policy-repository.js";
 import { describe, expect, it } from "vitest";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
 import {
@@ -175,6 +176,76 @@ function fixture(): {
 }
 
 describe("thread agent tool policy persistence", () => {
+  it("tracks the current named association and preserves it only for unchanged policy content", async () => {
+    const value = fixture();
+    try {
+      const policies = new ThreadAgentToolPolicyRepository(value.database,eligibility);
+      const sets = new ToolPolicyRepository(value.database);
+      const first = sets.create(value.scope,{name:"Review",enabledToolIds:["thread.status","agent.context"],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}},400);
+      const content = {enabled:true,enabledToolIds:[...first.enabledToolIds],resourceScope:first.resourceScope};
+      let current = policies.update(value.scope,value.piThreadId,{...content,expectedRevision:0,presentation:{surface:"native",mode:"individual"},policySet:{id:first.id,revision:first.revision},now:500});
+      const captured = {id:first.id,name:first.name,revision:first.revision};
+      expect(current.policySet).toEqual(captured);
+      const changedDefinition = sets.update(value.scope,first.id,{name:"Changed review",enabledToolIds:["thread.status"],resourceScope:first.resourceScope},0,501);
+      current = policies.update(value.scope,value.piThreadId,{...content,expectedRevision:current.revision,presentation:{surface:"native",mode:"progressive"},now:502});
+      expect(current.policySet).toEqual(captured);
+      sets.delete(value.scope,first.id,changedDefinition.revision);
+      current = policies.update(value.scope,value.piThreadId,{...content,expectedRevision:current.revision,presentation:{surface:"native",mode:"individual"},policySet:{id:first.id,revision:first.revision},now:503});
+      expect(current.policySet).toEqual(captured);
+      current = policies.update(value.scope,value.piThreadId,{...content,expectedRevision:current.revision,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:true},presentation:current.presentation,now:504});
+      expect(current.policySet).toBeNull();
+      expect(() => policies.update(value.scope,value.piThreadId,{...content,expectedRevision:current.revision,presentation:current.presentation,policySet:{id:first.id,revision:first.revision},now:505})).toThrow(/not found/i);
+      expect(policies.getDurable(value.scope,value.piThreadId)).toEqual(current);
+      const second = sets.create(value.scope,{name:"Current review",enabledToolIds:[...current.enabledToolIds],resourceScope:current.resourceScope},506);
+      const next = policies.update(value.scope,value.piThreadId,{...current,expectedRevision:current.revision,policySet:{id:second.id,revision:second.revision},now:507});
+      expect(next.revision).toBe(current.revision+1);
+      expect(next.policySet).toEqual({id:second.id,name:second.name,revision:second.revision});
+      current = policies.update(value.scope,value.piThreadId,{...next,expectedRevision:next.revision,policySet:null,now:508});
+      expect(current.policySet).toBeNull();
+      expect(current.revision).toBe(next.revision+1);
+      const dependencies = createThreadAgentToolPolicyDependencies();
+      const reader = new DatabaseThreadApplicationInventoryReader({inventory:new InventoryRepository(value.database),queue:new QueuedInputRepository(value.database),completion:new SubmissionCompletionRepository(value.database),agentTools:policies,agentToolCatalog:dependencies.catalog,agentToolRuntimeAvailability:{read:()=>({availability:"available"})},directoryBrowsingAvailability:()=>"unavailable",executionWorkspaces:directThreadExecutionWorkspaceReader});
+      const projected = (await reader.getAuthorized(value.scope,value.piThreadId)).agentTools;
+      expect(projected.policySet).toBeNull();
+      expect(projected).not.toHaveProperty("origin");
+    } finally {value.database.close();}
+  });
+
+  it("rejects stale, foreign, or mismatching named associations without changing grants or metadata", () => {
+    const value = fixture();
+    try {
+      const policies = new ThreadAgentToolPolicyRepository(value.database,eligibility);
+      const sets = new ToolPolicyRepository(value.database);
+      const definition = sets.create(value.scope,{name:"Exact review",enabledToolIds:["thread.status"],resourceScope:{allowOtherEnvironments:false,allowOtherProjects:false}},400);
+      const valid = {enabled:true,enabledToolIds:definition.enabledToolIds,resourceScope:definition.resourceScope,presentation:{surface:"native" as const,mode:"individual" as const},expectedRevision:0,now:500};
+      const before = policies.getDurable(value.scope,value.piThreadId);
+      const reference = {id:definition.id,revision:definition.revision};
+      for (const invalid of [
+        {...valid,enabled:false,policySet:reference},
+        {...valid,enabledToolIds:["agent.context"],policySet:reference},
+        {...valid,resourceScope:{allowOtherEnvironments:true,allowOtherProjects:false},policySet:reference},
+        {...valid,resourceScope:{allowOtherEnvironments:false,allowOtherProjects:true},policySet:reference},
+        {...valid,policySet:{...reference,revision:1}},
+      ]) {
+        expect(() => policies.update(value.scope,value.piThreadId,invalid)).toThrow();
+        expect(policies.getDurable(value.scope,value.piThreadId)).toEqual(before);
+      }
+      const foreignScope = {...value.scope,principalId:"foreign-policy-owner"};
+      value.database.prepare("INSERT INTO principals(tenant_id,id,kind,created_at) VALUES (?,?,'local_human',100)").run(foreignScope.tenantId,foreignScope.principalId);
+      const foreign = sets.create(foreignScope,{name:"Private",enabledToolIds:definition.enabledToolIds,resourceScope:definition.resourceScope},400);
+      expect(() => policies.update(value.scope,value.piThreadId,{...valid,policySet:{id:foreign.id,revision:foreign.revision}})).toThrow(/not found/i);
+      expect(policies.getDurable(value.scope,value.piThreadId)).toEqual(before);
+      const applied = policies.update(value.scope,value.piThreadId,{...valid,policySet:reference});
+      expect(applied.policySet).toEqual({id:definition.id,name:definition.name,revision:definition.revision});
+      expect(() => policies.update(value.scope,value.piThreadId,{...valid,expectedRevision:0,policySet:null})).toThrow(/changed in another client/i);
+      expect(policies.getDurable(value.scope,value.piThreadId)).toEqual(applied);
+      const custom = policies.update(value.scope,value.piThreadId,{...valid,expectedRevision:applied.revision,enabledToolIds:["agent.context"],now:501});
+      expect(custom.policySet).toBeNull();
+      const disabled = policies.update(value.scope,value.piThreadId,{...valid,expectedRevision:custom.revision,enabled:false,now:502});
+      expect(disabled.policySet).toBeNull();
+    } finally {value.database.close();}
+  });
+
   it("projects runtime and archived-thread denials independently of saved grants and catalog availability", async () => {
     const value = fixture();
     try {

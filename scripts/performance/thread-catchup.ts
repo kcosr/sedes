@@ -77,7 +77,7 @@ function snapshot(title = "Thread"): NormalizedThreadSnapshot {
     composerCommands: [],
     agentTools: {
       runtimeAvailability: { availability: "available" },
-      origin: null,
+      policySet: null,
       enabled: false,
       resourceScope: { allowOtherEnvironments: false, allowOtherProjects: true },
       groups: [],

@@ -33,7 +33,7 @@ import { codexBackendTurnId } from "../../src/server/backends/codex/codex-histor
 import { OverlayRepository } from "../support/schema9/overlay-repository.js";
 import { ThreadInventoryService } from "../support/schema9/thread-inventory-service.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
-import { ThreadToolPolicyOriginRepository } from "../../src/server/db/repositories/thread-tool-policy-origin-repository.js";
+import { ThreadAppliedToolPolicySetRepository } from "../../src/server/db/repositories/thread-applied-tool-policy-set-repository.js";
 import { threadAgentToolPolicyRepository } from "../support/thread-agent-tool-policy.js";
 
 const configuration = parseResolvedBackendConfiguration({
@@ -346,7 +346,7 @@ function fixture(withEnvironmentVariables = false) {
     inventory,
     operations: new ConversationOperationRepository(database),
     toolPolicies,
-    toolPolicyOrigins: new ThreadToolPolicyOriginRepository(database),
+    appliedToolPolicySets: new ThreadAppliedToolPolicySetRepository(database),
     principalToolClients: new PrincipalAgentToolClientRepository(database, createPrincipalAgentToolClientEligibility()),
     deliveryInputSnapshots,
     outputArtifacts: { collectGarbage: collectOutputArtifactGarbage },
@@ -582,21 +582,21 @@ describe("ThreadForkService", () => {
   });
 
   it.each(["selected_completed_turn", "latest_provider_snapshot"] as const)(
-    "preserves the exact Sedes tool snapshot and immutable origin for a %s fork",
+    "preserves the exact Sedes tool snapshot and current applied set for a %s fork",
     async (boundary) => {
       const current = fixture();
       try {
-        const { toolPolicies, toolPolicyOrigins } = current.service.input;
-        const origin = { source: "account" as const, policySet: {
+        const { toolPolicies, appliedToolPolicySets } = current.service.input;
+        const policySet = {
           id: "11111111-1111-4111-8111-111111111111", name: "Everyday", revision: 4,
-        } };
+        };
         const sourcePolicy = toolPolicies.update(current.scope, current.source.id, {
           expectedRevision: 0, enabled: true, enabledToolIds: ["thread.list", "task.list"],
           presentation: { surface: "cli", mode: "individual" },
           resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false }, now: 400,
         });
-        current.database.transaction(() => toolPolicyOrigins.record(
-          current.scope, current.source.id, origin, 400,
+        current.database.transaction(() => appliedToolPolicySets.set(
+          current.scope, current.source.id, policySet, 400,
         ))();
         const result = await current.service.forkManual(boundary === "selected_completed_turn"
           ? current.manual() : current.latestSnapshot());
@@ -606,7 +606,7 @@ describe("ThreadForkService", () => {
           presentation: sourcePolicy.presentation, resourceScope: sourcePolicy.resourceScope,
           revision: 0,
         });
-        expect(toolPolicyOrigins.get(current.scope, result.childThreadId)).toEqual(origin);
+        expect(appliedToolPolicySets.get(current.scope, result.childThreadId)).toEqual(policySet);
         toolPolicies.update(current.scope, current.source.id, {
           expectedRevision: sourcePolicy.revision, enabled: false, enabledToolIds: [],
           presentation: sourcePolicy.presentation,
@@ -616,7 +616,13 @@ describe("ThreadForkService", () => {
           enabled: true, enabledToolIds: ["task.list", "thread.list"],
           resourceScope: { allowOtherEnvironments: true, allowOtherProjects: false },
         });
-        expect(toolPolicyOrigins.get(current.scope, result.childThreadId)).toEqual(origin);
+        expect(appliedToolPolicySets.get(current.scope, result.childThreadId)).toEqual(policySet);
+        expect(appliedToolPolicySets.get(current.scope, current.source.id)).toBeNull();
+        const customCopy = await current.service.forkManual(boundary === "selected_completed_turn"
+          ? current.manual("custom-policy-copy") : current.latestSnapshot("custom-policy-copy"));
+        expect(customCopy.status).toBe("created");
+        expect(toolPolicies.getDurable(current.scope, customCopy.childThreadId)).toMatchObject({enabled: false, enabledToolIds: []});
+        expect(appliedToolPolicySets.get(current.scope, customCopy.childThreadId)).toBeNull();
       } finally { current.database.close(); }
     },
   );

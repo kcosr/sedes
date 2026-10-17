@@ -1,3 +1,4 @@
+import { threadAppliedToolPolicySetsMigration } from "./migrations/152-thread-applied-tool-policy-sets.js";
 import { threadToolPolicyOriginsMigration } from "./migrations/151-thread-tool-policy-origins.js";
 import { templateToolPoliciesMigration } from "./migrations/150-template-tool-policies.js";
 import { toolPolicySetsMigration } from "./migrations/149-tool-policy-sets.js";
@@ -316,6 +317,7 @@ export const backendNormalizedMigrations = [
   toolPolicySetsMigration,
   templateToolPoliciesMigration,
   threadToolPolicyOriginsMigration,
+  threadAppliedToolPolicySetsMigration,
 ] as const;
 
 export type DatabaseMigration = {

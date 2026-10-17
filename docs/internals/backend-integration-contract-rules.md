@@ -3664,7 +3664,7 @@ access approval is requested. Provider-native permission handling remains
 private to the backend. Named policy sets and their Account → Environment →
 Backend → Agent → Thread selections resolve to independent creation snapshots
 for all five compiled backends. Preserve exact flags, IDs, presentation and
-creation provenance across forks and same-settings copies.
+the current applied-set association across forks and same-settings copies.
 
 Model-visible tool media is a separate closed `modelContent` array on a
 completed canonical invocation, never an oversized base64 string in ordinary
@@ -3900,8 +3900,13 @@ policy is resolved and fenced transactionally at creation, stored as independent
 thread state, and copied intact by user forks. Agent and Tool-client forks
 must additionally prove that the copied policy is a subset of the caller's
 current authority before reservation commits. Policy metadata names and IDs
-are provenance rather than live authority. Missing selected sets fail closed;
-existing thread snapshots remain usable after set deletion.
+describe the current snapshot, not live authority. Applying a set validates its
+scoped ID, revision, exact tools and access flags transactionally; custom tool
+or access edits clear its association, while presentation-only edits retain it.
+Saved names and revisions survive later set edits or deletion. Missing selected
+sets fail closed at creation; existing thread snapshots remain usable after set
+deletion. This shared application path applies to Pi, Codex, Claude, Grok and
+OpenCode without changing their provider protocols or tool admission.
 
 Workpads are application-owned Markdown documents, revision history,
 attribution, and user drafts; providers receive only normalized canonical tools.
