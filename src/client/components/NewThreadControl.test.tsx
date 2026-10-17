@@ -482,6 +482,52 @@ describe("NewThreadControl", () => {
     expect(createThread.mock.calls[0]![0]).not.toHaveProperty("toolPresentation");
   });
 
+  it("repairs an unsupported inherited Agent presentation using the cheap preview choices", async () => {
+    const user = userEvent.setup();
+    const agent = { ...carefulAgent, toolPresentation: { surface: "cli" as const, mode: "individual" as const } };
+    const descriptor = candidate("target-pi", "Remote Pi");
+    descriptor.sedesTools.presentationOptions = [{ surface: "native", modes: ["progressive", "individual"] }];
+    const { api, createThread } = control({
+      agents: [agent],
+      resolveToolPolicy: vi.fn().mockResolvedValue({
+        enabled: false, enabledToolIds: [], source: "default",
+        resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false },
+        defaultPresentation: { surface: "native", mode: "progressive" },
+        presentationOptions: descriptor.sedesTools.presentationOptions,
+      }),
+    });
+    api.resolveSavedAgent.mockImplementation(async (_agentId, input) => input.toolPresentation?.surface === "native"
+      ? { candidates: [descriptor], failures: [] }
+      : { candidates: [], failures: [{ targetId: "target-pi", reason: { text: "Sedes CLI is unavailable on this target." } }] });
+
+    await openPicker(user);
+    await chooseCareful(user);
+    expect(await screen.findByText("Sedes CLI is unavailable on this target.")).toBeInTheDocument();
+    expect(screen.getByText("Inherited presentation: Sedes CLI · Individual operations.")).toBeInTheDocument();
+    const presentation = screen.getByRole("combobox", { name: "Tool presentation" });
+    expect(within(presentation).getByRole("option", { name: "Native tools · Individual operations" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
+
+    await user.selectOptions(presentation, "native:individual");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
+    expect(api.resolveSavedAgent).toHaveBeenLastCalledWith(agent.id, expect.objectContaining({ toolPresentation: { surface: "native", mode: "individual" } }), expect.any(AbortSignal));
+
+    await user.selectOptions(presentation, "inherit");
+    expect(await screen.findByText("Sedes CLI is unavailable on this target.")).toBeInTheDocument();
+    expect(screen.getByText("Inherited presentation: Sedes CLI · Individual operations.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
+    expect(api.resolveSavedAgent.mock.calls.at(-1)![1]).not.toHaveProperty("toolPresentation");
+
+    await user.selectOptions(presentation, "native:individual");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    await waitFor(() => expect(createThread).toHaveBeenCalledWith(expect.objectContaining({
+      configuration: { kind: "saved_agent", agentId: agent.id, targetId: "target-pi" },
+      toolPresentation: { surface: "native", mode: "individual" },
+    })));
+    expect(api.getSavedAgentOptions).not.toHaveBeenCalled();
+  });
+
   it.each(["custom", "agent"] as const)("explains and retries a missing inherited policy on the %s path", async (path) => {
     const user = userEvent.setup();
     const missing = new ApiError(404, "not_found", "The tool policy set was not found.", false,

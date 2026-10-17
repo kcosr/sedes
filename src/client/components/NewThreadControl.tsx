@@ -510,10 +510,14 @@ export function NewThreadControl({
   const policySource = toolPolicyPreview
     ? toolPolicySourceLabel(toolPolicyPreview.source)
     : "Agent, backend, environment, or account defaults";
+  // An unsupported saved presentation can prevent Agent resolution. Keep the
+  // target's choices available so the thread override can repair that failure.
   const presentationCatalog = selection.kind === "saved_agent"
-    ? selectedResolvedTarget?.sedesTools
+    ? selectedResolvedTarget?.sedesTools ?? (selectedWorkspace?.available ? toolPolicyPreview : undefined)
     : toolPolicyPreview;
-  const presentationLoading = selection.kind === "saved_agent" ? resolutionLoading : toolPolicyLoading;
+  const presentationLoading = selection.kind === "saved_agent" && selectedResolvedTarget
+    ? resolutionLoading
+    : toolPolicyLoading;
   const presentations = presentationCatalog?.presentationOptions.flatMap(({ surface, modes }) =>
     modes.map((mode) => ({ surface, mode })),
   ) ?? [];
