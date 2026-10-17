@@ -182,7 +182,7 @@ export function NewThreadControl({
     kind: "custom",
   });
   const [selectedAgentSummary, setSelectedAgentSummary] =
-    useState<Pick<SavedAgentSummary, "id" | "name" | "backend">>();
+    useState<Pick<SavedAgentSummary, "id" | "name" | "backend" | "toolPresentation">>();
   const [selectedTargetId, setSelectedTargetId] = useState<string>();
   const [executionWorkspace, setExecutionWorkspace] =
     useState<ExecutionWorkspaceSelection>();
@@ -549,7 +549,14 @@ export function NewThreadControl({
     surface === toolPresentation.surface && mode === toolPresentation.mode,
   );
   const inheritedPresentation = selectedResolvedTarget?.sedesTools.resolvedPolicy?.presentation
+    ?? selectedAgentSummary?.toolPresentation
     ?? presentationCatalog?.defaultPresentation;
+  const presentationReady = !toolPresentation || Boolean(
+    presentationCatalog && !presentationLoading && !presentationError && presentationIsAvailable,
+  );
+  const presentationNeedsAttention = Boolean(toolPresentation) && !presentationLoading && (
+    Boolean(presentationError) || Boolean(presentationCatalog && !presentationIsAvailable)
+  );
   const refreshToolPolicies = () => {
     setToolPolicyPreview(undefined);
     setToolPolicyLoading(true);
@@ -558,8 +565,7 @@ export function NewThreadControl({
 
   const canCreate = Boolean(
     toolPolicyPreview && !toolPolicyLoading && !policiesError && !policiesLoading &&
-    presentationCatalog && !presentationLoading && !presentationError && presentationIsAvailable &&
-    variablesPreview.result &&
+    presentationReady && variablesPreview.result &&
     !pendingLocation &&
     !scopeConflict &&
     selectedWorkspace?.available &&
@@ -590,7 +596,7 @@ export function NewThreadControl({
     selectedTemplate &&
     (templateAgentMissing ||
       Boolean(toolPolicyIssue) ||
-      (Boolean(presentationCatalog) && !presentationIsAvailable) ||
+      presentationNeedsAttention ||
       !selectedWorkspace?.available ||
       !selectedTarget?.available ||
       (selection.kind === "saved_agent" &&
@@ -601,7 +607,7 @@ export function NewThreadControl({
   const canSaveTemplate = Boolean(
     selectedWorkspace?.available &&
     selectedTarget?.available &&
-    selectedExecutionWorkspace &&
+    selectedExecutionWorkspace && presentationReady &&
     selection.kind === "saved_agent" &&
     !resolutionLoading &&
     selectedResolvedTarget,
@@ -1078,6 +1084,7 @@ export function NewThreadControl({
             id: agent.id,
             name: agent.name,
             backend: agent.backend,
+            ...(agent.toolPresentation ? { toolPresentation: agent.toolPresentation } : {}),
           });
           return;
         }
@@ -1921,20 +1928,20 @@ export function NewThreadControl({
               <Field label="Tool presentation" id={`${pickerId}-tool-presentation`}
                 description={inheritedPresentation ? `Inherited presentation: ${presentationLabel(inheritedPresentation)}.` : "Choose how this target exposes Sedes tools."}>
                 <NativeSelect value={toolPresentation ? presentationKey(toolPresentation) : "inherit"}
-                  disabled={pending || presentationLoading || !presentationCatalog}
+                  disabled={pending}
                   onChange={(event) => {
                     const next = presentations.find((item) => presentationKey(item) === event.target.value);
                     setToolPresentation(next);
                   }}>
                   <option value="inherit">Inherit</option>
-                  {!presentationIsAvailable && toolPresentation && <option value={presentationKey(toolPresentation)} disabled>{presentationLabel(toolPresentation)} (unavailable)</option>}
+                  {!presentationIsAvailable && toolPresentation && <option value={presentationKey(toolPresentation)} disabled>{presentationLabel(toolPresentation)} ({presentationLoading ? "checking…" : presentationError ? "not verified" : "unavailable"})</option>}
                   {presentations.map((item) => <option key={presentationKey(item)} value={presentationKey(item)}>{presentationLabel(item)}</option>)}
                 </NativeSelect>
               </Field>
-              {!presentationIsAvailable && !presentationLoading && <DialogAlert tone="danger">This tool presentation is unavailable on the selected target. Choose Inherit or a supported presentation.</DialogAlert>}
-              {presentationError && <DialogAlert tone="danger" action={
+              {presentationCatalog && !presentationIsAvailable && !presentationLoading && <DialogAlert tone="danger">This tool presentation is unavailable on the selected target. Choose Inherit or a supported presentation.</DialogAlert>}
+              {presentationError && <DialogAlert tone={toolPresentation ? "danger" : "warning"} action={
                 <Button type="button" size="sm" variant="outline" onClick={refreshToolPolicies}>Retry tool presentation</Button>
-              }>{presentationError}</DialogAlert>}
+              }>{presentationError} {toolPresentation ? "Choose Inherit or retry to verify this presentation." : "You can still create this thread with inherited presentation."}</DialogAlert>}
             </section>
             <section
               className="new-thread-variables"
@@ -1976,8 +1983,8 @@ export function NewThreadControl({
                       <small>
                         {toolPolicyIssue
                           ? "Review the Sedes tool policy above, then update the template."
-                          : !presentationIsAvailable
-                            ? "Choose a supported tool presentation, then update the template."
+                          : presentationNeedsAttention
+                            ? "Choose Inherit or a supported tool presentation, then update the template."
                             : "Choose an available Project, Location, Target, and saved Agent, then update the template."}
                       </small>
                     )}

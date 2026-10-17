@@ -378,6 +378,63 @@ async function chooseTemplate(
 }
 
 describe("NewThreadControl", () => {
+  it("creates a Custom inherited draft when optional presentation options fail", async () => {
+    const user = userEvent.setup();
+    const { createThread } = control({ getSavedAgentOptions: vi.fn().mockRejectedValue(new Error("Model catalog unavailable")) });
+    await openPicker(user);
+    expect(await screen.findByText(/You can still create this thread with inherited presentation/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    await waitFor(() => expect(createThread).toHaveBeenCalledWith(expect.objectContaining({ configuration: { kind: "custom", targetId: "target-pi" } })));
+    expect(createThread.mock.calls[0]![0]).not.toHaveProperty("toolPresentation");
+  });
+
+  it("lets a template return to Inherit when its presentation cannot be verified", async () => {
+    const user = userEvent.setup();
+    const { createThread } = control({
+      templates: [{ ...carefulTemplate, toolPresentation: { surface: "cli", mode: "individual" } }],
+      getSavedAgentOptions: vi.fn().mockRejectedValue(new Error("Model catalog unavailable")),
+    });
+    await openPicker(user);
+    await chooseTemplate(user);
+    expect(await screen.findByText(/Choose Inherit or retry to verify this presentation/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Tool presentation" }), "inherit");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    await waitFor(() => expect(createThread).toHaveBeenCalledOnce());
+    expect(createThread.mock.calls[0]![0]).not.toHaveProperty("toolPresentation");
+  });
+
+  it("retains the Agent presentation preview when a missing policy is repaired by a thread override", async () => {
+    const user = userEvent.setup();
+    const agent = { ...carefulAgent, toolPresentation: { surface: "cli" as const, mode: "individual" as const } };
+    const policy = { id: "33333333-3333-4333-8333-333333333333", name: "Review", enabledToolIds: ["thread.list"],
+      resourceScope: { allowOtherEnvironments: false, allowOtherProjects: false }, revision: 0, createdAt: "2026-10-17T00:00:00Z", updatedAt: "2026-10-17T00:00:00Z" };
+    const missing = new ApiError(404, "not_found", "The tool policy set was not found.", false,
+      { kind: "missing_policy_set", source: "agent", policySetId: "44444444-4444-4444-8444-444444444444" });
+    const { api, createThread } = control({
+      agents: [agent],
+      listToolPolicySets: vi.fn().mockResolvedValue({ items: [policy] }),
+      resolveToolPolicy: vi.fn(async ({ threadSelection }) => {
+        if (threadSelection.kind === "inherit") throw missing;
+        return { enabled: true, enabledToolIds: policy.enabledToolIds, resourceScope: policy.resourceScope, source: "thread" };
+      }),
+    });
+    const descriptor = candidate("target-pi", "Local SDK");
+    api.resolveSavedAgent.mockResolvedValue({ candidates: [{ ...descriptor, sedesTools: { ...descriptor.sedesTools, resolvedPolicy: null } }], failures: [] });
+    await openPicker(user);
+    await chooseCareful(user);
+    expect(await screen.findByText(/Needs attention: the Agent policy set/)).toBeInTheDocument();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Sedes tool policy" }), policy.id);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled());
+    expect(screen.getByText("Inherited presentation: Sedes CLI · Individual operations.")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Tool presentation" })).toHaveValue("inherit");
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    await waitFor(() => expect(createThread).toHaveBeenCalledOnce());
+    expect(createThread.mock.calls[0]![0]).not.toHaveProperty("toolPresentation");
+  });
+
   it.each(["custom", "agent"] as const)("explains and retries a missing inherited policy on the %s path", async (path) => {
     const user = userEvent.setup();
     const missing = new ApiError(404, "not_found", "The tool policy set was not found.", false,
