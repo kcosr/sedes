@@ -51,9 +51,11 @@ User-facing changes are collected here before release. See the
   usage warnings. Repeated notices with identical text and severity retain one
   copy per thread; a new occurrence after dismissal can appear again. See
   [thread warnings](docs/user/provider-features.md#check-provider-accounts-and-warnings).
+  ([#98](https://github.com/kcosr/sedes/pull/98))
 
 - Mobile and touch inline **Fork from here** asks for confirmation before creating a
   thread. See [forking](docs/user/conversations.md#fork-from-a-completed-turn).
+  ([#98](https://github.com/kcosr/sedes/pull/98))
 
 - Reuse named Sedes tool policy sets across backends, with Account → Environment
   → Backend → Agent → Thread defaults and template selections. Apply a set to
