@@ -699,6 +699,12 @@ Use **Fork from here** on a completed turn to create a separate thread whose
 native history includes that turn. The source conversation continues on its
 own branch.
 
+On mobile and touch devices, the inline **Fork from here** button asks
+**Fork from this point?**
+before creating the new thread. Choose **Cancel** to stay in the conversation
+without forking. Desktop mouse actions and the thread menu keep their existing
+behavior.
+
 Provider capabilities determine when forking is available:
 
 - Pi and Codex can fork an explicitly selected completed turn while later

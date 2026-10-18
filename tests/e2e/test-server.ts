@@ -21,6 +21,7 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import type Database from "better-sqlite3";
 import express from "express";
 import { z } from "zod";
+import { runtimeNoticeSchema } from "../../src/shared/protocol/conversation.js";
 import type {
   Options as ClaudeOptions,
   Query as ClaudeQuery,
@@ -6013,6 +6014,21 @@ async function main(): Promise<void> {
         invocationId: randomUUID(),
         capture: () => actors.captureApplicationPublication(scope, request.params.threadId),
       }));
+    } catch (error) { next(error); }
+  });
+  // Substitute only provider notice delivery. Retention, dismissal, checkpoint
+  // replay, and browser publication use the real scoped application hub.
+  app.post("/__e2e/threads/:threadId/notices", express.json({ limit: "8kb" }), (request, response, next) => {
+    try {
+      inventoryRepository.getThread(scope, request.params.threadId);
+      const hub = threadHubs.thread(scope, request.params.threadId);
+      if (!hub.projectionGeneration) throw new Error("e2e_notice_projection_missing");
+      const notice = runtimeNoticeSchema.parse({
+        ...request.body, id: randomUUID(), createdAt: new Date().toISOString(),
+      });
+      hub.publish({ type: "notice", generation: hub.projectionGeneration, notice });
+      const checkpoint = hub.currentCheckpoint()!;
+      response.json({ eventId: checkpoint.eventId, notices: checkpoint.notices });
     } catch (error) { next(error); }
   });
   let pageNavigationSinkHits = 0;

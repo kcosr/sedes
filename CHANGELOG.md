@@ -8,7 +8,7 @@ User-facing changes are collected here before release. See the
 ### Breaking Changes
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **166**. Sedes tool policies replace cross-boundary approval modes with
+  **167**. Sedes tool policies replace cross-boundary approval modes with
   independent project/environment limits: queries filter to scope and direct
   outside requests are denied. Legacy thread-only policies are disabled for
   review rather than broadened. Saved Agent and thread-create tool contracts
@@ -32,8 +32,8 @@ User-facing changes are collected here before release. See the
   See [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
-- Client protocol **166** also includes Page responses, HTML page downloads
-  and shared download metadata,
+- Client protocol **167** also includes dismissible runtime notices, Page
+  responses, HTML page downloads and shared download metadata,
   larger composer reference lists, the updated
   native voice bridge, Windows notification script paths, multiple named
   automations per thread, dismissal of automation results, and removal of
@@ -46,6 +46,14 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95))
 
 ### Added
+
+- Dismiss runtime warning banners, including Codex MCP failures and Claude
+  usage warnings. Repeated notices with identical text and severity retain one
+  copy per thread; a new occurrence after dismissal can appear again. See
+  [thread warnings](docs/user/provider-features.md#check-provider-accounts-and-warnings).
+
+- Mobile and touch inline **Fork from here** asks for confirmation before creating a
+  thread. See [forking](docs/user/conversations.md#fork-from-a-completed-turn).
 
 - Reuse named Sedes tool policy sets across backends, with Account → Environment
   → Backend → Agent → Thread defaults and template selections. Apply a set to

@@ -301,8 +301,8 @@ function checkpoints(response: FakeResponse) {
 }
 
 function publishNotices(hub: ThreadEventHub, ids: readonly string[]) {
-  for (const id of ids)
-    hub.publish({
+  return ids.map(id => {
+    const published = hub.publish({
       type: "notice",
       generation: "projection-1",
       notice: {
@@ -312,6 +312,9 @@ function publishNotices(hub: ThreadEventHub, ids: readonly string[]) {
         createdAt: "2026-07-30T15:00:00.000Z",
       },
     });
+    if (published?.event.type !== "notice") throw new Error("Expected a new fixture notice.");
+    return published.event.notice;
+  });
 }
 
 function replayDiagnostics(response: FakeResponse) {
@@ -516,7 +519,7 @@ describe("serveThreadEventStream", () => {
       generation: "projection-1",
       usage: { counters: { userMessages: 1 } },
     });
-    publishNotices(hub, ["one", "two"]);
+    const notices = publishNotices(hub, ["one", "two"]);
     response.writeResult = () => true;
     response.emit("drain");
     await vi.waitFor(() => expect(checkpoints(response)).toHaveLength(2));
@@ -530,7 +533,7 @@ describe("serveThreadEventStream", () => {
     );
     expect(checkpoints(response)[1]).toMatchObject({
       eventId: hub.eventIdAt(4),
-      notices: [{ id: "one" }, { id: "two" }],
+      notices,
     });
     expect(response.end).not.toHaveBeenCalled();
     expect(capture).not.toHaveBeenCalled();
@@ -1242,14 +1245,14 @@ describe("serveThreadEventStream", () => {
       source(hub, { capture }),
       { pendingEventLimit: 1, pendingByteLimit: 100_000 },
     );
-    publishNotices(hub, ["one", "two"]);
+    const notices = publishNotices(hub, ["one", "two"]);
     response.writeResult = () => true;
     response.emit("drain");
     await serving;
 
     expect(checkpoints(response)).toMatchObject([
       { eventId: anchor.eventId, notices: [] },
-      { eventId: hub.eventIdAt(3), notices: [{ id: "one" }, { id: "two" }] },
+      { eventId: hub.eventIdAt(3), notices },
     ]);
     expect(envelopes(response)).toEqual([]);
     expect(capture).not.toHaveBeenCalled();

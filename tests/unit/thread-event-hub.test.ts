@@ -5,6 +5,7 @@ import type {
   ThreadEventEnvelope,
 } from "../../src/shared/protocol/conversation.js";
 import { MAXIMUM_NORMALIZED_TIMELINE_TURNS, normalizedThreadSnapshotSchema, pageItemSchema, type PageItem } from "../../src/shared/protocol/conversation.js";
+import { ScopedThreadEventHubRegistry } from "../../src/server/events/thread-runtime-coordinator.js";
 import { ThreadEventHub } from "../../src/server/events/thread-event-hub.js";
 import { fitApplicationItemsToSnapshot } from "../../src/server/conversations/application-publication-projection.js";
 import * as pageProjection from "../../src/server/conversations/application-publication-projection.js";
@@ -247,8 +248,9 @@ describe("ThreadEventHub", () => {
     const hub = new ThreadEventHub();
     const store = new NormalizedThreadStore();
     store.apply(hub.publish({ type: "snapshot", generation: "authority", snapshot: source }));
-    const notice = { id: "warning", tone: "warning" as const, message: { text: "Tool needs attention" }, createdAt: "2026-10-11T00:00:00.000Z" };
-    store.apply(hub.publish({ type: "notice", generation: "authority", notice }));
+    const providerNotice = { id: "warning", tone: "warning" as const, message: { text: "Tool needs attention" }, createdAt: "2026-10-11T00:00:00.000Z" };
+    store.apply(hub.publish({ type: "notice", generation: "authority", notice: providerNotice }));
+    const notice = hub.currentCheckpoint()!.notices[0]!;
     expect(hub.snapshot?.itemsById[previewItem().id]).toBeUndefined();
     const reset = hub.publish({ type: "run_state", generation: "authority", state: "idle" });
     expect(reset.event.type).toBe("snapshot");
@@ -1198,8 +1200,8 @@ describe("ThreadEventHub", () => {
       });
     }
     const checkpoint = hub.currentCheckpoint()!;
-    expect(checkpoint.notices.map(({ id }) => id)).toEqual(
-      Array.from({ length: 100 }, (_, index) => `notice-${index + 5}`),
+    expect(checkpoint.notices.map(({ message }) => message.text)).toEqual(
+      Array.from({ length: 100 }, (_, index) => `Notice ${index + 5}`),
     );
     const subscriber = hub.subscribeFromCurrentSnapshot(vi.fn());
     expect(subscriber.checkpoint?.notices).toEqual(checkpoint.notices);
@@ -1491,5 +1493,131 @@ describe("ThreadEventHub", () => {
     expect(() =>
       hub.publish(withOperations(["reconfigure", "observe"])),
     ).toThrow("thread_projection_provider_feature_revision_conflict");
+  });
+});
+
+
+describe("transient runtime notice lifecycle", () => {
+  const notice = { id: "provider-notice", tone: "warning" as const,
+    message: { text: "The provider is approaching its limit." }, createdAt: "2026-10-17T12:00:00.000Z" };
+  function fixture() {
+    const hub = new ThreadEventHub();
+    hub.publish({ type: "snapshot", generation: "notices", snapshot: snapshot() });
+    const publish = (value = notice) => hub.publish({ type: "notice", generation: "notices", notice: value });
+    const dismiss = (noticeId = hub.currentCheckpoint()!.notices[0]?.id ?? "missing", generation = "notices") =>
+      hub.dismissNotice({ noticeId, generation });
+    return { hub, publish, dismiss };
+  }
+
+  it.each(["pi", "codex", "claude", "grok", "opencode"] as const)(
+    "retains one %s notice by exact text and severity without publishing duplicates", brand => {
+      const { hub, publish } = fixture();
+      const initial = snapshot();
+      initial.thread.backend.brand = brand;
+      initial.capabilities.backend.brand = brand;
+      hub.publish({ type: "snapshot", generation: "notices", snapshot: initial });
+      const listener = vi.fn(); const subscription = hub.subscribe(listener);
+      publish();
+      const checkpoint = hub.currentCheckpoint();
+      const watermark = hub.watermark; const bytes = hub.retainedBytes;
+      for (let index = 0; index < 150; index++) expect(publish({ ...notice, id: `repeat-${index}`, createdAt: "2026-10-17T13:00:00.000Z" })).toBeUndefined();
+      expect(hub.watermark).toBe(watermark);
+      expect(hub.retainedBytes).toBe(bytes);
+      expect(hub.currentCheckpoint()).toBe(checkpoint);
+      expect(checkpoint!.notices).toEqual([{ ...notice, id: expect.any(String) }]);
+      expect(checkpoint!.notices[0]!.id).not.toBe(notice.id);
+      expect(listener).toHaveBeenCalledTimes(1);
+      subscription.close();
+    },
+  );
+
+  it("keeps distinct text and severity while bounding unique notices", () => {
+    const { hub, publish } = fixture(); publish();
+    hub.publish({ type: "notice", generation: "notices", notice: { ...notice, tone: "error" } });
+    publish({ ...notice, message: { text: notice.message.text.toLowerCase() } });
+    const distinct = hub.currentCheckpoint()!.notices;
+    expect(distinct).toHaveLength(3);
+    expect(new Set(distinct.map(value => value.id)).size).toBe(3); // Providers can reuse their ID.
+    hub.dismissNotice({ generation: "notices", noticeId: distinct[1]!.id });
+    expect(hub.currentCheckpoint()!.notices).toEqual([distinct[0], distinct[2]]);
+    for (let index = 0; index < 100; index++) publish({ ...notice, message: { text: `Notice ${index}` } });
+    expect(hub.currentCheckpoint()!.notices).toHaveLength(100);
+    expect(hub.currentCheckpoint()!.notices[0]!.message.text).toBe("Notice 0");
+    publish(); // Evicted content may be emitted again, just as dismissed content may.
+    expect(hub.currentCheckpoint()!.notices.at(-1)).toEqual({ ...notice, id: expect.any(String) });
+  });
+
+  it("removes one occurrence from every client and preserves ordered replay/checkpoints", () => {
+    const { hub, publish, dismiss } = fixture(); publish();
+    const cursor = hub.eventIdAt(hub.watermark);
+    const first = new NormalizedThreadStore(); const second = new NormalizedThreadStore();
+    const checkpoint = hub.currentCheckpoint()!;
+    first.applyCheckpoint(checkpoint); second.applyCheckpoint(checkpoint);
+    const subscriptions = [hub.subscribe(event => first.apply(event)), hub.subscribe(event => second.apply(event))];
+    dismiss();
+    expect(first.state.notices).toEqual([]); expect(second.state.notices).toEqual([]);
+    expect(hub.currentCheckpoint()!.notices).toEqual([]);
+    const offline = new NormalizedThreadStore(); offline.applyCheckpoint(checkpoint);
+    const replay = hub.subscribe(() => undefined, cursor);
+    expect(replay.replay.map(event => event.event.type)).toEqual(["notice_dismissed"]);
+    replay.replay.forEach(event => offline.apply(event));
+    expect(offline.state.notices).toEqual([]);
+    const fresh = new NormalizedThreadStore(); fresh.applyCheckpoint(hub.currentCheckpoint()!);
+    expect(fresh.state.notices).toEqual([]);
+    const watermark = hub.watermark;
+    dismiss(); expect(hub.watermark).toBe(watermark);
+    publish();
+    expect(first.state.notices).toEqual(hub.currentCheckpoint()!.notices);
+    expect(second.state.notices).toEqual(first.state.notices);
+    expect(first.state.notices[0]!.id).not.toBe(checkpoint.notices[0]!.id);
+    subscriptions.forEach(subscription => subscription.close()); replay.close();
+  });
+
+  it("ignores delayed dismissals after a new occurrence, generation or hub replaces the viewed notice", () => {
+    const { hub, publish, dismiss } = fixture(); publish();
+    const oldId = hub.currentCheckpoint()!.notices[0]!.id;
+    dismiss(); publish(); // Same provider ID and text, but a fresh application occurrence.
+    const current = hub.currentCheckpoint(); const watermark = hub.watermark;
+    dismiss(oldId); dismiss("missing"); dismiss(current!.notices[0]!.id, "old-generation");
+    expect(hub.watermark).toBe(watermark);
+    expect(hub.currentCheckpoint()).toBe(current);
+    expect(current!.notices[0]!.id).not.toBe(oldId);
+    const replacement = fixture(); replacement.publish(); replacement.dismiss(oldId);
+    expect(replacement.hub.currentCheckpoint()!.notices).toHaveLength(1);
+    hub.publish({ type: "snapshot", generation: "new-generation", snapshot: snapshot() });
+    expect(hub.currentCheckpoint()!.notices).toEqual([]);
+    hub.publish({ type: "notice", generation: "new-generation", notice });
+    dismiss(hub.currentCheckpoint()!.notices[0]!.id);
+    expect(hub.currentCheckpoint()!.notices).toHaveLength(1);
+  });
+
+  it("preserves a dismissal between checkpoint capture and newer live delivery", () => {
+    const { hub, publish, dismiss } = fixture(); publish();
+    const queued: ThreadEventEnvelope[] = [];
+    const connection = hub.subscribeFromCurrentSnapshot(event => queued.push(event));
+    dismiss(); publish();
+    const client = new NormalizedThreadStore(); client.applyCheckpoint(connection.checkpoint!);
+    queued.forEach(event => client.apply(event));
+    expect(client.state.notices).toHaveLength(1);
+    expect(client.state.notices[0]!.id).not.toBe(connection.checkpoint!.notices[0]!.id);
+    expect(client.state.notices).toEqual(hub.currentCheckpoint()!.notices);
+    connection.close();
+  });
+
+  it("uses principal and thread scoped memory without creating hubs for missing dismissals", () => {
+    const registry = new ScopedThreadEventHubRegistry();
+    const scope = { tenantId: "tenant", principalId: "owner" };
+    const hub = registry.thread(scope, "thread");
+    hub.publish({ type: "snapshot", generation: "notices", snapshot: snapshot() });
+    hub.publish({ type: "notice", generation: "notices", notice });
+    const current = hub.currentCheckpoint()!;
+    const request = { generation: "notices", noticeId: current.notices[0]!.id };
+    registry.dismissNotice({ ...scope, principalId: "other" }, "thread", request);
+    registry.dismissNotice({ ...scope, tenantId: "other" }, "thread", request);
+    registry.dismissNotice(scope, "other", request);
+    expect(registry.size).toBe(1);
+    expect(hub.currentCheckpoint()).toBe(current);
+    registry.dismissNotice(scope, "thread", request);
+    expect(hub.currentCheckpoint()!.notices).toEqual([]);
   });
 });

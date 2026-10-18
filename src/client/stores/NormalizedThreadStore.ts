@@ -765,6 +765,12 @@ export class NormalizedThreadStore {
           notices: [...this.#state.notices, event.notice].slice(-100),
         });
         return { kind: "applied" };
+      case "notice_dismissed":
+        this.#replaceState({
+          ...this.#state,
+          notices: this.#state.notices.filter(notice => notice.id !== event.noticeId),
+        });
+        return { kind: "applied" };
       case "snapshot":
         throw new Error("snapshot handled before incremental dispatch");
     }

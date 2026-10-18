@@ -5359,7 +5359,9 @@ describe("QueuedInputDispatcher", () => {
     }
   });
 
-  it("caps active queue state at the normalized event payload limit", () => {
+  // Preserve all 500 real automation admissions plus migration setup. This
+  // boundary workload exceeds Vitest's default 5s even on an otherwise idle host.
+  it("caps active queue state at the normalized event payload limit", { timeout: 10_000 }, () => {
     const fixture = createFixture();
     try {
       const repository = new QueuedInputRepository(fixture.database);

@@ -152,24 +152,25 @@ describe("in-memory canonical thread stream", () => {
         // after the idle threshold, including events initiated outside Sedes.
         const externalStart = envelopes.length;
         const backendRecord = backendEmit.mock.calls[0]![0];
+        const providerNotice = {
+          id: "external-after-idle",
+          tone: "info" as const,
+          message: { text: "External backend event after idle" },
+          createdAt: new Date().toISOString(),
+        };
         driver.emit(backendRecord, {
           type: "notice",
-          notice: {
-            id: "external-after-idle",
-            tone: "info",
-            message: { text: "External backend event after idle" },
-            createdAt: new Date().toISOString(),
-          },
+          notice: providerNotice,
         });
+        const externalNotices = () => eventsOf(envelopes.slice(externalStart))
+          .filter(event => event.type === "notice").map(event => event.notice);
         await vi.waitFor(() => {
-          expect(
-            eventsOf(envelopes.slice(externalStart)).some(
-              (event) =>
-                event.type === "notice" &&
-                event.notice.id === "external-after-idle",
-            ),
-          ).toBe(true);
+          expect(externalNotices()).toEqual([
+            { ...providerNotice, id: expect.any(String) },
+          ]);
         });
+        const acceptedNotice = externalNotices()[0]!;
+        expect(acceptedNotice.id).not.toBe(providerNotice.id);
 
         // Borrowing the already-pinned runtime must not establish another
         // generation or publish another baseline.
@@ -185,6 +186,7 @@ describe("in-memory canonical thread stream", () => {
           firstGeneration,
         );
         expect(checkpoint.snapshot).toEqual(hubHandle.hub.snapshot);
+        expect(checkpoint.notices).toEqual([acceptedNotice]);
         expect(canonicalSubscription.replay).toEqual([]);
         const anchorLength = canonicalFrames.length;
         expect(

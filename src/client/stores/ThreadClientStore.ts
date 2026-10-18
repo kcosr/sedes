@@ -914,6 +914,14 @@ export class ThreadClientStore {
     });
   }
 
+  dismissNotice(noticeId: string): Promise<void> {
+    const generation = this.normalized.state.generation;
+    if (!generation) return Promise.resolve();
+    return this.#mutate(() => this.#api.dismissRuntimeNotice(this.threadId, {
+      generation, noticeId,
+    }));
+  }
+
   dismissAttention(
     attention:
       | { kind: "wake"; wokeAt: string }

@@ -167,6 +167,7 @@ import {
   type CreateThreadRequest,
   type CreateThreadFromSettingsRequest,
   type CreateThreadResult,
+  type DismissRuntimeNoticeRequest,
   type CreateSavedAgentRequest,
   type DeleteSavedAgentRequest,
   type ResolveSavedAgentRequest,
@@ -2525,6 +2526,17 @@ export class ApiClient {
       `/api/threads/${encodeURIComponent(threadId)}/inventory`,
       threadArchiveMutationResultSchema,
       { method: "PATCH", body: JSON.stringify(mutation) },
+    );
+  }
+
+  async dismissRuntimeNotice(
+    threadId: string,
+    request: DismissRuntimeNoticeRequest,
+  ): Promise<void> {
+    await this.#mutation(
+      `/api/threads/${encodeURIComponent(threadId)}/notices/dismiss`,
+      z.unknown(),
+      { method: "POST", body: JSON.stringify(request) },
     );
   }
 
