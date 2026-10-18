@@ -1946,6 +1946,11 @@ export const normalizedThreadEventSchema = z.discriminatedUnion("type", [
     generation: generationSchema,
     notice: runtimeNoticeSchema,
   }),
+  z.strictObject({
+    type: z.literal("notice_dismissed"),
+    generation: generationSchema,
+    noticeId: runtimeNoticeSchema.shape.id,
+  }),
 ]);
 export type NormalizedThreadEvent = z.infer<typeof normalizedThreadEventSchema>;
 

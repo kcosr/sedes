@@ -19,6 +19,19 @@ async function devicePanelLayout(page: Page): Promise<string | null> {
   return page.evaluate(() => localStorage.getItem("sedes-panel-regions@1"));
 }
 
+function expectMinimumTouchTarget(
+  bounds: { readonly width: number; readonly height: number } | null,
+  minimum: number,
+): void {
+  expect(bounds).not.toBeNull();
+  for (const axis of ["width", "height"] as const) {
+    // Translated drawer geometry can report 36px as 35.99998474121094.
+    // Remove only submillipixel float noise, preserving the target minimum.
+    const pixels = Math.round(bounds![axis] * 10_000) / 10_000;
+    expect(pixels, `touch target ${axis}`).toBeGreaterThanOrEqual(minimum);
+  }
+}
+
 async function applicationSession(page: Page) {
   const response = await page.request.get("/api/application/session");
   expect(response.ok()).toBeTruthy();
@@ -625,9 +638,37 @@ test.describe.serial("normalized lineage browser journeys", () => {
       .getByRole("button", { name: /Fork from here/ })
       .first()
       .boundingBox();
-    expect(touchForkTarget?.width).toBeGreaterThanOrEqual(44);
-    expect(touchForkTarget?.height).toBeGreaterThanOrEqual(44);
+    expectMinimumTouchTarget(touchForkTarget, 44);
     await capture(touchPage, testInfo, "lineage-turn-footer-mobile.png");
+    const touchFork = touchPage.getByRole("button", { name: /Fork from here/ }).first();
+    await expect(touchFork).toHaveAttribute("aria-disabled", "false");
+    const touchForkRequests: Request[] = [];
+    const recordTouchFork = (request: Request) => {
+      if (request.method() === "POST" && new URL(request.url()).pathname === `/api/threads/${recoveredChildId}/forks`)
+        touchForkRequests.push(request);
+    };
+    touchPage.on("request", recordTouchFork);
+    await touchFork.tap();
+    const touchForkConfirmation = touchPage.getByRole("dialog", { name: "Fork from this point?" });
+    await expect(touchForkConfirmation).toBeVisible();
+    await expectNoPageOverflow(touchPage);
+    await capture(touchPage, testInfo, "lineage-fork-confirmation-mobile.png");
+    expect(touchForkRequests).toHaveLength(0);
+    await touchForkConfirmation.getByRole("button", { name: "Cancel" }).tap();
+    await expect(touchForkConfirmation).toBeHidden();
+    await expect(touchPage).toHaveURL(recoveredChildPath);
+    expect(touchForkRequests).toHaveLength(0);
+    await touchFork.tap();
+    const confirmedForkResponse = touchPage.waitForResponse((response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === `/api/threads/${recoveredChildId}/forks`);
+    await touchForkConfirmation.getByRole("button", { name: "Fork", exact: true }).tap();
+    expect((await confirmedForkResponse).ok()).toBe(true);
+    await expect(touchPage).not.toHaveURL(recoveredChildPath);
+    await expect(touchPage.getByRole("dialog", { name: "Creating fork…" })).toBeHidden();
+    expect(touchForkRequests).toHaveLength(1);
+    touchPage.off("request", recordTouchFork);
+    await touchPage.goto(recoveredChildPath);
     await touchPage
       .getByRole("button", { name: "Open thread navigation" })
       .tap();
@@ -638,8 +679,7 @@ test.describe.serial("normalized lineage browser journeys", () => {
       name: "View options",
     });
     const touchTarget = await touchViewOptions.boundingBox();
-    expect(touchTarget?.width).toBeGreaterThanOrEqual(36);
-    expect(touchTarget?.height).toBeGreaterThanOrEqual(36);
+    expectMinimumTouchTarget(touchTarget, 36);
     await capture(touchPage, testInfo, "lineage-mobile-touch.png");
     // Repeat from the same original row after navigation makes its store inactive.
     for (let attempt = 0; attempt < 2; attempt += 1) {

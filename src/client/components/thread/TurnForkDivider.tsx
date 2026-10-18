@@ -7,12 +7,15 @@ import type {
   ConversationTurn,
   TurnForkCapability,
 } from "../../../shared/index.js";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ThreadClientStore,
   TurnForkAttempt,
 } from "../../stores/ThreadClientStore.js";
 import { Button } from "../ui/button.js";
+import { ConfirmDialog } from "../ui/confirm-dialog.js";
+import { matchesTouchDensity } from "../../app/use-touch-density.js";
+import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
 import { openThreadRoute } from "../../workspace-panels/thread-panel-navigation.js";
 
 function completionLabel(
@@ -57,6 +60,12 @@ function attemptMessage(attempt: TurnForkAttempt): string {
   return attempt.diagnostic;
 }
 
+interface ForkConfirmation {
+  readonly store: ThreadClientStore;
+  readonly sourceTurnId: string;
+  readonly expectedTurnRevision: number;
+}
+
 // Streaming item updates preserve completed-turn, capability, attempt, and
 // store references. Avoid reformatting every completed boundary (including
 // constructing two Intl formatters) when only a message elsewhere changed.
@@ -83,7 +92,25 @@ export const TurnForkDivider = memo(function TurnForkDivider({
 }): React.JSX.Element | null {
   // Hooks stay above the eligibility returns: a live turn completing must not
   // change the hook count between renders.
+  const chatVisible = useContext(ChatViewVisibilityContext);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [forkConfirmation, setForkConfirmation] = useState<ForkConfirmation>();
+  const pendingConfirmation = useRef<ForkConfirmation | undefined>(undefined);
+  const clearForkConfirmation = () => {
+    pendingConfirmation.current = undefined;
+    setForkConfirmation(undefined);
+  };
+  // A confirmation belongs to the exact boundary that was tapped. Navigation
+  // or refreshed history must never silently retarget it to another thread/turn.
+  const confirmationMatches = chatVisible && forkConfirmation !== undefined &&
+    forkConfirmation.store === store &&
+    forkConfirmation.sourceTurnId === turn.id &&
+    turn.status === "completed" &&
+    capability?.sourceTurnId === forkConfirmation.sourceTurnId &&
+    capability.expectedTurnRevision === forkConfirmation.expectedTurnRevision;
+  useEffect(() => {
+    if (forkConfirmation && !confirmationMatches) clearForkConfirmation();
+  }, [forkConfirmation, confirmationMatches]);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
     "idle",
   );
@@ -131,6 +158,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
   const recoveryLocked = attempt?.phase === "recovery_required";
   const requestLocked =
     attempt?.phase === "request_failed" && !attempt.retryable;
+  const forkBlocked = unavailable || pending || recoveryLocked || requestLocked;
   const actionLabel = pending
     ? "Creating fork…"
     : `Fork from here, ${time?.short}`;
@@ -147,6 +175,21 @@ export const TurnForkDivider = memo(function TurnForkDivider({
       fork: (shouldRestart) => store.forkTurn(capability!, { restart: shouldRestart }),
       restart,
     });
+  };
+
+  const requestFork = () => {
+    if (!chatVisible || forkBlocked) return;
+    if (matchesTouchDensity()) {
+      const confirmation = {
+        store,
+        sourceTurnId: capability!.sourceTurnId,
+        expectedTurnRevision: capability!.expectedTurnRevision,
+      };
+      pendingConfirmation.current = confirmation;
+      setForkConfirmation(confirmation);
+    } else {
+      activate(false);
+    }
   };
 
   return (
@@ -223,7 +266,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
           title={
             unavailableReason ?? "Fork from here — includes this completed turn"
           }
-          onClick={() => activate(false)}
+          onClick={requestFork}
         >
           {pending ? (
             <LoaderCircle
@@ -292,6 +335,22 @@ export const TurnForkDivider = memo(function TurnForkDivider({
           )}
         </div>
       )}
+      {confirmationMatches && <ConfirmDialog
+        open
+        onOpenChange={(open) => { if (!open) clearForkConfirmation(); }}
+        title="Fork from this point?"
+        description="Creates a new thread through this response, keeping this conversation."
+        confirmLabel="Fork"
+        confirmDisabled={forkBlocked}
+        blockers={unavailableReason ? [unavailableReason] : []}
+        onConfirm={() => {
+          // Consume synchronously, before opening the existing operation
+          // overlay, so repeated confirmation cannot create another request.
+          if (pendingConfirmation.current !== forkConfirmation || forkBlocked) return;
+          clearForkConfirmation();
+          activate(false);
+        }}
+      />}
     </footer>
   );
 }, (previous, next) => {

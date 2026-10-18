@@ -25,6 +25,8 @@ import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
 import { NativeVoiceStore } from "../../voice/NativeVoiceStore.js";
 import { fakeVoicePlugin, VOICE_CONNECTION, voiceSettings, voiceSnapshot } from "../../voice/native-voice-test-fixture.js";
 import { TurnForkDivider } from "./TurnForkDivider.js";
+import { TOUCH_DENSITY_QUERY } from "../../app/use-touch-density.js";
+import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
 
 beforeEach(() => { render(<OperationOverlayHost />); });
 
@@ -33,6 +35,7 @@ afterEach(() => {
   cleanup();
   voiceContext.store?.dispose();
   voiceContext.store = null;
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   window.history.replaceState(null, "", "/");
 });
@@ -53,6 +56,125 @@ const capability = {
 };
 
 describe("TurnForkDivider", () => {
+  function touchLayout() {
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+      matches: query === TOUCH_DENSITY_QUERY,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })));
+  }
+
+  function forkProps() {
+    const forkTurn = vi.fn(async () => ({ status: "created" as const, childThreadId: "child-1" }));
+    return {
+      turn,
+      capability,
+      attempt: undefined,
+      connected: true,
+      authoritative: true,
+      store: { threadId: "thread-1", forkTurn } as unknown as ThreadClientStore,
+    };
+  }
+
+  it("requires touch confirmation, cancels without a mutation, and confirms exactly one fork", async () => {
+    touchLayout();
+    const props = forkProps();
+    render(<TurnForkDivider {...props} />);
+    const opener = screen.getByRole("button", { name: /Fork from here/ });
+    opener.focus();
+    fireEvent.click(opener);
+    expect(screen.getByRole("dialog", { name: "Fork from this point?" })).toHaveAccessibleDescription(
+      "Creates a new thread through this response, keeping this conversation.",
+    );
+    expect(props.store.forkTurn).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Fork from this point?" })).toBeNull();
+    await waitFor(() => expect(opener).toHaveFocus());
+    expect(props.store.forkTurn).not.toHaveBeenCalled();
+
+    fireEvent.click(opener);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Fork from this point?" })).toBeNull();
+    expect(props.store.forkTurn).not.toHaveBeenCalled();
+
+    fireEvent.click(opener);
+    const confirm = screen.getByRole("button", { name: "Fork" });
+    act(() => {
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+    });
+    expect(props.store.forkTurn).toHaveBeenCalledExactlyOnceWith(capability, { restart: false });
+    await waitFor(() => expect(window.location.pathname).toBe("/threads/child-1"));
+  });
+
+  it("keeps desktop inline forking immediate", async () => {
+    const props = forkProps();
+    render(<TurnForkDivider {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: /Fork from here/ }));
+    expect(screen.queryByRole("dialog", { name: "Fork from this point?" })).toBeNull();
+    expect(props.store.forkTurn).toHaveBeenCalledExactlyOnceWith(capability, { restart: false });
+    await waitFor(() => expect(window.location.pathname).toBe("/threads/child-1"));
+  });
+
+  it("discards a confirmation when its retained chat panel becomes hidden", () => {
+    touchLayout();
+    const props = forkProps();
+    const content = (visible: boolean) => <ChatViewVisibilityContext.Provider value={visible}>
+      <TurnForkDivider {...props} />
+    </ChatViewVisibilityContext.Provider>;
+    const view = render(content(true));
+    fireEvent.click(screen.getByRole("button", { name: /Fork from here/ }));
+    expect(screen.getByRole("dialog", { name: "Fork from this point?" })).toBeVisible();
+    view.rerender(content(false));
+    expect(screen.queryByRole("dialog", { name: "Fork from this point?" })).toBeNull();
+    view.rerender(content(true));
+    expect(screen.queryByRole("dialog", { name: "Fork from this point?" })).toBeNull();
+    expect(props.store.forkTurn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { connected: false },
+    { authoritative: false },
+    { capability: { ...capability, available: false, unavailableReason: { text: "Forking is unavailable." } } },
+    { attempt: { phase: "pending" as const } },
+    { attempt: { phase: "recovery_required" as const, childThreadId: "child-2", retryable: true, diagnostic: "Recovery required." } },
+  ])("rechecks current fork authority at confirmation: %j", async (changed) => {
+    touchLayout();
+    const props = forkProps();
+    const view = render(<TurnForkDivider {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: /Fork from here/ }));
+    view.rerender(<TurnForkDivider {...props} {...changed} />);
+    const confirm = screen.getByRole("button", { name: "Fork" });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(props.store.forkTurn).not.toHaveBeenCalled();
+    view.rerender(<TurnForkDivider {...props} copyText="Another message streamed." capability={{ ...capability }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+    expect(props.store.forkTurn).toHaveBeenCalledExactlyOnceWith(capability, { restart: false });
+    await waitFor(() => expect(window.location.pathname).toBe("/threads/child-1"));
+  });
+
+  it.each(["thread", "turn", "revision", "status"] as const)(
+    "discards the confirmation when its source %s changes", (change) => {
+      touchLayout();
+      const props = forkProps();
+      const view = render(<TurnForkDivider {...props} />);
+      fireEvent.click(screen.getByRole("button", { name: /Fork from here/ }));
+      const nextStore = { ...props.store, threadId: "thread-2", forkTurn: vi.fn() } as unknown as ThreadClientStore;
+      view.rerender(<TurnForkDivider
+        {...props}
+        store={change === "thread" ? nextStore : props.store}
+        turn={change === "turn" ? { ...turn, id: "turn-2" } : change === "status" ? { ...turn, status: "in_progress" } : turn}
+        capability={change === "revision" ? { ...capability, expectedTurnRevision: 4 } : capability}
+      />);
+      expect(screen.queryByRole("dialog", { name: "Fork from this point?" })).toBeNull();
+      expect(props.store.forkTurn).not.toHaveBeenCalled();
+      expect(nextStore.forkTurn).not.toHaveBeenCalled();
+      view.rerender(<TurnForkDivider {...props} />);
+      expect(screen.queryByRole("dialog", { name: "Fork from this point?" })).toBeNull();
+    },
+  );
+
   it("shows only the rate outside the right-side controls, independently of recorded usage", () => {
     const props = {
       turn,

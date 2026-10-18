@@ -332,6 +332,13 @@ export type DismissThreadAttentionRequest = z.infer<
   typeof dismissThreadAttentionRequestSchema
 >;
 
+/** Process-local notice dismissal, fenced to the occurrence the client saw. */
+export const dismissRuntimeNoticeRequestSchema = z.strictObject({
+  generation: z.string().min(1).max(160),
+  noticeId: z.string().min(1).max(160),
+});
+export type DismissRuntimeNoticeRequest = z.infer<typeof dismissRuntimeNoticeRequestSchema>;
+
 export const listAutomationsQuerySchema = z.strictObject({
   threadId: threadIdSchema.optional(),
   cursor: z.string().max(2048).optional(),

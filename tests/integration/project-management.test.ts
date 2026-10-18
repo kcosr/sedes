@@ -246,9 +246,10 @@ describe("workspace.open for agents", () => {
     const current=f.inventory.getWorkspace(f.scope,opened.workspaceId);
     f.inventory.removeWorkspace(f.scope,opened.workspaceId,{expectedRevision:current.revision,expectedThreadIds:[],now:600});
     const removedMembership=f.project(opened.projectId).membershipRevision;
-    // Restoring changes the project's membership, which needs the project's authority.
+    // Restoring needs project authority. This fixture has no project reader,
+    // so the conflict must not disclose an unverified project identifier.
     await expect(f.open("/tmp/agent-restored")).rejects.toMatchObject({code:"conflict",
-      message:`This directory is a removed location of project ${opened.projectId}. To restore it there, retry with that projectId.`});
+      message:"This directory is a removed location of an existing project. Restore it in that project."});
     expect(f.inventory.isWorkspaceRemoved(f.scope,opened.workspaceId)).toBe(true);
     expect(f.project(opened.projectId).membershipRevision).toBe(removedMembership);
 
@@ -383,7 +384,7 @@ describe("workspace.open restores a location only with its project's authority",
       {toolId:"workspace.open",schemaVersion:3,requestId:randomUUID(),input:f.input(canonicalPath,projectId)},new AbortController().signal);
   }
 
-  const removedMessage=(projectId:string)=>`This directory is a removed location of project ${projectId}. To restore it there, retry with that projectId.`;
+  const privateRemovedLocationMessage="This directory is a removed location of an existing project. Restore it in that project.";
 
   it("checks the project boundary when restoring a local location of a cross-host project", async () => {
     const f=crossHostFixture();
@@ -395,7 +396,9 @@ describe("workspace.open restores a location only with its project's authority",
     expect(f.state(f.local)).toEqual({removed:true,members:[buildServer]});
 
     const localOnly=threadAgent(f,true);
-    await expect(localOnly.open("/srv/shared")).rejects.toMatchObject({toolError:{code:"conflict",message:removedMessage(f.local.projectId)}});
+    // A local-only caller cannot discover the project identifier through a
+    // removed local path when the project is active only on another host.
+    await expect(localOnly.open("/srv/shared")).rejects.toMatchObject({toolError:{code:"conflict",message:privateRemovedLocationMessage}});
     await expect(localOnly.open("/srv/shared",f.local.projectId)).rejects.toMatchObject({toolError:{code:"permission_denied"}});
     expect(f.state(f.local)).toEqual({removed:true,members:[buildServer]});
     const allowed=threadAgent(f,true,true);
@@ -417,9 +420,9 @@ describe("workspace.open restores a location only with its project's authority",
   it("denies a Tool client the restore unless it may use one of the project's hosts", async () => {
     const f=crossHostFixture();
     const localOnly=toolClient(f,[f.environment.id]);
-    await expect(localOnly("/srv/shared")).rejects.toMatchObject({code:"conflict",message:removedMessage(f.local.projectId)});
+    await expect(localOnly("/srv/shared")).rejects.toMatchObject({code:"conflict",message:privateRemovedLocationMessage});
     await expect(localOnly("/srv/shared",f.local.projectId)).rejects.toMatchObject({code:"permission_denied"});
-    await expect(localOnly("/srv/lone")).rejects.toMatchObject({code:"conflict",message:removedMessage(f.lone.projectId)});
+    await expect(localOnly("/srv/lone")).rejects.toMatchObject({code:"conflict",message:privateRemovedLocationMessage});
     await expect(localOnly("/srv/lone",f.lone.projectId)).rejects.toMatchObject({code:"permission_denied"});
     expect(f.state(f.local)).toEqual({removed:true,members:[buildServer]});
     expect(f.state(f.lone)).toEqual({removed:true,members:[]});

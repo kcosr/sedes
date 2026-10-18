@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   MAXIMUM_NORMALIZED_TIMELINE_ITEMS,
   MAXIMUM_NORMALIZED_TIMELINE_TURNS,
@@ -24,6 +25,7 @@ import {
 } from "../../shared/protocol/payload.js";
 import { SerializedMailbox } from "../conversations/serialized-mailbox.js";
 import { sameAgentToolPolicyRevision } from "../../shared/agent-tool-policy.js";
+import type { DismissRuntimeNoticeRequest } from "../../shared/protocol/api.js";
 import { fitApplicationItemsToSnapshot, isApplicationPublicationItem, type ApplicationPublicationItem, type ApplicationProjectionInput } from "../conversations/application-publication-projection.js";
 
 export interface ThreadEventSubscription {
@@ -229,7 +231,9 @@ export class ThreadEventHub {
     });
   }
 
-  publish(rawEvent: NormalizedThreadEvent, sourceTimeline?: ApplicationProjectionInput): ThreadEventEnvelope {
+  publish(rawEvent: Exclude<NormalizedThreadEvent, { type: "notice" }>, sourceTimeline?: ApplicationProjectionInput): ThreadEventEnvelope;
+  publish(rawEvent: NormalizedThreadEvent, sourceTimeline?: ApplicationProjectionInput): ThreadEventEnvelope | undefined;
+  publish(rawEvent: NormalizedThreadEvent, sourceTimeline?: ApplicationProjectionInput): ThreadEventEnvelope | undefined {
     const priorGeneration = this.#projectionGeneration;
     const priorCapabilityRevision = this.#snapshot?.capabilities.revision;
     let event: NormalizedThreadEvent;
@@ -267,6 +271,15 @@ export class ThreadEventHub {
     } else if (event.generation !== this.#projectionGeneration) {
       throw new Error("thread_projection_snapshot_required");
     } else {
+      // Repeated provider warnings are one visible occurrence. Preserve its
+      // identity and timestamp without advancing replay or notifying viewers.
+      if (event.type === "notice") {
+        const incoming = event.notice;
+        if (this.#notices.some(notice => notice.tone === incoming.tone && notice.message.text === incoming.message.text)) return undefined;
+        // Provider IDs can be reused for different diagnostics. Each accepted
+        // application occurrence owns a unique identity for rendering/dismissal.
+        event = { ...event, notice: { ...incoming, id: randomUUID() } };
+      }
       if (
         event.type === "capabilities_changed" &&
         event.threadRevision < this.#capabilityThreadRevision
@@ -330,10 +343,21 @@ export class ThreadEventHub {
         this.#capabilityRunState = event.state.capabilities.runState;
       if (event.type === "notice")
         this.#notices = [...this.#notices, event.notice].slice(-100);
+      if (event.type === "notice_dismissed") {
+        const dismissedId = event.noticeId;
+        this.#notices = this.#notices.filter(notice => notice.id !== dismissedId);
+      }
     }
     this.#checkpoint = undefined;
     const published = envelope(this.#hub.publish(event.type, event));
     return published;
+  }
+
+  /** Does not attach a provider or retain an acknowledgement after removal. */
+  dismissNotice(request: DismissRuntimeNoticeRequest): void {
+    if (request.generation !== this.#projectionGeneration) return;
+    if (!this.#notices.some(notice => notice.id === request.noticeId)) return;
+    this.publish({ type: "notice_dismissed", generation: request.generation, noticeId: request.noticeId });
   }
 
   subscribe(
@@ -884,6 +908,7 @@ function applyIncremental(
       break;
     case "questions_changed":
     case "notice":
+    case "notice_dismissed":
       return snapshot;
   }
   return next;

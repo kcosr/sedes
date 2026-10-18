@@ -36,6 +36,7 @@ import type {
 import { assertConversationRetentionMilliseconds } from "../conversations/conversation-retention-policy.js";
 import { ThreadEventHub } from "./thread-event-hub.js";
 import type { ThreadForceResetConversationRuntimeBlocker } from "../db/repositories/thread-force-reset-repository.js";
+import type { DismissRuntimeNoticeRequest } from "../../shared/protocol/api.js";
 
 function scopedKey(scope: RequestScope, applicationThreadId: string): string {
   return [scope.tenantId, scope.principalId, applicationThreadId].join("\0");
@@ -60,6 +61,10 @@ export class ScopedThreadEventHubRegistry {
     const hub = this.#lookup(scope, applicationThreadId);
     this.#evictInactive();
     return hub;
+  }
+
+  dismissNotice(scope: RequestScope, applicationThreadId: string, request: DismissRuntimeNoticeRequest): void {
+    this.#hubs.get(scopedKey(scope, applicationThreadId))?.dismissNotice(request);
   }
 
   /** Publication ownership survives browser disconnects and registry pressure. */
@@ -1004,6 +1009,10 @@ export class ThreadRuntimeCoordinator {
       },
       release: hubLease.release,
     };
+  }
+
+  dismissNotice(scope: RequestScope, applicationThreadId: string, request: DismissRuntimeNoticeRequest): void {
+    this.#hubs.dismissNotice(scope, applicationThreadId, request);
   }
 
   async captureLoadedState(

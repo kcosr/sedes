@@ -72,6 +72,7 @@ import {
   deleteThreadExecutionWorkspaceResultSchema,
   deleteAutomationRequestSchema,
   dismissThreadAttentionRequestSchema,
+  dismissRuntimeNoticeRequestSchema,
   forkThreadRequestSchema,
   forkThreadResultSchema,
   handoffThreadExecutionWorkspaceRequestSchema,
@@ -3659,6 +3660,15 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       response.status(204).end();
     },
   );
+
+  routes.post("/api/threads/:threadId/notices/dismiss", async (request, response) => {
+    const requestScope = await scope(request);
+    const { threadId } = threadRouteParametersSchema.parse(request.params);
+    dependencies.inventory.repository.getThread(requestScope, threadId);
+    const body = dismissRuntimeNoticeRequestSchema.parse(request.body);
+    dependencies.threadRuntimes.dismissNotice(requestScope, threadId, body);
+    response.status(204).end();
+  });
 
   routes.post(
     "/api/threads/:threadId/automations/preview",

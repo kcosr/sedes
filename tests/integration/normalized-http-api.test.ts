@@ -994,6 +994,11 @@ async function fixture(
     applicationSnapshots,
   );
   const threadRuntimes = {
+    dismissNotice(scope: RequestScope, threadId: string, body: import("../../src/shared/protocol/api.js").DismissRuntimeNoticeRequest) {
+      repository.getThread(scope, threadId);
+      boundHubs.get(threadId)?.dismissNotice(body);
+      quietHubs.dismissNotice(scope, threadId, body);
+    },
     async captureLoadedState() {
       return undefined;
     },
@@ -1773,6 +1778,42 @@ async function fixture(
 }
 
 describe("normalized HTTP application contract", () => {
+  it("dismisses only authorized in-memory notices without attaching or capturing a runtime", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } }).expect(201);
+      const created = await current.mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Notices" }).expect(201);
+      const threadId = created.body.threadId;
+      const endpoint = `/api/threads/${threadId}/notices/dismiss`;
+      await current.mutate(request(current.app).post(endpoint)).send({ generation: "gone", noticeId: "gone" }).expect(204);
+      expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
+      current.bindThread(threadId);
+      const hub = await current.loadBoundHub(threadId);
+      hub.publish({ type: "notice", generation: hub.projectionGeneration!, notice: { id: "provider-notice", tone: "warning",
+        message: { text: "Provider warning" }, createdAt: "2026-10-17T12:00:00.000Z" } });
+      const body = { generation: hub.projectionGeneration!, noticeId: hub.currentCheckpoint()!.notices[0]!.id };
+      current.runtimeEstablishmentCaptures.mockClear(); current.runtimeReplacementCaptures.mockClear(); current.threadSnapshotPublications.mockClear();
+      await current.withHost(request(current.app).post(endpoint)).send(body).expect(403); // Missing CSRF.
+      await current.mutate(request(current.app).post(endpoint)).set("X-Test-Foreign-Principal", "yes").send(body).expect(404);
+      await current.mutate(request(current.app).post(`/api/threads/${randomUUID()}/notices/dismiss`)).send(body).expect(404);
+      await current.mutate(request(current.app).post(endpoint)).send({ ...body, principalId: current.owner.principalId }).expect(400);
+      await current.mutate(request(current.app).post(endpoint)).send({ noticeId: body.noticeId }).expect(400);
+      expect(hub.currentCheckpoint()!.notices).toHaveLength(1);
+      await current.mutate(request(current.app).post(endpoint)).send({ ...body, generation: "stale" }).expect(204);
+      expect(hub.currentCheckpoint()!.notices).toHaveLength(1);
+      await current.mutate(request(current.app).post(endpoint)).send(body).expect(204);
+      expect(hub.currentCheckpoint()!.notices).toEqual([]);
+      const watermark = hub.watermark;
+      await current.mutate(request(current.app).post(endpoint)).send(body).expect(204);
+      expect(hub.watermark).toBe(watermark);
+      expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
+      expect(current.runtimeReplacementCaptures).not.toHaveBeenCalled();
+      expect(current.threadSnapshotPublications).not.toHaveBeenCalled();
+    } finally { current.close(); }
+  });
+
   it("reads an authorized thread summary without establishing a runtime", async () => {
     const current = await fixture();
     try {

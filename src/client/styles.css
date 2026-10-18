@@ -4971,26 +4971,31 @@ textarea:disabled {
 }
 
 .thread-notice::before,
+.runtime-notice::before,
 .runtime-banner::before {
   background: var(--muted-foreground-2);
 }
 
 .thread-notice.warning::before,
+.runtime-notice.warning::before,
 .runtime-banner.reconnecting::before,
 .runtime-banner.disconnected::before {
   background: var(--warning);
 }
 
 .thread-notice.error::before,
+.runtime-notice.error::before,
 .runtime-banner.error::before {
   background: var(--destructive);
 }
 
-.thread-notice.success::before {
+.thread-notice.success::before,
+.runtime-notice.success::before {
   background: var(--success);
 }
 
-.thread-notice.info::before {
+.thread-notice.info::before,
+.runtime-notice.info::before {
   background: var(--info);
 }
 

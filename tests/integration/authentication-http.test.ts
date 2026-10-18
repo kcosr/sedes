@@ -100,6 +100,7 @@ describe("authentication HTTP admission", () => {
     await api.get("/").set("Host", "127.0.0.1").expect(200);
     await api.get("/api/private").set("Host", "127.0.0.1").expect(401);
     await api.post("/api/threads/thread/inputs").set("Host", "127.0.0.1").expect(401);
+    await api.post("/api/threads/thread/notices/dismiss").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/threads/thread/input-context").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/input-receipts/mutation").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/threads/thread/queued-inputs/input").set("Host", "127.0.0.1").expect(401);

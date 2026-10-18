@@ -77,6 +77,7 @@ describe("OpenCode v2 identity migration", () => {
         revision: 0,
         updatedAt: 210,
         enabledToolIds: [],
+        policySet: null,
       });
       const currentThread = bindings.createUnboundThread(scope, {
         workspaceId: workspace.id, connectionProfileId: "opencode-profile",

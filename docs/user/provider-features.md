@@ -184,6 +184,13 @@ network safety guidance.
 
 ## Check provider accounts and warnings
 
+Runtime notices above a thread, such as Codex MCP startup failures or Claude
+usage warnings, have a **Dismiss** button. Sedes keeps one copy of each exact
+message and severity in that thread's current runtime memory. Repeats do not
+refresh its timestamp or add another banner. Dismiss removes it for connected
+clients without changing provider state or saving a permanent suppression;
+a new occurrence after dismissal can appear again.
+
 Open **Accounts** from the sidebar footer **More** menu to see the available
 weekly windows, balances, reset credits, reset times, and last successful check
 for configured provider accounts. Expand one account for details.

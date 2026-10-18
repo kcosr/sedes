@@ -92,6 +92,17 @@ of a configured target.
 Every backend-facing change must give all five an explicit implemented or
 intentionally unsupported disposition.
 
+Runtime notice retention and dismissal are shared application behavior for Pi,
+Codex, Claude, Grok, and OpenCode. The principal-scoped thread publication hub
+retains only the first notice with each exact tone and display text, discarding
+duplicates before stream publication. Dismissal removes the selected occurrence
+from process memory and publishes its removal; it does not persist suppression,
+acknowledge provider state, or clear turn failure/recovery state. A later matching
+notice is a new occurrence. Reconnect checkpoints and event replay must agree
+with this current collection, and stale dismissals must not remove a later
+occurrence or another projection generation. Provider adapters and sidecars
+continue emitting the existing normalized notice contract.
+
 OpenCode v2 implements the same scoped application inventory and binding
 publication, ordinary first-Send lifecycle, durable Queue, source preservation,
 saved-Agent settings capture, and normalized interaction contracts. It adds

@@ -650,7 +650,11 @@ export function ThreadView({
           />
         ))}
         <ThreadFailureNotice snapshot={snapshot} />
-        <ThreadNotices notices={store.normalized.state.notices} />
+        <ThreadNotices
+          notices={store.normalized.state.notices}
+          pending={state.actionPending}
+          onDismiss={noticeId => void store.dismissNotice(noticeId).catch(() => undefined)}
+        />
         <CodexTuiThreadPresentation
           threadId={threadId}
           visible={visible}
