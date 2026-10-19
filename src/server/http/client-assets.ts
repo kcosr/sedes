@@ -83,7 +83,10 @@ export function clientAssets(clientDirectory: string): RequestHandler {
     const key = `${encoding}\0${filePath}`;
     const cached = compressed.get(key);
     if (cached && cached.size === size && cached.mtimeMs === mtimeMs) return cached;
-    const inFlight = pending.get(key);
+    // Only the same file version may share a compression: a request that saw
+    // a replaced file must not receive the previous body under its validators.
+    const version = `${key}\0${size}\0${mtimeMs}`;
+    const inFlight = pending.get(version);
     if (inFlight) return inFlight;
     const work = (async () => {
       const source = await readFile(filePath);
@@ -112,11 +115,11 @@ export function clientAssets(clientDirectory: string): RequestHandler {
       }
       return asset;
     })();
-    pending.set(key, work);
+    pending.set(version, work);
     try {
       return await work;
     } finally {
-      pending.delete(key);
+      pending.delete(version);
     }
   };
 
