@@ -155,7 +155,8 @@ User-facing changes are collected here before release. See the
 
 - Composer drafts are saved when you close, reload, or leave the page or
   background the Android app, and a draft save that fails during a network
-  blip or server restart retries without another keystroke. See
+  blip or server restart retries without another keystroke. A failed
+  attachment upload no longer holds back the files queued after it. See
   [Build a prompt](docs/user/conversations.md#build-a-prompt).
 
 - Find in thread stays on the selected match while a reply streams instead of
