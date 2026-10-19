@@ -3068,30 +3068,16 @@ export function WorkspaceFilesPanel({
         )}
       {createPortal(
         <div className="workspace-files-toolbar-actions">
-          <div
+          <SegmentedControl
+            size="sm"
             className="workspace-files-mode-switcher"
-            role="tablist"
             aria-label="Files view"
+            value={mode}
+            onValueChange={(next) => selectMode(next as WorkspaceFilesMode)}
           >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === "browse"}
-              className={mode === "browse" ? "is-active" : undefined}
-              onClick={() => selectMode("browse")}
-            >
-              Browse
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === "compare"}
-              className={mode === "compare" ? "is-active" : undefined}
-              onClick={() => selectMode("compare")}
-            >
-              Changes
-            </button>
-          </div>
+            <SegmentedControlItem value="browse">Browse</SegmentedControlItem>
+            <SegmentedControlItem value="compare">Changes</SegmentedControlItem>
+          </SegmentedControl>
           <Button
             ref={treeToggleRef}
             variant={treeOpen ? "secondary" : "ghost"}

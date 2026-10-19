@@ -152,9 +152,10 @@ describe("UsageView", () => {
   });
 
   it("requests the wider explore read and shows unreported metrics as unknown", async () => {
+    const user = userEvent.setup();
     const api = mount();
     await screen.findByText("2.5M");
-    fireEvent.click(screen.getByRole("tab", { name: "Explore" }));
+    await user.click(screen.getByRole("tab", { name: "Explore" }));
     expect(api).toHaveBeenLastCalledWith(expect.objectContaining({ groupBy: "model", breakdownLimit: 100 }), expect.any(AbortSignal));
     const table = await screen.findByRole("table");
     const opus = within(table).getByRole("button", { name: /opus/ }).closest("tr")!;
@@ -164,9 +165,10 @@ describe("UsageView", () => {
   });
 
   it("lists threads with a link that opens them", async () => {
+    const user = userEvent.setup();
     mount();
     await screen.findByText("2.5M");
-    fireEvent.click(screen.getByRole("tab", { name: "Threads" }));
+    await user.click(screen.getByRole("tab", { name: "Threads" }));
     const open = await screen.findByRole("button", { name: /^Ship usage page/ });
     fireEvent.click(open);
     expect(window.location.pathname).toBe("/threads/thread-1");
@@ -189,7 +191,7 @@ describe("UsageView", () => {
       totals: aggregate(9_000_000, { missing: { ...aggregate(0).missing, cacheRead: "4" } }),
     }));
     await screen.findByText("9M");
-    fireEvent.click(screen.getByRole("tab", { name: "Patterns" }));
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Patterns" }));
     const tile = (label: string) => screen.getByText(label).closest(".usage-stat") as HTMLElement;
     expect(within(await waitFor(() => tile("Cache reuse"))).getByText("—")).toBeVisible();
     expect(within(tile("Cache reuse")).getByText("Cache reads not reported")).toBeVisible();

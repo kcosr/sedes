@@ -9,6 +9,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/ApiClient.js";
@@ -519,7 +520,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
     const refresh = vi.fn();
     act(() => {
       (latestCompareProps?.onRefreshControlChange as (control: unknown) => void)({ refresh, disabled: false });
@@ -533,8 +534,26 @@ describe("WorkspaceFilesPanel", () => {
       (latestCompareProps?.onRefreshControlChange as (control: unknown) => void)({ refresh, disabled: true });
     });
     expect(screen.getByRole("button", { name: "Refresh comparison" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
     expect(screen.getByRole("button", { name: "Refresh workspace files" })).toBeEnabled();
+  });
+
+  it("switches Browse and Changes from the keyboard as one segmented control", async () => {
+    const user = userEvent.setup();
+    const api = setupApi();
+    const { context } = setupContext();
+    render(<WorkspaceFilesPanel context={context} api={api} />);
+    await waitForListing(api);
+    const view = screen.getByRole("radiogroup", { name: "Files view" });
+    const browse = within(view).getByRole("radio", { name: "Browse" });
+    const changes = within(view).getByRole("radio", { name: "Changes" });
+    expect(browse).toHaveAttribute("aria-checked", "true");
+    act(() => browse.focus());
+    await user.keyboard("{ArrowRight}");
+    expect(changes).toHaveFocus();
+    await user.keyboard(" ");
+    expect(changes).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("button", { name: "Refresh comparison" })).toBeInTheDocument();
   });
 
   it("explains when a saved root is missing and keeps available roots usable", async () => {
@@ -549,7 +568,7 @@ describe("WorkspaceFilesPanel", () => {
     );
 
     expect(await screen.findByText("The previously selected Files root is unavailable. Choose an available root.")).toBeVisible();
-    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
     await waitForListing(api);
     expect(screen.getByRole("button", { name: "Refresh workspace files" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss root recovery notice" }));
@@ -944,7 +963,7 @@ describe("WorkspaceFilesPanel", () => {
     act(() => selectPaths(["src/", "src/index.ts"]));
     await screen.findByTestId("file-viewer");
 
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
     const compare = screen.getByTestId("compare-view");
     fireEvent.change(screen.getByLabelText("Retained compare filter"), {
       target: { value: "src/" },
@@ -956,7 +975,7 @@ describe("WorkspaceFilesPanel", () => {
       "hidden",
     );
 
-    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
     expect(
       screen.getByTestId("file-viewer").closest("main"),
     ).not.toHaveAttribute("hidden");
@@ -984,8 +1003,8 @@ describe("WorkspaceFilesPanel", () => {
     fireEvent.click(treeToggle);
     expect(treeToggle).toHaveAttribute("aria-expanded", "false");
 
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
-    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
 
     expect(treeToggle).toHaveAttribute("aria-expanded", "true");
   });
@@ -1009,7 +1028,7 @@ describe("WorkspaceFilesPanel", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Change draft" }),
     );
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
 
     expect(
       screen.getByText(
@@ -1024,7 +1043,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
 
     const dataSource = latestCompareProps?.dataSource as {
       listRepositories(rootId: string, signal?: AbortSignal): Promise<unknown>;
@@ -1069,7 +1088,7 @@ describe("WorkspaceFilesPanel", () => {
     } as WorkspacePanelContext;
     render(<WorkspaceFilesPanel context={scopedContext} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
     const comparison = {
       comparisonId: "comparison_1234567890abcdef",
       repositoryId: "repository_1234567890abcdef",
@@ -1139,7 +1158,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
     const comparison = { comparisonId: "comparison-first", repositoryId: "repository-one", mode: "direct", base: { kind: "revision", revisionId: "revision-main", commitHash: "a".repeat(40), label: "main" }, head: { kind: "working_tree" }, fingerprint: "fingerprint-first" };
     const file = { fileId: "file-first", changeKind: "modified", oldPath: "same.ts", newPath: "same.ts", binary: false };
     act(() => {
@@ -1174,7 +1193,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
     const comparison = { comparisonId: "comparison-first", repositoryId: "repository-one", mode: "direct", base: { kind: "revision", revisionId: "revision-main", commitHash: "a".repeat(40), label: "main" }, head: { kind: "working_tree" }, fingerprint: "fingerprint-first" };
     const file = { fileId: "file-first", changeKind: "modified", oldPath: "same.ts", newPath: "same.ts", binary: false };
     act(() => {
@@ -1200,7 +1219,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
 
     const comparison = {
       comparisonId: "comparison_1234567890abcdef",
@@ -1408,7 +1427,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
 
     act(() => {
       (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
@@ -1600,7 +1619,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
 
     act(() => {
       (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
@@ -1764,7 +1783,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
 
     const file = {
       fileId: "file_1234567890abcdef",
@@ -1923,7 +1942,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
 
     act(() => {
       (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
@@ -2045,7 +2064,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
 
     act(() => {
       (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
@@ -2146,7 +2165,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
 
     act(() => {
       (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
@@ -3664,7 +3683,7 @@ describe("WorkspaceFilesPanel", () => {
     fireEvent.click(treeToggle);
     expect(fileBrowser()).toHaveClass("workspace-files-tree-open");
 
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
     expect(fileBrowser()).toHaveClass("workspace-files-tree-open");
     fireEvent(window, new Event("resize"));
     expect(
@@ -3675,8 +3694,8 @@ describe("WorkspaceFilesPanel", () => {
 
     act(() => selectPaths(["src/index.ts"]));
     await screen.findByTestId("file-viewer");
-    expect(screen.getByRole("tab", { name: "Browse" })).toHaveAttribute(
-      "aria-selected",
+    expect(screen.getByRole("radio", { name: "Browse" })).toHaveAttribute(
+      "aria-checked",
       "true",
     );
     expect(fileBrowser()).not.toHaveClass("workspace-files-tree-open");
@@ -5159,7 +5178,7 @@ describe("WorkspaceFilesPanel", () => {
     act(() => selectPaths(["src/index.ts"]));
     await screen.findByTestId("file-viewer");
     expect(api.readWorkspaceFile).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
 
     expect(subscribeWorkspaceFiles).not.toHaveBeenCalled();
     const refreshComparison = vi.fn();

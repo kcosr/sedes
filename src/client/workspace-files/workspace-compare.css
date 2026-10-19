@@ -8,35 +8,10 @@
   color: var(--foreground);
   background: var(--background);
 }
+/* Browse · Changes in the panel header: the header's control height. */
 .workspace-files-mode-switcher {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  margin-right: 4px;
-  padding: 2px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-  background: var(--muted);
-}
-.workspace-files-mode-switcher button {
-  height: 24px;
-  padding: 0 7px;
-  border: 0;
-  border-radius: var(--radius-inline);
-  color: var(--muted-foreground);
-  background: transparent;
-  font-size: 11px;
-  cursor: pointer;
-}
-.workspace-files-mode-switcher button:hover,
-.workspace-files-mode-switcher button.is-active {
-  color: var(--foreground);
-  background: var(--secondary);
-  box-shadow: 0 0 0 1px var(--border-soft);
-}
-.workspace-files-mode-switcher button:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
+  height: var(--bar-control);
+  margin-right: var(--space-1);
 }
 .workspace-files-tabs[hidden],
 .workspace-files-viewer[hidden],

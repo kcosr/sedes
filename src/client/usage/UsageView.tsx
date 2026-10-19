@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChartColumnBig, RefreshCw, TriangleAlert } from "lucide-react";
 import { Button } from "@client/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@client/components/ui/tabs";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import type { UsageAnalyticsDimension, UsageAnalyticsRequest, UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import { useUsageAnalytics } from "./use-usage-analytics.js";
@@ -102,19 +103,18 @@ export function UsageView({ store }: { store: ApplicationClientStore }) {
         ) : (
           <div className="usage-content" data-stale={analytics.stale ? "true" : undefined} aria-busy={analytics.loading}>
             <SummaryTiles data={data} rangeLabel={rangeLabel} comparable={settings.preset !== "all"} />
-            <nav className="usage-tabs" role="tablist" aria-label="Usage views">
-              {USAGE_TABS.map((tab) => (
-                <button key={tab.id} type="button" role="tab" id={`usage-tab-${tab.id}`} aria-selected={settings.tab === tab.id}
-                  aria-controls="usage-tab-panel" onClick={() => update({ tab: tab.id })}>{tab.label}</button>
-              ))}
-            </nav>
-            <div id="usage-tab-panel" role="tabpanel" aria-labelledby={`usage-tab-${settings.tab}`} className="usage-tab-panel">
-              {settings.tab === "overview" ? <UsageOverview data={data} settings={settings} onSettings={update} filters={filters} onFilters={setFilters} onExplore={explore} />
-                : settings.tab === "explore" ? <UsageExplore data={data} settings={settings} onSettings={update} filters={filters} onFilters={setFilters} />
-                : settings.tab === "threads" ? <UsageThreads data={data} filters={filters} onFilters={setFilters} />
-                : settings.tab === "patterns" ? <UsagePatterns data={data} />
-                : <UsageCoverage data={data} />}
-            </div>
+            <Tabs value={settings.tab} onValueChange={(tab) => update({ tab: tab as UsageTab })}>
+              <TabsList aria-label="Usage views">
+                {USAGE_TABS.map((tab) => <TabsTrigger key={tab.id} value={tab.id}>{tab.label}</TabsTrigger>)}
+              </TabsList>
+              <TabsContent value={settings.tab} className="usage-tab-panel">
+                {settings.tab === "overview" ? <UsageOverview data={data} settings={settings} onSettings={update} filters={filters} onFilters={setFilters} onExplore={explore} />
+                  : settings.tab === "explore" ? <UsageExplore data={data} settings={settings} onSettings={update} filters={filters} onFilters={setFilters} />
+                  : settings.tab === "threads" ? <UsageThreads data={data} filters={filters} onFilters={setFilters} />
+                  : settings.tab === "patterns" ? <UsagePatterns data={data} />
+                  : <UsageCoverage data={data} />}
+              </TabsContent>
+            </Tabs>
           </div>
         )}
       </div>

@@ -158,7 +158,7 @@ test.describe.serial("workspace files compare", () => {
       'export const workspace = "alpha";\nexport const answer = 99;\n',
     );
 
-    await page.getByRole("tab", { name: "Changes", exact: true }).click();
+    await page.getByRole("radio", { name: "Changes", exact: true }).click();
     const compareSurface = panel.locator(".workspace-files-compare-surface");
     await expect(compareSurface).toBeVisible();
 
@@ -349,9 +349,9 @@ test.describe.serial("workspace files compare", () => {
     await expect(settings).toBeHidden();
 
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.getByRole("tab", { name: "Browse" }).click();
+    await page.getByRole("radio", { name: "Browse", exact: true }).click();
     await expect(editor(panel)).toContainText("export const answer = 99;");
-    await page.getByRole("tab", { name: "Changes", exact: true }).click();
+    await page.getByRole("radio", { name: "Changes", exact: true }).click();
     await viewToggle.click();
     await expect(viewOptions.getByRole("menuitemradio", { name: "Split", exact: true })).toHaveAttribute("aria-checked", "true");
     await page.keyboard.press("Escape");
@@ -366,15 +366,15 @@ test.describe.serial("workspace files compare", () => {
     await expect(compareSurface.locator("diffs-container").filter({ hasText: "branch-only.ts" })).toBeVisible();
     await capture(page, testInfo, "workspace-files-branch-comparison.png");
     // Save the retained Browse draft before reloading the application.
-    await page.getByRole("tab", { name: "Browse", exact: true }).click();
+    await page.getByRole("radio", { name: "Browse", exact: true }).click();
     await panel.getByRole("button", { name: "Save", exact: true }).click();
     await expect(panel.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
     await expect(panel.getByLabel("Unsaved changes", { exact: true })).toHaveCount(0);
-    await page.getByRole("tab", { name: "Changes", exact: true }).click();
+    await page.getByRole("radio", { name: "Changes", exact: true }).click();
     await expect.poll(() => page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith("sedes.files-navigation.v1:")))).toBe(true);
     await page.reload();
     const restored = await openFilesPanel(page);
-    await expect(page.getByRole("tab", { name: "Changes", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("radio", { name: "Changes", exact: true })).toHaveAttribute("aria-checked", "true");
     await expect(restored.getByLabel("1 changed file", { exact: true })).toBeVisible();
     await expect(restored.locator("diffs-container").filter({ hasText: "branch-only.ts" })).toBeVisible();
     await page.emulateMedia({ colorScheme: "dark" });

@@ -109,7 +109,9 @@ User-facing changes are collected here before release. See the
 
 - Long paths in the Files editor, the Changes diff headers, and the changed-file
   list give way from the start of their directory, so the file name stays
-  visible on narrow panels; the tooltip keeps the whole path.
+  visible on narrow panels; the tooltip keeps the whole path. The Files
+  Browse/Changes switch, the Usage views, and Usage's chart choices use the
+  shared segmented control and tabs, with arrow-key navigation.
 
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See

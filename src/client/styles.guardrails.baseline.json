@@ -3,7 +3,7 @@
   "colorLiterals": {
     "components/thread/flat-thread-row.css": 2,
     "styles.css": 3,
-    "usage/usage.css": 41,
+    "usage/usage.css": 40,
     "workpads/WorkpadDocument.css": 13,
     "workspace-files/workspace-compare.css": 1
   },
@@ -14,7 +14,7 @@
     "styles.css": 213,
     "usage/usage.css": 23,
     "workpads/WorkpadDocument.css": 2,
-    "workspace-files/workspace-compare.css": 20,
+    "workspace-files/workspace-compare.css": 19,
     "workspace-files/workspace-review-inspector.css": 1
   },
   "fontWeightLiterals": {
@@ -22,7 +22,7 @@
     "components/thread/question-inbox.css": 2,
     "components/thread/thread-group-roster.css": 1,
     "styles.css": 73,
-    "usage/usage.css": 16,
+    "usage/usage.css": 14,
     "workspace-files/workspace-compare.css": 2
   },
   "borderRadiusLiterals": {
