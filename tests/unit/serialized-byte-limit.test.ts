@@ -35,6 +35,7 @@ const samples: unknown[] = [
   { nested: [{ deeper: ["\u0000".repeat(40), "😀".repeat(20)] }, { "kéy\u0001": "välue" }] },
   { at: new Date(0) },
   { custom: { toJSON: () => "x".repeat(100) } },
+  Object.assign([1], { toJSON: () => "x".repeat(100) }),
   Array.from({ length: 600 }, (_, index) => ({ index })),
 ];
 

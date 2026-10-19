@@ -73,6 +73,8 @@ function boundSerializedValue(
       return 5;
     case "object": {
       if (value === null) return 4;
+      // JSON.stringify calls toJSON on arrays as well as on plain objects.
+      if ("toJSON" in value) return Number.POSITIVE_INFINITY;
       let total = 2;
       if (Array.isArray(value)) {
         for (let index = 0; index < value.length; index += 1) {
@@ -82,9 +84,7 @@ function boundSerializedValue(
         return total;
       }
       const prototype = Object.getPrototypeOf(value) as unknown;
-      if ((prototype !== Object.prototype && prototype !== null) || "toJSON" in value) {
-        return Number.POSITIVE_INFINITY;
-      }
+      if (prototype !== Object.prototype && prototype !== null) return Number.POSITIVE_INFINITY;
       const record = value as Record<string, unknown>;
       const keys = Object.keys(record);
       for (let index = 0; index < keys.length; index += 1) {
