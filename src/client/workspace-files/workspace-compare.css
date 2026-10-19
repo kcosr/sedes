@@ -669,4 +669,16 @@
     min-width: var(--bar-control-width);
     height: var(--control-touch);
   }
+
+  /* Refresh keeps the notice compact with a 44px-tall hit area. */
+  .workspace-compare-callout [data-slot="callout-action"] button {
+    position: relative;
+  }
+
+  .workspace-compare-callout [data-slot="callout-action"] button::before {
+    content: "";
+    position: absolute;
+    inset-block: calc((100% - var(--control-touch)) / 2);
+    inset-inline: 0;
+  }
 }

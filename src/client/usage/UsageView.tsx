@@ -108,7 +108,7 @@ export function UsageView({ store }: { store: ApplicationClientStore }) {
 
         {analytics.error ? (
           // Stale numbers stay on screen after a failed refresh: a warning.
-          <Callout tone={data ? "warning" : "danger"} role="alert"
+          <Callout className="usage-callout" tone={data ? "warning" : "danger"} role="alert"
             action={<Button variant="outline" size="sm" onClick={analytics.refresh}>Retry</Button>}>
             {data ? "Usage could not be refreshed. Showing the last successful read." : "Usage is unavailable right now."}{" "}
             <span className="usage-error-detail">{analytics.error}</span>

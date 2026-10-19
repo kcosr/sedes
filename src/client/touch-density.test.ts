@@ -124,6 +124,12 @@ describe("touch targets under touch density", () => {
       expect(touch(`${control}::before`, "inset"), control).toBe(HIT_AREA);
     }
     expect(touch(".view-filter-chip::before", "inset-block")).toBe(HIT_AREA);
+    // Notice actions keep their callouts compact.
+    for (const surface of [".terminal-panel-callout", ".workspace-compare-callout", ".question-inbox-panel", ".usage-callout"]) {
+      const action = `${surface} [data-slot="callout-action"] button`;
+      expect(touch(action, "position"), surface).toBe("relative");
+      expect(touch(`${action}::before`, "inset-block"), surface).toBe(HIT_AREA);
+    }
   });
 
   it("lets the voice chevron win near misses over the open-thread overlay", () => {

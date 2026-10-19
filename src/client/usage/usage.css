@@ -1622,6 +1622,18 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
     height: var(--control-default);
   }
 
+  /* Retry keeps the notice compact with a 44px-tall hit area. */
+  .usage-callout [data-slot="callout-action"] button {
+    position: relative;
+  }
+
+  .usage-callout [data-slot="callout-action"] button::before {
+    content: "";
+    position: absolute;
+    inset-block: calc((100% - var(--control-touch)) / 2);
+    inset-inline: 0;
+  }
+
   /* A chip's remove button keeps its size with a 44px hit area. */
   .usage-filter-chips li:not(.usage-chip-clear) button {
     position: relative;

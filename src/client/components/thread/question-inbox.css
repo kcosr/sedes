@@ -151,4 +151,16 @@
   .question-inbox-options button {
     min-height: var(--control-touch);
   }
+
+  /* Try again keeps the notice compact with a 44px-tall hit area. */
+  .question-inbox-panel [data-slot="callout-action"] button {
+    position: relative;
+  }
+
+  .question-inbox-panel [data-slot="callout-action"] button::before {
+    content: "";
+    position: absolute;
+    inset-block: calc((100% - var(--control-touch)) / 2);
+    inset-inline: 0;
+  }
 }

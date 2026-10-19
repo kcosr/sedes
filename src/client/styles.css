@@ -3569,6 +3569,18 @@ textarea:disabled {
     font-size: var(--text-input);
   }
 
+  /* Recovery buttons keep the notice compact with a 44px-tall hit area. */
+  .terminal-panel-callout [data-slot="callout-action"] button {
+    position: relative;
+  }
+
+  .terminal-panel-callout [data-slot="callout-action"] button::before {
+    content: "";
+    position: absolute;
+    inset-block: calc((100% - var(--control-touch)) / 2);
+    inset-inline: 0;
+  }
+
   .terminal-panel-bottom-controls {
     display: block;
   }
