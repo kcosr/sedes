@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  SedesDynamicCliUsageError,
   parseDynamicToolInput,
   renderDynamicToolHelp,
   resolveDynamicCommand,
@@ -153,6 +154,37 @@ describe("dynamic Sedes tool commands", () => {
         parseDynamicToolInput(inputSchema, arguments_, readers),
       ).rejects.toBeInstanceOf(Error);
     }
+  });
+
+  it.each([
+    [["--title-file", "-", "--details-file", "-"]],
+    [["--files-file", "-", "--files-file", "-"]],
+  ])("refuses to read stdin for more than one input option: %j", async (arguments_) => {
+    const readStdin = vi.fn(async () => "stdin text");
+    const failure = parseDynamicToolInput(inputSchema, arguments_, {
+      readFile: vi.fn(async () => "file text"),
+      readStdin,
+    });
+    await expect(failure).rejects.toBeInstanceOf(SedesDynamicCliUsageError);
+    await expect(failure).rejects.toThrow(
+      "Standard input (-) may be read by only one input option.",
+    );
+    expect(readStdin).not.toHaveBeenCalled();
+  });
+
+  it("reads stdin for one file-backed option alongside file paths", async () => {
+    const readStdin = vi.fn(async () => "From stdin");
+    await expect(
+      parseDynamicToolInput(
+        inputSchema,
+        ["--title-file", "-", "--details-file", "/tmp/details.md"],
+        { readFile: vi.fn(async () => "From file"), readStdin },
+      ),
+    ).resolves.toEqual({
+      json: false,
+      input: { title: "From stdin", details: "From file" },
+    });
+    expect(readStdin).toHaveBeenCalledOnce();
   });
 
   it("prefers specific primitive union members and supports an exact JSON form", async () => {

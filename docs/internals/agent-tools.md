@@ -717,7 +717,8 @@ native presentation: discovery and invocation read like an ordinary human CLI
 without first printing the complete JSON catalog.
 
 Every string option also has a `-file` form; `-` reads the exact value from
-stdin. Use it for multiline Markdown and text containing backticks, `$()`,
+stdin, and at most one option per command may use it. Use it for multiline
+Markdown and text containing backticks, `$()`,
 quotes, or other shell syntax. `--input-file` reads a complete canonical JSON
 object and cannot be mixed with named options. File/stdin reads use only the
 CLI process's existing filesystem authority and do not grant Sedes Files
