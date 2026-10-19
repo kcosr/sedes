@@ -90,6 +90,11 @@ export type TranscriptHandle = {
    * Returns false when the caller must fall back to targeted history lookup.
    */
   readonly seekTurn: (turnId: string, target?: "turn" | "response") => boolean;
+  /**
+   * Hands the viewport to a reader-driven jump that scrolls it directly,
+   * such as find: stops following the live edge and releases a seek pin.
+   */
+  readonly yieldToReaderNavigation: () => void;
 };
 
 export type TranscriptProps = {
@@ -826,6 +831,14 @@ export function Transcript({
     setAtLiveEdge(false);
   };
 
+  const yieldToReaderNavigation = () => {
+    viewportResizeFollowIntent.current = false;
+    cancelLiveEdgeFollow();
+    releaseSeekPin("reader_navigation");
+    wasAtLiveEdge.current = false;
+    setAtLiveEdge(false);
+  };
+
   const seekAdjacentHistoryItem = (direction: "previous" | "next") => {
     const element = viewport.current;
     if (!element) return;
@@ -1365,8 +1378,9 @@ export function Transcript({
         const target = takeSeekTarget();
         if (target) beginSeek(target);
       },
+      yieldToReaderNavigation,
     }),
-    [scrollToHistoryItem, seekAdjacentHistoryItem, seekLoadedTurn, takeSeekTarget, beginSeek],
+    [scrollToHistoryItem, seekAdjacentHistoryItem, seekLoadedTurn, takeSeekTarget, beginSeek, yieldToReaderNavigation],
   );
 
   useLayoutEffect(

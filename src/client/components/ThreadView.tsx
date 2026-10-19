@@ -146,6 +146,10 @@ export function ThreadView({
     (itemId: string) => transcript.current?.seekHistoryItem(itemId),
     [],
   );
+  const yieldTranscriptToFind = useCallback(
+    () => transcript.current?.yieldToReaderNavigation(),
+    [],
+  );
   const seekBookmarkTurn = useCallback(
     (turnId: string) => {
       // Selecting the same routed bookmark again must still perform a seek.
@@ -518,6 +522,7 @@ export function ThreadView({
           scopeRef={threadView}
           contentRef={findContent}
           viewportRef={findViewport}
+          onNavigate={yieldTranscriptToFind}
         />
         {state.loadFailure && (
           <div className="runtime-banner error" role="alert">

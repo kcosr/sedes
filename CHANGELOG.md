@@ -158,6 +158,9 @@ User-facing changes are collected here before release. See the
   blip or server restart retries without another keystroke. See
   [Build a prompt](docs/user/conversations.md#build-a-prompt).
 
+- Find in thread stays on the selected match while a reply streams instead of
+  being pulled back to the latest message.
+
 - Quick Task actions in a row on one task, such as Pin then Backlog, no longer
   fail with "That task changed elsewhere", and retrying a Task add or paste
   whose response was lost no longer creates the Task twice.
