@@ -140,6 +140,59 @@ describe("sidecar runtime bodies", () => {
   });
 });
 
+describe("sidecar runtime body draining", () => {
+  it("refuses offers while too many expired bodies still wait for their senders", async () => {
+    const fixture = await bodyFixture();
+    const offer = (index: number) => ({ id: `12345678-1234-4234-8234-${index.toString().padStart(12, "0")}`, size: 16, sha256: "d".repeat(64) });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      for (let batch = 0; batch < 4; batch += 1) {
+        for (let index = batch * 16; index < batch * 16 + 16; index += 1) {
+          await fixture.sedes.call(sidecarRuntimeBodyOffer, offer(index));
+        }
+        await vi.advanceTimersByTimeAsync(60_000);
+      }
+      // Sixty-four expired bodies are draining; a refusal is not fatal.
+      await expect(fixture.sedes.call(sidecarRuntimeBodyOffer, offer(64))).rejects.toThrow("sidecar_operation_failed");
+      const pingId = "12345678-1234-4234-8234-123456789ac2";
+      await expect(fixture.sedes.call(controlPingOperation, { pingId })).resolves.toEqual({ pingId });
+
+      // One sender finishes its expired body; its drain slot is free again.
+      const finished = fixture.sedes.openOutgoingStream({ ...capability, streamId: offer(0).id, initialCreditBytes: 1024 * 1024 });
+      await finished.terminal({ size: 16, sha256: "d".repeat(64) }, terminalSchema);
+      await vi.waitFor(async () => {
+        await expect(fixture.sedes.call(sidecarRuntimeBodyOffer, offer(64))).resolves.toEqual({ accepted: true });
+      });
+    } finally {
+      vi.useRealTimers();
+      await fixture.close();
+    }
+  });
+
+  it("ends the stream of a body whose sender fails mid-transfer", async () => {
+    const fixture = await bodyFixture();
+    const value = { data: "s".repeat(512 * 1024) };
+    const send = fixture.pair.left.send.bind(fixture.pair.left);
+    let dataFrames = 0;
+    vi.spyOn(fixture.pair.left, "send").mockImplementation(async (bytes, options) => {
+      // The third body chunk meets a congested outbound queue.
+      if (options.lane === "operation" && !options.settlement && (dataFrames += 1) === 3) {
+        throw new SidecarFrameWriteError("sidecar_outbound_queue_limit", "not_sent");
+      }
+      return await send(bytes, options);
+    });
+    const offered = vi.spyOn(fixture.sedes, "call");
+    try {
+      await expect(fixture.left.encodeBody(value)).rejects.toThrow("sidecar_outbound_queue_limit");
+      const id = (offered.mock.calls[0]![1] as { id: string }).id;
+      // The receiver learns at once instead of holding the body until expiry.
+      await expect(fixture.right.decodeBody({ type: "stream", id })).rejects.toThrow("sidecar_runtime_body_digest_invalid");
+      const pingId = "12345678-1234-4234-8234-123456789ac3";
+      await expect(fixture.sedes.call(controlPingOperation, { pingId })).resolves.toEqual({ pingId });
+    } finally { await fixture.close(); }
+  });
+});
+
 async function bodyFixture() {
   const pair = transportPair();
   const leftRegistry = new SidecarOperationRegistry();

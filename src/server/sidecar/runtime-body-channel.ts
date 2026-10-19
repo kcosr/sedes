@@ -29,11 +29,14 @@ export const sidecarRuntimeBodyOffer: SidecarOperationDefinition<z.infer<typeof 
 // never expires. An expired body frees its reservation at once; its stream is
 // retired, so frames its sender still sends are drained, never fatal.
 const BODY_IDLE_MILLISECONDS = 60_000;
+// Retired streams stay registered until their sender's terminal. Offers are
+// refused, never fatal, while this many are still draining.
+const MAXIMUM_DRAINING_BODIES = 64;
 type Incoming = {
   readonly size: number;
   readonly value: Promise<unknown>;
   reject(error: Error): void;
-  readonly retire: () => void;
+  readonly retire: () => Promise<void>;
   /** Received bytes, dropped on release: a retired stream outlives its body. */
   readonly chunks: Buffer[];
   timer: ReturnType<typeof setTimeout> | undefined;
@@ -46,12 +49,13 @@ export class SidecarRuntimeBodyChannel {
   readonly #peer: SidecarProtocolPeer;
   readonly #incoming = new Map<string, Incoming>();
   #reservedBytes = 0;
+  #draining = 0;
   #closed = false;
 
   constructor(peer: SidecarProtocolPeer, registry: SidecarOperationRegistry) {
     this.#peer = peer;
     registry.register(sidecarRuntimeBodyOffer, input => {
-      if (this.#closed || this.#incoming.has(input.id) || this.#incoming.size >= 16 || this.#reservedBytes + input.size > MAXIMUM_RESERVED_BYTES) throw new Error("sidecar_runtime_body_capacity_exceeded");
+      if (this.#closed || this.#incoming.has(input.id) || this.#incoming.size >= 16 || this.#draining >= MAXIMUM_DRAINING_BODIES || this.#reservedBytes + input.size > MAXIMUM_RESERVED_BYTES) throw new Error("sidecar_runtime_body_capacity_exceeded");
       const chunks: Buffer[] = [];
       let bytes = 0;
       const hash = createHash("sha256");
@@ -104,7 +108,14 @@ export class SidecarRuntimeBodyChannel {
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     await this.#peer.call(sidecarRuntimeBodyOffer, { id, size: bytes.byteLength, sha256 }, { deadlineMilliseconds: 30_000 });
     const stream = this.#peer.openOutgoingStream({ capabilityId: SIDECAR_RUNTIME_BODY_CAPABILITY, majorVersion: 1, streamId: id, initialCreditBytes: CREDIT_BYTES });
-    for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024) await stream.send("stdout", bytes.subarray(offset, offset + 64 * 1024));
+    try {
+      for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024) await stream.send("stdout", bytes.subarray(offset, offset + 64 * 1024));
+    } catch (error) {
+      // End the stream anyway so the receiver stops waiting for this body;
+      // its size and digest checks reject the partial transfer.
+      await stream.terminal({ size: bytes.byteLength, sha256 }, terminalSchema).catch(() => undefined);
+      throw error;
+    }
     await stream.terminal({ size: bytes.byteLength, sha256 }, terminalSchema);
     return { type: "stream", id };
   }
@@ -128,6 +139,7 @@ export class SidecarRuntimeBodyChannel {
     clearTimeout(incoming.timer);
     incoming.chunks.length = 0;
     if (error) incoming.reject(error);
-    incoming.retire();
+    this.#draining += 1;
+    void incoming.retire().then(() => { this.#draining -= 1; });
   }
 }

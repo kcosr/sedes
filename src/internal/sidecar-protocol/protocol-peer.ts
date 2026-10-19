@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
+  SidecarFrameWriteError,
   SidecarProtocolDeliveryError,
   type SidecarFrameLane,
   type SidecarFrameSendOptions,
@@ -89,6 +90,18 @@ type IncomingStream = {
   remainingCredit: number;
 };
 
+type RetiredStream = {
+  readonly stream: IncomingStream;
+  /** Settles the retirement once the producer's terminal arrives. */
+  readonly drained: () => void;
+  /** Credit for dropped frames not yet granted back to the producer. */
+  owedCredit: number;
+  repaying: boolean;
+};
+
+const RETIRED_CREDIT_RETRY_MILLISECONDS = 50;
+const MAXIMUM_RETIRED_CREDIT_RETRY_MILLISECONDS = 1_000;
+
 type OutgoingStream = {
   readonly capabilityId: string;
   readonly majorVersion: number;
@@ -137,10 +150,10 @@ export class SidecarProtocolPeer {
   readonly #cancelledOutbound = new Set<string>();
   readonly #events = new Map<string, Set<EventRegistration>>();
   readonly #incomingStreams = new Map<string, IncomingStream>();
-  // Incoming streams their consumer retired before the producer finished,
-  // oldest first. Their remaining frames are validated, credited back so the
-  // producer can finish, and dropped; the terminal removes the entry.
-  readonly #retiredIncomingStreams = new Map<string, IncomingStream>();
+  // Incoming streams their consumer retired before the producer finished.
+  // Their remaining frames are validated, credited back so the producer can
+  // finish, and dropped; only the terminal or session close removes one.
+  readonly #retiredIncomingStreams = new Map<string, RetiredStream>();
   readonly #outgoingStreams = new Map<string, OutgoingStream>();
   readonly #terminalOutgoingStreams = new Set<string>();
   #localCapabilities: ReadonlySet<string> = new Set();
@@ -407,9 +420,11 @@ export class SidecarProtocolPeer {
     readonly unregister: () => void;
     /**
      * Stops delivering this stream while letting its producer finish: later
-     * frames are credited and dropped instead of being protocol-fatal.
+     * frames are credited and dropped instead of being protocol-fatal. The
+     * peer keeps the stream until its terminal or session close, so callers
+     * must bound how many streams they retire. Resolves when it is drained.
      */
-    readonly retire: () => void;
+    readonly retire: () => Promise<void>;
   } {
     validateStreamId(input.streamId);
     validateStreamCredit(input.initialCreditBytes);
@@ -451,22 +466,73 @@ export class SidecarProtocolPeer {
         }
       },
       retire: () => {
-        if (this.#incomingStreams.get(input.streamId) !== stream) return;
+        if (this.#incomingStreams.get(input.streamId) !== stream) {
+          return Promise.resolve();
+        }
         this.#incomingStreams.delete(input.streamId);
-        this.#retiredIncomingStreams.set(input.streamId, stream);
-        const maximum = this.#limits.maximumInboundRequests * 2;
-        for (const streamId of this.#retiredIncomingStreams.keys()) {
-          if (this.#retiredIncomingStreams.size <= maximum) break;
-          this.#retiredIncomingStreams.delete(streamId);
-        }
+        let drained!: () => void;
+        const finished = new Promise<void>((resolve) => {
+          drained = resolve;
+        });
+        const retired: RetiredStream = {
+          stream,
+          drained,
+          owedCredit: 0,
+          repaying: false,
+        };
+        this.#retiredIncomingStreams.set(input.streamId, retired);
         // A producer waiting for credit the consumer withheld must not stall.
-        const deficit = stream.creditWindow - stream.remainingCredit;
-        if (deficit > 0 && !this.#closed) {
-          void this.#sendStreamCredit(input.streamId, stream, deficit)
-            .catch(() => undefined);
-        }
+        this.#repayRetiredCredit(
+          input.streamId,
+          retired,
+          Math.max(0, stream.creditWindow - stream.remainingCredit),
+        );
+        return finished;
       },
     });
+  }
+
+  /** Grants dropped frames' credit back, retrying refusals until it lands. */
+  #repayRetiredCredit(
+    streamId: string,
+    retired: RetiredStream,
+    bytes: number,
+  ): void {
+    retired.owedCredit += bytes;
+    if (retired.repaying || retired.owedCredit === 0) return;
+    retired.repaying = true;
+    void (async () => {
+      let delay = RETIRED_CREDIT_RETRY_MILLISECONDS;
+      try {
+        while (
+          retired.owedCredit > 0 &&
+          !this.#closed &&
+          this.#retiredIncomingStreams.get(streamId) === retired
+        ) {
+          const owed = retired.owedCredit;
+          try {
+            await this.#sendStreamCredit(streamId, retired.stream, owed);
+            retired.owedCredit -= owed;
+            delay = RETIRED_CREDIT_RETRY_MILLISECONDS;
+          } catch (error) {
+            // A congested queue refuses the frame before writing it; any
+            // other failure closes the transport and with it this stream.
+            if (
+              !(error instanceof SidecarFrameWriteError) ||
+              error.delivery !== "not_sent"
+            ) {
+              return;
+            }
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, delay).unref();
+            });
+            delay = Math.min(delay * 2, MAXIMUM_RETIRED_CREDIT_RETRY_MILLISECONDS);
+          }
+        }
+      } finally {
+        retired.repaying = false;
+      }
+    })();
   }
 
   async #sendStreamCredit(
@@ -921,7 +987,7 @@ export class SidecarProtocolPeer {
       throw new Error("sidecar_protocol_stream_origin_invalid");
     }
     const retired = this.#retiredIncomingStreams.get(frame.streamId);
-    const stream = this.#incomingStreams.get(frame.streamId) ?? retired;
+    const stream = this.#incomingStreams.get(frame.streamId) ?? retired?.stream;
     if (!stream) throw new Error("sidecar_protocol_stream_unknown");
     if (
       frame.sequence !== stream.expectedSequence ||
@@ -932,11 +998,7 @@ export class SidecarProtocolPeer {
     stream.expectedSequence += frame.bytes.byteLength;
     stream.remainingCredit -= frame.bytes.byteLength;
     if (retired) {
-      void this.#sendStreamCredit(
-        frame.streamId,
-        retired,
-        frame.bytes.byteLength,
-      ).catch(() => undefined);
+      this.#repayRetiredCredit(frame.streamId, retired, frame.bytes.byteLength);
       return;
     }
     stream.onData({
@@ -972,7 +1034,7 @@ export class SidecarProtocolPeer {
       throw new Error("sidecar_protocol_stream_origin_invalid");
     }
     const retired = this.#retiredIncomingStreams.get(envelope.streamId);
-    const stream = this.#incomingStreams.get(envelope.streamId) ?? retired;
+    const stream = this.#incomingStreams.get(envelope.streamId) ?? retired?.stream;
     if (!stream) throw new Error("sidecar_protocol_stream_unknown");
     if (
       envelope.sequence !== stream.expectedSequence ||
@@ -989,6 +1051,7 @@ export class SidecarProtocolPeer {
     }
     if (retired) {
       this.#retiredIncomingStreams.delete(envelope.streamId);
+      retired.drained();
       return;
     }
     this.#incomingStreams.delete(envelope.streamId);
@@ -1144,6 +1207,7 @@ export class SidecarProtocolPeer {
     }
     this.#inbound.clear();
     this.#incomingStreams.clear();
+    for (const retired of this.#retiredIncomingStreams.values()) retired.drained();
     this.#retiredIncomingStreams.clear();
     for (const stream of this.#outgoingStreams.values()) {
       stream.terminalRequested = true;

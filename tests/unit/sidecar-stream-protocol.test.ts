@@ -358,14 +358,18 @@ describe("sidecar retained streams", () => {
       await producer.send("data", Buffer.from("a"));
       await vi.waitFor(() => expect(data).toHaveBeenCalledOnce());
       // The consumer withheld credit for "a"; retiring refills the window.
-      incoming.retire();
+      let drained = false;
+      const retirement = incoming.retire().then(() => { drained = true; });
       expect(() => fixture.sedes.registerIncomingStream(registration)).toThrow("sidecar_stream_already_registered");
       await expect(incoming.addCredit(1)).rejects.toThrow("sidecar_stream_not_registered");
       for (let index = 0; index < 8; index += 1) {
         await producer.send("data", Buffer.from("bc"));
       }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(drained).toBe(false);
       await producer.terminal({ outcome: "exited", exitCode: 0, signal: null,
         stdoutBytes: 17, stderrBytes: 0, emittedBytes: 17, omittedBytes: 0, truncated: false }, workspaceToolsShellTerminalSchema);
+      await retirement;
       await expect(fixture.sedes.call(workspaceContextReadOperation, {
         admissionId: randomUUID(), declaredPath: "/workspace", policyRootPath: "/workspace",
       })).resolves.toMatchObject({ fingerprint: "a".repeat(64) });
@@ -373,6 +377,62 @@ describe("sidecar retained streams", () => {
       expect(terminal).not.toHaveBeenCalled();
       // The terminal ended the drain; the id can be registered again.
       expect(() => fixture.sedes.registerIncomingStream(registration)).not.toThrow();
+    } finally { await fixture.sedes.close("done"); }
+  });
+
+  it("keeps every retired stream drainable however many are retired", async () => {
+    const fixture = await streamFixture();
+    const streamIds = Array.from({ length: 300 }, () => randomUUID());
+    const registrations = streamIds.map((streamId) => fixture.sedes.registerIncomingStream({
+      streamId, ...capability, initialCreditBytes: 4,
+      terminalSchema: workspaceToolsShellTerminalSchema,
+      onData: () => undefined, onTerminal: () => undefined,
+    }));
+    try {
+      const retirements = registrations.map((registration) => registration.retire());
+      // The first retired stream's producer is still live.
+      const producer = fixture.sidecar.openOutgoingStream({ streamId: streamIds[0]!, ...capability, initialCreditBytes: 4 });
+      for (let index = 0; index < 4; index += 1) {
+        await producer.send("data", Buffer.from("late"));
+      }
+      await producer.terminal({ outcome: "exited", exitCode: 0, signal: null,
+        stdoutBytes: 16, stderrBytes: 0, emittedBytes: 16, omittedBytes: 0, truncated: false }, workspaceToolsShellTerminalSchema);
+      await retirements[0];
+      await expect(fixture.sedes.call(workspaceContextReadOperation, {
+        admissionId: randomUUID(), declaredPath: "/workspace", policyRootPath: "/workspace",
+      })).resolves.toMatchObject({ fingerprint: "a".repeat(64) });
+    } finally { await fixture.sedes.close("done"); }
+  });
+
+  it("retries a retired stream's credit repayment that a congested queue refused", async () => {
+    const fixture = await streamFixture();
+    const streamId = randomUUID();
+    const incoming = fixture.sedes.registerIncomingStream({
+      streamId, ...capability, initialCreditBytes: 2,
+      terminalSchema: workspaceToolsShellTerminalSchema,
+      onData: () => undefined, onTerminal: () => undefined,
+    });
+    const producer = fixture.sidecar.openOutgoingStream({ streamId, ...capability, initialCreditBytes: 2 });
+    try {
+      await producer.send("data", Buffer.from("ab"));
+      const send = fixture.pair.left.send.bind(fixture.pair.left);
+      // Only credit frames leave Sedes here. The refill on retirement and the
+      // repayment for "cd" are each refused twice before the queue drains.
+      const refusedAttempts = new Set([1, 2, 4, 5]);
+      let attempts = 0;
+      vi.spyOn(fixture.pair.left, "send").mockImplementation(async (bytes, options) => {
+        attempts += 1;
+        if (refusedAttempts.has(attempts)) {
+          throw new SidecarFrameWriteError("sidecar_outbound_queue_limit", "not_sent");
+        }
+        return await send(bytes, options);
+      });
+      void incoming.retire();
+      await producer.send("data", Buffer.from("cd"));
+      await producer.send("data", Buffer.from("ef"));
+      expect(attempts).toBeGreaterThanOrEqual(6);
+      await producer.terminal({ outcome: "exited", exitCode: 0, signal: null,
+        stdoutBytes: 6, stderrBytes: 0, emittedBytes: 6, omittedBytes: 0, truncated: false }, workspaceToolsShellTerminalSchema);
     } finally { await fixture.sedes.close("done"); }
   });
 
