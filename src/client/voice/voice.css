@@ -465,3 +465,16 @@
     --voice-dock-inset: 9px;
   }
 }
+
+@media (max-width: 819px), (pointer: coarse) {
+  /* The chevron keeps its size beside the title but takes a 44px-tall hit
+     area over the "Open thread" overlay, so a near miss opens the picker.
+     It stops short of the card's actions on its right. */
+  .voice-card-target::before {
+    content: "";
+    position: absolute;
+    inset-block: calc((100% - var(--control-touch)) / 2);
+    inset-inline-start: calc(100% - var(--control-touch) + var(--space-1));
+    inset-inline-end: calc(-1 * var(--space-1));
+  }
+}

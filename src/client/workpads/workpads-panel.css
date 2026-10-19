@@ -29,6 +29,19 @@
     --workpads-row-text: var(--text-title);
     --workpads-more-width: var(--control-touch);
   }
+
+  /* Close search fills the 44px search row. */
+  .workpads-search > [data-slot="button"] {
+    width: var(--control-touch);
+    height: var(--control-touch);
+  }
+
+  /* The error's dismiss keeps its corner size with a 44px hit area. */
+  .workpads-alert-dismiss::before {
+    content: "";
+    position: absolute;
+    inset: calc((100% - var(--control-touch)) / 2);
+  }
 }
 
 /* ── Header actions (portaled into the panel header) ── */

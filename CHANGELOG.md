@@ -159,7 +159,9 @@ User-facing changes are collected here before release. See the
 
 - On phones and touch screens, text inputs (searches, renames, filters, the
   terminal command line, and interaction prompts) are 16px so iOS no longer
-  zooms the page on focus; the composer is unchanged.
+  zooms the page on focus; the composer is unchanged. Small controls in Tasks,
+  Workpads, voice, and Usage take 44px touch targets, so a near miss on the
+  voice card's chevron opens the thread picker rather than the thread.
 
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the

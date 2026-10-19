@@ -53,6 +53,19 @@
     --tasks-row-icon: var(--icon-md);
     --tasks-more-width: var(--control-touch);
   }
+
+  /* Close search fills the 44px search row. */
+  .tasks-search > [data-slot="button"] {
+    width: var(--control-touch);
+    height: var(--control-touch);
+  }
+
+  /* The error's dismiss keeps its corner size with a 44px hit area. */
+  .tasks-alert-dismiss::before {
+    content: "";
+    position: absolute;
+    inset: calc((100% - var(--control-touch)) / 2);
+  }
 }
 
 /* ── Header: the panel family's (`PanelChrome`), with ⌕ and the Pinned

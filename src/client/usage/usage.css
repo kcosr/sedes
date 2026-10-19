@@ -1704,6 +1704,17 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
   .usage-filter-search input {
     font-size: var(--text-input);
   }
+
+  /* A chip's remove button keeps its size with a 44px hit area. */
+  .usage-filter-chips li:not(.usage-chip-clear) button {
+    position: relative;
+  }
+
+  .usage-filter-chips li:not(.usage-chip-clear) button::before {
+    content: "";
+    position: absolute;
+    inset: calc((100% - var(--control-touch)) / 2);
+  }
 }
 
 @media (max-width: 460px) {
