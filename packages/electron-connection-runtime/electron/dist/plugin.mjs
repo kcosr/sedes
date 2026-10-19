@@ -137,11 +137,16 @@ class ElectronConnectionRuntimeImpl {
   }
 
   #hasResources() {
-    const status = this.#manager.getStatus();
-    return (
-      status.local.status !== "disconnected" ||
-      status.ssh.status !== "disconnected"
-    );
+    try {
+      const status = this.#manager.getStatus();
+      return (
+        status.local.status !== "disconnected" ||
+        status.ssh.status !== "disconnected"
+      );
+    } catch {
+      // An unreadable state must not skip the owned cleanup before quitting.
+      return true;
+    }
   }
 
   #beginOwnedQuit() {
