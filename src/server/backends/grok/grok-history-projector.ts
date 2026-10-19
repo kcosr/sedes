@@ -39,6 +39,7 @@ import {
   type GrokSubagentCollaborationProjection,
   type GrokSubagentEvent,
 } from "./grok-subagent-reducer.js";
+import { isRecord } from "../../../shared/json-guards.js";
 
 const DEFAULT_RETAINED_COMPLETED_PROMPTS = 10;
 const MAXIMUM_DATE_MILLISECONDS = 8_640_000_000_000_000;
@@ -1917,10 +1918,6 @@ function boundedString(value: unknown, maximumBytes: number): value is string {
     Buffer.byteLength(value) <= maximumBytes &&
     !value.includes("\0")
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function privateStableId(

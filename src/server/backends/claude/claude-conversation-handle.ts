@@ -110,6 +110,7 @@ import {
   ClaudeViewedImagePublications,
   type ClaudeViewedImageCandidate,
 } from "./claude-viewed-images.js";
+import { isRecord } from "../../../shared/json-guards.js";
 
 const MAXIMUM_EVENT_JOURNAL = 256;
 const MAXIMUM_ACKNOWLEDGEMENT_WAIT_MS = 30_000;
@@ -3582,10 +3583,6 @@ function carriesImageReadResult(message: SessionMessage, imageReadToolUseIds: Re
     isRecord(block) && block.type === "tool_result" && typeof block.tool_use_id === "string" &&
     imageReadToolUseIds.has(block.tool_use_id) && Array.isArray(block.content) &&
     block.content.some((part: unknown) => isRecord(part) && part.type === "image"));
-}
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function copySessionMessage(message: SessionMessage): SessionMessage {

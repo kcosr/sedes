@@ -5,6 +5,7 @@ import {
   type OfficialCodexClientRequestParams,
   type OfficialCodexClientRequestResult,
 } from "../../provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
+import { isRecord } from "../../../shared/json-guards.js";
 
 // Preserve the established Zod `string().max(...)` semantics: JavaScript
 // UTF-16 code units, not UTF-8 bytes or Unicode scalar values.
@@ -71,10 +72,6 @@ export type CodexThreadForkResponse = Pick<
   | "reasoningEffort"
 >;
 
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function assertExactKeys(
   value: unknown,

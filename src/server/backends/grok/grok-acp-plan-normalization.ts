@@ -3,6 +3,7 @@ import type { SessionNotification } from "@agentclientprotocol/sdk";
 import type { BackendItem } from "../../../shared/protocol/backend.js";
 import { PAYLOAD_LIMITS } from "../../../shared/protocol/payload.js";
 import { boundDisplayText } from "../../conversations/payload-policy.js";
+import { isRecord } from "../../../shared/json-guards.js";
 
 const MAXIMUM_IDENTIFIER_BYTES = 1_024;
 
@@ -150,10 +151,6 @@ function stableId(prefix: string, values: readonly unknown[]): string {
   return `${prefix}:${createHash("sha256")
     .update(JSON.stringify(values))
     .digest("base64url")}`;
-}
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function invalid(): never {

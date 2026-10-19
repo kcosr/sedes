@@ -28,6 +28,7 @@ import {
   type CodexServerNotificationMethod,
   type CodexServerRequestMethod,
 } from "./protocol.js";
+import { isRecord } from "../../../../shared/json-guards.js";
 
 const DEFAULT_MAX_FRAME_BYTES = MAXIMUM_PROVIDER_FRAME_BYTES;
 const DEFAULT_MAX_PENDING_REQUESTS = 256;
@@ -177,10 +178,6 @@ interface ActiveServerRequest {
 }
 
 type RequestTombstone = "late_allowed" | "settled";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function hasOwn(
   value: Readonly<Record<string, unknown>>,

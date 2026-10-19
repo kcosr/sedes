@@ -19,6 +19,7 @@ import type {
   BackendMutationReconciliation,
   InteractionResponseInput,
 } from "../contracts.js";
+import { isRecord } from "../../../shared/json-guards.js";
 
 const ALLOW_ONCE_ACTION_ID = "allow_once";
 const ALLOW_FOR_SESSION_ACTION_ID = "allow_for_session";
@@ -699,10 +700,6 @@ function stableOptionId(
     .update("\0")
     .update(label)
     .digest("hex")}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isPotentiallyDestructive(toolName: string): boolean {
