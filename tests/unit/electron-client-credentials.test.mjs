@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, copyFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, copyFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -54,6 +54,24 @@ describe("Electron credential persistence", () => {
     expect(await store.getCredential({ ...local, serverUrl: "http://127.0.0.1:41001" })).toEqual({ credential: null });
     expect(await store.getCredential({ ...local, serverUrl: "http://127.0.0.1:41002" })).toEqual({ credential: "sedes_second_local_secret_002" });
     expect(await store.getCredential(identity)).toEqual({ credential });
+  });
+  it("keeps the previous credential when a replacement fails and saves despite a stuck old one", async () => {
+    const { store } = await fixture();
+    const local = { profileId: "00000000-0000-4000-8000-000000000001" };
+    const first = { ...local, serverUrl: "http://127.0.0.1:41001", credential: "sedes_first_local_secret_0001" };
+    await store.replaceProfileCredential(first);
+    const encryptString = store.storage.encryptString;
+    store.storage.encryptString = () => { throw new Error("encryption_failed"); };
+    await expect(store.replaceProfileCredential({ ...local, serverUrl: "http://127.0.0.1:41002", credential: "sedes_second_local_secret_002" })).rejects.toThrow("encryption_failed");
+    expect(await store.getCredential(first)).toEqual({ credential: first.credential });
+
+    store.storage.encryptString = encryptString;
+    const stuck = path.join(store.profileDirectory(local.profileId), `${"0".repeat(64)}.enc`);
+    await mkdir(stuck);
+    const third = { ...local, serverUrl: "http://127.0.0.1:41003", credential: "sedes_third_local_secret_0003" };
+    await store.replaceProfileCredential(third);
+    expect(await store.getCredential(third)).toEqual({ credential: third.credential });
+    expect(await store.getCredential(first)).toEqual({ credential: null });
   });
   it("rejects swapped encrypted records across profiles", async () => {
     const { directory, store } = await fixture();

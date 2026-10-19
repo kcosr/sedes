@@ -70,7 +70,9 @@ export class CredentialStore {
     const retained = path.basename(this.filename(identity(input)));
     for (const entry of await readdir(directory)) {
       if (entry === retained || !entry.endsWith(".enc")) continue;
-      await unlink(path.join(directory, entry)).catch((error) => { if (error.code !== "ENOENT") throw error; });
+      // The new credential is saved; a superseded one that cannot be removed
+      // now is retried by the next replacement instead of failing this save.
+      await unlink(path.join(directory, entry)).catch(() => undefined);
     }
   }
   async removeCredential(input) {
