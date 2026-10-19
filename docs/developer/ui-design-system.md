@@ -141,7 +141,15 @@ reads the tokens the switch sets; TypeScript uses `useTouchDensity()` or
 
 Inputs, `NativeSelect`, `SelectTrigger`, tabs, and switch hit areas follow
 `--control-default`. Buttons keep fixed heights; a container opts its buttons
-into touch height, as dialog footers and the settings save bar do. Component
+into touch height, as dialog footers and the settings save bar do. A small
+control that must keep its look (a corner dismiss, a chip's remove, a
+callout's action) instead takes an invisible `::before` hit area under the
+switch, `inset: calc((100% - var(--control-touch)) / 2)` on a positioned
+control (`inset-block` only for wide ones). Select such buttons by element
+(`> button`): a `Button` used as a menu trigger carries the trigger's
+`data-slot`. A text input whose desktop size is below `--text-input` keeps it
+and switches to `--text-input` in a touch-density block;
+`touch-density.test.ts` checks both rules. Component
 layout uses container queries; media queries come only from the allowed set in
 the guardrails (the breakpoint, 519px footer stacking, pointer, hover, and
 reduced motion). The sidebar-to-drawer swap uses `(max-width: 819px)` alone.
