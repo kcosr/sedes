@@ -594,6 +594,47 @@ describe("serveThreadEventStream", () => {
     expect(capture).not.toHaveBeenCalled();
   });
 
+  it("keeps a replacement snapshot replayable while its summary suffix costs less than a checkpoint", async () => {
+    const hub = new ThreadEventHub();
+    hub.publish({ type: "snapshot", generation: "projection-1", snapshot: snapshotWithMessage("answer") });
+    const notices = publishNotices(hub, Array.from({ length: 80 }, (_, index) => `notice-${index}`));
+    const cursor = hub.eventIdAt(hub.watermark);
+    // A same-generation replacement keeps the notices; its detailed activity
+    // is large in full detail but a short summary in summary mode.
+    const initial = snapshotWithMessage("answer");
+    const reasoning = initial.itemsById["reasoning-activity"]!;
+    if (reasoning.kind !== "reasoning")
+      throw new Error("fixture_reasoning_required");
+    const replacement = hub.publish({
+      type: "snapshot",
+      generation: "projection-1",
+      snapshot: {
+        ...initial,
+        itemsById: {
+          ...initial.itemsById,
+          "reasoning-activity": { ...reasoning, markdown: { text: "推理".repeat(30_000) } },
+        },
+      },
+    });
+    // The activity then shrinks, so the current snapshot is far smaller.
+    const compacted = hub.publish({
+      type: "item_upsert",
+      generation: "projection-1",
+      item: { ...reasoning, revision: reasoning.revision + 1, markdown: { text: "compacted" } },
+    });
+    expect(hub.replayBytesAfter(cursor)).toBeGreaterThan(65_536);
+    expect(hub.canReplay(cursor)).toBe(true);
+
+    const response = new FakeResponse();
+    const request = new FakeRequest(cursor);
+    await serveThreadEventStream(asRequest(request), asResponse(response), hub, source(hub, { capture: vi.fn() }), { activityDetail: "summary" });
+    expect(checkpoints(response)).toEqual([]);
+    expect(envelopes(response).map(({ eventId }) => eventId)).toEqual([replacement.eventId, compacted.eventId]);
+    expect(response.writes.join("")).not.toContain("推理");
+    expect(hub.currentCheckpoint()?.notices).toHaveLength(notices.length);
+    request.emit("close");
+  });
+
   it("recovers overflow while live and resumes strictly after the checkpoint watermark", async () => {
     const hub = new ThreadEventHub();
     publishedSnapshot(hub, "projection-1");

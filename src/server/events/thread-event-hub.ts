@@ -45,13 +45,13 @@ export const THREAD_SSE_SMALL_REPLAY_BYTES = 64 * 1_024;
 
 /**
  * What replaying one event costs any subscriber, at least. Summary-mode
- * subscribers receive detailed activity items and history pages reduced to
- * summaries, so those events have no lower bound; every other event is
- * written unchanged in every activity mode.
+ * subscribers receive snapshots, history pages and detailed activity items
+ * with that activity reduced to summaries, so those events have no lower
+ * bound; every other event is written unchanged in every activity mode.
  */
 function replayCostFloor(type: string, data: unknown, bytes: number): number {
   const { event } = data as ThreadEventEnvelope;
-  if (type === "history_prepend") return 0;
+  if (type === "snapshot" || type === "history_prepend") return 0;
   if (event.type === "item_upsert" && isDetailedActivityItem(event.item)) return 0;
   return bytes;
 }
