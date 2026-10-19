@@ -451,7 +451,7 @@ describe("SettingsView", () => {
     ).toEqual(["Preferences", "Execution", "Access", "Support"]);
     const general = screen.getByRole("link", { name: "General" });
     expect(general).toHaveAttribute("href", "/settings/general");
-    expect(general).toHaveAccessibleDescription("Sidebar, panels, history and the composer.");
+    expect(general).toHaveAccessibleDescription("Default thread, sidebar, history and the composer.");
     const agents = screen.getByRole("link", { name: "Agents" });
     expect(agents).toHaveAttribute("href", "/settings/agents");
     expect(agents).toHaveAccessibleDescription("Saved presets for new threads.");
@@ -871,6 +871,12 @@ describe("SettingsView", () => {
     await waitFor(() => expect(toggle).not.toBeDisabled());
     expect(toggle).toHaveAttribute("data-state", "unchecked");
     expect(screen.getByText(/across every Codex connection/)).toBeVisible();
+    // The page's settings are this browser's; this one follows the account.
+    expect(toggle).toHaveAccessibleName("Show OpenAI skills in composer Account");
+    expect(screen.getByText("Account", { selector: '[data-slot="tag"]' })).toBeVisible();
+    expect(
+      screen.getByText(/Preferences for this browser, unless a setting names another scope\./),
+    ).toBeVisible();
 
     fireEvent.click(toggle);
     await waitFor(() =>

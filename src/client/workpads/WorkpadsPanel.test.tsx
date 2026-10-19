@@ -607,6 +607,17 @@ describe("WorkpadsPanel", () => {
     expect(screen.queryByRole("button", { name: "Old result" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New result" })).toBeInTheDocument();
   });
+  it("offers Clear search when a search matches nothing", async () => {
+    const listWorkpads = vi.fn(async (request?: { query?: string }) => ({ items: request?.query ? [] : [pad] }));
+    const { store } = fixture({ listWorkpads });
+    render(<Panel context={panelContext(store)} />);
+    await screen.findByRole("button", { name: "Integration" });
+    fireEvent.change(openSearch(), { target: { value: "nothing" } });
+    expect(await screen.findByText("No workpads match “nothing”.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(screen.queryByRole("textbox", { name: "Search workpads" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Integration" })).toBeInTheDocument();
+  });
   it("refreshes on document events and reconnect, without periodic reads", async () => {
     const { store, api, emit } = fixture();
     render(<Panel context={panelContext(store)} />);
@@ -1740,7 +1751,7 @@ describe("WorkpadsPanel", () => {
       await screen.findByRole("button", { name: "Integration" });
       fireEvent.click(await screen.findByRole("button", { name: /^Archived/ }));
       await waitFor(() => expect(listWorkpads).toHaveBeenCalledWith(expect.objectContaining({ archived: true })));
-      expect(screen.getByText("No archived workpads")).toBeInTheDocument();
+      expect(screen.getByText("No archived workpads.")).toBeInTheDocument();
       openMenu("Actions for “Integration”"); choose("Archive");
       const section = screen.getByRole("region", { name: "Archived workpads" });
       expect(await within(section).findByRole("button", { name: "Integration" })).toBeInTheDocument();
@@ -1761,7 +1772,7 @@ describe("WorkpadsPanel", () => {
       const section = screen.getByRole("region", { name: "Archived workpads" });
       expect(await within(section).findByText("Couldn't load archived workpads.")).toBeInTheDocument();
       expect(within(section).getByRole("alert")).toHaveTextContent("Archive unavailable");
-      expect(within(section).queryByText("No archived workpads")).not.toBeInTheDocument();
+      expect(within(section).queryByText("No archived workpads.")).not.toBeInTheDocument();
       fireEvent.click(within(section).getByRole("button", { name: "Try again" }));
       expect(await within(section).findByRole("button", { name: "Old notes" })).toBeInTheDocument();
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -1874,7 +1885,7 @@ describe("WorkpadsPanel", () => {
       const lists = api.listWorkpads.mock.calls.length;
       const counts = api.getWorkpadCounts.mock.calls.length;
       openMenu("Actions for “Integration”"); choose("Delete…");
-      const confirm = within(deleteDialog()).getByRole("button", { name: "Delete" });
+      const confirm = within(deleteDialog()).getByRole("button", { name: "Delete workpad" });
       expect(confirm).toHaveAttribute("data-variant", "destructive");
       fireEvent.click(confirm);
       expect(api.deleteWorkpad).toHaveBeenCalledExactlyOnceWith("pad");
@@ -1900,7 +1911,7 @@ describe("WorkpadsPanel", () => {
       await openRow();
       await screen.findByRole("button", { name: "Edit workpad" });
       documentMenu(); choose("Delete…");
-      fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete" }));
+      fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete workpad" }));
       await finish();
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(api.deleteWorkpad).toHaveBeenCalledExactlyOnceWith("pad");
@@ -1921,7 +1932,7 @@ describe("WorkpadsPanel", () => {
       fireEvent.click(heading());
       await screen.findByRole("button", { name: "Old notes" });
       openMenu("Actions for “Old notes”"); choose("Delete…");
-      fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete" }));
+      fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete workpad" }));
       await finish();
       await waitFor(() => expect(heading()).toHaveTextContent(/^Archived1$/));
       expect(api.deleteWorkpad).toHaveBeenCalledExactlyOnceWith("old");
@@ -1935,7 +1946,7 @@ describe("WorkpadsPanel", () => {
       await openRow();
       await screen.findByRole("button", { name: "Edit workpad" });
       documentMenu(); choose("Delete…");
-      await act(async () => { fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete" })); });
+      await act(async () => { fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete workpad" })); });
       expect(within(deleteDialog()).getByRole("alert")).toHaveTextContent("The workpad was not found.");
       expect(api.deleteWorkpad).toHaveBeenCalledOnce();
       fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Cancel" }));

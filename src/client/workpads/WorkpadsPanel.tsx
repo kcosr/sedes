@@ -796,12 +796,13 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     onArchive={() => archiveWorkpad(item, !item.archivedAt)} onDelete={() => setDeleteTarget(item)} />;
   const emptyState = (() => {
     if (loading) return <EmptyState variant="inline" className="workpads-empty" title="Loading…" />;
-    if (!scopeValid) return <EmptyState variant="inline" className="workpads-empty" title="Open a thread to see its workpads" />;
+    if (!scopeValid) return <EmptyState variant="inline" className="workpads-empty" title="Open a thread to see its workpads." />;
     if (listLoadFailed) return <EmptyState variant="inline" className="workpads-empty" role="alert" title="Couldn't load workpads."
       description={refreshError} action={<Button variant="ghost" size="sm" onClick={() => setListAttempt(value => value + 1)}>Try again</Button>} />;
-    if (trimmedQuery) return <EmptyState variant="inline" className="workpads-empty" title={`No workpads match “${trimmedQuery}”`} />;
+    if (trimmedQuery) return <EmptyState variant="inline" className="workpads-empty" title={`No workpads match “${trimmedQuery}”.`}
+      action={<Button variant="ghost" size="sm" onClick={closeSearch}>Clear search</Button>} />;
     if ((archivedTotal ?? 0) > 0) return <EmptyState variant="inline" className="workpads-empty" title="Nothing active." description="Every workpad here is archived." />;
-    return <EmptyState variant="inline" className="workpads-empty" title={`No ${SCOPE_NOUN[view]} yet`} description="Name one above, or ask an agent to start one." />;
+    return <EmptyState variant="inline" className="workpads-empty" title={`No ${SCOPE_NOUN[view]} yet.`} description="Name one above, or ask an agent to start one." />;
   })();
   const archivedSection = archivedShown && <section className="workpads-section" aria-label="Archived workpads">
     <ListHeading expanded={archivedOpen} onToggle={() => setArchivedOpen(value => !value)}
@@ -813,7 +814,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
         title="Couldn't load archived workpads." description={archivedError}
         action={<Button variant="ghost" size="sm" onClick={() => setArchivedAttempt(value => value + 1)}>Try again</Button>} />
       : <EmptyState variant="inline" className="workpads-empty"
-        title={archivedLoading ? "Loading…" : trimmedQuery ? `No archived workpads match “${trimmedQuery}”` : "No archived workpads"} />}
+        title={archivedLoading ? "Loading…" : trimmedQuery ? `No archived workpads match “${trimmedQuery}”.` : "No archived workpads."} />}
       {archivedCursor && <Button variant="ghost" size="sm" className="workpads-more" disabled={busy} onClick={() => { void run(() => refreshArchived(archivedCursor)); }}>Load more</Button>}
     </>}
   </section>;
@@ -1079,7 +1080,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       tone="danger"
       title="Delete workpad?"
       description={`“${deleteTarget?.title ?? ""}” will be permanently deleted, with its content, revision history, and any draft. This can’t be undone.`}
-      confirmLabel="Delete"
+      confirmLabel="Delete workpad"
       pendingLabel="Deleting…"
       // The opener's row or toolbar is gone: focus the next row, else the add row.
       fallbackFocus={() => [...rootRef.current?.querySelectorAll<HTMLElement>("[data-workpad-id]") ?? []]

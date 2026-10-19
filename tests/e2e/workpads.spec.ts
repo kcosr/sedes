@@ -451,7 +451,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await searchToggle.click();
   const searchInput = panel.getByRole("textbox", { name: "Search workpads", exact: true });
   await searchInput.fill("Unmatched workpad query");
-  await expect(panel.getByText("No workpads match “Unmatched workpad query”", { exact: true })).toBeVisible();
+  await expect(panel.getByText("No workpads match “Unmatched workpad query”.", { exact: true })).toBeVisible();
   await searchInput.press("Escape");
   await expect(searchInput).toHaveValue("");
   await expect(searchInput).toBeFocused();
@@ -523,7 +523,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect(deleteDialog).toHaveAccessibleDescription("“Shared team notes” will be permanently deleted, with its content, revision history, and any draft. This can’t be undone.");
   await capture(page, testInfo, "workpads-delete-confirm.png");
   const deletedGlobal = deletion();
-  await deleteDialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await deleteDialog.getByRole("button", { name: "Delete workpad", exact: true }).click();
   await deletedGlobal;
   await expect(deleteDialog).toBeHidden();
   await expect(segment("All")).toHaveText("All2");
@@ -535,7 +535,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await panel.getByRole("button", { name: "Workpad actions", exact: true }).click();
   await page.getByRole("menuitem", { name: "Delete…", exact: true }).click();
   const deletedThreadPad = deletion();
-  await deleteDialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await deleteDialog.getByRole("button", { name: "Delete workpad", exact: true }).click();
   const deletedId = new URL((await deletedThreadPad).url()).pathname.split("/").at(-1)!;
   await expect(deleteDialog).toBeHidden();
   await expect(panel.locator(".workpads-doc-toolbar")).toHaveCount(0);

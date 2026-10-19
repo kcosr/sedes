@@ -107,6 +107,11 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- A terminal's ✕ in the terminal menu names what its confirmation does
+  (**End**, **Disconnect and remove**, or **Remove** for an exited terminal).
+  Workpads confirms deletion with **Delete workpad**, and a search with no
+  match offers **Clear search**.
+
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See
   [parking](docs/user/organize-work.md#park-quiet-work).

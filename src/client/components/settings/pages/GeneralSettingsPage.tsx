@@ -27,6 +27,7 @@ import {
 import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import { NativeSelect } from "@client/components/ui/native-select";
+import { Tag } from "@client/components/ui/tag";
 import { SettingsField, SwitchField } from "../SettingsField.js";
 import { SettingsPage } from "../SettingsPage.js";
 import { SettingsSection } from "../SettingsSection.js";
@@ -66,7 +67,7 @@ export function GeneralSettingsPage({
   return (
     <SettingsPage
       title="General"
-      description="How Sedes behaves in this browser. Changes apply as you make them."
+      description="Preferences for this browser, unless a setting names another scope. Changes apply as you make them."
     >
       {applicationStore ? <DefaultThreadSetting store={applicationStore} /> : null}
       <SettingsSection title="Workspace" card>
@@ -175,7 +176,7 @@ function OpenAIComposerSkillPreference({
     <>
       <SwitchField
         id="setting-show-openai-composer-skills"
-        label="Show OpenAI skills in composer"
+        label={<>Show OpenAI skills in composer <Tag>Account</Tag></>}
         description="Show OpenAI Templates, Sites, and Visualize skills across every Codex connection for this account."
         checked={preferences?.showOpenAIComposerSkills ?? false}
         disabled={!preferences || saving}
