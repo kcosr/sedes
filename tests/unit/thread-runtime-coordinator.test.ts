@@ -904,6 +904,11 @@ describe("ThreadRuntimeCoordinator", () => {
     await expect(
       coordinator.acquire(scope, "thread-reset-poison"),
     ).rejects.toThrow("close failed");
+    const commit = vi.fn();
+    await expect(
+      coordinator.commitWithRuntimesObserved(scope, ["thread-reset-poison"], commit),
+    ).rejects.toThrow("close failed");
+    expect(commit).not.toHaveBeenCalled();
     expect(replacement.close).not.toHaveBeenCalled();
     acquired.release();
     await expect(coordinator.close()).rejects.toThrow(
@@ -1972,6 +1977,48 @@ describe("ThreadRuntimeCoordinator", () => {
     expect(peekSnapshotState).toHaveBeenCalledOnce();
     expect(hub.publish).not.toHaveBeenCalled();
     runtime.release();
+    await coordinator.close();
+  });
+
+  it("forgets a runtime whose actor closed during establishment so later work can proceed", async () => {
+    const threadId = "thread-closed-during-establishment";
+    const closedDuringEstablishment = resettableActor({ generation: "generation-1", canEvict: true });
+    const replacement = resettableActor({ generation: "generation-2", canEvict: true });
+    // Fail fast instead of starving the event loop if acquire re-reads a
+    // settled eviction for the closed runtime forever.
+    let staleReads = 0;
+    Object.defineProperty(closedDuringEstablishment.actor, "readOnly", {
+      get() {
+        staleReads += 1;
+        if (staleReads > 10_000) throw new Error("stale_runtime_entry_hot_loop");
+        return false;
+      },
+    });
+    const bridgeReady = deferred<void>();
+    const { coordinator, actorRelease, replacementPublications } = resetCoordinator(
+      [closedDuringEstablishment.actor, replacement.actor],
+      60_000,
+      runtimeTarget,
+      new ScopedThreadEventHubRegistry(),
+      bridgeReady.promise,
+    );
+    const opening = coordinator.acquire(scope, threadId);
+    void opening.catch(() => undefined);
+    await vi.waitFor(() => expect(replacementPublications).toHaveLength(1));
+    // The shared actor closes while the bridge still composes its first
+    // snapshot; the snapshot then publishes and readiness resolves.
+    await closedDuringEstablishment.actor.close();
+    bridgeReady.resolve();
+    await expect(opening).rejects.toThrow("conversation_actor_closed");
+    expect(actorRelease[0]).toHaveBeenCalledOnce();
+
+    const reopened = await coordinator.acquire(scope, threadId);
+    expect(reopened.actor).toBe(replacement.actor);
+    reopened.release();
+    await expect(coordinator.commitWithRuntimesObserved(scope, [threadId], (runtimes) => runtimes.get(threadId)))
+      .resolves.toMatchObject({ kind: "loaded" });
+    await expect(coordinator.runWithRuntimeRetired(scope, threadId, async () => "retired")).resolves.toBe("retired");
+    expect(replacement.closeIfIdle).toHaveBeenCalledOnce();
     await coordinator.close();
   });
 

@@ -374,7 +374,11 @@ export class ThreadRuntimeCoordinator {
         ).then(async (runtime) => {
           created.runtime = runtime;
           if (runtime.actor.closed) {
-            created.eviction ??= this.#dispose(runtime);
+            // The actor's close notification arrived before this runtime was
+            // published on the entry, so this is the only eviction for it.
+            created.eviction ??= this.#dispose(runtime).finally(() => {
+              if (this.#entries.get(key) === created) this.#entries.delete(key);
+            });
             await created.eviction;
             throw new Error("conversation_actor_closed");
           }
@@ -431,7 +435,7 @@ export class ThreadRuntimeCoordinator {
         });
       }
       if (entry.eviction) {
-        await entry.eviction;
+        await this.#settleEviction(key, entry, entry.eviction);
         continue;
       }
       if (entry.evictionTimer) {
@@ -1123,9 +1127,28 @@ export class ThreadRuntimeCoordinator {
         }
         continue;
       }
-      const evictions = keys.flatMap((key) => this.#entries.get(key)?.eviction ?? []);
+      const evictions = keys.flatMap((key) => {
+        const entry = this.#entries.get(key);
+        return entry?.eviction ? [{ key, entry, eviction: entry.eviction }] : [];
+      });
       if (evictions.length > 0) {
-        await Promise.allSettled(evictions);
+        const settled = await Promise.allSettled(
+          evictions.map(({ key, entry, eviction }) =>
+            this.#settleEviction(key, entry, eviction),
+          ),
+        );
+        for (const [index, result] of settled.entries()) {
+          // A failed eviction left installed fences its entry; re-reading it
+          // would only observe the same rejection again.
+          const { key, entry, eviction } = evictions[index]!;
+          if (
+            result.status === "rejected" &&
+            this.#entries.get(key) === entry &&
+            entry.eviction === eviction
+          ) {
+            throw result.reason;
+          }
+        }
         continue;
       }
       return commit(this.observeRuntimes(scope, applicationThreadIds));
@@ -1477,7 +1500,6 @@ export class ThreadRuntimeCoordinator {
         unsubscribeSubscriberCount,
         unsubscribeActorClosed,
       };
-      if (acquired.actor.closed) this.#runtimeActorClosed(key, runtime);
       return runtime;
     } catch (error) {
       const failures: unknown[] = [error];
@@ -1536,6 +1558,23 @@ export class ThreadRuntimeCoordinator {
     const entry = this.#entries.get(key);
     if (!entry || entry.eviction || entry.runtime?.hub !== hub) return;
     this.#reconcileEviction(key, entry);
+  }
+
+  /**
+   * Waits for an installed eviction. Every successful eviction removes its
+   * entry, so one still installed after it settles is stale: drop it instead
+   * of letting waiters re-await the settled promise in an endless microtask
+   * loop that starves timers and I/O.
+   */
+  async #settleEviction(
+    key: string,
+    entry: RuntimeEntry,
+    eviction: Promise<void>,
+  ): Promise<void> {
+    await eviction;
+    if (this.#entries.get(key) === entry && entry.eviction === eviction) {
+      this.#entries.delete(key);
+    }
   }
 
   #runtimeActorClosed(key: string, runtime: EstablishedRuntime): void {
@@ -1724,7 +1763,7 @@ export class ThreadRuntimeCoordinator {
       const entry = this.#entries.get(key);
       if (!entry) return;
       if (entry.eviction) {
-        await entry.eviction;
+        await this.#settleEviction(key, entry, entry.eviction);
         continue;
       }
       if (entry.evictionTimer) clearTimeout(entry.evictionTimer);
