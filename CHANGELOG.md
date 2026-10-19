@@ -110,6 +110,10 @@ User-facing changes are collected here before release. See the
 - Thread actions and recovery checks no longer slow down as mutation history
   grows: database migration **153** indexes mutation receipts by thread.
 
+- The server sends the web client compressed (Brotli or gzip) and lets browsers
+  cache content-hashed assets for a year; `index.html` is still revalidated on
+  every load. The initial download drops from about 3.0 MB to 0.7 MB.
+
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See
   [parking](docs/user/organize-work.md#park-quiet-work).

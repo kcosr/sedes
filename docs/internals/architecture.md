@@ -575,7 +575,11 @@ security headers, and bounded bodies protect expected browser flows; they are
 independent of client authentication. By default, production composition installs paired
 client admission before protected management routes and upgrades. Public
 frontend assets and the downloadable connector enable enrollment; they confer
-no application authority. Same-origin browsers use HttpOnly cookies, while
+no application authority. Built client files are sent with Brotli or gzip when
+the browser accepts it (compressed once per file version in a bounded process
+cache; API and SSE responses are never compressed). Content-hashed `assets/`
+files are cached as immutable for a year; `index.html` and unhashed files are
+revalidated on every use. Same-origin browsers use HttpOnly cookies, while
 packaged clients use per-profile bearer credentials held in native encrypted
 storage. A server-account CLI issues five-minute single-use codes and manages
 90-day revocable credentials in a separate, installation-owned
