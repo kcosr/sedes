@@ -113,10 +113,12 @@ User-facing changes are collected here before release. See the
   Browse/Changes switch, the Usage views, and Usage's chart choices use the
   shared segmented control and tabs, with arrow-key navigation.
 
-- The question inbox and Terminals use the shared notices: the inbox's
-  **Try again** is a real button, an empty Terminals panel is a centred empty
-  state, and terminal notices are tinted by severity with their recovery
-  buttons beside the message instead of spanning the panel.
+- The question inbox, Terminals, and Changes use the shared notices: the
+  inbox's **Try again** is a real button, an empty Terminals panel is a
+  centred empty state, terminal notices are tinted by severity with their
+  recovery buttons beside the message, Changes errors are red, a stale diff
+  stays readable under a warning with **Refresh**, and **Configure
+  comparison** is offered whenever nothing is compared.
 
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See

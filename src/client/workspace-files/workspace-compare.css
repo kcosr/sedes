@@ -88,19 +88,6 @@
 .workspace-compare input {
   font: inherit;
 }
-.workspace-compare-state button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 32px;
-  padding: 0 11px;
-  border: 1px solid var(--primary);
-  border-radius: var(--radius-ctl);
-  color: var(--primary-foreground);
-  background: var(--primary);
-  cursor: pointer;
-}
 .workspace-compare button:disabled {
   opacity: 0.48;
   cursor: default;
@@ -189,19 +176,34 @@
   --diffs-line-height: 1.65;
   --diffs-font-family: var(--font-mono);
 }
-.workspace-compare-state {
-  display: grid;
-  min-height: 180px;
-  flex: 1;
-  place-content: center;
-  justify-items: center;
-  gap: 10px;
-  padding: 24px;
-  color: var(--muted-foreground);
-  text-align: center;
+/* Body states: a compact callout above the diff, and the empty state that
+   fills the body when there is no diff to show. */
+.workspace-compare-callout {
+  flex: none;
+  margin: var(--space-2) var(--space-2) 0;
 }
-.workspace-compare-state button {
-  min-height: 30px;
+.workspace-compare-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 0;
+  padding: var(--space-4);
+  overflow: auto;
+}
+.workspace-compare-loading {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+}
+.workspace-compare-loading svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 .workspace-compare-spin {
   animation: workspace-compare-spin 0.85s linear infinite;

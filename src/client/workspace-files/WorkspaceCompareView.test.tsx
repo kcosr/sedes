@@ -174,6 +174,79 @@ describe("WorkspaceCompareView", () => {
     vi.unstubAllGlobals();
   });
 
+  it("offers Configure comparison from the empty state before a comparison exists", async () => {
+    const dataSource = createDataSource(1);
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const empty = (
+      await screen.findByText("Choose sources to compare workspace changes.")
+    ).closest("[data-slot=empty-state]") as HTMLElement;
+    expect(empty).toHaveAttribute("data-variant", "panel");
+    fireEvent.click(
+      within(empty).getByRole("button", { name: "Configure comparison" }),
+    );
+    expect(await screen.findByRole("button", { name: "Compare" })).toBeVisible();
+  });
+
+  it("shows a comparison with no changed files as an empty state with Refresh", async () => {
+    const dataSource = createDataSource(0);
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const compare = await configureComparison();
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    const empty = (
+      await screen.findByText("No changed files in this comparison.")
+    ).closest("[data-slot=empty-state]") as HTMLElement;
+    expect(screen.queryByRole("status")).toBeNull();
+    fireEvent.click(within(empty).getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledTimes(2),
+    );
+  });
+
+  it("keeps a stale diff on screen under a compact warning with Refresh", async () => {
+    const dataSource = createDataSource(1, {
+      loadPatch: async () => ({
+        status: "stale",
+        currentFingerprint: "fingerprint_987654321",
+      }) as WorkspaceDiffPatchResult,
+    });
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const compare = await configureComparison();
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    const callout = (await screen.findByText(/comparison is stale/)).closest(
+      "[data-slot=callout]",
+    ) as HTMLElement;
+    expect(callout).toHaveAttribute("data-tone", "warning");
+    expect(callout).toHaveAttribute("role", "status");
+    // The diff stays below the notice instead of sharing the body with it.
+    expect(screen.getByTestId("code-view")).toBeInTheDocument();
+    expect(screen.queryByText("Choose sources to compare workspace changes.")).toBeNull();
+    fireEvent.click(within(callout).getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledTimes(2),
+    );
+  });
+
+  it("reports a failed comparison as a danger alert over the empty state", async () => {
+    const dataSource = createDataSource(1);
+    vi.mocked(dataSource.createComparison).mockResolvedValueOnce({
+      status: "unavailable",
+      diagnosticCode: "git_failed",
+    } as never);
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const compare = await configureComparison();
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveAttribute("data-slot", "callout");
+    expect(alert).toHaveAttribute("data-tone", "danger");
+    expect(alert).toHaveTextContent("Could not create comparison (git_failed).");
+    expect(
+      screen.getByRole("button", { name: "Configure comparison" }),
+    ).toBeVisible();
+  });
+
   it("creates a comparison from catalogued opaque selections and lazily loads patches", async () => {
     const dataSource = createDataSource(10);
     render(
