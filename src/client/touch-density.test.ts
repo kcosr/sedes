@@ -130,6 +130,9 @@ describe("touch targets under touch density", () => {
     const checklist = ".workpad-document .markdown-checklist-control::before";
     expect(touch(checklist, "inset-block")).toBe("0");
     expect(touch(checklist, "inset-inline")).toBe(HIT_AREA);
+    // Under the checkbox, so the box itself still takes its taps.
+    expect(touch(checklist, "z-index")).toBe("-1");
+    expect(touch(".workpad-document .markdown-checklist-control", "isolation")).toBe("isolate");
     // Wrapped chip rows leave room for both rows' areas.
     expect(touch(".view-filters", "row-gap")).toBe("calc(var(--control-touch) - var(--control-md))");
     expect(touch(".usage-filter-chips", "row-gap")).toBe("var(--space-4)");
