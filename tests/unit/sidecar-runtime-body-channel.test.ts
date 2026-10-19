@@ -9,6 +9,7 @@ import {
 } from "../../src/internal/sidecar-protocol/index.js";
 import { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
 import { sidecarRuntimeBodyOffer } from "../../src/server/sidecar/runtime-body-channel.js";
+import { MAXIMUM_PROVIDER_FRAME_BYTES } from "../../src/server/provider-protocol/transport/framed-message-limits.js";
 
 const capability = { capabilityId: "runtime_bodies", majorVersion: 1 };
 const terminalSchema = z.strictObject({ size: z.number().int().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/u) });
@@ -96,28 +97,42 @@ describe("sidecar runtime bodies", () => {
     }
   });
 
-  it("retires an expired body whose sender stops without a terminal", async () => {
+  it("frees an expired body's reservation at once and drains its sender after any idle period", async () => {
     const fixture = await bodyFixture();
     const id = "12345678-1234-4234-8234-123456789ac0";
-    const bytes = Buffer.from(JSON.stringify({ data: "z".repeat(4 * 1024) }));
-    const offer = { id, size: bytes.byteLength, sha256: sha256(bytes) };
+    const largest = { size: MAXIMUM_PROVIDER_FRAME_BYTES + 1024 * 1024, sha256: "c".repeat(64) };
+    const offerId = (index: number) => `12345678-1234-4234-8234-${index.toString().padStart(12, "0")}`;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      await fixture.sedes.call(sidecarRuntimeBodyOffer, offer);
+      await fixture.sedes.call(sidecarRuntimeBodyOffer, { id, ...largest });
       const decoded = fixture.right.decodeBody({ type: "stream", id });
       const assertion = expect(decoded).rejects.toThrow("sidecar_runtime_body_expired");
       const stream = fixture.sedes.openOutgoingStream({ ...capability, streamId: id, initialCreditBytes: 1024 * 1024 });
-      await stream.send("stdout", bytes.subarray(0, 1024));
-      await vi.advanceTimersByTimeAsync(60_000);
-      await assertion;
-      // Frames after expiry keep the discarded transfer alive.
-      await stream.send("stdout", bytes.subarray(1024, 2048));
-      await vi.advanceTimersByTimeAsync(45_000);
-      await expect(fixture.sedes.call(sidecarRuntimeBodyOffer, offer)).rejects.toThrow("sidecar_operation_failed");
+      await stream.send("stdout", Buffer.alloc(1024, 0x7b));
+      await vi.advanceTimersByTimeAsync(30_000);
+      // Three more of the largest bodies fill the reservation.
+      for (const index of [1, 2, 3]) {
+        await fixture.sedes.call(sidecarRuntimeBodyOffer, { id: offerId(index), ...largest });
+      }
+      await expect(fixture.sedes.call(sidecarRuntimeBodyOffer, { id: offerId(4), ...largest })).rejects.toThrow("sidecar_operation_failed");
 
-      // The sender never finishes: its reservation and stream are released.
-      await vi.advanceTimersByTimeAsync(15_000);
-      await expect(fixture.sedes.call(sidecarRuntimeBodyOffer, offer)).resolves.toEqual({ accepted: true });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await assertion;
+      // The expired body holds no reservation or capacity, while its stream
+      // id stays owned by the sender that may still finish it.
+      await expect(fixture.sedes.call(sidecarRuntimeBodyOffer, { id: offerId(4), ...largest })).resolves.toEqual({ accepted: true });
+      await expect(fixture.sedes.call(sidecarRuntimeBodyOffer, { id, ...largest })).rejects.toThrow("sidecar_operation_failed");
+
+      // However long the sender stalls, its remaining frames are drained,
+      // beyond the original credit window, without closing the session.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      for (let sent = 0; sent < 2 * 1024 * 1024; sent += 64 * 1024) {
+        await stream.send("stdout", Buffer.alloc(64 * 1024, 0x20));
+      }
+      await stream.terminal(largest, terminalSchema);
+      const pingId = "12345678-1234-4234-8234-123456789ac1";
+      await expect(fixture.sedes.call(controlPingOperation, { pingId })).resolves.toEqual({ pingId });
+      await expect(fixture.right.decodeBody({ type: "stream", id })).rejects.toThrow("sidecar_runtime_body_unknown");
     } finally {
       vi.useRealTimers();
       await fixture.close();

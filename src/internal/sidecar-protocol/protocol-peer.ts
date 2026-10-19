@@ -83,6 +83,8 @@ type IncomingStream = {
   readonly terminalSchema: z.ZodType<unknown>;
   readonly onData: (record: SidecarStreamDataRecord) => void;
   readonly onTerminal: (payload: unknown) => void;
+  /** Initial credit; a retired stream refills it so its producer can finish. */
+  readonly creditWindow: number;
   expectedSequence: number;
   remainingCredit: number;
 };
@@ -135,6 +137,10 @@ export class SidecarProtocolPeer {
   readonly #cancelledOutbound = new Set<string>();
   readonly #events = new Map<string, Set<EventRegistration>>();
   readonly #incomingStreams = new Map<string, IncomingStream>();
+  // Incoming streams their consumer retired before the producer finished,
+  // oldest first. Their remaining frames are validated, credited back so the
+  // producer can finish, and dropped; the terminal removes the entry.
+  readonly #retiredIncomingStreams = new Map<string, IncomingStream>();
   readonly #outgoingStreams = new Map<string, OutgoingStream>();
   readonly #terminalOutgoingStreams = new Set<string>();
   #localCapabilities: ReadonlySet<string> = new Set();
@@ -399,10 +405,18 @@ export class SidecarProtocolPeer {
   }): {
     readonly addCredit: (bytes: number) => Promise<void>;
     readonly unregister: () => void;
+    /**
+     * Stops delivering this stream while letting its producer finish: later
+     * frames are credited and dropped instead of being protocol-fatal.
+     */
+    readonly retire: () => void;
   } {
     validateStreamId(input.streamId);
     validateStreamCredit(input.initialCreditBytes);
-    if (this.#incomingStreams.has(input.streamId)) {
+    if (
+      this.#incomingStreams.has(input.streamId) ||
+      this.#retiredIncomingStreams.has(input.streamId)
+    ) {
       throw new Error("sidecar_stream_already_registered");
     }
     let terminalReceived = false;
@@ -415,6 +429,7 @@ export class SidecarProtocolPeer {
         terminalReceived = true;
         input.onTerminal(payload as Payload);
       },
+      creditWindow: input.initialCreditBytes,
       expectedSequence: 0,
       remainingCredit: input.initialCreditBytes,
     };
@@ -428,29 +443,53 @@ export class SidecarProtocolPeer {
         if (this.#incomingStreams.get(input.streamId) !== stream) {
           throw new Error("sidecar_stream_not_registered");
         }
-        if (stream.remainingCredit + bytes > Number.MAX_SAFE_INTEGER) {
-          throw new Error("sidecar_stream_credit_overflow");
-        }
-        await this.#transport.send(
-          encodeSidecarEnvelope({
-            wireVersion: SIDECAR_WIRE_VERSION,
-            sessionNonce: this.#sessionNonce,
-            type: "stream_credit",
-            origin: this.#role,
-            streamId: input.streamId,
-            bytes,
-          }),
-          { lane: "control" },
-        );
-        stream.remainingCredit += bytes;
-        this.#markOutboundActivity();
+        await this.#sendStreamCredit(input.streamId, stream, bytes);
       },
       unregister: () => {
         if (this.#incomingStreams.get(input.streamId) === stream) {
           this.#incomingStreams.delete(input.streamId);
         }
       },
+      retire: () => {
+        if (this.#incomingStreams.get(input.streamId) !== stream) return;
+        this.#incomingStreams.delete(input.streamId);
+        this.#retiredIncomingStreams.set(input.streamId, stream);
+        const maximum = this.#limits.maximumInboundRequests * 2;
+        for (const streamId of this.#retiredIncomingStreams.keys()) {
+          if (this.#retiredIncomingStreams.size <= maximum) break;
+          this.#retiredIncomingStreams.delete(streamId);
+        }
+        // A producer waiting for credit the consumer withheld must not stall.
+        const deficit = stream.creditWindow - stream.remainingCredit;
+        if (deficit > 0 && !this.#closed) {
+          void this.#sendStreamCredit(input.streamId, stream, deficit)
+            .catch(() => undefined);
+        }
+      },
     });
+  }
+
+  async #sendStreamCredit(
+    streamId: string,
+    stream: IncomingStream,
+    bytes: number,
+  ): Promise<void> {
+    if (stream.remainingCredit + bytes > Number.MAX_SAFE_INTEGER) {
+      throw new Error("sidecar_stream_credit_overflow");
+    }
+    await this.#transport.send(
+      encodeSidecarEnvelope({
+        wireVersion: SIDECAR_WIRE_VERSION,
+        sessionNonce: this.#sessionNonce,
+        type: "stream_credit",
+        origin: this.#role,
+        streamId,
+        bytes,
+      }),
+      { lane: "control" },
+    );
+    stream.remainingCredit += bytes;
+    this.#markOutboundActivity();
   }
 
   openOutgoingStream(input: {
@@ -881,7 +920,8 @@ export class SidecarProtocolPeer {
     if (frame.origin !== this.#remoteRole) {
       throw new Error("sidecar_protocol_stream_origin_invalid");
     }
-    const stream = this.#incomingStreams.get(frame.streamId);
+    const retired = this.#retiredIncomingStreams.get(frame.streamId);
+    const stream = this.#incomingStreams.get(frame.streamId) ?? retired;
     if (!stream) throw new Error("sidecar_protocol_stream_unknown");
     if (
       frame.sequence !== stream.expectedSequence ||
@@ -891,6 +931,14 @@ export class SidecarProtocolPeer {
     }
     stream.expectedSequence += frame.bytes.byteLength;
     stream.remainingCredit -= frame.bytes.byteLength;
+    if (retired) {
+      void this.#sendStreamCredit(
+        frame.streamId,
+        retired,
+        frame.bytes.byteLength,
+      ).catch(() => undefined);
+      return;
+    }
     stream.onData({
       sequence: frame.sequence,
       channel: frame.channel,
@@ -923,7 +971,8 @@ export class SidecarProtocolPeer {
     if (envelope.origin !== this.#remoteRole) {
       throw new Error("sidecar_protocol_stream_origin_invalid");
     }
-    const stream = this.#incomingStreams.get(envelope.streamId);
+    const retired = this.#retiredIncomingStreams.get(envelope.streamId);
+    const stream = this.#incomingStreams.get(envelope.streamId) ?? retired;
     if (!stream) throw new Error("sidecar_protocol_stream_unknown");
     if (
       envelope.sequence !== stream.expectedSequence ||
@@ -937,6 +986,10 @@ export class SidecarProtocolPeer {
       throw new Error("sidecar_protocol_stream_terminal_payload_invalid", {
         cause: parsed.error,
       });
+    }
+    if (retired) {
+      this.#retiredIncomingStreams.delete(envelope.streamId);
+      return;
     }
     this.#incomingStreams.delete(envelope.streamId);
     stream.onTerminal(parsed.data);
@@ -1091,6 +1144,7 @@ export class SidecarProtocolPeer {
     }
     this.#inbound.clear();
     this.#incomingStreams.clear();
+    this.#retiredIncomingStreams.clear();
     for (const stream of this.#outgoingStreams.values()) {
       stream.terminalRequested = true;
       stream.terminal = true;

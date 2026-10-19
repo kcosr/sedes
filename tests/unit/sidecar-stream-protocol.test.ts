@@ -342,6 +342,40 @@ describe("sidecar retained streams", () => {
     } finally { await fixture.sedes.close("done"); }
   });
 
+  it("drains a retired stream's remaining frames with credit until its terminal", async () => {
+    const fixture = await streamFixture();
+    const streamId = randomUUID();
+    const data = vi.fn();
+    const terminal = vi.fn();
+    const registration = {
+      streamId, ...capability, initialCreditBytes: 2,
+      terminalSchema: workspaceToolsShellTerminalSchema,
+      onData: data, onTerminal: terminal,
+    };
+    const incoming = fixture.sedes.registerIncomingStream(registration);
+    const producer = fixture.sidecar.openOutgoingStream({ streamId, ...capability, initialCreditBytes: 2 });
+    try {
+      await producer.send("data", Buffer.from("a"));
+      await vi.waitFor(() => expect(data).toHaveBeenCalledOnce());
+      // The consumer withheld credit for "a"; retiring refills the window.
+      incoming.retire();
+      expect(() => fixture.sedes.registerIncomingStream(registration)).toThrow("sidecar_stream_already_registered");
+      await expect(incoming.addCredit(1)).rejects.toThrow("sidecar_stream_not_registered");
+      for (let index = 0; index < 8; index += 1) {
+        await producer.send("data", Buffer.from("bc"));
+      }
+      await producer.terminal({ outcome: "exited", exitCode: 0, signal: null,
+        stdoutBytes: 17, stderrBytes: 0, emittedBytes: 17, omittedBytes: 0, truncated: false }, workspaceToolsShellTerminalSchema);
+      await expect(fixture.sedes.call(workspaceContextReadOperation, {
+        admissionId: randomUUID(), declaredPath: "/workspace", policyRootPath: "/workspace",
+      })).resolves.toMatchObject({ fingerprint: "a".repeat(64) });
+      expect(data).toHaveBeenCalledOnce();
+      expect(terminal).not.toHaveBeenCalled();
+      // The terminal ended the drain; the id can be registered again.
+      expect(() => fixture.sedes.registerIncomingStream(registration)).not.toThrow();
+    } finally { await fixture.sedes.close("done"); }
+  });
+
   it("keeps a replacement registration when a completed stream's handle is used again", async () => {
     const fixture = await streamFixture();
     const streamId = randomUUID();

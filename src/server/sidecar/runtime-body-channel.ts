@@ -26,18 +26,17 @@ export const sidecarRuntimeBodyOffer: SidecarOperationDefinition<z.infer<typeof 
 };
 // A body expires after this long without progress, or this long after its
 // terminal without being decoded. A slow transfer that keeps progressing
-// never expires. An expired transfer is retired after another idle period.
+// never expires. An expired body frees its reservation at once; its stream is
+// retired, so frames its sender still sends are drained, never fatal.
 const BODY_IDLE_MILLISECONDS = 60_000;
 type Incoming = {
   readonly size: number;
   readonly value: Promise<unknown>;
   reject(error: Error): void;
-  readonly unregister: () => void;
+  readonly retire: () => void;
+  /** Received bytes, dropped on release: a retired stream outlives its body. */
+  readonly chunks: Buffer[];
   timer: ReturnType<typeof setTimeout> | undefined;
-  terminal: boolean;
-  /** Expired mid-transfer: remaining data is discarded until the terminal or
-   * another idle period, and the body keeps its reservation until then. */
-  discarding: boolean;
 };
 
 /** Ephemeral, credit-controlled body transfer shared by both ends of the
@@ -60,22 +59,9 @@ export class SidecarRuntimeBodyChannel {
       let reject!: (error: Error) => void;
       const value = new Promise<unknown>((yes, no) => { resolve = yes; reject = no; });
       void value.catch(() => undefined);
-      const expire = () => {
-        if (incoming.terminal || incoming.discarding) {
-          // Undecoded after its terminal, or abandoned by its sender.
-          this.#release(input.id, new Error("sidecar_runtime_body_expired"), true);
-          return;
-        }
-        // The sender may still be streaming. Fail only this body and keep the
-        // stream registered so its remaining frames are not protocol-fatal.
-        incoming.discarding = true;
-        chunks.splice(0);
-        reject(new Error("sidecar_runtime_body_expired"));
-        arm();
-      };
       const arm = () => {
         clearTimeout(incoming.timer);
-        incoming.timer = setTimeout(expire, BODY_IDLE_MILLISECONDS);
+        incoming.timer = setTimeout(() => this.#release(input.id, new Error("sidecar_runtime_body_expired")), BODY_IDLE_MILLISECONDS);
         incoming.timer.unref();
       };
       const stream = peer.registerIncomingStream({
@@ -84,19 +70,12 @@ export class SidecarRuntimeBodyChannel {
         onData: record => {
           bytes += record.bytes.byteLength;
           if (bytes > input.size || record.channel !== "stdout") throw new Error("sidecar_runtime_body_size_invalid");
-          if (!incoming.discarding) {
-            const chunk = Buffer.from(record.bytes);
-            chunks.push(chunk); hash.update(chunk);
-          }
+          const chunk = Buffer.from(record.bytes);
+          chunks.push(chunk); hash.update(chunk);
           arm();
-          void stream.addCredit(record.bytes.byteLength).catch(error => reject(error instanceof Error ? error : new Error("sidecar_runtime_body_credit_failed")));
+          void stream.addCredit(chunk.byteLength).catch(error => reject(error instanceof Error ? error : new Error("sidecar_runtime_body_credit_failed")));
         },
         onTerminal: terminal => {
-          incoming.terminal = true;
-          if (incoming.discarding) {
-            this.#release(input.id, undefined, true);
-            return;
-          }
           arm();
           if (terminal.size !== input.size || bytes !== input.size || terminal.sha256 !== input.sha256 || hash.digest("hex") !== input.sha256) {
             reject(new Error("sidecar_runtime_body_digest_invalid"));
@@ -106,7 +85,7 @@ export class SidecarRuntimeBodyChannel {
           catch { reject(new Error("sidecar_runtime_body_json_invalid")); }
         },
       });
-      const incoming: Incoming = { size: input.size, value, reject, unregister: stream.unregister, timer: undefined, terminal: false, discarding: false };
+      const incoming: Incoming = { size: input.size, value, reject, retire: stream.retire, chunks, timer: undefined };
       arm();
       this.#incoming.set(input.id, incoming);
       this.#reservedBytes += input.size;
@@ -141,14 +120,14 @@ export class SidecarRuntimeBodyChannel {
     this.#closed = true;
     for (const id of this.#incoming.keys()) this.#release(id, new Error("sidecar_runtime_body_channel_closed"));
   }
-  /** `retire` ends a discarding transfer, which otherwise outlives its decode. */
-  #release(id: string, error?: Error, retire = false): void {
+  #release(id: string, error?: Error): void {
     const incoming = this.#incoming.get(id);
-    if (!incoming || (incoming.discarding && !retire && !this.#closed)) return;
+    if (!incoming) return;
     this.#incoming.delete(id);
     this.#reservedBytes -= incoming.size;
     clearTimeout(incoming.timer);
+    incoming.chunks.length = 0;
     if (error) incoming.reject(error);
-    incoming.unregister();
+    incoming.retire();
   }
 }
