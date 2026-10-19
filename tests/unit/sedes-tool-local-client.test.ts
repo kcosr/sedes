@@ -126,6 +126,7 @@ describe("SedesToolLocalClient", () => {
       name: "SedesToolApiError",
       code: "invalid_input",
       retryable: false,
+      message: expect.stringContaining("65,536 UTF-16 code units"),
     });
     expect(connected).toBe(false);
   });

@@ -159,9 +159,8 @@ User-facing changes are collected here before release. See the
   receipts and Windows IPC keys are written atomically.
 
 - `sedes` and `sedes mcp` no longer crash on a bodyless HTTP reply. Malformed
-  tool IDs or input over a transport limit report `invalid_input`, schema
-  string lengths count UTF-16 code units, and only one option per command may
-  read stdin (`-`).
+  tool IDs or input over a transport limit report `invalid_input`, and only
+  one option per command may read stdin (`-`).
 
 - Electron no longer raises a main-process error when it quits during an SSH
   connect, and still waits for connection cleanup. Managed Local keeps one
