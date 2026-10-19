@@ -45,7 +45,11 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
   readonly #operationWrites: WriteEntry[] = [];
   readonly #resolveClosed: (closure: SidecarTransportClosure) => void;
   readonly #rejectClosed: (error: Error) => void;
-  #buffer = Buffer.alloc(0);
+  // Unparsed inbound bytes, kept as received chunks so reassembling a large
+  // frame copies each byte once instead of re-concatenating per chunk.
+  #pendingChunks: Buffer[] = [];
+  #pendingOffset = 0;
+  #pendingBytes = 0;
   #queuedWriteBytes = 0;
   #activeWrite: WriteEntry | undefined;
   #pumping = false;
@@ -179,9 +183,17 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
   async #read(): Promise<void> {
     try {
       for await (const chunk of this.#stream.bytes) {
-        this.#receive(Buffer.from(chunk));
+        if (this.#closedSettled) continue;
+        this.#appendChunk(chunk);
+        // Frames are handed over one at a time and the byte stream is not read
+        // again until every complete frame fits the inbound queue, so a carrier
+        // read that coalesces many small frames applies backpressure instead of
+        // overflowing the queue.
+        for (let frame = this.#takeFrame(); frame; frame = this.#takeFrame()) {
+          await this.#inbound.push({ bytes: frame });
+        }
       }
-      if (this.#buffer.byteLength !== 0) {
+      if (this.#pendingBytes !== 0) {
         throw new Error("sidecar_stream_partial_frame");
       }
       const closure = await this.#stream.closed;
@@ -209,30 +221,72 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
     }
   }
 
-  #receive(chunk: Buffer): void {
-    if (this.#closedSettled) return;
+  #appendChunk(chunk: Uint8Array): void {
     if (
-      this.#buffer.byteLength + chunk.byteLength >
+      this.#pendingBytes + chunk.byteLength >
       this.#limits.maximumInboundQueueBytes + HEADER_BYTES
     ) {
       throw new Error("sidecar_stream_buffer_limit");
     }
-    this.#buffer = Buffer.concat([this.#buffer, chunk]);
-    while (this.#buffer.byteLength >= HEADER_BYTES) {
-      if (!this.#buffer.subarray(0, MAGIC.byteLength).equals(MAGIC)) {
-        throw new Error("sidecar_stream_magic_invalid");
-      }
-      const length = this.#buffer.readUInt32BE(MAGIC.byteLength);
-      if (length === 0 || length > this.#limits.maximumFrameBytes) {
-        throw new Error("sidecar_stream_frame_length_invalid");
-      }
-      if (this.#buffer.byteLength < HEADER_BYTES + length) return;
-      const frame = Uint8Array.from(
-        this.#buffer.subarray(HEADER_BYTES, HEADER_BYTES + length),
-      );
-      this.#buffer = this.#buffer.subarray(HEADER_BYTES + length);
-      this.#inbound.push({ bytes: frame });
+    if (chunk.byteLength === 0) return;
+    // Copy: the byte stream does not transfer ownership of its chunks.
+    this.#pendingChunks.push(Buffer.from(chunk));
+    this.#pendingBytes += chunk.byteLength;
+  }
+
+  /** Removes and returns the next complete frame payload, if one is buffered. */
+  #takeFrame(): Uint8Array | undefined {
+    if (this.#closedSettled || this.#pendingBytes < HEADER_BYTES) {
+      return undefined;
     }
+    const header = this.#peekHeader();
+    if (!header.subarray(0, MAGIC.byteLength).equals(MAGIC)) {
+      throw new Error("sidecar_stream_magic_invalid");
+    }
+    const length = header.readUInt32BE(MAGIC.byteLength);
+    if (length === 0 || length > this.#limits.maximumFrameBytes) {
+      throw new Error("sidecar_stream_frame_length_invalid");
+    }
+    if (this.#pendingBytes < HEADER_BYTES + length) return undefined;
+    this.#consume(HEADER_BYTES);
+    const frame = new Uint8Array(length);
+    this.#consume(length, frame);
+    return frame;
+  }
+
+  #peekHeader(): Buffer {
+    const first = this.#pendingChunks[0]!;
+    if (first.byteLength - this.#pendingOffset >= HEADER_BYTES) {
+      return first.subarray(this.#pendingOffset, this.#pendingOffset + HEADER_BYTES);
+    }
+    const header = Buffer.allocUnsafe(HEADER_BYTES);
+    let written = 0;
+    let offset = this.#pendingOffset;
+    for (const chunk of this.#pendingChunks) {
+      written += chunk.copy(header, written, offset, Math.min(chunk.byteLength, offset + HEADER_BYTES - written));
+      offset = 0;
+      if (written === HEADER_BYTES) break;
+    }
+    return header;
+  }
+
+  /** Discards `length` pending bytes, copying them into `target` when given. */
+  #consume(length: number, target?: Uint8Array): void {
+    let copied = 0;
+    let finishedChunks = 0;
+    while (copied < length) {
+      const chunk = this.#pendingChunks[finishedChunks]!;
+      const take = Math.min(chunk.byteLength - this.#pendingOffset, length - copied);
+      target?.set(chunk.subarray(this.#pendingOffset, this.#pendingOffset + take), copied);
+      copied += take;
+      this.#pendingOffset += take;
+      if (this.#pendingOffset === chunk.byteLength) {
+        finishedChunks += 1;
+        this.#pendingOffset = 0;
+      }
+    }
+    if (finishedChunks !== 0) this.#pendingChunks.splice(0, finishedChunks);
+    this.#pendingBytes -= length;
   }
 
   async #pumpWrites(): Promise<void> {

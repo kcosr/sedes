@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   LengthPrefixedSidecarFrameTransport,
   SidecarTransportCleanupError,
@@ -119,7 +119,29 @@ describe("length-prefixed sidecar frame transport", () => {
     await transport.close("test_complete");
   });
 
-  it("closes when coalesced inbound frames exceed the bounded queue", async () => {
+  it("applies backpressure when one read coalesces more frames than the inbound queue holds", async () => {
+    const stream = new TestByteStream();
+    const transport = createTransport(stream);
+    const received: string[] = [];
+    const consumer = (async () => {
+      for await (const frame of transport.frames) {
+        received.push(Buffer.from(frame.bytes).toString("utf8"));
+      }
+    })();
+    const payloads = Array.from({ length: 300 }, (_, index) =>
+      `credit-${String(index).padStart(3, "0")}`.padEnd(160, "."),
+    );
+    stream.push(
+      Buffer.concat(payloads.map((payload) => encodeStreamFrame(Buffer.from(payload)))),
+    );
+    await vi.waitFor(() => expect(received).toHaveLength(300));
+    expect(received).toEqual(payloads);
+    await expect(settledWithin(transport.closed)).resolves.toBe("pending");
+    await transport.close("test_complete");
+    await consumer;
+  });
+
+  it("stops reading the byte stream while the inbound queue is full", async () => {
     const stream = new TestByteStream();
     const transport = new LengthPrefixedSidecarFrameTransport({
       assurance: { kind: "test", carrierGeneration: 1 },
@@ -137,9 +159,75 @@ describe("length-prefixed sidecar frame transport", () => {
         encodeStreamFrame(Buffer.from("two")),
       ]),
     );
-    await expect(transport.closed).resolves.toMatchObject({
-      reason: "sidecar_queue_limit_exceeded",
+    stream.push(encodeStreamFrame(Buffer.from("three")));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(stream.pulls).toBe(1);
+    await expect(settledWithin(transport.closed)).resolves.toBe("pending");
+
+    const iterator = transport.frames[Symbol.asyncIterator]();
+    for (const expected of ["one", "two", "three"]) {
+      await expect(iterator.next()).resolves.toEqual({
+        done: false,
+        value: { bytes: Uint8Array.from(Buffer.from(expected)) },
+      });
+    }
+    expect(stream.pulls).toBeGreaterThanOrEqual(2);
+    await expect(settledWithin(transport.closed)).resolves.toBe("pending");
+    await transport.close("test_complete");
+  });
+
+  it("closes while backpressure holds frames without waiting for the consumer", async () => {
+    const stream = new TestByteStream();
+    const transport = new LengthPrefixedSidecarFrameTransport({
+      assurance: { kind: "test", carrierGeneration: 1 },
+      stream,
+      limits: {
+        maximumFrameBytes: 16,
+        maximumInboundQueueBytes: 32,
+        maximumInboundQueueFrames: 1,
+        maximumOutboundQueueBytes: 32,
+      },
     });
+    stream.push(
+      Buffer.concat([
+        encodeStreamFrame(Buffer.from("one")),
+        encodeStreamFrame(Buffer.from("two")),
+      ]),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await transport.close("test_complete");
+    await expect(transport.closed).resolves.toEqual({ reason: "test_complete" });
+  });
+
+  it("reassembles a large frame from small reads without re-concatenating the partial frame", async () => {
+    const stream = new TestByteStream();
+    const transport = createTransport(stream);
+    const iterator = transport.frames[Symbol.asyncIterator]();
+    const payload = Buffer.alloc(2 * 1024 * 1024);
+    for (let index = 0; index < payload.byteLength; index += 1) {
+      payload[index] = index % 251;
+    }
+    const framed = encodeStreamFrame(payload);
+    // Count calls without retaining arguments: a reassembler that concatenates
+    // the growing partial frame per read would retain gigabytes in a spy.
+    const concat = Buffer.concat;
+    let concatCalls = 0;
+    Buffer.concat = ((...args: Parameters<typeof Buffer.concat>) => {
+      concatCalls += 1;
+      return concat.apply(Buffer, args);
+    }) as typeof Buffer.concat;
+    try {
+      for (let offset = 0; offset < framed.byteLength; offset += 4096) {
+        stream.push(framed.subarray(offset, offset + 4096));
+      }
+      const result = await iterator.next();
+      expect(result.done).toBe(false);
+      expect(Buffer.from(result.value!.bytes).equals(payload)).toBe(true);
+      expect(concatCalls).toBe(0);
+    } finally {
+      Buffer.concat = concat;
+    }
+    await transport.close("test_complete");
   });
 
   it("rejects outbound queue overflow as not sent", async () => {
@@ -265,6 +353,7 @@ class AsyncByteQueue implements AsyncIterable<Uint8Array> {
   readonly #values: Uint8Array[] = [];
   readonly #waiters: Array<(result: IteratorResult<Uint8Array>) => void> = [];
   #ended = false;
+  pulls = 0;
 
   push(value: Uint8Array): void {
     const waiter = this.#waiters.shift();
@@ -282,6 +371,7 @@ class AsyncByteQueue implements AsyncIterable<Uint8Array> {
   [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
     return {
       next: async () => {
+        this.pulls += 1;
         const value = this.#values.shift();
         if (value) return { value, done: false };
         if (this.#ended) return { value: undefined, done: true };
@@ -318,6 +408,10 @@ class TestByteStream implements SidecarByteStream {
       resolveBlockedWriteStarted = resolve;
     });
     this.#resolveBlockedWriteStarted = resolveBlockedWriteStarted;
+  }
+
+  get pulls(): number {
+    return this.#queue.pulls;
   }
 
   push(value: Uint8Array): void {
@@ -375,6 +469,18 @@ function createTransport(
         }
       : {}),
   });
+}
+
+async function settledWithin(
+  promise: Promise<unknown>,
+): Promise<"settled" | "pending"> {
+  return await Promise.race([
+    promise.then(
+      () => "settled" as const,
+      () => "settled" as const,
+    ),
+    new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 20)),
+  ]);
 }
 
 function encodeStreamFrame(payload: Uint8Array): Uint8Array {

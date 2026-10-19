@@ -3,6 +3,7 @@ import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_SIDECAR_PROTOCOL_LIMITS,
+  LengthPrefixedSidecarFrameTransport,
   SIDECAR_WIRE_VERSION,
   SidecarFrameWriteError,
   SidecarOperationRegistry,
@@ -19,6 +20,8 @@ import {
   workspaceFilesDiffValidateReviewAnchorOperation,
   workspaceFilesV8Operations,
   workspaceFilesWriteOperation,
+  type SidecarByteStream,
+  type SidecarByteStreamClosure,
   type SidecarFrame,
   type SidecarFrameLane,
   type SidecarFrameTransport,
@@ -414,6 +417,51 @@ describe("sidecar private protocol", () => {
     await fixture.sedes.close("test_complete");
   });
 
+  it("delivers a burst of frames coalesced into one carrier read without closing the session", async () => {
+    const carrier = coalescingByteStreamPair();
+    const fixture = peerFixture({
+      transports: {
+        left: new LengthPrefixedSidecarFrameTransport({
+          assurance: { kind: "test", carrierGeneration: 1 },
+          stream: carrier.left,
+        }),
+        right: new LengthPrefixedSidecarFrameTransport({
+          assurance: { kind: "test", carrierGeneration: 1 },
+          stream: carrier.right,
+        }),
+      },
+    });
+    await fixture.hello();
+    const received: string[] = [];
+    fixture.sedes.onEvent({
+      capabilityId: "workspace_files",
+      majorVersion: 5,
+      event: "files.invalidated",
+      schema: workspaceFilesInvalidatedEventSchema,
+      listener: ({ subscriptionHandle }) => received.push(subscriptionHandle),
+    });
+    const handles = Array.from({ length: 300 }, () => randomUUID());
+    carrier.right.holdWrites();
+    for (const subscriptionHandle of handles) {
+      await fixture.sidecar.sendEvent({
+        capabilityId: "workspace_files",
+        majorVersion: 5,
+        event: "files.invalidated",
+        schema: workspaceFilesInvalidatedEventSchema,
+        payload: { subscriptionHandle },
+      });
+    }
+    expect(carrier.right.flushWrites()).toBe(300);
+
+    await vi.waitFor(() => expect(received).toHaveLength(300));
+    expect(received).toEqual(handles);
+    expect(() => fixture.sedes.assertReady()).not.toThrow();
+    await expect(
+      fixture.sedes.call(workspaceEchoOperation, { value: "still open" }),
+    ).resolves.toEqual({ value: "still open" });
+    await fixture.sedes.close("test_complete");
+  });
+
   it("tracks validated inbound activity separately from local outbound activity", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const fixture = peerFixture();
@@ -567,6 +615,10 @@ describe("sidecar private protocol", () => {
 });
 
 function peerFixture(input?: {
+  readonly transports?: {
+    readonly left: SidecarFrameTransport;
+    readonly right: SidecarFrameTransport;
+  };
   readonly prepare?: () => Promise<void>;
   readonly catalogHandler?: SidecarOperationHandler<
     z.infer<typeof agentToolCatalogOperation.requestSchema>,
@@ -574,6 +626,7 @@ function peerFixture(input?: {
   >;
 }) {
   const pair = frameTransportPair();
+  const transports = input?.transports ?? pair;
   const sedesRegistry = new SidecarOperationRegistry();
   sedesRegistry.register(
     agentToolCatalogOperation,
@@ -598,13 +651,13 @@ function peerFixture(input?: {
   });
   const sedes = new SidecarProtocolPeer({
     role: "sedes",
-    transport: pair.left,
+    transport: transports.left,
     sessionNonce,
     registry: sedesRegistry,
   });
   const sidecar = new SidecarProtocolPeer({
     role: "sidecar",
-    transport: pair.right,
+    transport: transports.right,
     sessionNonce,
     registry: sidecarRegistry,
   });
@@ -718,6 +771,87 @@ class MemoryFrameTransport implements SidecarFrameTransport {
     this.#queue.end();
     this.#resolveClosed({ reason });
   }
+}
+
+class CoalescingByteStream implements SidecarByteStream {
+  readonly bytes: AsyncIterable<Uint8Array>;
+  readonly closed: Promise<SidecarByteStreamClosure>;
+  peer?: CoalescingByteStream;
+  readonly #values: Uint8Array[] = [];
+  readonly #waiters: Array<(result: IteratorResult<Uint8Array>) => void> = [];
+  readonly #held: Uint8Array[] = [];
+  readonly #resolveClosed: (closure: SidecarByteStreamClosure) => void;
+  #holding = false;
+  #ended = false;
+
+  constructor() {
+    this.bytes = {
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          const value = this.#values.shift();
+          if (value) return { value, done: false };
+          if (this.#ended) return { value: undefined, done: true };
+          return await new Promise<IteratorResult<Uint8Array>>((resolve) =>
+            this.#waiters.push(resolve),
+          );
+        },
+      }),
+    };
+    let resolveClosed!: (closure: SidecarByteStreamClosure) => void;
+    this.closed = new Promise((resolve) => {
+      resolveClosed = resolve;
+    });
+    this.#resolveClosed = resolveClosed;
+  }
+
+  /** Buffers later writes so the peer receives them as one carrier read. */
+  holdWrites(): void {
+    this.#holding = true;
+  }
+
+  flushWrites(): number {
+    this.#holding = false;
+    const count = this.#held.length;
+    this.peer!.#deliver(Buffer.concat(this.#held.splice(0)));
+    return count;
+  }
+
+  async write(bytes: Uint8Array): Promise<void> {
+    if (this.#ended || !this.peer) throw new Error("coalescing_stream_closed");
+    if (this.#holding) this.#held.push(Uint8Array.from(bytes));
+    else this.peer.#deliver(Uint8Array.from(bytes));
+  }
+
+  async close(reason: string): Promise<void> {
+    this.#finish(reason);
+    if (this.peer) this.peer.#finish(reason);
+  }
+
+  #deliver(value: Uint8Array): void {
+    const waiter = this.#waiters.shift();
+    if (waiter) waiter({ value, done: false });
+    else this.#values.push(value);
+  }
+
+  #finish(reason: string): void {
+    if (this.#ended) return;
+    this.#ended = true;
+    for (const waiter of this.#waiters.splice(0)) {
+      waiter({ value: undefined, done: true });
+    }
+    this.#resolveClosed({ reason });
+  }
+}
+
+function coalescingByteStreamPair(): {
+  readonly left: CoalescingByteStream;
+  readonly right: CoalescingByteStream;
+} {
+  const left = new CoalescingByteStream();
+  const right = new CoalescingByteStream();
+  left.peer = right;
+  right.peer = left;
+  return { left, right };
 }
 
 function frameTransportPair(): {
