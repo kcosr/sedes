@@ -333,7 +333,14 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
   #abortWrite(entry: WriteEntry): void {
     if (entry.settled) return;
     const delivery = entry.started ? "sent_outcome_unknown" : "not_sent";
-    if (!entry.started) this.#queuedWriteBytes -= entry.payloadBytes;
+    if (!entry.started) {
+      // Free the queue slot now; a stalled active write must not let
+      // abandoned frames exhaust the outbound frame limit.
+      this.#queuedWriteBytes -= entry.payloadBytes;
+      if (!removeQueued(this.#controlWrites, entry)) {
+        removeQueued(this.#operationWrites, entry);
+      }
+    }
     rejectWrite(
       entry,
       new SidecarFrameWriteError("sidecar_frame_send_aborted", delivery, {
@@ -449,6 +456,13 @@ function writeDelivery(error: unknown): "not_sent" | "sent_outcome_unknown" {
     return error.delivery;
   }
   return "sent_outcome_unknown";
+}
+
+function removeQueued(lane: WriteEntry[], entry: WriteEntry): boolean {
+  const index = lane.indexOf(entry);
+  if (index < 0) return false;
+  lane.splice(index, 1);
+  return true;
 }
 
 function settleWrite(entry: WriteEntry): void {

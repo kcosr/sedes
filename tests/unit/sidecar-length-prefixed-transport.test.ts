@@ -254,6 +254,55 @@ describe("length-prefixed sidecar frame transport", () => {
     await transport.close("test_complete");
   });
 
+  it("releases the queue slots of aborted unstarted writes while the active write stalls", async () => {
+    const stream = new TestByteStream();
+    stream.blockWrites = true;
+    const transport = new LengthPrefixedSidecarFrameTransport({
+      assurance: { kind: "test", carrierGeneration: 1 },
+      stream,
+      limits: {
+        maximumFrameBytes: 16,
+        maximumInboundQueueBytes: 32,
+        maximumOutboundQueueBytes: 1024,
+        maximumOutboundQueueFrames: 4,
+      },
+    });
+    const active = transport.send(Buffer.from("active"), { lane: "operation" });
+    await stream.waitForBlockedWrite();
+    const controllers = Array.from({ length: 3 }, () => new AbortController());
+    const abandoned = controllers.map((controller, index) =>
+      transport.send(Buffer.from(`queued-${index}`), {
+        lane: index === 0 ? "control" : "operation",
+        signal: controller.signal,
+      }),
+    );
+    for (const controller of controllers) controller.abort(new Error("caller_timeout"));
+    for (const send of abandoned) {
+      await expect(send).rejects.toMatchObject({
+        message: "sidecar_frame_send_aborted",
+        delivery: "not_sent",
+      });
+    }
+    expect(transport.diagnosticSnapshot()).toEqual({
+      queuedWriteBytes: 0,
+      queuedWriteFrames: 0,
+      activeWriteBytes: 6,
+    });
+
+    const next = Array.from({ length: 3 }, (_, index) =>
+      transport.send(Buffer.from(`next-${index}`), { lane: "operation" }),
+    );
+    stream.releaseWrites();
+    await expect(Promise.all([active, ...next])).resolves.toHaveLength(4);
+    expect(stream.writes.map(decodeStreamFrame)).toEqual([
+      "active",
+      "next-0",
+      "next-1",
+      "next-2",
+    ]);
+    await transport.close("test_complete");
+  });
+
   it("admits a maximum-size payload when the outbound byte limit matches it", async () => {
     const stream = new TestByteStream();
     const transport = new LengthPrefixedSidecarFrameTransport({
