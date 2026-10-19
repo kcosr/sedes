@@ -19,28 +19,43 @@ export function createWindowsSidecarIpc(dependencies: {
     const key = crypto.createHash("sha256").update(endpoint).digest("hex");
     return path.join(home, ".local", "state", "sedes", "sidecar", "ipc", `${key}.key`);
   };
+  /** Publication temporaries of this key: `<key>.<uuid>`. */
+  const publishTemporaries = async (filename: string) => {
+    const directory = path.dirname(filename);
+    const pattern = new RegExp(`^${path.basename(filename).replace(".", "\\.")}\\.[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$`, "u");
+    return (await files.readdir(directory)).filter(entry => pattern.test(entry)).map(entry => path.join(directory, entry));
+  };
   const readKey = async (endpoint: string) => {
     const filename = keyPath(endpoint);
     await privacy(path.dirname(filename), "assert-directory");
     await privacy(filename, "assert-file");
-    const metadata = await files.lstat(filename);
-    if (!metadata.isFile() || metadata.size !== 64 || metadata.nlink !== 1) throw new Error("sidecar_windows_ipc_key_invalid");
+    let metadata = await files.lstat(filename, { bigint: true });
+    if (metadata.isFile() && metadata.nlink !== 1n) {
+      // A publish interrupted between link and unlink leaves its temporary
+      // linked to the key. Removing that link is the publish's only remaining
+      // step, so every reader finishes it, even while the publisher is live.
+      for (const temporary of await publishTemporaries(filename)) {
+        const candidate = await files.lstat(temporary, { bigint: true }).catch(() => undefined);
+        if (candidate?.dev === metadata.dev && candidate.ino === metadata.ino) {
+          await files.unlink(temporary).catch(() => undefined);
+        }
+      }
+      metadata = await files.lstat(filename, { bigint: true });
+    }
+    if (!metadata.isFile() || metadata.size !== 64n || metadata.nlink !== 1n) throw new Error("sidecar_windows_ipc_key_invalid");
     const key = await files.readFile(filename, "utf8");
     if (!/^[a-f0-9]{64}$/u.test(key)) throw new Error("sidecar_windows_ipc_key_invalid");
     return Buffer.from(key, "hex");
   };
   const prepareKey = async (endpoint: string) => {
     const filename = keyPath(endpoint);
-    const directory = path.dirname(filename);
-    await privacy(directory, "ensure-directory");
-    // An interrupted publish can leave its temporary linked to the key, which
-    // readKey refuses. Remove leftovers once no live writer can still own them.
-    const leftover = new RegExp(`^${path.basename(filename).replace(".", "\\.")}\\.[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$`, "u");
-    for (const entry of await files.readdir(directory)) {
-      if (!leftover.test(entry)) continue;
-      const metadata = await files.lstat(path.join(directory, entry)).catch(() => undefined);
+    await privacy(path.dirname(filename), "ensure-directory");
+    // Remove temporaries of publishes that crashed before linking once no
+    // live writer can still own them; readKey finishes linked ones.
+    for (const temporary of await publishTemporaries(filename)) {
+      const metadata = await files.lstat(temporary).catch(() => undefined);
       if (metadata?.isFile() && Date.now() - metadata.mtimeMs >= 60_000) {
-        await files.unlink(path.join(directory, entry)).catch(() => undefined);
+        await files.unlink(temporary).catch(() => undefined);
       }
     }
     // Publish only a complete, flushed key: a torn key file would fail every
