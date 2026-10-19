@@ -143,6 +143,34 @@ describe("Electron managed local server", () => {
     if (failure === "storage") expect(saveCredential).toHaveBeenCalledWith({ profileId: "00000000-0000-4000-8000-000000000001", serverUrl: "http://127.0.0.1:32124", credential: "c".repeat(43) });
   });
 
+  it("reports missing OS keyring guidance when Local cannot save its credential", async () => {
+    const child = new FakeChild();
+    const revokeCredential = vi.fn(async () => undefined);
+    const manager = new LocalServerManager({
+      electronExecutable: "/opt/electron", resourceRoot: "/opt/resources", userDataDirectory: "/private/user-data",
+      prepareFilesystem: async () => ({ resourceRoot: "/opt/resources", serverEntrypoint: "/opt/server.js", configurationFilename: "/private/config", stateDirectory: "/private/state" }),
+      hydrateEnvironment: async (environment) => environment,
+      pair: async () => "c".repeat(43), healthCheck: async () => undefined,
+      revokeCredential,
+      saveCredential: async () => {
+        throw Object.assign(new Error("Secure credential storage is unavailable. Configure an OS keyring before pairing."), { code: "credential_storage_unavailable" });
+      },
+      spawnProcess: () => {
+        queueMicrotask(() => child.ready(32125));
+        return child;
+      },
+      terminateProcess: async (process) => process.kill("SIGTERM"),
+    });
+    await expect(manager.start({ connectionId })).rejects.toMatchObject({
+      name: "LocalServerError",
+      code: "local_server_credential_storage_unavailable",
+      message: expect.stringMatching(/OS keyring.*SEDES_AUTH_REQUIRED=false/u),
+    });
+    expect(manager.getStatus()).toEqual({ status: "disconnected" });
+    expect(revokeCredential).toHaveBeenCalledWith({ baseUrl: "http://127.0.0.1:32125", credential: "c".repeat(43) });
+    expect(child.kills).toEqual(["SIGTERM"]);
+  });
+
   it("starts auth-disabled Local without pairing or touching secure storage", async () => {
     const child = new FakeChild();
     const pair = vi.fn(async () => { throw new Error("pairing must not run"); });

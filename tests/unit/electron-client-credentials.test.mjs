@@ -66,7 +66,10 @@ describe("Electron credential persistence", () => {
   });
   it("fails closed when Linux safeStorage uses basic_text", async () => {
     const { store, directory } = await fixture("basic_text");
-    await expect(store.setCredential({ ...identity, credential })).rejects.toThrow("OS keyring");
+    await expect(store.setCredential({ ...identity, credential })).rejects.toMatchObject({
+      code: "credential_storage_unavailable",
+      message: expect.stringContaining("OS keyring"),
+    });
     expect(await readdir(directory)).toEqual([]);
   });
   it("rejects invalid destinations and token header injection", async () => {

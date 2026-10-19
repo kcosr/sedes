@@ -386,7 +386,9 @@ The renderer needs the credential in memory for authenticated requests, so
 native encryption protects persistence, not a compromised active renderer.
 Managed Local enrolls automatically using a one-time token delivered over its
 private parent/child channel and saves the resulting credential securely,
-replacing the credential saved for its previous port.
+replacing the credential saved for its previous port. Without secure storage,
+Local does not start and reports `local_server_credential_storage_unavailable`
+with the keyring guidance.
 Local and SSH connections retain their existing lifecycle and forwarding
 behavior; the SSH transport itself does not replace Sedes API authentication.
 

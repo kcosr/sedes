@@ -343,7 +343,14 @@ export class LocalServerManager {
           if (typeof this.#saveCredential !== "function") {
             throw new LocalServerError("local_server_auth_failed", "Secure credential storage is unavailable.");
           }
-          await this.#saveCredential({ profileId: "00000000-0000-4000-8000-000000000001", serverUrl: ready.baseUrl, credential });
+          await this.#saveCredential({ profileId: "00000000-0000-4000-8000-000000000001", serverUrl: ready.baseUrl, credential })
+            .catch((error) => {
+              if (error?.code !== "credential_storage_unavailable") throw error;
+              throw new LocalServerError(
+                "local_server_credential_storage_unavailable",
+                "Secure credential storage is unavailable. Configure an OS keyring, or start Electron with SEDES_AUTH_REQUIRED=false only for an explicitly trusted deployment.",
+              );
+            });
           if (generation !== this.#generation) throw cancelled();
         } catch (error) {
           await this.#revokeCredential({ baseUrl: ready.baseUrl, credential }).catch(() => undefined);

@@ -33,7 +33,10 @@ export class CredentialStore {
   }
   requireEncryption() {
     if (!this.storage.isEncryptionAvailable() || (process.platform === "linux" && this.storage.getSelectedStorageBackend?.() === "basic_text")) {
-      throw new Error("Secure credential storage is unavailable. Configure an OS keyring before pairing.");
+      throw Object.assign(
+        new Error("Secure credential storage is unavailable. Configure an OS keyring before pairing."),
+        { code: "credential_storage_unavailable" },
+      );
     }
   }
   async getCredential(input) {
