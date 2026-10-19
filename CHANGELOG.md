@@ -107,6 +107,13 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Streaming replies, sidebar search and inventory updates do less work in the
+  browser: a flush re-renders only the turn that changed, and search or other
+  threads' updates no longer re-render the open thread.
+
+- Settings, Usage and Archived load on first use, which shrinks the initial
+  bundle. If their code cannot be fetched, the view offers Try again and Reload.
+
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See
   [parking](docs/user/organize-work.md#park-quiet-work).
