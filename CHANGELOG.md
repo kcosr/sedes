@@ -107,18 +107,14 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
-- Long paths in the Files editor, the Changes diff headers, and the changed-file
-  list give way from the start of their directory, so the file name stays
-  visible on narrow panels; the tooltip keeps the whole path. The Files
-  Browse/Changes switch, the Usage views, and Usage's chart choices use the
-  shared segmented control and tabs, with arrow-key navigation.
-
-- The question inbox, Terminals, and Changes use the shared notices: the
-  inbox's **Try again** is a real button, an empty Terminals panel is a
-  centred empty state, terminal notices are tinted by severity with their
-  recovery buttons beside the message, Changes errors are red, a stale diff
-  stays readable under a warning with **Refresh**, and **Configure
-  comparison** is offered whenever nothing is compared.
+- Files, Changes, Usage, Terminals, and the question inbox use the shared
+  controls and notices. Long paths keep the file name visible (the tooltip
+  keeps the whole path); Browse/Changes, the Usage views, and Usage's chart
+  choices are segmented controls and tabs with arrow keys; errors and stale
+  states are toned notices with their actions beside them (the inbox's
+  **Try again** is a real button, and a stale diff stays readable under
+  **Refresh**); and empty panels offer **New terminal** or **Configure
+  comparison**.
 
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See
