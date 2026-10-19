@@ -163,6 +163,9 @@ User-facing changes are collected here before release. See the
   eventually disconnect, when a small update follows a snapshot replacement
   on a slow connection. Inventory streams no longer close in the same case.
 
+- Exiting a terminal shell while a mobile keyboard closes no longer drops the
+  viewer with a protocol error.
+
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See

@@ -86,6 +86,8 @@ export class TerminalActor {
   #controllerEpoch = 0;
   #mailbox = Promise.resolve();
   #finalized = false;
+  /** Set as soon as the process reports its exit, before the exit is queued. */
+  #processExited = false;
   readonly #finalizedPromise: Promise<TerminalResource>;
   #resolveFinalized!: (terminal: TerminalResource) => void;
   #rejectFinalized!: (error: unknown) => void;
@@ -173,6 +175,7 @@ export class TerminalActor {
     });
     this.#unsubscribeExit = input.process.onExit((exit) => {
       if (this.#detached) return;
+      this.#processExited = true;
       void this.#enqueue(() => this.#recordExit(exit)).catch(reportFinalizationFailure);
     });
     this.#ready = input.process.persistent?.start({
@@ -538,7 +541,15 @@ export class TerminalActor {
       this.#emitError(viewer, "stale_controller", "Only the current controller can resize.", false);
       return;
     }
-    await this.#process.resize({ rows: frame.rows, columns: frame.columns });
+    try {
+      await this.#process.resize({ rows: frame.rows, columns: frame.columns });
+    } catch (error) {
+      // The exit can overtake a resize already waiting in the mailbox. That
+      // exit is queued behind it and finalizes the terminal, so the late
+      // resize is not a viewer protocol failure.
+      if (this.#processExited) return;
+      throw error;
+    }
     // The remote suffix establishes ordering relative to concurrent PTY output.
     if (this.#process.persistent) return;
     this.#recordResize(frame);

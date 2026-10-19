@@ -250,6 +250,66 @@ describe("TerminalActor", () => {
     }
   });
 
+  it("ignores a queued resize that the shell exit overtakes", async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "sedes-terminal-actor-"));
+    directories.push(directory);
+    const process = new FakeProcess();
+    let resource = terminalResource();
+    const repository = {
+      updateHead(_scope: unknown, _id: string, headSeq: number) {
+        resource = { ...resource, headSeq };
+      },
+      finalize(_scope: unknown, _id: string, input: { lifecycle: TerminalResource["lifecycle"]; headSeq: number; publicReason?: string | null }) {
+        resource = {
+          ...resource,
+          lifecycle: input.lifecycle,
+          headSeq: input.headSeq,
+          publicReason: input.publicReason ?? null,
+          lifecycleRevision: resource.lifecycleRevision + 1,
+        };
+        return resource;
+      },
+    } as unknown as TerminalRepository;
+    const actor = new TerminalActor({
+      scope: { tenantId: "tenant", principalId: "principal" },
+      terminal: resource,
+      repository,
+      journal: new TerminalJournalStore({ stateDirectory: directory }),
+      process,
+      onTerminalSummaryChanged: () => undefined,
+      onFinalized: () => undefined,
+    });
+    const frames: TerminalServerFrame[] = [];
+    const session = await actor.attach({
+      attachmentId: "33333333-3333-4333-8333-333333333333",
+      producerId: "44444444-4444-4444-8444-444444444444",
+      requestedRole: "controller",
+      restore: { kind: "checkpoint" },
+      emit: (frame) => frames.push(frame),
+    });
+    await vi.waitFor(() =>
+      expect(frames.some((frame) => frame.type === "caught_up")).toBe(true),
+    );
+
+    // The mobile keyboard collapses after `exit`: its resize is already
+    // queued when the PTY reports the exit.
+    const resized = session.dispatch({
+      v: 2,
+      type: "resize",
+      terminalId: resource.terminalId,
+      incarnationId: resource.incarnationId!,
+      controllerEpoch: 1,
+      rows: 40,
+      columns: 120,
+    });
+    process.exit({ disposition: "exited", exitCode: 0, signal: null });
+
+    await expect(resized).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(resource.lifecycle).toBe("exited"));
+    expect(process.resizes).toEqual([]);
+    expect(frames.some((frame) => frame.type === "error")).toBe(false);
+  });
+
   it("stops the process when a resize cannot be journaled", async () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "sedes-terminal-actor-"));
     directories.push(directory);
@@ -332,7 +392,13 @@ class FakeProcess implements InteractiveTerminalProcess {
     this.writes.push(Uint8Array.from(bytes));
     return { outcome: "sent" as const };
   }
-  async resize() {}
+  readonly resizes: { rows: number; columns: number }[] = [];
+  #exited = false;
+  async resize(size: { readonly rows: number; readonly columns: number }) {
+    // Mirrors the local and SSH providers, which reject resizing an exited PTY.
+    if (this.#exited) throw new Error("interactive_terminal_process_exited");
+    this.resizes.push({ ...size });
+  }
   async terminate(signal: "hangup" | "terminate" | "kill") {
     this.terminations.push(signal);
   }
@@ -348,6 +414,7 @@ class FakeProcess implements InteractiveTerminalProcess {
     for (const listener of this.#output) listener(bytes);
   }
   exit(exit: InteractiveTerminalExit) {
+    this.#exited = true;
     for (const listener of this.#exit) listener(exit);
   }
 }
