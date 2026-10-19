@@ -1838,6 +1838,48 @@ describe("WorkpadsPanel", () => {
       expect(screen.getByRole("button", { name: "Actions for “Plan”" })).toHaveFocus();
     });
 
+    it("navigates rows by keyboard as Tasks does: one tab stop, arrows, →⋯, Delete and F2", async () => {
+      const archived = { ...pad, id: "old", title: "Old notes", archivedAt: time };
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => ({ items: request?.archived ? [archived] : [pad, other] }));
+      const { store } = fixture({ listWorkpads, getWorkpadCounts: vi.fn(async () => ({ active: viewCounts({ global: 2, all: 2 }), archived: viewCounts({ global: 1, all: 1 }) })) });
+      render(<Panel context={panelContext(store)} />);
+      const first = await screen.findByRole("button", { name: "Integration" });
+      const second = screen.getByRole("button", { name: "Other" });
+      const heading = await screen.findByRole("button", { name: /^Archived/ });
+      // One tab stop for the rows: the first row's title and its ⋯.
+      expect(first).toHaveAttribute("tabindex", "0");
+      expect(screen.getByRole("button", { name: "Actions for “Integration”" })).toHaveAttribute("tabindex", "0");
+      expect(second).toHaveAttribute("tabindex", "-1");
+      expect(screen.getByRole("button", { name: "Actions for “Other”" })).toHaveAttribute("tabindex", "-1");
+      expect(heading).toHaveAttribute("tabindex", "-1");
+
+      act(() => first.focus());
+      fireEvent.keyDown(first, { key: "ArrowDown" });
+      expect(second).toHaveFocus();
+      expect(second).toHaveAttribute("tabindex", "0");
+      expect(first).toHaveAttribute("tabindex", "-1");
+      fireEvent.keyDown(second, { key: "ArrowRight" });
+      expect(screen.getByRole("button", { name: "Actions for “Other”" })).toHaveFocus();
+      fireEvent.keyDown(screen.getByRole("button", { name: "Actions for “Other”" }), { key: "ArrowLeft" });
+      expect(second).toHaveFocus();
+      fireEvent.keyDown(second, { key: "End" });
+      expect(heading).toHaveFocus();
+      fireEvent.keyDown(heading, { key: "ArrowRight" });
+      expect(heading).toHaveAttribute("aria-expanded", "true");
+      const archivedRow = await screen.findByRole("button", { name: "Old notes" });
+      fireEvent.keyDown(heading, { key: "ArrowDown" });
+      expect(archivedRow).toHaveFocus();
+      fireEvent.keyDown(archivedRow, { key: "Home" });
+      expect(first).toHaveFocus();
+
+      fireEvent.keyDown(first, { key: "F2" });
+      expect(screen.getByRole("dialog", { name: "Rename workpad" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(first).toHaveFocus());
+      fireEvent.keyDown(first, { key: "Delete" });
+      expect(screen.getByRole("dialog", { name: "Delete workpad?" })).toHaveAccessibleDescription(/“Integration” will be permanently deleted/);
+    });
+
     it("names the workpad and the action when a Move fails", async () => {
       const { store, api } = fixture({ updateWorkpad: vi.fn(async () => { throw new Error("The workpad changed."); }) });
       render(<Panel context={{ ...panelContext(store), threadId: "thread-build" }} />);

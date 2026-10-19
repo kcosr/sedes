@@ -75,6 +75,11 @@ import { KeyValueList } from "@client/components/ui/key-value-list";
 import { SearchableSelectList } from "@client/components/ui/searchable-select";
 import { ScopeSegments } from "../scope-view/ScopeSegments.js";
 import { ViewFilterChips } from "../scope-view/scope-list.js";
+import {
+  listNavSelector,
+  onListHeadingKeyDown,
+  useScopedListNav,
+} from "../scope-view/use-scoped-list-nav.js";
 import type { PanelRegionStore } from "../../workspace-panels/region-store.js";
 import {
   PanelChrome,
@@ -300,7 +305,6 @@ export function TasksPanelContent({
   const [addDraft, setAddDraft] = useState<TaskAddDraft>(EMPTY_TASK_ADD_DRAFT);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [moveMenuId, setMoveMenuId] = useState<string | null>(null);
-  const [activeNavKey, setActiveNavKey] = useState<string | null>(null);
   const [backlogOpen, setBacklogOpen] = useState(false);
   const [completedOpen, setCompletedOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -326,8 +330,6 @@ export function TasksPanelContent({
   const addInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchButtonRef = useRef<HTMLButtonElement>(null);
-  const lastFocused = useRef<{ key: string; element: HTMLElement } | null>(null);
-  const lastNavOrder = useRef<readonly string[]>([]);
   const announcementTimeout = useRef<number | undefined>(undefined);
 
   const clearAnnouncement = useCallback(() => {
@@ -466,10 +468,14 @@ export function TasksPanelContent({
     completedSection,
     completedOpen,
   ]);
-  const rovingKey =
-    activeNavKey !== null && navKeys.includes(activeNavKey)
-      ? activeNavKey
-      : navKeys[0];
+  // The list's one tab stop, arrow keys, and focus kept in the list when a
+  // focused row leaves it (completed into a collapsed section, moved, deleted).
+  const nav = useScopedListNav({
+    keys: navKeys,
+    listRef,
+    fallback: () => addInputRef.current,
+  });
+  const rovingKey = nav.rovingKey;
 
   const expandedTask = expandedId
     ? tasks.find(({ id }) => id === expandedId)
@@ -503,31 +509,6 @@ export function TasksPanelContent({
     }
   }, [creating, tasks]);
 
-  // A row the user was on can leave the list (completed into a collapsed
-  // section, moved, deleted). Keep keyboard focus in the list: the same
-  // task where it went, else its neighbour.
-  useLayoutEffect(() => {
-    const focused = lastFocused.current;
-    const region = listRef.current;
-    if (focused && region && !focused.element.isConnected) {
-      lastFocused.current = null;
-      const activeElement = document.activeElement;
-      if (activeElement === null || activeElement === document.body) {
-        const find = (key: string) =>
-          region.querySelector<HTMLElement>(
-            `[data-tasks-nav="${CSS.escape(key)}"]`,
-          );
-        const index = lastNavOrder.current.indexOf(focused.key);
-        const neighbour =
-          navKeys[Math.min(Math.max(index, 0), navKeys.length - 1)];
-        const target =
-          find(focused.key) ?? (neighbour ? find(neighbour) : null);
-        (target ?? addInputRef.current)?.focus();
-      }
-    }
-    lastNavOrder.current = navKeys;
-  });
-
   // Reveal requests (transcript "Open task"): switch to a view that holds
   // the task, make it visible, expand it and move focus to it. The view's
   // options and the search are left as they are: a task they hide is shown
@@ -554,7 +535,7 @@ export function TasksPanelContent({
     if (task.completedAt !== null) setCompletedOpen(true);
     else if (task.backlog && !options.onlyBacklog) setBacklogOpen(true);
     setExpandedId(task.id);
-    setActiveNavKey(taskNavKey(task.id));
+    nav.setActiveKey(taskNavKey(task.id));
     setRevealId(null);
     setFocusRequest(task.id);
   }, [revealId, tasks, view, options, query]);
@@ -563,7 +544,7 @@ export function TasksPanelContent({
   useLayoutEffect(() => {
     if (focusRequest === null) return;
     const element = listRef.current?.querySelector<HTMLElement>(
-      `[data-tasks-nav="${CSS.escape(taskNavKey(focusRequest))}"]`,
+      listNavSelector(taskNavKey(focusRequest)),
     );
     if (!element) return;
     element.focus({ preventScroll: true });
@@ -588,7 +569,7 @@ export function TasksPanelContent({
   // The phone detail replaces the list: focus starts on its back button.
   useEffect(() => {
     if (!sheetDetail) return;
-    lastFocused.current = null;
+    nav.forgetFocus();
     rootRef.current?.querySelector<HTMLElement>(".tasks-back")?.focus();
   }, [sheetDetail]);
 
@@ -821,7 +802,7 @@ export function TasksPanelContent({
 
   const toggleExpanded = (task: AssociatedTask) => {
     clearAnnouncement();
-    setActiveNavKey(taskNavKey(task.id));
+    nav.setActiveKey(taskNavKey(task.id));
     setMoveMenuId(null);
     setExpandedId((current) => (current === task.id ? null : task.id));
   };
@@ -913,61 +894,6 @@ export function TasksPanelContent({
           ?.focus();
         return;
     }
-  };
-
-  const onHeadingKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
-      const expanded = event.currentTarget.getAttribute("aria-expanded") === "true";
-      if ((event.key === "ArrowRight") !== expanded) {
-        event.preventDefault();
-        event.currentTarget.click();
-      }
-    }
-  };
-
-  /** ↑/↓/Home/End between the list's focusable items. */
-  const onListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const target = event.target as HTMLElement;
-    if (!event.currentTarget.contains(target) || !target.dataset.tasksNav) return;
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
-    const items = [
-      ...event.currentTarget.querySelectorAll<HTMLElement>("[data-tasks-nav]"),
-    ];
-    const index = items.indexOf(target);
-    const next =
-      event.key === "ArrowDown"
-        ? items[Math.min(index + 1, items.length - 1)]
-        : event.key === "ArrowUp"
-          ? items[Math.max(index - 1, 0)]
-          : event.key === "Home"
-            ? items[0]
-            : event.key === "End"
-              ? items.at(-1)
-              : undefined;
-    if (!next) return;
-    event.preventDefault();
-    next.focus();
-  };
-
-  const onListFocus = (event: React.FocusEvent<HTMLDivElement>) => {
-    const target = event.target as HTMLElement;
-    const key = target.dataset.tasksNav;
-    if (key) {
-      lastFocused.current = { key, element: target };
-      setActiveNavKey(key);
-    }
-  };
-  // Focus that leaves on its own (to another control, or a click elsewhere)
-  // is not restored; only a row removed from under it is.
-  const onListBlur = (event: React.FocusEvent<HTMLDivElement>) => {
-    const element = event.target as HTMLElement;
-    const next = event.relatedTarget as Node | null;
-    if (next && event.currentTarget.contains(next)) return;
-    requestAnimationFrame(() => {
-      if (element.isConnected && lastFocused.current?.element === element) {
-        lastFocused.current = null;
-      }
-    });
   };
 
   /**
@@ -1372,9 +1298,7 @@ export function TasksPanelContent({
       ref={listRef}
       className="tasks-scroll"
       {...scopeDrop.props(view, scopeDropTarget(view))}
-      onKeyDown={onListKeyDown}
-      onFocus={onListFocus}
-      onBlur={onListBlur}
+      {...nav.listProps}
     >
       <ul className="tasks-list" aria-label={`${TASKS_VIEW_LABEL[view]} tasks`}>
         {visibleCreating.map((entry) => (
@@ -1390,7 +1314,7 @@ export function TasksPanelContent({
             focusable={rovingKey === "backlog"}
             expanded={backlogOpen}
             onToggle={() => setBacklogOpen((open) => !open)}
-            onKeyDown={onHeadingKeyDown}
+            onKeyDown={onListHeadingKeyDown}
             label="Backlog"
             count={backlogSection.length}
           />
@@ -1408,7 +1332,7 @@ export function TasksPanelContent({
             focusable={rovingKey === "completed"}
             expanded={completedOpen}
             onToggle={() => setCompletedOpen((open) => !open)}
-            onKeyDown={onHeadingKeyDown}
+            onKeyDown={onListHeadingKeyDown}
             label="Completed"
             count={completedSection.length}
           />
@@ -1479,15 +1403,7 @@ export function TasksPanelContent({
   const choosingTask = choosingMoveId
     ? tasks.find(({ id }) => id === choosingMoveId)
     : undefined;
-  const neighbourFocus = (taskId: string) => () => {
-    const index = navKeys.indexOf(taskNavKey(taskId));
-    const key = navKeys[index + 1] ?? navKeys[index - 1];
-    return key
-      ? listRef.current?.querySelector<HTMLElement>(
-          `[data-tasks-nav="${CSS.escape(key)}"]`,
-        )
-      : addInputRef.current;
-  };
+  const neighbourFocus = (taskId: string) => () => nav.neighbour(taskNavKey(taskId));
   return (
     <TaskListProvider value={environment}>
       <div

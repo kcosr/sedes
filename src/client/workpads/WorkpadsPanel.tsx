@@ -28,6 +28,7 @@ import { Textarea } from "../components/ui/textarea.js";
 import { ScopeSegments } from "../components/scope-view/ScopeSegments.js";
 import { ListHeading, ScopeIcon, ScopeLocation, ViewFilterChips, type ScopeLocationLabel, type ViewFilterChip } from "../components/scope-view/scope-list.js";
 import { ScopeOptionItem, SortOptionItems } from "../components/scope-view/ViewOptionsItems.js";
+import { onListHeadingKeyDown, useScopedListNav } from "../components/scope-view/use-scoped-list-nav.js";
 import { useTaskDestinations } from "../components/tasks/task-destinations.js";
 import { clampView, destinationScope, parseScopeKey, scopeKey as destinationKey, viewUnavailableReason, type TasksContext } from "../components/tasks/task-view-model.js";
 import { WorkpadDocument } from "./WorkpadDocument.js";
@@ -53,6 +54,9 @@ const ADD_PLACEHOLDER: Record<WorkpadsView, string> = {
   global: "New global workpad…",
   all: "New global workpad…",
 };
+/** A row's stop in the list's keyboard navigation, and the Archived heading's. */
+const workpadNavKey = (id: string) => `workpad:${id}`;
+const ARCHIVED_NAV_KEY = "archived";
 const SCOPE_NOUN: Record<WorkpadsView, string> = {
   thread: "workpads in this thread",
   project: "workpads in this project",
@@ -160,11 +164,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const deletedNeighbour = useRef<string | undefined>(undefined);
   // Where a Rename or Move dialog opened from a menu returns focus.
   const dialogReturnRef = useRef<HTMLElement | null>(null);
-  // The row control that last had focus. When an action takes its row out
-  // of the list (archive, move), focus goes to the same workpad where it
-  // went, else its neighbour, else the add row.
-  const lastFocusedRow = useRef<{ id: string; element: HTMLElement } | null>(null);
-  const lastRowOrder = useRef<readonly string[]>([]);
+  const listRef = useRef<HTMLDivElement>(null);
   const activeRequest = useMemo(() => workpadListRequest(view, target, options), [view, target, options]);
   const archivedRequest = useMemo(() => archivedListRequest(view, target, options), [view, target, options]);
   const scope: WorkpadScope = activeRequest?.scope ?? { kind: "global" };
@@ -626,8 +626,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const changeOptions = (patch: Partial<WorkpadsViewOptions>) => fromList(() => setWorkpadsViewOptions(view, patch));
   /** The control a Rename or Move dialog returns focus to: the row's ⋯, or the open workpad's. */
   const actionsTrigger = (id: string) => rootRef.current?.querySelector<HTMLElement>(`[data-workpad-actions="${CSS.escape(id)}"]`) ?? null;
-  const openRename = (target: WorkpadTarget) => {
-    dialogReturnRef.current = actionsTrigger(target.id);
+  const openRename = (target: WorkpadTarget, returnTo: HTMLElement | null = actionsTrigger(target.id)) => {
+    dialogReturnRef.current = returnTo;
     setTitle(target.title); setRenameTarget(target);
   };
   const chooseMove = (target: WorkpadTarget) => { dialogReturnRef.current = actionsTrigger(target.id); setMoveTarget(target); };
@@ -698,43 +698,6 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     return () => window.removeEventListener(CLOSE_WORKPAD_EVENT, onClose);
   }, [open]);
 
-  // A focused row that leaves the list (archived, moved, deleted) hands focus
-  // on: to the same workpad where it went, else a neighbour, else the add row.
-  // Focus that moved elsewhere on its own is left alone.
-  const rowOrder = useMemo(() => [...items, ...(archivedOpen ? archivedItems : [])].map(({ id }) => id), [items, archivedOpen, archivedItems]);
-  useLayoutEffect(() => {
-    const focused = lastFocusedRow.current;
-    const root = rootRef.current;
-    if (focused && root && !focused.element.isConnected) {
-      lastFocusedRow.current = null;
-      const active = document.activeElement;
-      if (active === null || active === document.body) {
-        const find = (id: string) => root.querySelector<HTMLElement>(`[data-workpad-id="${CSS.escape(id)}"]`);
-        const previous = lastRowOrder.current;
-        const index = previous.indexOf(focused.id);
-        const neighbour = [...previous.slice(index + 1), ...previous.slice(0, Math.max(index, 0)).reverse()].find(id => find(id));
-        (find(focused.id) ?? (neighbour ? find(neighbour) : null) ?? addInputRef.current)?.focus();
-      }
-    }
-    lastRowOrder.current = rowOrder;
-  });
-  const onListFocus = (event: React.FocusEvent<HTMLElement>) => {
-    const element = event.target as HTMLElement;
-    const id = element.closest<HTMLElement>("[data-workpad-row]")?.dataset.workpadRow;
-    if (id) lastFocusedRow.current = { id, element };
-  };
-  const onListBlur = (event: React.FocusEvent<HTMLElement>) => {
-    const element = event.target as HTMLElement;
-    const list = event.currentTarget;
-    const next = event.relatedTarget as Node | null;
-    if (next && list.contains(next)) return;
-    // A menu opened from the row returns focus to it; focus that went elsewhere is let go.
-    requestAnimationFrame(() => {
-      if (!element.isConnected || lastFocusedRow.current?.element !== element) return;
-      if (list.contains(document.activeElement) || element.matches("[aria-expanded=true]")) return;
-      lastFocusedRow.current = null;
-    });
-  };
   // An empty list that failed to load says so in its place, with Try again.
   const listLoadFailed = Boolean(refreshError) && !selected && !loading && scopeValid && items.length === 0;
   const errorText = error || (listLoadFailed ? "" : refreshError) || (checklistRefreshRequired ? "Reload this workpad before changing checklist items." : "");
@@ -776,6 +739,13 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const archivedTotal = viewCount(archivedCounts, view, options.includeThreadWorkpads);
   // The section shows while the view has archived workpads, and whenever their count cannot be read.
   const archivedShown = (archivedTotal ?? 0) > 0 || countsFailed || archivedItems.length > 0;
+  // The list's keyboard stops, as in Tasks: one tab stop, ↑/↓/Home/End, and
+  // focus kept in the list when a focused row leaves it (archived, moved).
+  const navKeys = useMemo(() => [
+    ...items.map(({ id }) => workpadNavKey(id)),
+    ...(archivedShown ? [ARCHIVED_NAV_KEY, ...(archivedOpen ? archivedItems.map(({ id }) => workpadNavKey(id)) : [])] : []),
+  ], [items, archivedShown, archivedOpen, archivedItems]);
+  const nav = useScopedListNav({ keys: navKeys, listRef, fallback: () => addInputRef.current });
   const segments = <ScopeSegments aria-label="Workpad scope" value={view} disabled={busy}
     onValueChange={changeView}
     // The way back from an open workpad: choose its view again.
@@ -790,8 +760,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const rowLocation = (item: WorkpadSummary) =>
     showsLocation(view, options) ? destinations.location(item.scope, { withProject: view === "all" }) : undefined;
   const renderRow = (item: WorkpadSummary, location?: ScopeLocationLabel) => <WorkpadRow key={item.id} item={item} location={location}
-    busy={busy} touch={touch} threadId={threadId} projectId={contextProjectId}
-    onOpen={() => { void run(() => load(item.id)); }} onRename={() => openRename(item)}
+    busy={busy} touch={touch} threadId={threadId} projectId={contextProjectId} focusable={nav.rovingKey === workpadNavKey(item.id)}
+    onOpen={() => { void run(() => load(item.id)); }} onRename={returnTo => openRename(item, returnTo)}
     onMove={destination => moveTo(item, destination)} onChooseMove={() => chooseMove(item)}
     onArchive={() => archiveWorkpad(item, !item.archivedAt)} onDelete={() => setDeleteTarget(item)} />;
   const emptyState = (() => {
@@ -806,6 +776,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   })();
   const archivedSection = archivedShown && <section className="workpads-section" aria-label="Archived workpads">
     <ListHeading expanded={archivedOpen} onToggle={() => setArchivedOpen(value => !value)}
+      data-list-nav={ARCHIVED_NAV_KEY} tabIndex={nav.rovingKey === ARCHIVED_NAV_KEY ? 0 : -1} onKeyDown={onListHeadingKeyDown}
       label="Archived" count={trimmedQuery ? undefined : archivedTotal} />
     {archivedOpen && <>
       {archivedItems.length ? <ul className="workpads-list" aria-label="Archived workpads">
@@ -821,7 +792,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
 
   const listView = <>
     {errorCallout}
-    <div className="workpads-scroll" aria-busy={loading} onFocus={onListFocus} onBlur={onListBlur}>
+    <div ref={listRef} className="workpads-scroll" aria-busy={loading} {...nav.listProps}>
       {items.length ? <ul className="workpads-list" aria-label={`${view === "all" ? "All" : view === "global" ? "Global" : view === "project" ? "Project" : "Thread"} workpads`}>
         {items.map(item => renderRow(item, rowLocation(item)))}
       </ul> : emptyState}
@@ -1135,24 +1106,38 @@ function MoveToItems({ current, threadId, projectId, onMove, onChoose }: {
  * belongs on a quiet second line), when it was last edited (and by whom when
  * not you), and ⋯ with Rename…, Move to, Archive or Unarchive, and Delete….
  */
-function WorkpadRow({ item, location, busy, touch, threadId, projectId, onOpen, onRename, onMove, onChooseMove, onArchive, onDelete }: {
+function WorkpadRow({ item, location, busy, touch, threadId, projectId, focusable, onOpen, onRename, onMove, onChooseMove, onArchive, onDelete }: {
   readonly item: WorkpadSummary;
   readonly location?: ScopeLocationLabel;
   readonly busy: boolean;
   readonly touch: boolean;
   readonly threadId?: string;
   readonly projectId?: string;
+  /** Whether the row holds the list's tab stop. */
+  readonly focusable: boolean;
   readonly onOpen: () => void;
-  readonly onRename: () => void;
+  /** Renames, returning focus to `returnTo` (the row's ⋯ unless named). */
+  readonly onRename: (returnTo?: HTMLElement) => void;
   readonly onMove: (scope: WorkpadScope) => void;
   readonly onChooseMove: () => void;
   readonly onArchive: () => void;
   readonly onDelete: () => void;
 }): React.JSX.Element {
   const locationId = useId();
-  return <li className="workpads-row" data-workpad-row={item.id}>
-    <button type="button" className="workpads-row-title" data-workpad-id={item.id} data-location={location ? "" : undefined}
-      aria-describedby={location ? locationId : undefined} onClick={onOpen}>
+  const navKey = workpadNavKey(item.id);
+  // Delete asks first and F2 renames, as in Tasks; → moves to ⋯ and ← back.
+  const onTitleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (event.nativeEvent.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); if (!busy) onDelete(); }
+    else if (event.key === "F2") { event.preventDefault(); if (!busy) onRename(event.currentTarget); }
+    else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      event.currentTarget.closest(".workpads-row")?.querySelector<HTMLElement>(".workpads-row-more")?.focus();
+    }
+  };
+  return <li className="workpads-row">
+    <button type="button" className="workpads-row-title" data-workpad-id={item.id} data-list-nav={navKey} tabIndex={focusable ? 0 : -1}
+      data-location={location ? "" : undefined} aria-describedby={location ? locationId : undefined} onClick={onOpen} onKeyDown={onTitleKeyDown}>
       {location ? <>
         <span className="workpads-row-name">{item.title}</span>
         <ScopeLocation location={location} />
@@ -1166,12 +1151,17 @@ function WorkpadRow({ item, location, busy, touch, threadId, projectId, onOpen, 
     <DropdownMenu presentation={touch ? "sheet" : "menu"}>
       <DropdownMenuTrigger asChild>
         {/* It stays focusable while an action runs, so focus can return here; its items wait instead. */}
-        <Button variant="ghost" size="icon-sm" className="workpads-row-more" aria-label={`Actions for “${item.title}”`} data-workpad-actions={item.id}>
+        <Button variant="ghost" size="icon-sm" className="workpads-row-more" aria-label={`Actions for “${item.title}”`} data-workpad-actions={item.id}
+          data-list-nav-for={navKey} tabIndex={focusable ? 0 : -1} onKeyDown={event => {
+            if (event.key !== "ArrowLeft") return;
+            event.preventDefault();
+            event.currentTarget.closest(".workpads-row")?.querySelector<HTMLElement>(".workpads-row-title")?.focus();
+          }}>
           <Ellipsis aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" sheetTitle={item.title}>
-        <DropdownMenuItem disabled={busy} onSelect={onRename}><Pencil /><span>Rename…</span></DropdownMenuItem>
+        <DropdownMenuItem disabled={busy} onSelect={() => onRename()}><Pencil /><span>Rename…</span></DropdownMenuItem>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger disabled={busy}><FolderInput /><span>Move to</span></DropdownMenuSubTrigger>
           <DropdownMenuSubContent>

@@ -103,7 +103,11 @@ rows' leading inset, `--list-heading-inset`, and its chevron follows the
 count), `ViewFilterChips` with the `view-options-trigger` dot, and the View options
 rows `SortOptionItems` and `ScopeOptionItem`. Their styles are in
 `scope-view.css`; the panels are size containers, so its narrow rules follow
-the panel.
+the panel. Both lists take their keyboard navigation from
+`useScopedListNav`: row titles and section headings marked `data-list-nav`
+share one roving tab stop and ↑/↓/Home/End, a row's other controls carry
+`data-list-nav-for`, and a focused row that leaves the list hands focus to
+its neighbour.
 
 ## Tokens
 

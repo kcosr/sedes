@@ -177,7 +177,9 @@ User-facing changes are collected here before release. See the
 
 - Workpads Archive, Unarchive, Move and Rename are announced to screen
   readers, name the workpad in a failure, and keep keyboard focus in the list
-  when the row leaves it, as Tasks does. Workpad autosave no longer repeats
+  when the row leaves it, as Tasks does. The Workpads list has the Tasks
+  keyboard model: one tab stop, arrow keys, **Delete** and **F2**. See
+  [workpads](docs/user/workpads.md). Workpad autosave no longer repeats
   its sync state to screen readers (an explicit save is announced), and panel
   headers' unsaved and busy markers are read.
 
