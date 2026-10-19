@@ -1180,7 +1180,10 @@ function fakeSession(
     call: vi.fn(async (
       definition: unknown,
       _request?: unknown,
-      callOptions?: { readonly signal?: AbortSignal },
+      callOptions?: {
+        readonly signal?: AbortSignal;
+        readonly onLateSuccess?: (response: unknown) => void;
+      },
     ) => {
       if (definition === workspaceFilesRootOpenOperation) {
         return {
@@ -1191,22 +1194,30 @@ function fakeSession(
         (definition as { operation?: string }).operation === "files.watch_open"
       ) {
         watchIndex += 1;
+        const response = {
+          subscriptionHandle: `de8e220b-0000-4000-8000-${watchIndex === 1 ? "000000000021" : "000000000022"}`,
+        };
         if (options?.watchOpenGate) {
-          // Like the protocol peer, a cancelled call rejects at once and
-          // drops the success response that arrives later.
+          // Like the protocol peer, a cancelled call rejects at once and hands
+          // the success response that arrives later only to onLateSuccess.
           const signal = callOptions?.signal;
+          let cancelled = false;
+          void options.watchOpenGate.then(() => {
+            if (cancelled) callOptions?.onLateSuccess?.(response);
+          });
           await Promise.race([
             options.watchOpenGate,
             new Promise<never>((_resolve, reject) => {
-              const cancel = () => reject(new Error("sidecar_request_cancelled"));
+              const cancel = () => {
+                cancelled = true;
+                reject(new Error("sidecar_request_cancelled"));
+              };
               if (signal?.aborted) cancel();
               signal?.addEventListener("abort", cancel, { once: true });
             }),
           ]);
         }
-        return {
-          subscriptionHandle: `de8e220b-0000-4000-8000-${watchIndex === 1 ? "000000000021" : "000000000022"}`,
-        };
+        return response;
       }
       if (
         (definition as { operation?: string }).operation === "files.watch_close"

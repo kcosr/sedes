@@ -41,6 +41,7 @@ type PendingRequest = {
   readonly definition: SidecarOperationDefinition<unknown, unknown>;
   readonly resolve: (value: unknown) => void;
   readonly reject: (error: Error) => void;
+  readonly onLateSuccess?: (value: unknown) => void;
   readonly timer?: NodeJS.Timeout;
   readonly signal?: AbortSignal;
   readonly sendController: AbortController;
@@ -148,6 +149,11 @@ export class SidecarProtocolPeer {
   readonly #inbound = new Map<string, ActiveRequest>();
   readonly #receivedRequestIds = new Set<string>();
   readonly #cancelledOutbound = new Set<string>();
+  // Cancelled requests whose caller must release what a late success names.
+  readonly #lateSuccessHandlers = new Map<
+    string,
+    { readonly definition: SidecarOperationDefinition<unknown, unknown>; readonly handler: (value: unknown) => void }
+  >();
   readonly #events = new Map<string, Set<EventRegistration>>();
   readonly #incomingStreams = new Map<string, IncomingStream>();
   // Incoming streams their consumer retired before the producer finished.
@@ -238,6 +244,12 @@ export class SidecarProtocolPeer {
     options?: {
       readonly signal?: AbortSignal;
       readonly deadlineMilliseconds?: number;
+      /**
+       * Receives a successful response that arrives after this call was
+       * cancelled or timed out, so the caller can release a remote resource
+       * the response names. It is never called for a settled call.
+       */
+      readonly onLateSuccess?: (response: Response) => void;
     },
   ): Promise<Response> {
     if (!this.#started) throw new Error("sidecar_protocol_peer_not_started");
@@ -293,6 +305,9 @@ export class SidecarProtocolPeer {
         definition: definition as SidecarOperationDefinition<unknown, unknown>,
         resolve: resolve as (value: unknown) => void,
         reject,
+        ...(options?.onLateSuccess
+          ? { onLateSuccess: options.onLateSuccess as (value: unknown) => void }
+          : {}),
         timer,
         ...(options?.signal ? { signal: options.signal } : {}),
         sendController: new AbortController(),
@@ -911,8 +926,21 @@ export class SidecarProtocolPeer {
     }
     const pending = this.#outbound.get(envelope.requestId);
     if (!pending) {
-      if (this.#cancelledOutbound.delete(envelope.requestId)) return;
-      throw new Error("sidecar_protocol_response_unknown_request");
+      if (!this.#cancelledOutbound.delete(envelope.requestId)) {
+        throw new Error("sidecar_protocol_response_unknown_request");
+      }
+      const late = this.#lateSuccessHandlers.get(envelope.requestId);
+      this.#lateSuccessHandlers.delete(envelope.requestId);
+      if (late && envelope.outcome === "ok") {
+        const parsed = late.definition.responseSchema.safeParse(envelope.payload);
+        if (!parsed.success) {
+          throw new Error("sidecar_protocol_response_payload_invalid", {
+            cause: parsed.error,
+          });
+        }
+        try { late.handler(parsed.data); } catch { /* Cleanup cannot affect the session. */ }
+      }
+      return;
     }
     if (envelope.outcome === "error") {
       if (pending.diagnosticStarted !== undefined) this.#diagnoseHeartbeat(envelope.requestId, "response_parsed", { durationMs: performance.now() - pending.diagnosticStarted, outcome: "error" }, new SidecarOperationError(envelope.error.code, envelope.error.retryable));
@@ -1064,6 +1092,12 @@ export class SidecarProtocolPeer {
     if (pending.diagnosticStarted !== undefined) this.#diagnoseHeartbeat(requestId, "request_cancelled", { durationMs: performance.now() - pending.diagnosticStarted }, new Error(code));
     pending.cancellationCode = code;
     this.#rememberCancelled(requestId);
+    if (pending.onLateSuccess) {
+      this.#lateSuccessHandlers.set(requestId, {
+        definition: pending.definition,
+        handler: pending.onLateSuccess,
+      });
+    }
     if (pending.sendState === "sent") {
       this.#settleOutbound(
         requestId,
@@ -1209,6 +1243,7 @@ export class SidecarProtocolPeer {
     this.#incomingStreams.clear();
     for (const retired of this.#retiredIncomingStreams.values()) retired.drained();
     this.#retiredIncomingStreams.clear();
+    this.#lateSuccessHandlers.clear();
     for (const stream of this.#outgoingStreams.values()) {
       stream.terminalRequested = true;
       stream.terminal = true;
@@ -1244,6 +1279,10 @@ export class SidecarProtocolPeer {
   #rememberCancelled(requestId: string): void {
     this.#cancelledOutbound.add(requestId);
     trimSet(this.#cancelledOutbound, this.#limits.maximumOutboundRequests * 2);
+    for (const cancelled of this.#lateSuccessHandlers.keys()) {
+      if (this.#cancelledOutbound.has(cancelled)) break;
+      this.#lateSuccessHandlers.delete(cancelled);
+    }
   }
 
   #markInboundActivity(): void {

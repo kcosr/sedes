@@ -436,6 +436,43 @@ describe("sidecar retained streams", () => {
     } finally { await fixture.sedes.close("done"); }
   });
 
+  it("hands a success that crossed a timed-out call to its late-success handler", async () => {
+    let failNext = false;
+    const fixture = await streamFixture(async (_sidecar, request) => {
+      if (failNext) throw new Error("start_failed");
+      return { streamId: request.streamId, admitted: true as const };
+    });
+    // Hold Sedes-bound frames so each response crosses its deadline.
+    const queue = fixture.pair.left.queue;
+    const deliver = queue.push.bind(queue);
+    const held: SidecarFrame[] = [];
+    queue.push = (frame: SidecarFrame) => { held.push(frame); };
+    const start = (streamId: string, onLateSuccess: (response: unknown) => void) =>
+      fixture.sedes.call(workspaceToolsShellStartOperation, {
+        workspaceHandle: randomUUID(), operationId: randomUUID(), streamId,
+        command: "x", initialCreditBytes: 1, timeoutMilliseconds: 1_000,
+      }, { deadlineMilliseconds: 20, onLateSuccess });
+    try {
+      const streamId = randomUUID();
+      const late = vi.fn();
+      await expect(start(streamId, late)).rejects.toThrow("sidecar_request_timeout");
+      queue.push = deliver;
+      for (const frame of held.splice(0)) deliver(frame);
+      await vi.waitFor(() => expect(late).toHaveBeenCalledExactlyOnceWith({ streamId, admitted: true }));
+
+      failNext = true;
+      queue.push = (frame: SidecarFrame) => { held.push(frame); };
+      const lateFailure = vi.fn();
+      await expect(start(randomUUID(), lateFailure)).rejects.toThrow("sidecar_request_timeout");
+      queue.push = deliver;
+      for (const frame of held.splice(0)) deliver(frame);
+      await expect(fixture.sedes.call(workspaceContextReadOperation, {
+        admissionId: randomUUID(), declaredPath: "/workspace", policyRootPath: "/workspace",
+      })).resolves.toMatchObject({ fingerprint: "a".repeat(64) });
+      expect(lateFailure).not.toHaveBeenCalled();
+    } finally { await fixture.sedes.close("done"); }
+  });
+
   it("keeps a replacement registration when a completed stream's handle is used again", async () => {
     const fixture = await streamFixture();
     const streamId = randomUUID();

@@ -331,6 +331,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
     options?: {
       readonly signal?: AbortSignal;
       readonly deadlineMilliseconds?: number;
+      readonly onLateSuccess?: (response: Response) => void;
     },
   ): Promise<Response> {
     return this.#peer.call(definition, request, options);
