@@ -40,8 +40,11 @@ describe("Workbench new-thread creation scope", () => {
     const getUsageAnalytics = vi.fn();
     const applicationStore = {api:{getUsageAnalytics},subscribe:()=>()=>undefined,getSnapshot:()=>state,workspaceIdForThread:()=>undefined};
     render(<Workbench route={{name:"usage"}} applicationStore={applicationStore as never} threadRegistry={{} as never} panelLayoutStore={{} as never} panelTenants={{} as never}/>);
-    expect(screen.getByText("Experimental usage accounting is disabled on this server.")).toBeVisible();
-    expect(screen.queryByRole("region",{name:"Usage"})).toBeNull();
+    // The page explains how to enable usage, without the analytics view.
+    expect(screen.getByText("Usage is turned off")).toBeVisible();
+    expect(screen.getByText("SEDES_EXPERIMENTAL_USAGE=1")).toBeVisible();
+    expect(screen.queryByRole("toolbar",{name:"Usage range and filters"})).toBeNull();
+    expect(screen.queryByRole("tablist",{name:"Usage views"})).toBeNull();
     expect(getUsageAnalytics).not.toHaveBeenCalled();
   });
   function renderHome(preferences: Record<string, unknown>) {
