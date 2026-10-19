@@ -251,6 +251,26 @@ describe("client static assets", () => {
     expect(brotliDecompressSync(replaced.body).toString()).toBe(replacement);
   });
 
+  it("leaves If-Match and If-Unmodified-Since preconditions to the uncompressed handler", async () => {
+    const get = await listening(await builtClientDirectory());
+    const preconditions: Record<string, string>[] = [
+      { "If-Match": "\"another-version\"" },
+      { "If-Unmodified-Since": "Thu, 01 Jan 1970 00:00:00 GMT" },
+    ];
+    for (const target of ["/assets/index-AbC_12-z.js", "/"]) {
+      for (const method of ["GET", "HEAD"]) {
+        for (const precondition of preconditions) {
+          const identity = await get(target, precondition, method);
+          expect(identity.status).toBeGreaterThanOrEqual(400);
+          const negotiated = await get(target, { ...browserEncodings, ...precondition }, method);
+          expect(negotiated.status).toBe(identity.status);
+          expect(negotiated.headers["content-encoding"]).toBeUndefined();
+          expect(negotiated.body.toString()).not.toContain("compressible client text");
+        }
+      }
+    }
+  });
+
   it("never serves dotfiles or files outside the client root and keeps the Host guard", async () => {
     const get = await listening(await builtClientDirectory());
     for (const target of ["/assets/.hidden-AbCd1234.js", "/assets/%2e%2e/%2e%2e/outside.js", "/..%2foutside.js", "/assets/..%5c..%5coutside.js"]) {

@@ -126,6 +126,9 @@ export function clientAssets(clientDirectory: string): RequestHandler {
   const serveCompressed = async (request: Request, response: Response): Promise<boolean> => {
     if (request.method !== "GET" && request.method !== "HEAD") return false;
     if (request.headers.range !== undefined) return false;
+    // `send` answers failed If-Match/If-Unmodified-Since preconditions; browsers
+    // never send them for client assets, so those requests stay uncompressed.
+    if (request.headers["if-match"] !== undefined || request.headers["if-unmodified-since"] !== undefined) return false;
     const filePath = clientFilePath(root, request.path);
     if (!filePath || !compressible(filePath)) return false;
     // Prefer Brotli whenever it is acceptable at all; browsers list gzip first.
