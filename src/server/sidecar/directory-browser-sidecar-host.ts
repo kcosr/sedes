@@ -17,6 +17,7 @@ import {
   pathForOpenDescriptor,
   revalidatedPathForOpenHandle,
 } from "../local-file-descriptor-path.js";
+import { pathIsWithin } from "../path-containment.js";
 
 const SNAPSHOT_TTL_MILLISECONDS = 60_000;
 const MAXIMUM_SNAPSHOTS = 32;
@@ -114,7 +115,7 @@ export class DirectoryBrowserSidecarHost {
     readonly entries: readonly DirectoryEntry[];
     truncated: boolean;
   }> {
-    if (!isWithin(request.rootPath, request.directoryPath)) {
+    if (!pathIsWithin(request.rootPath, request.directoryPath)) {
       throw directoryNotFound();
     }
     const root = await verifiedDirectory(request.rootPath);
@@ -125,7 +126,7 @@ export class DirectoryBrowserSidecarHost {
           : await verifiedDirectory(request.directoryPath);
       try {
         if (
-          !isWithin(root.canonicalPath, directory.canonicalPath) ||
+          !pathIsWithin(root.canonicalPath, directory.canonicalPath) ||
           root.canonicalPath !== request.rootPath ||
           directory.canonicalPath !== request.directoryPath
         ) {
@@ -302,7 +303,7 @@ async function enumerateDescriptor(
         continue;
       }
       const childPath = path.join(directoryPath, entry.name);
-      if (!isWithin(rootPath, childPath)) continue;
+      if (!pathIsWithin(rootPath, childPath)) continue;
       let child;
       try {
         child = await verifiedDirectory(childPath);
@@ -338,16 +339,6 @@ function validName(name: string): boolean {
     !name.includes("/") &&
     !/[\u0000-\u001f\u007f\\]/u.test(name) &&
     Buffer.byteLength(name, "utf8") <= 255
-  );
-}
-
-function isWithin(rootPath: string, candidatePath: string): boolean {
-  const relative = path.relative(rootPath, candidatePath);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) &&
-      !relative.startsWith(`..${path.sep}`) &&
-      relative !== "..")
   );
 }
 

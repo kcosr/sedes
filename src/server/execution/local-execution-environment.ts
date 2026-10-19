@@ -55,10 +55,6 @@ function sameScope(left: RequestScope, right: RequestScope): boolean {
   );
 }
 
-function isWithin(root: string, candidate: string): boolean {
-  return pathIsWithin(root, candidate);
-}
-
 async function canonicalDirectory(candidate: string): Promise<string> {
   let canonical: string;
   try {
@@ -289,7 +285,7 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
       throw new Error("directory_browse_not_allowed");
     }
     const containingRoot = roots
-      .filter((root) => isWithin(root, canonicalPath))
+      .filter((root) => pathIsWithin(root, canonicalPath))
       .sort((left, right) => right.length - left.length)[0];
     if (!containingRoot) throw new Error("directory_browse_not_allowed");
 
@@ -406,7 +402,7 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
           kind: "directory",
           path: canonicalPath,
           ...(canonicalPath !== containingRoot &&
-          isWithin(containingRoot, parent)
+          pathIsWithin(containingRoot, parent)
             ? { parentPath: parent }
             : {}),
         },
@@ -445,11 +441,11 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     // moved-or-removed classification; canonical containment is checked again
     // below to reject symlink escape.
     const lexicalPath = path.resolve(candidatePath);
-    if (!roots.some((root) => isWithin(root, lexicalPath))) {
+    if (!roots.some((root) => pathIsWithin(root, lexicalPath))) {
       throw new ExecutionWorkspaceAdmissionDeniedError();
     }
     const canonicalPath = await canonicalDirectory(candidatePath);
-    if (!roots.some((root) => isWithin(root, canonicalPath))) {
+    if (!roots.some((root) => pathIsWithin(root, canonicalPath))) {
       throw new ExecutionWorkspaceAdmissionDeniedError();
     }
     const id = this.#workspaceIds.get(canonicalPath) ?? randomUUID();

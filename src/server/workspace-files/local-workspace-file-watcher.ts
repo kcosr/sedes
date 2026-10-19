@@ -246,7 +246,7 @@ export class LocalWorkspaceFileWatcherRegistry {
   ): Promise<void> {
     if (entry.closing || entry.failed) return;
     const desired = (await gitMetadataDirectories(canonicalRoot))
-      .filter((candidate) => !isWithin(canonicalRoot, candidate.path))
+      .filter((candidate) => !pathIsWithin(canonicalRoot, candidate.path))
       .slice(0, MAXIMUM_GIT_METADATA_WATCHES);
     if (entry.closing || entry.failed) return;
     const desiredPaths = new Set(
@@ -351,10 +351,6 @@ async function gitMetadataDirectories(
   } catch {
     return [];
   }
-}
-
-function isWithin(root: string, candidate: string): boolean {
-  return pathIsWithin(root, candidate);
 }
 
 function closeEntry(entry: WatchEntry): void {
