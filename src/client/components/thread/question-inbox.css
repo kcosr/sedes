@@ -109,6 +109,9 @@
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-1-5);
+}
+/* "Saving…" is quiet; Dismiss keeps the button's own colour. */
+.question-inbox-card-actions > [role="status"] {
   color: var(--muted-foreground);
   font-size: var(--text-meta);
 }
