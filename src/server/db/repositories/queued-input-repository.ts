@@ -1834,7 +1834,11 @@ export class QueuedInputRepository {
       }
       this.#touchThread(scope, applicationThreadId, input.now, false);
       const failed = this.get(scope, applicationThreadId, id);
-      this.#releaseUnacceptedCallback(scope, applicationThreadId, failed, input.now);
+      // Late evidence can still accept a Steer whose outcome is unknown, so
+      // only a proven-unsent one ends here; dismissal ends the other.
+      if (failureReason === "not_sent") {
+        this.#releaseUnacceptedCallback(scope, applicationThreadId, failed, input.now);
+      }
       return failed;
     })();
   }
@@ -2565,7 +2569,7 @@ export class QueuedInputRepository {
     id: string,
     now: number,
   ): number {
-    return this.database
+    const changes = this.database
       .prepare(
         `
           UPDATE queued_inputs
@@ -2577,6 +2581,15 @@ export class QueuedInputRepository {
       )
       .run(now, scope.tenantId, scope.principalId, applicationThreadId, id)
       .changes;
+    if (changes === 1) {
+      this.#releaseUnacceptedCallback(
+        scope,
+        applicationThreadId,
+        this.get(scope, applicationThreadId, id),
+        now,
+      );
+    }
+    return changes;
   }
 
   #assertActiveCapacity(
@@ -2687,10 +2700,11 @@ export class QueuedInputRepository {
   }
 
   /**
-   * A failed or cancelled row was never authoritatively accepted, so its
-   * operation can never record the completion an agent-control callback
-   * awaits. Release that obligation in the same transaction; otherwise it
-   * would stay registered and block archive and snooze for both threads.
+   * A cancelled row, a dismissed failure, or a failure no later evidence can
+   * accept was never authoritatively accepted, so its operation can never
+   * record the completion an agent-control callback awaits. Release that
+   * obligation in the same transaction; otherwise it would stay registered
+   * and block archive and snooze for both threads.
    */
   #releaseUnacceptedCallback(
     scope: RequestScope,

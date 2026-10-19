@@ -1189,6 +1189,48 @@ describe("ThreadCompletionCallbackDispatcher", () => {
     }
   });
 
+  it("keeps a callback while a Steer of its target input has an unknown outcome, then releases it on dismissal", () => {
+    const fixture = createFixture();
+    try {
+      const [callerThreadId, targetThreadId] = fixture.threadIds;
+      const repository = new QueuedInputRepository(fixture.database);
+      const callbacks = new ThreadCompletionCallbackRepository(fixture.database);
+      const callbackId = "7d2c9c65-4d77-4c2a-9d8b-8c5f5fa03f33";
+      repository.enqueue(fixture.scope, targetThreadId, {
+        id: "agent-steer", mutationId: "agent-steer-send", text: "steer this in",
+        contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: {
+          kind: "agent_control",
+          expectedThreadRevision: repository.getThreadRevision(fixture.scope, targetThreadId),
+          initiatingAgentThreadId: callerThreadId,
+          completionCallback: { id: callbackId, callerThreadId },
+        },
+        now: 1_000,
+      });
+      repository.reserveHeadForSteer(fixture.scope, targetThreadId, "agent-steer", {
+        steerOperationId: "agent-steer-operation",
+        expectedThreadRevision: repository.getThreadRevision(fixture.scope, targetThreadId),
+        now: 1_010,
+      });
+      repository.failSteerUnknown(fixture.scope, targetThreadId, "agent-steer", {
+        steerOperationId: "agent-steer-operation", expectedState: "dispatching",
+        diagnostic: "Delivery outcome is unknown.", now: 1_020,
+      });
+      // Late provider evidence may still accept this failed Steer.
+      expect(repository.get(fixture.scope, targetThreadId, "agent-steer").state).toBe("failed");
+      expect(callbacks.get(fixture.scope, callbackId).state).toBe("registered");
+
+      repository.acknowledgeFailure(fixture.scope, targetThreadId, "agent-steer", 1_030);
+      expect(callbacks.get(fixture.scope, callbackId)).toMatchObject({
+        state: "cancelled",
+        cancelledAt: 1_030,
+        cancellationMutationId: `${callbackId}:target_input_failed`,
+      });
+    } finally {
+      fixture.database.close();
+    }
+  });
+
   it("releases a callback obligation when its pending target agent-control input is cancelled", async () => {
     const fixture = createFixture();
     const [callerThreadId, targetThreadId] = fixture.threadIds;

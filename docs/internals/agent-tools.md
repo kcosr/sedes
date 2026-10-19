@@ -897,10 +897,13 @@ registered callbacks whose completion snapshot already exists, so a recovered
 result is delivered through the queue that already owns it. Registered
 callbacks block archival at either endpoint, a force reset cancels the affected
 registrations, and archived or snoozed calling threads are never silently
-revived. A target input that becomes `failed` or `cancelled` was never
-authoritatively accepted and can never record the completion its callback
-awaits, so the same queue transaction cancels that registration; the calling
-thread receives no result for it.
+revived. A target input that is cancelled, whose failure is dismissed, or
+that fails where no later evidence can accept it was never authoritatively
+accepted and can never record the completion its callback awaits, so the same
+queue transaction cancels that registration; the calling thread receives no
+result for it. A Steer whose delivery outcome is unknown keeps its
+registration until dismissed, because late provider evidence can still accept
+it.
 
 ## CLI transports and admission
 
