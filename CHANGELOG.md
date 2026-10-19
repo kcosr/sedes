@@ -107,6 +107,10 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Long paths in the Files editor, the Changes diff headers, and the changed-file
+  list give way from the start of their directory, so the file name stays
+  visible on narrow panels; the tooltip keeps the whole path.
+
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See
   [parking](docs/user/organize-work.md#park-quiet-work).

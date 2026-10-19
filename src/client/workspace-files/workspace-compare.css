@@ -351,10 +351,6 @@
   font-family: var(--font-mono);
   font-size: 11px;
 }
-.workspace-compare-directory span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .workspace-compare-directory svg {
   width: 13px;
   height: 13px;

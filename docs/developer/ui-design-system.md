@@ -167,6 +167,12 @@ item) share the control box in `components/ui/control.ts`. `Field` takes `label`
 inside dialogs, sheets, popovers, and menus, so a dialog opened from a field
 starts a new form.
 
+**Paths.** `PathLabel` shows a file or directory path on one line: its muted
+directory gives way from the start, so the last segment stays visible, and its
+tooltip keeps the whole path (or a caller's `title`, such as a rename's
+`old → new`). Use it wherever a path labels a file, as in the Files editor
+toolbar and the Changes diff headers and navigator.
+
 **Status and feedback.** One tone vocabulary (`components/ui/tone.ts`),
 `neutral | info | success | warning | danger`, serves every status primitive. Buttons and menu items name
 an action with `variant="destructive"` instead.

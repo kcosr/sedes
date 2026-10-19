@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Search, X } from "lucide-react";
 import { WORKSPACE_COMPARE_FILTER_MAX_LENGTH } from "./workspace-compare-navigation.js";
+import { PathLabel } from "../components/ui/path-label.js";
 import type {
   WorkspaceDiffChangedFileSummary,
   WorkspaceDiffFileId,
@@ -212,7 +213,7 @@ export function WorkspaceChangedFileNavigator({
                 ) : (
                   <ChevronDown />
                 )}
-                <span>{row.path}/</span>
+                <PathLabel path={`${row.path}/`} />
               </div>
             ) : (
               <div

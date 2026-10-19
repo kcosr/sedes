@@ -78,6 +78,7 @@ import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js
 import { Field } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { NativeSelect } from "../components/ui/native-select.js";
+import { PathLabel } from "../components/ui/path-label.js";
 import {
   SegmentedControl,
   SegmentedControlItem,
@@ -3413,7 +3414,7 @@ export function WorkspaceFilesPanel({
               activeFile.contentKind === "binary" ? (
               <div className="workspace-files-editor-shell">
                 <header className="workspace-files-editor-toolbar">
-                  <span title={activeFile.path}>{activeFile.path}</span>
+                  <PathLabel path={activeFile.path} />
                   <div>{activeDownloadAction}</div>
                 </header>
                 {activeDownloadError && (
@@ -3456,7 +3457,7 @@ export function WorkspaceFilesPanel({
               ) : (
                 <div className="workspace-files-editor-shell">
                   <header className="workspace-files-editor-toolbar">
-                    <span title={activeFile.path}>{activeFile.path}</span>
+                    <PathLabel path={activeFile.path} />
                     <div>{activeDownloadAction}</div>
                   </header>
                   {activeDownloadError && (
@@ -3474,7 +3475,7 @@ export function WorkspaceFilesPanel({
             ) : activeFile?.availability === "available" && activeDocument ? (
               <div className="workspace-files-editor-shell">
                 <header className="workspace-files-editor-toolbar">
-                  <span title={activeDocument.path}>{activeDocument.path}</span>
+                  <PathLabel path={activeDocument.path} />
                   <div>
                     {activeDownloadAction}
                     <Button

@@ -662,6 +662,13 @@ describe("WorkspaceFilesPanel", () => {
     });
     const edit = screen.getByRole("button", { name: "Edit" });
     const save = screen.getByRole("button", { name: "Save" });
+    const path = download
+      .closest(".workspace-files-editor-toolbar")!
+      .querySelector("[data-slot=path-label]")!;
+    expect(path).toHaveAttribute("title", "src/index.ts");
+    expect(
+      path.querySelector("[data-slot=path-label-name]"),
+    ).toHaveTextContent(/^index\.ts$/);
     expect(download).toHaveTextContent("");
     expect(download).toHaveAttribute("title", "Download saved file");
     expect(edit).toHaveTextContent("");

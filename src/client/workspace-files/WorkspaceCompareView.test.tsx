@@ -213,6 +213,12 @@ describe("WorkspaceCompareView", () => {
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(8));
     expect(screen.queryByText("Sedes")).toBeNull();
     expect(screen.queryByText(/Load more diffs/)).not.toBeInTheDocument();
+    // Directory rows give way from their start, keeping the full path as
+    // their tooltip.
+    const directory = screen.getByRole("treeitem", { name: "src/" });
+    expect(
+      directory.querySelector("[data-slot=path-label]"),
+    ).toHaveAttribute("title", "src/");
     fireEvent.click(screen.getByRole("treeitem", { name: /file-9.ts/ }));
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(10));
   });
@@ -721,9 +727,13 @@ describe("WorkspaceCompareView", () => {
     const reviewed = await screen.findByRole("button", {
       name: "Mark reviewed",
     });
-    expect(
-      within(screen.getByTestId("code-view")).getByText("src/file-1.ts"),
-    ).toBeVisible();
+    const path = within(screen.getByTestId("code-view")).getByTitle(
+      "src/file-1.ts",
+    );
+    expect(path).toBeVisible();
+    expect(path).toHaveTextContent("src/file-1.ts");
+    // The file name is its own segment, so a narrow header keeps it whole.
+    expect(within(path).getByText("file-1.ts")).toBeVisible();
     fireEvent.click(reviewed);
     expect(onReviewedChange).toHaveBeenCalledWith("file-1", true);
     fireEvent.click(screen.getByRole("button", { name: "Open file" }));

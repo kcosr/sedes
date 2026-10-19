@@ -94,6 +94,7 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
 import { Field } from "../components/ui/field.js";
+import { PathLabel } from "../components/ui/path-label.js";
 import {
   Popover,
   PopoverContent,
@@ -2127,16 +2128,17 @@ export function WorkspaceCompareView({
                         : "workspace-compare-status-card"
                     }
                   >
-                    <strong
-                      title={
-                        file.oldPath &&
-                        file.newPath &&
-                        file.oldPath !== file.newPath
-                          ? `${file.oldPath} → ${file.newPath}`
-                          : workspaceCompareFilePath(file)
-                      }
-                    >
-                      {workspaceCompareFilePath(file)}
+                    <strong>
+                      <PathLabel
+                        path={workspaceCompareFilePath(file)}
+                        title={
+                          file.oldPath &&
+                          file.newPath &&
+                          file.oldPath !== file.newPath
+                            ? `${file.oldPath} → ${file.newPath}`
+                            : undefined
+                        }
+                      />
                     </strong>
                     {item.type === "diff" && <FileStats file={file} />}
                     {item.type !== "diff" && (

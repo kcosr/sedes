@@ -2956,12 +2956,6 @@ textarea:disabled {
   font-size: 12px;
 }
 
-.workspace-files-editor-toolbar > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .workspace-files-editor-toolbar > div {
   display: flex;
   flex: 0 0 auto;
