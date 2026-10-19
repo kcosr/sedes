@@ -11,7 +11,6 @@ import {
   type ThreadEventEnvelope,
   type ThreadCheckpoint,
 } from "../../shared/protocol/conversation.js";
-import { MAXIMUM_SSE_EVENT_BYTES } from "../../shared/protocol/payload.js";
 import {
   threadCheckpointFrame,
   threadEventFrame,
@@ -26,7 +25,7 @@ import {
 } from "../../shared/protocol/diagnostics.js";
 import { THREAD_SSE_SMALL_REPLAY_BYTES, type ThreadEventHub } from "./thread-event-hub.js";
 import { ApiError, projectApiError } from "../http/errors.js";
-import { assertBoundedSseFrame } from "./sse-frame.js";
+import { assertBoundedSseFrame, assertBoundedSseFrameBytes } from "./sse-frame.js";
 
 export interface ThreadSnapshotCapture {
   /**
@@ -67,9 +66,7 @@ function roundedMilliseconds(value: number): number {
 
 /** Enforces the transport limit for one subscriber; the hub never rejects a large event. */
 function boundedFrame(encoded: ThreadFrame): ThreadFrame {
-  if (encoded.bytes > MAXIMUM_SSE_EVENT_BYTES) {
-    throw new Error("sse_event_frame_byte_limit_exceeded");
-  }
+  assertBoundedSseFrameBytes(encoded.bytes);
   return encoded;
 }
 

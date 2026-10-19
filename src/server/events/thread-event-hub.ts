@@ -56,7 +56,6 @@ function replayCostFloor(type: string, data: unknown, bytes: number): number {
   return bytes;
 }
 
-
 /**
  * Validated normalized thread publication boundary.
  *

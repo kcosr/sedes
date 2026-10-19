@@ -108,7 +108,9 @@ User-facing changes are collected here before release. See the
 ### Changed
 
 - Thread actions and recovery checks no longer slow down as mutation history
-  grows: database migration **153** indexes mutation receipts by thread.
+  grows: database migration **153** indexes mutation receipts by thread. Live
+  thread streams validate and encode each update once for every viewer and keep
+  less unusable reconnect history in memory.
 
 - The server sends the web client compressed (Brotli or gzip) and lets browsers
   cache content-hashed assets for a year; `index.html` is still revalidated on
