@@ -168,7 +168,9 @@ User-facing changes are collected here before release. See the
 
 - Usage chart and heatmap readouts stay on screen after a tap instead of
   vanishing as the finger lifts, the heatmap can be read with the arrow keys,
-  and its readout is announced to screen readers.
+  and its readout is announced to screen readers. With usage turned off, the
+  Usage page explains how the operator enables it; the empty state now names
+  OpenCode among the recorded backends.
 
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the

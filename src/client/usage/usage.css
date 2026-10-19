@@ -388,23 +388,9 @@
   border-top: 1px solid var(--border-soft);
 }
 
-.usage-banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in oklch, var(--warning) 45%, transparent);
-  border-radius: var(--radius-card);
-  background: color-mix(in oklch, var(--warning) 10%, var(--card));
-  font-size: var(--text-ui);
-}
-
-.usage-banner > span {
-  flex: 1;
-}
-
-.usage-banner small {
+.usage-error-detail {
   color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
 }
 
 /* ── Summary tiles ─────────────────────────────────────────────────────── */
@@ -1494,31 +1480,6 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
 }
 
 /* Empty and loading. */
-.usage-empty {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  padding: 64px 24px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-card);
-  color: var(--muted-foreground-2);
-  text-align: center;
-}
-
-.usage-empty h2 {
-  margin: 4px 0 0;
-  color: var(--foreground);
-  font-size: 16px;
-  font-weight: 620;
-}
-
-.usage-empty p {
-  max-width: 480px;
-  margin: 0;
-  font-size: var(--text-ui);
-  line-height: 1.5;
-}
-
 .usage-skeleton {
   display: grid;
   gap: 16px;

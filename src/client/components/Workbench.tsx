@@ -22,7 +22,7 @@ import {
   createWorkspaceFileLinkHandler,
   WorkspaceFileLinkProvider,
 } from "../workspace-files/workspace-file-link-routing";
-import { UsageView } from "../usage/UsageView";
+import { UsageDisabledView, UsageView } from "../usage/UsageView";
 import { useSidebarInventoryScope } from "../app/use-sidebar-inventory-scope";
 import { useEnvironmentColorsEnabled } from "../app/use-environment-colors-enabled";
 import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
@@ -135,7 +135,7 @@ export function Workbench({
           <div className="pane-nav-header">
             <SidebarNavTrigger />
           </div>
-          {application.experimentalUsageEnabled ? <UsageView store={applicationStore} /> : <p>Experimental usage accounting is disabled on this server.</p>}
+          {application.experimentalUsageEnabled ? <UsageView store={applicationStore} /> : <UsageDisabledView />}
         </div>
       </main>
     );

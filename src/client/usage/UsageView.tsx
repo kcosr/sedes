@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChartColumnBig, RefreshCw, TriangleAlert } from "lucide-react";
+import { ChartColumnBig, RefreshCw } from "lucide-react";
 import { Button } from "@client/components/ui/button";
+import { Callout } from "@client/components/ui/callout";
+import { EmptyState } from "@client/components/ui/empty-state";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@client/components/ui/tabs";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import type { UsageAnalyticsDimension, UsageAnalyticsRequest, UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
@@ -32,6 +34,24 @@ function tabQuery(tab: UsageTab, settings: UsageViewSettings): Pick<UsageAnalyti
 }
 
 /** Principal-wide recorded usage analytics page. */
+/** The Usage page when the server has not enabled usage accounting. */
+export function UsageDisabledView() {
+  return (
+    <section className="usage-view" aria-labelledby="usage-view-title">
+      <div className="usage-page">
+        <header className="usage-header">
+          <div>
+            <p className="eyebrow">Recorded usage · Experimental</p>
+            <h1 id="usage-view-title">Usage</h1>
+          </div>
+        </header>
+        <EmptyState icon={<ChartColumnBig />} title="Usage is turned off"
+          description={<>The server operator enables it by setting <code>SEDES_EXPERIMENTAL_USAGE=1</code> and restarting the server.</>} />
+      </div>
+    </section>
+  );
+}
+
 export function UsageView({ store }: { store: ApplicationClientStore }) {
   const [settings, setSettings] = useState<UsageViewSettings>(() => readUsageSettings());
   const [filters, setFilters] = useState<UsageFilterState>({});
@@ -87,19 +107,17 @@ export function UsageView({ store }: { store: ApplicationClientStore }) {
         </div>
 
         {analytics.error ? (
-          <div className="usage-banner" role="alert">
-            <TriangleAlert aria-hidden="true" size={16} />
-            <span>{data ? "Usage could not be refreshed. Showing the last successful read." : "Usage is unavailable right now."} <small>{analytics.error}</small></span>
-            <Button variant="outline" size="sm" onClick={analytics.refresh}>Retry</Button>
-          </div>
+          // Stale numbers stay on screen after a failed refresh: a warning.
+          <Callout tone={data ? "warning" : "danger"} role="alert"
+            action={<Button variant="outline" size="sm" onClick={analytics.refresh}>Retry</Button>}>
+            {data ? "Usage could not be refreshed. Showing the last successful read." : "Usage is unavailable right now."}{" "}
+            <span className="usage-error-detail">{analytics.error}</span>
+          </Callout>
         ) : null}
 
         {!data ? (analytics.error ? null : <UsageSkeleton />) : neverRecorded ? (
-          <div className="usage-empty">
-            <ChartColumnBig aria-hidden="true" size={24} />
-            <h2>No recorded usage yet</h2>
-            <p>Sedes records tokens and estimated cost on the server as Pi, Codex, and Claude threads run. Charts appear here after the first recorded turn. Grok does not report usage.</p>
-          </div>
+          <EmptyState icon={<ChartColumnBig />} title="No recorded usage yet"
+            description="Sedes records tokens and estimated cost on the server as Pi, Codex, Claude, and OpenCode threads run. Charts appear here after the first recorded turn. Grok does not report usage." />
         ) : (
           <div className="usage-content" data-stale={analytics.stale ? "true" : undefined} aria-busy={analytics.loading}>
             <SummaryTiles data={data} rangeLabel={rangeLabel} comparable={settings.preset !== "all"} />

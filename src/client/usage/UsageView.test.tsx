@@ -8,7 +8,7 @@ import {
   type UsageAnalyticsAggregate, type UsageAnalyticsRequest, type UsageAnalyticsResponse,
 } from "../../shared/protocol/usage-analytics.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
-import { UsageView } from "./UsageView.js";
+import { UsageDisabledView, UsageView } from "./UsageView.js";
 
 const aggregate = (tokens: number, overrides: Partial<UsageAnalyticsAggregate> = {}): UsageAnalyticsAggregate => ({
   tokens: String(tokens), input: String(Math.round(tokens * 0.9)), uncachedInput: "0", cacheRead: String(Math.round(tokens * 0.6)), cacheWrite: "0",
@@ -227,6 +227,9 @@ describe("UsageView", () => {
     fail = true;
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh usage" })); });
     expect(await screen.findByRole("alert")).toHaveTextContent("Usage could not be refreshed");
+    // The last numbers stay, so a failed refresh is a warning, not an error.
+    expect(screen.getByRole("alert")).toHaveAttribute("data-slot", "callout");
+    expect(screen.getByRole("alert")).toHaveAttribute("data-tone", "warning");
     expect(screen.getByText("2.5M")).toBeVisible();
     fail = false;
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Retry" })); });
@@ -237,11 +240,23 @@ describe("UsageView", () => {
   it("reports a request that fails before it is sent instead of unmounting", async () => {
     mount(() => { throw new Error("request_invalid"); });
     expect(await screen.findByRole("alert")).toHaveTextContent("Usage is unavailable right now.");
+    expect(screen.getByRole("alert")).toHaveAttribute("data-tone", "danger");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Usage" })).toBeVisible();
   });
 
   it("explains an installation with no recorded usage", async () => {
     mount(async (request) => response(request, { firstRecordedAt: null, totals: aggregate(0, { increments: "0", threads: "0", costs: [] }) }));
-    expect(await screen.findByRole("heading", { name: "No recorded usage yet" })).toBeVisible();
+    const empty = (await screen.findByText("No recorded usage yet")).closest("[data-slot=empty-state]");
+    expect(empty).toHaveAttribute("data-variant", "panel");
+    expect(empty).toHaveTextContent("Pi, Codex, Claude, and OpenCode threads");
+  });
+
+  it("explains that usage is turned off and how the operator enables it", () => {
+    render(<UsageDisabledView />);
+    expect(screen.getByRole("heading", { name: "Usage" })).toBeVisible();
+    const empty = screen.getByText("Usage is turned off").closest("[data-slot=empty-state]");
+    expect(empty).toHaveAttribute("data-variant", "panel");
+    expect(within(empty as HTMLElement).getByText("SEDES_EXPERIMENTAL_USAGE=1").tagName).toBe("CODE");
   });
 });
