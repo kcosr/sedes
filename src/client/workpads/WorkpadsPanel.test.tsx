@@ -359,6 +359,8 @@ describe("WorkpadsPanel", () => {
     await waitFor(() => expect(api.commitWorkpadDraft).toHaveBeenCalledWith("pad", { expectedDraftRevision: 1, expectedRevision: 1 }));
     expect(api.saveWorkpadDraft).toHaveBeenCalledWith("pad", { expectedRevision: 0, baseRevision: 1, content: "Original with new agreement" });
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "Workpad content" })).not.toBeInTheDocument());
+    // An explicit save is announced, unlike autosave.
+    await waitFor(() => expect(document.querySelector(".workpads-panel > [aria-live]")).toHaveTextContent("Saved revision 2."));
   });
   it("reports unsynced text to the panel host and retains it while collapsed", async () => {
     const { store, api, emit } = fixture();
@@ -1479,7 +1481,11 @@ describe("WorkpadsPanel", () => {
       const editor = await startEditing();
       const save = screen.getByRole("button", { name: "Save workpad" });
       expect(save).toBeDisabled();
-      expect(screen.getByRole("status")).toHaveTextContent("No changes");
+      // The routine sync label is shown, not announced.
+      const sync = document.querySelector(".workpads-sync")!;
+      expect(sync).toHaveTextContent("No changes");
+      expect(sync).not.toHaveAttribute("role");
+      expect(sync.closest("[aria-live], [role=status]")).toBeNull();
       fireEvent.change(editor, { target: { value: "Original, amended" } });
       expect(save).toBeEnabled();
       fireEvent.change(editor, { target: { value: "Original" } });

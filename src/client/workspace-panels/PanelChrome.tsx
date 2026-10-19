@@ -103,12 +103,14 @@ export function PanelChrome({
             {status?.dirty && (
               <span
                 className="workspace-panel-dirty"
+                role="img"
                 aria-label="Unsaved changes"
               />
             )}
             {status?.busy && (
               <span
                 className="comet-spinner workspace-panel-spinner"
+                role="img"
                 aria-label="Busy"
               />
             )}

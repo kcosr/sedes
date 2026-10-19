@@ -171,7 +171,9 @@ User-facing changes are collected here before release. See the
 
 - Workpads Archive, Unarchive, Move and Rename are announced to screen
   readers, name the workpad in a failure, and keep keyboard focus in the list
-  when the row leaves it, as Tasks does.
+  when the row leaves it, as Tasks does. Workpad autosave no longer repeats
+  its sync state to screen readers (an explicit save is announced), and panel
+  headers' unsaved and busy markers are read.
 
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the

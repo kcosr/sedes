@@ -524,6 +524,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     if (!isCurrent()) return;
     const result = await store.api.commitWorkpadDraft(selected.id, { expectedDraftRevision: value.revision, expectedRevision: value.baseRevision });
     if (!isCurrent()) return;
+    announce(`Saved revision ${result.workpad.revision}.`);
     await load(result.workpad.id);
     if (isCurrent()) await refreshList();
   };
@@ -849,7 +850,9 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       <div className="workpads-doc-heading">
         <h3 className="workpads-doc-title" title={documentTitle}>{documentTitle}</h3>
         {editing
-          ? <span className="workpads-doc-meta workpads-sync" role="status">{syncLabel}</span>
+          // Autosave cycles this label every few seconds; it is not announced.
+          // Failures and conflicts are alerts, and a saved revision is announced.
+          ? <span className="workpads-doc-meta workpads-sync">{syncLabel}</span>
           : checklistSaving ? <span className="workpads-doc-meta workpads-sync" role="status">Saving checklist item…</span>
           : <span className="workpads-doc-meta" title={revision ? new Date(revision.createdAt).toLocaleString() : undefined}>{meta}</span>}
       </div>
