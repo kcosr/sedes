@@ -89,7 +89,7 @@ export class EventHub<T> {
     commit?: {
       readonly bytes: number;
       readonly retain: boolean;
-      readonly beforeFanout: (event: SequencedEvent<T>) => void;
+      readonly beforeFanout?: (event: SequencedEvent<T>) => void;
     },
   ): SequencedEvent<T> {
     const event: SequencedEvent<T> = {
@@ -127,7 +127,7 @@ export class EventHub<T> {
       }
     }
 
-    commit?.beforeFanout(event);
+    commit?.beforeFanout?.(event);
     for (const subscriber of [...this.subscribers]) {
       try {
         subscriber.listener(event);

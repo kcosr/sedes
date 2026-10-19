@@ -142,14 +142,15 @@ export function projectThreadEventEnvelopeActivity(
           page: projectHistoryPageActivityValue(event.page, detail),
         },
       });
-    case "item_upsert":
+    case "item_upsert": {
+      const item = projectConversationItemActivity(event.item, detail);
+      // Messages and other undetailed items are written unchanged.
+      if (item === event.item) return envelope;
       return threadEventEnvelopeSchema.parse({
         ...envelope,
-        event: {
-          ...event,
-          item: projectConversationItemActivity(event.item, detail),
-        },
+        event: { ...event, item },
       });
+    }
     default:
       return envelope;
   }

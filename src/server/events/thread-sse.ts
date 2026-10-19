@@ -7,15 +7,16 @@ import {
 } from "../../shared/protocol/api.js";
 import {
   threadEventEnvelopeSchema,
-  threadCheckpointSchema,
   type ActivityDetailMode,
   type ThreadEventEnvelope,
   type ThreadCheckpoint,
 } from "../../shared/protocol/conversation.js";
+import { MAXIMUM_SSE_EVENT_BYTES } from "../../shared/protocol/payload.js";
 import {
-  projectThreadEventEnvelopeActivity,
-  projectThreadSnapshotActivity,
-} from "../conversations/thread-activity-projection.js";
+  threadCheckpointFrame,
+  threadEventFrame,
+  type ThreadFrame,
+} from "./thread-event-frames.js";
 import {
   threadLoadServerDiagnosticSchema,
   threadHandshakeServerDiagnosticSchema,
@@ -64,39 +65,12 @@ function roundedMilliseconds(value: number): number {
   return Math.round(Math.min(86_400_000, Math.max(0, value)) * 10) / 10;
 }
 
-function encodeEnvelope(
-  rawEnvelope: unknown,
-  activityDetail: ActivityDetailMode,
-): string {
-  const envelope = projectThreadEventEnvelopeActivity(
-    threadEventEnvelopeSchema.parse(rawEnvelope),
-    activityDetail,
-  );
-  return assertBoundedSseFrame(
-    [
-      `id: ${envelope.eventId}`,
-      "event: thread",
-      `data: ${JSON.stringify(envelope)}`,
-      "",
-      "",
-    ].join("\n"),
-  );
-}
-
-function encodeCheckpoint(
-  checkpoint: ThreadCheckpoint,
-  activityDetail: ActivityDetailMode,
-): string {
-  const projected = threadCheckpointSchema.parse({
-    ...checkpoint,
-    snapshot: projectThreadSnapshotActivity(
-      checkpoint.snapshot,
-      activityDetail,
-    ),
-  });
-  return assertBoundedSseFrame(
-    `id: ${projected.eventId}\nevent: thread-checkpoint\ndata: ${JSON.stringify(projected)}\n\n`,
-  );
+/** Enforces the transport limit for one subscriber; the hub never rejects a large event. */
+function boundedFrame(encoded: ThreadFrame): ThreadFrame {
+  if (encoded.bytes > MAXIMUM_SSE_EVENT_BYTES) {
+    throw new Error("sse_event_frame_byte_limit_exceeded");
+  }
+  return encoded;
 }
 
 function encodeLoadDiagnostic(diagnostic: ThreadLoadServerDiagnostic): string {
@@ -241,21 +215,20 @@ export async function serveThreadEventStream(
   options: ThreadEventStreamOptions = {},
 ): Promise<void> {
   const activityDetail = options.activityDetail ?? "full";
-  const encode = (rawEnvelope: unknown): string =>
-    encodeEnvelope(rawEnvelope, activityDetail);
-  const checkpointFrames = new WeakMap<
-    ThreadCheckpoint,
-    { readonly frame: string; readonly encodeMilliseconds: number }
-  >();
+  // Hub envelopes and checkpoints are validated once at the hub and shared
+  // by every subscriber, which also share their encoded frames.
+  const encode = (envelope: ThreadEventEnvelope): ThreadFrame =>
+    boundedFrame(threadEventFrame(envelope, activityDetail));
+  const checkpointEncodeMilliseconds = new WeakMap<ThreadCheckpoint, number>();
   const encodeCurrent = (checkpoint: ThreadCheckpoint) => {
-    let encoded = checkpointFrames.get(checkpoint);
-    if (encoded === undefined) {
-      const startedAt = performance.now();
-      const frame = encodeCheckpoint(checkpoint, activityDetail);
-      encoded = { frame, encodeMilliseconds: performance.now() - startedAt };
-      checkpointFrames.set(checkpoint, encoded);
+    const startedAt = performance.now();
+    const encoded = boundedFrame(threadCheckpointFrame(checkpoint, activityDetail));
+    let encodeMilliseconds = checkpointEncodeMilliseconds.get(checkpoint);
+    if (encodeMilliseconds === undefined) {
+      encodeMilliseconds = performance.now() - startedAt;
+      checkpointEncodeMilliseconds.set(checkpoint, encodeMilliseconds);
     }
-    return encoded;
+    return { ...encoded, encodeMilliseconds };
   };
   const pendingEventLimit =
     options.pendingEventLimit ?? DEFAULT_THREAD_SSE_PENDING_EVENT_LIMIT;
@@ -322,7 +295,11 @@ export async function serveThreadEventStream(
         )
     : undefined;
 
-  let pending: ThreadEventEnvelope[] = [];
+  type PendingEnvelope = {
+    readonly envelope: ThreadEventEnvelope;
+    readonly encoded: ThreadFrame;
+  };
+  let pending: PendingEnvelope[] = [];
   let pendingBytes = 0;
   let overflowed = false;
   let live = false;
@@ -383,15 +360,15 @@ export async function serveThreadEventStream(
     drainTimer.unref();
   };
 
-  const write = (rawEnvelope: unknown): boolean => {
+  const write = (encoded: ThreadFrame): boolean => {
     if (closed) return false;
-    return response.write(encode(rawEnvelope));
+    return response.write(encoded.frame);
   };
 
   const resetPendingAtReplacement = (envelope: ThreadEventEnvelope): void => {
     const encoded = encode(envelope);
-    pending = [envelope];
-    pendingBytes = Buffer.byteLength(encoded, "utf8");
+    pending = [{ envelope, encoded }];
+    pendingBytes = encoded.bytes;
     // A replacement supersedes the entire pending array. The prior flush
     // index belongs to that discarded array and must never skip the new
     // authoritative anchor after backpressure drains.
@@ -402,8 +379,7 @@ export async function serveThreadEventStream(
     overflowed = pending.length > pendingEventLimit;
   };
 
-  const queue = (rawEnvelope: unknown): void => {
-    const envelope = threadEventEnvelopeSchema.parse(rawEnvelope);
+  const queue = (envelope: ThreadEventEnvelope): void => {
     if (envelope.event.type === "snapshot") {
       // A replacement is authoritative over everything before it, including
       // any events already discarded by an overflow.
@@ -411,7 +387,8 @@ export async function serveThreadEventStream(
       return;
     }
     if (overflowed) return;
-    const bytes = Buffer.byteLength(encode(envelope), "utf8");
+    const encoded = encode(envelope);
+    const bytes = encoded.bytes;
     if (
       pending.length + 1 > pendingEventLimit ||
       pendingBytes + bytes > pendingByteLimit
@@ -422,7 +399,7 @@ export async function serveThreadEventStream(
       );
       return;
     }
-    pending.push(envelope);
+    pending.push({ envelope, encoded });
     pendingBytes += bytes;
   };
 
@@ -438,9 +415,9 @@ export async function serveThreadEventStream(
       return;
     }
     while (flushIndex < pending.length) {
-      const envelope = pending[flushIndex]!;
+      const { encoded } = pending[flushIndex]!;
       flushIndex += 1;
-      if (!write(envelope)) {
+      if (!write(encoded)) {
         armDrain();
         return;
       }
@@ -478,11 +455,13 @@ export async function serveThreadEventStream(
     envelope: ThreadEventEnvelope | ThreadCheckpoint,
     handshake: SnapshotHandshake = "queued_replacement",
     snapshotCaptureMilliseconds = 0,
+    encodedEnvelope?: ThreadFrame,
   ): Promise<boolean> => {
     const encodeStartedAt = performance.now();
     const encodedCheckpoint =
       "event" in envelope ? undefined : encodeCurrent(envelope);
-    const frame = encodedCheckpoint?.frame ?? encode(envelope);
+    const frame = encodedCheckpoint?.frame ??
+      (encodedEnvelope ?? encode(envelope as ThreadEventEnvelope)).frame;
     const snapshot =
       "event" in envelope
         ? envelope.event.type === "snapshot"
@@ -603,10 +582,9 @@ export async function serveThreadEventStream(
       // Optional observability cannot close a valid authoritative stream.
     }
   };
-  const receive = (rawEnvelope: unknown): void => {
+  const receive = (envelope: ThreadEventEnvelope): void => {
     if (closed) return;
     try {
-      const envelope = threadEventEnvelopeSchema.parse(rawEnvelope);
       if (recoveringOverflow && envelope.event.type === "snapshot") {
         recoverySnapshots.set(envelope.eventId, envelope);
       }
@@ -614,7 +592,7 @@ export async function serveThreadEventStream(
         queue(envelope);
         return;
       }
-      if (!write(envelope)) {
+      if (!write(encode(envelope))) {
         pending = [];
         pendingBytes = 0;
         flushIndex = 0;
@@ -648,15 +626,12 @@ export async function serveThreadEventStream(
     ) {
       candidate = captureInitialCheckpoint();
       if (candidate) {
-        const checkpointBytes = Buffer.byteLength(
-          encodeCurrent(candidate).frame,
-          "utf8",
-        );
+        const checkpointBytes = encodeCurrent(candidate).bytes;
         // Raw tool/reasoning updates can shrink substantially in summary mode.
         // Stop costing as soon as the actual projected suffix exceeds a checkpoint.
         useReplay =
           hub.replayCostExceeds(replayCursor!, checkpointBytes, (event) =>
-            Buffer.byteLength(encode(event), "utf8"),
+            encode(event).bytes,
           ) !== true;
       }
     }
@@ -756,11 +731,10 @@ export async function serveThreadEventStream(
         return false;
       }
       pending = pending.filter(
-        (envelope) => sequenceOf(hub, envelope) > baselineSequence,
+        ({ envelope }) => sequenceOf(hub, envelope) > baselineSequence,
       );
       pendingBytes = pending.reduce(
-        (total, envelope) =>
-          total + Buffer.byteLength(encode(envelope), "utf8"),
+        (total, { encoded }) => total + encoded.bytes,
         0,
       );
       return drainPending(baselineSequence);
@@ -771,15 +745,15 @@ export async function serveThreadEventStream(
     ): Promise<boolean> => {
       if (overflowed) return recoverFromOverflow();
       while (pending.length > 0) {
-        const envelope = pending.shift()!;
-        pendingBytes -= Buffer.byteLength(encode(envelope), "utf8");
+        const { envelope, encoded } = pending.shift()!;
+        pendingBytes -= encoded.bytes;
         if (
           minimumExclusive !== undefined &&
           sequenceOf(hub, envelope) <= minimumExclusive
         ) {
           continue;
         }
-        if (closed || !(await writeInitial(envelope))) return false;
+        if (closed || !(await writeInitial(envelope, undefined, 0, encoded))) return false;
         if (overflowed) return recoverFromOverflow();
       }
       if (overflowed) return recoverFromOverflow();

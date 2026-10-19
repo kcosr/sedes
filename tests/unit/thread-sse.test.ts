@@ -390,6 +390,43 @@ describe("serveThreadEventStream", () => {
     request.emit("close");
   });
 
+  it("validates and encodes each published event and checkpoint once for every subscriber", async () => {
+    const hub = new ThreadEventHub();
+    hub.publish({ type: "snapshot", generation: "projection-1", snapshot: snapshotWithMessage("initial") });
+    const envelopeParse = vi.spyOn(threadEventEnvelopeSchema, "parse");
+    const checkpointParse = vi.spyOn(threadCheckpointSchema, "parse");
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      const streams = await Promise.all((["full", "full", "summary"] as const).map(async (activityDetail) => {
+        const response = new FakeResponse();
+        const request = new FakeRequest();
+        await serveThreadEventStream(asRequest(request), asResponse(response), hub, source(hub, { capture: vi.fn() }), { activityDetail });
+        return { request, response, activityDetail };
+      }));
+      // The hub captures one checkpoint; both full-detail attaches share its frame.
+      expect(checkpointParse).toHaveBeenCalledTimes(1);
+      expect(streams[0]!.response.writes[0]).toBe(streams[1]!.response.writes[0]);
+      const checkpointFrames = stringify.mock.calls.filter(([value]) =>
+        typeof value === "object" && value !== null && "capabilityRunState" in value).length;
+      expect(checkpointFrames).toBe(2);
+
+      stringify.mockClear();
+      const assistant = hub.snapshot!.itemsById["assistant-1"]!;
+      const published = hub.publish({ type: "item_upsert", generation: "projection-1", item: { ...assistant, revision: 2 } });
+      expect(Object.isFrozen(published)).toBe(true);
+      // Messages are written unchanged in summary mode, so all three share one frame.
+      expect(envelopeParse).not.toHaveBeenCalled();
+      expect(stringify.mock.calls.filter(([value]) => value === published)).toHaveLength(1);
+      for (const { response } of streams) expect(envelopes(response)).toEqual([published]);
+      expect(streams[0]!.response.writes.at(-1)).toBe(streams[2]!.response.writes.at(-1));
+      for (const { request } of streams) request.emit("close");
+    } finally {
+      envelopeParse.mockRestore();
+      checkpointParse.mockRestore();
+      stringify.mockRestore();
+    }
+  });
+
   it("replaces a large repeated-message suffix with its smaller current checkpoint", async () => {
     const hub = new ThreadEventHub();
     // Older retained activity keeps the snapshot large enough that the suffix
