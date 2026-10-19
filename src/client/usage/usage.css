@@ -934,7 +934,9 @@ button.usage-bar-row[aria-pressed="true"] {
   gap: 10px;
   border-radius: var(--radius-inline);
   outline: none;
-  touch-action: pan-y;
+  /* Quick taps on neighbouring cells never double-tap zoom, and a pinch can
+     still enlarge the small cells. */
+  touch-action: manipulation;
 }
 
 .usage-heatmap:focus-visible {
