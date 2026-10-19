@@ -154,29 +154,21 @@ User-facing changes are collected here before release. See the
 ### Fixed
 
 - Composer drafts are saved when you close, reload, or leave the page or
-  background the Android app, and a draft save that fails during a network
-  blip or server restart retries without another keystroke. A failed
-  attachment upload no longer holds back the files queued after it. See
+  background the Android app, and a failed draft save retries without another
+  keystroke. A failed attachment upload no longer holds back later files,
+  pasting a copied file no longer inserts its name or path, and Safari's
+  IME-confirming Enter no longer sends. See
   [Build a prompt](docs/user/conversations.md#build-a-prompt).
 
-- In Safari, the Enter that confirms IME input (for example Japanese or
-  Chinese) no longer sends the message or picks a composer command, and
-  pasting a copied file attaches it without also inserting its name or path.
+- Tasks: quick actions in a row on one task, such as Pin then Backlog, no
+  longer fail as "changed elsewhere"; retrying an add or paste whose response
+  was lost no longer creates the Task twice; and Escape restores a maximized
+  layout from Tasks.
 
-- Escape restores a maximized layout from the Tasks panel when Tasks has no
-  expanded row or search to close, and the sidebar's thread shortcuts
-  (Mod+1–9, Mod+Shift+↑/↓) no longer switch threads behind an open dialog.
-
-- Files compare no longer leaves **Start review** stuck on "Loading…" when the
-  selected review is cleared while its comments load, and switching roots
-  keeps each root's selected historical review.
-
-- Find in thread stays on the selected match while a reply streams instead of
-  being pulled back to the latest message.
-
-- Quick Task actions in a row on one task, such as Pin then Backlog, no longer
-  fail with "That task changed elsewhere", and retrying a Task add or paste
-  whose response was lost no longer creates the Task twice.
+- Find in thread stays on its match while a reply streams. Files compare keeps
+  each root's selected review and no longer leaves **Start review** stuck on
+  "Loading…". Sidebar thread shortcuts (Mod+1–9, Mod+Shift+↑/↓) no longer
+  switch threads behind an open dialog.
 
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
