@@ -153,6 +153,21 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Execution sidecar sessions stay open through bursts of small frames, late
+  Files watch events, aborted writes, and slow runtime bodies. Agent tools and
+  the shell accept a filesystem-root workspace root (`/`, `C:\`). Service
+  receipts and Windows IPC keys are written atomically.
+
+- `sedes` and `sedes mcp` no longer crash on a bodyless HTTP reply. Malformed
+  tool IDs or input over a transport limit report `invalid_input`, schema
+  string lengths count UTF-16 code units, and only one option per command may
+  read stdin (`-`).
+
+- Electron no longer raises a main-process error when it quits during an SSH
+  connect, and still waits for connection cleanup. Managed Local keeps one
+  saved credential and reports keyring guidance when secure storage is
+  unavailable. See [Electron](docs/operator/clients/electron.md#connection-credentials).
+
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See
