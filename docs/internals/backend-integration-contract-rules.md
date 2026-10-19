@@ -2063,7 +2063,11 @@ transaction open across provider RPC.
 
 Receipts are scoped, bounded, and replay the result of the exact accepted
 operation. They are not a cross-principal cache and cannot be reused across a
-configuration or runtime generation that invalidates their authority.
+configuration or runtime generation that invalidates their authority. A
+resident handle's in-memory replay receipts are a recency cache that a
+reattached handle starts without; cap them with `rememberBoundedReceipt`
+(`src/server/backends/bounded-receipts.ts`), evicting only settled acceptances
+and never an unknown outcome or a Steer still awaiting materialization.
 
 A persistent Codex transport may compact a reconciled receipt only by atomically
 moving its bounded deduplication proof onto the existing final application

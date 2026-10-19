@@ -1,6 +1,7 @@
 import { ConversationInterruptLedger } from "../conversation-interrupt.js";
 import { PiUsageAccounting } from "./pi-usage-accounting.js";
 import { TurnThroughputRecorder } from "../turn-throughput.js";
+import { rememberBoundedReceipt } from "../bounded-receipts.js";
 import type { UsageSink } from "../../usage/contracts.js";
 import type {
   OutputArtifactPublisher,
@@ -2718,6 +2719,7 @@ class PiConversationHandle implements ConversationHandle {
     string,
     Extract<BackendConversationEvent, { type: "interaction_opened" }>
   >();
+  /** Accepted submissions; a miss rereads the durable session marker. */
   readonly #submissionResults = new Map<string, SubmitTurnResult>();
   readonly #steerResults = new Map<string, SteerTurnResult>();
   readonly #interrupts = new ConversationInterruptLedger();
@@ -2729,7 +2731,8 @@ class PiConversationHandle implements ConversationHandle {
     interrupt: (input: InterruptConversationInput) => this.interrupt(input),
     reconcileInterrupt: (input: InterruptConversationInput) => this.reconcileInterrupt(input),
   });
-  readonly #markedToolCalls = new Set<string>();
+  /** Recently verified tool identity markers; a miss rescans the branch. */
+  readonly #markedToolCalls = new Map<string, true>();
   readonly #assistantItems = new Map<
     string,
     {
@@ -3159,7 +3162,7 @@ class PiConversationHandle implements ConversationHandle {
           ? { backendTurnId: persisted.userEntryId }
           : {}),
       };
-      this.#submissionResults.set(input.applicationOperationId, result);
+      rememberBoundedReceipt(this.#submissionResults, input.applicationOperationId, result);
       return result;
     }
     if (!this.#session.isIdle) {
@@ -3292,7 +3295,7 @@ class PiConversationHandle implements ConversationHandle {
       completionCorrelation: input.applicationOperationId,
       backendTurnId: durable.userEntryId,
     };
-    this.#submissionResults.set(input.applicationOperationId, result);
+    rememberBoundedReceipt(this.#submissionResults, input.applicationOperationId, result);
     return result;
   }
 
@@ -4386,7 +4389,7 @@ class PiConversationHandle implements ConversationHandle {
             samePiToolIdentity(marker.identity, identity),
         )
       ) {
-        this.#markedToolCalls.add(key);
+        rememberBoundedReceipt(this.#markedToolCalls, key, true);
         return;
       }
       throw new Error("pi_tool_identity_marker_conflict");
@@ -4403,7 +4406,7 @@ class PiConversationHandle implements ConversationHandle {
         this.#toolIdentityAuthentication,
       ),
     );
-    this.#markedToolCalls.add(key);
+    rememberBoundedReceipt(this.#markedToolCalls, key, true);
   }
 
   #consumeAssistantUpdate(

@@ -5,6 +5,7 @@ import type { UsageSink } from "../../usage/contracts.js";
 import { CodexUsageCapture } from "./codex-usage-capture.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import { createHash, randomUUID } from "node:crypto";
+import { rememberBoundedReceipt } from "../bounded-receipts.js";
 import type {
   BackendCapabilityDocument,
   BackendConversationEvent,
@@ -1673,7 +1674,7 @@ export class CodexConversationHandle implements ConversationHandle {
           completionCorrelation: input.applicationOperationId,
           backendTurnId: acceptedBackendTurnId,
         } satisfies SubmitTurnResult;
-        this.#submitOperations.set(input.applicationOperationId, {
+        rememberBoundedReceipt(this.#submitOperations, input.applicationOperationId, {
           reconciliationToken: input.reconciliationToken,
           source: input.source,
           selectedSkillId: input.selectedSkillId,
@@ -1682,7 +1683,7 @@ export class CodexConversationHandle implements ConversationHandle {
           attachmentsFingerprint,
           state: "accepted",
           result,
-        });
+        }, settledCodexSubmission);
         return result;
       } catch (error) {
         this.#pendingUsageTuple = undefined;
@@ -1698,7 +1699,7 @@ export class CodexConversationHandle implements ConversationHandle {
           (error instanceof CodexRpcDeliveryError &&
             error.delivery === "sent_outcome_unknown")
         ) {
-          this.#submitOperations.set(input.applicationOperationId, {
+          rememberBoundedReceipt(this.#submitOperations, input.applicationOperationId, {
             reconciliationToken: input.reconciliationToken,
             source: input.source,
             selectedSkillId: input.selectedSkillId,
@@ -1706,7 +1707,7 @@ export class CodexConversationHandle implements ConversationHandle {
             contextExcerptsFingerprint,
             attachmentsFingerprint,
             state: "outcome_unknown",
-          });
+          }, settledCodexSubmission);
         }
         const mapped = mapCodexMutationError(error, "submit");
         if (!submissionBoundaryCrossed || mapped.crossedSubmissionBoundary) {
@@ -1797,10 +1798,10 @@ export class CodexConversationHandle implements ConversationHandle {
             status: "accepted",
             backendTurnId: expectedBackendTurnId,
           } satisfies SteerTurnResult;
-          this.#steerOperations.set(input.applicationOperationId, {
+          rememberBoundedReceipt(this.#steerOperations, input.applicationOperationId, {
             ...previous,
             result: accepted,
-          });
+          }, settledCodexSteer);
           return accepted;
         }
         return previous.result;
@@ -1948,7 +1949,7 @@ export class CodexConversationHandle implements ConversationHandle {
           completionCorrelation: input.applicationOperationId,
           backendTurnId: expectedBackendTurnId,
         } satisfies SteerTurnResult;
-        this.#steerOperations.set(input.applicationOperationId, {
+        rememberBoundedReceipt(this.#steerOperations, input.applicationOperationId, {
           reconciliationToken: input.reconciliationToken,
           selectedSkillId: input.selectedSkillId,
           taskContextsFingerprint,
@@ -1956,21 +1957,21 @@ export class CodexConversationHandle implements ConversationHandle {
           attachmentsFingerprint,
           state: "accepted",
           result,
-        });
+        }, settledCodexSteer);
         return result;
       } catch (error) {
         if (
           error instanceof CodexRpcDeliveryError &&
           error.delivery === "sent_outcome_unknown"
         ) {
-          this.#steerOperations.set(input.applicationOperationId, {
+          rememberBoundedReceipt(this.#steerOperations, input.applicationOperationId, {
             reconciliationToken: input.reconciliationToken,
             selectedSkillId: input.selectedSkillId,
             taskContextsFingerprint,
             contextExcerptsFingerprint,
             attachmentsFingerprint,
             state: "outcome_unknown",
-          });
+          }, settledCodexSteer);
         }
         throw mapCodexMutationError(error, "steer");
       }
@@ -2207,9 +2208,11 @@ export class CodexConversationHandle implements ConversationHandle {
               { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS },
             );
             this.#assertMutationReceipt(response.generation);
-            this.#compactOperations.set(
+            rememberBoundedReceipt(
+              this.#compactOperations,
               input.applicationOperationId,
               "accepted",
+              (receipt) => receipt === "accepted",
             );
             return { accepted: true };
           } catch (error) {
@@ -2217,9 +2220,11 @@ export class CodexConversationHandle implements ConversationHandle {
               error instanceof CodexRpcDeliveryError &&
               error.delivery === "sent_outcome_unknown"
             ) {
-              this.#compactOperations.set(
+              rememberBoundedReceipt(
+                this.#compactOperations,
                 input.applicationOperationId,
                 "outcome_unknown",
+                (receipt) => receipt === "accepted",
               );
             }
             throw mapCodexMutationError(error, "compact");
@@ -7534,6 +7539,24 @@ function assertCodexHistoryMode(thread: CodexThread): "legacy" | "paginated" {
         "codex_history_mode_invalid",
       );
   }
+}
+
+/**
+ * Resident replay receipts are bounded. Only a settled acceptance may leave
+ * the cache; an unknown outcome or a Steer awaiting materialization stays.
+ */
+function settledCodexSubmission(receipt: {
+  readonly state: "accepted" | "outcome_unknown";
+}): boolean {
+  return receipt.state === "accepted";
+}
+
+function settledCodexSteer(
+  receipt:
+    | { readonly state: "outcome_unknown" }
+    | { readonly state: "accepted"; readonly result: SteerTurnResult },
+): boolean {
+  return receipt.state === "accepted" && receipt.result.status === "accepted";
 }
 
 function mutationOutcomeUnknown(operation: string): BackendError {
