@@ -3603,7 +3603,10 @@ describe("inactive schema-10 repositories", () => {
     }
   });
 
-  it("promotes an aborted fork child's Workpads to its location's project with a revision", () => {
+  it.each([
+    { observer: "observed" },
+    { observer: "unobserved" },
+  ] as const)("promotes an aborted fork child's Workpads to its location's project with a revision ($observer)", ({ observer }) => {
     const fixture = createFixture();
     try {
       bindDiscovered(fixture);
@@ -3672,13 +3675,16 @@ describe("inactive schema-10 repositories", () => {
         diagnostic: "Provider rejected the fork before creation.",
         restartable: true,
         now: 560,
-        onThreadWorkpadsPromoted: (moved) => promoted.push(moved),
+        // The move must not depend on a caller observing it.
+        ...(observer === "observed"
+          ? { onThreadWorkpadsPromoted: (moved: readonly { readonly id: string; readonly revision: number }[]) => promoted.push(moved) }
+          : {}),
       });
 
-      expect(promoted).toEqual([[
+      expect(promoted).toEqual(observer === "observed" ? [[
         { id: open.id, revision: open.revision + 1 },
         { id: archived.id, revision: archived.revision + 1 },
-      ].sort((a, b) => a.id.localeCompare(b.id))]);
+      ].sort((a, b) => a.id.localeCompare(b.id))] : []);
       for (const before of [open, archived]) {
         expect(workpads.get(fixture.scope, before.id)).toMatchObject({
           scope: { kind: "project", projectId },

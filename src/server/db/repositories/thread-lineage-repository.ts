@@ -919,12 +919,15 @@ export class ThreadLineageRepository {
           )
           .get(scope.tenantId, scope.principalId, childThreadId) as { readonly projectId: string };
         const workpads = new WorkpadRepository(this.database);
-        input.onThreadWorkpadsPromoted?.(childWorkpads.map(({ id, revision }) => {
+        // Move every pad before notifying: the move must not depend on a caller
+        // that observes it.
+        const promotedWorkpads = childWorkpads.map(({ id, revision }) => {
           const pad = workpads.update(scope, id, {
             expectedRevision: revision, scope: { kind: "project", projectId },
           }, { kind: "user" }, input.now);
           return { id: pad.id, revision: pad.revision };
-        }));
+        });
+        input.onThreadWorkpadsPromoted?.(promotedWorkpads);
       }
       const usageEvidence = this.database.prepare(`SELECT 1 FROM usage_observations o JOIN usage_sources s ON s.id=o.source_id
         WHERE s.tenant_id=? AND s.principal_id=? AND s.thread_id=? LIMIT 1`).get(scope.tenantId,scope.principalId,childThreadId);
