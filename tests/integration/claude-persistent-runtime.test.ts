@@ -1783,6 +1783,30 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await expect(disposition(randomUUID())).resolves.toEqual({ disposition: "session_ended" });
     await expect(disposition(operations[3]!.operationId)).resolves.toEqual({ disposition: "session_ended" });
   });
+
+  it("forgets the oldest withdrawn inputs with their sends past the journal bound", async () => {
+    const f = await fixture({ maximumJournaledOperations: 2 });
+    const attached = await f.attach();
+    const runtimeId = await attached.connection.ensure(configuration);
+    attached.connection.onEvent(runtimeId, () => {});
+    const authority = { runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const sessionId = randomUUID();
+    await attached.connection.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", environment: {}, enableCanUseTool: false,
+    } });
+    const disposition = (operationId: string) => attached.connection.execute({ ...authority, action: "submission_disposition",
+      request: { sessionId, operationId, cwd: "/workspace" } });
+    const operations = [0, 1, 2, 3].map(index => ({ queryId: sessionId, operationId: randomUUID(), content: `Queued ${index}` }));
+    // Each input is admitted, then withdrawn by Claude before it starts.
+    for (const operation of operations) {
+      await expect(attached.connection.execute({ ...authority, action: "send", request: operation })).resolves.toEqual({ accepted: true });
+      await f.sessions[0]!.emit(lifecycle(sessionId, operation.operationId, "cancelled"));
+    }
+    await expect(disposition(operations[3]!.operationId)).resolves.toEqual({ disposition: "cancelled" });
+    await expect(disposition(operations[2]!.operationId)).resolves.toEqual({ disposition: "cancelled" });
+    // The withdrawal left the journal with its send, so the set stays bounded.
+    await expect(disposition(operations[0]!.operationId)).resolves.toEqual({ disposition: "unknown" });
+  });
 });
 
 

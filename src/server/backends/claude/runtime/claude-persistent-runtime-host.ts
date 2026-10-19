@@ -903,7 +903,11 @@ export class ClaudePersistentRuntimeHost {
   #forgetSettledSend(session: Session): boolean {
     for (const operationId of session.sends.keys()) {
       if (session.active.has(operationId) || session.pendingInputs.has(operationId)) continue;
+      // Only admitted sends are ever withdrawn, so the withdrawal goes with its
+      // send and both stay bounded; a forgotten one resolves like any other
+      // forgotten send under the incomplete journal.
       session.sends.delete(operationId);
+      session.withdrawnInputs.delete(operationId);
       session.admissionJournalComplete = false;
       return true;
     }
