@@ -368,7 +368,10 @@ The composer can contain:
 - file or image attachments; and
 - up to 16 structured Task references.
 
-The whole composer is saved on the server. Chat text has one 256 KiB UTF-8
+The whole composer is saved on the server after a short pause in typing and
+when you close, reload, or leave the page or background the app. A save that
+fails while offline retries automatically, promptly after the thread
+reconnects. Chat text has one 256 KiB UTF-8
 limit for draft save, Send, stash, and queue restoration, shared with voice
 text. Text, context, notes, and materialized Task content must also fit that
 same aggregate input budget. Attachment-file limits are separate and shown

@@ -4269,6 +4269,188 @@ describe("Composer delivery guards", () => {
     });
   });
 
+  describe("page lifecycle and autosave retry", () => {
+    afterEach(() => {
+      Reflect.deleteProperty(document, "visibilityState");
+    });
+
+    const hidePage = () => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+    };
+
+    it("flushes the typed draft with keepalive when the page is hidden before the debounce", async () => {
+      vi.useFakeTimers();
+      try {
+        const store = new FakeComposerStore(snapshot(), "");
+        render(<Composer store={store as unknown as ThreadClientStore} />);
+
+        type("closing the tab now");
+        hidePage();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+        expect(store.saveDraft).toHaveBeenCalledWith(
+          {
+            text: "closing the tab now",
+            contextExcerpts: [],
+            taskReferences: [],
+            attachments: [],
+            revision: 1,
+          },
+          { keepalive: true },
+        );
+
+        // The flushed draft is clean, so the debounce has nothing left to do.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("flushes the typed draft when the page is unloaded", async () => {
+      const store = new FakeComposerStore(snapshot(), "");
+      render(<Composer store={store as unknown as ThreadClientStore} />);
+
+      type("reloading");
+      act(() => {
+        window.dispatchEvent(new Event("pagehide"));
+      });
+
+      await waitFor(() =>
+        expect(store.saveDraft).toHaveBeenCalledWith(
+          {
+            text: "reloading",
+            contextExcerpts: [],
+            taskReferences: [],
+            attachments: [],
+            revision: 1,
+          },
+          { keepalive: true },
+        ),
+      );
+    });
+
+    it("does not save a clean draft when the page is hidden", async () => {
+      const store = new FakeComposerStore(snapshot(), "saved");
+      render(<Composer store={store as unknown as ThreadClientStore} />);
+
+      hidePage();
+      await act(async () => undefined);
+
+      expect(store.saveDraft).not.toHaveBeenCalled();
+    });
+
+    it("retries a failed autosave with backoff without another keystroke", async () => {
+      vi.useFakeTimers();
+      try {
+        const store = new FakeComposerStore(snapshot(), "");
+        store.saveDraft.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+        render(<Composer store={store as unknown as ThreadClientStore} />);
+
+        type("survive a network blip");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(3_999);
+        });
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+        expect(store.saveDraft).toHaveBeenCalledTimes(2);
+        expect(store.saveDraft).toHaveBeenLastCalledWith({
+          text: "survive a network blip",
+          contextExcerpts: [],
+          taskReferences: [],
+          attachments: [],
+          revision: 1,
+        });
+
+        // The retry succeeded; nothing else is pending.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(60_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("retries a failed autosave promptly once the thread reconnects", async () => {
+      vi.useFakeTimers();
+      try {
+        const store = new FakeComposerStore(snapshot(), "");
+        store.saveDraft
+          .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+          .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+        render(<Composer store={store as unknown as ThreadClientStore} />);
+
+        type("typed before the server restarted");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        act(() => store.replace({ connection: "reconnecting" }));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(4_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledTimes(2);
+
+        // The next backoff step is long; reconnecting retries without it.
+        act(() => store.replace({ connection: "connected" }));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledTimes(3);
+        expect(store.saveDraft).toHaveBeenLastCalledWith({
+          text: "typed before the server restarted",
+          contextExcerpts: [],
+          taskReferences: [],
+          attachments: [],
+          revision: 1,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not retry an autosave the server rejected definitively", async () => {
+      vi.useFakeTimers();
+      try {
+        const store = new FakeComposerStore(snapshot(), "");
+        store.saveDraft.mockRejectedValueOnce(
+          new ApiError(400, "bad_request", "Invalid draft.", false),
+        );
+        render(<Composer store={store as unknown as ThreadClientStore} />);
+
+        type("rejected");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(120_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("adopts server draft changes while the composer is clean", async () => {
     const store = new FakeComposerStore(snapshot(), "original");
     render(<Composer store={store as unknown as ThreadClientStore} />);

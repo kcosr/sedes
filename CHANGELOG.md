@@ -153,6 +153,11 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Composer drafts are saved when you close, reload, or leave the page or
+  background the Android app, and a draft save that fails during a network
+  blip or server restart retries without another keystroke. See
+  [Build a prompt](docs/user/conversations.md#build-a-prompt).
+
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See

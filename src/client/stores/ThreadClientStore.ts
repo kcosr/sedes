@@ -777,10 +777,14 @@ export class ThreadClientStore {
    * Persists composer-owned draft text. Autosave is silent on success — no
    * UI "saving" flag. Failures surface via actionError (and the composer
    * maps 409 to its conflict banner); the error is rethrown for the caller.
+   * A save made while the page is hiding asks for `keepalive` delivery.
    */
-  async saveDraft(draft: NormalizedDraft): Promise<NormalizedDraft> {
+  async saveDraft(
+    draft: NormalizedDraft,
+    options?: { readonly keepalive?: boolean },
+  ): Promise<NormalizedDraft> {
     try {
-      return await this.#api.saveDraft(this.threadId, draft);
+      return await this.#api.saveDraft(this.threadId, draft, options);
     } catch (error) {
       this.#replaceState({
         ...this.#state,
