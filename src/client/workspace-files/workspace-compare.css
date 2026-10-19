@@ -236,8 +236,7 @@
     transform: rotate(360deg);
   }
 }
-.workspace-compare-reviewed,
-.workspace-compare-annotation button {
+.workspace-compare-reviewed {
   border: 0;
   color: var(--muted-foreground);
   background: transparent;
@@ -276,6 +275,11 @@
 .workspace-compare-annotation p {
   margin: 5px 0 0;
   white-space: pre-wrap;
+}
+.workspace-compare-annotation > .workspace-compare-annotation-actions {
+  justify-content: flex-end;
+  gap: var(--space-1);
+  margin-top: var(--space-1-5);
 }
 .workspace-compare-annotation.is-outdated {
   opacity: 0.72;
@@ -448,8 +452,7 @@
   color: var(--muted-foreground);
   font-size: 11px;
 }
-.workspace-compare-reviewed,
-.workspace-compare-annotation button {
+.workspace-compare-reviewed {
   border: 0;
   color: var(--muted-foreground);
   background: transparent;

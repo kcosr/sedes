@@ -153,6 +153,10 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Deleting a Files review comment now asks for confirmation; a failed delete
+  stays in the dialog. Inline comment actions use the shared buttons, with
+  Open before Delete.
+
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See

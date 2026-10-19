@@ -365,6 +365,12 @@ export function WorkspaceFilesPanel({
   const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
   const [pendingDownload, setPendingDownload] =
     useState<WorkspaceFileDownloadTarget>();
+  const [pendingCommentDelete, setPendingCommentDelete] = useState<{
+    readonly reviewId: string;
+    readonly commentId: string;
+    /** Opened from the review inspector, which is a sheet on phones. */
+    readonly fromInspector: boolean;
+  }>();
   const [downloadState, setDownloadState] =
     useState<WorkspaceFileDownloadState>();
   const [attachDialogOpen, setAttachDialogOpen] = useState(false);
@@ -453,6 +459,7 @@ export function WorkspaceFilesPanel({
     undefined,
   );
   const downloadControllerRef = useRef<AbortController | undefined>(undefined);
+  const reviewInspectorRef = useRef<HTMLDivElement>(null);
   const downloadFeedbackTimerRef = useRef<number | undefined>(undefined);
   const refreshingFileKeyRef = useRef<string | undefined>(undefined);
   const documentGenerationRef = useRef(0);
@@ -2605,52 +2612,6 @@ export function WorkspaceFilesPanel({
     workspaceId,
   ]);
 
-  const deleteCompareAnnotation = useCallback(
-    async (annotation: WorkspaceCompareReviewAnnotation) => {
-      const comment = compareCurrentAnnotationById.get(annotation.annotationId);
-      if (!comment || !currentCompareReview) return;
-      const requestContextKey = compareReviewContextKeyRef.current;
-      setCompareReviewMutating(true);
-      setCompareReviewError(undefined);
-      try {
-        const result = await api.deleteWorkspaceDiffReviewComment(
-          currentCompareReview.id,
-          comment.id,
-          {
-            expectedReviewRevision: currentCompareReview.revision,
-            expectedCommentRevision: comment.revision,
-            mutationId: crypto.randomUUID(),
-          },
-        );
-        if (compareReviewContextKeyRef.current !== requestContextKey) return;
-        setCompareReviews((current) =>
-          current.map((item) =>
-            item.id === result.review.id ? result.review : item,
-          ),
-        );
-        setCompareHistoryReviews((current) =>
-          current.map((item) =>
-            item.id === result.review.id ? result.review : item,
-          ),
-        );
-        setCompareComments((current) =>
-          activeCompareReviewIdRef.current === currentCompareReview.id
-            ? current.filter((item) => item.id !== comment.id)
-            : current,
-        );
-        setCompareCurrentComments((current) =>
-          current.filter((item) => item.id !== comment.id),
-        );
-      } catch (error) {
-        if (compareReviewContextKeyRef.current !== requestContextKey) return;
-        setCompareReviewError(messageFor(error));
-      } finally {
-        if (compareReviewContextKeyRef.current === requestContextKey) setCompareReviewMutating(false);
-      }
-    },
-    [api, compareCurrentAnnotationById, currentCompareReview],
-  );
-
   const deleteCompareComment = useCallback(
     async (
       review: WorkspaceDiffReview,
@@ -2692,13 +2653,30 @@ export function WorkspaceFilesPanel({
         }
       } catch (error) {
         if (compareReviewContextKeyRef.current !== requestContextKey) return;
-        setCompareReviewError(messageFor(error));
+        // The confirmation shows the failure inline and stays open.
+        throw new Error(messageFor(error));
       } finally {
         if (compareReviewContextKeyRef.current === requestContextKey) setCompareReviewMutating(false);
       }
     },
     [api, currentCompareReview],
   );
+
+  // Resolved at render so the confirmation deletes the latest revision.
+  const pendingCommentDeleteTarget = (() => {
+    if (!pendingCommentDelete) return undefined;
+    const review = [currentCompareReview, activeCompareReview].find(
+      (candidate) => candidate?.id === pendingCommentDelete.reviewId,
+    );
+    const comments =
+      review && review.id === currentCompareReview?.id
+        ? compareCurrentComments
+        : compareComments;
+    const comment = comments.find(
+      (candidate) => candidate.id === pendingCommentDelete.commentId,
+    );
+    return review && comment ? { review, comment } : undefined;
+  })();
 
   const setCompareReviewed = useCallback(
     async (fileId: WorkspaceDiffFileId, reviewed: boolean) => {
@@ -3689,9 +3667,17 @@ export function WorkspaceFilesPanel({
                   range,
                 });
               }}
-              onDeleteAnnotation={(annotation) =>
-                void deleteCompareAnnotation(annotation)
-              }
+              onDeleteAnnotation={(annotation) => {
+                const comment = compareCurrentAnnotationById.get(
+                  annotation.annotationId,
+                );
+                if (!comment || !currentCompareReview) return;
+                setPendingCommentDelete({
+                  reviewId: currentCompareReview.id,
+                  commentId: comment.id,
+                  fromInspector: false,
+                });
+              }}
               onReviewedChange={(fileId, reviewed) =>
                 void setCompareReviewed(fileId, reviewed)
               }
@@ -3830,6 +3816,7 @@ export function WorkspaceFilesPanel({
         }}
       >
         <DialogContent
+          ref={reviewInspectorRef}
           layout="side"
           size="md"
           dismissible={!compareReviewMutating}
@@ -3972,14 +3959,15 @@ export function WorkspaceFilesPanel({
                             </Button>
                           )}
                           <Button
-                            variant="ghost"
+                            variant="destructive-outline"
                             size="xs"
                             onClick={() =>
                               activeCompareReview
-                                ? void deleteCompareComment(
-                                    activeCompareReview,
-                                    comment,
-                                  )
+                                ? setPendingCommentDelete({
+                                    reviewId: activeCompareReview.id,
+                                    commentId: comment.id,
+                                    fromInspector: true,
+                                  })
                                 : undefined
                             }
                           >
@@ -4094,6 +4082,27 @@ export function WorkspaceFilesPanel({
           const next = pendingClose;
           setPendingClose(undefined);
           if (next) removeTab(next, true);
+        }}
+      />
+      <ConfirmDialog
+        open={context.visible && pendingCommentDeleteTarget !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setPendingCommentDelete(undefined);
+        }}
+        layer={pendingCommentDelete?.fromInspector ? "over-dialog" : "dialog"}
+        fallbackFocus={() => reviewInspectorRef.current}
+        title="Delete comment?"
+        description={
+          pendingCommentDeleteTarget
+            ? `The comment on ${commentLocation(pendingCommentDeleteTarget.comment)} will be permanently deleted.`
+            : undefined
+        }
+        confirmLabel="Delete comment"
+        pendingLabel="Deleting…"
+        tone="danger"
+        onConfirm={async () => {
+          const target = pendingCommentDeleteTarget;
+          if (target) await deleteCompareComment(target.review, target.comment);
         }}
       />
       <ConfirmDialog
@@ -4695,6 +4704,13 @@ function diagnosticFor(code: string): string {
       return `Folder unavailable (${code}).`;
   }
 }
+function commentLocation(comment: WorkspaceDiffReviewComment): string {
+  const path = comment.newPath ?? comment.oldPath ?? "this file";
+  return comment.startLine === comment.endLine
+    ? `${path}, line ${comment.startLine}`
+    : `${path}, lines ${comment.startLine}–${comment.endLine}`;
+}
+
 function messageFor(error: unknown): string {
   return error instanceof Error
     ? error.message

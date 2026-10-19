@@ -1528,6 +1528,8 @@ describe("WorkspaceFilesPanel", () => {
       body: "History body",
       revision: 2,
     };
+    // The server's latest copy, so a refetch after the edit stays current.
+    let latestCurrentComment: typeof currentComment = currentComment;
     const api = setupApi({
       listWorkspaceDiffReviews: vi.fn(async () => ({
         reviews: [currentReview],
@@ -1537,20 +1539,14 @@ describe("WorkspaceFilesPanel", () => {
       })),
       listWorkspaceDiffReviewComments: vi.fn(async (reviewId: string) => ({
         comments:
-          reviewId === currentReview.id ? [currentComment] : [historyComment],
+          reviewId === currentReview.id
+            ? [latestCurrentComment]
+            : [historyComment],
       })),
       listWorkspaceDiffReviewedFiles: vi.fn(async () => ({ files: [] })),
       updateWorkspaceDiffReviewComment: vi.fn(
-        async (reviewId: string, commentId: string, request) => ({
-          review: {
-            ...(reviewId === currentReview.id ? currentReview : historyReview),
-            revision:
-              (reviewId === currentReview.id
-                ? currentReview.revision
-                : historyReview.revision) + 1,
-            updatedAt: 9,
-          },
-          comment: {
+        async (reviewId: string, commentId: string, request) => {
+          const comment = {
             ...(commentId === currentComment.id
               ? currentComment
               : historyComment),
@@ -1562,8 +1558,20 @@ describe("WorkspaceFilesPanel", () => {
                 ? currentComment.revision
                 : historyComment.revision) + 1,
             updatedAt: 9,
-          },
-        }),
+          };
+          if (commentId === currentComment.id) latestCurrentComment = comment;
+          return {
+            review: {
+              ...(reviewId === currentReview.id ? currentReview : historyReview),
+              revision:
+                (reviewId === currentReview.id
+                  ? currentReview.revision
+                  : historyReview.revision) + 1,
+              updatedAt: 9,
+            },
+            comment,
+          };
+        },
       ),
       deleteWorkspaceDiffReviewComment: vi.fn(
         async (reviewId: string, commentId: string) => ({
@@ -1663,21 +1671,31 @@ describe("WorkspaceFilesPanel", () => {
       ),
     );
 
-    await act(async () => {
-      await (
+    act(() => {
+      (
         latestCompareProps?.onDeleteAnnotation as (value: {
           annotationId: string;
-        }) => Promise<void>
+        }) => void
       )({ annotationId: currentComment.id });
     });
 
-    expect(api.deleteWorkspaceDiffReviewComment).toHaveBeenCalledWith(
-      currentReview.id,
-      currentComment.id,
-      expect.objectContaining({
-        expectedReviewRevision: currentReview.revision + 1,
-        expectedCommentRevision: currentComment.revision + 1,
-      }),
+    const confirm = await screen.findByRole("dialog", {
+      name: "Delete comment?",
+    });
+    expect(api.deleteWorkspaceDiffReviewComment).not.toHaveBeenCalled();
+    fireEvent.click(
+      within(confirm).getByRole("button", { name: "Delete comment" }),
+    );
+
+    await waitFor(() =>
+      expect(api.deleteWorkspaceDiffReviewComment).toHaveBeenCalledWith(
+        currentReview.id,
+        currentComment.id,
+        expect.objectContaining({
+          expectedReviewRevision: currentReview.revision + 1,
+          expectedCommentRevision: currentComment.revision + 1,
+        }),
+      ),
     );
   });
 
@@ -1957,10 +1975,34 @@ describe("WorkspaceFilesPanel", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("History body")).toBeVisible();
+    vi.mocked(api.deleteWorkspaceDiffReviewComment).mockRejectedValueOnce(
+      new Error("The review changed. Refresh and try again."),
+    );
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
 
+    const confirm = await screen.findByRole("dialog", {
+      name: "Delete comment?",
+    });
+    expect(confirm).toHaveTextContent(
+      "The comment on src/file.ts, line 4 will be permanently deleted.",
+    );
+    expect(api.deleteWorkspaceDiffReviewComment).not.toHaveBeenCalled();
+    fireEvent.click(
+      within(confirm).getByRole("button", { name: "Delete comment" }),
+    );
+    // A failure stays inline and keeps the confirmation open.
+    expect(
+      await within(confirm).findByText(
+        "The review changed. Refresh and try again.",
+      ),
+    ).toBeVisible();
+    expect(within(dialog).getByText("History body")).toBeInTheDocument();
+    fireEvent.click(
+      within(confirm).getByRole("button", { name: "Delete comment" }),
+    );
+
     await waitFor(() =>
-      expect(api.deleteWorkspaceDiffReviewComment).toHaveBeenCalledWith(
+      expect(api.deleteWorkspaceDiffReviewComment).toHaveBeenLastCalledWith(
         historyReview.id,
         historyComment.id,
         expect.objectContaining({
