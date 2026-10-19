@@ -1,7 +1,21 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { Route } from "../app/router";
-import type { ApplicationClientStore } from "../stores/ApplicationClientStore";
-import { useApplicationStore } from "../stores/ApplicationClientStore";
+import type {
+  ApplicationClientState,
+  ApplicationClientStore,
+} from "../stores/ApplicationClientStore";
+import {
+  sameSelectedFields,
+  useApplicationStoreSelector,
+} from "../stores/use-application-store-selector.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry";
 import { AutomationEditor } from "./automation/AutomationEditor";
 import { AutomationPage } from "./automation/AutomationPage";
@@ -35,7 +49,9 @@ const UsageView = lazyView(
   async () => (await import("../usage/UsageView")).UsageView,
 );
 
-export function Workbench({
+// Memoized with field-level application subscriptions: sidebar search and
+// other inventory-only changes re-render the shell, not the workbench.
+export const Workbench = memo(function Workbench({
   route,
   active = true,
   applicationStore,
@@ -50,7 +66,25 @@ export function Workbench({
   panelLayoutStore: PanelRegionStore;
   panelTenants: WorkspacePanelTenantRegistry;
 }): React.JSX.Element {
-  const application = useApplicationStore(applicationStore);
+  // Only the welcome view's Continue recent follows the sidebar's search.
+  const welcome = route.name === "home" || route.name === "settings";
+  const selectApplication = useCallback(
+    (state: ApplicationClientState) => ({
+      snapshot: state.snapshot,
+      experimentalUsageEnabled: state.experimentalUsageEnabled,
+      recent: welcome
+        ? state.visibleThreads.find(
+            (thread) => thread.inventoryState === "active",
+          )
+        : undefined,
+    }),
+    [welcome],
+  );
+  const application = useApplicationStoreSelector(
+    applicationStore,
+    selectApplication,
+    sameSelectedFields,
+  );
   const projects = application.snapshot?.projects ?? [];
   const workspaces = application.snapshot?.workspaces ?? [];
   const environments = application.snapshot?.environments ?? [];
@@ -194,9 +228,7 @@ export function Workbench({
     );
   }
 
-  const recent = application.visibleThreads.find(
-    (thread) => thread.inventoryState === "active",
-  );
+  const recent = application.recent;
 
   return (
     <main className="workbench">
@@ -251,7 +283,7 @@ export function Workbench({
       </div>
     </main>
   );
-}
+});
 
 /**
  * The automation pages' pane. Its bar shows where the sidebar does not
