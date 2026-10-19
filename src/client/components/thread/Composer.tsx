@@ -13,6 +13,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from "react";
 import { recordComposerInputDiagnostic } from "../../app/diagnostics.js";
@@ -323,6 +324,14 @@ class DraftOperationQueue {
     }
   }
 }
+
+/**
+ * A key the input method owns. Safari fires the Enter that confirms a
+ * composition after compositionend, with `isComposing` false and the IME's
+ * keyCode 229; other browsers report `isComposing`.
+ */
+const imeKeyEvent = (event: ReactKeyboardEvent): boolean =>
+  event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
 
 /**
  * A failed transport or server-side fault may succeed unchanged later; a
@@ -3386,13 +3395,14 @@ export function Composer({
                     if (files.length > 0) addAttachmentFiles(files);
                   }}
                   onKeyDown={(event) => {
+                    const ime = imeKeyEvent(event);
                     if (
-                      threadPickerOpen && !event.nativeEvent.isComposing &&
+                      threadPickerOpen && !ime &&
                       (event.key === "ArrowDown" || event.key === "ArrowUp") && threadChoices.length > 0
                     ) {
                       event.preventDefault();
                       setThreadChoiceIndex((index) => (index + (event.key === "ArrowDown" ? 1 : -1) + threadChoices.length) % threadChoices.length);
-                    } else if (threadPickerOpen && !event.nativeEvent.isComposing &&
+                    } else if (threadPickerOpen && !ime &&
                       (event.key === "Enter" || event.key === "Tab") && !event.shiftKey && threadChoices[threadChoiceIndex]) {
                       event.preventDefault();
                       stageThreadReference(threadChoices[threadChoiceIndex]!);
@@ -3400,7 +3410,7 @@ export function Composer({
                       event.preventDefault();
                       event.stopPropagation();
                       closeThreadPicker();
-                    } else if (commandMenuOpen &&
+                    } else if (commandMenuOpen && !ime &&
                       (event.key === "ArrowDown" || event.key === "ArrowUp")
                     ) {
                       event.preventDefault();
@@ -3412,6 +3422,7 @@ export function Composer({
                       );
                     } else if (
                       commandMenuOpen &&
+                      !ime &&
                       activeCommand &&
                       (event.key === "Enter" || event.key === "Tab")
                     ) {
@@ -3422,7 +3433,7 @@ export function Composer({
                       setDismissedCommandDraft(text);
                     } else if (
                       event.key === "Escape" &&
-                      !event.nativeEvent.isComposing &&
+                      !ime &&
                       document.querySelector(OPEN_OVERLAY_SELECTOR) === null
                     ) {
                       event.preventDefault();
@@ -3437,7 +3448,7 @@ export function Composer({
                     } else if (
                       event.key === "Enter" &&
                       !event.shiftKey &&
-                      !event.nativeEvent.isComposing &&
+                      !ime &&
                       window.matchMedia("(pointer: fine)").matches
                     ) {
                       event.preventDefault();

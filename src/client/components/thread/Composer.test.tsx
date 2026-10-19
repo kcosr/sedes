@@ -3956,6 +3956,54 @@ describe("Composer delivery guards", () => {
     ).toBeNull();
   });
 
+  it("does not send with the Enter that confirms an IME composition after compositionend", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    const input = screen.getByRole("textbox");
+    input.focus();
+
+    fireEvent.compositionStart(input, { data: "にほ" });
+    type("日本語");
+    fireEvent.compositionEnd(input, { data: "日本語" });
+    // Safari reports the confirming Enter after compositionend, with
+    // isComposing false and the IME's keyCode 229.
+    expect(
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 229 }),
+    ).toBe(true);
+    await act(async () => undefined);
+    expect(store.deliver).not.toHaveBeenCalled();
+    expect(input).toHaveValue("日本語");
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
+  });
+
+  it("leaves IME Enter and arrows to the composition while the command menu is open", () => {
+    const withCommands = snapshot();
+    withCommands.composerCommands = [
+      { invocation: "/review", source: "prompt" },
+      { invocation: "/release", source: "extension" },
+    ];
+    const store = new FakeComposerStore(withCommands, "");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    const input = screen.getByRole("textbox");
+
+    type("/re");
+    const [review, release] = within(
+      screen.getByRole("listbox", { name: "Commands" }),
+    ).getAllByRole("option");
+    fireEvent.keyDown(input, { key: "ArrowDown", isComposing: true });
+    expect(review).toHaveAttribute("data-active", "true");
+    expect(release).not.toHaveAttribute("data-active");
+    expect(fireEvent.keyDown(input, { key: "Enter", isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(input, { key: "Tab", keyCode: 229 })).toBe(true);
+    expect(input).toHaveValue("/re");
+    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input).toHaveValue("/review ");
+  });
+
   it("lists slash commands as menu rows with one active wash", () => {
     const withCommands = snapshot();
     withCommands.composerCommands = [
