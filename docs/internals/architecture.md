@@ -582,11 +582,11 @@ outbound operations and bound to connector identity, independently of host
 approval and execution grants. All authenticated management clients resolve
 to the existing local tenant/principal; a client cannot select either scope.
 
-One upgrade router owns the listener's WebSocket upgrades. It dispatches the
-terminal, managed-terminal, and outbound carrier paths by exact URL. It answers
-any other upgrade path with 404, so those requests do not bypass Express. A
-refused upgrade's socket is destroyed shortly after its response, and a peer
-reset during admission closes only that socket.
+One upgrade router owns the listener's WebSocket upgrades, which Node does
+not pass through Express or its HTTP timeouts. It dispatches the terminal,
+managed-terminal, and outbound carrier paths by exact URL and answers any
+other upgrade path with 404. A refused upgrade's socket is destroyed shortly
+after its response, and a peer reset during admission closes only that socket.
 
 Provider credentials, transport credentials, native IDs, operator paths, and
 resolved secrets stay server-side. Transcript and workspace content are
