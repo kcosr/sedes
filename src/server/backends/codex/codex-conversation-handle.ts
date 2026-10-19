@@ -1801,7 +1801,7 @@ export class CodexConversationHandle implements ConversationHandle {
           rememberBoundedReceipt(this.#steerOperations, input.applicationOperationId, {
             ...previous,
             result: accepted,
-          }, settledCodexSteer);
+          }, (receipt) => settledCodexSteer(receipt, this.#nativeThread));
           return accepted;
         }
         return previous.result;
@@ -1957,7 +1957,7 @@ export class CodexConversationHandle implements ConversationHandle {
           attachmentsFingerprint,
           state: "accepted",
           result,
-        }, settledCodexSteer);
+        }, (receipt) => settledCodexSteer(receipt, this.#nativeThread));
         return result;
       } catch (error) {
         if (
@@ -1971,7 +1971,7 @@ export class CodexConversationHandle implements ConversationHandle {
             contextExcerptsFingerprint,
             attachmentsFingerprint,
             state: "outcome_unknown",
-          }, settledCodexSteer);
+          }, (receipt) => settledCodexSteer(receipt, this.#nativeThread));
         }
         throw mapCodexMutationError(error, "steer");
       }
@@ -7551,12 +7551,30 @@ function settledCodexSubmission(receipt: {
   return receipt.state === "accepted";
 }
 
+/**
+ * A Steer receipt is settled once it is accepted, or once it is pending
+ * materialization on a turn that is no longer the active one. Codex usually
+ * answers pending, and the dispatcher reconciles through the driver rather
+ * than replaying here, so waiting for acceptance alone would keep most Steer
+ * receipts forever. A replay after eviction fails closed with
+ * `codex_steer_target_changed` before sending. An unknown outcome, or a Steer
+ * pending on the running turn, stays.
+ */
 function settledCodexSteer(
   receipt:
     | { readonly state: "outcome_unknown" }
     | { readonly state: "accepted"; readonly result: SteerTurnResult },
+  thread: CodexThread | undefined,
 ): boolean {
-  return receipt.state === "accepted" && receipt.result.status === "accepted";
+  if (receipt.state !== "accepted") return false;
+  if (receipt.result.status === "accepted") return true;
+  if (!thread) return false;
+  if (thread.status.type !== "active") return true;
+  const activeTurnId = activeNativeTurnId(thread);
+  return (
+    activeTurnId !== undefined &&
+    codexBackendTurnId(thread.id, activeTurnId) !== receipt.result.backendTurnId
+  );
 }
 
 function mutationOutcomeUnknown(operation: string): BackendError {

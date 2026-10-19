@@ -16668,6 +16668,66 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("evicts pending Steer receipts of an ended turn and keeps those of the running turn", async () => {
+    const harness = new RpcHarness();
+    const runningTurn = (index: number) => ({
+      ...nativeTurn(index),
+      items: [],
+      status: "inProgress" as const,
+      completedAt: null,
+      durationMs: null,
+    });
+    const handle = (await driver(harness).attach(
+      attachInput(),
+    )) as CodexConversationHandle;
+    await establish(
+      harness,
+      handle,
+      nativeThread({ status: { type: "active", activeFlags: [] }, turns: [runningTurn(1)] }),
+    );
+    const steer = (label: string, nativeTurnId: string) => ({
+      applicationOperationId: `steer-${label}`,
+      mutationId: `mutation-${label}`,
+      reconciliationToken: `steer-${label}-token`,
+      target: { kind: "turn" as const, turnId: codexBackendTurnId("thread-1", nativeTurnId) },
+      taskContexts: [],
+      contextExcerpts: [],
+      attachments: [],
+      text: `clarification ${label}`,
+    });
+    const admitSteer = () =>
+      harness.enqueue("turn/steer", (params: unknown) => ({
+        turnId: (params as { expectedTurnId: string }).expectedTurnId,
+      }));
+    const steers = () => harness.calls.filter(({ method }) => method === "turn/steer");
+    const first = steer("first", "turn-1");
+    admitSteer();
+    await expect(handle.steer(first)).resolves.toMatchObject({ status: "pending_materialization" });
+    harness.notify("turn/completed", { threadId: "thread-1", turn: { ...nativeTurn(1), items: [] } });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    harness.notify("turn/started", { threadId: "thread-1", turn: runningTurn(2) });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const later = Array.from(
+      { length: MAXIMUM_RESIDENT_OPERATION_RECEIPTS },
+      (_, index) => steer(`later-${index}`, "turn-2"),
+    );
+    for (const input of later) {
+      admitSteer();
+      await expect(handle.steer(input)).resolves.toMatchObject({ status: "pending_materialization" });
+    }
+    expect(steers()).toHaveLength(later.length + 1);
+    // turn-1 ended without the first Steer, so its receipt left the resident
+    // cache; a replay fails closed instead of sending it again.
+    await expect(handle.steer(first)).rejects.toMatchObject({
+      backendCode: "codex_steer_target_changed",
+    });
+    // Every Steer still pending on the running turn kept its receipt.
+    await expect(handle.steer(later[0]!)).resolves.toMatchObject({ status: "pending_materialization" });
+    expect(steers()).toHaveLength(later.length + 1);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it("keeps a lost interrupt unknown while the exact target remains active", async () => {
     const harness = new RpcHarness();
     const activeTurn = {
