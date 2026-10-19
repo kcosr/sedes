@@ -1881,6 +1881,48 @@ describe("WorkpadsPanel", () => {
       expect(screen.getByRole("button", { name: "Actions for “Plan”" })).toHaveFocus();
     });
 
+    it("focuses the next row when a Rename takes its row out of the search while the dialog closes", async () => {
+      // jsdom runs no CSS animations; report the dialog's motion so a closed
+      // dialog stays mounted, animating out, as it does in a browser.
+      const computed = window.getComputedStyle.bind(window);
+      vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!(element instanceof HTMLElement) || element.dataset.slot !== "dialog-content") return style;
+        return new Proxy(style, {
+          get(target, property) {
+            if (property === "animationName") return element.dataset.state === "closed" ? "ui-dialog-out" : "ui-dialog-in";
+            const value = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+      let listed: Workpad[] = [pad, { ...other, title: "Interview" }];
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => ({
+        items: request?.archived ? [] : listed.filter(({ title }) => typeof request?.query !== "string" || title.includes(request.query)),
+      }));
+      const updateWorkpad = vi.fn(async (id: string, change: object) => {
+        listed = listed.map(item => item.id === id ? { ...item, ...change, revision: 2 } : item);
+        return listed.find(item => item.id === id)!;
+      });
+      const { store } = fixture({ listWorkpads, updateWorkpad });
+      render(<Panel context={panelContext(store)} />);
+      await screen.findByRole("button", { name: "Interview" });
+      fireEvent.change(openSearch(), { target: { value: "Int" } });
+      await waitFor(() => expect(listWorkpads).toHaveBeenCalledWith(expect.objectContaining({ query: "Int" })));
+      openMenu("Actions for “Integration”"); choose("Rename…");
+      const dialog = screen.getByRole("dialog", { name: "Rename workpad" });
+      fireEvent.change(within(dialog).getByRole("textbox", { name: "Workpad title" }), { target: { value: "Plan" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+      // The refresh drops the row while the dialog is still animating out.
+      await waitFor(() => expect(document.querySelector('[data-workpad-id="pad"]')).toBeNull());
+      expect(dialog).toHaveAttribute("data-state", "closed");
+      const end = new Event("animationend");
+      Object.defineProperty(end, "animationName", { value: "ui-dialog-out" });
+      act(() => { dialog.dispatchEvent(end); });
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
+      expect(document.querySelector('[data-workpad-id="other"]')).toHaveFocus();
+    });
+
     it("navigates rows by keyboard as Tasks does: one tab stop, arrows, →⋯, Delete and F2", async () => {
       const archived = { ...pad, id: "old", title: "Old notes", archivedAt: time };
       const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => ({ items: request?.archived ? [archived] : [pad, other] }));

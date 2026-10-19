@@ -160,8 +160,9 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const operationMutating = useRef(false);
   const rootRef = useRef<HTMLElement>(null);
   const addInputRef = useRef<HTMLInputElement>(null);
-  // The row that takes focus once a deleted workpad's row is gone.
-  const deletedNeighbour = useRef<string | undefined>(undefined);
+  // The row that takes focus once an acted-on workpad's row is gone (deleted,
+  // or renamed or moved out of the list while its dialog was closing).
+  const neighbourRow = useRef<string | undefined>(undefined);
   // Where a Rename or Move dialog opened from a menu returns focus.
   const dialogReturnRef = useRef<HTMLElement | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -627,11 +628,22 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const changeOptions = (patch: Partial<WorkpadsViewOptions>) => fromList(() => setWorkpadsViewOptions(view, patch));
   /** The control a Rename or Move dialog returns focus to: the row's ⋯, or the open workpad's. */
   const actionsTrigger = (id: string) => rootRef.current?.querySelector<HTMLElement>(`[data-workpad-actions="${CSS.escape(id)}"]`) ?? null;
+  const rememberNeighbour = (id: string) => {
+    const listed = [...itemsRef.current, ...archivedItemsRef.current];
+    const index = listed.findIndex(item => item.id === id);
+    neighbourRow.current = index < 0 ? undefined : (listed[index + 1] ?? listed[index - 1])?.id;
+  };
+  /** A dialog's focus target once its opener's row is gone: the next row, else the add row. */
+  const survivingRow = () => [...rootRef.current?.querySelectorAll<HTMLElement>("[data-workpad-id]") ?? []]
+    .find(row => row.dataset.workpadId === neighbourRow.current) ?? addInputRef.current;
   const openRename = (target: WorkpadTarget, returnTo: HTMLElement | null = actionsTrigger(target.id)) => {
-    dialogReturnRef.current = returnTo;
+    dialogReturnRef.current = returnTo; rememberNeighbour(target.id);
     setTitle(target.title); setRenameTarget(target);
   };
-  const chooseMove = (target: WorkpadTarget) => { dialogReturnRef.current = actionsTrigger(target.id); setMoveTarget(target); };
+  const chooseMove = (target: WorkpadTarget) => {
+    dialogReturnRef.current = actionsTrigger(target.id); rememberNeighbour(target.id);
+    setMoveTarget(target);
+  };
   const moveTo = (target: WorkpadTarget, destination: WorkpadScope) => {
     void run(() => mutate(target, { scope: destination }, {
       done: `Moved “${target.title}” to ${destinations.label(destination)}.`, failed: `Couldn't move “${target.title}”`,
@@ -654,9 +666,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     await run(async isCurrent => {
       try { await store.api.deleteWorkpad(target.id); } catch (caught) { failure = caught; return; }
       if (!isCurrent()) return;
-      const listed = [...itemsRef.current, ...archivedItemsRef.current];
-      const index = listed.findIndex(({ id }) => id === target.id);
-      deletedNeighbour.current = index < 0 ? undefined : (listed[index + 1] ?? listed[index - 1])?.id;
+      rememberNeighbour(target.id);
       forget(target.id);
       announce(`Deleted “${target.title}”.`);
       await refreshList();
@@ -995,7 +1005,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     </div>
     {selected ? documentView : listView}
     <Dialog open={open && renameTarget !== undefined} onOpenChange={value => { if (!value) setRenameTarget(undefined); }}>
-      <DialogContent size="sm" aria-describedby={undefined} returnFocusRef={dialogReturnRef}>
+      <DialogContent size="sm" aria-describedby={undefined} returnFocusRef={dialogReturnRef} fallbackFocus={survivingRow}>
         <DialogHeader><DialogTitle>Rename workpad</DialogTitle></DialogHeader>
         <form className="contents" noValidate onSubmit={event => {
           event.preventDefault();
@@ -1017,7 +1027,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     </Dialog>
     <Dialog open={open && moveTarget !== undefined} onOpenChange={value => { if (!value) setMoveTarget(undefined); }}>
       <DialogContent size="sm" mobile="sheet" className="searchable-select-sheet workpads-destination-dialog" aria-describedby={undefined}
-        returnFocusRef={dialogReturnRef}>
+        returnFocusRef={dialogReturnRef} fallbackFocus={survivingRow}>
         <DialogHeader><DialogTitle>Move workpad</DialogTitle></DialogHeader>
         {moveTarget && <SearchableSelectList
           label="Destination"
@@ -1057,8 +1067,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       confirmLabel="Delete workpad"
       pendingLabel="Deleting…"
       // The opener's row or toolbar is gone: focus the next row, else the add row.
-      fallbackFocus={() => [...rootRef.current?.querySelectorAll<HTMLElement>("[data-workpad-id]") ?? []]
-        .find(row => row.dataset.workpadId === deletedNeighbour.current) ?? addInputRef.current}
+      fallbackFocus={survivingRow}
       onOpenChange={value => { if (!value) setDeleteTarget(undefined); }}
       onConfirm={async () => { if (deleteTarget) await deleteWorkpad(deleteTarget); }}
     />
