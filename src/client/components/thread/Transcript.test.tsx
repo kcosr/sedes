@@ -1,5 +1,18 @@
 // @vitest-environment jsdom
 vi.mock("./TurnUsageAction.js", () => ({ TurnUsageAction: () => null }));
+// Render probe: counts each activity group's renders by its first item.
+const activityGroupRenders = vi.hoisted(() => new Map<string, number>());
+vi.mock("./ActivityGroup.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./ActivityGroup.js")>();
+  return {
+    ...actual,
+    ActivityGroup: (props: Parameters<typeof actual.ActivityGroup>[0]) => {
+      const id = props.items[0]!.id;
+      activityGroupRenders.set(id, (activityGroupRenders.get(id) ?? 0) + 1);
+      return actual.ActivityGroup(props);
+    },
+  };
+});
 import { OperationOverlayHost } from "../../operations/OperationOverlay.js";
 import { getBlockingOperation } from "../../operations/blocking-operation.js";
 vi.mock("../../operations/thread-readiness.js", () => ({
@@ -5012,6 +5025,59 @@ describe("Transcript history presentation", () => {
     act(() => fake.replaceSnapshot({ ...current, itemsById: { ...current.itemsById } }));
 
     expect(counts.transcriptCommits).toBe(1);
+  });
+
+  it("re-renders only the turn whose items changed on a streaming flush", () => {
+    // Render streamed text at once rather than revealing it over frames.
+    smoothStreamingEnabled = false;
+    const snapshot = userMessageSnapshot(["turn-1", "turn-2", "turn-3"]);
+    for (const turnId of ["turn-1", "turn-2", "turn-3"]) {
+      snapshot.turnsById[turnId] = {
+        ...snapshot.turnsById[turnId]!,
+        orderedItemIds: [`${turnId}-user`, `${turnId}-command`, `${turnId}-reply`],
+      };
+      snapshot.itemsById[`${turnId}-command`] = {
+        id: `${turnId}-command`,
+        turnId,
+        kind: "command",
+        status: "completed",
+        revision: 1,
+        phase: "completed",
+        command: { text: "pwd" },
+      };
+      snapshot.itemsById[`${turnId}-reply`] = {
+        id: `${turnId}-reply`,
+        turnId,
+        kind: "assistant_message",
+        status: "completed",
+        revision: 1,
+        markdown: { text: `Reply in ${turnId}` },
+      };
+    }
+    snapshot.turnsById["turn-3"] = { ...snapshot.turnsById["turn-3"]!, status: "in_progress" };
+    snapshot.itemsById["turn-3-reply"] = {
+      ...snapshot.itemsById["turn-3-reply"]!,
+      status: "streaming",
+    } as ConversationItem;
+    const fake = new FakeTranscriptStore(snapshot);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    activityGroupRenders.clear();
+
+    act(() => fake.replaceSnapshot({
+      ...snapshot,
+      itemsById: {
+        ...snapshot.itemsById,
+        "turn-3-reply": {
+          ...snapshot.itemsById["turn-3-reply"]!,
+          revision: 2,
+          markdown: { text: "Reply in turn-3, continued" },
+        } as ConversationItem,
+      },
+    }));
+
+    expect(Object.fromEntries(activityGroupRenders)).toEqual({ "turn-3-command": 1 });
+    expect(screen.getByText("Reply in turn-1")).toBeInTheDocument();
+    expect(screen.getByText(/continued/)).toBeInTheDocument();
   });
 
   it("republishes the rail when a preview changes", () => {
