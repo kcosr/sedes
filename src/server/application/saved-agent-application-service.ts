@@ -175,10 +175,6 @@ export const directThreadExecutionWorkspaceAllocator: ThreadExecutionWorkspaceAl
     },
   });
 
-function throwIfAborted(signal?: AbortSignal): void {
-  signal?.throwIfAborted();
-}
-
 function compareCodePoints(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
@@ -493,7 +489,7 @@ export class SavedAgentApplicationService {
             ),
           };
         } catch (error) {
-          throwIfAborted(signal);
+          signal?.throwIfAborted();
           return {
             status: "failed" as const,
             target: candidate.target,
@@ -542,7 +538,7 @@ export class SavedAgentApplicationService {
         "The template target uses a different Saved Agent backend type.",
       );
     }
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     this.#executionWorkspaceInitialization(
       scope,
       input.workspaceId,
@@ -626,7 +622,7 @@ export class SavedAgentApplicationService {
       } else {
         await this.input.targetHealth.requireSelectable(scope, request.configuration.targetId);
       }
-      throwIfAborted(signal);
+      signal?.throwIfAborted();
       this.#assertSimpleTargetDestination(scope, request, caller);
       const profile = this.input.configuration.getProfile(scope, request.configuration.targetId);
       const backend = this.input.configuration.getBackend(scope, profile.backendInstanceId);
@@ -728,7 +724,7 @@ export class SavedAgentApplicationService {
                   signal,
                 );
               } catch {
-                throwIfAborted(signal);
+                signal?.throwIfAborted();
                 return undefined;
               }
             }),
@@ -770,7 +766,7 @@ export class SavedAgentApplicationService {
         signal,
       );
     }
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     if (caller.kind === "agent_tool") {
       this.#requireAgentDestination(
         scope,
@@ -986,7 +982,7 @@ export class SavedAgentApplicationService {
       { snapshot: toolSnapshot, presentation: capturedTools.presentation },
       signal,
     );
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     const executionWorkspace = this.input.executionWorkspaces.selection(
       scope,
       sourceApplicationThreadId,
@@ -1176,7 +1172,7 @@ export class SavedAgentApplicationService {
     signal?: AbortSignal,
     requireHealthy = true,
   ): Promise<Candidate[]> {
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     const workspace = this.input.inventory.getWorkspace(scope, workspaceId);
     const candidates = this.input.configuration
       .listProfiles(scope)
@@ -1234,10 +1230,10 @@ export class SavedAgentApplicationService {
               candidate.connectionProfileId,
             );
           }
-          throwIfAborted(signal);
+          signal?.throwIfAborted();
           return candidate;
         } catch {
-          throwIfAborted(signal);
+          signal?.throwIfAborted();
           return undefined;
         }
       }),
@@ -1329,7 +1325,7 @@ export class SavedAgentApplicationService {
     signal?: AbortSignal,
     allowUnavailableTools = false,
   ): Promise<PreparedCandidate> {
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     if (this.input.targetHealth.requireAgentSelectable) {
       await this.input.targetHealth.requireAgentSelectable(
         scope,
@@ -1342,7 +1338,7 @@ export class SavedAgentApplicationService {
         candidate.connectionProfileId,
       );
     }
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     const profile = this.input.configuration.getProfile(
       scope,
       candidate.connectionProfileId,
@@ -1356,14 +1352,14 @@ export class SavedAgentApplicationService {
       workspaceId,
       signal,
     });
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     let catalog;
     try {
       catalog = await this.input.registry
         .driver(resolvedTarget.connection)
         .catalog({ scope, workspace: resolvedTarget.workspace });
     } catch (cause) {
-      throwIfAborted(signal);
+      signal?.throwIfAborted();
       throw new DomainError(
         "runtime_unavailable",
         "The Saved Agent target catalog is not currently available.",
@@ -1371,7 +1367,7 @@ export class SavedAgentApplicationService {
         { cause },
       );
     }
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     const canonical = candidate.adapter.validateOverrides({ overrides });
     if (
       canonical.backendTypeId !== candidate.adapter.typeId ||

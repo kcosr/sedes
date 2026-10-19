@@ -83,10 +83,6 @@ export interface ResolvedNewThreadBootstrap {
   }) => void;
 }
 
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw signal.reason ?? new Error("operation_aborted");
-}
-
 /**
  * Provider-specific persistence participates in the SQLite transaction opened
  * by the lifecycle service. Implementations must not perform external calls
@@ -382,7 +378,7 @@ export class ConversationLifecycleService {
         return { applicationThreadId: input.id, draft };
       }
     }
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     const now = this.#now();
     const resolved = await this.#targets.resolveNew(
       scope,
@@ -392,7 +388,7 @@ export class ConversationLifecycleService {
       },
       signal,
     );
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     if (resolved.connection.id !== input.connectionProfileId) {
       throw new DomainError(
         "conflict",
@@ -418,13 +414,13 @@ export class ConversationLifecycleService {
         catalog = await this.#registry
           .driver(resolved.connection)
           .catalog({ scope, workspace: resolved.workspace });
-        throwIfAborted(signal);
+        signal?.throwIfAborted();
       } catch {
-        throwIfAborted(signal);
+        signal?.throwIfAborted();
         catalog = { models: [], commands: [], skills: [], notices: [] };
       }
     }
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     return this.#bindings.database.transaction(() => {
       if (input.configurationCopy) {
         const replay = this.#bindings.findThreadConfigurationCopyReceipt(

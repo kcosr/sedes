@@ -110,12 +110,6 @@ interface LocalDirectoryCursor {
 const MAXIMUM_DIRECTORY_SCAN_ENTRIES = 10_000;
 const MAXIMUM_DIRECTORY_SCAN_PROJECTION_BYTES = 1024 * 1024;
 
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) {
-    throw signal.reason ?? new Error("directory_browse_cancelled");
-  }
-}
-
 function directoryIdentity(value: {
   readonly dev: number;
   readonly ino: number;
@@ -224,7 +218,7 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     request: ExecutionDirectoryBrowseRequest,
   ): Promise<DirectoryBrowseResult> {
     await this.#assertActive(scope, request.environmentId);
-    throwIfAborted(request.signal);
+    request.signal?.throwIfAborted();
     const roots = await this.#roots.catch(() => {
       throw new Error("directory_browse_not_allowed");
     });
@@ -312,7 +306,7 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
       ) {
         throw new Error("directory_browse_cursor_invalid");
       }
-      throwIfAborted(request.signal);
+      request.signal?.throwIfAborted();
       const entries: { name: string; path: string }[] = [];
       let scanTruncated = false;
       let scanned = 0;
@@ -329,7 +323,7 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
       );
       try {
         for await (const value of directory) {
-          throwIfAborted(request.signal);
+          request.signal?.throwIfAborted();
           scanned += 1;
           if (scanned > MAXIMUM_DIRECTORY_SCAN_ENTRIES) {
             scanTruncated = true;

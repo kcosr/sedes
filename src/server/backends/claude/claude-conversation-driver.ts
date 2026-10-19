@@ -371,7 +371,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
   async discover(
     input: DiscoverConversationsInput,
   ): Promise<DiscoveredConversationPage> {
-    throwIfAborted(input.signal);
+    input.signal.throwIfAborted();
     this.#assertScope(input.scope);
     this.#assertWorkspace(input.workspace);
     this.#assertEnabled();
@@ -411,7 +411,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         },
         this.#childEnvironment,
       );
-      throwIfAborted(input.signal);
+      input.signal.throwIfAborted();
       if (
         cursor &&
         cursor.prefixDigest !== discoveryPrefixDigest(sessions.slice(0, offset))
@@ -426,7 +426,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       const page = sessions.slice(offset, offset + input.limit);
       const ids = new Set<string>();
       const conversations = page.map((session) => {
-        throwIfAborted(input.signal);
+        input.signal.throwIfAborted();
         const sessionId = uuidSchema.parse(session.sessionId);
         if (ids.has(sessionId)) {
           throw new Error("claude_discovery_duplicate_session");
@@ -1757,10 +1757,6 @@ function parseDiscoveryCursor(
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("base64url");
-}
-
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw signal.reason;
 }
 
 function bindingMismatch(): BackendError {
