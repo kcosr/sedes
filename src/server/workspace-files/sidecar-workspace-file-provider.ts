@@ -919,6 +919,12 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
           { signal: controller.signal },
         );
         if (closed || this.#closed) {
+          // The subscription closed while this open was in flight: close the
+          // remote watcher it created and drop its in-flight events.
+          lease.session.retireWatch(subscriptionHandle);
+          void lease.session
+            .call(workspaceFilesWatchCloseOperation, { subscriptionHandle })
+            .catch(() => undefined);
           throw new WorkspaceFileProviderUnavailableError();
         }
         const removeInvalidation = lease.session.registerInvalidation(
