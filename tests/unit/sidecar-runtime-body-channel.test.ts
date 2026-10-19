@@ -95,6 +95,34 @@ describe("sidecar runtime bodies", () => {
       await fixture.close();
     }
   });
+
+  it("retires an expired body whose sender stops without a terminal", async () => {
+    const fixture = await bodyFixture();
+    const id = "12345678-1234-4234-8234-123456789ac0";
+    const bytes = Buffer.from(JSON.stringify({ data: "z".repeat(4 * 1024) }));
+    const offer = { id, size: bytes.byteLength, sha256: sha256(bytes) };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await fixture.sedes.call(sidecarRuntimeBodyOffer, offer);
+      const decoded = fixture.right.decodeBody({ type: "stream", id });
+      const assertion = expect(decoded).rejects.toThrow("sidecar_runtime_body_expired");
+      const stream = fixture.sedes.openOutgoingStream({ ...capability, streamId: id, initialCreditBytes: 1024 * 1024 });
+      await stream.send("stdout", bytes.subarray(0, 1024));
+      await vi.advanceTimersByTimeAsync(60_000);
+      await assertion;
+      // Frames after expiry keep the discarded transfer alive.
+      await stream.send("stdout", bytes.subarray(1024, 2048));
+      await vi.advanceTimersByTimeAsync(45_000);
+      await expect(fixture.sedes.call(sidecarRuntimeBodyOffer, offer)).rejects.toThrow("sidecar_operation_failed");
+
+      // The sender never finishes: its reservation and stream are released.
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(fixture.sedes.call(sidecarRuntimeBodyOffer, offer)).resolves.toEqual({ accepted: true });
+    } finally {
+      vi.useRealTimers();
+      await fixture.close();
+    }
+  });
 });
 
 async function bodyFixture() {
