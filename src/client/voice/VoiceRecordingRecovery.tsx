@@ -69,6 +69,8 @@ export function VoiceRecordingRecovery({ store, threads, onAddedToComposer, conf
   const [discarding, setDiscarding] = useState<string | null>(null);
   const closeDiscard = useCallback(() => setDiscarding(null), []);
   useEffect(() => { setCopied(false); }, [native?.connectionGeneration, saved?.recordingId, saved?.revision]);
+  // A confirmation belongs to one saved item; it never reopens for it later.
+  if (discarding !== null && saved?.recordingId !== discarding) setDiscarding(null);
   if (!native || !saved) return null;
   const context = recordingRecoveryContext(native, saved);
   const run = (enabled: boolean, action: () => Promise<NativeVoiceState>) => {

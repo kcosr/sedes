@@ -120,7 +120,8 @@ export function useScopedListNav({
         // elsewhere is let go and never pulled back.
         requestAnimationFrame(() => {
           if (!element.isConnected || lastFocused.current?.element !== element) return;
-          if (list.contains(document.activeElement) || element.getAttribute("aria-expanded") === "true") return;
+          const menuOpen = element.hasAttribute("aria-haspopup") && element.getAttribute("aria-expanded") === "true";
+          if (list.contains(document.activeElement) || menuOpen) return;
           lastFocused.current = null;
         });
       },

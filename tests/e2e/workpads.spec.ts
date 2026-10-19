@@ -112,7 +112,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect.poll(listedScope).toEqual({ kind: "thread", threadId: secondThreadPath.split("/").at(-1)!, projectId: null });
   await expect(panel.getByRole("radio", { name: "Thread", exact: true })).toBeChecked();
   await expect(addRow).toHaveAttribute("placeholder", "New workpad in this thread…");
-  await expect(panel.getByText("No workpads in this thread yet", { exact: true })).toBeVisible();
+  await expect(panel.getByText("No workpads in this thread yet.", { exact: true })).toBeVisible();
   await expect(panel.locator(".workpad-document")).toHaveCount(0);
   expect(await panel.evaluate(node => (window as typeof window & { __retainedWorkpad?: Element }).__retainedWorkpad === node)).toBe(true);
   await expect(page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Hide Workpads panel", exact: true })).toBeVisible();
@@ -170,12 +170,13 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   const synced = page.waitForResponse(response => response.request().method() === "PUT" && response.url().endsWith(`/workpads/${workpad.id}/draft`) && response.ok());
   await editor.fill(draftText);
   await synced;
-  await expect(panel.getByRole("status")).toHaveText("Draft synced");
+  // Shown, not announced: autosave would otherwise repeat it to screen readers.
+  await expect(panel.locator(".workpads-sync")).toHaveText("Draft synced");
   expect((await readWorkpad(page, workpad.id)).revision).toBe(saved.revision);
   // A synced draft survives following another thread and reopening its document.
   await page.goForward();
   await expect(page).toHaveURL(secondThreadPath);
-  await expect(panel.getByText("No workpads in this thread yet", { exact: true })).toBeVisible();
+  await expect(panel.getByText("No workpads in this thread yet.", { exact: true })).toBeVisible();
   await expect(editor).toHaveCount(0);
   await page.goBack();
   await expect(page).toHaveURL(threadPath);
@@ -390,7 +391,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect.poll(listedScope).toEqual({ kind: "project", projectId: otherWorkspace.projectId, threadId: null });
   await expect(panel.getByRole("button", { name: /^Archived/ })).toHaveCount(0);
   await expect(addRow).toHaveAttribute("placeholder", "New workpad in this project…");
-  await expect(panel.getByText("No workpads in this project yet", { exact: true })).toBeVisible();
+  await expect(panel.getByText("No workpads in this project yet.", { exact: true })).toBeVisible();
   await expect(panel.locator(".workpad-document")).toHaveCount(0);
   expect(await panel.evaluate(node => (window as typeof window & { __retainedWorkpad?: Element }).__retainedWorkpad === node)).toBe(true);
   await expect.poll(async () => {
@@ -467,7 +468,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await capture(page, testInfo, "workpads-list-thread.png");
   await segment("Project").click();
   await expect(segment("Project")).toHaveText("Project0");
-  await expect(panel.getByText("No workpads in this project yet", { exact: true })).toBeVisible();
+  await expect(panel.getByText("No workpads in this project yet.", { exact: true })).toBeVisible();
   await pane.getByRole("button", { name: "View options", exact: true }).click();
   await page.getByRole("menuitemcheckbox", { name: "Include thread workpads", exact: true }).click();
   await page.keyboard.press("Escape");
