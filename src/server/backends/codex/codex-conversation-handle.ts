@@ -6460,41 +6460,6 @@ function assertCompleteLegacyResume(response: CodexThreadResumeResponse): void {
   }
 }
 
-export function selectCodexSnapshotWindow(
-  snapshot: BackendConversationSnapshot,
-): {
-  readonly snapshot: BackendConversationSnapshot;
-  readonly start: number;
-} {
-  const start = Math.max(
-    0,
-    snapshot.orderedBackendTurnIds.length - SNAPSHOT_TURN_LIMIT,
-  );
-  const turnIds = snapshot.orderedBackendTurnIds.slice(start);
-  const turnsById = Object.fromEntries(
-    turnIds.map((turnId) => [turnId, snapshot.turnsById[turnId]!]),
-  );
-  const itemIds = turnIds.flatMap(
-    (turnId) => turnsById[turnId]!.orderedBackendItemIds,
-  );
-  const itemsById = Object.fromEntries(
-    itemIds.map((itemId) => [itemId, snapshot.itemsById[itemId]!]),
-  );
-  return {
-    start,
-    snapshot: {
-      orderedBackendTurnIds: turnIds,
-      turnsById,
-      itemsById,
-      runState: snapshot.runState,
-      ...(snapshot.activeBackendTurnId &&
-      turnsById[snapshot.activeBackendTurnId]
-        ? { activeBackendTurnId: snapshot.activeBackendTurnId }
-        : {}),
-    },
-  };
-}
-
 function historyPage(
   snapshot: BackendConversationSnapshot,
   turnIds: readonly string[],

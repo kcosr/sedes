@@ -226,27 +226,10 @@ const NATIVE_TO_BROWSER_STATUS: Readonly<
   complete: "complete",
 };
 
-const BROWSER_TO_NATIVE_STATUS: Readonly<
-  Record<CodexGoalStatusV1, CodexNativeGoalStatus>
-> = {
-  active: "active",
-  paused: "paused",
-  blocked: "blocked",
-  usage_limited: "usageLimited",
-  budget_limited: "budgetLimited",
-  complete: "complete",
-};
-
 export function projectNativeGoalStatus(
   status: CodexNativeGoalStatus,
 ): CodexGoalStatusV1 {
   return NATIVE_TO_BROWSER_STATUS[status];
-}
-
-export function nativeGoalStatusFromBrowser(
-  status: CodexGoalStatusV1,
-): CodexNativeGoalStatus {
-  return BROWSER_TO_NATIVE_STATUS[status];
 }
 
 /**

@@ -24,7 +24,6 @@ import {
   requireConsistentFileReplacement,
   safeItemErrorSchema,
   turnFailureSchema,
-  truncationInfoSchema,
   unifiedDiffSchema,
 } from "./payload.js";
 import { imageItemOriginSchema, normalizedImageSchema } from "./output-artifacts.js";
@@ -576,12 +575,6 @@ export const conversationHistoryWindowSchema = z.discriminatedUnion(
 export type ConversationHistoryWindow = z.infer<
   typeof conversationHistoryWindowSchema
 >;
-
-export const truncationBearingSchemas = {
-  text: boundedTextSchema,
-  displayText: boundedDisplayTextSchema,
-  truncation: truncationInfoSchema,
-} as const;
 
 const safeCountSchema = z
   .number()

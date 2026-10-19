@@ -97,8 +97,3 @@ export const saveWorkpadDraftRequestSchema = z.strictObject({ expectedRevision: 
 export type SaveWorkpadDraftRequest = z.infer<typeof saveWorkpadDraftRequestSchema>;
 export const commitWorkpadDraftRequestSchema = z.strictObject({ expectedDraftRevision: revision, expectedRevision: revision });
 export type CommitWorkpadDraftRequest = z.infer<typeof commitWorkpadDraftRequestSchema>;
-
-export const workpadMutationResultSchema = z.strictObject({ workpad: workpadSchema });
-export const workpadDraftResultSchema = z.strictObject({ draft: workpadDraftSchema });
-export const workpadRevisionResultSchema = z.strictObject({ revision: workpadRevisionSchema });
-export const workpadDraftCommitResultSchema = z.strictObject({ workpad: workpadSchema, draft: workpadDraftSchema });

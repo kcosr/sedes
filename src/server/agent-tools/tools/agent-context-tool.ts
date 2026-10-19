@@ -9,7 +9,6 @@ import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-
 
 const manifest = CANONICAL_AGENT_TOOL_MANIFEST["agent.context"];
 export const agentContextToolId = manifest.id;
-export const agentContextToolSchemaVersion = manifest.schemaVersion;
 export const piAgentContextToolName = "sedes_agent_context";
 
 export type AgentContextInput = Readonly<Record<never, never>>;

@@ -47,7 +47,6 @@ export const codexRuntimeExecuteOperation = {
   ...capability, operation: "runtime.execute", requestSchema: sidecarRuntimeBodySchema,
   responseSchema: sidecarRuntimeBodySchema, lane: "operation", maximumDeadlineMilliseconds: 600_000,
 } satisfies SidecarOperationDefinition<z.infer<typeof sidecarRuntimeBodySchema>, z.infer<typeof sidecarRuntimeBodySchema>>;
-export const codexRuntimeOperations = [codexRuntimeEnsureOperation, codexRuntimeLookupOperation, codexRuntimeExecuteOperation] as const;
 const eventDefinition = { ...capability, event: "runtime.event", schema: z.strictObject({ runtimeId: id, body: sidecarRuntimeBodySchema }) };
 
 /** Register once per authenticated peer; hosts/receipts remain service-owned.

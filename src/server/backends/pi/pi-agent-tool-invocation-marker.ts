@@ -231,14 +231,6 @@ export function readPiAgentToolInvocationMarker(
   };
 }
 
-export function piAgentToolInvocationMarker(
-  entry: SessionEntry,
-  authentication?: PiToolIdentityAuthentication,
-): PiAgentToolInvocationMarker | undefined {
-  const result = readPiAgentToolInvocationMarker(entry, authentication);
-  return result.status === "authenticated" ? result.marker : undefined;
-}
-
 /** Returns the provider-native name only when this exact marker authenticated. */
 export function authenticatedPiAgentToolInvocationNativeToolName(
   entry: SessionEntry,

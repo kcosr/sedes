@@ -13,7 +13,6 @@ import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-
 
 const manifest = CANONICAL_AGENT_TOOL_MANIFEST["thread.status"];
 export const threadStatusToolId = manifest.id;
-export const threadStatusToolSchemaVersion = manifest.schemaVersion;
 export const piThreadStatusToolName = "sedes_thread_status";
 
 export interface ThreadStatusInput {

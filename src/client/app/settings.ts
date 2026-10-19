@@ -43,7 +43,6 @@ const clickNamesToFilterKey = "sedes-filter-by-project-name";
 
 export const DEFAULT_ACTIVITY_DETAIL: ActivityDetailMode = "full";
 export const DEFAULT_MOBILE_COMPOSER_REFOCUS_AFTER_SEND = true;
-export const DEFAULT_MOBILE_HISTORY_SEEK_CONTROL = true;
 export const DEFAULT_SHOW_PROMPTS_TAB = true;
 export type PromptsPlacement = "above_composer" | "toolbar";
 export const DEFAULT_PROMPTS_PLACEMENT: PromptsPlacement = "above_composer";

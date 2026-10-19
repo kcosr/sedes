@@ -7,7 +7,6 @@ import type {
   ThreadHistorySeekResult,
 } from "../../shared/protocol/conversation.js";
 import {
-  historyPageSchema,
   normalizedThreadSnapshotSchema,
   threadEventEnvelopeSchema,
   threadHistorySeekResultSchema,
@@ -99,14 +98,6 @@ function projectThreadSnapshotActivityValue(
     ...snapshot,
     itemsById: projectItems(snapshot.itemsById, detail),
   };
-}
-
-export function projectHistoryPageActivity(
-  page: HistoryPage,
-  detail: ActivityDetailMode,
-): HistoryPage {
-  if (detail === "full") return page;
-  return historyPageSchema.parse(projectHistoryPageActivityValue(page, detail));
 }
 
 function projectHistoryPageActivityValue(

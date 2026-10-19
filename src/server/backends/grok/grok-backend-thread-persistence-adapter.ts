@@ -510,24 +510,6 @@ export class GrokBackendThreadPersistenceAdapter implements BackendThreadPersist
   }
 }
 
-export function assertGrokConnectionDefaultsAvailable(
-  connection: AgentConnectionProfile,
-  catalog: BackendCatalog,
-  defaults: GrokConnectionModuleConfiguration["defaults"] | undefined,
-  modelPolicy: CompiledBackendModelPolicy,
-): void {
-  resolveDesiredSettings(connection, catalog, defaults, modelPolicy);
-}
-
-export function resolveGrokDesiredSettings(
-  connection: AgentConnectionProfile,
-  catalog: BackendCatalog,
-  defaults: GrokConnectionModuleConfiguration["defaults"] | undefined,
-  modelPolicy: CompiledBackendModelPolicy,
-): GrokDesiredSettings {
-  return resolveDesiredSettings(connection, catalog, defaults, modelPolicy);
-}
-
 function resolveDesiredSettings(
   connection: AgentConnectionProfile,
   catalog: BackendCatalog,

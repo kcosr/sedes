@@ -278,5 +278,4 @@ export class SavedAgentService {
   }
 }
 
-export const SAVED_AGENT_DEFAULT_PAGE_SIZE = 50;
 export { SAVED_AGENT_PAGE_MAX_ITEMS };
