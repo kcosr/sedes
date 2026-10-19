@@ -436,6 +436,43 @@ describe("sidecar retained streams", () => {
     } finally { await fixture.sedes.close("done"); }
   });
 
+  it("waits out congestion before settling a stream's terminal", async () => {
+    const fixture = await streamFixture();
+    const streamId = randomUUID();
+    const terminal = vi.fn();
+    fixture.sedes.registerIncomingStream({
+      streamId, ...capability, initialCreditBytes: 1,
+      terminalSchema: workspaceToolsShellTerminalSchema,
+      onData: () => undefined, onTerminal: terminal,
+    });
+    const producer = fixture.sidecar.openOutgoingStream({ streamId, ...capability, initialCreditBytes: 1 });
+    const send = fixture.pair.right.send.bind(fixture.pair.right);
+    const refusals = ["sidecar_outbound_queue_limit", "sidecar_outbound_queue_limit"];
+    vi.spyOn(fixture.pair.right, "send").mockImplementation(async (bytes, options) => {
+      const refusal = options.settlement ? refusals.shift() : undefined;
+      if (refusal) throw new SidecarFrameWriteError(refusal, "not_sent");
+      return await send(bytes, options);
+    });
+    const settled = { outcome: "exited", exitCode: 0, signal: null, stdoutBytes: 0, stderrBytes: 0,
+      emittedBytes: 0, omittedBytes: 0, truncated: false } as const;
+    try {
+      await producer.terminal(settled, workspaceToolsShellTerminalSchema);
+      await vi.waitFor(() => expect(terminal).toHaveBeenCalledOnce());
+      expect(refusals).toEqual([]);
+
+      // Any other refusal still fails the terminal at once.
+      const other = randomUUID();
+      fixture.sedes.registerIncomingStream({
+        streamId: other, ...capability, initialCreditBytes: 1,
+        terminalSchema: workspaceToolsShellTerminalSchema,
+        onData: () => undefined, onTerminal: () => undefined,
+      });
+      refusals.push("sidecar_transport_closed");
+      await expect(fixture.sidecar.openOutgoingStream({ streamId: other, ...capability, initialCreditBytes: 1 })
+        .terminal(settled, workspaceToolsShellTerminalSchema)).rejects.toThrow("sidecar_transport_closed");
+    } finally { await fixture.sedes.close("done"); }
+  });
+
   it("hands a success that crossed a timed-out call to its late-success handler", async () => {
     let failNext = false;
     const fixture = await streamFixture(async (_sidecar, request) => {

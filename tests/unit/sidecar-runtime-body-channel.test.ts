@@ -174,19 +174,24 @@ describe("sidecar runtime body draining", () => {
     const value = { data: "s".repeat(512 * 1024) };
     const send = fixture.pair.left.send.bind(fixture.pair.left);
     let dataFrames = 0;
+    let settlements = 0;
     vi.spyOn(fixture.pair.left, "send").mockImplementation(async (bytes, options) => {
-      // The third body chunk meets a congested outbound queue.
-      if (options.lane === "operation" && !options.settlement && (dataFrames += 1) === 3) {
-        throw new SidecarFrameWriteError("sidecar_outbound_queue_limit", "not_sent");
-      }
+      // The third body chunk meets a congested outbound queue, and its
+      // settling terminal finds the reserved capacity exhausted twice.
+      const refused = options.settlement
+        ? (settlements += 1) <= 2
+        : options.lane === "operation" && (dataFrames += 1) === 3;
+      if (refused) throw new SidecarFrameWriteError("sidecar_outbound_queue_limit", "not_sent");
       return await send(bytes, options);
     });
     const offered = vi.spyOn(fixture.sedes, "call");
     try {
       await expect(fixture.left.encodeBody(value)).rejects.toThrow("sidecar_outbound_queue_limit");
       const id = (offered.mock.calls[0]![1] as { id: string }).id;
-      // The receiver learns at once instead of holding the body until expiry.
+      // The receiver learns once congestion clears, instead of holding the
+      // body until expiry and its drain slot until the session closes.
       await expect(fixture.right.decodeBody({ type: "stream", id })).rejects.toThrow("sidecar_runtime_body_digest_invalid");
+      expect(settlements).toBe(3);
       const pingId = "12345678-1234-4234-8234-123456789ac3";
       await expect(fixture.sedes.call(controlPingOperation, { pingId })).resolves.toEqual({ pingId });
     } finally { await fixture.close(); }

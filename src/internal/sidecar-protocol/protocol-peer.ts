@@ -100,8 +100,10 @@ type RetiredStream = {
   repaying: boolean;
 };
 
-const RETIRED_CREDIT_RETRY_MILLISECONDS = 50;
-const MAXIMUM_RETIRED_CREDIT_RETRY_MILLISECONDS = 1_000;
+// Frames that settle a stream are retried while a congested outbound queue
+// refuses them; nothing else can settle the stream for its peer.
+const CONGESTION_RETRY_MILLISECONDS = 50;
+const MAXIMUM_CONGESTION_RETRY_MILLISECONDS = 1_000;
 
 type OutgoingStream = {
   readonly capabilityId: string;
@@ -517,7 +519,7 @@ export class SidecarProtocolPeer {
     if (retired.repaying || retired.owedCredit === 0) return;
     retired.repaying = true;
     void (async () => {
-      let delay = RETIRED_CREDIT_RETRY_MILLISECONDS;
+      let delay = CONGESTION_RETRY_MILLISECONDS;
       try {
         while (
           retired.owedCredit > 0 &&
@@ -528,20 +530,13 @@ export class SidecarProtocolPeer {
           try {
             await this.#sendStreamCredit(streamId, retired.stream, owed);
             retired.owedCredit -= owed;
-            delay = RETIRED_CREDIT_RETRY_MILLISECONDS;
+            delay = CONGESTION_RETRY_MILLISECONDS;
           } catch (error) {
-            // A congested queue refuses the frame before writing it; any
-            // other failure closes the transport and with it this stream.
-            if (
-              !(error instanceof SidecarFrameWriteError) ||
-              error.delivery !== "not_sent"
-            ) {
-              return;
-            }
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, delay).unref();
-            });
-            delay = Math.min(delay * 2, MAXIMUM_RETIRED_CREDIT_RETRY_MILLISECONDS);
+            // Any failure other than congestion closes the transport and
+            // with it this stream.
+            if (!refusedByCongestion(error)) return;
+            await congestionPause(delay);
+            delay = Math.min(delay * 2, MAXIMUM_CONGESTION_RETRY_MILLISECONDS);
           }
         }
       } finally {
@@ -653,20 +648,32 @@ export class SidecarProtocolPeer {
         wakeStreamWaiters(state);
         const next = state.chain.then(async () => {
           state.terminal = true;
-          await this.#transport.send(
-            encodeSidecarEnvelope({
-              wireVersion: SIDECAR_WIRE_VERSION,
-              sessionNonce: this.#sessionNonce,
-              type: "stream_terminal",
-              origin: this.#role,
-              streamId: input.streamId,
-              sequence: state.sequence,
-              capabilityId: input.capabilityId,
-              majorVersion: input.majorVersion,
-              payload: parsed,
-            }),
-            { lane: "operation", settlement: true },
-          );
+          const frame = encodeSidecarEnvelope({
+            wireVersion: SIDECAR_WIRE_VERSION,
+            sessionNonce: this.#sessionNonce,
+            type: "stream_terminal",
+            origin: this.#role,
+            streamId: input.streamId,
+            sequence: state.sequence,
+            capabilityId: input.capabilityId,
+            majorVersion: input.majorVersion,
+            payload: parsed,
+          });
+          // A terminal can be requested only once, so wait out congestion
+          // instead of leaving the consumer waiting for it forever.
+          for (let delay = CONGESTION_RETRY_MILLISECONDS; ; ) {
+            try {
+              await this.#transport.send(frame, {
+                lane: "operation",
+                settlement: true,
+              });
+              break;
+            } catch (error) {
+              if (this.#closed || !refusedByCongestion(error)) throw error;
+              await congestionPause(delay);
+              delay = Math.min(delay * 2, MAXIMUM_CONGESTION_RETRY_MILLISECONDS);
+            }
+          }
           this.#outgoingStreams.delete(input.streamId);
           this.#terminalOutgoingStreams.add(input.streamId);
           trimSet(
@@ -1406,6 +1413,21 @@ function eventKey(input: {
   readonly event: string;
 }): string {
   return `${capabilityPrefix(input)}\0${input.event}`;
+}
+
+/** A congested outbound queue refused the frame before writing any of it. */
+function refusedByCongestion(error: unknown): boolean {
+  return (
+    error instanceof SidecarFrameWriteError &&
+    error.delivery === "not_sent" &&
+    error.message === "sidecar_outbound_queue_limit"
+  );
+}
+
+function congestionPause(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds).unref();
+  });
 }
 
 function trimSet(values: Set<string>, maximum: number): void {
