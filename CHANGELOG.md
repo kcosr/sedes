@@ -164,6 +164,10 @@ User-facing changes are collected here before release. See the
   Workpads, voice, and Usage, take touch-sized targets, so a near miss on the
   voice card's chevron opens the thread picker rather than the thread.
 
+- Usage chart and heatmap readouts stay on screen after a tap instead of
+  vanishing as the finger lifts, the heatmap can be read with the arrow keys,
+  and its readout is announced to screen readers.
+
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See

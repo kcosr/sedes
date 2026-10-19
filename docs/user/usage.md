@@ -52,7 +52,9 @@ remembered in this browser.
 - **Threads** ranks threads by tokens, cost, input, output, or reasoning.
   Select a thread to open it.
 - **Patterns** shows when usage happens by weekday and hour, the token mix,
-  and how cache reuse and reasoning share change over time.
+  and how cache reuse and reasoning share change over time. Hover or tap a
+  weekday-and-hour cell, or focus the grid and use the arrow keys, to read its
+  total; a tapped value stays until you tap another cell.
 - **Coverage** explains how much of the range has a known time, cost, model,
   and reasoning effort, and which threads have incomplete accounting.
 

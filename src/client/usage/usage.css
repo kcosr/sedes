@@ -1003,6 +1003,13 @@ button.usage-bar-row[aria-pressed="true"] {
   display: grid;
   min-width: 0;
   gap: 10px;
+  border-radius: var(--radius-inline);
+  outline: none;
+  touch-action: pan-y;
+}
+
+.usage-heatmap:focus-visible {
+  box-shadow: var(--focus-ring);
 }
 
 .usage-heatmap-grid {
