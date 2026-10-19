@@ -153,6 +153,10 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- The server no longer exits when a client resets a refused terminal or
+  outbound-host WebSocket upgrade. Upgrade requests for unknown paths now get
+  a 404 and are closed instead of holding their connections open.
+
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See

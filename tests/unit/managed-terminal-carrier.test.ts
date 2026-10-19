@@ -7,11 +7,16 @@ import { WebSocket } from "ws";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../src/server/config/config.js";
 import { errorMiddleware } from "../../src/server/http/errors.js";
+import { WebSocketUpgradeRouter } from "../../src/server/http/websocket-upgrade-router.js";
 import type {
   IdentityProvider,
   RequestScope,
 } from "../../src/server/identity/identity-provider.js";
 import { LongLivedHttpConnectionRegistry } from "../../src/server/runtime/application-shutdown.js";
+import {
+  captureProcessCrashes,
+  sendUpgradeAndReset,
+} from "../helpers/raw-websocket-upgrade.js";
 import {
   csrfGuard,
   hostOriginGuard,
@@ -336,6 +341,30 @@ describe("managed terminal carrier", () => {
     expect(fixture.authority.attachViewer).toHaveBeenCalledTimes(1);
   });
 
+  it("survives clients that reset rejected upgrades and keeps admitting viewers", async () => {
+    const fixture = await createFixture();
+    const port = Number(new URL(fixture.baseUrl).port);
+    const crashes = captureProcessCrashes();
+    try {
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        await sendUpgradeAndReset({
+          port,
+          path: MANAGED_TERMINAL_WEBSOCKET_PATH,
+          host: "attacker.test",
+          protocols: [MANAGED_TERMINAL_WEBSOCKET_PROTOCOL, "A".repeat(43)],
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const admission = await issueAdmission(fixture);
+      const viewer = await openViewer(fixture, admission.token);
+      expect(viewer.protocol).toBe(MANAGED_TERMINAL_WEBSOCKET_PROTOCOL);
+      viewer.close();
+      expect(crashes.errors).toEqual([]);
+    } finally {
+      crashes.dispose();
+    }
+  });
+
   it("closes malformed viewers and maps authority failures to the closed error enum", async () => {
     const fixture = await createFixture();
     const first = await issueAdmission(fixture);
@@ -483,7 +512,7 @@ async function createFixture(appConfig: AppConfig = config, authentication?: Aut
   app.use(errorMiddleware);
   const server = createServer(app);
   const connections = new LongLivedHttpConnectionRegistry();
-  const carrier = attachManagedTerminalCarrier(server, {
+  const carrier = attachManagedTerminalCarrier(new WebSocketUpgradeRouter(server), {
     config: appConfig,
     identity: new FixedIdentity<IncomingMessage>(),
     admissions,

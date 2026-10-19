@@ -20,6 +20,7 @@ import type {
   IdentityProvider,
   RequestScope,
 } from "../../src/server/identity/identity-provider.js";
+import { WebSocketUpgradeRouter } from "../../src/server/http/websocket-upgrade-router.js";
 import { LongLivedHttpConnectionRegistry } from "../../src/server/runtime/application-shutdown.js";
 import {
   TerminalAdmissionTokens,
@@ -28,6 +29,11 @@ import {
 import type {
   TerminalService,
 } from "../../src/server/terminals/terminal-service.js";
+import {
+  captureProcessCrashes,
+  sendUpgradeAndReset,
+  upgradeUntilServerCloses,
+} from "../helpers/raw-websocket-upgrade.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" };
 const terminalId = "11111111-1111-4111-8111-111111111111";
@@ -189,6 +195,43 @@ describe("application terminal carrier", () => {
     const viewer = await open(fixture, token);
     expect(viewer.protocol).toBe(TERMINAL_WEBSOCKET_PROTOCOL);
     viewer.close();
+  });
+
+  it("survives clients that reset rejected upgrades and keeps admitting viewers", async () => {
+    const fixture = await createFixture();
+    const port = new URL(fixture.baseUrl).port;
+    const crashes = captureProcessCrashes();
+    try {
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        await sendUpgradeAndReset({
+          port: Number(port),
+          path: TERMINAL_WEBSOCKET_PATH,
+          host: "attacker.test",
+          protocols: [TERMINAL_WEBSOCKET_PROTOCOL, "A".repeat(43)],
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const viewer = await open(fixture, issue(fixture));
+      expect(viewer.protocol).toBe(TERMINAL_WEBSOCKET_PROTOCOL);
+      viewer.close();
+      expect(crashes.errors).toEqual([]);
+    } finally {
+      crashes.dispose();
+    }
+  });
+
+  it("answers and closes upgrade requests for unrouted paths", async () => {
+    const fixture = await createFixture();
+    const port = Number(new URL(fixture.baseUrl).port);
+    for (const path of ["/x", `${TERMINAL_WEBSOCKET_PATH}?q`]) {
+      const { response } = await upgradeUntilServerCloses({
+        port,
+        path,
+        protocols: [TERMINAL_WEBSOCKET_PROTOCOL, "A".repeat(43)],
+        timeoutMilliseconds: 2_000,
+      });
+      expect(response).toMatch(/^HTTP\/1\.1 404 Not Found\r\n/);
+    }
   });
 
   it("requires the exact protocol-token pair and consumes it across concurrent upgrades", async () => {
@@ -511,7 +554,7 @@ async function createFixture(appConfig: AppConfig = config, authentication?: Aut
   app.use(errorMiddleware);
   const server = createServer(app);
   const connections = new LongLivedHttpConnectionRegistry();
-  const carrier = attachTerminalCarrier(server, {
+  const carrier = attachTerminalCarrier(new WebSocketUpgradeRouter(server), {
     config: appConfig,
     identity: new FixedIdentity(),
     admissions,

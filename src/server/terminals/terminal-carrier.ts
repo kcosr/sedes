@@ -1,6 +1,6 @@
 import type { AuthenticationAdmission } from "../authentication/authentication-admission.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { IncomingMessage, Server } from "node:http";
+import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
@@ -16,6 +16,10 @@ import {
   type TerminalServerFrame,
 } from "../../shared/protocol/terminals.js";
 import type { AppConfig } from "../config/config.js";
+import {
+  rejectWebSocketUpgrade,
+  type WebSocketUpgradeRouter,
+} from "../http/websocket-upgrade-router.js";
 import type {
   IdentityProvider,
   RequestScope,
@@ -116,7 +120,7 @@ export class TerminalAdmissionTokens {
 }
 
 export function attachTerminalCarrier(
-  server: Server,
+  upgrades: WebSocketUpgradeRouter,
   input: {
     readonly config: AppConfig;
     readonly identity: IdentityProvider<IncomingMessage>;
@@ -139,7 +143,6 @@ export function attachTerminalCarrier(
   });
   let closing = false;
   const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
-    if (request.url !== TERMINAL_WEBSOCKET_PATH) return;
     socket.pause();
     void authorize(request)
       .then(({ record, clientId }) => {
@@ -149,7 +152,7 @@ export function attachTerminalCarrier(
         });
         socket.resume();
       })
-      .catch(() => reject(socket));
+      .catch(() => rejectWebSocketUpgrade(socket, 403));
   };
   const authorize = async (request: IncomingMessage): Promise<{ readonly record: AdmissionRecord; readonly clientId?: string }> => {
     if (input.drain?.isDraining) throw new Error("terminal_application_draining");
@@ -352,13 +355,13 @@ export function attachTerminalCarrier(
       });
     },
   );
-  server.on("upgrade", onUpgrade);
+  const unroute = upgrades.route(TERMINAL_WEBSOCKET_PATH, onUpgrade);
   let closePromise: Promise<void> | undefined;
   return {
     close() {
       if (closePromise) return closePromise;
       closing = true;
-      server.off("upgrade", onUpgrade);
+      unroute();
       for (const client of sockets.clients) {
         client.close(1001, "server_shutdown");
         const force = setTimeout(() => {
@@ -429,10 +432,4 @@ function parseClientFrame(data: RawData, isBinary: boolean): TerminalClientFrame
     }
   }
   return terminalClientFrameSchema.parse(parsed);
-}
-
-function reject(socket: Duplex): void {
-  if (!socket.destroyed) {
-    socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-  }
 }
