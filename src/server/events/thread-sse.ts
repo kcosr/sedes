@@ -389,17 +389,24 @@ export async function serveThreadEventStream(
     return response.write(encode(rawEnvelope));
   };
 
+  // A complete replacement is independently bounded by the normalized
+  // snapshot and full SSE-frame limits. It may exceed the much smaller
+  // incremental buffer, so only incrementals queued behind it count against
+  // `pendingByteLimit`; at most one replacement is retained.
+  const pendingIncrementalBytes = (envelope: ThreadEventEnvelope): number =>
+    envelope.event.type === "snapshot"
+      ? 0
+      : Buffer.byteLength(encode(envelope), "utf8");
+
   const resetPendingAtReplacement = (envelope: ThreadEventEnvelope): void => {
-    const encoded = encode(envelope);
+    // Encoding enforces the frame bound before the replacement is retained.
+    encode(envelope);
     pending = [envelope];
-    pendingBytes = Buffer.byteLength(encoded, "utf8");
+    pendingBytes = 0;
     // A replacement supersedes the entire pending array. The prior flush
     // index belongs to that discarded array and must never skip the new
     // authoritative anchor after backpressure drains.
     flushIndex = 0;
-    // A complete replacement is independently bounded by the normalized
-    // snapshot and full SSE-frame limits. It may exceed the much smaller
-    // incremental handshake buffer, but only one replacement is retained.
     overflowed = pending.length > pendingEventLimit;
   };
 
@@ -760,8 +767,7 @@ export async function serveThreadEventStream(
         (envelope) => sequenceOf(hub, envelope) > baselineSequence,
       );
       pendingBytes = pending.reduce(
-        (total, envelope) =>
-          total + Buffer.byteLength(encode(envelope), "utf8"),
+        (total, envelope) => total + pendingIncrementalBytes(envelope),
         0,
       );
       return drainPending(baselineSequence);
@@ -773,7 +779,7 @@ export async function serveThreadEventStream(
       if (overflowed) return recoverFromOverflow();
       while (pending.length > 0) {
         const envelope = pending.shift()!;
-        pendingBytes -= Buffer.byteLength(encode(envelope), "utf8");
+        pendingBytes -= pendingIncrementalBytes(envelope);
         if (
           minimumExclusive !== undefined &&
           sequenceOf(hub, envelope) <= minimumExclusive

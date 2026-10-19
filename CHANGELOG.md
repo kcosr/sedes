@@ -159,6 +159,10 @@ User-facing changes are collected here before release. See the
   startup deadline cannot be closed. Upgrade requests for unknown paths now get
   a 404 and are closed instead of holding their connections open.
 
+- Threads with very large snapshots no longer resend a full checkpoint, and
+  eventually disconnect, when a small update follows a snapshot replacement
+  on a slow connection. Inventory streams no longer close in the same case.
+
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See
