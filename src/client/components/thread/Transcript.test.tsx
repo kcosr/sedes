@@ -17,7 +17,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRef } from "react";
+import { createRef, Profiler, useCallback, useState } from "react";
 import type {
   ConversationItem,
   HistoryPage,
@@ -37,6 +37,7 @@ import { clearDiagnostics, readDiagnostics } from "../../app/diagnostics.js";
 import {
   Transcript,
   type TranscriptHandle,
+  type TranscriptHistoryPresentation,
   type TranscriptSeekRequest,
 } from "./Transcript";
 import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
@@ -4942,6 +4943,92 @@ function asyncQuestionItem(turnId: string): ConversationItem {
     },
   };
 }
+
+describe("Transcript history presentation", () => {
+  function streamingReplySnapshot(text: string, revision: number): NormalizedThreadSnapshot {
+    const snapshot = userMessageSnapshot(["turn-1"]);
+    snapshot.turnsById["turn-1"] = {
+      ...snapshot.turnsById["turn-1"]!,
+      status: "in_progress",
+      orderedItemIds: ["turn-1-user", "turn-1-reply"],
+    };
+    snapshot.itemsById["turn-1-reply"] = {
+      id: "turn-1-reply",
+      turnId: "turn-1",
+      kind: "assistant_message",
+      status: "streaming",
+      revision,
+      markdown: { text },
+    };
+    return snapshot;
+  }
+
+  function mountPublishingHost(fake: FakeTranscriptStore) {
+    const published: TranscriptHistoryPresentation[] = [];
+    const counts = { hostRenders: 0, transcriptCommits: 0 };
+    // Mirrors ThreadView: the publication is lifted into parent state.
+    function Host(): React.JSX.Element {
+      counts.hostRenders += 1;
+      const [, setPresentation] = useState<TranscriptHistoryPresentation>({ entries: [] });
+      const publish = useCallback((next: TranscriptHistoryPresentation) => {
+        published.push(next);
+        setPresentation(next);
+      }, []);
+      return (
+        <Profiler id="transcript" onRender={() => { counts.transcriptCommits += 1; }}>
+          <Transcript
+            store={fake as unknown as ThreadClientStore}
+            onHistoryPresentationChange={publish}
+          />
+        </Profiler>
+      );
+    }
+    render(<Host />);
+    return { published, counts };
+  }
+
+  it("does not republish unchanged rail entries on streaming flushes", () => {
+    const longReply = "Streaming words keep arriving. ".repeat(40);
+    const fake = new FakeTranscriptStore(streamingReplySnapshot(longReply, 1));
+    const { published, counts } = mountPublishingHost(fake);
+    const publications = published.length;
+    expect(published.at(-1)?.entries).toHaveLength(1);
+    counts.hostRenders = 0;
+
+    // Past the preview limit, further text no longer changes the rail.
+    act(() => fake.replaceSnapshot(streamingReplySnapshot(`${longReply}More text.`, 2)));
+    act(() => fake.replaceSnapshot(streamingReplySnapshot(`${longReply}More text, and more.`, 3)));
+
+    expect(published).toHaveLength(publications);
+    expect(counts.hostRenders).toBe(0);
+  });
+
+  it("commits a flush that changes no rendered item once", () => {
+    const fake = new FakeTranscriptStore(streamingReplySnapshot("Reply", 1));
+    const { counts } = mountPublishingHost(fake);
+    counts.transcriptCommits = 0;
+
+    const current = fake.getSnapshot().snapshot!;
+    act(() => fake.replaceSnapshot({ ...current, itemsById: { ...current.itemsById } }));
+
+    expect(counts.transcriptCommits).toBe(1);
+  });
+
+  it("republishes the rail when a preview changes", () => {
+    const fake = new FakeTranscriptStore(streamingReplySnapshot("Short", 1));
+    const { published } = mountPublishingHost(fake);
+    const publications = published.length;
+
+    act(() => fake.replaceSnapshot(streamingReplySnapshot("Short reply grows", 2)));
+
+    expect(published).toHaveLength(publications + 1);
+    expect(published.at(-1)?.entries[0]).toMatchObject({
+      itemId: "turn-1-user",
+      assistantPreview: "Short reply grows",
+      responseState: "available",
+    });
+  });
+});
 
 describe("Transcript viewed images", () => {
   it.each(["generated", "shown"] as const)("discloses a captured viewed image but keeps a following %s image inline", (inlineOrigin) => {

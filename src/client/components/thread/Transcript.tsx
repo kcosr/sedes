@@ -52,6 +52,7 @@ import { useSmoothStreaming } from "../../app/use-smooth-streaming.js";
 import {
   ChatHistoryRail,
   createChatHistoryEntries,
+  sameChatHistoryEntries,
   type ChatHistoryEntry,
 } from "./ChatHistoryRail.js";
 import { ActivityGroup } from "./ActivityGroup.js";
@@ -105,6 +106,14 @@ export type TranscriptProps = {
   readonly findContentRef?: RefObject<HTMLDivElement | null>;
   readonly findViewportRef?: RefObject<HTMLDivElement | null>;
 };
+
+type TranscriptFocusStatus =
+  | "idle"
+  | "loading"
+  | "found"
+  | "not_found"
+  | "unavailable"
+  | "error";
 
 const seekRequestTtlMilliseconds = 15_000;
 const seekCompletionCheckMilliseconds = 1_000;
@@ -227,9 +236,16 @@ export function Transcript({
   const [historyLoadIntent, setHistoryLoadIntent] = useState<
     "more" | "all" | undefined
   >();
-  const [focusStatus, setFocusStatus] = useState<
-    "idle" | "loading" | "found" | "not_found" | "unavailable" | "error"
-  >("idle");
+  const [focusStatus, setFocusStatus] = useState<TranscriptFocusStatus>("idle");
+  // The focus effects re-assert the status on every snapshot. A same-value
+  // update right after a commit still re-renders the whole transcript, so
+  // skip updates that request the status already requested.
+  const requestedFocusStatus = useRef<TranscriptFocusStatus>("idle");
+  const updateFocusStatus = useCallback((next: TranscriptFocusStatus) => {
+    if (requestedFocusStatus.current === next) return;
+    requestedFocusStatus.current = next;
+    setFocusStatus(next);
+  }, []);
   const [focusDiagnostic, setFocusDiagnostic] = useState<string>();
   const [focusRetryable, setFocusRetryable] = useState(false);
   const [focusPage, setFocusPage] = useState<
@@ -380,20 +396,28 @@ export function Transcript({
       providerFeatureCapabilities,
     ],
   );
-  const historyEntries = useMemo(
+  const bookmarkedTurnIds = useMemo(
+    () => new Set(bookmarks.map((bookmark) => bookmark.turnId)),
+    [bookmarks],
+  );
+  const computedHistoryEntries = useMemo(
     () =>
       createChatHistoryEntries(
         turnIds,
         viewTurnsById,
         viewItemsById,
-        new Set(bookmarks.map((bookmark) => bookmark.turnId)),
+        bookmarkedTurnIds,
       ),
-    [bookmarks, turnIds, viewItemsById, viewTurnsById],
+    [bookmarkedTurnIds, turnIds, viewItemsById, viewTurnsById],
   );
-  const bookmarkedTurnIds = useMemo(
-    () => new Set(bookmarks.map((bookmark) => bookmark.turnId)),
-    [bookmarks],
-  );
+  // Every streaming flush rebuilds the entries. Keep the published array while
+  // its values are unchanged so the rail publication does not re-render the
+  // thread a second time.
+  const stableHistoryEntries = useRef(computedHistoryEntries);
+  if (!sameChatHistoryEntries(stableHistoryEntries.current, computedHistoryEntries)) {
+    stableHistoryEntries.current = computedHistoryEntries;
+  }
+  const historyEntries = stableHistoryEntries.current;
   const pendingBookmarkTurnIdSet = useMemo(
     () => new Set(pendingBookmarkTurnIds),
     [pendingBookmarkTurnIds],
@@ -438,15 +462,16 @@ export function Transcript({
   ]);
   const historyEntriesRef = useRef(historyEntries);
   historyEntriesRef.current = historyEntries;
-  const historyEntryKey = historyEntries
-    .map((entry) => entry.itemId)
-    .join("\u0000");
-  const historyEntryIdsRef = useRef(
-    new Set(historyEntries.map((entry) => entry.itemId)),
+  const historyEntryKey = useMemo(
+    () => historyEntries.map((entry) => entry.itemId).join("\u0000"),
+    [historyEntries],
   );
-  historyEntryIdsRef.current = new Set(
-    historyEntries.map((entry) => entry.itemId),
+  const historyEntryIds = useMemo(
+    () => new Set(historyEntries.map((entry) => entry.itemId)),
+    [historyEntries],
   );
+  const historyEntryIdsRef = useRef(historyEntryIds);
+  historyEntryIdsRef.current = historyEntryIds;
   const runState = snapshot?.runState ?? "idle";
   const readOnly = snapshot?.capabilities.interactionMode === "read_only";
   const diagnosticState = useRef({ runState, itemCount: itemIds.length });
@@ -1516,17 +1541,17 @@ export function Transcript({
     setFocusPage(undefined);
     setFocusDiagnostic(undefined);
     setFocusRetryable(false);
-    setFocusStatus(focusTurnId ? "loading" : "idle");
+    updateFocusStatus(focusTurnId ? "loading" : "idle");
   }, [activityDetail, focusTurnId, focusResponse, store]);
 
   useEffect(() => {
     if (!focusTurnId || !snapshot) {
-      setFocusStatus("idle");
+      updateFocusStatus("idle");
       return;
     }
     const targetTurn = viewTurnsById?.[focusTurnId];
     if (targetTurn) {
-      setFocusStatus("found");
+      updateFocusStatus("found");
       const handlingKey = `${activityDetail}:${focusTurnId}:${focusResponse}:${focusRetryNonce}`;
       if (handledFocusTarget.current === handlingKey) return;
       const frame = requestAnimationFrame(() => {
@@ -1551,13 +1576,13 @@ export function Transcript({
       return () => cancelAnimationFrame(frame);
     }
     if (connection !== "connected" || !authoritative) {
-      setFocusStatus("loading");
+      updateFocusStatus("loading");
       return;
     }
     const attemptKey = `${activityDetail}:${focusTurnId}:${focusResponse}:${focusRetryNonce}`;
     if (focusAttemptTarget.current === attemptKey) return;
     focusAttemptTarget.current = attemptKey;
-    setFocusStatus("loading");
+    updateFocusStatus("loading");
     void store.seekHistoryTurn(focusTurnId).then(
       (result) => {
         if (focusAttemptTarget.current !== attemptKey) return;
@@ -1568,16 +1593,16 @@ export function Transcript({
             page: result.page,
           });
         } else if (result.status === "not_found") {
-          setFocusStatus("not_found");
+          updateFocusStatus("not_found");
         } else {
           setFocusDiagnostic(result.reason.text);
           setFocusRetryable(result.retryable);
-          setFocusStatus("unavailable");
+          updateFocusStatus("unavailable");
         }
       },
       () => {
         if (focusAttemptTarget.current === attemptKey) {
-          setFocusStatus("error");
+          updateFocusStatus("error");
         }
       },
     );

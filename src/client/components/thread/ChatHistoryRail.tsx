@@ -83,6 +83,31 @@ export function createChatHistoryEntries(
   return entries;
 }
 
+/**
+ * Value equality for rail entries. Streaming flushes rebuild the entries even
+ * when no preview changed; consumers keep the previous array in that case.
+ */
+export function sameChatHistoryEntries(
+  left: readonly ChatHistoryEntry[],
+  right: readonly ChatHistoryEntry[],
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const other = right[index]!;
+    return (
+      entry === other ||
+      (entry.itemId === other.itemId &&
+        entry.turnId === other.turnId &&
+        entry.userPreview === other.userPreview &&
+        entry.userLabel === other.userLabel &&
+        entry.assistantPreview === other.assistantPreview &&
+        entry.responseState === other.responseState &&
+        entry.bookmarked === other.bookmarked)
+    );
+  });
+}
+
 export function ChatHistoryRail({
   entries,
   activeItemId,
