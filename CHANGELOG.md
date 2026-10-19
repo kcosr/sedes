@@ -247,8 +247,9 @@ User-facing changes are collected here before release. See the
   [agent tools](docs/internals/agent-tools.md#durable-callback-lifecycle).
 
 - Queued input resumes when a Stop is later proven not applied, instead of
-  waiting on an idle thread for an unrelated event. Pi extension dialogs honor
-  their `signal` and `timeout` options. See
+  waiting on an idle thread for an unrelated event. A prompt the provider
+  withdraws during a transcript refresh no longer stays pending, and Pi
+  extension dialogs honor their `signal` and `timeout` options. See
   [Pi capabilities](docs/operator/backends/pi.md#topologies-and-capabilities).
 
 ### Removed

@@ -1470,7 +1470,10 @@ export class ConversationActor {
       const completionGapRevision = this.#completionObservationGapRevision;
       void this.#mailbox
         .enqueue(async () => {
-          if (epoch !== this.#establishmentEpoch) return;
+          if (epoch !== this.#establishmentEpoch) {
+            this.#forwardRetiredRailResolution(event.event);
+            return;
+          }
           const nativeEvent = event.event;
           if (nativeEvent.type === "turn_completed" && nativeEvent.turn.status !== "in_progress" &&
               nativeEvent.completionProvenance === "recovered") {
@@ -1562,6 +1565,22 @@ export class ConversationActor {
           // A failed actor operation is surfaced by the next authoritative
           // request. Driver callbacks must never create unhandled rejections.
         });
+    });
+  }
+
+  /**
+   * A replacement captures only after its predecessor rail is retired, so its
+   * replay omits an interaction that rail already resolved. Resolution can only
+   * remove a request, so forward it instead of leaving the broker's copy
+   * pending forever.
+   */
+  #forwardRetiredRailResolution(event: BackendConversationEvent): void {
+    if (event.type !== "interaction_resolved") return;
+    this.#pendingInteractions.delete(event.backendInteractionId);
+    this.#publish({
+      type: "backend_event",
+      generation: this.#projector.generation,
+      event,
     });
   }
 

@@ -165,6 +165,9 @@ An actor must replay current authoritative pending interactions to late
 subscribers, including the interaction broker. Remove resolved requests and
 rebuild the pending view from the handle's replay on projection replacement;
 neither resolved requests nor obsolete projection state may be resurrected.
+A replacement captures after its predecessor rail is retired, so its replay
+omits a request that rail resolved; the actor still forwards such a retired-rail
+resolution to the broker, because resolution can only remove a request.
 A thread event-stream reader retains its hub subscription after setup and
 releases its execution borrow. Viewing a thread prevents idle eviction without
 blocking an explicitly confirmed backend Stop. Confirmation revisions track
