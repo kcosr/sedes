@@ -9,7 +9,6 @@
   },
   "fontSizeLiterals": {
     "components/thread/flat-thread-row.css": 12,
-    "components/thread/question-inbox.css": 6,
     "components/thread/thread-group-roster.css": 1,
     "styles.css": 213,
     "usage/usage.css": 22,
@@ -19,7 +18,6 @@
   },
   "fontWeightLiterals": {
     "components/thread/flat-thread-row.css": 5,
-    "components/thread/question-inbox.css": 2,
     "components/thread/thread-group-roster.css": 1,
     "styles.css": 73,
     "usage/usage.css": 13,
@@ -27,7 +25,6 @@
   },
   "borderRadiusLiterals": {
     "components/thread/flat-thread-row.css": 3,
-    "components/thread/question-inbox.css": 3,
     "styles.css": 20,
     "usage/usage.css": 17,
     "workpads/WorkpadDocument.css": 3

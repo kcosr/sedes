@@ -111,7 +111,9 @@ User-facing changes are collected here before release. See the
   list give way from the start of their directory, so the file name stays
   visible on narrow panels; the tooltip keeps the whole path. The Files
   Browse/Changes switch, the Usage views, and Usage's chart choices use the
-  shared segmented control and tabs, with arrow-key navigation.
+  shared segmented control and tabs, with arrow-key navigation. The question
+  inbox uses the shared notices, count badge, and answer field, so its
+  **Try again** is a real button.
 
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See
