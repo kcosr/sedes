@@ -154,9 +154,10 @@ User-facing changes are collected here before release. See the
 ### Fixed
 
 - The server no longer exits when a client resets a refused terminal or
-  outbound-host WebSocket upgrade, or when storage fails while a terminal
-  records its history; only that terminal fails. Upgrade requests for unknown
-  paths now get a 404 and are closed instead of holding their connections open.
+  outbound-host WebSocket upgrade, when storage fails while a terminal records
+  its history (only that terminal fails), or when a Codex TUI that missed its
+  startup deadline cannot be closed. Upgrade requests for unknown paths now get
+  a 404 and are closed instead of holding their connections open.
 
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
