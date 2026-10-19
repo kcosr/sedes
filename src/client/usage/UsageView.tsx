@@ -33,7 +33,6 @@ function tabQuery(tab: UsageTab, settings: UsageViewSettings): Pick<UsageAnalyti
   return { groupBy: null, crossBy: null, breakdownLimit: 8 };
 }
 
-/** Principal-wide recorded usage analytics page. */
 /** The Usage page when the server has not enabled usage accounting. */
 export function UsageDisabledView() {
   return (
@@ -52,6 +51,7 @@ export function UsageDisabledView() {
   );
 }
 
+/** Principal-wide recorded usage analytics page. */
 export function UsageView({ store }: { store: ApplicationClientStore }) {
   const [settings, setSettings] = useState<UsageViewSettings>(() => readUsageSettings());
   const [filters, setFilters] = useState<UsageFilterState>({});
