@@ -160,7 +160,8 @@ User-facing changes are collected here before release. See the
   [Build a prompt](docs/user/conversations.md#build-a-prompt).
 
 - Files compare no longer leaves **Start review** stuck on "Loading…" when the
-  selected review is cleared while its comments load.
+  selected review is cleared while its comments load, and switching roots
+  keeps each root's selected historical review.
 
 - Find in thread stays on the selected match while a reply streams instead of
   being pulled back to the latest message.

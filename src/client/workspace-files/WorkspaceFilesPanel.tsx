@@ -2150,8 +2150,15 @@ export function WorkspaceFilesPanel({
     };
   }, [activeComparison, activeRootId, api, workspaceId, navigationScope]);
 
+  // Persist only a selection loaded for the current comparison. Switching
+  // roots clears both context keys while the previous root's selection is
+  // still in state; it must not be written into the next root's entry.
   useEffect(() => {
-    if (!activeCompareReviewId || loadedReviewContextRef.current !== compareReviewContextKeyRef.current) return;
+    if (
+      !activeCompareReviewId ||
+      loadedReviewContextRef.current === undefined ||
+      loadedReviewContextRef.current !== compareReviewContextKeyRef.current
+    ) return;
     const saved = workspaceCompareStorage.get(navigationScope, workspaceId, activeRootId);
     workspaceCompareStorage.set(navigationScope, workspaceId, activeRootId, { ...saved, mode: modeRef.current, selectedReviewId: activeCompareReviewId });
   }, [activeCompareReviewId, navigationScope, workspaceId, activeRootId]);
