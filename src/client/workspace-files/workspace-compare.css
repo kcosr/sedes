@@ -333,12 +333,12 @@
   overflow: auto;
   outline-offset: -2px;
 }
+/* Rows are virtual: their height and top come from the navigator. */
 .workspace-compare-tree-file,
 .workspace-compare-directory {
   position: absolute;
   left: 0;
   right: 0;
-  height: 32px;
   display: flex;
   gap: 6px;
   align-items: center;
@@ -658,9 +658,38 @@
   padding: 2px 4px;
 }
 
-/* Touch density, at any width with a coarse pointer. */
+/* Touch density, at any width with a coarse pointer: toolbar controls take
+   the bar control size, header actions fill the 44px file header, and the
+   navigator's filter row and close button are touch-sized. */
 @media (max-width: 819px), (pointer: coarse) {
+  .workspace-compare-navigator-search {
+    padding-block: 0;
+  }
+
   .workspace-compare-navigator-search input {
+    min-height: var(--control-touch);
     font-size: var(--text-input);
+  }
+
+  .workspace-compare-navigator-search button {
+    width: var(--control-touch);
+    height: var(--control-touch);
+  }
+
+  .workspace-compare-toolbar {
+    height: auto;
+    min-height: calc(var(--bar-control) + var(--space-2));
+  }
+
+  .workspace-compare-toolbar-button,
+  .workspace-compare-source-trigger {
+    min-width: var(--bar-control-width);
+    min-height: var(--bar-control);
+  }
+
+  .workspace-compare-header-action,
+  .workspace-compare-file-navigation button {
+    min-width: var(--bar-control-width);
+    height: var(--control-touch);
   }
 }

@@ -138,4 +138,22 @@ describe("touch targets under touch density", () => {
   it("sizes the scoped lists' section headings with the density switch", () => {
     expect(found.get("|.list-heading|min-height")).toBe("var(--control-default)");
   });
+
+  it("sizes Files tabs and Changes controls for touch", () => {
+    for (const [selector, property, value] of [
+      [".workspace-files-tab", "min-height", "var(--control-touch)"],
+      [".workspace-files-tab-close", "width", "var(--control-touch)"],
+      [".workspace-files-tab-close", "height", "var(--control-touch)"],
+      [".workspace-files-root-tab", "min-height", "var(--control-touch)"],
+      ['.workspace-files-root-switcher > [data-slot="button"]', "height", "var(--control-touch)"],
+      ['.workspace-files-editor-toolbar > div > [data-slot="button"]', "height", "var(--bar-control)"],
+      [".workspace-compare-toolbar-button", "min-height", "var(--bar-control)"],
+      [".workspace-compare-source-trigger", "min-height", "var(--bar-control)"],
+      [".workspace-compare-header-action", "height", "var(--control-touch)"],
+      [".workspace-compare-file-navigation button", "height", "var(--control-touch)"],
+      [".workspace-compare-navigator-search button", "height", "var(--control-touch)"],
+    ] as const) {
+      expect(touch(selector, property), `${selector} ${property}`).toBe(value);
+    }
+  });
 });

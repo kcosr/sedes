@@ -2913,6 +2913,35 @@ textarea:disabled {
   box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--ring) 45%, transparent);
 }
 
+/* Touch density: open-file and root tabs are 44px tall, and a file tab's
+   close button and the folder's Remove fill that height. */
+@media (max-width: 819px), (pointer: coarse) {
+  .workspace-files-tab {
+    min-height: var(--control-touch);
+    padding-block: 0;
+    padding-right: 0;
+  }
+
+  .workspace-files-tab-close {
+    width: var(--control-touch);
+    height: var(--control-touch);
+  }
+
+  .workspace-files-root-tab {
+    min-height: var(--control-touch);
+  }
+
+  .workspace-files-root-switcher > [data-slot="button"] {
+    width: var(--control-touch);
+    height: var(--control-touch);
+  }
+
+  .workspace-files-editor-toolbar > div > [data-slot="button"] {
+    width: var(--bar-control-width);
+    height: var(--bar-control);
+  }
+}
+
 .workspace-files-root {
   display: flex;
   min-width: 0;
