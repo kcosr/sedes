@@ -135,6 +135,8 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/backends/model-policy.ts",
   "src/server/backends/runtime-control.ts",
   "src/server/backends/retained-runtime-lifecycle.ts",
+  // Pure insertion-order receipt bound used by the persistent Claude host.
+  "src/server/backends/bounded-receipts.ts",
   "src/server/backends/codex/codex-backend-configuration.ts",
   "src/server/backends/codex/runtime/codex-runtime-wire.ts",
   "src/server/backends/codex/runtime/codex-sidecar-runtime.ts",
