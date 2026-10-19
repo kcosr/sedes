@@ -913,10 +913,12 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
           this.#rootKind(root),
           root.canonicalPath,
         );
+        // Closing the subscription must not cancel an open in flight: a
+        // cancelled call drops a success response that already crossed the
+        // carrier, and the remote watcher it names could then never be closed.
         const { subscriptionHandle } = await lease.session.call(
           workspaceFilesWatchOpenOperation,
           { rootHandle },
-          { signal: controller.signal },
         );
         if (closed || this.#closed) {
           // The subscription closed while this open was in flight: close the

@@ -1054,11 +1054,11 @@ describe("SidecarWorkspaceFileProvider", () => {
     const provider = providerFor(fakeRuntime([session]));
     const pending = provider.watch(scope, root, vi.fn());
     await vi.waitFor(() =>
-      expect(session.call).toHaveBeenCalledWith(
-        workspaceFilesWatchOpenOperation,
-        expect.anything(),
-        expect.anything(),
-      ),
+      expect(
+        session.call.mock.calls.some(
+          ([definition]) => definition === workspaceFilesWatchOpenOperation,
+        ),
+      ).toBe(true),
     );
     await provider.close();
     gate.resolve();
@@ -1085,11 +1085,11 @@ describe("SidecarWorkspaceFileProvider", () => {
     const subscription = await provider.watch(scope, root, listener);
     first.failWatch();
     await vi.waitFor(() =>
-      expect(second.call).toHaveBeenCalledWith(
-        workspaceFilesWatchOpenOperation,
-        expect.anything(),
-        expect.anything(),
-      ),
+      expect(
+        second.call.mock.calls.some(
+          ([definition]) => definition === workspaceFilesWatchOpenOperation,
+        ),
+      ).toBe(true),
     );
     subscription.close();
     gate.resolve();
@@ -1177,7 +1177,11 @@ function fakeSession(
   let watchIndex = 0;
   const session = {
     closed: closure.promise,
-    call: vi.fn(async (definition: unknown) => {
+    call: vi.fn(async (
+      definition: unknown,
+      _request?: unknown,
+      callOptions?: { readonly signal?: AbortSignal },
+    ) => {
       if (definition === workspaceFilesRootOpenOperation) {
         return {
           rootHandle: `de8e220b-0000-4000-8000-${label === "first" ? "000000000011" : "000000000012"}`,
@@ -1187,7 +1191,19 @@ function fakeSession(
         (definition as { operation?: string }).operation === "files.watch_open"
       ) {
         watchIndex += 1;
-        await options?.watchOpenGate;
+        if (options?.watchOpenGate) {
+          // Like the protocol peer, a cancelled call rejects at once and
+          // drops the success response that arrives later.
+          const signal = callOptions?.signal;
+          await Promise.race([
+            options.watchOpenGate,
+            new Promise<never>((_resolve, reject) => {
+              const cancel = () => reject(new Error("sidecar_request_cancelled"));
+              if (signal?.aborted) cancel();
+              signal?.addEventListener("abort", cancel, { once: true });
+            }),
+          ]);
+        }
         return {
           subscriptionHandle: `de8e220b-0000-4000-8000-${watchIndex === 1 ? "000000000021" : "000000000022"}`,
         };
