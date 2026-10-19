@@ -12,12 +12,15 @@
   vertical-align: middle;
   cursor: pointer;
 }
-/* The box keeps its size in the line; touch gets a 44px hit area. */
+/* The box keeps its size in the line; touch widens its hit area to 44px.
+   Only sideways: checklist lines sit closer than 44px, and a taller area
+   would cover the neighbouring line's box. */
 @media (max-width: 819px), (pointer: coarse) {
   .workpad-document .markdown-checklist-control::before {
     content: "";
     position: absolute;
-    inset: calc((100% - var(--control-touch)) / 2);
+    inset-block: 0;
+    inset-inline: calc((100% - var(--control-touch)) / 2);
   }
 }
 .workpad-document .markdown-checklist-control:has(input:disabled),

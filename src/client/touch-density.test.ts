@@ -117,13 +117,30 @@ describe("touch targets under touch density", () => {
     for (const control of [
       ".tasks-alert-dismiss",
       ".workpads-alert-dismiss",
-      ".workpad-document .markdown-checklist-control",
       ".usage-filter-chips li:not(.usage-chip-clear) button",
     ]) {
       expect(touch(`${control}::before`, "content"), control).toBe('""');
       expect(touch(`${control}::before`, "inset"), control).toBe(HIT_AREA);
     }
     expect(touch(".view-filter-chip::before", "inset-block")).toBe(HIT_AREA);
+  });
+
+  it("keeps hit areas off neighbouring controls", () => {
+    // Checklist lines sit closer than 44px: the box widens only sideways.
+    const checklist = ".workpad-document .markdown-checklist-control::before";
+    expect(touch(checklist, "inset-block")).toBe("0");
+    expect(touch(checklist, "inset-inline")).toBe(HIT_AREA);
+    // Wrapped chip rows leave room for both rows' areas.
+    expect(touch(".view-filters", "row-gap")).toBe("calc(var(--control-touch) - var(--control-md))");
+    expect(touch(".usage-filter-chips", "row-gap")).toBe("var(--space-4)");
+    // An error's message and action stay clear of its dismiss's area.
+    for (const alert of [".tasks-alert", ".workpads-alert"]) {
+      expect(touch(`${alert} > [data-slot="callout"]`, "padding-right"), alert).toBe(
+        "calc(var(--control-touch) + var(--space-1))",
+      );
+    }
+    // A squeezed file tab would leave only its 44px close button to tap.
+    expect(touch(".workspace-files-tab", "flex")).toBe("none");
     // Notice actions keep their callouts compact.
     for (const surface of [".terminal-panel-callout", ".workspace-compare-callout", ".question-inbox-panel", ".usage-callout"]) {
       const action = `${surface} [data-slot="callout-action"] button`;

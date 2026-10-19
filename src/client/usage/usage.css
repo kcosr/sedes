@@ -1634,7 +1634,12 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
     inset-inline: 0;
   }
 
-  /* A chip's remove button keeps its size with a 44px hit area. */
+  /* A chip's remove button keeps its size with a 44px hit area; wrapped
+     rows are spaced so it never covers the next row's chips. */
+  .usage-filter-chips {
+    row-gap: var(--space-4);
+  }
+
   .usage-filter-chips li:not(.usage-chip-clear) button {
     position: relative;
   }

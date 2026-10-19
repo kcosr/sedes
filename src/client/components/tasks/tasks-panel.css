@@ -60,12 +60,6 @@
     height: var(--control-touch);
   }
 
-  /* The error's dismiss keeps its corner size with a 44px hit area. */
-  .tasks-alert-dismiss::before {
-    content: "";
-    position: absolute;
-    inset: calc((100% - var(--control-touch)) / 2);
-  }
 }
 
 /* ── Header: the panel family's (`PanelChrome`), with ⌕ and the Pinned
@@ -306,6 +300,20 @@
   top: var(--space-1-5);
   right: var(--space-1-5);
   color: var(--muted-foreground);
+}
+
+/* Under touch density the dismiss keeps its corner size with a 44px hit
+   area, and the message and its action stay clear of that area. */
+@media (max-width: 819px), (pointer: coarse) {
+  .tasks-alert > [data-slot="callout"] {
+    padding-right: calc(var(--control-touch) + var(--space-1));
+  }
+
+  .tasks-alert-dismiss::before {
+    content: "";
+    position: absolute;
+    inset: calc((100% - var(--control-touch)) / 2);
+  }
 }
 
 /* ── List region: the one scroller. */

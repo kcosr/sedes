@@ -71,7 +71,12 @@
     height: var(--control-md);
   }
 
-  /* A 44px-tall hit area around the chip's visual height. */
+  /* A 44px-tall hit area around the chip's visual height; wrapped rows are
+     spaced so neighbouring chips' areas never overlap. */
+  .view-filters {
+    row-gap: calc(var(--control-touch) - var(--control-md));
+  }
+
   .view-filter-chip::before {
     content: "";
     position: absolute;

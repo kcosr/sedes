@@ -2916,7 +2916,10 @@ textarea:disabled {
 /* Touch density: open-file and root tabs are 44px tall, and a file tab's
    close button and the folder's Remove fill that height. */
 @media (max-width: 819px), (pointer: coarse) {
+  /* Tabs keep their width and the strip scrolls, so a squeezed tab never
+     leaves only its close button to tap. */
   .workspace-files-tab {
+    flex: none;
     min-height: var(--control-touch);
     padding-block: 0;
     padding-right: 0;
