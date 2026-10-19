@@ -1,13 +1,16 @@
 import { scriptDelivery } from "../../../tests/support/notification-settings.js";
 // @vitest-environment jsdom
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { navigate } from "../app/router.js";
 import type { NotificationSettings } from "../../shared/protocol/notification.js";
 import type { ApiClient } from "../api/ApiClient.js";
 import { NotificationSettingsStore } from "../stores/NotificationSettingsStore.js";
@@ -227,6 +230,56 @@ describe("notification settings", () => {
         (screen.getByLabelText("Server script path") as HTMLInputElement).value,
       ).toBe("/server/new"),
     );
+  });
+  it("asks before navigation drops unsaved edits and lets a saved page leave", async () => {
+    navigate("/settings/notifications", { replace: true });
+    try {
+      const { store } = fixture();
+      render(<NotificationSettingsPage store={store} />);
+      expect(
+        await screen.findByText(/Changes apply when you save\./),
+      ).toBeInTheDocument();
+      fireEvent.change(await screen.findByLabelText("Server script path"), {
+        target: { value: "/usr/local/bin/notify" },
+      });
+
+      act(() => navigate("/settings/general"));
+      const dialog = await screen.findByRole("dialog", {
+        name: "Discard unsaved changes?",
+      });
+      expect(window.location.pathname).toBe("/settings/notifications");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(window.location.pathname).toBe("/settings/notifications");
+      expect(screen.getByLabelText("Server script path")).toHaveValue(
+        "/usr/local/bin/notify",
+      );
+
+      act(() => navigate("/settings/general"));
+      fireEvent.click(
+        within(
+          await screen.findByRole("dialog", { name: "Discard unsaved changes?" }),
+        ).getByRole("button", { name: "Discard and leave" }),
+      );
+      await waitFor(() =>
+        expect(window.location.pathname).toBe("/settings/general"),
+      );
+      // Leaving unmounts the page in the app.
+      cleanup();
+
+      navigate("/settings/notifications", { replace: true });
+      render(<NotificationSettingsPage store={store} />);
+      fireEvent.change(await screen.findByLabelText("Server script path"), {
+        target: { value: "/usr/local/bin/notify-2" },
+      });
+      fireEvent.click(screen.getByText("Save notifications"));
+      await expectSaved();
+      act(() => navigate("/settings/general"));
+      expect(window.location.pathname).toBe("/settings/general");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      navigate("/", { replace: true });
+    }
   });
   it("marks an invalid timeout on its field instead of saving or testing", async () => {
     const { api, store } = fixture();

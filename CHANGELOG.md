@@ -154,8 +154,9 @@ User-facing changes are collected here before release. See the
 ### Fixed
 
 - Deleting a Files review comment or discarding a saved voice dictation now
-  asks for confirmation; a failed delete stays in the dialog. Inline comment
-  actions use the shared buttons, with Open before Delete. See
+  asks for confirmation; a failed delete stays in the dialog. Leaving
+  **Settings → Notifications** with unsaved edits asks before discarding them.
+  Inline comment actions use the shared buttons, with Open before Delete. See
   [saved dictation](docs/operator/clients/voice.md).
 
 - Android voice holds queued playback while foreground dictation is saved and

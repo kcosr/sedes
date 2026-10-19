@@ -5,6 +5,7 @@ import type {
   VoiceAction,
 } from "../../shared/protocol/notification.js";
 import { ApiError } from "../api/ApiClient.js";
+import { useDirtyNavigationGuard } from "../app/use-dirty-navigation-guard.js";
 import {
   type NotificationSettingsStore,
   useNotificationSettings,
@@ -12,6 +13,7 @@ import {
 import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import { Checkbox } from "@client/components/ui/checkbox";
+import { DiscardChangesDialog } from "@client/components/ui/discard-changes-dialog";
 import { Input } from "@client/components/ui/input";
 import { Label } from "@client/components/ui/label";
 import { Textarea } from "@client/components/ui/textarea";
@@ -241,8 +243,11 @@ export function NotificationSettingsPage({
       setTesting(false);
     }
   };
+  const saved = state.settings;
+  const dirty = Boolean(draft && saved && draftChanged(draft, saved));
+  const guard = useDirtyNavigationGuard(dirty && !(state.pending && !testing));
   const description =
-    "Choose script and Android voice delivery for each event. Settings apply across your clients.";
+    "Choose script and Android voice delivery for each event. Settings apply across your clients. Changes apply when you save.";
   if (!draft)
     return (
       <SettingsPage title="Notifications" description={description}>
@@ -266,9 +271,7 @@ export function NotificationSettingsPage({
       </SettingsPage>
     );
   const pending = state.pending || testing;
-  const saved = state.settings;
   const changedElsewhere = saved && saved.revision !== draft.settings.revision;
-  const dirty = Boolean(saved && draftChanged(draft, saved));
   return (
     <SettingsPage title="Notifications" description={description}>
       {state.settings?.silenced ? (
@@ -459,6 +462,15 @@ export function NotificationSettingsPage({
           setTestResult(undefined);
         }}
         onSave={() => void save()}
+      />
+      <DiscardChangesDialog
+        open={Boolean(guard.pendingRoute)}
+        onOpenChange={(open) => {
+          if (!open) guard.cancel();
+        }}
+        description="Your notification settings have edits that have not been saved."
+        discardLabel="Discard and leave"
+        onDiscard={guard.discardAndContinue}
       />
     </SettingsPage>
   );
