@@ -84,7 +84,9 @@
   padding: var(--space-1-5) var(--space-2);
   font-size: var(--text-meta);
 }
-.workspace-compare button,
+/* Raw buttons take the surrounding font; the shared Button (notice and empty
+   state actions) keeps its own. */
+.workspace-compare button:where(:not([data-slot="button"])),
 .workspace-compare input {
   font: inherit;
 }
