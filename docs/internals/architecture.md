@@ -430,6 +430,11 @@ configuration before database mutation, obtains state ownership gates, backs
 up a supported older database before migration, checks integrity, and rejects
 a database newer than the running source.
 
+The server's long-lived SQLite connection uses WAL with full synchronous
+commits. It refreshes bounded query-planner statistics with `PRAGMA optimize`
+after startup migration, hourly, and before closing; statistics only guide plan
+choice.
+
 An installation key supplies separate cryptographic domains for authenticated
 control markers, encrypted restart-safe agent-tool thread references, and
 principal Tool-client secret verification. Persisted references hold the

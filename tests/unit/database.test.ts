@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
-import { openOverlayDatabase } from "../../src/server/db/database.js";
+import { openOverlayDatabase, openOverlayDatabaseConnection, optimizeDatabase } from "../../src/server/db/database.js";
 import {
   applyDatabaseMigrations,
   type DatabaseMigration,
@@ -248,4 +248,30 @@ describe("database migrations and storage", () => {
       expect((await stat(filename)).mode & 0o777).toBe(0o600);
     },
   );
+});
+
+describe("database planner statistics", () => {
+  it("analyzes a long-lived connection when opened and keeps durability settings", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sedes-optimize-"));
+    roots.push(root);
+    const database = openOverlayDatabaseConnection(path.join(root, "overlay.sqlite"));
+    try {
+      database.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY, owner TEXT NOT NULL); CREATE INDEX entries_owner ON entries(owner);");
+      const insert = database.prepare("INSERT INTO entries (owner) VALUES (?)");
+      database.transaction(() => { for (let index = 0; index < 2_000; index += 1) insert.run(`owner-${index % 20}`); })();
+      const synchronous = database.pragma("synchronous", { simple: true });
+      expect(database.prepare("SELECT name FROM sqlite_schema WHERE name = 'sqlite_stat1'").get()).toBeUndefined();
+
+      optimizeDatabase(database, "opened");
+      expect(database.pragma("analysis_limit", { simple: true })).toBe(1_000);
+      expect(database.prepare("SELECT tbl, idx FROM sqlite_stat1 WHERE tbl = 'entries'").all())
+        .toEqual([{ tbl: "entries", idx: "entries_owner" }]);
+      expect(() => optimizeDatabase(database, "periodic")).not.toThrow();
+      expect(() => optimizeDatabase(database, "closing")).not.toThrow();
+      expect(database.pragma("synchronous", { simple: true })).toBe(synchronous);
+      expect(database.pragma("journal_mode", { simple: true })).toBe("wal");
+    } finally {
+      database.close();
+    }
+  });
 });
