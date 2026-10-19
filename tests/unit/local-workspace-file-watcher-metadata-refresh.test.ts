@@ -7,7 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocalWorkspaceFileWatcherRegistry } from "../../src/server/workspace-files/local-workspace-file-watcher.js";
 
 // Counts the watcher's `git rev-parse` metadata probes without spawning git.
-const gitProbes = vi.hoisted(() => ({ started: 0, active: 0, maximumActive: 0 }));
+const gitProbes = vi.hoisted(() => ({
+  started: 0,
+  active: 0,
+  maximumActive: 0,
+  hold: undefined as Promise<void> | undefined,
+}));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -21,7 +26,7 @@ vi.mock("node:child_process", async (importOriginal) => {
         gitProbes.started += 1;
         gitProbes.active += 1;
         gitProbes.maximumActive = Math.max(gitProbes.maximumActive, gitProbes.active);
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await (gitProbes.hold ?? new Promise((resolve) => setTimeout(resolve, 5)));
         gitProbes.active -= 1;
         return { stdout: "", stderr: "" };
       },
@@ -87,6 +92,39 @@ describe("LocalWorkspaceFileWatcherRegistry metadata refresh", () => {
     rootEvent();
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(gitProbes.started).toBe(beforeLateEvent + 1);
+    registry.close();
+  });
+
+  it("runs exactly one follow-up refresh for events that arrive during a refresh", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sedes-watch-follow-up-"));
+    roots.push(root);
+    const { watchFactory, rootEvent } = fakeWatchFactory();
+    const registry = new LocalWorkspaceFileWatcherRegistry({
+      debounceMilliseconds: 20,
+      maximumLatencyMilliseconds: 100,
+      watchFactory,
+    });
+    const subscription = await registry.subscribe("scope\0follow-up", root, vi.fn());
+    const before = gitProbes.started;
+    let release!: () => void;
+    gitProbes.hold = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      rootEvent();
+      await vi.waitFor(() => expect(gitProbes.started).toBe(before + 1));
+      expect(gitProbes.active).toBe(1);
+      // These changes may postdate the running probe's Git read.
+      for (let event = 0; event < 100; event += 1) rootEvent();
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(gitProbes.started).toBe(before + 1);
+    } finally {
+      gitProbes.hold = undefined;
+      release();
+    }
+    await vi.waitFor(() => expect(gitProbes.started).toBe(before + 2));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(gitProbes.started).toBe(before + 2);
+    expect(gitProbes.maximumActive).toBe(1);
+    subscription.close();
     registry.close();
   });
 });
