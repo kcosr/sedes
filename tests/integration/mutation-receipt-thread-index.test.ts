@@ -22,7 +22,7 @@ const indexes = (database: Database.Database) => (database
   .all() as { name: string }[]).map(({ name }) => name);
 
 /** Captures every executed receipt statement with its bound parameters and returns their query plans. */
-async function receiptPlans(database: Database.Database, run: () => unknown): Promise<string[]> {
+async function receiptPlans(database: Database.Database, run: () => Promise<unknown>): Promise<string[]> {
   const executed: Array<{ sql: string; parameters: unknown[] }> = [];
   const prepare = database.prepare.bind(database);
   vi.spyOn(database, "prepare").mockImplementation(sql => {
@@ -37,7 +37,7 @@ async function receiptPlans(database: Database.Database, run: () => unknown): Pr
     }
     return statement;
   });
-  try { await run(); } catch { /* Plans only; missing fixture rows may reject. */ }
+  await run().catch(() => undefined); // Plans only; the missing thread rejects the activity capture.
   vi.mocked(database.prepare).mockRestore();
   expect(executed.length).toBeGreaterThan(0);
   return executed.map(({ sql, parameters }) => (prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...parameters) as { detail: string }[])
@@ -57,30 +57,26 @@ describe("mutation receipt thread index", () => {
   it("serves the per-thread recovery checks without walking the principal's receipts", async () => {
     const { database, scope } = fixture();
     const operations = new ConversationOperationRepository(database);
-    const threadId = "thread-without-receipts";
-    const checks: Array<() => unknown> = [
-      () => operations.findUncertainThreadOperation(scope, threadId),
-      () => operations.hasPendingMaterializationDraftSteer(scope, threadId),
-      () => operations.hasBlockingSteer(scope, threadId, "submit"),
-      () => operations.hasBlockingSteer(scope, threadId, "steer"),
-      () => operations.expireInterrupts(scope, 1_000, threadId),
-    ];
-    for (const check of checks) {
-      for (const plan of await receiptPlans(database, check)) {
-        expect(plan).toMatch(/USING (COVERING )?INDEX mutation_receipts_thread_state \(tenant_id=\? AND principal_id=\? AND thread_id=\?/);
-        expect(plan).not.toContain("mutation_receipts_created");
-      }
-    }
-
     const activity = new ThreadActivityService({
       database,
       actors: { observeInputRuntime: () => undefined, isInputRuntimeDormant: () => true, subscribeInputActivity: () => () => undefined },
       presentation: { readCached: async () => { throw new Error("not read"); } },
     });
+    const threadId = "thread-without-receipts";
     try {
-      const [plan] = await receiptPlans(database, () => activity.capture(scope, threadId));
-      const receiptLookups = plan!.split("\n").filter(detail => detail.includes(" receipt "));
-      expect(receiptLookups).toHaveLength(2);
+      // Observe from the connection's first preparation; statements are cached per connection.
+      const plans = await receiptPlans(database, async () => {
+        operations.findUncertainThreadOperation(scope, threadId);
+        operations.hasPendingMaterializationDraftSteer(scope, threadId);
+        operations.hasBlockingSteer(scope, threadId, "submit");
+        operations.expireInterrupts(scope, 1_000, threadId);
+        await activity.capture(scope, threadId);
+      });
+      // Uncertain, draft Steer, blocking Steer, three expiry statements and the activity capture.
+      expect(plans).toHaveLength(7);
+      const receiptLookups = plans.flatMap(plan => plan.split("\n"))
+        .filter(detail => /^SEARCH (mutation_receipts|receipt) /.test(detail));
+      expect(receiptLookups).toHaveLength(8);
       for (const detail of receiptLookups) {
         expect(detail).toMatch(/USING (COVERING )?INDEX mutation_receipts_thread_state \(tenant_id=\? AND principal_id=\? AND thread_id=\?/);
       }
