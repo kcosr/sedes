@@ -2211,10 +2211,7 @@ textarea:disabled {
 .workspace-panel-layout,
 .workspace-region,
 .workspace-panel-leaf,
-.workspace-panel-surface,
-.workspace-panel-body,
 .workspace-panel-content,
-.workspace-panel-content-slot,
 .workspace-panel-portal-target,
 .workspace-panel-tenant {
   min-width: 0;
@@ -2273,8 +2270,7 @@ textarea:disabled {
   z-index: calc(var(--z-sticky) + 4);
 }
 
-.workspace-panel-leaf,
-.workspace-panel-surface {
+.workspace-panel-leaf {
   position: relative;
   display: flex;
   width: 100%;
@@ -2286,8 +2282,7 @@ textarea:disabled {
   background: var(--background);
 }
 
-.workspace-panel-leaf[data-active="true"],
-.workspace-panel-surface[data-active="true"] {
+.workspace-panel-leaf[data-active="true"] {
   box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--ring) 36%, transparent);
 }
 
@@ -2382,15 +2377,6 @@ textarea:disabled {
 .workspace-panel-title > span:not(.workspace-panel-subtitle) {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-panel-meta {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2498,7 +2484,6 @@ textarea:disabled {
   gap: 1px;
 }
 
-.workspace-panel-body,
 .workspace-panel-content {
   position: relative;
   width: 100%;
@@ -2506,16 +2491,6 @@ textarea:disabled {
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;
-}
-
-.workspace-panel-content-slot {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-}
-
-.workspace-panel-content-slot[hidden] {
-  display: none;
 }
 
 .workspace-panel-tenant {
@@ -2592,13 +2567,6 @@ textarea:disabled {
   text-align: center;
 }
 
-.workspace-panel-empty-content {
-  display: grid;
-  max-width: 360px;
-  justify-items: center;
-  gap: 7px;
-}
-
 .workspace-panel-empty-icon {
   display: grid;
   width: 40px;
@@ -2611,24 +2579,11 @@ textarea:disabled {
   padding: 9px;
 }
 
-.workspace-panel-empty-title {
-  margin: 0;
-  color: var(--foreground);
-  font-size: 15px;
-  font-weight: 600;
-}
-
 .workspace-panel-empty > h2 {
   margin: 0;
   color: var(--foreground);
   font-size: 15px;
   font-weight: 600;
-}
-
-.workspace-panel-empty-description {
-  margin: 0;
-  font-size: 12.5px;
-  line-height: 1.5;
 }
 
 .workspace-panel-empty > p {
@@ -10140,8 +10095,7 @@ tr.diff-hunk td {
   }
 
   .workspace-region-divider,
-  .workspace-panel-resize-handle,
-  .workspace-panel-desktop-only {
+  .workspace-panel-resize-handle {
     display: none;
   }
 

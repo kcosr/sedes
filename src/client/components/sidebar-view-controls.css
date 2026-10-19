@@ -1,8 +1,7 @@
 /* Header view controls (SidebarViewControls, Lane D of sidebar alternate
    views). The 28px ghost icon buttons sit in .sidebar-search-row beside
-   the search box and mirror .sidebar-group-toggle; View options itself is
-   the shared DropdownMenu. Uses only custom properties that already exist
-   in styles.css. */
+   the search box; View options itself is the shared DropdownMenu. Uses only
+   custom properties that already exist in styles.css. */
 
 .view-controls-button {
   position: relative;
