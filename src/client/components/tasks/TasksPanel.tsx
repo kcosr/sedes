@@ -844,12 +844,41 @@ export function TasksPanelContent({
     [actions, active, destinations, pending, taskDrag, touch, workspace?.available],
   );
 
+  // A create whose outcome is unknown (the response was lost, or the server
+  // or a proxy failed) may have committed. Retrying the identical request
+  // with its mutation ID replays the server's receipt instead of creating the
+  // task twice. Any other request, or a retry after a definitive rejection,
+  // starts fresh; reusing an ID for a different request would conflict.
+  const uncertainCreate = useRef<{ readonly request: string; readonly mutationId: string }>(undefined);
+  const createTask = useCallback(
+    async (
+      title: string,
+      scope: TaskScope,
+      details: string | undefined,
+      placement: { readonly pinned: boolean; readonly backlog: boolean },
+    ): Promise<Task> => {
+      const request = JSON.stringify([title, scope, details ?? "", placement.pinned, placement.backlog]);
+      const retry = uncertainCreate.current?.request === request ? uncertainCreate.current : undefined;
+      uncertainCreate.current = undefined;
+      const mutationId = retry?.mutationId ?? crypto.randomUUID();
+      try {
+        return await store.createTask(title, scope, details, placement, mutationId);
+      } catch (cause) {
+        if (!(cause instanceof ApiError) || cause.status >= 500) {
+          uncertainCreate.current = { request, mutationId };
+        }
+        throw cause;
+      }
+    },
+    [store],
+  );
+
   // Default to the current filters; an explicit pin choice wins.
   const addTask = (title: string, notes: string, pinned: boolean) => {
     if (!destination) return;
     const key = crypto.randomUUID();
     setCreating((current) => [...current, { key, title, scope: destination }]);
-    void store.createTask(title, destination, notes || undefined, { pinned, backlog: options.onlyBacklog }).then(
+    void createTask(title, destination, notes || undefined, { pinned, backlog: options.onlyBacklog }).then(
       (created) => {
         setError(null);
         setCreating((current) =>
@@ -1673,7 +1702,7 @@ export function TasksPanelContent({
             while (remaining.length > 0) {
               const title = remaining.at(-1)!;
               try {
-                await store.createTask(title, destination, undefined, { pinned: pastePinned, backlog: options.onlyBacklog });
+                await createTask(title, destination, undefined, { pinned: pastePinned, backlog: options.onlyBacklog });
               } catch (cause) {
                 setPasteTitles([...remaining]);
                 throw cause;

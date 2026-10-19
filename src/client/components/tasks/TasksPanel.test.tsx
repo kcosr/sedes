@@ -19,6 +19,7 @@ import type {
   WorkspaceFileLinkReference,
 } from "../../../shared/index.js";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
+import { ApiError } from "../../api/ApiClient.js";
 import {
   navigate,
   threadPath,
@@ -462,7 +463,7 @@ describe("TasksPanel scope", () => {
     fireEvent.change(addInput(), { target: { value: "From All" } });
     fireEvent.keyDown(addInput(), { key: "Enter" });
     await vi.waitFor(() =>
-      expect(store.createTask).toHaveBeenCalledWith("From All", { kind: "global" }, undefined, UNPLACED),
+      expect(store.createTask).toHaveBeenCalledWith("From All", { kind: "global" }, undefined, UNPLACED, expect.any(String)),
     );
 
     view.unmount();
@@ -690,6 +691,7 @@ describe("TasksPanel across a project's locations", () => {
         { kind: "project", projectId: "project-1" },
         undefined,
         UNPLACED,
+        expect.any(String),
       ),
     );
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
@@ -808,6 +810,7 @@ describe("TasksPanel add row", () => {
       { kind: "thread", threadId: "thread-9" },
       "Measure before and after.\nTwice.",
       UNPLACED,
+      expect.any(String),
     );
     expect(screen.queryByRole("textbox", { name: "New task notes" })).not.toBeInTheDocument();
     expect(addInput()).toHaveFocus();
@@ -866,7 +869,7 @@ describe("TasksPanel add row", () => {
       "Ship it",
       "Write the migration",
     ]);
-    expect(store.createTask).toHaveBeenCalledWith("Ship it", { kind: "thread", threadId: "thread-9" }, undefined, UNPLACED);
+    expect(store.createTask).toHaveBeenCalledWith("Ship it", { kind: "thread", threadId: "thread-9" }, undefined, UNPLACED, expect.any(String));
   });
 
   it("keeps a single-line paste in the field", async () => {
@@ -887,7 +890,7 @@ describe("TasksPanel add row", () => {
     expect(pin).toHaveAttribute("aria-pressed", "true");
     await user.click(addInput());
     await user.keyboard("Keep this handy{Enter}");
-    expect(store.createTask).toHaveBeenCalledWith("Keep this handy", { kind: "thread", threadId: "thread-9" }, undefined, { pinned: true, backlog: false });
+    expect(store.createTask).toHaveBeenCalledWith("Keep this handy", { kind: "thread", threadId: "thread-9" }, undefined, { pinned: true, backlog: false }, expect.any(String));
     expect(pin).toHaveAttribute("aria-pressed", "false");
   });
 
@@ -921,6 +924,78 @@ describe("TasksPanel add row", () => {
     );
     expect(addInput()).toHaveValue("Doomed task");
     expect(panel().querySelector('[data-creating="true"]')).toBeNull();
+  });
+
+  it("retries a create whose response was lost with the same mutation ID", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.createTask).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderPanel(store);
+
+    await user.click(addInput());
+    await user.keyboard("Maybe saved{Enter}");
+    await screen.findByRole("alert");
+    expect(addInput()).toHaveValue("Maybe saved");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(2));
+    const [first, retry] = vi.mocked(store.createTask).mock.calls;
+    expect(first![4]).toEqual(expect.any(String));
+    expect(retry![4]).toBe(first![4]);
+
+    // A new task is a new request.
+    await user.keyboard("Maybe saved{Enter}");
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(store.createTask).mock.calls[2]![4]).not.toBe(first![4]);
+  });
+
+  it("starts a fresh create after an edit or a definitive rejection", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.createTask)
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new ApiError(404, "not_found", "That project was removed.", false))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderPanel(store);
+
+    await user.click(addInput());
+    await user.keyboard("Draft{Enter}");
+    await screen.findByRole("alert");
+    // Edited before the retry: the server must not replay the first title.
+    await user.keyboard(" plan{Enter}");
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(2));
+    const calls = () => vi.mocked(store.createTask).mock.calls;
+    expect(calls()[1]![0]).toBe("Draft plan");
+    expect(calls()[1]![4]).not.toBe(calls()[0]![4]);
+
+    // The server rejected that one outright, so its retry is a new request.
+    await waitFor(() => expect(addInput()).toHaveValue("Draft plan"));
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(3));
+    expect(calls()[2]![4]).not.toBe(calls()[1]![4]);
+  });
+
+  it("retries the paste line whose response was lost with its mutation ID", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.createTask)
+      .mockImplementationOnce(async (title, scope) => makeTask({ id: "created-1", title, scope }))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderPanel(store);
+
+    await user.click(addInput());
+    await user.paste("One\nTwo\nThree");
+    const dialog = screen.getByRole("dialog", { name: "Create 3 tasks?" });
+    await user.click(within(dialog).getByRole("button", { name: "Create 3 tasks" }));
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(2));
+    const retryDialog = await screen.findByRole("dialog", { name: "Create 2 tasks?" });
+    await user.click(within(retryDialog).getByRole("button", { name: "Create 2 tasks" }));
+
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(4));
+    const calls = vi.mocked(store.createTask).mock.calls;
+    expect(calls.map(([title]) => title)).toEqual(["Three", "Two", "Two", "One"]);
+    expect(calls[2]![4]).toBe(calls[1]![4]);
+    expect(new Set(calls.map((call) => call[4])).size).toBe(3);
   });
 });
 
@@ -1661,6 +1736,7 @@ describe("TasksPanel Backlog and Pin", () => {
       { kind: "thread", threadId: "thread-9" },
       undefined,
       { pinned: false, backlog: true },
+      expect.any(String),
     );
 
     // In All the backlog is the flat list, each row saying where it belongs.
@@ -1701,6 +1777,7 @@ describe("TasksPanel Backlog and Pin", () => {
       { kind: "thread", threadId: "thread-9" },
       undefined,
       { pinned: true, backlog: true },
+      expect.any(String),
     );
     await user.paste("First\nSecond");
     const dialog = screen.getByRole("dialog", { name: "Create 2 tasks?" });
@@ -1710,6 +1787,7 @@ describe("TasksPanel Backlog and Pin", () => {
       { kind: "thread", threadId: "thread-9" },
       undefined,
       { pinned: true, backlog: true },
+      expect.any(String),
     ));
   });
 

@@ -159,7 +159,8 @@ User-facing changes are collected here before release. See the
   [Build a prompt](docs/user/conversations.md#build-a-prompt).
 
 - Quick Task actions in a row on one task, such as Pin then Backlog, no longer
-  fail with "That task changed elsewhere".
+  fail with "That task changed elsewhere", and retrying a Task add or paste
+  whose response was lost no longer creates the Task twice.
 
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
