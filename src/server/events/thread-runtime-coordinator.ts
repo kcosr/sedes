@@ -1138,15 +1138,18 @@ export class ThreadRuntimeCoordinator {
           ),
         );
         for (const [index, result] of settled.entries()) {
-          // A failed eviction left installed fences its entry; re-reading it
-          // would only observe the same rejection again.
+          // A failed eviction left installed is a retirement whose close was
+          // not proved: it fences its entry like an unproven maintenance
+          // fence, and re-reading it would only observe the same rejection.
           const { key, entry, eviction } = evictions[index]!;
           if (
             result.status === "rejected" &&
             this.#entries.get(key) === entry &&
             entry.eviction === eviction
           ) {
-            throw result.reason;
+            throw result.reason instanceof ThreadRuntimeRetirementUnprovenError
+              ? result.reason
+              : new ThreadRuntimeRetirementUnprovenError(result.reason);
           }
         }
         continue;

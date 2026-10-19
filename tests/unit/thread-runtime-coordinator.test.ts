@@ -905,9 +905,9 @@ describe("ThreadRuntimeCoordinator", () => {
       coordinator.acquire(scope, "thread-reset-poison"),
     ).rejects.toThrow("close failed");
     const commit = vi.fn();
-    await expect(
-      coordinator.commitWithRuntimesObserved(scope, ["thread-reset-poison"], commit),
-    ).rejects.toThrow("close failed");
+    const observed = coordinator.commitWithRuntimesObserved(scope, ["thread-reset-poison"], commit);
+    await expect(observed).rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    await expect(observed).rejects.toMatchObject({ cause: failure });
     expect(commit).not.toHaveBeenCalled();
     expect(replacement.close).not.toHaveBeenCalled();
     acquired.release();
