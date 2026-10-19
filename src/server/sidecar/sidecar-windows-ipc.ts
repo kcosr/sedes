@@ -31,7 +31,18 @@ export function createWindowsSidecarIpc(dependencies: {
   };
   const prepareKey = async (endpoint: string) => {
     const filename = keyPath(endpoint);
-    await privacy(path.dirname(filename), "ensure-directory");
+    const directory = path.dirname(filename);
+    await privacy(directory, "ensure-directory");
+    // An interrupted publish can leave its temporary linked to the key, which
+    // readKey refuses. Remove leftovers once no live writer can still own them.
+    const leftover = new RegExp(`^${path.basename(filename).replace(".", "\\.")}\\.[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$`, "u");
+    for (const entry of await files.readdir(directory)) {
+      if (!leftover.test(entry)) continue;
+      const metadata = await files.lstat(path.join(directory, entry)).catch(() => undefined);
+      if (metadata?.isFile() && Date.now() - metadata.mtimeMs >= 60_000) {
+        await files.unlink(path.join(directory, entry)).catch(() => undefined);
+      }
+    }
     // Publish only a complete, flushed key: a torn key file would fail every
     // later start, while link keeps the first writer's key on a race.
     const temporary = `${filename}.${crypto.randomUUID()}`;

@@ -99,4 +99,30 @@ describe("Windows sidecar local IPC", () => {
     } finally { await files.rm(home, { recursive: true, force: true }); }
   });
 
+  it("removes a stale publish temporary still linked to the key", async () => {
+    const home = await files.mkdtemp(path.join(tmpdir(), "sedes-ipc-key-"));
+    try {
+      const keys = createWindowsSidecarIpc({ crypto, files, path, home, privacy: async (target, operation) => {
+        if (operation === "ensure-directory") await files.mkdir(target, { recursive: true });
+      } });
+      const endpoint = "\\\\.\\pipe\\sedes-key-test";
+      const key = await keys.prepareKey(endpoint);
+      const filename = keys.keyPath(endpoint);
+      // A publish interrupted between link and unlink, from an earlier start.
+      const stale = `${filename}.${crypto.randomUUID()}`;
+      await files.link(filename, stale);
+      const old = new Date(Date.now() - 120_000);
+      await files.utimes(stale, old, old);
+      await expect(keys.readKey(endpoint)).rejects.toThrow("sidecar_windows_ipc_key_invalid");
+      // A temporary that a live writer may still own is left alone.
+      const live = `${filename}.${crypto.randomUUID()}`;
+      await files.writeFile(live, "", { mode: 0o600 });
+
+      expect(await keys.prepareKey(endpoint)).toEqual(key);
+      expect((await files.readdir(path.dirname(filename))).sort()).toEqual(
+        [path.basename(filename), path.basename(live)].sort(),
+      );
+    } finally { await files.rm(home, { recursive: true, force: true }); }
+  });
+
 });
