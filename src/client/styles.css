@@ -2931,12 +2931,12 @@ textarea:disabled {
     min-height: var(--control-touch);
   }
 
-  .workspace-files-root-switcher > [data-slot="button"] {
+  .workspace-files-root-switcher > button {
     width: var(--control-touch);
     height: var(--control-touch);
   }
 
-  .workspace-files-editor-toolbar > div > [data-slot="button"] {
+  .workspace-files-editor-toolbar > div > button {
     width: var(--bar-control-width);
     height: var(--bar-control);
   }

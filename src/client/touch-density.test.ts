@@ -108,8 +108,8 @@ describe("touch targets under touch density", () => {
 
   it("fills the Tasks and Workpads search rows with Close search", () => {
     for (const row of [".tasks-search", ".workpads-search"]) {
-      expect(touch(`${row} > [data-slot="button"]`, "width")).toBe("var(--control-touch)");
-      expect(touch(`${row} > [data-slot="button"]`, "height")).toBe("var(--control-touch)");
+      expect(touch(`${row} > button`, "width")).toBe("var(--control-touch)");
+      expect(touch(`${row} > button`, "height")).toBe("var(--control-touch)");
     }
   });
 
@@ -146,8 +146,8 @@ describe("touch targets under touch density", () => {
       [".workspace-files-tab-close", "width", "var(--control-touch)"],
       [".workspace-files-tab-close", "height", "var(--control-touch)"],
       [".workspace-files-root-tab", "min-height", "var(--control-touch)"],
-      ['.workspace-files-root-switcher > [data-slot="button"]', "height", "var(--control-touch)"],
-      ['.workspace-files-editor-toolbar > div > [data-slot="button"]', "height", "var(--bar-control)"],
+      [".workspace-files-root-switcher > button", "height", "var(--control-touch)"],
+      [".workspace-files-editor-toolbar > div > button", "height", "var(--bar-control)"],
       [".workspace-compare-toolbar-button", "min-height", "var(--bar-control)"],
       [".workspace-compare-source-trigger", "min-height", "var(--bar-control)"],
       [".workspace-compare-header-action", "height", "var(--control-touch)"],

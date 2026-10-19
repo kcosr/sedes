@@ -55,7 +55,7 @@
   }
 
   /* Close search fills the 44px search row. */
-  .tasks-search > [data-slot="button"] {
+  .tasks-search > button {
     width: var(--control-touch);
     height: var(--control-touch);
   }

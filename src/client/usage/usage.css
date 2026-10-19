@@ -1617,7 +1617,7 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
   }
 
   /* A card's actions sit beside a touch-sized segmented control. */
-  .usage-card-actions > [data-slot="button"] {
+  .usage-card-actions > button {
     min-width: var(--control-default);
     height: var(--control-default);
   }

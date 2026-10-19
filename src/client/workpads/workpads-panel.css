@@ -31,7 +31,7 @@
   }
 
   /* Close search fills the 44px search row. */
-  .workpads-search > [data-slot="button"] {
+  .workpads-search > button {
     width: var(--control-touch);
     height: var(--control-touch);
   }
