@@ -1778,6 +1778,49 @@ describe("WorkpadsPanel", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
+    it("ends an Archived failure when a later read lands, even an empty one", async () => {
+      let fail = true;
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => {
+        if (request?.archived && fail) { fail = false; throw new Error("Archive unavailable"); }
+        return { items: request?.archived ? [] : [pad] };
+      });
+      const { store, emit } = fixture({ listWorkpads, getWorkpadCounts: vi.fn(async () => archivedCounts(1)) });
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build" }} />);
+      await screen.findByRole("button", { name: "Integration" });
+      fireEvent.click(await screen.findByRole("button", { name: /^Archived/ }));
+      const section = screen.getByRole("region", { name: "Archived workpads" });
+      expect(await within(section).findByText("Couldn't load archived workpads.")).toBeInTheDocument();
+      // A change refreshes the list and, with it, the expanded section.
+      const reads = listWorkpads.mock.calls.length;
+      await act(async () => { emit(); });
+      await waitFor(() => expect(listWorkpads.mock.calls.length).toBeGreaterThan(reads));
+      expect(await within(section).findByText("No archived workpads.")).toBeInTheDocument();
+      expect(within(section).queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("replaces earlier Archived rows with a failed read of the section", async () => {
+      let fail = false;
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => {
+        if (request?.archived && fail) throw new Error("Archive unavailable");
+        return { items: request?.archived ? [archivedPad("old-1", "Old notes")] : [pad] };
+      });
+      const { store } = fixture({ listWorkpads, getWorkpadCounts: vi.fn(async () => archivedCounts(1)) });
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build" }} />);
+      await screen.findByRole("button", { name: "Integration" });
+      const heading = await screen.findByRole("button", { name: /^Archived/ });
+      fireEvent.click(heading);
+      const section = screen.getByRole("region", { name: "Archived workpads" });
+      expect(await within(section).findByRole("button", { name: "Old notes" })).toBeInTheDocument();
+      // Collapsing and expanding reads the section again; that read fails.
+      fireEvent.click(heading);
+      fail = true;
+      fireEvent.click(heading);
+      expect(await within(section).findByText("Couldn't load archived workpads.")).toBeInTheDocument();
+      expect(within(section).queryByRole("button", { name: "Old notes" })).not.toBeInTheDocument();
+      // The list keeps one tab stop among the rows still shown.
+      expect(screen.getByRole("button", { name: "Integration" })).toHaveAttribute("tabindex", "0");
+    });
+
     it("names each archived workpad's place in All", async () => {
       const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => ({
         items: request?.archived ? [archivedPad("old-1", "Old notes", { kind: "project", projectId: "project-docs" })] : [pad],

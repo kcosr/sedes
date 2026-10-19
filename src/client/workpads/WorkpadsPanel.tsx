@@ -277,6 +277,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     setArchivedItems(listed);
     archivedCount.current = listed.length;
     setArchivedCursor(result.cursor);
+    // Any read that lands, including one alongside the list, ends a failure.
+    setArchivedError("");
   }, [archivedRequest, archivedKey, trimmedQuery, readPages]);
   /**
    * The list, and with it (unless asked not to) the counts and an expanded
@@ -319,8 +321,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     archivedCount.current = 0;
     setArchivedLoading(true);
     const debounce = window.setTimeout(() => {
-      void refreshArchived().then(() => { if (!cancelled) setArchivedError(""); })
-        .catch(failure => { if (!cancelled) setArchivedError(message(failure)); })
+      void refreshArchived().catch(failure => { if (!cancelled) setArchivedError(message(failure)); })
         .finally(() => { if (!cancelled) setArchivedLoading(false); });
     }, 180);
     return () => { cancelled = true; clearTimeout(debounce); ++archivedGeneration.current; };
@@ -739,12 +740,13 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const archivedTotal = viewCount(archivedCounts, view, options.includeThreadWorkpads);
   // The section shows while the view has archived workpads, and whenever their count cannot be read.
   const archivedShown = (archivedTotal ?? 0) > 0 || countsFailed || archivedItems.length > 0;
+  const archivedFailed = Boolean(archivedError) && !archivedLoading;
   // The list's keyboard stops, as in Tasks: one tab stop, ↑/↓/Home/End, and
   // focus kept in the list when a focused row leaves it (archived, moved).
   const navKeys = useMemo(() => [
     ...items.map(({ id }) => workpadNavKey(id)),
-    ...(archivedShown ? [ARCHIVED_NAV_KEY, ...(archivedOpen ? archivedItems.map(({ id }) => workpadNavKey(id)) : [])] : []),
-  ], [items, archivedShown, archivedOpen, archivedItems]);
+    ...(archivedShown ? [ARCHIVED_NAV_KEY, ...(archivedOpen && !archivedFailed ? archivedItems.map(({ id }) => workpadNavKey(id)) : [])] : []),
+  ], [items, archivedShown, archivedOpen, archivedFailed, archivedItems]);
   const nav = useScopedListNav({ keys: navKeys, listRef, fallback: () => addInputRef.current });
   const segments = <ScopeSegments aria-label="Workpad scope" value={view} disabled={busy}
     onValueChange={changeView}
@@ -779,14 +781,15 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       data-list-nav={ARCHIVED_NAV_KEY} tabIndex={nav.rovingKey === ARCHIVED_NAV_KEY ? 0 : -1} onKeyDown={onListHeadingKeyDown}
       label="Archived" count={trimmedQuery ? undefined : archivedTotal} />
     {archivedOpen && <>
-      {archivedItems.length ? <ul className="workpads-list" aria-label="Archived workpads">
-        {archivedItems.map(item => renderRow(item, rowLocation(item)))}
-      </ul> : archivedError && !archivedLoading ? <EmptyState variant="inline" className="workpads-empty" role="alert"
+      {/* A failed read replaces what an earlier read listed: those rows may no longer match. */}
+      {archivedFailed ? <EmptyState variant="inline" className="workpads-empty" role="alert"
         title="Couldn't load archived workpads." description={archivedError}
         action={<Button variant="ghost" size="sm" onClick={() => setArchivedAttempt(value => value + 1)}>Try again</Button>} />
-      : <EmptyState variant="inline" className="workpads-empty"
+      : archivedItems.length ? <ul className="workpads-list" aria-label="Archived workpads">
+        {archivedItems.map(item => renderRow(item, rowLocation(item)))}
+      </ul> : <EmptyState variant="inline" className="workpads-empty"
         title={archivedLoading ? "Loading…" : trimmedQuery ? `No archived workpads match “${trimmedQuery}”.` : "No archived workpads."} />}
-      {archivedCursor && <Button variant="ghost" size="sm" className="workpads-more" disabled={busy} onClick={() => { void run(() => refreshArchived(archivedCursor)); }}>Load more</Button>}
+      {!archivedFailed && archivedCursor && <Button variant="ghost" size="sm" className="workpads-more" disabled={busy} onClick={() => { void run(() => refreshArchived(archivedCursor)); }}>Load more</Button>}
     </>}
   </section>;
 
