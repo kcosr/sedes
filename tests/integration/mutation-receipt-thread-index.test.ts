@@ -51,7 +51,7 @@ describe("mutation receipt thread index", () => {
     expect(indexes(before.database)).not.toContain("mutation_receipts_thread_state");
     applyDatabaseMigrations(before.database, backendNormalizedMigrations);
     expect(indexes(before.database)).toContain("mutation_receipts_thread_state");
-    expect(before.database.prepare("SELECT max(version) AS version FROM schema_migrations").get()).toEqual({ version: 153 });
+    expect(before.database.prepare("SELECT version FROM schema_migrations WHERE version = 153").get()).toEqual({ version: 153 });
   }, 15_000);
 
   it("serves the per-thread recovery checks without walking the principal's receipts", async () => {
