@@ -53,25 +53,20 @@ const HOST_GLOBAL_CONTEXT_FILENAMES = Object.freeze([
 const HOST_GLOBAL_CONTEXT_MAXIMUM_BYTES = 64 * 1024;
 const REMOTE_BASH_MAXIMUM_TIMEOUT_MILLISECONDS = 600_000;
 
-export const PI_REMOTE_BUILTIN_TOOL_NAMES = PI_SUPPORTED_BUILTIN_TOOL_NAMES;
-
-export const PI_REMOTE_BUILTIN_OVERRIDES: ReadonlySet<PiBuiltinToolKind> =
-  new Set(PI_REMOTE_BUILTIN_TOOL_NAMES);
-
 /** Executor-backed names are shared by SSH and local isolated workspaces. */
-export const PI_EXECUTOR_BUILTIN_TOOL_NAMES = PI_REMOTE_BUILTIN_TOOL_NAMES;
-export const PI_EXECUTOR_BUILTIN_OVERRIDES = PI_REMOTE_BUILTIN_OVERRIDES;
+export const PI_EXECUTOR_BUILTIN_TOOL_NAMES = PI_SUPPORTED_BUILTIN_TOOL_NAMES;
 
-export type RemotePiWorkspaceContextReader = WorkspaceContextReader;
+export const PI_EXECUTOR_BUILTIN_OVERRIDES: ReadonlySet<PiBuiltinToolKind> =
+  new Set(PI_EXECUTOR_BUILTIN_TOOL_NAMES);
 
-export interface RemotePiWorkspaceServices {
+export interface PiExecutorWorkspaceServices {
   readonly executionEnvironment?: ResolvedEnvironmentVariables;
   /** Remote semantic cwd. It is display and executor metadata, never local I/O. */
   readonly semanticCwd: string;
   /** Dedicated main-host directory used only for SDK service construction. */
   readonly serviceCwd: string;
   readonly executor: WorkspaceToolExecutor;
-  readonly contextReader: RemotePiWorkspaceContextReader;
+  readonly contextReader: WorkspaceContextReader;
   /** Optional remote Agent Skills catalog and exact-body resolver. */
   readonly skillReader?: WorkspaceSkillReader;
   readonly environmentLabel: string;
@@ -81,8 +76,6 @@ export interface RemotePiWorkspaceServices {
   readonly autoResizeImages?: boolean;
 }
 
-export type PiExecutorWorkspaceServices = RemotePiWorkspaceServices;
-
 /**
  * Data-only Pi resource view for remote workspaces. The delegate is used only
  * for the closed Sedes extension runtime created at construction. Reloads do
@@ -90,7 +83,7 @@ export type PiExecutorWorkspaceServices = RemotePiWorkspaceServices;
  */
 export class RemotePiResourceLoader implements ResourceLoader {
   readonly #extensions: LoadExtensionsResult;
-  readonly #contextReader: RemotePiWorkspaceContextReader;
+  readonly #contextReader: WorkspaceContextReader;
   readonly #skillReader: WorkspaceSkillReader | undefined;
   readonly #agentDir: string | undefined;
   readonly #appendSystemPrompt: readonly string[];
@@ -114,7 +107,7 @@ export class RemotePiResourceLoader implements ResourceLoader {
 
   constructor(input: {
     readonly extensions: LoadExtensionsResult;
-    readonly contextReader: RemotePiWorkspaceContextReader;
+    readonly contextReader: WorkspaceContextReader;
     readonly skillReader?: WorkspaceSkillReader;
     readonly agentDir?: string;
     readonly appendSystemPrompt?: readonly string[];
@@ -398,30 +391,24 @@ function sameFileIdentity(left: BigIntStats, right: BigIntStats): boolean {
   );
 }
 
-export function assertCompletePiRemoteBuiltinOverrides(
+export function assertCompletePiExecutorBuiltinOverrides(
   tools: readonly Pick<ToolInfo, "name" | "sourceInfo">[],
 ): void {
-  assertAuditedPiBuiltinToolCatalog(tools, PI_REMOTE_BUILTIN_OVERRIDES);
+  assertAuditedPiBuiltinToolCatalog(tools, PI_EXECUTOR_BUILTIN_OVERRIDES);
 }
 
-export const assertCompletePiExecutorBuiltinOverrides =
-  assertCompletePiRemoteBuiltinOverrides;
-
-export function assertPiRemoteBuiltinDefinitionSet(
+export function assertPiExecutorBuiltinDefinitionSet(
   definitions: readonly Pick<ToolDefinition, "name">[],
 ): void {
   const names = definitions.map(({ name }) => name);
   if (
-    names.length !== PI_REMOTE_BUILTIN_TOOL_NAMES.length ||
-    new Set(names).size !== PI_REMOTE_BUILTIN_TOOL_NAMES.length ||
-    PI_REMOTE_BUILTIN_TOOL_NAMES.some((name) => !names.includes(name))
+    names.length !== PI_EXECUTOR_BUILTIN_TOOL_NAMES.length ||
+    new Set(names).size !== PI_EXECUTOR_BUILTIN_TOOL_NAMES.length ||
+    PI_EXECUTOR_BUILTIN_TOOL_NAMES.some((name) => !names.includes(name))
   ) {
     throw new Error("pi_remote_builtin_definition_set_invalid");
   }
 }
-
-export const assertPiExecutorBuiltinDefinitionSet =
-  assertPiRemoteBuiltinDefinitionSet;
 
 function toolResult<Details>(
   text: string,
@@ -494,8 +481,8 @@ function formatBytes(bytes: number): string {
 }
 
 /** Complete execute replacements. No Pi operations hook or local path helper runs. */
-export function createPiRemoteWorkspaceToolDefinitions(
-  remote: RemotePiWorkspaceServices,
+export function createPiExecutorWorkspaceToolDefinitions(
+  remote: PiExecutorWorkspaceServices,
 ) {
   const read = createReadToolDefinition(remote.semanticCwd);
   const write = createWriteToolDefinition(remote.semanticCwd);
@@ -750,6 +737,3 @@ export function createPiRemoteWorkspaceToolDefinitions(
     remoteLs,
   ] as const;
 }
-
-export const createPiExecutorWorkspaceToolDefinitions =
-  createPiRemoteWorkspaceToolDefinitions;

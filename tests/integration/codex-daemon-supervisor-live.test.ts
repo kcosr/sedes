@@ -50,9 +50,9 @@ import {
 import { unavailableCodexAgentToolCliEnvironmentProvider } from "../../src/server/backends/codex/codex-agent-tool-cli-environment.js";
 import type {
   CodexExecutionSettingsProvider,
-  CodexExecutionSettingsTuple,
   CodexObservedExecutionSettings,
 } from "../../src/server/backends/codex/codex-conversation-handle.js";
+import type { CodexExecutionSettingsTuple } from "../../src/server/backends/codex/codex-thread-execution-settings-repository.js";
 import { CodexDaemonSupervisor } from "../../src/server/backends/codex/codex-daemon-supervisor.js";
 import { CodexFastModeSessionRegistry } from "../../src/server/backends/codex/codex-fast-mode-session.js";
 import { CodexNativeStoreOwnershipGate } from "../../src/server/backends/codex/codex-native-store-ownership.js";

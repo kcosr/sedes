@@ -76,8 +76,8 @@ import {
   projectCodexThreadHistory,
   verifiedCodexProjectionBytes,
   type CodexExecutionSettingsProvider,
-  type CodexExecutionSettingsTuple,
 } from "./codex-conversation-handle.js";
+import type { CodexExecutionSettingsTuple } from "./codex-thread-execution-settings-repository.js";
 import { codexExecutionPolicy } from "./codex-execution-policy.js";
 import { CODEX_HISTORY_TIMEOUT_MILLISECONDS } from "./codex-history-timeouts.js";
 import { CodexHistoryReader } from "./codex-history-reader.js";

@@ -138,7 +138,7 @@ import {
   type PiSdkSessionFactory,
   type PiSteerAdmission,
 } from "./pi-sdk-session.js";
-import { type RemotePiWorkspaceServices } from "./pi-remote-workspace.js";
+import { type PiExecutorWorkspaceServices } from "./pi-remote-workspace.js";
 import { WorkspaceSkillReaderError } from "../../workspace-skills/contracts.js";
 import {
   PiSessionStore,
@@ -259,7 +259,7 @@ export interface PiDriverOptions extends PiSessionStoreOptions {
   readonly resolveRemoteWorkspace?: (
     workspace: ValidatedWorkspace,
     mode: "passive" | "active",
-  ) => RemotePiWorkspaceServices | undefined;
+  ) => PiExecutorWorkspaceServices | undefined;
   readonly isolatedWorkspaces?: PiIsolatedWorkspaceResolver;
   readonly toolProvenanceKey: Uint8Array;
   readonly toolAccessPolicy: (
@@ -288,8 +288,8 @@ export interface PiDriverOptions extends PiSessionStoreOptions {
 
 interface ResolvedPiWorkspace {
   readonly workspace: ValidatedWorkspace;
-  readonly remoteWorkspace?: RemotePiWorkspaceServices;
-  readonly isolatedWorkspace?: RemotePiWorkspaceServices;
+  readonly remoteWorkspace?: PiExecutorWorkspaceServices;
+  readonly isolatedWorkspace?: PiExecutorWorkspaceServices;
   readonly isolatedResolution?: PiIsolatedWorkspaceResolution;
   release(): Promise<void>;
 }

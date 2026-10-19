@@ -48,7 +48,6 @@ import {
   codexObservedExecutionSettings,
   serializeCodexSubmissionRetryAnchor,
   type CodexExecutionSettingsProvider,
-  type CodexExecutionSettingsTuple,
 } from "../../src/server/backends/codex/codex-conversation-handle.js";
 import type { CodexForkSettingsEligibility } from "../../src/server/backends/codex/codex-fork-settings-eligibility.js";
 import {
@@ -70,7 +69,10 @@ import { CODEX_GOAL_FEATURE_REF } from "../../src/server/backends/codex/codex-go
 import { CodexFastModeSessionRegistry } from "../../src/server/backends/codex/codex-fast-mode-session.js";
 import { CodexExecutionSettingsRepositoryAdapter } from "../../src/server/backends/codex/codex-backend-module.js";
 import { CodexThreadActionPersistence } from "../../src/server/backends/codex/codex-thread-action-persistence.js";
-import { CodexThreadExecutionSettingsRepository } from "../../src/server/backends/codex/codex-thread-execution-settings-repository.js";
+import {
+  CodexThreadExecutionSettingsRepository,
+  type CodexExecutionSettingsTuple,
+} from "../../src/server/backends/codex/codex-thread-execution-settings-repository.js";
 import { CodexHistoryReader } from "../../src/server/backends/codex/codex-history-reader.js";
 import { ProviderFeatureMutationRepository } from "../../src/server/db/repositories/provider-feature-mutation-repository.js";
 import { CodexManagedTuiController } from "../../src/server/backends/codex/codex-managed-tui-controller.js";

@@ -16,7 +16,7 @@ import {
 } from "../../shared/index.js";
 import { MarkdownContent } from "../components/conversation/MarkdownContent.js";
 import {
-  useContextExcerptStaging,
+  useComposerDraftStaging,
   type ContextExcerptStagingSnapshot,
   type ContextExcerptStagingTarget,
 } from "../context-excerpts/coordinator.js";
@@ -68,7 +68,7 @@ export function MarkdownSelectionSurface({
   /** Exposed for deterministic tests; product callers should use the default. */
   readonly selectionDebounceMilliseconds?: number;
 }): React.JSX.Element {
-  const contextTarget = useContextExcerptStaging();
+  const contextTarget = useComposerDraftStaging();
   const target = stagingTarget ?? contextTarget;
   const targetSnapshot = useSyncExternalStore(
     target?.subscribe ?? emptySubscribe,

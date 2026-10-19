@@ -16,7 +16,7 @@ import {
   workspaceContextV1Operations,
   workspaceToolsV2Operations,
 } from "../../src/internal/sidecar-protocol/index.js";
-import { createPiRemoteWorkspaceToolDefinitions } from "../../src/server/backends/pi/pi-remote-workspace.js";
+import { createPiExecutorWorkspaceToolDefinitions } from "../../src/server/backends/pi/pi-remote-workspace.js";
 import { sidecarSocketByteStream } from "../../src/server/sidecar/sidecar-socket-byte-stream.js";
 import { SidecarClientSession } from "../../src/server/sidecar/sidecar-client-session.js";
 import { WorkspaceToolsShellHost } from "../../src/server/sidecar/workspace-tools-shell-host.js";
@@ -200,7 +200,7 @@ async function shellFixture() {
     acquireRecoveryLease: acquireRecovery,
   });
   const unsupported = async (): Promise<never> => { throw new Error("unexpected_non_shell_tool"); };
-  const [bash] = createPiRemoteWorkspaceToolDefinitions({
+  const [bash] = createPiExecutorWorkspaceToolDefinitions({
     semanticCwd: directory, serviceCwd: directory, environmentLabel: "Recovery fixture",
     contextReader: { read: async () => ({ files: [], fingerprint: "empty" }) },
     executor: {

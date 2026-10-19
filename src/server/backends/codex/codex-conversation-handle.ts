@@ -202,8 +202,6 @@ import {
   type CodexTuiActionId,
 } from "./codex-tui-feature.js";
 
-export type { CodexExecutionSettingsTuple };
-
 interface CodexObservedExecutionSettingsBase {
   readonly model: string;
   readonly reasoningEffort: string | null;

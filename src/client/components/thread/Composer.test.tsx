@@ -39,7 +39,6 @@ import {
   ComposerDraftCoordinator,
   ComposerDraftProvider,
   useComposerDraftStaging,
-  useContextExcerptStaging,
 } from "../../context-excerpts/coordinator.js";
 import type { ContextExcerpt } from "../../../shared/index.js";
 import {
@@ -500,7 +499,7 @@ function ContextExcerptFixture({
   readonly note?: string;
   readonly excerpt?: ContextExcerpt;
 }) {
-  const staging = useContextExcerptStaging();
+  const staging = useComposerDraftStaging();
   return (
     <button
       type="button"
@@ -516,7 +515,7 @@ function ImmediateContextExcerptFixture({
 }: {
   readonly excerpt: ContextExcerpt;
 }) {
-  const staging = useContextExcerptStaging();
+  const staging = useComposerDraftStaging();
   const [reason, setReason] = useState<string>();
   return (
     <>

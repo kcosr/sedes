@@ -12,8 +12,8 @@ import {
 import { LegacyDiffContent } from "./LegacyDiffContent.js";
 import { preparePierrePatch } from "./prepare-pierre-patch.js";
 import {
-  useContextExcerptStaging,
-  useContextExcerptStagingSnapshot,
+  useComposerDraftStaging,
+  useComposerDraftStagingSnapshot,
 } from "../../context-excerpts/coordinator.js";
 import {
   captureUnifiedDiffLineSelection,
@@ -46,8 +46,8 @@ export function PierreFileChangeDiff({
   readonly wrap?: boolean;
 }): React.JSX.Element {
   const [themeType, setThemeType] = useState(getResolvedAppearance);
-  const staging = useContextExcerptStaging();
-  const stagingStatus = useContextExcerptStagingSnapshot();
+  const staging = useComposerDraftStaging();
+  const stagingStatus = useComposerDraftStagingSnapshot();
   const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(
     null,
   );
