@@ -2308,6 +2308,7 @@ describe("Composer delivery guards", () => {
     fireEvent.paste(input, {
       clipboardData: {
         files: [new File(["one"], "pasted.bin")],
+        getData: () => "",
       },
     });
     await screen.findByText("pasted.bin");
@@ -2322,6 +2323,49 @@ describe("Composer delivery guards", () => {
 
     expect(input).toHaveValue("keep this text");
     expect(store.uploadComposerAttachment).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["its name", "photo.png"],
+    ["its path", "/Users/me/Pictures/photo.png"],
+    ["its file URL", "file:///C:/Users/me/My%20Pictures/photo.png"],
+    ["its Windows path", "C:\\Users\\me\\photo.png"],
+  ])("pastes a copied file as an attachment without %s as text", async (_label, text) => {
+    const store = new FakeComposerStore(snapshot(), "keep this text");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    const input = screen.getByRole("textbox");
+
+    const pasted = fireEvent.paste(input, {
+      clipboardData: {
+        files: [new File(["png"], "photo.png", { type: "image/png" })],
+        getData: (type: string) => (type === "text/plain" ? text : ""),
+      },
+    });
+
+    expect(pasted).toBe(false);
+    await waitFor(() =>
+      expect(store.uploadComposerAttachment).toHaveBeenCalledOnce(),
+    );
+    expect(input).toHaveValue("keep this text");
+  });
+
+  it("keeps the browser's text paste when the clipboard carries more than file names", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    const input = screen.getByRole("textbox");
+
+    const pasted = fireEvent.paste(input, {
+      clipboardData: {
+        files: [new File(["png"], "cells.png", { type: "image/png" })],
+        getData: (type: string) =>
+          type === "text/plain" ? "Region\tRevenue\nNorth\t42" : "",
+      },
+    });
+
+    expect(pasted).toBe(true);
+    await waitFor(() =>
+      expect(store.uploadComposerAttachment).toHaveBeenCalledOnce(),
+    );
   });
 
   it("rejects a fifth image before upload while retaining the four-image allowance", async () => {

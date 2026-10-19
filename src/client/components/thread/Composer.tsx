@@ -334,6 +334,28 @@ const imeKeyEvent = (event: ReactKeyboardEvent): boolean =>
   event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
 
 /**
+ * Whether pasted text only names the pasted files. File managers put the
+ * copied files' names, paths, or file URLs on the clipboard beside the files.
+ */
+const textOnlyNamesFiles = (text: string, files: readonly File[]): boolean => {
+  const names = new Set(files.map(({ name }) => name));
+  return text.split(/\r?\n/u).every((line) => {
+    let entry = line.trim();
+    if (entry.length === 0) return true;
+    if (/^file:\/\//iu.test(entry)) {
+      try {
+        entry = decodeURIComponent(new URL(entry).pathname);
+      } catch {
+        return false;
+      }
+    }
+    return names.has(
+      entry.slice(Math.max(entry.lastIndexOf("/"), entry.lastIndexOf("\\")) + 1),
+    );
+  });
+};
+
+/**
  * A failed transport or server-side fault may succeed unchanged later; a
  * definitive rejection (validation, conflict, authorization) needs an edit.
  */
@@ -3392,7 +3414,12 @@ export function Composer({
                   onCompositionEnd={() => { mentionComposing.current = false; }}
                   onPaste={(event) => {
                     const files = Array.from(event.clipboardData.files);
-                    if (files.length > 0) addAttachmentFiles(files);
+                    if (files.length === 0) return;
+                    addAttachmentFiles(files);
+                    // Other text, such as copied spreadsheet cells, still pastes.
+                    if (textOnlyNamesFiles(event.clipboardData.getData("text/plain"), files)) {
+                      event.preventDefault();
+                    }
                   }}
                   onKeyDown={(event) => {
                     const ime = imeKeyEvent(event);

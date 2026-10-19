@@ -160,7 +160,8 @@ User-facing changes are collected here before release. See the
   [Build a prompt](docs/user/conversations.md#build-a-prompt).
 
 - In Safari, the Enter that confirms IME input (for example Japanese or
-  Chinese) no longer sends the message or picks a composer command.
+  Chinese) no longer sends the message or picks a composer command, and
+  pasting a copied file attaches it without also inserting its name or path.
 
 - Escape restores a maximized layout from the Tasks panel when Tasks has no
   expanded row or search to close, and the sidebar's thread shortcuts
