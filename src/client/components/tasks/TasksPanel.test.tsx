@@ -1929,6 +1929,100 @@ describe("TasksPanel Backlog and Pin", () => {
   });
 });
 
+describe("TasksPanel quick actions on one task", () => {
+  it("queues a second action behind the first and sends it at the revision the first returned", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    let resolveFirst!: (task: Task) => void;
+    vi.mocked(store.updateTask).mockImplementationOnce(
+      () => new Promise<Task>((resolve) => { resolveFirst = resolve; }),
+    );
+    renderPanel(store);
+
+    rowTitle("Add retry to the payment call").focus();
+    await user.keyboard("p");
+    await user.keyboard("b");
+    expect(store.updateTask).toHaveBeenCalledTimes(1);
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry", revision: 0 }),
+      { pinned: true },
+    );
+
+    const task = store.getTasks().find(({ id }) => id === "t-retry")!;
+    await act(async () => resolveFirst({ ...task, pinned: true, revision: 1 }));
+
+    await waitFor(() => expect(store.updateTask).toHaveBeenCalledTimes(2));
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry", revision: 1 }),
+      { backlog: true },
+    );
+    await waitFor(() =>
+      expect(announced("Sent “Add retry to the payment call” to the Backlog.")).toBe(true),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("uses a returned revision the application stream has not published yet", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    rowTitle("Add retry to the payment call").focus();
+    await user.keyboard(" ");
+    await waitFor(() =>
+      expect(announced("Completed “Add retry to the payment call”.")).toBe(true),
+    );
+    // The stream has not caught up, so the row still shows the open task and
+    // Space asks for what it shows, at the revision the first action returned.
+    await user.keyboard(" ");
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry", revision: 1 }),
+      { completed: true },
+    );
+
+    // Once the snapshot reaches a newer revision, it is the base again.
+    act(() =>
+      store.publish(
+        store.getTasks().map((task) =>
+          task.id === "t-retry" ? { ...task, revision: 5 } : task,
+        ),
+      ),
+    );
+    await user.keyboard("p");
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry", revision: 5 }),
+      { pinned: true },
+    );
+  });
+
+  it("serializes a move behind a pending action on the same task", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    let resolveFirst!: (task: Task) => void;
+    vi.mocked(store.updateTask).mockImplementationOnce(
+      () => new Promise<Task>((resolve) => { resolveFirst = resolve; }),
+    );
+    renderPanel(store);
+
+    rowTitle("Add retry to the payment call").focus();
+    await user.keyboard("p");
+    await user.click(screen.getByRole("button", { name: 'Actions for "Add retry to the payment call"' }));
+    const moveMenu = await openSubmenu(user, screen.getByRole("menu"), "Move to");
+    await user.click(within(moveMenu).getByRole("menuitem", { name: /This project/ }));
+    expect(store.moveTask).not.toHaveBeenCalled();
+
+    const task = store.getTasks().find(({ id }) => id === "t-retry")!;
+    await act(async () => resolveFirst({ ...task, pinned: true, revision: 1 }));
+    await waitFor(() =>
+      expect(store.moveTask).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "t-retry", revision: 1 }),
+        { kind: "project", projectId: "project-1" },
+      ),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
 describe("TasksPanel two-line rows", () => {
   beforeEach(() => {
     setTasksLastView("all");

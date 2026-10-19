@@ -158,6 +158,9 @@ User-facing changes are collected here before release. See the
   blip or server restart retries without another keystroke. See
   [Build a prompt](docs/user/conversations.md#build-a-prompt).
 
+- Quick Task actions in a row on one task, such as Pin then Backlog, no longer
+  fail with "That task changed elsewhere".
+
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See

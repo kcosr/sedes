@@ -32,6 +32,7 @@ import {
 import {
   workspaceFileAbsolutePathSchema,
   type AssociatedTask,
+  type Task,
   type TaskScope,
 } from "../../../shared/index.js";
 import {
@@ -367,21 +368,73 @@ export function TasksPanelContent({
     },
     [],
   );
+  // ── Per-task mutation order ──────────────────────────────────────────────
+  // Every quick action sends the task's revision. Actions on one task run one
+  // at a time, each at the newest revision this panel knows: the listed
+  // task's, or one an earlier action returned that the application stream
+  // has not published yet. Otherwise this client's own earlier action would
+  // fail the next one as a conflict. What each action changes stays what
+  // the reader chose from the task as shown.
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+  const taskMutationTails = useRef(new Map<string, Promise<void>>());
+  const returnedRevisions = useRef(new Map<string, number>());
+  const atNewestRevision = useCallback(
+    (task: AssociatedTask): AssociatedTask => {
+      const listed =
+        tasksRef.current.find(({ id }) => id === task.id)?.revision ?? 0;
+      const returned = returnedRevisions.current.get(task.id) ?? 0;
+      if (returned <= listed) returnedRevisions.current.delete(task.id);
+      const revision = Math.max(task.revision, listed, returned);
+      return revision === task.revision ? task : { ...task, revision };
+    },
+    [],
+  );
+  const mutateTask = useCallback(
+    (
+      task: AssociatedTask,
+      operation: (current: AssociatedTask) => Promise<Task>,
+    ): Promise<Task> => {
+      const tails = taskMutationTails.current;
+      const run = async () => {
+        const result = await operation(atNewestRevision(task));
+        const returned = returnedRevisions.current.get(task.id) ?? 0;
+        if (result.revision > returned) {
+          returnedRevisions.current.set(task.id, result.revision);
+        }
+        return result;
+      };
+      const previous = tails.get(task.id);
+      const result = previous ? previous.then(run) : run();
+      const tail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      tails.set(task.id, tail);
+      void tail.then(() => {
+        if (tails.get(task.id) === tail) tails.delete(task.id);
+      });
+      return result;
+    },
+    [atNewestRevision],
+  );
+
   /**
-   * Runs one action on one task; a repeat while it runs is ignored. A
-   * failure is reported as `failure` (naming the task) and the reason.
+   * Runs one action on one task after any earlier action on it; a repeat
+   * while it waits or runs is ignored. A failure is reported as `failure`
+   * (naming the task) and the reason.
    */
   const runTask = useCallback(
-    async <T,>(
+    async (
       task: AssociatedTask,
       action: TaskAction,
-      operation: () => Promise<T>,
+      operation: (current: AssociatedTask) => Promise<Task>,
       failure: string,
-    ): Promise<{ ok: true; value: T } | { ok: false }> => {
+    ): Promise<{ ok: true; value: Task } | { ok: false }> => {
       if (pendingRef.current.get(task.id)?.has(action)) return { ok: false };
       markPending(task.id, action, true);
       try {
-        const value = await operation();
+        const value = await mutateTask(task, operation);
         setError(null);
         return { ok: true, value };
       } catch (cause) {
@@ -391,7 +444,7 @@ export function TasksPanelContent({
         markPending(task.id, action, false);
       }
     },
-    [markPending],
+    [markPending, mutateTask],
   );
 
   // ── What the view shows ──────────────────────────────────────────────────
@@ -606,7 +659,7 @@ export function TasksPanelContent({
       const result = await runTask(
         task,
         "complete",
-        () => store.updateTask(task, { completed }),
+        (current) => store.updateTask(current, { completed }),
         `${completed ? "Couldn't complete" : "Couldn't reopen"} “${task.title}”`,
       );
       if (!result.ok) return;
@@ -619,14 +672,14 @@ export function TasksPanelContent({
     async (task: AssociatedTask, scope: TaskScope) => {
       markPending(task.id, "move", true);
       try {
-        await store.moveTask(task, scope);
+        await mutateTask(task, (current) => store.moveTask(current, scope));
       } finally {
         markPending(task.id, "move", false);
       }
       setError(null);
       announce(`Moved “${task.title}” to ${destinations.label(scope)}.`);
     },
-    [announce, destinations, markPending, store],
+    [announce, destinations, markPending, mutateTask, store],
   );
 
   const moveTo = useCallback(
@@ -720,7 +773,7 @@ export function TasksPanelContent({
       void runTask(
         task,
         "pin",
-        () => store.updateTask(task, { pinned: !task.pinned }),
+        (current) => store.updateTask(current, { pinned: !task.pinned }),
         `${task.pinned ? "Couldn't unpin" : "Couldn't pin"} “${task.title}”`,
       );
     },
@@ -733,7 +786,7 @@ export function TasksPanelContent({
       const result = await runTask(
         task,
         "backlog",
-        () => store.updateTask(task, { backlog }),
+        (current) => store.updateTask(current, { backlog }),
         backlog
           ? `Couldn't send “${task.title}” to the Backlog`
           : `Couldn't take “${task.title}” out of the Backlog`,
