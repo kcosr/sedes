@@ -157,6 +157,10 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- On phones and touch screens, text inputs (searches, renames, filters, the
+  terminal command line, and interaction prompts) are 16px so iOS no longer
+  zooms the page on focus; the composer is unchanged.
+
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See

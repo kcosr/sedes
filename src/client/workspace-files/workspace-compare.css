@@ -657,3 +657,10 @@
   font-weight: 700;
   padding: 2px 4px;
 }
+
+/* Touch density, at any width with a coarse pointer. */
+@media (max-width: 819px), (pointer: coarse) {
+  .workspace-compare-navigator-search input {
+    font-size: var(--text-input);
+  }
+}

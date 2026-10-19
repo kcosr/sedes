@@ -1698,6 +1698,14 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
   }
 }
 
+/* Touch density, at any width with a coarse pointer. */
+@media (max-width: 819px), (pointer: coarse) {
+  .usage-inline-search input,
+  .usage-filter-search input {
+    font-size: var(--text-input);
+  }
+}
+
 @media (max-width: 460px) {
   .usage-stats > .usage-stat:last-child:nth-child(odd) {
     grid-column: 1 / -1;

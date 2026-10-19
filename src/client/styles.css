@@ -1057,7 +1057,7 @@ textarea:disabled {
   outline: none;
   background: transparent;
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--text-input);
 }
 
 .search-box input::placeholder {
@@ -1263,7 +1263,7 @@ textarea:disabled {
   border-radius: var(--radius-ctl);
   background: var(--secondary);
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--text-input);
   font-weight: 500;
 }
 
@@ -3400,7 +3400,7 @@ textarea:disabled {
   background: var(--terminal-background);
   color: var(--terminal-foreground);
   font:
-    13px/18px ui-monospace,
+    var(--text-input) / 18px ui-monospace,
     SFMono-Regular,
     Menlo,
     Monaco,
@@ -3493,6 +3493,10 @@ textarea:disabled {
 
   .terminal-transcript input {
     min-height: 44px;
+  }
+
+  .terminal-tab-rename-input {
+    font-size: var(--text-input);
   }
 
   .terminal-panel-bottom-controls {
@@ -4239,7 +4243,8 @@ textarea:disabled {
   border: 1px solid var(--ring);
   border-radius: var(--radius-ctl);
   background: var(--secondary);
-  font-size: 15px;
+  /* The title size, or the 16px input size under the density switch. */
+  font-size: max(var(--text-title), var(--text-input));
   font-weight: 650;
 }
 
@@ -4530,7 +4535,7 @@ textarea:disabled {
   outline: 0;
   background: transparent;
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--text-input);
 }
 
 .thread-find-control input::placeholder {
@@ -6029,6 +6034,12 @@ textarea:disabled {
   background: var(--background);
   color: var(--foreground);
   font: inherit;
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  .context-excerpt-note-editor textarea {
+    font-size: var(--text-input);
+  }
 }
 
 .context-excerpt-note-editor > div {
@@ -9015,7 +9026,7 @@ tr.diff-hunk td {
   background: var(--code);
   color: var(--foreground);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-input);
   resize: vertical;
   transition: border-color var(--motion-fast);
 }
@@ -9241,7 +9252,7 @@ tr.diff-hunk td {
   background: var(--code);
   color: var(--foreground);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-input);
   resize: vertical;
 }
 
@@ -11146,6 +11157,7 @@ tr.diff-hunk td {
     width: 100%;
     min-height: 120px;
     max-height: min(36dvh, 240px);
+    font-size: var(--text-input);
   }
 }
 .notification-silence-control {

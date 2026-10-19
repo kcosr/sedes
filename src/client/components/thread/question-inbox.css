@@ -116,7 +116,7 @@
   background: var(--muted);
   color: var(--foreground);
   font: inherit;
-  font-size: 0.85rem;
+  font-size: var(--text-input);
 }
 .question-inbox-question textarea:focus-visible {
   outline: 2px solid var(--primary);
@@ -166,9 +166,6 @@
   display: block;
 }
 @media (max-width: 819px) {
-  .question-inbox-question textarea {
-    font-size: 16px;
-  }
   .question-inbox-card-actions button,
   .question-inbox-options button {
     min-height: 44px;
