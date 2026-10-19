@@ -1469,6 +1469,70 @@ describe("WorkspaceFilesPanel", () => {
     expect(api.openWorkspaceDiffReview).not.toHaveBeenCalled();
   });
 
+  it("enables Start review when the review whose comments are loading is cleared", async () => {
+    const comparison = {
+      comparisonId: "comparison_1234567890abcdef",
+      repositoryId: "repository_1234567890abcdef",
+      mode: "direct",
+      base: {
+        kind: "revision",
+        revisionId: "revision_1234567890abcdef",
+        commitHash: "a".repeat(40),
+        label: "main",
+      },
+      head: { kind: "working_tree" },
+      fingerprint: "fingerprint_1234567890abcdef",
+    } as const;
+    const historyReview = {
+      id: "00000000-0000-4000-8000-000000000021",
+      workspaceId: "workspace-1",
+      rootId: "primary" as const,
+      title: "Earlier review",
+      summary: "",
+      state: "archived" as const,
+      revision: 2,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const api = setupApi({
+      listWorkspaceDiffReviews: vi.fn(async () => ({ reviews: [] })),
+      listWorkspaceDiffReviewHistory: vi.fn(async () => ({
+        reviews: [historyReview],
+      })),
+      listWorkspaceDiffReviewComments: vi.fn(() => new Promise<never>(() => undefined)),
+      listWorkspaceDiffReviewedFiles: vi.fn(() => new Promise<never>(() => undefined)),
+    });
+    const { context } = setupContext();
+    render(<WorkspaceFilesPanel context={context} api={api} />);
+    await waitForListing(api);
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    act(() => {
+      (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
+        comparison,
+      );
+    });
+    // The history review is selected automatically and its comments stay loading.
+    await waitFor(() =>
+      expect(api.listWorkspaceDiffReviewComments).toHaveBeenCalledWith(historyReview.id),
+    );
+    await openReviewMenu();
+    expect(startReviewItem()).toHaveAttribute("aria-disabled", "true");
+    expect(startReviewItem()).toHaveTextContent("Loading…");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "History" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review" });
+    fireEvent.change(
+      within(dialog).getByRole("combobox", { name: "Historical workspace diff review" }),
+      { target: { value: "" } },
+    );
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull());
+
+    await openReviewMenu();
+    await waitFor(() => expect(startReviewItem()).not.toHaveAttribute("aria-disabled"));
+    expect(startReviewItem()).not.toHaveTextContent("Loading…");
+  });
+
   it("keeps inline annotation actions bound to the current review while viewing history details", async () => {
     const comparison = {
       comparisonId: "comparison_1234567890abcdef",

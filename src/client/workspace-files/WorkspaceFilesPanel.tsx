@@ -414,6 +414,9 @@ export function WorkspaceFilesPanel({
   const [compareCurrentReviewedFiles, setCompareCurrentReviewedFiles] =
     useState<readonly WorkspaceDiffReviewedFile[]>([]);
   const [compareReviewLoading, setCompareReviewLoading] = useState(false);
+  // The active review's comments load separately from the review list, so
+  // neither effect can clear or strand the other's loading state.
+  const [compareReviewCommentsLoading, setCompareReviewCommentsLoading] = useState(false);
   const [compareReviewMutating, setCompareReviewMutating] = useState(false);
   const [compareReviewError, setCompareReviewError] = useState<string>();
   const [compareCommentDraft, setCompareCommentDraft] =
@@ -2157,12 +2160,13 @@ export function WorkspaceFilesPanel({
     if (!activeCompareReviewId) {
       setCompareComments([]);
       setCompareReviewedFiles([]);
+      setCompareReviewCommentsLoading(false);
       return;
     }
     let cancelled = false;
     setCompareComments([]);
     setCompareReviewedFiles([]);
-    setCompareReviewLoading(true);
+    setCompareReviewCommentsLoading(true);
     setCompareReviewError(undefined);
     void Promise.all([
       api.listWorkspaceDiffReviewComments(activeCompareReviewId),
@@ -2180,7 +2184,7 @@ export function WorkspaceFilesPanel({
         setCompareReviewError(messageFor(error));
       })
       .finally(() => {
-        if (!cancelled) setCompareReviewLoading(false);
+        if (!cancelled) setCompareReviewCommentsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -2959,7 +2963,7 @@ export function WorkspaceFilesPanel({
       (compareHistoryReviews.find((review) => review.id === activeCompareReviewId && review.id !== currentCompareReview?.id)?.id ?? compareHistoryReviews.find((review) => review.id !== currentCompareReview?.id)?.id));
     setCompareDetailsOpen(true);
   };
-  const startReviewBlocked = compareReviewLoading
+  const startReviewBlocked = compareReviewLoading || compareReviewCommentsLoading
     ? "Loading…"
     : compareReviewMutating || compareCommentSaving
       ? "Saving…"
