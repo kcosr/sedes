@@ -1187,7 +1187,9 @@ export function Composer({
   ]);
 
   // Closing, reloading, or backgrounding the page does not unmount React, and
-  // the debounce may never fire afterwards. Save immediately instead.
+  // the debounce may never fire afterwards. Save immediately instead. A save
+  // already in flight still goes first: each save names the revision it
+  // replaces, so this one waits for that revision rather than guessing it.
   useEffect(
     () =>
       subscribePageHide(() => {

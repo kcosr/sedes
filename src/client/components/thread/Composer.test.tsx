@@ -4433,6 +4433,62 @@ describe("Composer delivery guards", () => {
       );
     });
 
+    it("sends the page-hide save after an in-flight autosave, at the revision it returns", async () => {
+      vi.useFakeTimers();
+      try {
+        const store = new FakeComposerStore(snapshot(), "");
+        let finishAutosave!: () => void;
+        store.saveDraft.mockImplementationOnce(
+          (draft) =>
+            new Promise((resolve) => {
+              finishAutosave = () =>
+                resolve({
+                  ...draft,
+                  revision: draft.revision + 1,
+                  updatedAt: "2026-07-30T15:01:00.000Z",
+                });
+            }),
+        );
+        render(<Composer store={store as unknown as ThreadClientStore} />);
+
+        type("first part");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+
+        type("first part, then more");
+        act(() => {
+          window.dispatchEvent(new Event("pagehide"));
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        // A save names the revision it replaces, so the newer draft waits for
+        // the in-flight save's revision instead of guessing it. A page that
+        // unloads before that save answers loses the newer edits.
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+
+        await act(async () => {
+          finishAutosave();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(store.saveDraft).toHaveBeenCalledTimes(2);
+        expect(store.saveDraft).toHaveBeenLastCalledWith(
+          {
+            text: "first part, then more",
+            contextExcerpts: [],
+            taskReferences: [],
+            attachments: [],
+            revision: 2,
+          },
+          { keepalive: true },
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("does not save a clean draft when the page is hidden", async () => {
       const store = new FakeComposerStore(snapshot(), "saved");
       render(<Composer store={store as unknown as ThreadClientStore} />);

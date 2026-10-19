@@ -154,8 +154,9 @@ User-facing changes are collected here before release. See the
 ### Fixed
 
 - Composer drafts are saved when you close, reload, or leave the page or
-  background the Android app, and a failed draft save retries without another
-  keystroke. A failed attachment upload no longer holds back later files,
+  background the Android app, except edits made while an earlier save is still
+  in progress. A failed draft save retries without another keystroke. A failed
+  attachment upload no longer holds back later files,
   pasting a copied file no longer inserts its name or path, and Safari's
   IME-confirming Enter no longer sends. See
   [Build a prompt](docs/user/conversations.md#build-a-prompt).
