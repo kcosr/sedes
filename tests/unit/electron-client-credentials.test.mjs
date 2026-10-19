@@ -44,6 +44,17 @@ describe("Electron credential persistence", () => {
     expect(await store.getCredential({ ...identity, serverUrl: "http://localhost:12345" })).toEqual({ credential: null });
     expect(await store.getCredential({ ...identity, profileId: "device-2" })).toEqual({ credential });
   });
+  it("replaces a profile's credentials for earlier origins with the new one", async () => {
+    const { store } = await fixture();
+    const local = { profileId: "00000000-0000-4000-8000-000000000001" };
+    await store.setCredential({ ...identity, credential });
+    await store.replaceProfileCredential({ ...local, serverUrl: "http://127.0.0.1:41001", credential: "sedes_first_local_secret_0001" });
+    await store.replaceProfileCredential({ ...local, serverUrl: "http://127.0.0.1:41002", credential: "sedes_second_local_secret_002" });
+    expect(await readdir(store.profileDirectory(local.profileId))).toHaveLength(1);
+    expect(await store.getCredential({ ...local, serverUrl: "http://127.0.0.1:41001" })).toEqual({ credential: null });
+    expect(await store.getCredential({ ...local, serverUrl: "http://127.0.0.1:41002" })).toEqual({ credential: "sedes_second_local_secret_002" });
+    expect(await store.getCredential(identity)).toEqual({ credential });
+  });
   it("rejects swapped encrypted records across profiles", async () => {
     const { directory, store } = await fixture();
     await store.setCredential({ ...identity, credential });

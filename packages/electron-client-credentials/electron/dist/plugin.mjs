@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile, rm } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, unlink, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { app, safeStorage } from "electron";
 
@@ -59,6 +59,16 @@ export class CredentialStore {
       await writeFile(temporary, encrypted, { mode: 0o600, flag: "wx" });
       await rename(temporary, filename);
     } finally { await unlink(temporary).catch(() => undefined); }
+  }
+  /** Stores the credential as the profile's only one, removing its other origins. */
+  async replaceProfileCredential(input) {
+    await this.setCredential(input);
+    const directory = this.profileDirectory(input.profileId);
+    const retained = path.basename(this.filename(identity(input)));
+    for (const entry of await readdir(directory)) {
+      if (entry === retained || !entry.endsWith(".enc")) continue;
+      await unlink(path.join(directory, entry)).catch((error) => { if (error.code !== "ENOENT") throw error; });
+    }
   }
   async removeCredential(input) {
     await unlink(this.filename(identity(input))).catch((error) => { if (error.code !== "ENOENT") throw error; });
