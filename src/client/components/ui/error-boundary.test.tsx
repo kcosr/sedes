@@ -104,4 +104,26 @@ describe("ErrorBoundary", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()
     expect(screen.getByText("Second")).toBeInTheDocument()
   })
+
+  it("retries once per reset key change when the children still fail", () => {
+    let attempts = 0
+    function Broken({ label }: { label: string }): React.ReactNode {
+      attempts++
+      throw new Error(`${label} broke`)
+    }
+    const view = (label: string) => (
+      <ErrorBoundary fallback={fallback} resetKeys={[label]}>
+        <Broken label={label} />
+      </ErrorBoundary>
+    )
+    const { rerender } = render(view("First"))
+    expect(screen.getByRole("alert")).toHaveTextContent("First broke")
+    const perAttempt = attempts
+    rerender(view("Second"))
+    // The change retried, failed again, and settled on the fallback.
+    expect(screen.getByRole("alert")).toHaveTextContent("Second broke")
+    expect(attempts).toBe(perAttempt * 2)
+    rerender(view("Second"))
+    expect(attempts).toBe(perAttempt * 2)
+  })
 })
