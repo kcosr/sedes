@@ -143,6 +143,24 @@ describe("Tool clients settings", () => {
     });
   });
 
+  it("retries a failed load in place instead of reloading the app", async () => {
+    const getToolClientOptions = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Server unavailable."))
+      .mockResolvedValue(options());
+    const page = controls({ getToolClientOptions });
+    render(<ToolClientsSettingsPage controls={page} />);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Server unavailable.");
+    fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+    expect(
+      await screen.findByText("No tool clients yet"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(getToolClientOptions).toHaveBeenCalledTimes(2);
+    expect(page.api.listToolClients).toHaveBeenCalledTimes(2);
+  });
+
   it("creates an exact grant and keeps an HTTP credential masked until explicit reveal", async () => {
     const created = toolClient();
     const createToolClient = vi.fn().mockResolvedValue({

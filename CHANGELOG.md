@@ -162,7 +162,8 @@ User-facing changes are collected here before release. See the
 - A Workpads list or Archived section that fails to load says so in place,
   with **Try again**, instead of claiming there are no workpads. Files Browse
   with no open file and the tree closed offers **Browse files** instead of a
-  blank pane.
+  blank pane. **Settings → Tool clients** and **Paired clients** retry a
+  failed load in place with **Try again**, without reloading the app.
 
 - A rendering failure no longer blanks the whole app. A transcript message
   that cannot render shows **Try again** in its place, a failing workspace
