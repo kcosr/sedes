@@ -26,6 +26,7 @@ import {
 import {
   PanelChrome,
   panelContentId,
+  useStablePanelChromeControls,
   type PanelChromeControls,
   type PanelChromeStatus,
   type PanelRegionControls,
@@ -540,6 +541,9 @@ function PanelLayoutReady({
     };
   };
 
+  // The chat body is memoized; layout renders must not hand it new controls.
+  const chatControls = useStablePanelChromeControls(controlsFor("chat"));
+
   // Escape restores a maximized layout, unless something else owns the key.
   useEffect(() => {
     if (!active || !desktop || snapshot.maximized === null) return undefined;
@@ -909,7 +913,7 @@ function PanelLayoutReady({
       </div>
 
       {createPortal(
-        renderChat(controlsFor("chat"), active && onStage("chat")),
+        renderChat(chatControls, active && onStage("chat")),
         targets.chat,
         `chat:${threadId}`,
       )}

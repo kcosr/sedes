@@ -212,6 +212,19 @@ describe("PanelLayout regions", () => {
     expect(unmountedChat).not.toHaveBeenCalled();
   });
 
+  it("keeps Chat's controls identical across unrelated application changes", () => {
+    const rendered: PanelChromeControls[] = [];
+    setup({ renderedChat: (controls) => rendered.push(controls) });
+    const before = rendered.length;
+
+    act(() => publishApplicationState({ search: "deploy" }));
+
+    expect(rendered.length).toBeGreaterThan(before);
+    expect(new Set(rendered.slice(before - 1))).toHaveLength(1);
+    fireEvent.click(headerButton("Chat", "Hide Chat panel"));
+    expect(screen.getByTestId("chat-visible")).toHaveTextContent("false");
+  });
+
   it("moves a panel with Move to, for every thread, and reopens it there", async () => {
     const store = setup();
     act(() => store.open("files", { focus: false }));

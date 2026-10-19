@@ -59,3 +59,18 @@ export function useApplicationStoreSelector<Selection>(
   }, [isEqual, selector, store]);
   return useSyncExternalStore(store.subscribe, getSelection, getSelection);
 }
+
+/**
+ * Equality for a selection object of store fields: equal when it has the same
+ * fields with identical values.
+ */
+export function sameSelectedFields<Selection extends object>(
+  previous: Selection,
+  next: Selection,
+): boolean {
+  const keys = Object.keys(next) as (keyof Selection)[];
+  return (
+    keys.length === Object.keys(previous).length &&
+    keys.every((key) => Object.is(previous[key], next[key]))
+  );
+}

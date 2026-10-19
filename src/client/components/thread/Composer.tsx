@@ -123,10 +123,14 @@ import {
 } from "../../attachments/AttachmentCards.js";
 import { useComposerAttachmentUploads } from "../../attachments/useComposerAttachmentUploads.js";
 import { AttachmentGroup } from "../ui/attachment.js";
-import {
-  useApplicationStore,
-  type ApplicationClientStore,
+import type {
+  ApplicationClientState,
+  ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
+import {
+  sameSelectedFields,
+  useApplicationStoreSelector,
+} from "../../stores/use-application-store-selector.js";
 import { ApiError } from "../../api/ApiClient.js";
 import {
   ComposerPromptPicker,
@@ -163,6 +167,16 @@ const EMPTY_APPLICATION_STORE = {
   getSnapshot: () => EMPTY_APPLICATION_STATE,
   refresh: async () => undefined,
 } as unknown as ApplicationClientStore;
+
+/** The application state the composer renders; sidebar search is not part of it. */
+function selectComposerApplication(state: ApplicationClientState) {
+  return {
+    snapshot: state.snapshot,
+    descendantPages: state.descendantPages,
+    authoritative: state.authoritative,
+    connection: state.connection,
+  };
+}
 
 type DraftValue = {
   readonly text: string;
@@ -363,7 +377,11 @@ export function Composer({
     useComposerReasoningFit();
   const chatViewVisible = useContext(ChatViewVisibilityContext);
   const resolvedApplicationStore = applicationStore ?? EMPTY_APPLICATION_STORE;
-  const application = useApplicationStore(resolvedApplicationStore);
+  const application = useApplicationStoreSelector(
+    resolvedApplicationStore,
+    selectComposerApplication,
+    sameSelectedFields,
+  );
   const snapshot = state.snapshot;
   const serverDraft = snapshot?.draft;
   const retainedComposerState = getRetainedComposerDeliveryState(store);

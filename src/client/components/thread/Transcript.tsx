@@ -139,7 +139,9 @@ const keyboardControlSelector = [
   '[role="listbox"], [role="menu"], [role="tree"], [role="grid"], [role="tablist"]',
 ].join(", ");
 
-export function Transcript({
+// Memoized: ThreadView re-renders for its own state and the panel layout;
+// the transcript re-renders only for its props and its thread store.
+export const Transcript = memo(function Transcript({
   ref,
   store,
   seekRequest,
@@ -2280,7 +2282,7 @@ export function Transcript({
       )}
     </div>
   );
-}
+});
 
 function isActiveRun(runState: ThreadRunState): boolean {
   return [
