@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import { describe, expect, it, vi } from "vitest";
 import {
   SidecarFrameWriteError, SidecarOperationRegistry, SidecarProtocolPeer,
-  controlHelloOperation, registerControlV2Operations,
+  controlHelloOperation, controlPingOperation, registerControlV2Operations,
   type SidecarFrame, type SidecarFrameSendOptions, type SidecarFrameTransport,
   type SidecarTransportClosure,
 } from "../../src/internal/sidecar-protocol/index.js";
@@ -9,6 +11,8 @@ import { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.
 import { sidecarRuntimeBodyOffer } from "../../src/server/sidecar/runtime-body-channel.js";
 
 const capability = { capabilityId: "runtime_bodies", majorVersion: 1 };
+const terminalSchema = z.strictObject({ size: z.number().int().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/u) });
+const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 describe("sidecar runtime bodies", () => {
   it("transfers large native-shaped JSON in both directions with bounded credit chunks", async () => {
@@ -44,6 +48,52 @@ describe("sidecar runtime bodies", () => {
       await assertion;
       await expect(fixture.right.decodeBody({ type: "stream", id })).rejects.toThrow("sidecar_runtime_body_unknown");
     } finally { await fixture.close(); }
+  });
+
+  it("keeps a slow transfer that is still progressing", async () => {
+    const fixture = await bodyFixture();
+    const id = "12345678-1234-4234-8234-123456789abd";
+    const bytes = Buffer.from(JSON.stringify({ data: "x".repeat(3 * 1024) }));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await fixture.sedes.call(sidecarRuntimeBodyOffer, { id, size: bytes.byteLength, sha256: sha256(bytes) });
+      const decoded = fixture.right.decodeBody({ type: "stream", id });
+      const stream = fixture.sedes.openOutgoingStream({ ...capability, streamId: id, initialCreditBytes: 1024 * 1024 });
+      for (let offset = 0; offset < bytes.byteLength; offset += 1024) {
+        await stream.send("stdout", bytes.subarray(offset, offset + 1024));
+        await vi.advanceTimersByTimeAsync(45_000);
+      }
+      await stream.terminal({ size: bytes.byteLength, sha256: sha256(bytes) }, terminalSchema);
+      await expect(decoded).resolves.toEqual({ data: "x".repeat(3 * 1024) });
+    } finally {
+      vi.useRealTimers();
+      await fixture.close();
+    }
+  });
+
+  it("fails only a stalled body and discards its late frames without closing the session", async () => {
+    const fixture = await bodyFixture();
+    const id = "12345678-1234-4234-8234-123456789abe";
+    const bytes = Buffer.from(JSON.stringify({ data: "y".repeat(4 * 1024) }));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await fixture.sedes.call(sidecarRuntimeBodyOffer, { id, size: bytes.byteLength, sha256: sha256(bytes) });
+      const decoded = fixture.right.decodeBody({ type: "stream", id });
+      const assertion = expect(decoded).rejects.toThrow("sidecar_runtime_body_expired");
+      const stream = fixture.sedes.openOutgoingStream({ ...capability, streamId: id, initialCreditBytes: 1024 * 1024 });
+      await stream.send("stdout", bytes.subarray(0, 1024));
+      await vi.advanceTimersByTimeAsync(60_000);
+      await assertion;
+
+      await stream.send("stdout", bytes.subarray(1024));
+      await stream.terminal({ size: bytes.byteLength, sha256: sha256(bytes) }, terminalSchema);
+      await expect(fixture.right.decodeBody({ type: "stream", id })).rejects.toThrow("sidecar_runtime_body_unknown");
+      const pingId = "12345678-1234-4234-8234-123456789abf";
+      await expect(fixture.sedes.call(controlPingOperation, { pingId })).resolves.toEqual({ pingId });
+    } finally {
+      vi.useRealTimers();
+      await fixture.close();
+    }
   });
 });
 
