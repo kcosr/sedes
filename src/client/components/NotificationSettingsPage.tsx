@@ -140,6 +140,7 @@ export function NotificationSettingsPage({
   const [savedAt, setSavedAt] = useState<number>();
   const [testResult, setTestResult] = useState<TestResult>();
   const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const timeoutInput = useRef<HTMLInputElement>(null);
   const phasesLabel = useId();
   useEffect(() => {
@@ -192,6 +193,7 @@ export function NotificationSettingsPage({
     if (!draft) return;
     setSaveError("");
     setTestResult(undefined);
+    setSaving(true);
     try {
       const result = await store.save({
         ...scriptInput(),
@@ -209,6 +211,8 @@ export function NotificationSettingsPage({
           ? "Notification settings changed in another session. Reload saved settings and review them before saving again."
           : errorMessage(cause),
       );
+    } finally {
+      setSaving(false);
     }
   };
   const test = async () => {
@@ -245,7 +249,9 @@ export function NotificationSettingsPage({
   };
   const saved = state.settings;
   const dirty = Boolean(draft && saved && draftChanged(draft, saved));
-  const guard = useDirtyNavigationGuard(dirty && !(state.pending && !testing));
+  // Leaving while this form saves is allowed. The bell's Silence/Resume shares
+  // the store's pending state but saves none of these edits.
+  const guard = useDirtyNavigationGuard(dirty && !saving);
   const description =
     "Choose script and Android voice delivery for each event. Settings apply across your clients. Changes apply when you save.";
   if (!draft)

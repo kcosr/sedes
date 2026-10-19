@@ -281,6 +281,44 @@ describe("notification settings", () => {
       navigate("/", { replace: true });
     }
   });
+  it("keeps guarding unsaved edits while the bell's Silence/Resume runs", async () => {
+    navigate("/settings/notifications", { replace: true });
+    try {
+      const { api, store } = fixture();
+      let finishSilence!: () => void;
+      api.setNotificationSilenced.mockImplementation(
+        (silenced: boolean) =>
+          new Promise<NotificationSettings>((resolve) => {
+            finishSilence = () => resolve({ ...initial, silenced });
+          }),
+      );
+      render(<NotificationSettingsPage store={store} />);
+      fireEvent.change(await screen.findByLabelText("Server script path"), {
+        target: { value: "/usr/local/bin/notify" },
+      });
+      // The bell shares the store; resuming saves none of the form's edits.
+      let silencing!: Promise<NotificationSettings>;
+      act(() => {
+        silencing = store.silence(false);
+      });
+      expect(store.getSnapshot().pending).toBe(true);
+
+      act(() => navigate("/settings/general"));
+      expect(
+        await screen.findByRole("dialog", { name: "Discard unsaved changes?" }),
+      ).toBeInTheDocument();
+      expect(window.location.pathname).toBe("/settings/notifications");
+      await act(async () => {
+        finishSilence();
+        await silencing;
+      });
+      expect(screen.getByLabelText("Server script path")).toHaveValue(
+        "/usr/local/bin/notify",
+      );
+    } finally {
+      navigate("/", { replace: true });
+    }
+  });
   it("marks an invalid timeout on its field instead of saving or testing", async () => {
     const { api, store } = fixture();
     render(<NotificationSettingsPage store={store} />);
