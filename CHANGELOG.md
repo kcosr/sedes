@@ -107,10 +107,13 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
-- A terminal's ✕ in the terminal menu names what its confirmation does
-  (**End**, **Disconnect and remove**, or **Remove** for an exited terminal).
-  Workpads confirms deletion with **Delete workpad**, and a search with no
-  match offers **Clear search**.
+- The Workpads list has the Tasks keyboard model (one tab stop, arrow keys,
+  **Delete**, **F2**); its row actions are announced, name the workpad when
+  they fail, and keep focus in the list, and a search with no match offers
+  **Clear search**. Workpad autosave no longer repeats its sync state to
+  screen readers, panel headers' unsaved and busy markers are read, and a
+  terminal menu ✕ names what it does (**End** or **Remove**). See
+  [workpads](docs/user/workpads.md).
 
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See
@@ -158,30 +161,17 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
-- Deleting a Files review comment or discarding a saved voice dictation now
-  asks for confirmation; a failed delete stays in the dialog. Leaving
-  **Settings → Notifications** with unsaved edits asks before discarding them.
-  Inline comment actions use the shared buttons, with Open before Delete. See
+- Deleting a Files review comment or discarding a saved voice dictation asks
+  for confirmation, and leaving **Settings → Notifications** with unsaved
+  edits asks before discarding them. See
   [saved dictation](docs/operator/clients/voice.md).
 
-- A Workpads list or Archived section that fails to load says so in place,
-  with **Try again**, instead of claiming there are no workpads. Files Browse
-  with no open file and the tree closed offers **Browse files** instead of a
-  blank pane. **Settings → Tool clients** and **Paired clients** retry a
-  failed load in place with **Try again**, without reloading the app.
-
-- A rendering failure no longer blanks the whole app. A transcript message
-  that cannot render shows **Try again** in its place, a failing workspace
-  panel offers **Reload panel** and **Close panel** while Chat keeps working,
-  and the app itself offers **Try again**, **Reload** and **Copy details**.
-
-- Workpads Archive, Unarchive, Move and Rename are announced to screen
-  readers, name the workpad in a failure, and keep keyboard focus in the list
-  when the row leaves it, as Tasks does. The Workpads list has the Tasks
-  keyboard model: one tab stop, arrow keys, **Delete** and **F2**. See
-  [workpads](docs/user/workpads.md). Workpad autosave no longer repeats
-  its sync state to screen readers (an explicit save is announced), and panel
-  headers' unsaved and busy markers are read.
+- A rendering failure no longer blanks the app: a transcript message shows
+  **Try again** in its place, a failing panel offers **Reload panel** while
+  Chat keeps working, and the app offers **Try again**, **Reload** and **Copy
+  details**. A failed Workpads, **Tool clients** or **Paired clients** load
+  offers **Try again** in place instead of a false empty state or an app
+  reload, and Files Browse with no open file offers **Browse files**.
 
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
