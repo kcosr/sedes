@@ -21,6 +21,18 @@ export interface EventHubOptions {
   readonly replayLimit?: number;
   readonly replayByteLimit?: number;
   readonly supersedesReplay?: (type: string, data: unknown) => boolean;
+  /**
+   * Bounds replay by what a subscriber could still accept. `costFloor` is a
+   * lower bound on what replaying one event costs any subscriber, and
+   * `servableBytes` the most a retained suffix may cost before every
+   * subscriber would take a current snapshot instead. The oldest events are
+   * dropped while the retained suffix's floor exceeds it: a cursor needing
+   * them could never be replayed.
+   */
+  readonly servableReplay?: {
+    readonly costFloor: (type: string, data: unknown, bytes: number) => number;
+    readonly servableBytes: () => number;
+  };
 }
 
 /**
@@ -37,12 +49,15 @@ export class EventHub<T> {
   private readonly events: {
     readonly event: SequencedEvent<T>;
     readonly bytes: number;
+    readonly costFloor: number;
   }[] = [];
   private readonly subscribers = new Set<Subscriber<T>>();
   private readonly replayLimit: number;
   private readonly replayByteLimit: number;
   private readonly supersedesReplay: (type: string, data: T) => boolean;
+  private readonly servableReplay: EventHubOptions["servableReplay"];
   private replayBytes = 0;
+  private replayCostFloor = 0;
 
   constructor(options: EventHubOptions = {}) {
     this.replayLimit = options.replayLimit ?? DEFAULT_EVENT_HUB_REPLAY_LIMIT;
@@ -52,6 +67,7 @@ export class EventHub<T> {
       (options.supersedesReplay as
         | ((type: string, data: T) => boolean)
         | undefined) ?? (() => false);
+    this.servableReplay = options.servableReplay;
     if (!Number.isSafeInteger(this.replayLimit) || this.replayLimit <= 0) {
       throw new Error("event_hub_replay_limit_invalid");
     }
@@ -85,28 +101,29 @@ export class EventHub<T> {
     const eventBytes =
       commit?.bytes ?? Buffer.byteLength(JSON.stringify(event), "utf8");
     this.sequence = event.sequence;
-    if (this.supersedesReplay(type, data)) {
-      this.events.length = 0;
-      this.replayBytes = 0;
-    }
+    if (this.supersedesReplay(type, data)) this.clearReplay();
     if (commit?.retain === false || eventBytes > this.replayByteLimit) {
       // Replay storage represents only a contiguous suffix. Retaining events
       // from before an individually oversized event would make the preceding
       // cursor appear replayable even though that event was omitted.
-      this.events.length = 0;
-      this.replayBytes = 0;
+      this.clearReplay();
     } else {
-      this.events.push({ event, bytes: eventBytes });
+      const costFloor = this.servableReplay?.costFloor(type, data, eventBytes) ?? 0;
+      this.events.push({ event, bytes: eventBytes, costFloor });
       this.replayBytes += eventBytes;
+      this.replayCostFloor += costFloor;
+      const servableBytes = this.servableReplay?.servableBytes() ?? Number.POSITIVE_INFINITY;
       while (
         this.events.length > this.replayLimit ||
-        this.replayBytes > this.replayByteLimit
+        this.replayBytes > this.replayByteLimit ||
+        this.replayCostFloor > servableBytes
       ) {
         const removed = this.events.shift();
         if (!removed) break;
         // Reuse the publication-time byte count; eviction must not serialize
         // retained output a second time.
         this.replayBytes -= removed.bytes;
+        this.replayCostFloor -= removed.costFloor;
       }
     }
 
@@ -127,8 +144,13 @@ export class EventHub<T> {
 
   close(): void {
     this.subscribers.clear();
+    this.clearReplay();
+  }
+
+  private clearReplay(): void {
     this.events.length = 0;
     this.replayBytes = 0;
+    this.replayCostFloor = 0;
   }
 
   get subscriberCount(): number {

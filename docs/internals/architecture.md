@@ -558,7 +558,11 @@ checkpoint. Idle application projections expire after one hour, with at most
 128 idle scopes and 256 MiB of accounted projection, replay and checkpoint
 bytes. The fold, checkpoint, eviction and recovery rules behind those bounds
 are in [Materialized application projection](application-projection.md).
-Each thread replay independently retains 4,096 events within 32 MiB. The browser keeps
+Each thread replay independently retains 4,096 events within 32 MiB, and drops
+its oldest events once the retained suffix costs more than 64 KiB plus twice the
+current snapshot and notices in every activity mode. A reconnect replays a suffix
+only while it is at most 64 KiB or costs no more than the current checkpoint, so
+those cursors already received a checkpoint. The browser keeps
 up to 32 inactive thread projections for one hour within a 256 MiB serialized
 desktop budget or a 64 MiB serialized Android budget; normalized object graphs
 can occupy several times their serialized size in a mobile WebView heap.

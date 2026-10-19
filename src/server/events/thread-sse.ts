@@ -23,7 +23,7 @@ import {
   type ThreadLoadServerDiagnostic,
   type ThreadReplayServerDiagnostic,
 } from "../../shared/protocol/diagnostics.js";
-import type { ThreadEventHub } from "./thread-event-hub.js";
+import { THREAD_SSE_SMALL_REPLAY_BYTES, type ThreadEventHub } from "./thread-event-hub.js";
 import { ApiError, projectApiError } from "../http/errors.js";
 import { assertBoundedSseFrame } from "./sse-frame.js";
 
@@ -56,7 +56,6 @@ export const DEFAULT_THREAD_SSE_PENDING_BYTE_LIMIT = 16 * 1_024 * 1_024;
 export const DEFAULT_THREAD_SSE_DRAIN_TIMEOUT_MILLISECONDS = 30_000;
 const DEFAULT_HEARTBEAT_MILLISECONDS = 20_000;
 const LIVE_FRAME = "event: thread-live\ndata: {}\n\n";
-export const THREAD_SSE_SMALL_REPLAY_BYTES = 64 * 1_024;
 
 type SnapshotHandshake = ThreadLoadServerDiagnostic["handshake"];
 

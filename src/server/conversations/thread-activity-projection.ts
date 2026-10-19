@@ -37,7 +37,7 @@ const activityKinds = new Set<ConversationItem["kind"]>([
   "web_search",
 ]);
 
-function isDetailedActivityItem(
+export function isDetailedActivityItem(
   item: ConversationItem,
 ): item is DetailedActivityItem {
   return activityKinds.has(item.kind);

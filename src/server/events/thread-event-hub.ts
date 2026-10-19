@@ -24,6 +24,7 @@ import {
   serializedUtf8Bytes,
 } from "../../shared/protocol/payload.js";
 import { SerializedMailbox } from "../conversations/serialized-mailbox.js";
+import { isDetailedActivityItem } from "../conversations/thread-activity-projection.js";
 import { sameAgentToolPolicyRevision } from "../../shared/agent-tool-policy.js";
 import type { DismissRuntimeNoticeRequest } from "../../shared/protocol/api.js";
 import { fitApplicationItemsToSnapshot, isApplicationPublicationItem, type ApplicationPublicationItem, type ApplicationProjectionInput } from "../conversations/application-publication-projection.js";
@@ -39,6 +40,21 @@ export interface ThreadCheckpointSubscription extends ThreadEventSubscription {
 }
 
 type ItemTurnEvent = Extract<NormalizedThreadEvent, { type: "item_upsert" | "turn_upsert" }>;
+
+/** A thread stream always replays a suffix of at most this many bytes. */
+export const THREAD_SSE_SMALL_REPLAY_BYTES = 64 * 1_024;
+
+/**
+ * What replaying one event costs any subscriber, at least. Summary-mode
+ * subscribers receive detailed activity items and history pages reduced to
+ * summaries, so those events have no lower bound; every other event is
+ * written unchanged in every activity mode.
+ */
+function replayCostFloor(type: string, data: unknown, bytes: number): number {
+  if (type === "history_prepend") return 0;
+  if (type === "item_upsert" && isDetailedActivityItem((data as Extract<NormalizedThreadEvent, { type: "item_upsert" }>).item)) return 0;
+  return bytes;
+}
 
 function envelope(
   event: SequencedEvent<NormalizedThreadEvent>,
@@ -75,6 +91,8 @@ export class ThreadEventHub {
   #sourcePages: ReadonlyMap<string, ApplicationPublicationItem> = new Map();
   #checkpoint?: ThreadCheckpoint;
   #notices: readonly RuntimeNotice[] = [];
+  #noticeBytesFor?: readonly RuntimeNotice[];
+  #noticeBytes = 0;
   #capabilityThreadRevision = 0;
   #capabilityRunState: NormalizedThreadSnapshot["runState"] = "idle";
 
@@ -82,7 +100,25 @@ export class ThreadEventHub {
     this.#hub = new EventHub({
       ...options,
       supersedesReplay: (type) => type === "snapshot",
+      servableReplay: {
+        costFloor: replayCostFloor,
+        servableBytes: () => this.#servableReplayBytes(),
+      },
     });
+  }
+
+  /**
+   * A thread stream replays a suffix only while it costs no more than a
+   * checkpoint (or is small), so no subscriber can accept a suffix costing
+   * twice the current snapshot and notices plus the small-replay allowance.
+   * The margin covers snapshot growth from later events and frame overhead.
+   */
+  #servableReplayBytes(): number {
+    if (this.#noticeBytesFor !== this.#notices) {
+      this.#noticeBytesFor = this.#notices;
+      this.#noticeBytes = serializedUtf8Bytes(this.#notices);
+    }
+    return THREAD_SSE_SMALL_REPLAY_BYTES + 2 * (this.#snapshotBytes + this.#noticeBytes);
   }
 
   get transportGeneration(): string {
