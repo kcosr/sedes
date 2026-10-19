@@ -107,6 +107,10 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const [archivedItems, setArchivedItems] = useState<WorkpadSummary[]>([]);
   const [archivedCursor, setArchivedCursor] = useState<string>();
   const [archivedLoading, setArchivedLoading] = useState(false);
+  // A failed read of the list or the Archived section shows in its place, with Try again.
+  const [archivedError, setArchivedError] = useState("");
+  const [listAttempt, setListAttempt] = useState(0);
+  const [archivedAttempt, setArchivedAttempt] = useState(0);
   const [counts, setCounts] = useState<{ key: string; value?: WorkpadCounts; failed?: true }>();
   const [error, setError] = useState("");
   const [refreshError, setRefreshError] = useState("");
@@ -211,7 +215,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     setArchivedItems([]); setArchivedCursor(undefined); archivedCount.current = 0;
     setNewTitle(""); setTitle(""); setRenameTarget(undefined); setMoveTarget(undefined); setDiscarding(false); setDeleteTarget(undefined); setReconciling(false);
     setHistoryOpen(false); setViewMenuOpen(false); setDocumentMenuOpen(false);
-    setError(""); setRefreshError(""); setBusy(false); setLeaveRequest(undefined);
+    setError(""); setRefreshError(""); setArchivedError(""); setBusy(false); setLeaveRequest(undefined);
     setChecklistSaving(false); setChecklistRefreshRequired(false);
   }, [scopeKey, draft.setEditor, draft.saving, routeKey, contextKey, busy]);
   const run = async (action: (isCurrent: () => boolean) => Promise<void>, mutating = false) => {
@@ -301,18 +305,19 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
         .finally(() => { if (!cancelled) setLoading(false); });
     }, 180);
     return () => { cancelled = true; clearTimeout(debounce); ++listGeneration.current; };
-  }, [open, refreshList]);
+  }, [open, refreshList, listAttempt]);
   useEffect(() => {
     if (!open || !archivedOpen) return;
     let cancelled = false;
     archivedCount.current = 0;
     setArchivedLoading(true);
     const debounce = window.setTimeout(() => {
-      void refreshArchived().catch(failure => { if (!cancelled) setRefreshError(message(failure)); })
+      void refreshArchived().then(() => { if (!cancelled) setArchivedError(""); })
+        .catch(failure => { if (!cancelled) setArchivedError(message(failure)); })
         .finally(() => { if (!cancelled) setArchivedLoading(false); });
     }, 180);
     return () => { cancelled = true; clearTimeout(debounce); ++archivedGeneration.current; };
-  }, [open, archivedOpen, refreshArchived]);
+  }, [open, archivedOpen, refreshArchived, archivedAttempt]);
   // Counts follow the thread and project in view; the list's own refreshes refetch them.
   useEffect(() => {
     if (!open) return;
@@ -661,7 +666,9 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     return () => window.removeEventListener(CLOSE_WORKPAD_EVENT, onClose);
   }, [open]);
 
-  const errorText = error || refreshError || (checklistRefreshRequired ? "Reload this workpad before changing checklist items." : "");
+  // An empty list that failed to load says so in its place, with Try again.
+  const listLoadFailed = Boolean(refreshError) && !selected && !loading && scopeValid && items.length === 0;
+  const errorText = error || (listLoadFailed ? "" : refreshError) || (checklistRefreshRequired ? "Reload this workpad before changing checklist items." : "");
   const errorCallout = errorText && <div className="workpads-alert">
     <Callout tone="danger" role="alert" action={checklistRefreshRequired && selected && <Button variant="outline" size="sm" disabled={busy || editing || draft.saving}
       onClick={() => {
@@ -721,6 +728,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const emptyState = (() => {
     if (loading) return <EmptyState variant="inline" className="workpads-empty" title="Loading…" />;
     if (!scopeValid) return <EmptyState variant="inline" className="workpads-empty" title="Open a thread to see its workpads" />;
+    if (listLoadFailed) return <EmptyState variant="inline" className="workpads-empty" role="alert" title="Couldn't load workpads."
+      description={refreshError} action={<Button variant="ghost" size="sm" onClick={() => setListAttempt(value => value + 1)}>Try again</Button>} />;
     if (trimmedQuery) return <EmptyState variant="inline" className="workpads-empty" title={`No workpads match “${trimmedQuery}”`} />;
     if ((archivedTotal ?? 0) > 0) return <EmptyState variant="inline" className="workpads-empty" title="Nothing active." description="Every workpad here is archived." />;
     return <EmptyState variant="inline" className="workpads-empty" title={`No ${SCOPE_NOUN[view]} yet`} description="Name one above, or ask an agent to start one." />;
@@ -731,7 +740,10 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     {archivedOpen && <>
       {archivedItems.length ? <ul className="workpads-list" aria-label="Archived workpads">
         {archivedItems.map(item => renderRow(item, rowLocation(item)))}
-      </ul> : <EmptyState variant="inline" className="workpads-empty"
+      </ul> : archivedError && !archivedLoading ? <EmptyState variant="inline" className="workpads-empty" role="alert"
+        title="Couldn't load archived workpads." description={archivedError}
+        action={<Button variant="ghost" size="sm" onClick={() => setArchivedAttempt(value => value + 1)}>Try again</Button>} />
+      : <EmptyState variant="inline" className="workpads-empty"
         title={archivedLoading ? "Loading…" : trimmedQuery ? `No archived workpads match “${trimmedQuery}”` : "No archived workpads"} />}
       {archivedCursor && <Button variant="ghost" size="sm" className="workpads-more" disabled={busy} onClick={() => { void run(() => refreshArchived(archivedCursor)); }}>Load more</Button>}
     </>}

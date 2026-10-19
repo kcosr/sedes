@@ -159,6 +159,9 @@ User-facing changes are collected here before release. See the
   Inline comment actions use the shared buttons, with Open before Delete. See
   [saved dictation](docs/operator/clients/voice.md).
 
+- A Workpads list or Archived section that fails to load says so in place,
+  with **Try again**, instead of claiming there are no workpads.
+
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See

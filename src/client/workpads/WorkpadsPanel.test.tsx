@@ -752,6 +752,22 @@ describe("WorkpadsPanel", () => {
     expect(screen.getByRole("menuitemradio", { name: /^Revision 3 · latest/ })).toHaveAttribute("aria-checked", "false");
   });
 
+  it("shows a failed list load in place of the list, with Try again", async () => {
+    const { store, api } = fixture();
+    api.listWorkpads.mockRejectedValueOnce(new Error("Failed to fetch"));
+    render(<Panel context={panelContext(store)} />);
+    const failure = await screen.findByText("Couldn't load workpads.");
+    // One alert, in the list's place, never the false empty state.
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("Failed to fetch");
+    expect(failure.closest("[data-slot=empty-state]")).toBe(screen.getByRole("alert"));
+    expect(screen.queryByText(/No .*workpads yet/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss error" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("button", { name: "Integration" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(api.listWorkpads).toHaveBeenCalledTimes(2);
+  });
   it("clears recovered refresh failures without clearing mutation errors", async () => {
     const { store, api, emit } = fixture();
     render(<Panel context={panelContext(store)} />);
@@ -1724,6 +1740,25 @@ describe("WorkpadsPanel", () => {
       expect(await within(section).findByRole("button", { name: "Integration" })).toBeInTheDocument();
       expect(api.updateWorkpad).toHaveBeenCalledWith("pad", { expectedRevision: 1, archived: true });
       expect(screen.getAllByRole("button", { name: "Integration" })).toHaveLength(1);
+    });
+
+    it("shows a failed Archived read in the section, with Try again", async () => {
+      let fail = true;
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => {
+        if (request?.archived && fail) { fail = false; throw new Error("Archive unavailable"); }
+        return { items: request?.archived ? [archivedPad("old-1", "Old notes")] : [pad] };
+      });
+      const { store } = fixture({ listWorkpads, getWorkpadCounts: vi.fn(async () => archivedCounts(1)) });
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build" }} />);
+      await screen.findByRole("button", { name: "Integration" });
+      fireEvent.click(await screen.findByRole("button", { name: /^Archived/ }));
+      const section = screen.getByRole("region", { name: "Archived workpads" });
+      expect(await within(section).findByText("Couldn't load archived workpads.")).toBeInTheDocument();
+      expect(within(section).getByRole("alert")).toHaveTextContent("Archive unavailable");
+      expect(within(section).queryByText("No archived workpads")).not.toBeInTheDocument();
+      fireEvent.click(within(section).getByRole("button", { name: "Try again" }));
+      expect(await within(section).findByRole("button", { name: "Old notes" })).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
     it("names each archived workpad's place in All", async () => {
