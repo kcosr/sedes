@@ -1039,6 +1039,106 @@ describe("ThreadCompletionCallbackDispatcher", () => {
     }
   });
 
+  it("releases a callback obligation when its target agent-control input fails before acceptance", async () => {
+    const fixture = createFixture();
+    const [callerThreadId, targetThreadId] = fixture.threadIds;
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    gateway.submitBehaviors.push(new BackendError({
+      category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+      safeMessage: "The model is unavailable.",
+    }));
+    const now = { value: 1_000 };
+    const { dispatcher } = createDispatcher(repository, gateway, { now });
+    const callbacks = new ThreadCompletionCallbackRepository(fixture.database);
+    const inventory = new InventoryRepository(fixture.database);
+    try {
+      await dispatcher.recover(fixture.scope);
+      const callbackId = "3b0a6a43-2b55-4a0e-9b9e-6a3f3d8f1f11";
+      const enqueued = await dispatcher.enqueue(fixture.scope, targetThreadId, {
+        mutationId: "agent-send-fails",
+        text: "please do the thing",
+        contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: {
+          kind: "agent_control",
+          expectedThreadRevision: repository.getThreadRevision(fixture.scope, targetThreadId),
+          initiatingAgentThreadId: callerThreadId,
+          completionCallback: { id: callbackId, callerThreadId },
+        },
+        now: now.value,
+      });
+      expect(enqueued.item.state).toBe("failed");
+      expect(callbacks.get(fixture.scope, callbackId)).toMatchObject({
+        state: "cancelled",
+        cancelledAt: 1_000,
+        cancellationReason: "The target input failed before authoritative acceptance.",
+        cancellationMutationId: `${callbackId}:target_input_failed`,
+      });
+      // Only the target's own unacknowledged failure still needs attention.
+      expect([...inventory.findArchiveDurablyBlockedThreadIds(fixture.scope, fixture.threadIds)])
+        .toEqual([targetThreadId]);
+      const caller = inventory.getInventory(fixture.scope, callerThreadId);
+      expect(inventory.transitionInventory(fixture.scope, callerThreadId, {
+        expectedRevision: caller.inventoryRevision,
+        mutationId: "snooze-after-failed-callback-target",
+        change: { action: "snooze", snoozedUntil: 10_000 },
+        now: 1_010,
+      }).state.inventoryState).toBe("snoozed");
+
+      await dispatcher.acknowledgeFailure(fixture.scope, targetThreadId, enqueued.item.id, 1_020);
+      expect(callbacks.get(fixture.scope, callbackId).state).toBe("cancelled");
+      expect(inventory.findArchiveDurablyBlockedThreadIds(fixture.scope, fixture.threadIds).size).toBe(0);
+    } finally {
+      await dispatcher.close();
+      fixture.database.close();
+    }
+  });
+
+  it("releases a callback obligation when its pending target agent-control input is cancelled", async () => {
+    const fixture = createFixture();
+    const [callerThreadId, targetThreadId] = fixture.threadIds;
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    gateway.authoritativelySettled = false;
+    const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 1_000 } });
+    const callbacks = new ThreadCompletionCallbackRepository(fixture.database);
+    const inventory = new InventoryRepository(fixture.database);
+    try {
+      await dispatcher.recover(fixture.scope);
+      const callbackId = "5c1b7b54-3c66-4b1f-8c7a-7b4f4e9f2f22";
+      const enqueued = await dispatcher.enqueue(fixture.scope, targetThreadId, {
+        mutationId: "agent-send-cancelled",
+        text: "please do the other thing",
+        contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: {
+          kind: "agent_control",
+          expectedThreadRevision: repository.getThreadRevision(fixture.scope, targetThreadId),
+          initiatingAgentThreadId: callerThreadId,
+          completionCallback: { id: callbackId, callerThreadId },
+        },
+        now: 1_000,
+      });
+      expect(enqueued.item.state).toBe("pending");
+      expect(callbacks.get(fixture.scope, callbackId).state).toBe("registered");
+
+      await dispatcher.cancelUserInput(fixture.scope, targetThreadId, enqueued.item.id, {
+        mutationId: "cancel-agent-send",
+        expectedThreadRevision: repository.getThreadRevision(fixture.scope, targetThreadId),
+        now: 1_010,
+      });
+      expect(gateway.submitted).toHaveLength(0);
+      expect(callbacks.get(fixture.scope, callbackId)).toMatchObject({
+        state: "cancelled",
+        cancellationReason: "The target input was cancelled before authoritative acceptance.",
+        cancellationMutationId: `${callbackId}:target_input_cancelled`,
+      });
+      expect(inventory.findArchiveDurablyBlockedThreadIds(fixture.scope, fixture.threadIds).size).toBe(0);
+    } finally {
+      await dispatcher.close();
+      fixture.database.close();
+    }
+  });
+
   it("durably queues a ready callback while its bound caller is unavailable", async () => {
     const fixture = createFixture();
     try {

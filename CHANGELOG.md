@@ -241,6 +241,11 @@ User-facing changes are collected here before release. See the
   Park controls; active work and unresolved operations still block those actions.
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
+- An agent `thread send` with `callback: true` whose target input fails or is
+  cancelled before acceptance releases its callback, so neither thread stays
+  blocked from archive or snooze. See
+  [agent tools](docs/internals/agent-tools.md#durable-callback-lifecycle).
+
 ### Removed
 
 ## [0.2.0] - 2026-10-14

@@ -1254,10 +1254,9 @@ export class QueuedInputRepository {
         );
       }
       this.#touchThread(scope, applicationThreadId, input.now, false);
-      return {
-        item: this.get(scope, applicationThreadId, id),
-        replayed: false,
-      };
+      const cancelled = this.get(scope, applicationThreadId, id);
+      this.#releaseUnacceptedCallback(scope, applicationThreadId, cancelled, input.now);
+      return { item: cancelled, replayed: false };
     })();
   }
 
@@ -1707,7 +1706,9 @@ export class QueuedInputRepository {
         );
       }
       this.#touchThread(scope, applicationThreadId, input.now, false);
-      return this.get(scope, applicationThreadId, id);
+      const failed = this.get(scope, applicationThreadId, id);
+      this.#releaseUnacceptedCallback(scope, applicationThreadId, failed, input.now);
+      return failed;
     })();
   }
 
@@ -1832,7 +1833,9 @@ export class QueuedInputRepository {
         throw new DomainError("invalid_transition", conflict);
       }
       this.#touchThread(scope, applicationThreadId, input.now, false);
-      return this.get(scope, applicationThreadId, id);
+      const failed = this.get(scope, applicationThreadId, id);
+      this.#releaseUnacceptedCallback(scope, applicationThreadId, failed, input.now);
+      return failed;
     })();
   }
 
@@ -1978,7 +1981,9 @@ export class QueuedInputRepository {
         );
       }
       this.#touchThread(scope, applicationThreadId, input.now, false);
-      return this.get(scope, applicationThreadId, id);
+      const cancelled = this.get(scope, applicationThreadId, id);
+      this.#releaseUnacceptedCallback(scope, applicationThreadId, cancelled, input.now);
+      return cancelled;
     })();
   }
 
@@ -2642,7 +2647,40 @@ export class QueuedInputRepository {
       );
     }
     this.#touchThread(scope, applicationThreadId, now, false);
-    return this.get(scope, applicationThreadId, item.id);
+    const failed = this.get(scope, applicationThreadId, item.id);
+    this.#releaseUnacceptedCallback(scope, applicationThreadId, failed, now);
+    return failed;
+  }
+
+  /**
+   * A failed or cancelled row was never authoritatively accepted, so its
+   * operation can never record the completion an agent-control callback
+   * awaits. Release that obligation in the same transaction; otherwise it
+   * would stay registered and block archive and snooze for both threads.
+   */
+  #releaseUnacceptedCallback(
+    scope: RequestScope,
+    applicationThreadId: string,
+    item: QueuedInputRecord,
+    now: number,
+  ): void {
+    if (item.state !== "failed" && item.state !== "cancelled") {
+      throw new Error("queued_input_callback_release_requires_terminal_row");
+    }
+    const callback = this.#callbacks.findForTargetOperation(
+      scope,
+      applicationThreadId,
+      item.mutationId,
+    );
+    if (callback?.state !== "registered") return;
+    this.#callbacks.cancelRegistered(scope, callback.id, {
+      cancelledAt: now,
+      reason:
+        item.state === "failed"
+          ? "The target input failed before authoritative acceptance."
+          : "The target input was cancelled before authoritative acceptance.",
+      cancellationMutationId: `${callback.id}:target_input_${item.state}`,
+    });
   }
 
   #assertRetryPolicy(policy: QueueRetryPolicy): void {
