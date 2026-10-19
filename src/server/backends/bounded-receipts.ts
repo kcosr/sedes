@@ -16,7 +16,7 @@ export function rememberBoundedReceipt<K, V>(
   receipts: Map<K, V>,
   key: NoInfer<K>,
   value: NoInfer<V>,
-  evictable: (receipt: NoInfer<V>) => boolean = () => true,
+  evictable: (receipt: NoInfer<V>, key: NoInfer<K>) => boolean = () => true,
   limit = MAXIMUM_RESIDENT_OPERATION_RECEIPTS,
 ): void {
   receipts.delete(key);
@@ -24,6 +24,6 @@ export function rememberBoundedReceipt<K, V>(
   if (receipts.size <= limit) return;
   for (const [candidate, receipt] of receipts) {
     if (receipts.size <= limit) return;
-    if (candidate !== key && evictable(receipt)) receipts.delete(candidate);
+    if (candidate !== key && evictable(receipt, candidate)) receipts.delete(candidate);
   }
 }

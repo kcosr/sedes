@@ -23,6 +23,8 @@ export class ClaudePersistentRuntimeRegistry {
     /** Residency limit for detached, quiescent queries; tests shorten it. */
     detachedSessionTtlMs?: number;
     maximumCompactReceiptBytes?: number;
+    /** Per-query journal bound; tests shorten it. */
+    maximumJournaledOperations?: number;
   }) {}
 
   ensure(raw: ClaudePersistentConfiguration, epoch: number): ClaudePersistentRuntimeHost {
@@ -50,7 +52,8 @@ export class ClaudePersistentRuntimeRegistry {
     });
     const host = new ClaudePersistentRuntimeHost({ configuration, client, close: () => client.close(), services: this.input.services, ...(this.input.validateQueryEnvironment ? { validateQueryEnvironment: this.input.validateQueryEnvironment } : {}), ...(this.input.validateAgentToolMcp ? { validateAgentToolMcp: this.input.validateAgentToolMcp } : {}),
       ...(this.input.maximumCompactReceiptBytes !== undefined ? { maximumCompactReceiptBytes: this.input.maximumCompactReceiptBytes } : {}),
-      ...(this.input.detachedSessionTtlMs !== undefined ? { detachedSessionTtlMs: this.input.detachedSessionTtlMs } : {}) });
+      ...(this.input.detachedSessionTtlMs !== undefined ? { detachedSessionTtlMs: this.input.detachedSessionTtlMs } : {}),
+      ...(this.input.maximumJournaledOperations !== undefined ? { maximumJournaledOperations: this.input.maximumJournaledOperations } : {}) });
     const unregister = this.input.services.register({
       resourceId: host.runtimeId, kind: "provider", snapshot: () => host.snapshot(),
       onDetach: () => host.detach(),

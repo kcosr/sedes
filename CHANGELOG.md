@@ -253,8 +253,11 @@ User-facing changes are collected here before release. See the
   [Pi capabilities](docs/operator/backends/pi.md#topologies-and-capabilities).
 
 - Workpads on a discarded unfinished fork move to its project, like its Tasks,
-  instead of disappearing. Queue projections no longer reread a thread's whole
-  input history on every change.
+  instead of disappearing. Long-lived threads stay bounded: queue projections no
+  longer reread a thread's whole input history, resident Pi and Codex handles
+  cap their operation receipts, and a persistent Claude query keeps accepting
+  approvals and input past 16,384 of them (upgrade remote sidecars). See
+  [Claude runtimes](docs/operator/backends/claude.md).
 
 ### Removed
 

@@ -6,6 +6,7 @@ import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostic
 import { ClaudeBackgroundActivity } from "../claude-background-activity.js";
 import { claudeCommandLifecycle, claudeResultIsNotificationDrain, claudeResultIsUnrelated, claudeResultUserMessageIds } from "../claude-result-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
+import { rememberBoundedReceipt } from "../../bounded-receipts.js";
 import type { CanUseTool, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeOwnedRuntimeClient, ClaudeOwnedRuntimeSession, ClaudeRuntimeClient, ClaudeRuntimeForkResult, ClaudeRuntimeSession } from "../claude-runtime-client.js";
 import { claudeForkLaunchFailure } from "../claude-fork-launch.js";
@@ -59,7 +60,10 @@ type Session = {
 export const DETACHED_SESSION_TTL_MS = 30 * 60_000;
 const RESIDENCY_SWEEP_INTERVAL_MS = 60_000;
 const MAXIMUM_ENDED_JOURNALS = 256;
-/** Operations one query admits; a retired session's journal keeps at most as many. */
+/**
+ * Operations one query's journal retains; a retired session's journal keeps
+ * at most as many. A long-lived query forgets its oldest settled entries.
+ */
 const MAXIMUM_JOURNALED_OPERATIONS = 16384;
 const MAXIMUM_COMPACT_RECEIPTS = 256;
 /** 64 KiB accounting, 16,384 Unicode notice/code characters, plus metadata. */
@@ -115,7 +119,13 @@ export class ClaudePersistentRuntimeHost {
     validateAgentToolMcp?: (agentToolMcp: ClaudeRuntimeAgentToolMcp) => void;
     /** How long a detached, quiescent query stays resident before retirement. */
     detachedSessionTtlMs?: number;
+    /** Per-query journal bound for sends, permission responses, and compactions. */
+    maximumJournaledOperations?: number;
   }) {}
+
+  get #journalLimit(): number {
+    return this.input.maximumJournaledOperations ?? MAXIMUM_JOURNALED_OPERATIONS;
+  }
 
   detach(epoch?: number): void {
     for (const session of this.#sessions.values()) {
@@ -468,8 +478,11 @@ export class ClaudePersistentRuntimeHost {
         if (permission.response) {
           if (JSON.stringify(permission.response) !== JSON.stringify(command.request.response)) throw new Error("claude_persistent_permission_response_conflict");
         } else {
-          if (session.permissionResponses.size >= 16384) throw new Error("claude_persistent_permission_receipt_capacity_exceeded");
-          session.permissionResponses.set(key, fingerprint); permission.response = command.request.response as PermissionResult; this.#retirePermissionEvent(session, permission); permission.resolve(permission.response); this.#revision++; }
+          // Each response stays while its permission awaits delivery; only the
+          // newest delivered ones remain for exact replay of a lost reply.
+          rememberBoundedReceipt(session.permissionResponses, key, fingerprint,
+            (_, responseKey) => !session.permissions.has(responseKey), this.#journalLimit);
+          permission.response = command.request.response as PermissionResult; this.#retirePermissionEvent(session, permission); permission.resolve(permission.response); this.#revision++; }
         return { responded: true };
       }
       case "send": {
@@ -483,7 +496,7 @@ export class ClaudePersistentRuntimeHost {
           if (this.#hasLiveCompaction(session) || (session.active.size && command.request.priority !== "next")) return { accepted: false, code: "claude_persistent_query_busy" };
           const inputBytes = Buffer.byteLength(JSON.stringify(command.request.content), "utf8");
           if (retainedBytes(session) + session.pendingInputBytes + inputBytes > (this.input.maximumEventBytes ?? 64 * 1024 * 1024)) return { accepted: false, code: "claude_persistent_input_capacity_exceeded" };
-          if (session.sends.size >= MAXIMUM_JOURNALED_OPERATIONS) return { accepted: false, code: "claude_persistent_operation_capacity_exceeded" };
+          if (session.sends.size >= this.#journalLimit && !this.#forgetSettledSend(session)) return { accepted: false, code: "claude_persistent_operation_capacity_exceeded" };
           session.sends.set(operationId, fingerprint); session.active.add(operationId); session.pendingInputs.set(operationId, command.request as Parameters<ClaudeRuntimeSession["send"]>[0]); session.pendingInputBytes += inputBytes; this.#revision++;
           try { await session.runtime.send(command.request as Parameters<ClaudeRuntimeSession["send"]>[0]); }
           catch (error) { session.active.delete(operationId); this.#fail(session, "claude_persistent_send_failed"); throw error; }
@@ -569,7 +582,7 @@ export class ClaudePersistentRuntimeHost {
     const known = session?.compactions.has(command.request.operationId) || this.#endedJournals.get(command.request.queryId)?.compactions.has(command.request.operationId);
     const response = compactFailure(code, !!known);
     if (known) return { response, throughSequence: session?.sequence ?? 0 };
-    if (session && session.runtime.startupProbeUuid === command.request.startupProbeUuid && this.#compactRecords(session).size < MAXIMUM_JOURNALED_OPERATIONS &&
+    if (session && session.runtime.startupProbeUuid === command.request.startupProbeUuid && this.#compactRecords(session).size < this.#journalLimit &&
         this.#compactReceiptBytes() + compactResponseBytes(response) <= (this.input.maximumCompactReceiptBytes ?? MAXIMUM_COMPACT_RECEIPT_BYTES)) {
       session.compactions.set(command.request.operationId, { fingerprint: compactFingerprint(command.request),
         startupProbeUuid: command.request.startupProbeUuid, response, promise: Promise.resolve(response),
@@ -647,7 +660,7 @@ export class ClaudePersistentRuntimeHost {
     const fingerprint = compactFingerprint(command.request);
     const records = this.#compactRecords(session);
     const fullReceipts = [...records.values()].filter(record => record.outcome !== "not_applied" || record.response?.nativeResult);
-    if (records.size >= MAXIMUM_JOURNALED_OPERATIONS || fullReceipts.length >= MAXIMUM_COMPACT_RECEIPTS ||
+    if (records.size >= this.#journalLimit || fullReceipts.length >= MAXIMUM_COMPACT_RECEIPTS ||
         this.#compactReceiptBytes() + COMPACT_RECEIPT_RESERVATION_BYTES > (this.input.maximumCompactReceiptBytes ?? MAXIMUM_COMPACT_RECEIPT_BYTES)) {
       return this.#refuseCompact(command, "claude_compact_receipt_capacity");
     }
@@ -882,6 +895,21 @@ export class ClaudePersistentRuntimeHost {
    * earlier incarnation's journal for the same session merges in, so a
    * withdrawal main has not reconciled yet survives a later retirement.
    */
+  /**
+   * Keeps a long-lived query's admission journal bounded by forgetting its
+   * oldest send that is neither running nor awaiting delivery. An absent ID
+   * then no longer proves non-admission, so the journal becomes incomplete.
+   */
+  #forgetSettledSend(session: Session): boolean {
+    for (const operationId of session.sends.keys()) {
+      if (session.active.has(operationId) || session.pendingInputs.has(operationId)) continue;
+      session.sends.delete(operationId);
+      session.admissionJournalComplete = false;
+      return true;
+    }
+    return false;
+  }
+
   #rememberEndedJournal(session: Session): void {
     // This journal is captured only after owned-query close proved cleanup.
     // Its unknown effect remains unknown, while no command can execute again.
@@ -898,11 +926,11 @@ export class ClaudePersistentRuntimeHost {
     // Admission counts the retained earlier incarnation too, so merging keeps
     // every exact receipt and lightweight refusal identity within its cap.
     this.#endedJournals.set(session.id, { cwd: session.cwd, authorityFingerprint: session.authorityFingerprint, compactions,
-      sends: new Set(sends.slice(-MAXIMUM_JOURNALED_OPERATIONS)),
-      withdrawn: new Set(withdrawn.slice(-MAXIMUM_JOURNALED_OPERATIONS)),
+      sends: new Set(sends.slice(-this.#journalLimit)),
+      withdrawn: new Set(withdrawn.slice(-this.#journalLimit)),
       // A dropped send would make its absence read as never sent.
       admissionJournalComplete: session.admissionJournalComplete && (earlier?.admissionJournalComplete ?? true) &&
-        sends.length <= MAXIMUM_JOURNALED_OPERATIONS });
+        sends.length <= this.#journalLimit });
     while (this.#endedJournals.size > MAXIMUM_ENDED_JOURNALS) this.#endedJournals.delete(this.#endedJournals.keys().next().value!);
   }
 
