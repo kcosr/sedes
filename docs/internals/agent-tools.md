@@ -624,6 +624,9 @@ the runtime. Input that fails its canonical schema, policy denials, failed
 invocations, and transport failures return `isError` tool results carrying
 `{ "error": { "code", "message", "retryable" } }`, so the model can correct
 itself; an unknown tool name or malformed request is a JSON-RPC error.
+A malformed gateway tool ID or input that exceeds a transport bound is
+`invalid_input`. Canonical schema string lengths count UTF-16 code units, the
+same unit as the transport and domain limits.
 `notifications/cancelled` aborts the exact invocation and suppresses its
 response.
 

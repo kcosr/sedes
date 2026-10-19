@@ -515,6 +515,9 @@ export function compileCanonicalAgentToolSchema<T = unknown>(
     allErrors: true,
     strict: true,
     validateFormats: false,
+    // Count string lengths in UTF-16 code units, as the transports and domain
+    // schemas do, so a schema-valid string never fails a transport bound.
+    unicode: false,
   });
   const validate: ValidateFunction<T> = ajv.compile(normalized);
   return {

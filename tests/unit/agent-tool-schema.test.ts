@@ -126,6 +126,22 @@ describe("canonical agent-tool JSON Schema", () => {
     }
   });
 
+  it("bounds string length in UTF-16 code units like the transports", () => {
+    const harness = compileCanonicalAgentToolSchema({
+      $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
+      type: "object",
+      properties: { prompt: { type: "string", minLength: 1, maxLength: 65_536 } },
+      required: ["prompt"],
+      additionalProperties: false,
+      maxProperties: 1,
+    });
+    expect(harness.check({ prompt: "\u{1F600}".repeat(32_768) })).toBe(true);
+    expect(harness.check({ prompt: "\u{1F600}".repeat(32_769) })).toBe(false);
+    expect(harness.errors()).toEqual([
+      expect.objectContaining({ keyword: "maxLength", instancePath: "/prompt" }),
+    ]);
+  });
+
   it("is accepted as one MCP 1.30 ToolSchema and one Pi TypeBox parameter schema", () => {
     const normalized = normalizeCanonicalAgentToolSchema(conformanceSchema);
     const parsed = ToolSchema.parse({

@@ -477,6 +477,20 @@ describe("Sedes CLI", () => {
     }
   });
 
+  it("reports a malformed tool ID as invalid input before network access", async () => {
+    const output = bufferedIo();
+    const fetch = vi.fn();
+    expect(
+      await runSedesCli(["tool", "describe", "task..list", "--json"], {
+        environment: environment(),
+        io: output.io,
+        fetch,
+      }),
+    ).toBe(1);
+    expect(output.stderr()).toContain("invalid_input: A Sedes tool ID is malformed");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("describes, validates, bootstraps CSRF, and invokes canonical input", async () => {
     const output = bufferedIo();
     const tool = artifacts().find(({ id }) => id === "agent.context")!;

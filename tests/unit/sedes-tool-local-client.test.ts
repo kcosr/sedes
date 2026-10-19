@@ -97,6 +97,39 @@ describe("SedesToolLocalClient", () => {
     });
   });
 
+  it("reports transport contract violations as invalid input before connecting", async () => {
+    let connected = false;
+    const client = new SedesToolLocalClient(
+      "/nonexistent/sedes.sock",
+      sourceCapability,
+      () => {
+        connected = true;
+        throw new Error("unexpected_connection");
+      },
+      () => transportRequestId,
+    );
+
+    await expect(client.describeTools(["task..list"])).rejects.toMatchObject({
+      name: "SedesToolApiError",
+      code: "invalid_input",
+      retryable: false,
+      message: expect.stringContaining("tool ID"),
+    });
+    await expect(
+      client.invoke({
+        toolId: "automation.create",
+        schemaVersion: 1,
+        requestId: "oversized-prompt",
+        input: { prompt: "\u{1F600}".repeat(40_000) },
+      }),
+    ).rejects.toMatchObject({
+      name: "SedesToolApiError",
+      code: "invalid_input",
+      retryable: false,
+    });
+    expect(connected).toBe(false);
+  });
+
   it("preserves canonical relay errors", async () => {
     const endpoint = await listen((request, socket) => {
       socket.end(

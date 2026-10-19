@@ -18,6 +18,7 @@ import {
 import {
   DEFAULT_REQUEST_TIMEOUT_MILLISECONDS,
   SedesToolApiError,
+  parseSedesToolRequest,
   type SedesAgentToolCallerCredential,
   type SedesToolClient,
 } from "./sedes-tool-client.js";
@@ -101,7 +102,10 @@ export class SedesToolHttpClient implements SedesToolClient {
   }
 
   async describeTools(toolIds: readonly string[], signal?: AbortSignal) {
-    const body = createAgentToolDescriptionsRequestSchema.parse({ toolIds });
+    const body = parseSedesToolRequest(
+      createAgentToolDescriptionsRequestSchema,
+      { toolIds },
+    );
     const response = await this.#request(
       "/api/agent-tool-descriptions",
       {
@@ -130,7 +134,10 @@ export class SedesToolHttpClient implements SedesToolClient {
     request: CreateAgentToolInvocationRequest,
     signal?: AbortSignal,
   ) {
-    const body = createAgentToolInvocationRequestSchema.parse(request);
+    const body = parseSedesToolRequest(
+      createAgentToolInvocationRequestSchema,
+      request,
+    );
     if (!this.#csrfToken) await this.#acquireCsrfToken(signal);
     try {
       return await this.#invokeRequest(
