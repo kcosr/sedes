@@ -2721,6 +2721,7 @@ class PiConversationHandle implements ConversationHandle {
   >();
   /** Accepted submissions; a miss rereads the durable session marker. */
   readonly #submissionResults = new Map<string, SubmitTurnResult>();
+  /** Steer results; an accepted one may leave, as a miss rereads its marker. */
   readonly #steerResults = new Map<string, SteerTurnResult>();
   readonly #interrupts = new ConversationInterruptLedger();
   readonly #controlLifetime = new AbortController();
@@ -3428,7 +3429,7 @@ class PiConversationHandle implements ConversationHandle {
         completionCorrelation: persisted.marker.applicationOperationId,
         backendTurnId,
       };
-      this.#steerResults.set(input.applicationOperationId, result);
+      this.#rememberSteerResult(input.applicationOperationId, result);
       return result;
     }
     if (this.#session.isIdle) {
@@ -3642,7 +3643,7 @@ class PiConversationHandle implements ConversationHandle {
     if (result.status === "accepted") {
       this.#livePendingSteers.delete(input.applicationOperationId);
     }
-    this.#steerResults.set(input.applicationOperationId, result);
+    this.#rememberSteerResult(input.applicationOperationId, result);
     return result;
   }
 
@@ -4357,6 +4358,12 @@ class PiConversationHandle implements ConversationHandle {
     });
   }
 
+  /** Bounded like submissions; a Steer awaiting materialization stays. */
+  #rememberSteerResult(applicationOperationId: string, result: SteerTurnResult): void {
+    rememberBoundedReceipt(this.#steerResults, applicationOperationId, result,
+      (retained) => retained.status === "accepted");
+  }
+
   #recordToolIdentityMarker(toolCallId: string, toolName: string): void {
     const branch = this.#session.sessionManager.getBranch();
     const assistantEntryId = findPiToolCallAssistantEntryId(
@@ -4524,7 +4531,7 @@ class PiConversationHandle implements ConversationHandle {
     for (const pending of live) {
       const found = correlations.get(pending.applicationOperationId);
       if (found?.userEntryId) {
-        this.#steerResults.set(pending.applicationOperationId, {
+        this.#rememberSteerResult(pending.applicationOperationId, {
           status: "accepted",
           reconciliationToken: found.marker.reconciliationToken,
           completionCorrelation: found.marker.applicationOperationId,
@@ -4662,7 +4669,7 @@ class PiConversationHandle implements ConversationHandle {
           completionCorrelation,
           backendTurnId,
         };
-        this.#steerResults.set(completionCorrelation, acceptedResult);
+        this.#rememberSteerResult(completionCorrelation, acceptedResult);
         this.#livePendingSteers.delete(completionCorrelation);
       }
       const sourceOrder = steeringExistingTurn
