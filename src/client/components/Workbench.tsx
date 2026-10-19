@@ -3,7 +3,6 @@ import type { Route } from "../app/router";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore";
 import { useApplicationStore } from "../stores/ApplicationClientStore";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry";
-import { ArchivedView } from "./ArchivedView";
 import { AutomationEditor } from "./automation/AutomationEditor";
 import { AutomationPage } from "./automation/AutomationPage";
 import { AutomationsView } from "./automation/AutomationsView";
@@ -22,10 +21,19 @@ import {
   createWorkspaceFileLinkHandler,
   WorkspaceFileLinkProvider,
 } from "../workspace-files/workspace-file-link-routing";
-import { UsageView } from "../usage/UsageView";
 import { useSidebarInventoryScope } from "../app/use-sidebar-inventory-scope";
 import { useEnvironmentColorsEnabled } from "../app/use-environment-colors-enabled";
 import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
+import { lazyView } from "./LazyView.js";
+
+const ArchivedView = lazyView(
+  "archived threads",
+  async () => (await import("./ArchivedView")).ArchivedView,
+);
+const UsageView = lazyView(
+  "usage",
+  async () => (await import("../usage/UsageView")).UsageView,
+);
 
 export function Workbench({
   route,
