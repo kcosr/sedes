@@ -14,6 +14,7 @@ import type { TerminalJournalRecord, TerminalJournalState } from "./terminal-jou
 import { TerminalJournalStore } from "./terminal-journal.js";
 import { TerminalRepository } from "./terminal-repository.js";
 import { TerminalHeadlessEmulator } from "./terminal-emulator.js";
+import { reportBackgroundError } from "../report-background-error.js";
 
 export interface TerminalViewerSession {
   dispatch(frame: TerminalClientFrame): Promise<void>;
@@ -44,6 +45,11 @@ type TerminalServerFramePayload = TerminalServerFrame extends infer Frame
     ? Omit<Frame, "v" | "terminalId" | "incarnationId">
     : never
   : never;
+
+// `end()` observes finalization failures through the finalized promise.
+// Fire-and-forget callers report them; an unobserved rejection would
+// terminate the server instead of failing only this terminal.
+const reportFinalizationFailure = reportBackgroundError("Terminal finalization");
 
 const VIEWER_LIVE_QUEUE_MAX_BYTES = 2 * 1024 * 1024;
 const VIEWER_LIVE_QUEUE_MAX_RECORDS = 2_048;
@@ -127,7 +133,7 @@ export class TerminalActor {
         if (this.#process.persistent?.ownsDeviceReplies) return;
         void this.#enqueue(async () => {
           if (!this.#finalized) await this.#process.write(bytes);
-        });
+        }).catch(reportBackgroundError("Terminal device reply"));
       },
     });
     this.#unsubscribeOutput = input.process.onOutput((bytes) => {
@@ -150,7 +156,7 @@ export class TerminalActor {
           exitSignal: null,
           publicReason: "provider_output_overflow",
           cleanupConfirmed: false,
-        }));
+        })).catch(reportFinalizationFailure);
         return;
       }
       void this.#enqueue(() => this.#recordOutput(owned)).finally(() => {
@@ -163,11 +169,11 @@ export class TerminalActor {
           this.#providerOutputPaused = false;
           this.#process.resumeOutput();
         }
-      });
+      }).catch(reportBackgroundError("Terminal output recording"));
     });
     this.#unsubscribeExit = input.process.onExit((exit) => {
       if (this.#detached) return;
-      void this.#enqueue(() => this.#recordExit(exit));
+      void this.#enqueue(() => this.#recordExit(exit)).catch(reportFinalizationFailure);
     });
     this.#ready = input.process.persistent?.start({
       restore: (snapshot) => this.#enqueue(() => this.#restoreRemote(snapshot)),
@@ -656,7 +662,7 @@ export class TerminalActor {
       exitSignal: null,
       publicReason: "history_write_failed",
       cleanupConfirmed: false,
-    });
+    }).catch(reportFinalizationFailure);
   }
 
   #writeCheckpoint(): void {
@@ -1166,7 +1172,7 @@ export class TerminalActor {
           publicReason: "cleanup_unconfirmed",
           cleanupConfirmed: false,
         }),
-      );
+      ).catch(reportFinalizationFailure);
     }, delay);
     timer.unref();
     this.#stopTimers.push(timer);

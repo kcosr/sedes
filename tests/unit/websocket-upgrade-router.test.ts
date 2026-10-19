@@ -5,8 +5,8 @@ import {
   WebSocketUpgradeRouter,
   rejectWebSocketUpgrade,
 } from "../../src/server/http/websocket-upgrade-router.js";
+import { captureProcessCrashes } from "../helpers/process-crashes.js";
 import {
-  captureProcessCrashes,
   sendUpgradeAndReset,
   upgradeUntilServerCloses,
 } from "../helpers/raw-websocket-upgrade.js";

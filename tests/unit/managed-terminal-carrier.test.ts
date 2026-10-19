@@ -13,8 +13,8 @@ import type {
   RequestScope,
 } from "../../src/server/identity/identity-provider.js";
 import { LongLivedHttpConnectionRegistry } from "../../src/server/runtime/application-shutdown.js";
+import { captureProcessCrashes } from "../helpers/process-crashes.js";
 import {
-  captureProcessCrashes,
   sendUpgradeAndReset,
 } from "../helpers/raw-websocket-upgrade.js";
 import {

@@ -29,8 +29,8 @@ import {
 import type {
   TerminalService,
 } from "../../src/server/terminals/terminal-service.js";
+import { captureProcessCrashes } from "../helpers/process-crashes.js";
 import {
-  captureProcessCrashes,
   sendUpgradeAndReset,
   upgradeUntilServerCloses,
 } from "../helpers/raw-websocket-upgrade.js";

@@ -10,6 +10,7 @@ import type {
 import { TerminalActor } from "../../src/server/terminals/terminal-actor.js";
 import { TerminalJournalStore } from "../../src/server/terminals/terminal-journal.js";
 import type { TerminalRepository } from "../../src/server/terminals/terminal-repository.js";
+import { captureProcessCrashes } from "../helpers/process-crashes.js";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -209,6 +210,44 @@ describe("TerminalActor", () => {
         publicReason: "history_write_failed",
       }),
     );
+  });
+
+  it("reports an unrecordable history failure instead of crashing the server", async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "sedes-terminal-actor-"));
+    directories.push(directory);
+    const process = new FakeProcess();
+    const storageFull = Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" });
+    const repository = {
+      updateHead() { throw storageFull; },
+      finalize() { throw storageFull; },
+    } as unknown as TerminalRepository;
+    const onFinalized = vi.fn();
+    const stderr = vi.spyOn(globalThis.process.stderr, "write").mockImplementation(() => true);
+    const crashes = captureProcessCrashes();
+    try {
+      new TerminalActor({
+        scope: { tenantId: "tenant", principalId: "principal" },
+        terminal: terminalResource(),
+        repository,
+        journal: new TerminalJournalStore({ stateDirectory: directory }),
+        process,
+        onTerminalSummaryChanged: () => undefined,
+        onFinalized,
+      });
+      process.output(Buffer.from("hello"));
+      await vi.waitFor(() => expect(process.terminations).toEqual(["kill"]));
+      await vi.waitFor(() => expect(onFinalized).toHaveBeenCalledOnce());
+      // A late exit after the failed finalization must not finalize again.
+      process.exit({ disposition: "exited", exitCode: 0, signal: null });
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(crashes.errors).toEqual([]);
+      expect(onFinalized).toHaveBeenCalledOnce();
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining("database or disk is full"));
+    } finally {
+      crashes.dispose();
+      stderr.mockRestore();
+    }
   });
 
   it("stops the process when a resize cannot be journaled", async () => {

@@ -10,7 +10,8 @@ import { OUTBOUND_CONTROL_PATH, OUTBOUND_CONTROL_PROTOCOL, OUTBOUND_RUNTIME_PATH
 import { validateNativeWebSocketHost, validateWebSocketHostOrigin } from "../../src/server/security/http-security.js";
 import type { AppConfig } from "../../src/server/config/config.js";
 import { DomainError } from "../../src/server/domain/errors.js";
-import { captureProcessCrashes, sendUpgradeAndReset, upgradeUntilServerCloses } from "../helpers/raw-websocket-upgrade.js";
+import { captureProcessCrashes } from "../helpers/process-crashes.js";
+import { sendUpgradeAndReset, upgradeUntilServerCloses } from "../helpers/raw-websocket-upgrade.js";
 
 const config: AppConfig = { authenticationRequired: true, experimentalUsageEnabled: false, host: "127.0.0.1", port: 4784, stateDirectory: "/tmp/sedes", allowedTailscaleHosts: ["sedes.example.ts.net"], packagedClientOrigins: [], conversationRetentionMilliseconds: 600_000, conversationRuntimeBudget: 8 };
 const cleanups: (() => Promise<void>)[] = [];
