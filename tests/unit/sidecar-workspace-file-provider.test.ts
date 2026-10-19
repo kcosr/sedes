@@ -1055,7 +1055,7 @@ describe("SidecarWorkspaceFileProvider", () => {
     const pending = provider.watch(scope, root, vi.fn());
     await vi.waitFor(() =>
       expect(
-        session.call.mock.calls.some(
+        vi.mocked(session.call).mock.calls.some(
           ([definition]) => definition === workspaceFilesWatchOpenOperation,
         ),
       ).toBe(true),
@@ -1086,7 +1086,7 @@ describe("SidecarWorkspaceFileProvider", () => {
     first.failWatch();
     await vi.waitFor(() =>
       expect(
-        second.call.mock.calls.some(
+        vi.mocked(second.call).mock.calls.some(
           ([definition]) => definition === workspaceFilesWatchOpenOperation,
         ),
       ).toBe(true),
