@@ -410,6 +410,51 @@ describe("tasks HTTP contract", () => {
     }
   });
 
+  it("refuses to delete a task retained by force-reset history", async () => {
+    const current = fixture();
+    try {
+      const created = await current
+        .mutate(request(current.app).post("/api/tasks"))
+        .send({
+          mutationId: randomUUID(),
+          title: "Promoted by a reset",
+          scope: { kind: "thread", threadId: current.threadId },
+        })
+        .expect(201);
+      const taskId = created.body.task.id as string;
+      current.database
+        .prepare(
+          `INSERT INTO thread_force_reset_receipts (
+             tenant_id, principal_id, thread_id, mutation_id, request_fingerprint,
+             blocker_fingerprint, blocker_summary_json, reset_at
+           ) VALUES (?, ?, ?, 'reset-1', ?, ?, '[]', 0)`,
+        )
+        .run(current.owner.tenantId, current.owner.principalId, current.threadId, "a".repeat(64), "b".repeat(64));
+      current.database
+        .prepare(
+          `INSERT INTO thread_force_reset_promoted_tasks (
+             tenant_id, principal_id, reset_mutation_id, task_id
+           ) VALUES (?, ?, 'reset-1', ?)`,
+        )
+        .run(current.owner.tenantId, current.owner.principalId, taskId);
+      current.publishTaskChange.mockClear();
+
+      await current
+        .mutate(request(current.app).delete(`/api/tasks/${taskId}`))
+        .expect(409)
+        .expect(({ body }) => {
+          expect(body.error).toMatchObject({
+            code: "conflict",
+            message: "The task is still referenced by a thread reset.",
+          });
+        });
+      expect(new TaskRepository(current.database).get(current.owner, taskId).id).toBe(taskId);
+      expect(current.publishTaskChange).not.toHaveBeenCalled();
+    } finally {
+      current.close();
+    }
+  });
+
   it("replays an update that completed and pinned a task before the completion rule", async () => {
     const current = fixture();
     try {

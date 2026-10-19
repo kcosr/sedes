@@ -166,6 +166,9 @@ User-facing changes are collected here before release. See the
 - Exiting a terminal shell while a mobile keyboard closes no longer drops the
   viewer with a protocol error.
 
+- Deleting a Task that a force reset promoted now reports a conflict instead
+  of an internal server error. See [Tasks](docs/user/tasks-and-automations.md).
+
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See
