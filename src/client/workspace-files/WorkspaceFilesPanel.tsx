@@ -75,6 +75,7 @@ import {
   DialogTitle,
 } from "../components/ui/dialog.js";
 import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
+import { EmptyState } from "../components/ui/empty-state.js";
 import { Field } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { NativeSelect } from "../components/ui/native-select.js";
@@ -3362,6 +3363,26 @@ export function WorkspaceFilesPanel({
             </p>
           )}
         </aside>
+        {mode === "browse" && !fileTabPanelVisible && !treeOpen && (
+          <EmptyState
+            className="m-3 flex-1"
+            icon={<FolderTree />}
+            title="No file open"
+            description="Browse the workspace to open a file."
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setTreeOpen(true);
+                  requestAnimationFrame(() => treeToggleRef.current?.focus());
+                }}
+              >
+                Browse files
+              </Button>
+            }
+          />
+        )}
         {fileTabPanelVisible && (
           <main
             className="workspace-files-viewer"

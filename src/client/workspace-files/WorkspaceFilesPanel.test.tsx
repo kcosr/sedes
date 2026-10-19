@@ -983,6 +983,34 @@ describe("WorkspaceFilesPanel", () => {
     expect(treeToggle).toHaveAttribute("aria-expanded", "true");
   });
 
+  it("offers Browse files when no file is open and the tree is closed", async () => {
+    const api = setupApi();
+    const { context } = setupContext();
+    render(<WorkspaceFilesPanel context={context} api={api} />);
+    await waitForListing(api);
+
+    const treeToggle = screen.getByRole("button", {
+      name: "Toggle file browser",
+    });
+    expect(treeToggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("No file open")).not.toBeInTheDocument();
+    fireEvent.click(treeToggle);
+    expect(screen.getByText("No file open")).toBeVisible();
+    expect(
+      screen.getByText("Browse the workspace to open a file."),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    expect(screen.queryByText("No file open")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+    fireEvent.click(treeToggle);
+    expect(treeToggle).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "Browse files" }));
+    expect(treeToggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("No file open")).not.toBeInTheDocument();
+  });
+
   it("discloses that dirty Browse drafts are excluded without saving them", async () => {
     const api = setupApi();
     const { context } = setupContext();

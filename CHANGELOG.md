@@ -160,7 +160,9 @@ User-facing changes are collected here before release. See the
   [saved dictation](docs/operator/clients/voice.md).
 
 - A Workpads list or Archived section that fails to load says so in place,
-  with **Try again**, instead of claiming there are no workpads.
+  with **Try again**, instead of claiming there are no workpads. Files Browse
+  with no open file and the tree closed offers **Browse files** instead of a
+  blank pane.
 
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
