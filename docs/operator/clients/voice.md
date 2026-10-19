@@ -678,9 +678,10 @@ app session and voice connection remain open. If the combined draft exceeds the 
 unchanged and **Copy text** remains available. Finish transcription before adding
 an item that still has unrecognized audio.
 
-**Discard** can also cancel an active recovery Retry or Send and delete its saved
-recording. It cannot withdraw input Sedes has already received. Ordinary **Stop**
-preserves saved recovery data.
+**Discard** asks for confirmation before deleting the saved recording; the
+confirmation warns when audio that has not been transcribed would be lost.
+It can also cancel an active recovery Retry or Send. It cannot withdraw input
+Sedes has already received. Ordinary **Stop** preserves saved recovery data.
 An older input whose admission is uncertain stays accessible while ordinary
 recording continues, but must be resolved before adopting another recording.
 Use **Start new recording** in the Voice sheet when that older item permits it;

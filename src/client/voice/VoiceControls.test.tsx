@@ -1624,6 +1624,7 @@ describe("Keep listening and saved dictation", () => {
     expect(sheet).toHaveTextContent("Resolve saved dictation first to enable Keep listening for the current recording.");
     voice.fake.plugin.discardRecording.mockResolvedValue({ ...capture(), stateRevision: 2 });
     fireEvent.click(within(sheet).getByRole("button", { name: "Discard" }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Discard saved dictation?" })).getByRole("button", { name: "Discard dictation" }));
     await waitFor(() => expect(voice.fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: "saved-recording", expectedRecoveryRevision: 1 }));
     expect(voice.fake.plugin.stopCurrentInteraction).not.toHaveBeenCalled();
     fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
@@ -1664,10 +1665,41 @@ describe("Keep listening and saved dictation", () => {
     const discard = screen.getByRole("button", { name: "Discard saved dictation" });
     expect(discard).not.toHaveAttribute("aria-disabled");
     fireEvent.click(discard);
+    const confirm = await screen.findByRole("dialog", { name: "Discard saved dictation?" });
+    expect(confirm).toHaveTextContent(retry
+      ? "Part of this recording hasn't been transcribed. Discarding deletes its audio for good."
+      : "Discarding deletes this saved dictation from this device.");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Discard dictation" }));
     await waitFor(() => expect(voice.fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
       recordingId: saved.recordingId, expectedRecoveryRevision: 3 }));
     await waitFor(() => expect(screen.queryByRole("group", { name: "Voice controls" })).toBeNull());
     expect(voice.fake.plugin.stopCurrentInteraction).not.toHaveBeenCalled();
+  });
+  it("asks before the card discards a saved dictation and keeps it on Cancel or failure", async () => {
+    const saved = recordingRecovery({ revision: 4 });
+    voice.fake.plugin.setConnection.mockResolvedValue(voiceSnapshot({ recordingRecovery: saved }));
+    renderControls();
+    const discard = await screen.findByRole("button", { name: "Discard saved dictation" });
+    expect(discard).toHaveAttribute("aria-haspopup", "dialog");
+    fireEvent.click(discard);
+    let confirm = await screen.findByRole("dialog", { name: "Discard saved dictation?" });
+    expect(confirm).toHaveTextContent("Part of this recording hasn't been transcribed. Discarding deletes its audio for good.");
+    expect(within(confirm).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Discard saved dictation?" })).toBeNull());
+    expect(voice.fake.plugin.discardRecording).not.toHaveBeenCalled();
+    expect(screen.getByRole("group", { name: "Voice controls" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard saved dictation" }));
+    confirm = await screen.findByRole("dialog", { name: "Discard saved dictation?" });
+    act(() => voice.fake.emit("stateChanged", voiceSnapshot({ stateRevision: 2, recordingRecovery: { ...saved, revision: 5 } })));
+    voice.fake.plugin.discardRecording.mockRejectedValueOnce(new Error("Saved dictation changed."));
+    fireEvent.click(within(confirm).getByRole("button", { name: "Discard dictation" }));
+    expect(await within(confirm).findByText("Saved dictation changed.")).toBeInTheDocument();
+    expect(voice.fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      recordingId: saved.recordingId, expectedRecoveryRevision: 5 });
+    act(() => voice.fake.emit("stateChanged", voiceSnapshot({ stateRevision: 3 })));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Discard saved dictation?" })).toBeNull());
   });
   it("does not invent a navigation target for an unavailable saved recording", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(voiceSnapshot({ recordingRecovery: recordingRecovery({ stage: "unavailable",

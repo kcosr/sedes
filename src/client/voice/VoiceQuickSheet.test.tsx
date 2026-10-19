@@ -395,8 +395,14 @@ describe("voice quick sheet", () => {
     expect(send).toHaveFocus();
     const discard = within(sheet).getByRole("button", { name: "Discard" });
     expect(discard).not.toHaveAttribute("aria-disabled");
+    expect(discard).toHaveAttribute("data-variant", "destructive-outline");
     fake.plugin.discardRecording.mockResolvedValue(voiceSnapshot({ stateRevision: 4 }));
     fireEvent.click(discard);
+    const confirm = await screen.findByRole("dialog", { name: "Discard saved dictation?" });
+    expect(confirm).toHaveAttribute("data-layer", "over-dialog");
+    expect(confirm).toHaveTextContent("Discarding deletes this saved dictation from this device.");
+    expect(fake.plugin.discardRecording).not.toHaveBeenCalled();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Discard dictation" }));
     await waitFor(() => expect(fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
       recordingId: saved.recordingId, expectedRecoveryRevision: 6 }));
     expect(fake.plugin.stopCurrentInteraction).not.toHaveBeenCalled();
