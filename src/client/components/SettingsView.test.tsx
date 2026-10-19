@@ -451,7 +451,7 @@ describe("SettingsView", () => {
     ).toEqual(["Preferences", "Execution", "Access", "Support"]);
     const general = screen.getByRole("link", { name: "General" });
     expect(general).toHaveAttribute("href", "/settings/general");
-    expect(general).toHaveAccessibleDescription("Default thread, sidebar, history and the composer.");
+    expect(general).toHaveAccessibleDescription("Default thread, sidebar, history and composer.");
     const agents = screen.getByRole("link", { name: "Agents" });
     expect(agents).toHaveAttribute("href", "/settings/agents");
     expect(agents).toHaveAccessibleDescription("Saved presets for new threads.");
