@@ -152,6 +152,16 @@ describe("touch targets under touch density", () => {
     }
   });
 
+  it("wraps the terminal's recovery buttons with room for their hit areas", () => {
+    // Discard and Reconnect (and Retry) can show together; a narrow panel
+    // clips anything that runs past its edge.
+    const actions = '.terminal-panel-callout [data-slot="callout-action"]';
+    expect(found.get(`|${actions}|flex-wrap`)).toBe("wrap");
+    expect(found.get(`|${actions}|max-width`)).toBe("100%");
+    // The xs buttons' 44px areas reach 10px past each wrapped row.
+    expect(touch(actions, "row-gap")).toBe("calc(var(--control-touch) - var(--control-xs))");
+  });
+
   it("lets the voice chevron win near misses over the open-thread overlay", () => {
     const chevron = ".voice-card-target::before";
     expect(touch(chevron, "inset-block")).toBe(HIT_AREA);

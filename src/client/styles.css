@@ -3171,6 +3171,13 @@ textarea:disabled {
   margin: var(--space-2) var(--space-2) 0;
 }
 
+/* Up to three recovery buttons share the action: in a narrow panel they wrap
+   instead of running past the panel's clipped edge. */
+.terminal-panel-callout [data-slot="callout-action"] {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
 .terminal-transcript > header {
   display: flex;
   align-items: center;
@@ -3572,7 +3579,12 @@ textarea:disabled {
     font-size: var(--text-input);
   }
 
-  /* Recovery buttons keep the notice compact with a 44px-tall hit area. */
+  /* Recovery buttons keep the notice compact with a 44px-tall hit area;
+     wrapped rows are spaced so their areas never overlap. */
+  .terminal-panel-callout [data-slot="callout-action"] {
+    row-gap: calc(var(--control-touch) - var(--control-xs));
+  }
+
   .terminal-panel-callout [data-slot="callout-action"] button {
     position: relative;
   }
