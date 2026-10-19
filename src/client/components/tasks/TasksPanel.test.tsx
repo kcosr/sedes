@@ -997,6 +997,58 @@ describe("TasksPanel add row", () => {
     expect(calls[2]![4]).toBe(calls[1]![4]);
     expect(new Set(calls.map((call) => call[4])).size).toBe(3);
   });
+
+  it("gives a later identical task a fresh mutation ID once its lost create was edited away", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.createTask).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderPanel(store);
+
+    await user.click(addInput());
+    await user.keyboard("Weekly review{Enter}");
+    await screen.findByRole("alert");
+    await waitFor(() => expect(addInput()).toHaveValue("Weekly review"));
+    // The reader turns the restored title into another task instead.
+    await user.keyboard(" notes{Enter}");
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(addInput()).toHaveValue(""));
+
+    // Later, a deliberate task with the first title is a new task.
+    await user.keyboard("Weekly review{Enter}");
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(3));
+    const calls = vi.mocked(store.createTask).mock.calls;
+    expect(calls.map(([title]) => title)).toEqual(["Weekly review", "Weekly review notes", "Weekly review"]);
+    expect(new Set(calls.map((call) => call[4])).size).toBe(3);
+  });
+
+  it("abandons a lost paste line's mutation ID when its dialog closes", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.createTask).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderPanel(store);
+
+    await user.click(addInput());
+    await user.paste("One\nTwo");
+    const dialog = screen.getByRole("dialog", { name: "Create 2 tasks?" });
+    await user.click(within(dialog).getByRole("button", { name: "Create 2 tasks" }));
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledOnce());
+    const retryDialog = await screen.findByRole("dialog", { name: "Create 2 tasks?" });
+    await waitFor(() =>
+      expect(within(retryDialog).getByRole("button", { name: "Cancel" })).toBeEnabled(),
+    );
+    await user.click(within(retryDialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await user.click(addInput());
+    await user.paste("One\nTwo");
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Create 2 tasks?" })).getByRole("button", { name: "Create 2 tasks" }),
+    );
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(3));
+    const calls = vi.mocked(store.createTask).mock.calls;
+    expect(calls.map(([title]) => title)).toEqual(["Two", "Two", "One"]);
+    expect(new Set(calls.map((call) => call[4])).size).toBe(3);
+  });
 });
 
 describe("TasksPanel rows", () => {

@@ -216,8 +216,41 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
-/** Creates with an unknown outcome whose mutation IDs a retry can reuse. */
-const MAXIMUM_UNCERTAIN_CREATES = 32;
+/**
+ * A create whose outcome is unknown: the response was lost, or the server or
+ * a proxy failed, so it may have committed. Resubmitting exactly that request
+ * with its mutation ID replays the server's receipt instead of creating the
+ * task twice. The attempt belongs to the one title it failed for, and is
+ * abandoned once that title is edited, dropped, or created.
+ */
+interface UncertainCreate {
+  readonly request: string;
+  readonly mutationId: string;
+}
+
+/** The add row's draft, with the create attempt it restored, if any. */
+type AddDraft = TaskAddDraft & { readonly uncertainCreate?: UncertainCreate };
+
+/**
+ * The attempt for one create: `previous` when it is the same request, else a
+ * new mutation ID. Reusing an ID for a different request would conflict.
+ */
+function createAttempt(
+  title: string,
+  scope: TaskScope,
+  details: string | undefined,
+  placement: { readonly pinned: boolean; readonly backlog: boolean },
+  previous: UncertainCreate | undefined,
+): UncertainCreate {
+  const request = JSON.stringify([title, scope, details ?? "", placement.pinned, placement.backlog]);
+  return previous?.request === request
+    ? previous
+    : { request, mutationId: crypto.randomUUID() };
+}
+
+/** A definitive rejection needs a change; anything else may have committed. */
+const createOutcomeUnknown = (cause: unknown): boolean =>
+  !(cause instanceof ApiError) || cause.status >= 500;
 
 const ADD_PLACEHOLDER: Record<TasksView, string> = {
   thread: "Add a task to this thread…",
@@ -301,7 +334,7 @@ export function TasksPanelContent({
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
-  const [addDraft, setAddDraft] = useState<TaskAddDraft>(EMPTY_TASK_ADD_DRAFT);
+  const [addDraft, setAddDraft] = useState<AddDraft>(EMPTY_TASK_ADD_DRAFT);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [moveMenuId, setMoveMenuId] = useState<string | null>(null);
   const [activeNavKey, setActiveNavKey] = useState<string | null>(null);
@@ -314,6 +347,9 @@ export function TasksPanelContent({
   const [pasteTitles, setPasteTitles] = useState<readonly string[] | null>(null);
   const [pastePinned, setPastePinned] = useState(false);
   const [pasteCreating, setPasteCreating] = useState(false);
+  // The paste stops at its first failure, so this is the next line a retry
+  // creates. Closing the dialog abandons it.
+  const pasteUncertainCreate = useRef<UncertainCreate | undefined>(undefined);
   const pastePinId = useId();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
@@ -847,44 +883,33 @@ export function TasksPanelContent({
     [actions, active, destinations, pending, taskDrag, touch, workspace?.available],
   );
 
-  // A create whose outcome is unknown (the response was lost, or the server
-  // or a proxy failed) may have committed. Retrying the identical request
-  // with its mutation ID replays the server's receipt instead of creating the
-  // task twice. Any other request, or a retry after a definitive rejection,
-  // starts fresh; reusing an ID for a different request would conflict.
-  const uncertainCreates = useRef(new Map<string, string>());
-  const createTask = useCallback(
-    async (
-      title: string,
-      scope: TaskScope,
-      details: string | undefined,
-      placement: { readonly pinned: boolean; readonly backlog: boolean },
-    ): Promise<Task> => {
-      const uncertain = uncertainCreates.current;
-      const request = JSON.stringify([title, scope, details ?? "", placement.pinned, placement.backlog]);
-      const mutationId = uncertain.get(request) ?? crypto.randomUUID();
-      uncertain.delete(request);
-      try {
-        return await store.createTask(title, scope, details, placement, mutationId);
-      } catch (cause) {
-        if (!(cause instanceof ApiError) || cause.status >= 500) {
-          uncertain.set(request, mutationId);
-          if (uncertain.size > MAXIMUM_UNCERTAIN_CREATES) {
-            uncertain.delete(uncertain.keys().next().value!);
-          }
-        }
-        throw cause;
-      }
-    },
-    [store],
-  );
+  // A draft restored after an unknown outcome keeps its attempt only until
+  // the reader edits what it would create.
+  const changeAddDraft = (next: TaskAddDraft) =>
+    setAddDraft((current) => {
+      const draft: TaskAddDraft = {
+        title: next.title,
+        notes: next.notes,
+        notesOpen: next.notesOpen,
+        pinned: next.pinned,
+      };
+      return current.uncertainCreate &&
+        next.title === current.title &&
+        next.notes === current.notes &&
+        next.pinned === current.pinned
+        ? { ...draft, uncertainCreate: current.uncertainCreate }
+        : draft;
+    });
 
   // Default to the current filters; an explicit pin choice wins.
   const addTask = (title: string, notes: string, pinned: boolean) => {
     if (!destination) return;
     const key = crypto.randomUUID();
+    const details = notes || undefined;
+    const placement = { pinned, backlog: options.onlyBacklog };
+    const attempt = createAttempt(title, destination, details, placement, addDraft.uncertainCreate);
     setCreating((current) => [...current, { key, title, scope: destination }]);
-    void createTask(title, destination, notes || undefined, { pinned, backlog: options.onlyBacklog }).then(
+    void store.createTask(title, destination, details, placement, attempt.mutationId).then(
       (created) => {
         setError(null);
         setCreating((current) =>
@@ -897,10 +922,17 @@ export function TasksPanelContent({
       (cause: unknown) => {
         setCreating((current) => current.filter((entry) => entry.key !== key));
         setError(`Couldn't add “${title}”: ${errorMessage(cause)}`);
-        // Give the text back unless the next task is already being typed.
+        // Give the text back unless the next task is already being typed,
+        // with the attempt a resubmit reuses if it may have committed.
         setAddDraft((draft) =>
           draft.title.length === 0 && !draft.notesOpen
-            ? { title, notes, notesOpen: notes.length > 0, pinned }
+            ? {
+                title,
+                notes,
+                notesOpen: notes.length > 0,
+                pinned,
+                ...(createOutcomeUnknown(cause) ? { uncertainCreate: attempt } : {}),
+              }
             : draft,
         );
       },
@@ -1449,9 +1481,10 @@ export function TasksPanelContent({
       draft={addDraft}
       defaultPinned={options.onlyPinned}
       inputRef={addInputRef}
-      onDraftChange={setAddDraft}
+      onDraftChange={changeAddDraft}
       onAdd={addTask}
       onPasteMany={(titles) => {
+        pasteUncertainCreate.current = undefined;
         setPastePinned(addDraft.pinned ?? options.onlyPinned);
         setPasteTitles(titles);
       }}
@@ -1700,19 +1733,25 @@ export function TasksPanelContent({
             : []
         }
         onOpenChange={(open) => {
-          if (!open) setPasteTitles(null);
+          if (open) return;
+          pasteUncertainCreate.current = undefined;
+          setPasteTitles(null);
         }}
         onConfirm={async () => {
           if (!pasteTitles || !destination) return;
           setPasteCreating(true);
           // Created last-first, so the newest-first list reads in pasted order.
           const remaining = [...pasteTitles];
+          const placement = { pinned: pastePinned, backlog: options.onlyBacklog };
           try {
             while (remaining.length > 0) {
               const title = remaining.at(-1)!;
+              const attempt = createAttempt(title, destination, undefined, placement, pasteUncertainCreate.current);
+              pasteUncertainCreate.current = undefined;
               try {
-                await createTask(title, destination, undefined, { pinned: pastePinned, backlog: options.onlyBacklog });
+                await store.createTask(title, destination, undefined, placement, attempt.mutationId);
               } catch (cause) {
+                if (createOutcomeUnknown(cause)) pasteUncertainCreate.current = attempt;
                 setPasteTitles([...remaining]);
                 throw cause;
               }
