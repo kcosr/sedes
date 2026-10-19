@@ -159,6 +159,9 @@ User-facing changes are collected here before release. See the
   attachment upload no longer holds back the files queued after it. See
   [Build a prompt](docs/user/conversations.md#build-a-prompt).
 
+- Escape restores a maximized layout from the Tasks panel when Tasks has no
+  expanded row or search to close.
+
 - Files compare no longer leaves **Start review** stuck on "Loading…" when the
   selected review is cleared while its comments load, and switching roots
   keeps each root's selected historical review.

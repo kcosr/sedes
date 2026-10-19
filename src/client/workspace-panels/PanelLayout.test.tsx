@@ -271,6 +271,35 @@ describe("PanelLayout regions", () => {
     expect(stageKinds().sort()).toEqual(["chat", "workpads"]);
   });
 
+  it("restores a maximized Tasks panel with Escape once Tasks has nothing to close", async () => {
+    harness.applicationState = {
+      ...harness.applicationState,
+      snapshot: {
+        threads: [{ id: "thread-1", workspaceId: "workspace-1", title: { text: "Thread" }, inventoryState: "active" }],
+        workspaces: [{ id: "workspace-1", label: { text: "Workspace" }, displayPath: { text: "/workspace" } }],
+        environments: [],
+        tasks: [makeThreadTask({ id: "open-1" })],
+      },
+    };
+    const store = setup({ extraTenants: [tasksTenant], withTasksPanel: true });
+    act(() => store.open("tasks", { focus: false }));
+    fireEvent.click(headerButton("Tasks", "Maximize Tasks panel"));
+    expect(store.maximized()).toBe("tasks");
+    const row = within(panel("Tasks")!).getByRole("button", { name: "Task open-1" });
+
+    // Escape first collapses an expanded row, which keeps the layout.
+    fireEvent.click(row);
+    expect(row).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(row, { key: "Escape" });
+    expect(row).toHaveAttribute("aria-expanded", "false");
+    expect(store.maximized()).toBe("tasks");
+
+    row.focus();
+    fireEvent.keyDown(row, { key: "Escape" });
+    expect(store.maximized()).toBeNull();
+    expect(screen.getByText("Panel layout restored.")).toBeInTheDocument();
+  });
+
   it("leaves Escape to an open dialog while maximized", async () => {
     const store = setup();
     act(() => store.open("files", { focus: false }));

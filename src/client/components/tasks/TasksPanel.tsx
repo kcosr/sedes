@@ -1062,13 +1062,16 @@ export function TasksPanelContent({
     if (!event.currentTarget.contains(event.target as Node)) return;
     if (event.nativeEvent.isComposing) return;
     if (event.key === "Escape") {
-      event.preventDefault();
       clearAnnouncement();
+      // Claim the key only when it closed something here, so the layout can
+      // still use it (Escape restores a maximized layout).
       if (expandedId !== null) {
+        event.preventDefault();
         setFocusRequest(expandedId);
         setExpandedId(null);
         setMoveMenuId(null);
       } else if (searchOpen) {
+        event.preventDefault();
         closeSearch();
       }
       return;
