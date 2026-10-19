@@ -153,18 +153,17 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
-- The server no longer exits when a client resets a refused terminal or
-  outbound-host WebSocket upgrade, when storage fails while a terminal records
-  its history (only that terminal fails), or when a Codex TUI that missed its
-  startup deadline cannot be closed. Upgrade requests for unknown paths now get
-  a 404 and are closed instead of holding their connections open.
+- The server no longer exits or hangs after rare failures: a client resetting
+  a refused terminal or outbound-host WebSocket upgrade, storage failing while
+  a terminal records history (only that terminal fails), a late Codex TUI
+  launch that cannot be closed, or a provider runtime closing while a thread
+  opens. Upgrade requests for unknown paths now get a 404 and are closed.
 
-- Threads with very large snapshots no longer resend a full checkpoint, and
-  eventually disconnect, when a small update follows a snapshot replacement
-  on a slow connection. Inventory streams no longer close in the same case.
-
-- Exiting a terminal shell while a mobile keyboard closes no longer drops the
-  viewer with a protocol error.
+- Threads with very large snapshots no longer reload and disconnect when a
+  small update follows a replacement on a slow connection. Exiting a terminal
+  shell while a mobile keyboard closes no longer drops the viewer with a
+  protocol error. Files change watching runs at most one Git metadata check
+  per short interval during installs and builds.
 
 - Deleting a Task that a force reset promoted now reports a conflict instead
   of an internal server error. See [Tasks](docs/user/tasks-and-automations.md).
