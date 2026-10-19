@@ -31,7 +31,8 @@ const TEXT_INPUT = /(?:^|[^\w-])(?:input|textarea)(?![\w-])|[\w]-input(?![\w-])/
 const NOT_TEXT = /::|\[type=["']?(?:checkbox|radio|range|file|color)/u;
 
 function isTouchMedia(rule: Rule): boolean {
-  for (let node = rule.parent; node; node = node.parent) {
+  let node: postcss.Node | undefined = rule.parent;
+  for (; node; node = node.parent) {
     if (node.type === "atrule" && (node as AtRule).name === "media") {
       return (node as AtRule).params.replace(/\s+/gu, "").includes("(pointer:coarse)");
     }
