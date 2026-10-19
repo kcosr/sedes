@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SidecarOperationError } from "../../src/internal/sidecar-protocol/index.js";
-import { WORKSPACE_SKILLS_MAXIMUM_FILE_BYTES } from "../../src/internal/sidecar-protocol/index.js";
+import { WORKSPACE_SKILLS_MAXIMUM_FILE_BYTES, WORKSPACE_SKILLS_MAXIMUM_SCAN_ENTRIES } from "../../src/internal/sidecar-protocol/index.js";
 import { WorkspaceSkillsSidecarHost } from "../../src/server/sidecar/workspace-skills-sidecar-host.js";
 import {
   scanWorkspaceSkills,
@@ -218,6 +218,20 @@ describe("workspace skills scanner", () => {
       path.join(skillDirectory, "SKILL.md"),
       Buffer.alloc(WORKSPACE_SKILLS_MAXIMUM_FILE_BYTES + 1, 0x61),
     );
+
+    await expect(scanWorkspaceSkills(fixtureRoot)).rejects.toMatchObject({
+      code: "workspace_skills_limit_exceeded",
+    });
+  });
+
+  it("fails closed once listed entries exceed the scan bound", async () => {
+    const fixtureRoot = await fixture();
+    const skillsDirectory = path.join(fixtureRoot.homeDirectory, ".pi", "agent", "skills");
+    await mkdir(skillsDirectory, { recursive: true });
+    const names = Array.from({ length: WORKSPACE_SKILLS_MAXIMUM_SCAN_ENTRIES + 1 }, (_, index) => `entry-${index}.txt`);
+    for (let index = 0; index < names.length; index += 256) {
+      await Promise.all(names.slice(index, index + 256).map((name) => writeFile(path.join(skillsDirectory, name), "")));
+    }
 
     await expect(scanWorkspaceSkills(fixtureRoot)).rejects.toMatchObject({
       code: "workspace_skills_limit_exceeded",
