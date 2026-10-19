@@ -419,9 +419,10 @@ function requestViaNodeHttp(url: URL, init: RequestInit): Promise<Response> {
           chunks.push(chunk);
         });
         incoming.once("error", failTransport);
-        incoming.once("end", () =>
-          resolve(
-            new Response(Buffer.concat(chunks), {
+        incoming.once("end", () => {
+          let response: Response;
+          try {
+            response = new Response(Buffer.concat(chunks), {
               status: incoming.statusCode ?? 500,
               headers: new Headers(
                 Object.entries(incoming.headers).flatMap(([name, value]) =>
@@ -432,9 +433,23 @@ function requestViaNodeHttp(url: URL, init: RequestInit): Promise<Response> {
                       : [[name, value] as const],
                 ),
               ),
-            }),
-          ),
-        );
+            });
+          } catch {
+            // Bodyless (204/205/304) and out-of-range statuses cannot carry
+            // the JSON contract; this runs in an event handler, so it must
+            // reject rather than throw.
+            failTransport(
+              new SedesToolApiError(
+                "invalid_response",
+                "Sedes returned an unsupported HTTP response.",
+                false,
+                incoming.statusCode,
+              ),
+            );
+            return;
+          }
+          resolve(response);
+        });
       },
     );
     request.once("socket", (socket) => {

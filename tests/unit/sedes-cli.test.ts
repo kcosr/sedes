@@ -1058,6 +1058,55 @@ describe("Sedes CLI", () => {
     }
   });
 
+  it.each([204, 205, 304])("rejects an HTTP %i invocation reply as an invalid response", async (status) => {
+    const server = createServer((request, response) => {
+      if (request.url === SEDES_AGENT_TOOL_CSRF_ROUTE) {
+        response.setHeader("Content-Type", "application/json");
+        response.end(JSON.stringify({ csrfToken: "csrf-bodyless" }));
+        return;
+      }
+      request.once("end", () => {
+        response.writeHead(status);
+        response.end();
+      });
+      request.resume();
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const uncaught = vi.fn();
+    process.on("uncaughtException", uncaught);
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string")
+        throw new Error("test_server");
+      const client = new SedesToolHttpClient(
+        new URL(`http://127.0.0.1:${address.port}`),
+        sourceCredential,
+      );
+
+      await expect(
+        client.invoke({
+          toolId: "thread.send",
+          schemaVersion: 4,
+          requestId: `request-bodyless-${status}`,
+          input: { threadId: targetThreadId, message: "Continue" },
+        }),
+      ).rejects.toMatchObject({
+        code: "invalid_response",
+        retryable: false,
+        status,
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(uncaught).not.toHaveBeenCalled();
+    } finally {
+      process.off("uncaughtException", uncaught);
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
   it("preserves caller cancellation after an HTTP invocation is delivered", async () => {
     let markDelivered!: () => void;
     const delivered = new Promise<void>((resolve) => {
