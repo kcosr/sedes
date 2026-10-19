@@ -1026,9 +1026,9 @@ describe("WorkspaceFilesPanel", () => {
       screen.getByText("Browse the workspace to open a file."),
     ).toBeVisible();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
     expect(screen.queryByText("No file open")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
     fireEvent.click(treeToggle);
     expect(treeToggle).toHaveAttribute("aria-expanded", "false");
 
@@ -1559,7 +1559,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
     act(() => {
       (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
         comparison,
@@ -1650,7 +1650,7 @@ describe("WorkspaceFilesPanel", () => {
     await waitFor(() =>
       expect(screen.getByRole("tab", { name: "Agent context" })).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Changes" }));
     const comparison = {
       comparisonId: "comparison_1234567890abcdef",
       repositoryId: "repository_1234567890abcdef",
