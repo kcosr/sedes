@@ -216,6 +216,9 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
+/** Creates with an unknown outcome whose mutation IDs a retry can reuse. */
+const MAXIMUM_UNCERTAIN_CREATES = 32;
+
 const ADD_PLACEHOLDER: Record<TasksView, string> = {
   thread: "Add a task to this thread…",
   project: "Add a task to this project…",
@@ -849,7 +852,7 @@ export function TasksPanelContent({
   // with its mutation ID replays the server's receipt instead of creating the
   // task twice. Any other request, or a retry after a definitive rejection,
   // starts fresh; reusing an ID for a different request would conflict.
-  const uncertainCreate = useRef<{ readonly request: string; readonly mutationId: string }>(undefined);
+  const uncertainCreates = useRef(new Map<string, string>());
   const createTask = useCallback(
     async (
       title: string,
@@ -857,15 +860,18 @@ export function TasksPanelContent({
       details: string | undefined,
       placement: { readonly pinned: boolean; readonly backlog: boolean },
     ): Promise<Task> => {
+      const uncertain = uncertainCreates.current;
       const request = JSON.stringify([title, scope, details ?? "", placement.pinned, placement.backlog]);
-      const retry = uncertainCreate.current?.request === request ? uncertainCreate.current : undefined;
-      uncertainCreate.current = undefined;
-      const mutationId = retry?.mutationId ?? crypto.randomUUID();
+      const mutationId = uncertain.get(request) ?? crypto.randomUUID();
+      uncertain.delete(request);
       try {
         return await store.createTask(title, scope, details, placement, mutationId);
       } catch (cause) {
         if (!(cause instanceof ApiError) || cause.status >= 500) {
-          uncertainCreate.current = { request, mutationId };
+          uncertain.set(request, mutationId);
+          if (uncertain.size > MAXIMUM_UNCERTAIN_CREATES) {
+            uncertain.delete(uncertain.keys().next().value!);
+          }
         }
         throw cause;
       }
