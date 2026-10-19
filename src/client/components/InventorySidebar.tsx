@@ -391,6 +391,20 @@ function keyboardEventTargetBlocksSidebarNavigation(
   );
 }
 
+/**
+ * A dialog above the workbench keeps its keys, so switching threads cannot
+ * unmount it underneath. The navigation drawer hosting this sidebar is a
+ * dialog too, but the sidebar's shortcuts still belong there.
+ */
+function keyboardEventInsideOtherDialog(
+  target: EventTarget | null,
+  sidebar: HTMLElement | null,
+): boolean {
+  if (!(target instanceof Element)) return false;
+  const dialog = target.closest('[role="dialog"], [role="alertdialog"]');
+  return dialog !== null && !(sidebar !== null && dialog.contains(sidebar));
+}
+
 /** Keep the compact default row on the same status ladder as other threads. */
 function DefaultThreadIndicator({ thread }: { readonly thread: NormalizedApplicationThreadSummary }) {
   const backgroundWorkCurrent = useContext(SidebarBackgroundWorkCurrentContext);
@@ -1274,7 +1288,15 @@ export function InventorySidebar({
       if (modifierKey === undefined && modifier === undefined) {
         clearQuickSwitch();
       }
-      if (event.defaultPrevented || event.isComposing) return;
+      // Quick switch is a modifier chord, so it also works from the composer
+      // and other fields; only another dialog keeps it.
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        keyboardEventInsideOtherDialog(event.target, scrollContainer.current)
+      ) {
+        return;
+      }
       if (modifierKey !== undefined) {
         // Hints are a hold-one-modifier gesture. Cancel as soon as another
         // modifier joins it; system chords (for example macOS screenshots)
@@ -1351,7 +1373,8 @@ export function InventorySidebar({
       if (
         event.defaultPrevented ||
         event.isComposing ||
-        keyboardEventTargetBlocksSidebarNavigation(event.target)
+        keyboardEventTargetBlocksSidebarNavigation(event.target) ||
+        keyboardEventInsideOtherDialog(event.target, scrollContainer.current)
       ) {
         return;
       }

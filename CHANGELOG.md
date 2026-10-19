@@ -160,7 +160,8 @@ User-facing changes are collected here before release. See the
   [Build a prompt](docs/user/conversations.md#build-a-prompt).
 
 - Escape restores a maximized layout from the Tasks panel when Tasks has no
-  expanded row or search to close.
+  expanded row or search to close, and the sidebar's thread shortcuts
+  (Mod+1–9, Mod+Shift+↑/↓) no longer switch threads behind an open dialog.
 
 - Files compare no longer leaves **Start review** stuck on "Loading…" when the
   selected review is cleared while its comments load, and switching roots
