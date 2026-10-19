@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import * as files from "node:fs/promises";
 import { createServer, connect, type Socket } from "node:net";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { createWindowsSidecarIpc } from "../../src/server/sidecar/sidecar-windows-ipc.js";
 
@@ -67,4 +68,35 @@ describe("Windows sidecar local IPC", () => {
     expect(() => ipc.keyPath("\\\\.\\pipe\\sedes-abc\\..\\outside")).toThrow("sidecar_windows_endpoint_invalid");
     expect(() => ipc.keyPath("/tmp/other.sock")).toThrow("sidecar_windows_endpoint_invalid");
   });
+  it("publishes a complete private key and reuses it", async () => {
+    const home = await files.mkdtemp(path.join(tmpdir(), "sedes-ipc-key-"));
+    try {
+      const keys = createWindowsSidecarIpc({ crypto, files, path, home, privacy: async (target, operation) => {
+        if (operation === "ensure-directory") await files.mkdir(target, { recursive: true });
+      } });
+      const endpoint = "\\\\.\\pipe\\sedes-key-test";
+      const key = await keys.prepareKey(endpoint);
+      expect(key).toHaveLength(32);
+      expect(await keys.prepareKey(endpoint)).toEqual(key);
+      expect(await keys.readKey(endpoint)).toEqual(key);
+      expect(await files.readdir(path.dirname(keys.keyPath(endpoint)))).toEqual([path.basename(keys.keyPath(endpoint))]);
+    } finally { await files.rm(home, { recursive: true, force: true }); }
+  });
+
+  it("leaves no torn key when writing a new key fails", async () => {
+    const home = await files.mkdtemp(path.join(tmpdir(), "sedes-ipc-key-"));
+    try {
+      let failSecure = true;
+      const keys = createWindowsSidecarIpc({ crypto, files, path, home, privacy: async (target, operation) => {
+        if (operation === "ensure-directory") await files.mkdir(target, { recursive: true });
+        if (operation === "secure-file" && failSecure) throw new Error("sidecar_windows_privacy_invalid");
+      } });
+      const endpoint = "\\\\.\\pipe\\sedes-key-test";
+      await expect(keys.prepareKey(endpoint)).rejects.toThrow("sidecar_windows_privacy_invalid");
+      expect(await files.readdir(path.dirname(keys.keyPath(endpoint)))).toEqual([]);
+      failSecure = false;
+      await expect(keys.prepareKey(endpoint)).resolves.toHaveLength(32);
+    } finally { await files.rm(home, { recursive: true, force: true }); }
+  });
+
 });

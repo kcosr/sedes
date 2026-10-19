@@ -32,16 +32,21 @@ export function createWindowsSidecarIpc(dependencies: {
   const prepareKey = async (endpoint: string) => {
     const filename = keyPath(endpoint);
     await privacy(path.dirname(filename), "ensure-directory");
+    // Publish only a complete, flushed key: a torn key file would fail every
+    // later start, while link keeps the first writer's key on a race.
+    const temporary = `${filename}.${crypto.randomUUID()}`;
     try {
-      const handle = await files.open(filename, "wx", 0o600);
+      const handle = await files.open(temporary, "wx", 0o600);
       try {
-        await privacy(filename, "secure-file");
+        await privacy(temporary, "secure-file");
         await handle.writeFile(crypto.randomBytes(32).toString("hex"), "utf8");
         await handle.sync();
       } finally { await handle.close(); }
-    } catch (error) {
-      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") throw error;
-    }
+      try { await files.link(temporary, filename); }
+      catch (error) {
+        if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") throw error;
+      }
+    } finally { await files.unlink(temporary).catch(() => undefined); }
     return readKey(endpoint);
   };
   // Mutual, nonce-bound proofs protect clients against a squatted pipe as well
