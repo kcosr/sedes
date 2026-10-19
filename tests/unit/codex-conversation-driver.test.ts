@@ -45,10 +45,10 @@ import {
 } from "../../src/server/backends/codex/codex-conversation-driver.js";
 import {
   CodexConversationHandle,
-  codexObservedExecutionSettings,
-  serializeCodexSubmissionRetryAnchor,
   type CodexExecutionSettingsProvider,
 } from "../../src/server/backends/codex/codex-conversation-handle.js";
+import { codexObservedExecutionSettings } from "../../src/server/backends/codex/codex-observed-execution-settings.js";
+import { serializeCodexSubmissionRetryAnchor } from "../../src/server/backends/codex/codex-submission-retry-anchor.js";
 import type { CodexForkSettingsEligibility } from "../../src/server/backends/codex/codex-fork-settings-eligibility.js";
 import {
   codexClientUserMessageId,

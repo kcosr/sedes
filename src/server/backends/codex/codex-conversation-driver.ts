@@ -69,14 +69,14 @@ import {
 } from "./codex-c4-protocol.js";
 import {
   CodexConversationHandle,
-  codexObservedThreadExecutionSettings,
-  codexSubmissionRetryAnchorMatches,
   normalizeCodexTurnStatuses,
   mapCodexHistoryProjectionError,
   projectCodexThreadHistory,
   verifiedCodexProjectionBytes,
   type CodexExecutionSettingsProvider,
 } from "./codex-conversation-handle.js";
+import { codexObservedThreadExecutionSettings } from "./codex-observed-execution-settings.js";
+import { codexSubmissionRetryAnchorMatches } from "./codex-submission-retry-anchor.js";
 import type { CodexExecutionSettingsTuple } from "./codex-thread-execution-settings-repository.js";
 import { codexExecutionPolicy } from "./codex-execution-policy.js";
 import { CODEX_HISTORY_TIMEOUT_MILLISECONDS } from "./codex-history-timeouts.js";
