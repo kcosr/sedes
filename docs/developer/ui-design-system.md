@@ -181,6 +181,13 @@ an action with `variant="destructive"` instead.
 | `EmptyState` | Nothing to show: `panel` for a page or pane, `inline` inside a list |
 | `KeyValueList` | Labelled facts in a `max-content 1fr` grid; `mono` for identifiers |
 
+**Error boundaries.** `ErrorBoundary` contains a render failure and adds no
+markup while its children render. Three are in place: the app root
+(`app/AppErrorBoundary.tsx`, a full page with Try again, Reload and Copy
+details), each workspace panel (`TenantContent`, an `EmptyState` with Reload
+panel and Close panel), and each transcript item (`ConversationItemView`, a
+one-line danger `Callout` with Try again, retried when the item updates).
+
 ## Dialogs
 
 | `DialogContent` prop | Values and use |

@@ -164,6 +164,11 @@ User-facing changes are collected here before release. See the
   with no open file and the tree closed offers **Browse files** instead of a
   blank pane.
 
+- A rendering failure no longer blanks the whole app. A transcript message
+  that cannot render shows **Try again** in its place, a failing workspace
+  panel offers **Reload panel** and **Close panel** while Chat keeps working,
+  and the app itself offers **Try again**, **Reload** and **Copy details**.
+
 - Workpads Archive, Unarchive, Move and Rename are announced to screen
   readers, name the workpad in a failure, and keep keyboard focus in the list
   when the row leaves it, as Tasks does.

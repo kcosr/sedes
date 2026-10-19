@@ -710,6 +710,73 @@ describe("normalized conversation renderers", () => {
     expect(activity).toHaveTextContent("explorer · message");
   });
 
+  it("contains one item that cannot render and retries it on its next update", () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const message = {
+      ...common,
+      kind: "assistant_message" as const,
+      status: "completed" as const,
+      markdown: { text: "Hello" },
+    };
+    const healthy = render(<ConversationItemView item={message} />);
+    const healthyMarkup = healthy.container.innerHTML;
+    healthy.unmount();
+
+    const assistant = conversationItemRenderers.assistant_message;
+    const original = assistant.render.bind(assistant);
+    const failing = vi.spyOn(assistant, "render").mockImplementation((item, context) => {
+      if (item.id === "item-1") throw new Error("Unexpected Markdown");
+      return original(item, context);
+    });
+    const { container, rerender } = render(
+      <>
+        <ConversationItemView item={message} />
+        <ConversationItemView item={{ ...message, id: "item-2", markdown: { text: "Still here" } }} />
+      </>,
+    );
+    const row = container.querySelector<HTMLElement>('[data-item-id="item-1"]')!;
+    expect(within(row).getByText("This message couldn’t be displayed.")).toBeInTheDocument();
+    expect(row.querySelector('[data-slot="callout"]')).toHaveAttribute("data-tone", "danger");
+    // Its neighbour renders as usual.
+    expect(screen.getByText("Still here")).toBeInTheDocument();
+    // An unrelated render keeps the fallback; the item's next update retries it.
+    failing.mockRestore();
+    rerender(
+      <>
+        <ConversationItemView item={message} />
+        <ConversationItemView item={{ ...message, id: "item-2", markdown: { text: "Still here" } }} />
+      </>,
+    );
+    expect(within(row).getByText("This message couldn’t be displayed.")).toBeInTheDocument();
+    rerender(
+      <>
+        <ConversationItemView item={{ ...message, revision: 2 }} />
+        <ConversationItemView item={{ ...message, id: "item-2", markdown: { text: "Still here" } }} />
+      </>,
+    );
+    expect(within(row).queryByText("This message couldn’t be displayed.")).not.toBeInTheDocument();
+    expect(within(row).getByText("Hello")).toBeInTheDocument();
+    // Without a failure, the boundary adds nothing to the item's markup.
+    cleanup();
+    expect(render(<ConversationItemView item={message} />).container.innerHTML).toBe(healthyMarkup);
+    errors.mockRestore();
+  });
+
+  it("retries an item that could not render from its Try again action", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const failing = vi.spyOn(conversationItemRenderers.assistant_message, "render").mockImplementation(() => {
+      throw new Error("Unexpected Markdown");
+    });
+    render(
+      <ConversationItemView
+        item={{ ...common, kind: "assistant_message", status: "completed", markdown: { text: "Recovered" } }}
+      />,
+    );
+    failing.mockRestore();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(screen.getByText("Recovered")).toBeInTheDocument();
+  });
+
   it("progressively renders safe Markdown and suppresses an empty transient row", () => {
     const { container, rerender } = render(
       <ConversationItemView
