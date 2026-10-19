@@ -26,9 +26,77 @@ export const MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES = 32 * 1_024 * 1_024;
 export const MAXIMUM_SSE_EVENT_BYTES = 36 * 1_024 * 1_024;
 
 const utf8Encoder = new TextEncoder();
+// Node counts UTF-8 bytes without allocating an encoded copy; browsers encode.
+const nodeBuffer = (globalThis as {
+  readonly Buffer?: { byteLength(value: string, encoding: "utf8"): number };
+}).Buffer;
 
 export function serializedUtf8Bytes(value: unknown): number {
-  return utf8Encoder.encode(JSON.stringify(value)).byteLength;
+  const json = JSON.stringify(value) as string | undefined;
+  if (json === undefined) return 0;
+  return nodeBuffer ? nodeBuffer.byteLength(json, "utf8") : utf8Encoder.encode(json).byteLength;
+}
+
+/** Values beyond this many JSON nodes are measured exactly instead of bounded. */
+const SERIALIZED_BOUND_NODE_BUDGET = 512;
+// The longest JSON rendering of a finite number, such as -0.0000012345678901234567, is 25 bytes.
+const SERIALIZED_NUMBER_BYTES_BOUND = 25;
+
+/**
+ * A provable upper bound on `serializedUtf8Bytes(value)` that reads string
+ * lengths instead of serializing them. JSON writes each UTF-16 code unit as
+ * at most six UTF-8 bytes (a `\uXXXX` escape), so a string costs at most
+ * `6 * length + 2`. Returns `Infinity` when the bound would exceed
+ * `maximumBytes`, the value has too many nodes to bound cheaply, or it is not
+ * plain JSON data (for example it has `toJSON`), so the caller measures it.
+ */
+function serializedUtf8BytesBound(value: unknown, maximumBytes: number): number {
+  const budget = { nodes: SERIALIZED_BOUND_NODE_BUDGET, maximumBytes };
+  return boundSerializedValue(value, budget);
+}
+
+function boundSerializedValue(
+  value: unknown,
+  budget: { nodes: number; readonly maximumBytes: number },
+): number {
+  if (--budget.nodes < 0) return Number.POSITIVE_INFINITY;
+  switch (typeof value) {
+    case "string":
+      return 6 * value.length + 2;
+    case "number":
+      return SERIALIZED_NUMBER_BYTES_BOUND;
+    case "boolean":
+    case "undefined":
+    case "function":
+    case "symbol":
+      // At most `false`; the others are omitted or written as `null`.
+      return 5;
+    case "object": {
+      if (value === null) return 4;
+      let total = 2;
+      if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index += 1) {
+          total += boundSerializedValue(value[index], budget) + 1;
+          if (total > budget.maximumBytes) return Number.POSITIVE_INFINITY;
+        }
+        return total;
+      }
+      const prototype = Object.getPrototypeOf(value) as unknown;
+      if ((prototype !== Object.prototype && prototype !== null) || "toJSON" in value) {
+        return Number.POSITIVE_INFINITY;
+      }
+      const record = value as Record<string, unknown>;
+      const keys = Object.keys(record);
+      for (let index = 0; index < keys.length; index += 1) {
+        const key = keys[index]!;
+        total += 6 * key.length + 4 + boundSerializedValue(record[key], budget);
+        if (total > budget.maximumBytes) return Number.POSITIVE_INFINITY;
+      }
+      return total;
+    }
+    default:
+      return Number.POSITIVE_INFINITY;
+  }
 }
 
 export function requireSerializedByteLimit(
@@ -37,6 +105,8 @@ export function requireSerializedByteLimit(
   maximumBytes: number,
   message: string,
 ): void {
+  // Long message text would otherwise be serialized again by every parse.
+  if (serializedUtf8BytesBound(value, maximumBytes) <= maximumBytes) return;
   if (serializedUtf8Bytes(value) > maximumBytes) {
     context.addIssue({ code: "custom", message });
   }
