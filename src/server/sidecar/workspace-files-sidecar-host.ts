@@ -30,6 +30,7 @@ import {
 } from "../workspace-files/workspace-diffs-engine.js";
 import type { WorkspaceFileRootId } from "../../shared/protocol/workspace-files.js";
 
+import { pathIsWithin } from "../path-containment.js";
 import { SidecarOperationReceipts } from "./sidecar-operation-receipts.js";
 
 interface AdmittedRoot {
@@ -848,13 +849,10 @@ async function canonicalDirectory(value: string): Promise<string> {
 }
 
 function isWithin(root: string, candidate: string): boolean {
-  if (!path.isAbsolute(root) || !path.isAbsolute(candidate)) return false;
-  const relative = path.relative(root, candidate);
   return (
-    relative === "" ||
-    (!path.isAbsolute(relative) &&
-      relative !== ".." &&
-      !relative.startsWith(`..${path.sep}`))
+    path.isAbsolute(root) &&
+    path.isAbsolute(candidate) &&
+    pathIsWithin(root, candidate)
   );
 }
 
