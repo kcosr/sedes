@@ -229,7 +229,7 @@ export class QuestionRequestService {
       if (
         plan.resolvedDeliveryMode === "steer" &&
         projectQueuedInputSummaries(
-          this.input.queue.list(scope, threadId),
+          this.input.queue.listActive(scope, threadId),
         ).some(
           (item) =>
             item.state === "failed" ||
@@ -271,7 +271,7 @@ export class QuestionRequestService {
     // Capture the authoritative admission before asynchronous dispatch can change
     // its state. Replayed terminal inputs must not reappear as pending in clients.
     const queuedInput =
-      projectQueuedInputSummaries(this.input.queue.list(scope, threadId)).find(
+      projectQueuedInputSummaries(this.input.queue.listActive(scope, threadId)).find(
         (item) => item.id === admitted.id,
       ) ?? null;
     const result = respondToQuestionResultSchema.parse({

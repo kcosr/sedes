@@ -2167,6 +2167,40 @@ export class QueuedInputRepository {
     return rows.map((row) => this.#hydrate(scope, row));
   }
 
+  /**
+   * The thread's presented queue in delivery order: active rows and
+   * unacknowledged failures, bounded by the active capacity. Accepted,
+   * cancelled, and acknowledged rows are retained history; a projection read
+   * never selects or hydrates them, so its cost does not grow with thread age.
+   */
+  listActive(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): QueuedInputRecord[] {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT ${columns}
+          FROM queued_inputs
+          WHERE tenant_id = ? AND owner_principal_id = ?
+            AND application_thread_id = ?
+            AND (
+              state IN ('pending', 'retry_wait', 'dispatching', 'uncertain')
+              OR (state = 'failed' AND failure_acknowledged_at IS NULL)
+            )
+          ORDER BY sequence
+          LIMIT ?
+        `,
+      )
+      .all(
+        scope.tenantId,
+        scope.principalId,
+        applicationThreadId,
+        MAXIMUM_ACTIVE_QUEUED_INPUTS,
+      ) as QueuedInputRow[];
+    return rows.map((row) => this.#hydrate(scope, row));
+  }
+
   readProjectionState(
     scope: RequestScope,
     applicationThreadId: string,
@@ -2176,7 +2210,7 @@ export class QueuedInputRepository {
   } {
     return this.database.transaction(() => ({
       threadRevision: this.#threadRevision(scope, applicationThreadId),
-      records: this.list(scope, applicationThreadId),
+      records: this.listActive(scope, applicationThreadId),
     }))();
   }
 

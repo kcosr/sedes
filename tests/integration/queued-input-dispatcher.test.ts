@@ -5582,4 +5582,83 @@ describe("QueuedInputDispatcher", () => {
       fixture.database.close();
     }
   });
+
+  it("reads only the presented queue for projections, independent of retained history", async () => {
+    const fixture = createFixture();
+    const [threadId, sourceThreadId] = fixture.threadIds;
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    gateway.submitBehaviors.push(new BackendError({
+      category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+      safeMessage: "Rejected before acceptance.",
+    }));
+    const now = { value: 1_000 };
+    const { dispatcher } = createDispatcher(repository, gateway, { now });
+    const send = (id: string) => dispatcher.enqueue(fixture.scope, threadId, {
+      id, mutationId: `operation-${id}`, text: `text-${id}`,
+      contextExcerpts: [], attachmentIds: [], taskReferences: [],
+      source: {
+        kind: "agent_control",
+        expectedThreadRevision: repository.getThreadRevision(fixture.scope, threadId),
+        initiatingAgentThreadId: sourceThreadId,
+      },
+      now: now.value++,
+    });
+    const preparedDuring = (read: () => void): number => {
+      const prepare = vi.spyOn(fixture.database, "prepare");
+      try {
+        read();
+        return prepare.mock.calls.length;
+      } finally {
+        prepare.mockRestore();
+      }
+    };
+    try {
+      await dispatcher.recover(fixture.scope);
+      // History: an acknowledged failure, accepted sends, and cancellations.
+      await send("acknowledged");
+      await dispatcher.acknowledgeFailure(fixture.scope, threadId, "acknowledged", now.value++);
+      for (let index = 0; index < 20; index += 1) await send(`accepted-${index}`);
+      gateway.authoritativelySettled = false;
+      for (let index = 0; index < 5; index += 1) {
+        await send(`cancelled-${index}`);
+        await dispatcher.cancel(fixture.scope, threadId, `cancelled-${index}`, { now: now.value++ });
+      }
+      await send("active-1");
+      await send("active-2");
+      gateway.authoritativelySettled = true;
+      gateway.submitBehaviors.push(new BackendError({
+        category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+        safeMessage: "Rejected before acceptance.",
+      }));
+      await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+      gateway.authoritativelySettled = false;
+
+      const all = repository.list(fixture.scope, threadId);
+      expect(all).toHaveLength(28);
+      const projection = repository.readProjectionState(fixture.scope, threadId);
+      expect(projection.records.map(({ id, state }) => [id, state])).toEqual([
+        ["active-1", "failed"],
+        ["active-2", "pending"],
+      ]);
+      expect(projection.records).toEqual(repository.listActive(fixture.scope, threadId));
+      expect(projectQueuedInputSummaries(projection.records)).toEqual(projectQueuedInputSummaries(all));
+
+      const before = preparedDuring(() => repository.readProjectionState(fixture.scope, threadId));
+      gateway.authoritativelySettled = true;
+      await dispatcher.acknowledgeFailure(fixture.scope, threadId, "active-1", now.value++);
+      await vi.waitFor(() => expect(repository.get(fixture.scope, threadId, "active-2").state).toBe("accepted"));
+      for (let index = 0; index < 20; index += 1) await send(`later-accepted-${index}`);
+      gateway.authoritativelySettled = false;
+      await send("active-3");
+      await send("active-4");
+      expect(repository.list(fixture.scope, threadId)).toHaveLength(50);
+      expect(repository.listActive(fixture.scope, threadId).map(({ id }) => id)).toEqual(["active-3", "active-4"]);
+      // Twice the retained history, same projection read.
+      expect(preparedDuring(() => repository.readProjectionState(fixture.scope, threadId))).toBe(before);
+    } finally {
+      await dispatcher.close();
+      fixture.database.close();
+    }
+  });
 });
