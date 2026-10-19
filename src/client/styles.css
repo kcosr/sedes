@@ -3137,7 +3137,35 @@ textarea:disabled {
 
 /* The retained terminal body fills its panel below the header. */
 .terminal-panel-body {
+  display: flex;
+  flex-direction: column;
   height: 100%;
+}
+
+/* No terminal, or one that is loading or can't be found: a centred
+   EmptyState in the body. */
+.terminal-panel-empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 0;
+  padding: var(--space-4);
+  overflow: auto;
+}
+
+.terminal-panel-loading {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+  text-align: center;
+}
+
+/* Terminal notices: one Callout each, recovery buttons in its action. */
+.terminal-panel-callout {
+  flex: none;
+  margin: var(--space-2) var(--space-2) 0;
 }
 
 .terminal-transcript > header {
@@ -3350,14 +3378,6 @@ textarea:disabled {
   color: var(--terminal-foreground);
 }
 
-.terminal-panel-notice {
-  margin: 0;
-  padding: 5px 8px;
-  background: var(--warning-soft);
-  color: var(--warning);
-  font-size: 0.74rem;
-}
-
 .terminal-panel-emulator {
   position: relative;
   flex: 1;
@@ -3478,6 +3498,31 @@ textarea:disabled {
   border-bottom: 1px solid var(--terminal-border);
 }
 
+/* A search row on the terminal's surface: the shared Input and Button. */
+.terminal-transcript-search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--terminal-border);
+}
+
+.terminal-transcript-search [data-slot="input"] {
+  flex: 1 1 auto;
+  border-color: var(--terminal-border);
+  background: var(--terminal-background);
+  color: var(--terminal-foreground);
+}
+
+.terminal-transcript > p {
+  flex: none;
+  margin: 0;
+  padding: var(--space-1) var(--space-2-5);
+  color: var(--terminal-muted);
+  font-size: var(--text-meta);
+}
+
 .terminal-transcript pre {
   flex: 1;
   margin: 0;
@@ -3517,10 +3562,6 @@ textarea:disabled {
 
   .terminal-panel-search .thread-find-control [data-slot="button"] {
     min-width: 44px;
-    min-height: 44px;
-  }
-
-  .terminal-transcript input {
     min-height: 44px;
   }
 

@@ -111,9 +111,12 @@ User-facing changes are collected here before release. See the
   list give way from the start of their directory, so the file name stays
   visible on narrow panels; the tooltip keeps the whole path. The Files
   Browse/Changes switch, the Usage views, and Usage's chart choices use the
-  shared segmented control and tabs, with arrow-key navigation. The question
-  inbox uses the shared notices, count badge, and answer field, so its
-  **Try again** is a real button.
+  shared segmented control and tabs, with arrow-key navigation.
+
+- The question inbox and Terminals use the shared notices: the inbox's
+  **Try again** is a real button, an empty Terminals panel is a centred empty
+  state, and terminal notices are tinted by severity with their recovery
+  buttons beside the message instead of spanning the panel.
 
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See
