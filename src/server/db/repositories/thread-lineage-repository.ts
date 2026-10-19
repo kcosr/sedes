@@ -15,6 +15,10 @@ import type {
 } from "../../domain/thread-lineage-models.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
+import { WorkpadRepository } from "./workpad-repository.js";
+
+/** A thread Workpad moved to its location's project, with its new revision. */
+export type PromotedWorkpad = { readonly id: string; readonly revision: number };
 
 const originColumns = `
   tenant_id AS tenantId,
@@ -638,6 +642,7 @@ export class ThreadLineageRepository {
       readonly restartable: boolean;
       readonly now: number;
       readonly onThreadTasksPromoted?: (taskIds: readonly string[]) => void;
+      readonly onThreadWorkpadsPromoted?: (workpads: readonly PromotedWorkpad[]) => void;
     },
   ): AbortedThreadForkRecord {
     return this.#abortPreparedFork(
@@ -658,6 +663,7 @@ export class ThreadLineageRepository {
       readonly restartable: boolean;
       readonly now: number;
       readonly onThreadTasksPromoted?: (taskIds: readonly string[]) => void;
+      readonly onThreadWorkpadsPromoted?: (workpads: readonly PromotedWorkpad[]) => void;
     },
   ): AbortedThreadForkRecord {
     return this.#abortPreparedFork(
@@ -681,6 +687,8 @@ export class ThreadLineageRepository {
        * transaction) so the caller can publish them after commit.
        */
       readonly onThreadTasksPromoted?: (taskIds: readonly string[]) => void;
+      /** Receives Workpads promoted off the deleted child, like tasks. */
+      readonly onThreadWorkpadsPromoted?: (workpads: readonly PromotedWorkpad[]) => void;
     },
     boundaryKind: ForkBoundaryKind,
   ): AbortedThreadForkRecord {
@@ -882,6 +890,41 @@ export class ThreadLineageRepository {
         ) as readonly { readonly id: string }[];
       if (promotedTasks.length > 0) {
         input.onThreadTasksPromoted?.(promotedTasks.map(({ id }) => id));
+      }
+      // Workpads are user data too. Their visibility requires the thread row,
+      // so move them, archived or not, to the same project with a revision.
+      const childWorkpads = this.database
+        .prepare(
+          `
+        SELECT id, revision FROM workpads
+        WHERE tenant_id = ? AND owner_principal_id = ?
+          AND scope_kind = 'thread' AND thread_id = ?
+        ORDER BY id
+      `,
+        )
+        .all(scope.tenantId, scope.principalId, childThreadId) as readonly PromotedWorkpad[];
+      if (childWorkpads.length > 0) {
+        const { projectId } = this.database
+          .prepare(
+            `
+          SELECT location.project_id AS projectId
+          FROM application_threads AS thread
+          JOIN workspaces AS location
+            ON location.tenant_id = thread.tenant_id
+            AND location.owner_principal_id = thread.owner_principal_id
+            AND location.id = thread.workspace_id
+          WHERE thread.tenant_id = ? AND thread.owner_principal_id = ?
+            AND thread.id = ?
+        `,
+          )
+          .get(scope.tenantId, scope.principalId, childThreadId) as { readonly projectId: string };
+        const workpads = new WorkpadRepository(this.database);
+        input.onThreadWorkpadsPromoted?.(childWorkpads.map(({ id, revision }) => {
+          const pad = workpads.update(scope, id, {
+            expectedRevision: revision, scope: { kind: "project", projectId },
+          }, { kind: "user" }, input.now);
+          return { id: pad.id, revision: pad.revision };
+        }));
       }
       const usageEvidence = this.database.prepare(`SELECT 1 FROM usage_observations o JOIN usage_sources s ON s.id=o.source_id
         WHERE s.tenant_id=? AND s.principal_id=? AND s.thread_id=? LIMIT 1`).get(scope.tenantId,scope.principalId,childThreadId);

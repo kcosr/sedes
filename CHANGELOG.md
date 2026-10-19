@@ -252,6 +252,10 @@ User-facing changes are collected here before release. See the
   extension dialogs honor their `signal` and `timeout` options. See
   [Pi capabilities](docs/operator/backends/pi.md#topologies-and-capabilities).
 
+- Workpads on a discarded unfinished fork move to its project, like its Tasks,
+  instead of disappearing. Queue projections no longer reread a thread's whole
+  input history on every change.
+
 ### Removed
 
 ## [0.2.0] - 2026-10-14

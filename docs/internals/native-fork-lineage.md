@@ -57,7 +57,9 @@ its provider call. It is offered while no provider child identity has been
 returned and the creation is not in flight; the normalized recovery reports
 `conversationIdentified`, and a fork with a returned child is finished by
 recovery instead. Discard removes the reserved child thread and publishes the
-replacement snapshot. What happens to a child the provider may already have
+replacement snapshot. In the same transaction, any Tasks and Workpads created on
+the child move to the project of its location; each moved Workpad records a
+revision for its new scope. What happens to a child the provider may already have
 created depends on the backend's child identity, which the recovery reports as
 `forkChildIdentity` so the confirmation can say which applies:
 

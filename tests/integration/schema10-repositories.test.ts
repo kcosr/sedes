@@ -38,6 +38,7 @@ import { AutomationRepository } from "../../src/server/db/repositories/automatio
 import { DomainError } from "../../src/server/domain/errors.js";
 import { InventoryService } from "../../src/server/domain/inventory-service.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
+import { WorkpadRepository } from "../../src/server/db/repositories/workpad-repository.js";
 import { ThreadLineageRepository } from "../../src/server/db/repositories/thread-lineage-repository.js";
 import { DeliveryInputSnapshotRepository } from "../../src/server/db/repositories/delivery-input-snapshot-repository.js";
 import { ThreadCompletionCallbackRepository } from "../../src/server/db/repositories/thread-completion-callback-repository.js";
@@ -3597,6 +3598,108 @@ describe("inactive schema-10 repositories", () => {
           fixture.database,
         ).findThreadDefinition(fixture.scope, fixture.secondThreadId),
       ).toBeUndefined();
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  it("promotes an aborted fork child's Workpads to its location's project with a revision", () => {
+    const fixture = createFixture();
+    try {
+      bindDiscovered(fixture);
+      const checkpoint = new BackendCheckpointRepository(
+        fixture.database,
+      ).create(fixture.scope, fixture.threadId, {
+        id: "workpad-abort-checkpoint",
+        applicationTurnId: "workpad-abort-source-turn",
+        opaqueReference: "workpad-abort-source-leaf",
+        now: 520,
+      });
+      const lineage = new ThreadLineageRepository(fixture.database);
+      lineage.prepareOrigin(fixture.scope, {
+        childThreadId: fixture.secondThreadId,
+        sourceThreadId: fixture.threadId,
+        sourceTurnId: "workpad-abort-source-turn",
+        sourceTurnCompletedAt: 510,
+        sourceTurnRevision: 3,
+        sourceCheckpointId: checkpoint.id,
+        originKind: "user_fork",
+        initiatingPrincipalId: fixture.scope.principalId,
+        branchMethod: "provider_native",
+        creationOperationId: "workpad-abort-operation",
+        now: 530,
+      });
+      const creation = new ConversationCreationRepository(fixture.database);
+      creation.prepare(fixture.scope, fixture.secondThreadId, {
+        attemptId: "workpad-abort-attempt",
+        mutationId: "workpad-abort-operation",
+        expectedThreadRevision: 0,
+        creationKind: "fork",
+        forkChildIdentity: "application_reserved",
+        forkCreationRecovery: "idempotent",
+        sourceKind: "user_fork",
+        initialInputText: null,
+        initialAttachmentIds: [],
+        backendCreationCorrelation: "workpad-abort-correlation",
+        now: 540,
+      });
+      const workpads = new WorkpadRepository(fixture.database);
+      const childScope = { kind: "thread" as const, threadId: fixture.secondThreadId };
+      const open = workpads.create(fixture.scope, {
+        title: "Notes on the provisional child", scope: childScope, content: "first",
+      }, { kind: "user" }, 545);
+      const toArchive = workpads.create(fixture.scope, {
+        title: "Archived on the provisional child", scope: childScope,
+      }, { kind: "user" }, 546);
+      const archived = workpads.update(fixture.scope, toArchive.id, {
+        expectedRevision: toArchive.revision, archived: true,
+      }, { kind: "user" }, 547);
+      const elsewhere = workpads.create(fixture.scope, {
+        title: "Source thread notes", scope: { kind: "thread", threadId: fixture.threadId },
+      }, { kind: "user" }, 548);
+      const { projectId } = fixture.database
+        .prepare(
+          `SELECT location.project_id AS projectId
+           FROM application_threads AS thread
+           JOIN workspaces AS location ON location.id = thread.workspace_id
+           WHERE thread.id = ?`,
+        )
+        .get(fixture.secondThreadId) as { readonly projectId: string };
+
+      const promoted: Array<readonly { readonly id: string; readonly revision: number }[]> = [];
+      lineage.abortPreparedFork(fixture.scope, fixture.secondThreadId, {
+        creationOperationId: "workpad-abort-operation",
+        diagnostic: "Provider rejected the fork before creation.",
+        restartable: true,
+        now: 560,
+        onThreadWorkpadsPromoted: (moved) => promoted.push(moved),
+      });
+
+      expect(promoted).toEqual([[
+        { id: open.id, revision: open.revision + 1 },
+        { id: archived.id, revision: archived.revision + 1 },
+      ].sort((a, b) => a.id.localeCompare(b.id))]);
+      for (const before of [open, archived]) {
+        expect(workpads.get(fixture.scope, before.id)).toMatchObject({
+          scope: { kind: "project", projectId },
+          revision: before.revision + 1,
+          content: before.content,
+          archivedAt: before.archivedAt,
+        });
+        expect(workpads.revisions(fixture.scope, before.id).items[0]).toMatchObject({
+          revision: before.revision + 1,
+        });
+      }
+      expect(workpads.list(fixture.scope, {
+        scope: { kind: "project", projectId },
+      }).items.map(({ id }) => id)).toEqual([open.id]);
+      expect(workpads.list(fixture.scope, {
+        scope: { kind: "project", projectId }, archived: true,
+      }).items.map(({ id }) => id)).toEqual([archived.id]);
+      expect(workpads.get(fixture.scope, elsewhere.id)).toMatchObject({
+        scope: { kind: "thread", threadId: fixture.threadId },
+        revision: elsewhere.revision,
+      });
     } finally {
       fixture.database.close();
     }
