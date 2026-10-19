@@ -107,6 +107,9 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Thread actions and recovery checks no longer slow down as mutation history
+  grows: database migration **153** indexes mutation receipts by thread.
+
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See
   [parking](docs/user/organize-work.md#park-quiet-work).
