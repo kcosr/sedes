@@ -50,6 +50,13 @@ describe("AppErrorBoundary", () => {
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Couldn’t copy the details."));
   });
 
+  it("says the details could not be copied where there is no clipboard", async () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
+    render(<AppErrorBoundary><Shell /></AppErrorBoundary>);
+    fireEvent.click(screen.getByRole("button", { name: "Copy details" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Couldn’t copy the details."));
+  });
+
   it("formats details without a component stack", () => {
     const details = crashDetails(new Error("Broken"));
     expect(details).toMatch(/^Error: Broken/);

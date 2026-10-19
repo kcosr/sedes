@@ -55,8 +55,9 @@ function AppCrash({ error, componentStack, reset }: {
         <Button
           variant="outline"
           onClick={() => {
-            void navigator.clipboard
-              .writeText(crashDetails(error, componentStack))
+            // The clipboard is absent outside secure contexts; that is a failure too.
+            void Promise.resolve()
+              .then(() => navigator.clipboard.writeText(crashDetails(error, componentStack)))
               .then(() => setCopy("copied"), () => setCopy("failed"));
           }}
         >
