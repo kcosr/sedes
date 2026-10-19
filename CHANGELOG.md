@@ -164,6 +164,10 @@ User-facing changes are collected here before release. See the
   with no open file and the tree closed offers **Browse files** instead of a
   blank pane.
 
+- Workpads Archive, Unarchive, Move and Rename are announced to screen
+  readers, name the workpad in a failure, and keep keyboard focus in the list
+  when the row leaves it, as Tasks does.
+
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
   older reply on that thread before it starts speaking. See

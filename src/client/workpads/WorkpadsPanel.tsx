@@ -158,6 +158,13 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const addInputRef = useRef<HTMLInputElement>(null);
   // The row that takes focus once a deleted workpad's row is gone.
   const deletedNeighbour = useRef<string | undefined>(undefined);
+  // Where a Rename or Move dialog opened from a menu returns focus.
+  const dialogReturnRef = useRef<HTMLElement | null>(null);
+  // The row control that last had focus. When an action takes its row out
+  // of the list (archive, move), focus goes to the same workpad where it
+  // went, else its neighbour, else the add row.
+  const lastFocusedRow = useRef<{ id: string; element: HTMLElement } | null>(null);
+  const lastRowOrder = useRef<readonly string[]>([]);
   const activeRequest = useMemo(() => workpadListRequest(view, target, options), [view, target, options]);
   const archivedRequest = useMemo(() => archivedListRequest(view, target, options), [view, target, options]);
   const scope: WorkpadScope = activeRequest?.scope ?? { kind: "global" };
@@ -523,12 +530,17 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   // Any listed or open workpad; an open one reloads with the result. The
   // revision is the latest this panel knows, not the one a dialog opened
   // with: live refresh keeps both the open document and the list current.
-  const mutate = async (target: WorkpadTarget, change: Omit<UpdateWorkpadRequest, "expectedRevision">) => {
+  // A failure names the action and the workpad; success is announced.
+  const mutate = async (target: WorkpadTarget, change: Omit<UpdateWorkpadRequest, "expectedRevision">,
+    outcome: { readonly done: string; readonly failed: string }) => {
     const token = scopeGeneration.current;
     const known = selectedRef.current?.id === target.id ? selectedRef.current
       : itemsRef.current.find(({ id }) => id === target.id) ?? archivedItemsRef.current.find(({ id }) => id === target.id) ?? target;
-    const result = await store.api.updateWorkpad(target.id, { expectedRevision: known.revision, ...change });
+    let result: Workpad;
+    try { result = await store.api.updateWorkpad(target.id, { expectedRevision: known.revision, ...change }); }
+    catch (failure) { throw new Error(`${outcome.failed}: ${message(failure)}`); }
     if (token !== scopeGeneration.current) return;
+    announce(outcome.done);
     if (selectedRef.current?.id === result.id) await load(result.id);
     if (token === scopeGeneration.current) await refreshList();
   };
@@ -611,9 +623,28 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   /** Search and View options act on the list: with a workpad open, they return to it first. */
   const fromList = (action: () => void) => { if (selectedRef.current) closeDocument(action); else action(); };
   const changeOptions = (patch: Partial<WorkpadsViewOptions>) => fromList(() => setWorkpadsViewOptions(view, patch));
-  const openRename = (target: WorkpadTarget) => { setTitle(target.title); setRenameTarget(target); };
-  const moveTo = (target: WorkpadTarget, destination: WorkpadScope) => { void run(() => mutate(target, { scope: destination }), true); };
-  const archiveWorkpad = (target: WorkpadTarget, value: boolean) => { void run(() => mutate(target, { archived: value }), true); };
+  /** The control a Rename or Move dialog returns focus to: the row's ⋯, or the open workpad's. */
+  const actionsTrigger = (id: string) => rootRef.current?.querySelector<HTMLElement>(`[data-workpad-actions="${CSS.escape(id)}"]`) ?? null;
+  const openRename = (target: WorkpadTarget) => {
+    dialogReturnRef.current = actionsTrigger(target.id);
+    setTitle(target.title); setRenameTarget(target);
+  };
+  const chooseMove = (target: WorkpadTarget) => { dialogReturnRef.current = actionsTrigger(target.id); setMoveTarget(target); };
+  const moveTo = (target: WorkpadTarget, destination: WorkpadScope) => {
+    void run(() => mutate(target, { scope: destination }, {
+      done: `Moved “${target.title}” to ${destinations.label(destination)}.`, failed: `Couldn't move “${target.title}”`,
+    }), true);
+  };
+  const archiveWorkpad = (target: WorkpadTarget, value: boolean) => {
+    void run(() => mutate(target, { archived: value }, value
+      ? { done: `Archived “${target.title}”.`, failed: `Couldn't archive “${target.title}”` }
+      : { done: `Unarchived “${target.title}”.`, failed: `Couldn't unarchive “${target.title}”` }), true);
+  };
+  const renameWorkpad = (target: WorkpadTarget, value: string) => {
+    void run(() => mutate(target, { title: value }, {
+      done: `Renamed “${target.title}” to “${value}”.`, failed: `Couldn't rename “${target.title}”`,
+    }), true);
+  };
   const announce = (text: string) => { setAnnouncement(""); window.setTimeout(() => setAnnouncement(text), 0); };
   /** The confirmed deletion. A failure to delete rejects, keeping the confirmation open with its message. */
   const deleteWorkpad = async (target: WorkpadTarget) => {
@@ -666,6 +697,43 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     return () => window.removeEventListener(CLOSE_WORKPAD_EVENT, onClose);
   }, [open]);
 
+  // A focused row that leaves the list (archived, moved, deleted) hands focus
+  // on: to the same workpad where it went, else a neighbour, else the add row.
+  // Focus that moved elsewhere on its own is left alone.
+  const rowOrder = useMemo(() => [...items, ...(archivedOpen ? archivedItems : [])].map(({ id }) => id), [items, archivedOpen, archivedItems]);
+  useLayoutEffect(() => {
+    const focused = lastFocusedRow.current;
+    const root = rootRef.current;
+    if (focused && root && !focused.element.isConnected) {
+      lastFocusedRow.current = null;
+      const active = document.activeElement;
+      if (active === null || active === document.body) {
+        const find = (id: string) => root.querySelector<HTMLElement>(`[data-workpad-id="${CSS.escape(id)}"]`);
+        const previous = lastRowOrder.current;
+        const index = previous.indexOf(focused.id);
+        const neighbour = [...previous.slice(index + 1), ...previous.slice(0, Math.max(index, 0)).reverse()].find(id => find(id));
+        (find(focused.id) ?? (neighbour ? find(neighbour) : null) ?? addInputRef.current)?.focus();
+      }
+    }
+    lastRowOrder.current = rowOrder;
+  });
+  const onListFocus = (event: React.FocusEvent<HTMLElement>) => {
+    const element = event.target as HTMLElement;
+    const id = element.closest<HTMLElement>("[data-workpad-row]")?.dataset.workpadRow;
+    if (id) lastFocusedRow.current = { id, element };
+  };
+  const onListBlur = (event: React.FocusEvent<HTMLElement>) => {
+    const element = event.target as HTMLElement;
+    const list = event.currentTarget;
+    const next = event.relatedTarget as Node | null;
+    if (next && list.contains(next)) return;
+    // A menu opened from the row returns focus to it; focus that went elsewhere is let go.
+    requestAnimationFrame(() => {
+      if (!element.isConnected || lastFocusedRow.current?.element !== element) return;
+      if (list.contains(document.activeElement) || element.matches("[aria-expanded=true]")) return;
+      lastFocusedRow.current = null;
+    });
+  };
   // An empty list that failed to load says so in its place, with Try again.
   const listLoadFailed = Boolean(refreshError) && !selected && !loading && scopeValid && items.length === 0;
   const errorText = error || (listLoadFailed ? "" : refreshError) || (checklistRefreshRequired ? "Reload this workpad before changing checklist items." : "");
@@ -723,7 +791,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const renderRow = (item: WorkpadSummary, location?: ScopeLocationLabel) => <WorkpadRow key={item.id} item={item} location={location}
     busy={busy} touch={touch} threadId={threadId} projectId={contextProjectId}
     onOpen={() => { void run(() => load(item.id)); }} onRename={() => openRename(item)}
-    onMove={destination => moveTo(item, destination)} onChooseMove={() => setMoveTarget(item)}
+    onMove={destination => moveTo(item, destination)} onChooseMove={() => chooseMove(item)}
     onArchive={() => archiveWorkpad(item, !item.archivedAt)} onDelete={() => setDeleteTarget(item)} />;
   const emptyState = (() => {
     if (loading) return <EmptyState variant="inline" className="workpads-empty" title="Loading…" />;
@@ -751,7 +819,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
 
   const listView = <>
     {errorCallout}
-    <div className="workpads-scroll" aria-busy={loading}>
+    <div className="workpads-scroll" aria-busy={loading} onFocus={onListFocus} onBlur={onListBlur}>
       {items.length ? <ul className="workpads-list" aria-label={`${view === "all" ? "All" : view === "global" ? "Global" : view === "project" ? "Project" : "Thread"} workpads`}>
         {items.map(item => renderRow(item, rowLocation(item)))}
       </ul> : emptyState}
@@ -829,7 +897,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
         </Button>}
         <DropdownMenu presentation={touch ? "sheet" : "menu"} open={open && documentMenuOpen} onOpenChange={setDocumentMenuOpen}>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label="Workpad actions" title="More">
+            <Button variant="ghost" size="icon-sm" aria-label="Workpad actions" title="More" data-workpad-actions={selected.id}>
               <Ellipsis aria-hidden="true" />
             </Button>
           </DropdownMenuTrigger>
@@ -842,7 +910,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
                 <DropdownMenuSubTrigger disabled={busy}><FolderInput /><span>Move to</span></DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
                   <MoveToItems current={destinationKey(selected.scope)} threadId={threadId} projectId={contextProjectId}
-                    onMove={value => moveTo(selected, value)} onChoose={() => setMoveTarget(selected)} />
+                    onMove={value => moveTo(selected, value)} onChoose={() => chooseMove(selected)} />
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
               <DropdownMenuItem disabled={busy} onSelect={() => archiveWorkpad(selected, !selected.archivedAt)}>
@@ -949,7 +1017,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     </div>
     {selected ? documentView : listView}
     <Dialog open={open && renameTarget !== undefined} onOpenChange={value => { if (!value) setRenameTarget(undefined); }}>
-      <DialogContent size="sm" aria-describedby={undefined}>
+      <DialogContent size="sm" aria-describedby={undefined} returnFocusRef={dialogReturnRef}>
         <DialogHeader><DialogTitle>Rename workpad</DialogTitle></DialogHeader>
         <form className="contents" noValidate onSubmit={event => {
           event.preventDefault();
@@ -957,7 +1025,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
           const value = title.trim();
           if (!target || !value) return;
           setRenameTarget(undefined);
-          void run(() => mutate(target, { title: value }), true);
+          renameWorkpad(target, value);
         }}>
           <DialogBody>
             <Field label="Title"><Input autoFocus aria-label="Workpad title" maxLength={240} value={title} onChange={event => setTitle(event.target.value)} /></Field>
@@ -970,7 +1038,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       </DialogContent>
     </Dialog>
     <Dialog open={open && moveTarget !== undefined} onOpenChange={value => { if (!value) setMoveTarget(undefined); }}>
-      <DialogContent size="sm" mobile="sheet" className="searchable-select-sheet workpads-destination-dialog" aria-describedby={undefined}>
+      <DialogContent size="sm" mobile="sheet" className="searchable-select-sheet workpads-destination-dialog" aria-describedby={undefined}
+        returnFocusRef={dialogReturnRef}>
         <DialogHeader><DialogTitle>Move workpad</DialogTitle></DialogHeader>
         {moveTarget && <SearchableSelectList
           label="Destination"
@@ -1077,7 +1146,7 @@ function WorkpadRow({ item, location, busy, touch, threadId, projectId, onOpen, 
   readonly onDelete: () => void;
 }): React.JSX.Element {
   const locationId = useId();
-  return <li className="workpads-row">
+  return <li className="workpads-row" data-workpad-row={item.id}>
     <button type="button" className="workpads-row-title" data-workpad-id={item.id} data-location={location ? "" : undefined}
       aria-describedby={location ? locationId : undefined} onClick={onOpen}>
       {location ? <>
@@ -1092,24 +1161,25 @@ function WorkpadRow({ item, location, busy, touch, threadId, projectId, onOpen, 
     </span>
     <DropdownMenu presentation={touch ? "sheet" : "menu"}>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" className="workpads-row-more" aria-label={`Actions for “${item.title}”`} disabled={busy}>
+        {/* It stays focusable while an action runs, so focus can return here; its items wait instead. */}
+        <Button variant="ghost" size="icon-sm" className="workpads-row-more" aria-label={`Actions for “${item.title}”`} data-workpad-actions={item.id}>
           <Ellipsis aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" sheetTitle={item.title}>
-        <DropdownMenuItem onSelect={onRename}><Pencil /><span>Rename…</span></DropdownMenuItem>
+        <DropdownMenuItem disabled={busy} onSelect={onRename}><Pencil /><span>Rename…</span></DropdownMenuItem>
         <DropdownMenuSub>
-          <DropdownMenuSubTrigger><FolderInput /><span>Move to</span></DropdownMenuSubTrigger>
+          <DropdownMenuSubTrigger disabled={busy}><FolderInput /><span>Move to</span></DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
             <MoveToItems current={destinationKey(item.scope)} threadId={threadId} projectId={projectId}
               onMove={onMove} onChoose={onChooseMove} />
           </DropdownMenuSubContent>
         </DropdownMenuSub>
-        <DropdownMenuItem onSelect={onArchive}>
+        <DropdownMenuItem disabled={busy} onSelect={onArchive}>
           {item.archivedAt ? <><ArchiveRestore /><span>Unarchive</span></> : <><Archive /><span>Archive</span></>}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onSelect={onDelete}><Trash2 /><span>Delete…</span></DropdownMenuItem>
+        <DropdownMenuItem variant="destructive" disabled={busy} onSelect={onDelete}><Trash2 /><span>Delete…</span></DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   </li>;
