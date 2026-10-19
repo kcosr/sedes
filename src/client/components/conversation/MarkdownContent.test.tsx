@@ -42,6 +42,23 @@ const fileRequest = (reference: WorkspaceFileLinkReference) => ({
   target: { kind: "file" as const },
 });
 
+describe("MarkdownContent streaming updates", () => {
+  it("keeps a rendered link's element while the message keeps streaming", () => {
+    const view = render(
+      <MarkdownContent streaming>{"See [the docs](https://example.com/docs) and"}</MarkdownContent>,
+    );
+    const link = screen.getByRole("link", { name: /the docs/ });
+
+    view.rerender(
+      <MarkdownContent streaming>
+        {"See [the docs](https://example.com/docs) and more words"}
+      </MarkdownContent>,
+    );
+
+    expect(screen.getByRole("link", { name: /the docs/ })).toBe(link);
+  });
+});
+
 describe("MarkdownContent line breaks", () => {
   it("joins single newlines by default and shows them as line breaks when lineBreaks is on", () => {
     const source = "First line\nSecond line\n\nNext paragraph";
