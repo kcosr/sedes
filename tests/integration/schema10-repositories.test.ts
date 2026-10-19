@@ -5339,12 +5339,16 @@ describe("inactive schema-10 repositories", () => {
           now: 999,
         }),
       ).toMatchObject({ replayed: true, item: { state: "cancelled" } });
+      // The cancelled row is retained history, outside the presented queue.
       expect(
         queue.readProjectionState(fixture.scope, fixture.threadId),
       ).toEqual({
         threadRevision: expectedThreadRevision + 1,
-        records: [expect.objectContaining({ id: item.id, state: "cancelled" })],
+        records: [],
       });
+      expect(queue.list(fixture.scope, fixture.threadId)).toEqual([
+        expect.objectContaining({ id: item.id, state: "cancelled" }),
+      ]);
       expect(() =>
         queue.readProjectionState(
           { ...fixture.scope, principalId: "another-principal" },
