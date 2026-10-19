@@ -246,6 +246,9 @@ User-facing changes are collected here before release. See the
   blocked from archive or snooze. See
   [agent tools](docs/internals/agent-tools.md#durable-callback-lifecycle).
 
+- Queued input resumes when a Stop is later proven not applied, instead of
+  waiting on an idle thread for an unrelated event.
+
 ### Removed
 
 ## [0.2.0] - 2026-10-14

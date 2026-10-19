@@ -2171,6 +2171,14 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       clearTimeout(deadline.timer);
       this.#interruptDeadlines.delete(key);
     };
+    const rejectProvenNotApplied = () => {
+      // An uncertain receipt fenced queue dispatch, so a settle observed while
+      // Stop was in flight was refused. Its rejection must resume the queue.
+      const fenced = this.input.operations.findInterrupt(scope, operation.operationId)?.state === "uncertain";
+      this.input.operations.rejectInterruptProvenNotApplied(scope, operation.operationId);
+      finishDeadline();
+      if (fenced) void this.input.queue.onAuthoritativeSettled(scope, applicationThreadId).catch(() => undefined);
+    };
     const withinBudget = <T>(work: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
       const aborted = () => reject(new Error("conversation_stop_deadline_reached"));
       signal.addEventListener("abort", aborted, { once: true });
@@ -2185,8 +2193,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       const lease = this.input.runtimes.acquireExistingControl(scope, applicationThreadId);
       if (!lease) {
         if (current.state === "prepared") {
-          this.input.operations.rejectInterruptProvenNotApplied(scope, operation.operationId);
-          finishDeadline();
+          rejectProvenNotApplied();
           throw new DomainError("invalid_transition", "The existing conversation control is unavailable. Reconnect the thread and try Stop again.");
         }
         return { status: "recovery_required", retryable: true };
@@ -2201,8 +2208,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
           if (outcome.outcome === "unknown") return { status: "recovery_required", retryable: true };
           if (outcome.outcome === "not_applied") {
-            this.input.operations.rejectInterruptProvenNotApplied(scope, operation.operationId);
-            finishDeadline();
+            rejectProvenNotApplied();
             throw new DomainError("invalid_transition", "The previous Stop was not applied. Issue a new Stop to target current work.");
           }
         } else {
@@ -2230,8 +2236,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         return { status: "accepted", operationId: accepted.applicationOperationId };
       } catch (error) {
         if (currentBudget() && error instanceof BackendError && !error.crossedSubmissionBoundary) {
-          this.input.operations.rejectInterruptProvenNotApplied(scope, operation.operationId);
-          finishDeadline();
+          rejectProvenNotApplied();
           throw error;
         }
         if (error instanceof DomainError) throw error;

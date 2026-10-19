@@ -875,6 +875,101 @@ describe("queue dispatch and existing conversation Stop control", () => {
       await gateway.close(); await queue.close(); fixture.database.close();
     }
   });
+
+  function stopGateway(
+    fixture: Fixture,
+    queue: QueuedInputDispatcher,
+    queueGateway: FakeGateway,
+    control: {
+      readonly interrupt: (input: unknown, onDispatch?: () => void) => Promise<void>;
+      readonly reconcileInterrupt: () => Promise<{ readonly outcome: "unknown" | "not_applied" | "applied" }>;
+    },
+  ): ThreadMutationGateway {
+    return new ThreadMutationGateway({
+      actors: {} as never,
+      bindings: new ConversationBindingRepository(fixture.database), inventory: new InventoryRepository(fixture.database),
+      operations: new ConversationOperationRepository(fixture.database),
+      completions: new SubmissionCompletionRepository(fixture.database), queue, queueGateway,
+      runtimes: { acquire: async () => { throw new Error("Stop must not acquire transcript projection"); }, acquireExistingControl: () => ({ control: {
+        generation: "existing-native-owner", lifetime: new AbortController().signal, ...control,
+      }, release: () => undefined }) } as never,
+      lifecycle: {} as never, forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("unexpected fork discard"); } },
+      interactions: {} as never, presentation: {} as never,
+      agentToolPolicies: { database: fixture.database, get: () => { throw new Error("unexpected policy read"); }, update: () => { throw new Error("unexpected policy write"); } },
+      actionPersistence: new Map(), publishThreadSnapshot: async () => undefined, now: () => 700,
+    });
+  }
+
+  it("resumes a pending head fenced by a Stop the provider proves it did not apply", async () => {
+    const fixture = createFixture();
+    const threadId = fixture.threadIds[0];
+    const repository = new QueuedInputRepository(fixture.database);
+    const nativeGateway = new FakeGateway();
+    const scheduler = new ManualScheduler();
+    const { dispatcher: queue } = createDispatcher(repository, nativeGateway, { now: { value: 700 }, scheduler });
+    const operations = new ConversationOperationRepository(fixture.database);
+    let blockedDuringStop: boolean | undefined;
+    const gateway = stopGateway(fixture, queue, nativeGateway, {
+      interrupt: async (_input, onDispatch) => {
+        onDispatch?.();
+        // The turn settles while Stop is in flight; the uncertain receipt
+        // fences that settle-driven dispatch.
+        await queue.onAuthoritativeSettled(fixture.scope, threadId);
+        blockedDuringStop = operations.hasBlockingThreadOperation(fixture.scope, threadId, "submit");
+        throw new BackendError({ category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+          safeMessage: "The turn changed before Stop was applied." });
+      },
+      reconcileInterrupt: async () => ({ outcome: "unknown" }),
+    });
+    try {
+      nativeGateway.authoritativelySettled = false;
+      await queue.recover(fixture.scope);
+      enqueueUser(fixture, repository, threadId, "queued-before-stop", 650);
+      nativeGateway.authoritativelySettled = true;
+      await expect(gateway.mutate(fixture.scope, threadId, { kind: "interrupt", operationId: "stop-rejected" }))
+        .rejects.toThrow(/Stop was applied/);
+      expect(blockedDuringStop).toBe(true);
+      expect(operations.findInterrupt(fixture.scope, "stop-rejected")).toBeUndefined();
+      await vi.waitFor(() => expect(nativeGateway.submitted).toHaveLength(1));
+      expect(repository.get(fixture.scope, threadId, "queued-before-stop").state).toBe("accepted");
+    } finally {
+      await gateway.close(); await queue.close(); fixture.database.close();
+    }
+  });
+
+  it("resumes a pending head when an uncertain Stop reconciles as not applied", async () => {
+    const fixture = createFixture();
+    const threadId = fixture.threadIds[0];
+    const repository = new QueuedInputRepository(fixture.database);
+    const nativeGateway = new FakeGateway();
+    const scheduler = new ManualScheduler();
+    const { dispatcher: queue } = createDispatcher(repository, nativeGateway, { now: { value: 700 }, scheduler });
+    const operations = new ConversationOperationRepository(fixture.database);
+    const interrupt = vi.fn(async () => undefined);
+    const gateway = stopGateway(fixture, queue, nativeGateway, {
+      interrupt,
+      reconcileInterrupt: async () => ({ outcome: "not_applied" }),
+    });
+    try {
+      // A Stop that crossed into the provider before a restart stays uncertain.
+      operations.prepareInterrupt(fixture.scope, threadId, { operationId: "stop-before-restart", now: 690 });
+      operations.markInterruptStarted(fixture.scope, "stop-before-restart");
+      await queue.recover(fixture.scope);
+      enqueueUser(fixture, repository, threadId, "queued-behind-uncertain-stop", 650);
+      await queue.onAuthoritativeSettled(fixture.scope, threadId);
+      expect(nativeGateway.submitted).toHaveLength(0);
+      expect(repository.get(fixture.scope, threadId, "queued-behind-uncertain-stop").state).toBe("pending");
+
+      await expect(gateway.mutate(fixture.scope, threadId, { kind: "interrupt", operationId: "stop-before-restart" }))
+        .rejects.toThrow(/previous Stop was not applied/);
+      expect(interrupt).not.toHaveBeenCalled();
+      expect(operations.findInterrupt(fixture.scope, "stop-before-restart")).toBeUndefined();
+      await vi.waitFor(() => expect(nativeGateway.submitted).toHaveLength(1));
+      expect(repository.get(fixture.scope, threadId, "queued-behind-uncertain-stop").state).toBe("accepted");
+    } finally {
+      await gateway.close(); await queue.close(); fixture.database.close();
+    }
+  });
 });
 
 describe("ConversationOperationRepository interrupt rejection", () => {
