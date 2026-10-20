@@ -32,6 +32,7 @@ import {
 import {
   workspaceFileAbsolutePathSchema,
   type AssociatedTask,
+  type Task,
   type TaskScope,
 } from "../../../shared/index.js";
 import {
@@ -220,6 +221,42 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
+/**
+ * A create whose outcome is unknown: the response was lost, or the server or
+ * a proxy failed, so it may have committed. Resubmitting exactly that request
+ * with its mutation ID replays the server's receipt instead of creating the
+ * task twice. The attempt belongs to the one title it failed for, and is
+ * abandoned once that title is edited, dropped, or created.
+ */
+interface UncertainCreate {
+  readonly request: string;
+  readonly mutationId: string;
+}
+
+/** The add row's draft, with the create attempt it restored, if any. */
+type AddDraft = TaskAddDraft & { readonly uncertainCreate?: UncertainCreate };
+
+/**
+ * The attempt for one create: `previous` when it is the same request, else a
+ * new mutation ID. Reusing an ID for a different request would conflict.
+ */
+function createAttempt(
+  title: string,
+  scope: TaskScope,
+  details: string | undefined,
+  placement: { readonly pinned: boolean; readonly backlog: boolean },
+  previous: UncertainCreate | undefined,
+): UncertainCreate {
+  const request = JSON.stringify([title, scope, details ?? "", placement.pinned, placement.backlog]);
+  return previous?.request === request
+    ? previous
+    : { request, mutationId: crypto.randomUUID() };
+}
+
+/** A definitive rejection needs a change; anything else may have committed. */
+const createOutcomeUnknown = (cause: unknown): boolean =>
+  !(cause instanceof ApiError) || cause.status >= 500;
+
 const ADD_PLACEHOLDER: Record<TasksView, string> = {
   thread: "Add a task to this thread…",
   project: "Add a task to this project…",
@@ -302,7 +339,7 @@ export function TasksPanelContent({
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
-  const [addDraft, setAddDraft] = useState<TaskAddDraft>(EMPTY_TASK_ADD_DRAFT);
+  const [addDraft, setAddDraft] = useState<AddDraft>(EMPTY_TASK_ADD_DRAFT);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [moveMenuId, setMoveMenuId] = useState<string | null>(null);
   const [backlogOpen, setBacklogOpen] = useState(false);
@@ -314,6 +351,9 @@ export function TasksPanelContent({
   const [pasteTitles, setPasteTitles] = useState<readonly string[] | null>(null);
   const [pastePinned, setPastePinned] = useState(false);
   const [pasteCreating, setPasteCreating] = useState(false);
+  // The paste stops at its first failure, so this is the next line a retry
+  // creates. Closing the dialog abandons it.
+  const pasteUncertainCreate = useRef<UncertainCreate | undefined>(undefined);
   const pastePinId = useId();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
@@ -369,21 +409,73 @@ export function TasksPanelContent({
     },
     [],
   );
+  // ── Per-task mutation order ──────────────────────────────────────────────
+  // Every quick action sends the task's revision. Actions on one task run one
+  // at a time, each at the newest revision this panel knows: the listed
+  // task's, or one an earlier action returned that the application stream
+  // has not published yet. Otherwise this client's own earlier action would
+  // fail the next one as a conflict. What each action changes stays what
+  // the reader chose from the task as shown.
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+  const taskMutationTails = useRef(new Map<string, Promise<void>>());
+  const returnedRevisions = useRef(new Map<string, number>());
+  const atNewestRevision = useCallback(
+    (task: AssociatedTask): AssociatedTask => {
+      const listed =
+        tasksRef.current.find(({ id }) => id === task.id)?.revision ?? 0;
+      const returned = returnedRevisions.current.get(task.id) ?? 0;
+      if (returned <= listed) returnedRevisions.current.delete(task.id);
+      const revision = Math.max(task.revision, listed, returned);
+      return revision === task.revision ? task : { ...task, revision };
+    },
+    [],
+  );
+  const mutateTask = useCallback(
+    (
+      task: AssociatedTask,
+      operation: (current: AssociatedTask) => Promise<Task>,
+    ): Promise<Task> => {
+      const tails = taskMutationTails.current;
+      const run = async () => {
+        const result = await operation(atNewestRevision(task));
+        const returned = returnedRevisions.current.get(task.id) ?? 0;
+        if (result.revision > returned) {
+          returnedRevisions.current.set(task.id, result.revision);
+        }
+        return result;
+      };
+      const previous = tails.get(task.id);
+      const result = previous ? previous.then(run) : run();
+      const tail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      tails.set(task.id, tail);
+      void tail.then(() => {
+        if (tails.get(task.id) === tail) tails.delete(task.id);
+      });
+      return result;
+    },
+    [atNewestRevision],
+  );
+
   /**
-   * Runs one action on one task; a repeat while it runs is ignored. A
-   * failure is reported as `failure` (naming the task) and the reason.
+   * Runs one action on one task after any earlier action on it; a repeat
+   * while it waits or runs is ignored. A failure is reported as `failure`
+   * (naming the task) and the reason.
    */
   const runTask = useCallback(
-    async <T,>(
+    async (
       task: AssociatedTask,
       action: TaskAction,
-      operation: () => Promise<T>,
+      operation: (current: AssociatedTask) => Promise<Task>,
       failure: string,
-    ): Promise<{ ok: true; value: T } | { ok: false }> => {
+    ): Promise<{ ok: true; value: Task } | { ok: false }> => {
       if (pendingRef.current.get(task.id)?.has(action)) return { ok: false };
       markPending(task.id, action, true);
       try {
-        const value = await operation();
+        const value = await mutateTask(task, operation);
         setError(null);
         return { ok: true, value };
       } catch (cause) {
@@ -393,7 +485,7 @@ export function TasksPanelContent({
         markPending(task.id, action, false);
       }
     },
-    [markPending],
+    [markPending, mutateTask],
   );
 
   // ── What the view shows ──────────────────────────────────────────────────
@@ -587,7 +679,7 @@ export function TasksPanelContent({
       const result = await runTask(
         task,
         "complete",
-        () => store.updateTask(task, { completed }),
+        (current) => store.updateTask(current, { completed }),
         `${completed ? "Couldn't complete" : "Couldn't reopen"} “${task.title}”`,
       );
       if (!result.ok) return;
@@ -600,14 +692,14 @@ export function TasksPanelContent({
     async (task: AssociatedTask, scope: TaskScope) => {
       markPending(task.id, "move", true);
       try {
-        await store.moveTask(task, scope);
+        await mutateTask(task, (current) => store.moveTask(current, scope));
       } finally {
         markPending(task.id, "move", false);
       }
       setError(null);
       announce(`Moved “${task.title}” to ${destinations.label(scope)}.`);
     },
-    [announce, destinations, markPending, store],
+    [announce, destinations, markPending, mutateTask, store],
   );
 
   const moveTo = useCallback(
@@ -701,7 +793,7 @@ export function TasksPanelContent({
       void runTask(
         task,
         "pin",
-        () => store.updateTask(task, { pinned: !task.pinned }),
+        (current) => store.updateTask(current, { pinned: !task.pinned }),
         `${task.pinned ? "Couldn't unpin" : "Couldn't pin"} “${task.title}”`,
       );
     },
@@ -714,7 +806,7 @@ export function TasksPanelContent({
       const result = await runTask(
         task,
         "backlog",
-        () => store.updateTask(task, { backlog }),
+        (current) => store.updateTask(current, { backlog }),
         backlog
           ? `Couldn't send “${task.title}” to the Backlog`
           : `Couldn't take “${task.title}” out of the Backlog`,
@@ -772,12 +864,33 @@ export function TasksPanelContent({
     [actions, active, destinations, pending, taskDrag, touch, workspace?.available],
   );
 
+  // A draft restored after an unknown outcome keeps its attempt only until
+  // the reader edits what it would create.
+  const changeAddDraft = (next: TaskAddDraft) =>
+    setAddDraft((current) => {
+      const draft: TaskAddDraft = {
+        title: next.title,
+        notes: next.notes,
+        notesOpen: next.notesOpen,
+        pinned: next.pinned,
+      };
+      return current.uncertainCreate &&
+        next.title === current.title &&
+        next.notes === current.notes &&
+        next.pinned === current.pinned
+        ? { ...draft, uncertainCreate: current.uncertainCreate }
+        : draft;
+    });
+
   // Default to the current filters; an explicit pin choice wins.
   const addTask = (title: string, notes: string, pinned: boolean) => {
     if (!destination) return;
     const key = crypto.randomUUID();
+    const details = notes || undefined;
+    const placement = { pinned, backlog: options.onlyBacklog };
+    const attempt = createAttempt(title, destination, details, placement, addDraft.uncertainCreate);
     setCreating((current) => [...current, { key, title, scope: destination }]);
-    void store.createTask(title, destination, notes || undefined, { pinned, backlog: options.onlyBacklog }).then(
+    void store.createTask(title, destination, details, placement, attempt.mutationId).then(
       (created) => {
         setError(null);
         setCreating((current) =>
@@ -790,10 +903,17 @@ export function TasksPanelContent({
       (cause: unknown) => {
         setCreating((current) => current.filter((entry) => entry.key !== key));
         setError(`Couldn't add “${title}”: ${errorMessage(cause)}`);
-        // Give the text back unless the next task is already being typed.
+        // Give the text back unless the next task is already being typed,
+        // with the attempt a resubmit reuses if it may have committed.
         setAddDraft((draft) =>
           draft.title.length === 0 && !draft.notesOpen
-            ? { title, notes, notesOpen: notes.length > 0, pinned }
+            ? {
+                title,
+                notes,
+                notesOpen: notes.length > 0,
+                pinned,
+                ...(createOutcomeUnknown(cause) ? { uncertainCreate: attempt } : {}),
+              }
             : draft,
         );
       },
@@ -906,13 +1026,16 @@ export function TasksPanelContent({
     if (!event.currentTarget.contains(event.target as Node)) return;
     if (event.nativeEvent.isComposing) return;
     if (event.key === "Escape") {
-      event.preventDefault();
       clearAnnouncement();
+      // Claim the key only when it closed something here, so the layout can
+      // still use it (Escape restores a maximized layout).
       if (expandedId !== null) {
+        event.preventDefault();
         setFocusRequest(expandedId);
         setExpandedId(null);
         setMoveMenuId(null);
       } else if (searchOpen) {
+        event.preventDefault();
         closeSearch();
       }
       return;
@@ -1284,9 +1407,10 @@ export function TasksPanelContent({
       draft={addDraft}
       defaultPinned={options.onlyPinned}
       inputRef={addInputRef}
-      onDraftChange={setAddDraft}
+      onDraftChange={changeAddDraft}
       onAdd={addTask}
       onPasteMany={(titles) => {
+        pasteUncertainCreate.current = undefined;
         setPastePinned(addDraft.pinned ?? options.onlyPinned);
         setPasteTitles(titles);
       }}
@@ -1525,19 +1649,25 @@ export function TasksPanelContent({
             : []
         }
         onOpenChange={(open) => {
-          if (!open) setPasteTitles(null);
+          if (open) return;
+          pasteUncertainCreate.current = undefined;
+          setPasteTitles(null);
         }}
         onConfirm={async () => {
           if (!pasteTitles || !destination) return;
           setPasteCreating(true);
           // Created last-first, so the newest-first list reads in pasted order.
           const remaining = [...pasteTitles];
+          const placement = { pinned: pastePinned, backlog: options.onlyBacklog };
           try {
             while (remaining.length > 0) {
               const title = remaining.at(-1)!;
+              const attempt = createAttempt(title, destination, undefined, placement, pasteUncertainCreate.current);
+              pasteUncertainCreate.current = undefined;
               try {
-                await store.createTask(title, destination, undefined, { pinned: pastePinned, backlog: options.onlyBacklog });
+                await store.createTask(title, destination, undefined, placement, attempt.mutationId);
               } catch (cause) {
+                if (createOutcomeUnknown(cause)) pasteUncertainCreate.current = attempt;
                 setPasteTitles([...remaining]);
                 throw cause;
               }

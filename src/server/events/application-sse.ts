@@ -116,13 +116,16 @@ export async function serveApplicationEventStream(
       response.end();
     }
   };
+  // A bounded full replacement supersedes queued deltas and may itself be
+  // larger than the incremental pending budget, so only deltas queued behind
+  // it count against `pendingByteLimit`.
+  const pendingIncrementalBytes = (envelope: ApplicationEventEnvelope): number =>
+    envelope.event.type === "snapshot" ? 0 : hub.encoded(envelope).bytes;
   const enqueue = (envelope: ApplicationEventEnvelope): boolean => {
     const bytes = hub.encoded(envelope).bytes;
-    // A bounded full replacement supersedes queued deltas, and may itself be
-    // larger than the incremental pending budget.
     if (envelope.event.type === "snapshot") {
       pending = [envelope];
-      pendingBytes = bytes;
+      pendingBytes = 0;
       return true;
     }
     if (
@@ -169,9 +172,8 @@ export async function serveApplicationEventStream(
           continue;
         }
         const envelope = pending.shift()!;
-        const encoded = hub.encoded(envelope);
-        pendingBytes -= encoded.bytes;
-        write(encoded.frame);
+        pendingBytes -= pendingIncrementalBytes(envelope);
+        write(hub.encoded(envelope).frame);
       }
     } catch {
       close("stream_error");
@@ -259,7 +261,7 @@ export async function serveApplicationEventStream(
       }
       if (!pending.length) continue;
       const event = pending.shift()!;
-      pendingBytes -= hub.encoded(event).bytes;
+      pendingBytes -= pendingIncrementalBytes(event);
       const sequence = hub.sequenceOf(event.eventId);
       if (sequence === undefined)
         throw new Error("application_sse_event_generation_invalid");

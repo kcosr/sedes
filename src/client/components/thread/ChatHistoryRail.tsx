@@ -4,6 +4,7 @@ import type {
   ConversationTurn,
 } from "../../../shared/index.js";
 import { assistantMessagePreview, assistantPreviewLimit, collapsePreview, userMessagePreview } from "./message-previews.js";
+import { derivedPerTurn } from "./turn-derivation.js";
 
 export type ChatHistoryEntry = {
   readonly itemId: string;
@@ -27,60 +28,95 @@ export function createChatHistoryEntries(
   for (const turnId of orderedTurnIds) {
     const turn = turnsById[turnId];
     if (!turn) continue;
-    let userMessageIndex = 0;
-    for (let index = 0; index < turn.orderedItemIds.length; index += 1) {
-      const item = itemsById[turn.orderedItemIds[index]!];
-      if (item?.kind !== "user_message") continue;
-
-      const assistantPreviews: string[] = [];
-      for (
-        let replyIndex = index + 1;
-        replyIndex < turn.orderedItemIds.length;
-        replyIndex += 1
-      ) {
-        const reply = itemsById[turn.orderedItemIds[replyIndex]!];
-        if (reply?.kind === "user_message") break;
-        if (reply?.kind !== "assistant_message") continue;
-        const preview = assistantMessagePreview(reply);
-        if (preview) assistantPreviews.push(preview);
-      }
-
-      const assistantPreview = collapsePreview(
-        assistantPreviews.join(" "),
-        assistantPreviewLimit,
-      );
-      const pending = !assistantPreview && turn.status === "in_progress";
-      entries.push({
-        itemId: item.id,
-        turnId,
-        userPreview: userMessagePreview(item),
-        ...(item.origin
-          ? {
-              userLabel:
-                item.origin.kind === "question_response"
-                  ? "Question answered"
-                  : item.origin.kind === "page_response"
-                    ? `Page response · ${item.origin.title} · Revision ${item.origin.revision}`
-                  : `${item.origin.kind === "agent_message" ? "Agent message" : "Agent result"} · ${item.origin.sourceThreadLabel.text}`,
-            }
-          : {}),
-        assistantPreview:
-          assistantPreview ||
-          (pending ? "Waiting for a response…" : "No assistant response."),
-        responseState: assistantPreview
-          ? "available"
-          : pending
-            ? "pending"
-            : "empty",
-        ...(userMessageIndex === 0 && bookmarkedTurnIds.has(turnId)
-          ? { bookmarked: true }
-          : {}),
-      });
-      userMessageIndex += 1;
-    }
+    const [first, ...rest] = turnHistoryEntries(turn, itemsById);
+    if (!first) continue;
+    entries.push(
+      bookmarkedTurnIds.has(turnId) ? { ...first, bookmarked: true } : first,
+      ...rest,
+    );
   }
 
   return entries;
+}
+
+/** One turn's entries, bookmarks aside; unchanged turns keep their entries. */
+const turnHistoryEntries = derivedPerTurn(function turnHistoryEntries(
+  turn: ConversationTurn,
+  itemsById: Readonly<Record<string, ConversationItem>>,
+): readonly ChatHistoryEntry[] {
+  const entries: ChatHistoryEntry[] = [];
+  for (let index = 0; index < turn.orderedItemIds.length; index += 1) {
+    const item = itemsById[turn.orderedItemIds[index]!];
+    if (item?.kind !== "user_message") continue;
+
+    const assistantPreviews: string[] = [];
+    for (
+      let replyIndex = index + 1;
+      replyIndex < turn.orderedItemIds.length;
+      replyIndex += 1
+    ) {
+      const reply = itemsById[turn.orderedItemIds[replyIndex]!];
+      if (reply?.kind === "user_message") break;
+      if (reply?.kind !== "assistant_message") continue;
+      const preview = assistantMessagePreview(reply);
+      if (preview) assistantPreviews.push(preview);
+    }
+
+    const assistantPreview = collapsePreview(
+      assistantPreviews.join(" "),
+      assistantPreviewLimit,
+    );
+    const pending = !assistantPreview && turn.status === "in_progress";
+    entries.push({
+      itemId: item.id,
+      turnId: turn.id,
+      userPreview: userMessagePreview(item),
+      ...(item.origin
+        ? {
+            userLabel:
+              item.origin.kind === "question_response"
+                ? "Question answered"
+                : item.origin.kind === "page_response"
+                  ? `Page response · ${item.origin.title} · Revision ${item.origin.revision}`
+                : `${item.origin.kind === "agent_message" ? "Agent message" : "Agent result"} · ${item.origin.sourceThreadLabel.text}`,
+          }
+        : {}),
+      assistantPreview:
+        assistantPreview ||
+        (pending ? "Waiting for a response…" : "No assistant response."),
+      responseState: assistantPreview
+        ? "available"
+        : pending
+          ? "pending"
+          : "empty",
+    });
+  }
+  return entries;
+});
+
+/**
+ * Value equality for rail entries. Streaming flushes rebuild the entries even
+ * when no preview changed; consumers keep the previous array in that case.
+ */
+export function sameChatHistoryEntries(
+  left: readonly ChatHistoryEntry[],
+  right: readonly ChatHistoryEntry[],
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const other = right[index]!;
+    return (
+      entry === other ||
+      (entry.itemId === other.itemId &&
+        entry.turnId === other.turnId &&
+        entry.userPreview === other.userPreview &&
+        entry.userLabel === other.userLabel &&
+        entry.assistantPreview === other.assistantPreview &&
+        entry.responseState === other.responseState &&
+        entry.bookmarked === other.bookmarked)
+    );
+  });
 }
 
 export function ChatHistoryRail({

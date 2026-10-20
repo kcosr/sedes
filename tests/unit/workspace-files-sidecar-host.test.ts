@@ -809,6 +809,58 @@ describe("WorkspaceFilesSidecarHost", () => {
       host.close();
     }
   });
+
+  it("closes the watcher of an open cancelled while the watcher was starting", async () => {
+    const policy = await mkdtemp(path.join(tmpdir(), "h-sidecar-watch-"));
+    roots.push(policy);
+    const workspace = path.join(policy, "workspace");
+    await mkdir(workspace);
+    const started = deferred<void>();
+    const subscription = { failed: new Promise<void>(() => undefined), close: vi.fn() };
+    const watchReady = deferred<typeof subscription>();
+    const engine = {
+      validateRoot: async () => undefined,
+      watch: async () => {
+        started.resolve();
+        return await watchReady.promise;
+      },
+      close: vi.fn(),
+    } as unknown as WorkspaceFilesEngine;
+    const host = new WorkspaceFilesSidecarHost({
+      sessionNonce: "n".repeat(32),
+      engine,
+      sendInvalidation: async () => undefined,
+      sendWatchFailure: async () => undefined,
+      openDownloadStream: () => {
+        throw new Error("unexpected_download_stream");
+      },
+      onDownloadCleanupFailure: () => undefined,
+    });
+    try {
+      const opened = await host.handlers.rootOpen(
+        {
+          admissionId: "de8e220b-0000-4000-8000-000000000004",
+          rootId: "primary",
+          rootKind: "primary",
+          declaredPath: workspace,
+          policyRootPath: policy,
+        },
+        context(),
+      );
+      const controller = new AbortController();
+      const pending = host.handlers.watchOpen(
+        { rootHandle: opened.rootHandle },
+        { ...context(), signal: controller.signal },
+      );
+      await started.promise;
+      controller.abort(new Error("caller_cancelled"));
+      watchReady.resolve(subscription);
+      await expect(pending).rejects.toThrow("caller_cancelled");
+      expect(subscription.close).toHaveBeenCalledOnce();
+    } finally {
+      host.close();
+    }
+  });
 });
 
 function context() {

@@ -403,6 +403,9 @@ import {
   type SedesServerEndpoint,
 } from "../app/server-endpoint.js";
 
+/** The Fetch standard's in-flight keepalive body quota. */
+const KEEPALIVE_BODY_LIMIT_BYTES = 64 * 1024;
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -2043,26 +2046,33 @@ export class ApiClient {
     );
   }
 
+  /**
+   * `keepalive` lets a save issued while the page is being hidden or unloaded
+   * outlive the document. Browsers cap keepalive bodies at 64 KiB, so a larger
+   * draft is sent as an ordinary request.
+   */
   saveDraft(
     threadId: string,
     draft: NormalizedDraft,
+    options: { readonly keepalive?: boolean } = {},
   ): Promise<NormalizedDraft> {
+    const body = JSON.stringify({
+      text: draft.text,
+      ...(draft.selectedSkillId
+        ? { selectedSkillId: draft.selectedSkillId }
+        : {}),
+      contextExcerpts: draft.contextExcerpts,
+      attachmentIds: draft.attachments.map(({ id }) => id),
+      taskReferenceIds: draft.taskReferences.map(({ taskId }) => taskId),
+      expectedRevision: draft.revision,
+    });
+    const keepalive =
+      options.keepalive === true &&
+      new TextEncoder().encode(body).byteLength <= KEEPALIVE_BODY_LIMIT_BYTES;
     return this.#mutation(
       `/api/threads/${encodeURIComponent(threadId)}/draft`,
       normalizedDraftSchema,
-      {
-        method: "PUT",
-        body: JSON.stringify({
-          text: draft.text,
-          ...(draft.selectedSkillId
-            ? { selectedSkillId: draft.selectedSkillId }
-            : {}),
-          contextExcerpts: draft.contextExcerpts,
-          attachmentIds: draft.attachments.map(({ id }) => id),
-          taskReferenceIds: draft.taskReferences.map(({ taskId }) => taskId),
-          expectedRevision: draft.revision,
-        }),
-      },
+      { method: "PUT", body, ...(keepalive ? { keepalive: true } : {}) },
     );
   }
 

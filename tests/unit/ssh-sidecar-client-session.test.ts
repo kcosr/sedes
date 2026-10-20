@@ -10,10 +10,12 @@ import {
   agentToolsCatalogOperation,
   agentToolsV6Operations,
   controlHelloOperation,
+  controlPingOperation,
   terminalPrepareOperation,
   interactiveTerminalV2Operations,
   registerControlV2Operations,
   workspaceFilesListOperation,
+  workspaceFilesInvalidatedEventSchema,
   workspaceFilesWatchFailedEventSchema,
   workspaceFilesV8Operations,
   workspaceContextV1Operations,
@@ -944,7 +946,148 @@ describe("SidecarClientSession", () => {
     close.mockRestore();
     await host.close("test_complete");
   });
+
+  it("drops in-flight events for closed watches without closing the session", async () => {
+    const { host, session } = await startWorkspaceFilesSession();
+    let closedReason: string | undefined;
+    void session.closed.then(({ reason }) => {
+      closedReason = reason;
+    });
+    try {
+      const delivered = vi.fn();
+      for (let index = 0; index < 300; index += 1) {
+        const subscriptionHandle = randomUUID();
+        const removeInvalidation = session.registerInvalidation(subscriptionHandle, delivered);
+        const removeFailure = session.registerWatchFailure(subscriptionHandle, delivered);
+        removeInvalidation();
+        removeFailure();
+        await sendInvalidation(host, subscriptionHandle);
+        await sendWatchFailure(host, subscriptionHandle);
+      }
+      const abandonedHandle = randomUUID();
+      session.retireWatch(abandonedHandle);
+      await sendInvalidation(host, abandonedHandle);
+      await expect(session.call(controlPingOperation, { pingId: randomUUID() })).resolves.toBeDefined();
+      expect(closedReason).toBeUndefined();
+      expect(delivered).not.toHaveBeenCalled();
+
+      const earlyHandle = randomUUID();
+      await sendInvalidation(host, earlyHandle);
+      await vi.waitFor(async () => {
+        const early = vi.fn();
+        const remove = session.registerInvalidation(earlyHandle, early);
+        try {
+          await Promise.resolve();
+          expect(early).toHaveBeenCalledOnce();
+        } finally {
+          remove();
+        }
+      });
+    } finally {
+      await session.close("test_complete");
+      await host.close("test_complete");
+    }
+  });
+
+  it("expires unclaimed early watch events while keeping the burst limit", async () => {
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { host, session } = await startWorkspaceFilesSession();
+    let closedReason: string | undefined;
+    void session.closed.then(({ reason }) => {
+      closedReason = reason;
+    });
+    try {
+      for (let round = 0; round < 3; round += 1) {
+        for (let index = 0; index < 200; index += 1) {
+          await sendInvalidation(host, randomUUID());
+        }
+        now += 31_000;
+      }
+      await expect(session.call(controlPingOperation, { pingId: randomUUID() })).resolves.toBeDefined();
+      expect(closedReason).toBeUndefined();
+
+      for (let index = 0; index < 257 && closedReason === undefined; index += 1) {
+        await sendInvalidation(host, randomUUID());
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      await vi.waitFor(() => expect(closedReason).toBe("sidecar_early_watch_event_limit"));
+    } finally {
+      clock.mockRestore();
+      await session.close("test_complete").catch(() => undefined);
+      await host.close("test_complete");
+    }
+  });
 });
+
+async function startWorkspaceFilesSession() {
+  const streams = byteStreamPair();
+  const registry = new SidecarOperationRegistry();
+  for (const definition of workspaceFilesV8Operations) {
+    registry.register(
+      definition as never,
+      (() => {
+        throw new Error("unexpected_workspace_operation");
+      }) as never,
+    );
+  }
+  registerControlV2Operations(registry, {
+    buildId: artifact.buildId,
+    artifactSha256: artifact.artifactSha256,
+    enabledSidecarCapabilities: [workspaceCapability],
+    enabledSedesCapabilities: [],
+  });
+  const host = new SidecarProtocolPeer({
+    role: "sidecar",
+    sessionNonce,
+    registry,
+    transport: new LengthPrefixedSidecarFrameTransport({
+      assurance: { kind: "test_server", carrierGeneration: 1 },
+      stream: streams.right,
+    }),
+  });
+  host.start();
+  const session = await SidecarClientSession.start({
+    transportKind: "ssh_stdio",
+    stream: streams.left,
+    carrierGeneration: 1,
+    sessionNonce,
+    artifact,
+    installation,
+    signal: new AbortController().signal,
+    authorizedRuntimeCapabilities: [],
+    authorizedCapabilities: [workspaceCapability],
+    sedesOperations: new SidecarOperationRegistry(),
+    heartbeatIntervalMilliseconds: 60_000,
+  });
+  return { host, session };
+}
+
+async function sendInvalidation(
+  host: SidecarProtocolPeer,
+  subscriptionHandle: string,
+): Promise<void> {
+  await host.sendEvent({
+    capabilityId: "workspace_files",
+    majorVersion: 8,
+    event: "files.invalidated",
+    schema: workspaceFilesInvalidatedEventSchema,
+    payload: { subscriptionHandle },
+  });
+}
+
+async function sendWatchFailure(
+  host: SidecarProtocolPeer,
+  subscriptionHandle: string,
+): Promise<void> {
+  await host.sendEvent({
+    capabilityId: "workspace_files",
+    majorVersion: 8,
+    event: "files.watch_failed",
+    schema: workspaceFilesWatchFailedEventSchema,
+    payload: { subscriptionHandle },
+  });
+}
 
 class AsyncByteQueue implements AsyncIterable<Uint8Array> {
   readonly #values: Uint8Array[] = [];

@@ -304,6 +304,7 @@ import {
   securityHeaders,
 } from "./security/http-security.js";
 import { ApiError, errorMiddleware, notFound, projectApiError } from "./http/errors.js";
+import { clientAssetCacheControl, clientAssets } from "./http/client-assets.js";
 import type {
   ApplicationDrainController,
   HttpRequestOperationGate,
@@ -3909,12 +3910,16 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   });
   if (dependencies.clientDirectory) {
     const clientDirectory = dependencies.clientDirectory;
-    app.use(express.static(clientDirectory));
+    app.use(clientAssets(clientDirectory));
     routes.get("/{*path}", (_request, response) => {
       // Send relative to the client root. With an absolute path, `send`
       // treats every segment as request-controlled and ignores dotfiles,
       // so a checkout under a dot-directory failed every deep link.
-      response.sendFile("index.html", { root: clientDirectory });
+      response.sendFile("index.html", {
+        root: clientDirectory,
+        cacheControl: false,
+        headers: { "Cache-Control": clientAssetCacheControl("/index.html") },
+      });
     });
   }
   app.use(() => {

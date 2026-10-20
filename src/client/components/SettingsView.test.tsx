@@ -37,7 +37,8 @@ import {
 import { clearDiagnostics, recordSeekDiagnostic } from "../app/diagnostics.js";
 import { SEDES_VERSION } from "../../shared/version.js";
 import { createRef } from "react";
-import { SettingsView, useSettingsPages } from "./SettingsView.js";
+import { SettingsView } from "./SettingsView.js";
+import { useSettingsPages } from "./settings/use-settings-pages.js";
 import { SettingsNav } from "./settings/SettingsNav.js";
 import { NavigationControlsContext } from "../app/navigation-controls.js";
 import { navigate, settingsPath, useRoute } from "../app/router.js";

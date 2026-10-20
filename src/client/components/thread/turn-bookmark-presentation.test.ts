@@ -49,4 +49,20 @@ describe("turn bookmark presentation", () => {
   it("does not offer a bookmark for an optimistic or provider-only turn without a durable user message", () => {
     expect(turnBookmarkPreview(turn(["reply"]), { reply: assistant("reply", "Reply") })).toBeUndefined();
   });
+
+  it("reuses a turn's presentation until one of its items changes", () => {
+    const items = { question: user("question", "Question"), reply: assistant("reply", "Reply") };
+    const current = turn(Object.keys(items));
+    const preview = turnBookmarkPreview(current, items);
+    const [entry] = createChatHistoryEntries(["turn"], { turn: current }, items);
+
+    // A streamed delta elsewhere replaces the item map, not this turn's items.
+    const unrelated = { ...items, other: assistant("other", "Other") };
+    expect(turnBookmarkPreview(current, unrelated)).toBe(preview);
+    expect(createChatHistoryEntries(["turn"], { turn: current }, unrelated)[0]).toBe(entry);
+
+    const edited = { ...items, reply: assistant("reply", "Edited reply") };
+    expect(turnBookmarkPreview(current, edited)?.assistantPreview).toBe("Edited reply");
+    expect(createChatHistoryEntries(["turn"], { turn: current }, edited)[0]?.assistantPreview).toBe("Edited reply");
+  });
 });

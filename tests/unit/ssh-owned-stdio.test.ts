@@ -124,6 +124,26 @@ describe("openOwnedSshStdio", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
+  it("reports an effective-configuration process that survives cancellation as a cleanup failure", async () => {
+    const child = fakeChild();
+    child.kill.mockImplementation(() => true);
+    const controller = new AbortController();
+    const result = assertManagedSidecarSshConfiguration({
+      host: "slow-alias",
+      signal: controller.signal,
+      spawnProcess: () => {
+        queueMicrotask(() => controller.abort(new Error("test_abort")));
+        return child as unknown as ChildProcess;
+      },
+      stopTimeoutMilliseconds: 1,
+    });
+    await expect(result).rejects.toMatchObject({
+      name: SshOwnedStdioCleanupError.name,
+      cause: { diagnosticCode: "ssh_child_survived_cleanup" },
+    });
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
   it("waits for effective-configuration stdout that arrives after process exit", async () => {
     const child = fakeChild();
     await expect(

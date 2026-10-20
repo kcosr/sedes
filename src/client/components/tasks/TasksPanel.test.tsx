@@ -19,6 +19,7 @@ import type {
   WorkspaceFileLinkReference,
 } from "../../../shared/index.js";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
+import { ApiError } from "../../api/ApiClient.js";
 import {
   navigate,
   threadPath,
@@ -462,7 +463,7 @@ describe("TasksPanel scope", () => {
     fireEvent.change(addInput(), { target: { value: "From All" } });
     fireEvent.keyDown(addInput(), { key: "Enter" });
     await vi.waitFor(() =>
-      expect(store.createTask).toHaveBeenCalledWith("From All", { kind: "global" }, undefined, UNPLACED),
+      expect(store.createTask).toHaveBeenCalledWith("From All", { kind: "global" }, undefined, UNPLACED, expect.any(String)),
     );
 
     view.unmount();
@@ -690,6 +691,7 @@ describe("TasksPanel across a project's locations", () => {
         { kind: "project", projectId: "project-1" },
         undefined,
         UNPLACED,
+        expect.any(String),
       ),
     );
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
@@ -808,6 +810,7 @@ describe("TasksPanel add row", () => {
       { kind: "thread", threadId: "thread-9" },
       "Measure before and after.\nTwice.",
       UNPLACED,
+      expect.any(String),
     );
     expect(screen.queryByRole("textbox", { name: "New task notes" })).not.toBeInTheDocument();
     expect(addInput()).toHaveFocus();
@@ -866,7 +869,7 @@ describe("TasksPanel add row", () => {
       "Ship it",
       "Write the migration",
     ]);
-    expect(store.createTask).toHaveBeenCalledWith("Ship it", { kind: "thread", threadId: "thread-9" }, undefined, UNPLACED);
+    expect(store.createTask).toHaveBeenCalledWith("Ship it", { kind: "thread", threadId: "thread-9" }, undefined, UNPLACED, expect.any(String));
   });
 
   it("keeps a single-line paste in the field", async () => {
@@ -887,7 +890,7 @@ describe("TasksPanel add row", () => {
     expect(pin).toHaveAttribute("aria-pressed", "true");
     await user.click(addInput());
     await user.keyboard("Keep this handy{Enter}");
-    expect(store.createTask).toHaveBeenCalledWith("Keep this handy", { kind: "thread", threadId: "thread-9" }, undefined, { pinned: true, backlog: false });
+    expect(store.createTask).toHaveBeenCalledWith("Keep this handy", { kind: "thread", threadId: "thread-9" }, undefined, { pinned: true, backlog: false }, expect.any(String));
     expect(pin).toHaveAttribute("aria-pressed", "false");
   });
 
@@ -921,6 +924,130 @@ describe("TasksPanel add row", () => {
     );
     expect(addInput()).toHaveValue("Doomed task");
     expect(panel().querySelector('[data-creating="true"]')).toBeNull();
+  });
+
+  it("retries a create whose response was lost with the same mutation ID", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.createTask).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderPanel(store);
+
+    await user.click(addInput());
+    await user.keyboard("Maybe saved{Enter}");
+    await screen.findByRole("alert");
+    expect(addInput()).toHaveValue("Maybe saved");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(2));
+    const [first, retry] = vi.mocked(store.createTask).mock.calls;
+    expect(first![4]).toEqual(expect.any(String));
+    expect(retry![4]).toBe(first![4]);
+
+    // A new task is a new request.
+    await user.keyboard("Maybe saved{Enter}");
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(store.createTask).mock.calls[2]![4]).not.toBe(first![4]);
+  });
+
+  it("starts a fresh create after an edit or a definitive rejection", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.createTask)
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new ApiError(404, "not_found", "That project was removed.", false))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderPanel(store);
+
+    await user.click(addInput());
+    await user.keyboard("Draft{Enter}");
+    await screen.findByRole("alert");
+    // Edited before the retry: the server must not replay the first title.
+    await user.keyboard(" plan{Enter}");
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(2));
+    const calls = () => vi.mocked(store.createTask).mock.calls;
+    expect(calls()[1]![0]).toBe("Draft plan");
+    expect(calls()[1]![4]).not.toBe(calls()[0]![4]);
+
+    // The server rejected that one outright, so its retry is a new request.
+    await waitFor(() => expect(addInput()).toHaveValue("Draft plan"));
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(3));
+    expect(calls()[2]![4]).not.toBe(calls()[1]![4]);
+  });
+
+  it("retries the paste line whose response was lost with its mutation ID", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.createTask)
+      .mockImplementationOnce(async (title, scope) => makeTask({ id: "created-1", title, scope }))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderPanel(store);
+
+    await user.click(addInput());
+    await user.paste("One\nTwo\nThree");
+    const dialog = screen.getByRole("dialog", { name: "Create 3 tasks?" });
+    await user.click(within(dialog).getByRole("button", { name: "Create 3 tasks" }));
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(2));
+    const retryDialog = await screen.findByRole("dialog", { name: "Create 2 tasks?" });
+    await user.click(within(retryDialog).getByRole("button", { name: "Create 2 tasks" }));
+
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(4));
+    const calls = vi.mocked(store.createTask).mock.calls;
+    expect(calls.map(([title]) => title)).toEqual(["Three", "Two", "Two", "One"]);
+    expect(calls[2]![4]).toBe(calls[1]![4]);
+    expect(new Set(calls.map((call) => call[4])).size).toBe(3);
+  });
+
+  it("gives a later identical task a fresh mutation ID once its lost create was edited away", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.createTask).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderPanel(store);
+
+    await user.click(addInput());
+    await user.keyboard("Weekly review{Enter}");
+    await screen.findByRole("alert");
+    await waitFor(() => expect(addInput()).toHaveValue("Weekly review"));
+    // The reader turns the restored title into another task instead.
+    await user.keyboard(" notes{Enter}");
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(addInput()).toHaveValue(""));
+
+    // Later, a deliberate task with the first title is a new task.
+    await user.keyboard("Weekly review{Enter}");
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(3));
+    const calls = vi.mocked(store.createTask).mock.calls;
+    expect(calls.map(([title]) => title)).toEqual(["Weekly review", "Weekly review notes", "Weekly review"]);
+    expect(new Set(calls.map((call) => call[4])).size).toBe(3);
+  });
+
+  it("abandons a lost paste line's mutation ID when its dialog closes", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.createTask).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderPanel(store);
+
+    await user.click(addInput());
+    await user.paste("One\nTwo");
+    const dialog = screen.getByRole("dialog", { name: "Create 2 tasks?" });
+    await user.click(within(dialog).getByRole("button", { name: "Create 2 tasks" }));
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledOnce());
+    const retryDialog = await screen.findByRole("dialog", { name: "Create 2 tasks?" });
+    await waitFor(() =>
+      expect(within(retryDialog).getByRole("button", { name: "Cancel" })).toBeEnabled(),
+    );
+    await user.click(within(retryDialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await user.click(addInput());
+    await user.paste("One\nTwo");
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Create 2 tasks?" })).getByRole("button", { name: "Create 2 tasks" }),
+    );
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(3));
+    const calls = vi.mocked(store.createTask).mock.calls;
+    expect(calls.map(([title]) => title)).toEqual(["Two", "Two", "One"]);
+    expect(new Set(calls.map((call) => call[4])).size).toBe(3);
   });
 });
 
@@ -1661,6 +1788,7 @@ describe("TasksPanel Backlog and Pin", () => {
       { kind: "thread", threadId: "thread-9" },
       undefined,
       { pinned: false, backlog: true },
+      expect.any(String),
     );
 
     // In All the backlog is the flat list, each row saying where it belongs.
@@ -1701,6 +1829,7 @@ describe("TasksPanel Backlog and Pin", () => {
       { kind: "thread", threadId: "thread-9" },
       undefined,
       { pinned: true, backlog: true },
+      expect.any(String),
     );
     await user.paste("First\nSecond");
     const dialog = screen.getByRole("dialog", { name: "Create 2 tasks?" });
@@ -1710,6 +1839,7 @@ describe("TasksPanel Backlog and Pin", () => {
       { kind: "thread", threadId: "thread-9" },
       undefined,
       { pinned: true, backlog: true },
+      expect.any(String),
     ));
   });
 
@@ -1926,6 +2056,100 @@ describe("TasksPanel Backlog and Pin", () => {
     await user.click(segment("Global"));
     await user.click(segment("Thread"));
     expect(screen.queryByRole("button", { name: "Add retry to the payment call" })).not.toBeInTheDocument();
+  });
+});
+
+describe("TasksPanel quick actions on one task", () => {
+  it("queues a second action behind the first and sends it at the revision the first returned", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    let resolveFirst!: (task: Task) => void;
+    vi.mocked(store.updateTask).mockImplementationOnce(
+      () => new Promise<Task>((resolve) => { resolveFirst = resolve; }),
+    );
+    renderPanel(store);
+
+    rowTitle("Add retry to the payment call").focus();
+    await user.keyboard("p");
+    await user.keyboard("b");
+    expect(store.updateTask).toHaveBeenCalledTimes(1);
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry", revision: 0 }),
+      { pinned: true },
+    );
+
+    const task = store.getTasks().find(({ id }) => id === "t-retry")!;
+    await act(async () => resolveFirst({ ...task, pinned: true, revision: 1 }));
+
+    await waitFor(() => expect(store.updateTask).toHaveBeenCalledTimes(2));
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry", revision: 1 }),
+      { backlog: true },
+    );
+    await waitFor(() =>
+      expect(announced("Sent “Add retry to the payment call” to the Backlog.")).toBe(true),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("uses a returned revision the application stream has not published yet", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    rowTitle("Add retry to the payment call").focus();
+    await user.keyboard(" ");
+    await waitFor(() =>
+      expect(announced("Completed “Add retry to the payment call”.")).toBe(true),
+    );
+    // The stream has not caught up, so the row still shows the open task and
+    // Space asks for what it shows, at the revision the first action returned.
+    await user.keyboard(" ");
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry", revision: 1 }),
+      { completed: true },
+    );
+
+    // Once the snapshot reaches a newer revision, it is the base again.
+    act(() =>
+      store.publish(
+        store.getTasks().map((task) =>
+          task.id === "t-retry" ? { ...task, revision: 5 } : task,
+        ),
+      ),
+    );
+    await user.keyboard("p");
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry", revision: 5 }),
+      { pinned: true },
+    );
+  });
+
+  it("serializes a move behind a pending action on the same task", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    let resolveFirst!: (task: Task) => void;
+    vi.mocked(store.updateTask).mockImplementationOnce(
+      () => new Promise<Task>((resolve) => { resolveFirst = resolve; }),
+    );
+    renderPanel(store);
+
+    rowTitle("Add retry to the payment call").focus();
+    await user.keyboard("p");
+    await user.click(screen.getByRole("button", { name: 'Actions for "Add retry to the payment call"' }));
+    const moveMenu = await openSubmenu(user, screen.getByRole("menu"), "Move to");
+    await user.click(within(moveMenu).getByRole("menuitem", { name: /This project/ }));
+    expect(store.moveTask).not.toHaveBeenCalled();
+
+    const task = store.getTasks().find(({ id }) => id === "t-retry")!;
+    await act(async () => resolveFirst({ ...task, pinned: true, revision: 1 }));
+    await waitFor(() =>
+      expect(store.moveTask).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "t-retry", revision: 1 }),
+        { kind: "project", projectId: "project-1" },
+      ),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
 

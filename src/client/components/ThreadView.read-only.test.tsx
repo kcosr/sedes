@@ -45,6 +45,31 @@ import {
   resetThreadLoadAttemptsForTests,
 } from "../app/thread-load-diagnostics.js";
 import { ThreadView } from "./ThreadView.js";
+import { useApplicationStore } from "../stores/ApplicationClientStore.js";
+// Render probes: each counts its component's renders and delegates to it. A
+// ThreadView render always re-renders its composer, and a Transcript render
+// its history rail.
+const renders = vi.hoisted(() => ({ composer: 0, transcript: 0 }));
+vi.mock("./thread/ChatHistoryRail.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./thread/ChatHistoryRail.js")>();
+  return {
+    ...actual,
+    ChatHistoryRail: (props: Parameters<typeof actual.ChatHistoryRail>[0]) => {
+      renders.transcript += 1;
+      return actual.ChatHistoryRail(props);
+    },
+  };
+});
+vi.mock("./thread/Composer.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./thread/Composer.js")>();
+  return {
+    ...actual,
+    Composer: (props: Parameters<typeof actual.Composer>[0]) => {
+      renders.composer += 1;
+      return actual.Composer(props);
+    },
+  };
+});
 const voiceContext = vi.hoisted(() => ({ store: null as NativeVoiceStore | null }));
 vi.mock("../voice/VoiceProvider.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../voice/VoiceProvider.js")>(),
@@ -537,6 +562,51 @@ describe("ThreadView response bookmarks", () => {
       fireEvent.click(within(screen.getByRole("dialog", { name: "Bookmarks" })).getByText("Saved question"));
       await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 484 })));
     }
+  });
+});
+
+describe("ThreadView render isolation", () => {
+  async function mountUnderApplicationSubscriber() {
+    const base = makeSnapshot("interactive", "idle");
+    const snapshot: NormalizedThreadSnapshot = {
+      ...base, interactions: [], queue: [], orderedTurnIds: ["turn-1"],
+      turnsById: { "turn-1": { id: "turn-1", revision: 1, status: "completed", orderedItemIds: ["question", "reply"] } },
+      itemsById: {
+        question: { id: "question", turnId: "turn-1", revision: 1, kind: "user_message", status: "completed", content: [{ kind: "text", text: { text: "Question" } }] },
+        reply: { id: "reply", turnId: "turn-1", revision: 1, kind: "assistant_message", status: "completed", markdown: { text: "Answer" } },
+      },
+    };
+    const state = fixture(snapshot);
+    // Like the workbench and panel layout, re-renders for every application change.
+    function Host(): React.JSX.Element {
+      useApplicationStore(state.applicationStore);
+      return <ThreadView threadId={snapshot.thread.id} visible registry={state.registry} applicationStore={state.applicationStore} />;
+    }
+    render(<Host />);
+    // Settle the mount's own follow-up renders first.
+    await act(async () => undefined);
+    expect(renders.transcript).toBeGreaterThan(0);
+    renders.composer = 0;
+    renders.transcript = 0;
+    return state;
+  }
+
+  it("does not re-render the open thread for sidebar search", async () => {
+    const state = await mountUnderApplicationSubscriber();
+
+    act(() => state.updateApplicationState({ search: "deploy", visibleThreads: [] }));
+    act(() => state.updateApplicationState({ search: "deploy fix", visibleThreads: [] }));
+
+    expect(renders).toEqual({ composer: 0, transcript: 0 });
+  });
+
+  it("does not re-render the transcript for another thread's inventory change", async () => {
+    const state = await mountUnderApplicationSubscriber();
+    const current = state.applicationStore.getSnapshot().snapshot!;
+
+    act(() => state.updateApplicationSnapshot({ ...current, threads: [...current.threads] }));
+
+    expect(renders.transcript).toBe(0);
   });
 });
 
@@ -1671,6 +1741,7 @@ function fixture(
   readonly updateSnapshot: (snapshot: NormalizedThreadSnapshot) => void;
   readonly updateThreadState: (state: Partial<ThreadClientState>) => void;
   readonly updateApplicationSnapshot: (snapshot: NormalizedApplicationSnapshot) => void;
+  readonly updateApplicationState: (state: Partial<ApplicationClientState>) => void;
 } {
   let threadState: ThreadClientState = {
     status: "ready",
@@ -1834,6 +1905,10 @@ function fixture(
     },
     updateApplicationSnapshot: (nextSnapshot) => {
       applicationState = { ...applicationState, snapshot: nextSnapshot };
+      applicationListeners.forEach((listener) => listener());
+    },
+    updateApplicationState: (nextState) => {
+      applicationState = { ...applicationState, ...nextState };
       applicationListeners.forEach((listener) => listener());
     },
     updateSnapshot: (nextSnapshot) => {

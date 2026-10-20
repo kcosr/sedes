@@ -5,7 +5,6 @@ import {
   conversationTurnSourceRevision,
   normalizedThreadEventSchema,
   threadCheckpointSchema,
-  threadEventEnvelopeSchema,
   type NormalizedThreadEvent,
   type ThreadEventEnvelope,
   type NormalizedThreadSnapshot,
@@ -17,13 +16,14 @@ import {
   EventHub,
   type EventHubOptions,
   type EventSubscription,
-  type SequencedEvent,
 } from "./event-hub.js";
 import {
   MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES,
   serializedUtf8Bytes,
 } from "../../shared/protocol/payload.js";
 import { SerializedMailbox } from "../conversations/serialized-mailbox.js";
+import { threadEventFrame } from "./thread-event-frames.js";
+import { isDetailedActivityItem } from "../conversations/thread-activity-projection.js";
 import { sameAgentToolPolicyRevision } from "../../shared/agent-tool-policy.js";
 import type { DismissRuntimeNoticeRequest } from "../../shared/protocol/api.js";
 import { fitApplicationItemsToSnapshot, isApplicationPublicationItem, type ApplicationPublicationItem, type ApplicationProjectionInput } from "../conversations/application-publication-projection.js";
@@ -40,14 +40,20 @@ export interface ThreadCheckpointSubscription extends ThreadEventSubscription {
 
 type ItemTurnEvent = Extract<NormalizedThreadEvent, { type: "item_upsert" | "turn_upsert" }>;
 
-function envelope(
-  event: SequencedEvent<NormalizedThreadEvent>,
-): ThreadEventEnvelope {
-  return threadEventEnvelopeSchema.parse({
-    eventId: event.id,
-    projectionGeneration: event.data.generation,
-    event: event.data,
-  });
+/** A thread stream always replays a suffix of at most this many bytes. */
+export const THREAD_SSE_SMALL_REPLAY_BYTES = 64 * 1_024;
+
+/**
+ * What replaying one event costs any subscriber, at least. Summary-mode
+ * subscribers receive snapshots, history pages and detailed activity items
+ * with that activity reduced to summaries, so those events have no lower
+ * bound; every other event is written unchanged in every activity mode.
+ */
+function replayCostFloor(type: string, data: unknown, bytes: number): number {
+  const { event } = data as ThreadEventEnvelope;
+  if (type === "snapshot" || type === "history_prepend") return 0;
+  if (event.type === "item_upsert" && isDetailedActivityItem(event.item)) return 0;
+  return bytes;
 }
 
 /**
@@ -58,7 +64,7 @@ function envelope(
  * envelope rather than being confused with projection generations.
  */
 export class ThreadEventHub {
-  readonly #hub: EventHub<NormalizedThreadEvent>;
+  readonly #hub: EventHub<ThreadEventEnvelope>;
   readonly #applicationPublications = new SerializedMailbox();
   readonly #subscriberCountListeners = new Set<(count: number) => void>();
   #internalSubscriberCount = 0;
@@ -75,6 +81,8 @@ export class ThreadEventHub {
   #sourcePages: ReadonlyMap<string, ApplicationPublicationItem> = new Map();
   #checkpoint?: ThreadCheckpoint;
   #notices: readonly RuntimeNotice[] = [];
+  #noticeBytesFor?: readonly RuntimeNotice[];
+  #noticeBytes = 0;
   #capabilityThreadRevision = 0;
   #capabilityRunState: NormalizedThreadSnapshot["runState"] = "idle";
 
@@ -82,7 +90,25 @@ export class ThreadEventHub {
     this.#hub = new EventHub({
       ...options,
       supersedesReplay: (type) => type === "snapshot",
+      servableReplay: {
+        costFloor: replayCostFloor,
+        servableBytes: () => this.#servableReplayBytes(),
+      },
     });
+  }
+
+  /**
+   * A thread stream replays a suffix only while it costs no more than a
+   * checkpoint (or is small), so no subscriber can accept a suffix costing
+   * twice the current snapshot and notices plus the small-replay allowance.
+   * The margin covers snapshot growth from later events and frame overhead.
+   */
+  #servableReplayBytes(): number {
+    if (this.#noticeBytesFor !== this.#notices) {
+      this.#noticeBytesFor = this.#notices;
+      this.#noticeBytes = serializedUtf8Bytes(this.#notices);
+    }
+    return THREAD_SSE_SMALL_REPLAY_BYTES + 2 * (this.#snapshotBytes + this.#noticeBytes);
   }
 
   get transportGeneration(): string {
@@ -213,7 +239,7 @@ export class ThreadEventHub {
       this.#snapshotBytes = fitted.serializedBytes;
       this.#snapshotItemCount = itemCount - pages.size + fitted.applicationIds.size;
       this.#checkpoint = undefined;
-      return [envelope(this.#hub.publish(event.type, event))];
+      return [this.#publishEnvelope(event)];
     }
     return pending.map(step => {
       this.#sourceSnapshot = step.source;
@@ -227,7 +253,7 @@ export class ThreadEventHub {
         this.#visibleApplicationIds = new Set([...this.#visibleApplicationIds, step.event.item.id]);
       }
       this.#checkpoint = undefined;
-      return envelope(this.#hub.publish(step.event.type, step.event));
+      return this.#publishEnvelope(step.event);
     });
   }
 
@@ -349,8 +375,22 @@ export class ThreadEventHub {
       }
     }
     this.#checkpoint = undefined;
-    const published = envelope(this.#hub.publish(event.type, event));
-    return published;
+    return this.#publishEnvelope(event);
+  }
+
+  /**
+   * Validation happens once, before this point. Every subscriber receives the
+   * same immutable envelope, and the full-detail frame encoded here for replay
+   * accounting is shared with the publication's full-detail subscribers.
+   */
+  #publishEnvelope(event: NormalizedThreadEvent): ThreadEventEnvelope {
+    const envelope: ThreadEventEnvelope = Object.freeze({
+      eventId: this.eventIdAt(this.#hub.watermark + 1),
+      projectionGeneration: event.generation,
+      event,
+    });
+    const { bytes } = threadEventFrame(envelope, "full");
+    return this.#hub.publish(event.type, envelope, { bytes, retain: true }).data;
   }
 
   /** Does not attach a provider or retain an acknowledgement after removal. */
@@ -411,18 +451,13 @@ export class ThreadEventHub {
     listener: (event: ThreadEventEnvelope) => void,
     lastEventId?: string,
   ): ThreadEventSubscription {
-    const subscription: EventSubscription<NormalizedThreadEvent> =
-      this.#hub.subscribe((event) => listener(envelope(event)), lastEventId);
-    try {
-      return {
-        watermark: subscription.watermark,
-        replay: subscription.replay.map(envelope),
-        close: () => subscription.close(),
-      };
-    } catch (error) {
-      subscription.close();
-      throw error;
-    }
+    const subscription: EventSubscription<ThreadEventEnvelope> =
+      this.#hub.subscribe((event) => listener(event.data), lastEventId);
+    return {
+      watermark: subscription.watermark,
+      replay: subscription.replay.map((event) => event.data),
+      close: () => subscription.close(),
+    };
   }
 
   #notifySubscriberCountChanged(): void {
@@ -475,13 +510,7 @@ export class ThreadEventHub {
     budget: number,
     cost: (event: ThreadEventEnvelope) => number,
   ): boolean | undefined {
-    return this.#hub.replayCostExceeds(lastEventId, budget, (event) =>
-      cost({
-        eventId: event.id,
-        projectionGeneration: event.data.generation,
-        event: event.data,
-      }),
-    );
+    return this.#hub.replayCostExceeds(lastEventId, budget, (event) => cost(event.data));
   }
 }
 

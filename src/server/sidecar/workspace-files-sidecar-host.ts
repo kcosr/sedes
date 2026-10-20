@@ -30,6 +30,7 @@ import {
 } from "../workspace-files/workspace-diffs-engine.js";
 import type { WorkspaceFileRootId } from "../../shared/protocol/workspace-files.js";
 
+import { pathIsWithin } from "../path-containment.js";
 import { SidecarOperationReceipts } from "./sidecar-operation-receipts.js";
 
 interface AdmittedRoot {
@@ -277,8 +278,8 @@ export class WorkspaceFilesSidecarHost {
               return { removed: true as const };
             }),
         ),
-      watchOpen: (request) =>
-        this.#guard(() => this.#watchOpen(request.rootHandle)),
+      watchOpen: (request, context) =>
+        this.#guard(() => this.#watchOpen(request.rootHandle, context.signal)),
       watchClose: (request) =>
         this.#guard(() => this.#watchClose(request.subscriptionHandle)),
       diffRepositories: (request, context) =>
@@ -707,7 +708,7 @@ export class WorkspaceFilesSidecarHost {
     return { worktrees: [...result.worktrees], truncated: result.truncated };
   }
 
-  async #watchOpen(rootHandle: string) {
+  async #watchOpen(rootHandle: string, signal: AbortSignal) {
     this.#assertOpen();
     const assertAdmission = this.#admission();
     assertAdmission();
@@ -720,6 +721,9 @@ export class WorkspaceFilesSidecarHost {
     });
     try {
       assertAdmission();
+      // A cancelled open's response is discarded, so Sedes could never close
+      // a watcher registered now.
+      signal.throwIfAborted();
       if (this.#watches.size >= 256)
         throw new SidecarOperationError("sidecar_watch_capacity", true);
     } catch (error) {
@@ -845,13 +849,10 @@ async function canonicalDirectory(value: string): Promise<string> {
 }
 
 function isWithin(root: string, candidate: string): boolean {
-  if (!path.isAbsolute(root) || !path.isAbsolute(candidate)) return false;
-  const relative = path.relative(root, candidate);
   return (
-    relative === "" ||
-    (!path.isAbsolute(relative) &&
-      relative !== ".." &&
-      !relative.startsWith(`..${path.sep}`))
+    path.isAbsolute(root) &&
+    path.isAbsolute(candidate) &&
+    pathIsWithin(root, candidate)
   );
 }
 

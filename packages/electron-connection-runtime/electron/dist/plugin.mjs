@@ -95,7 +95,8 @@ class ElectronConnectionRuntimeImpl {
             : path.join(this.#app.getAppPath(), "generated", "local-server"),
           userDataDirectory: this.#app.getPath("userData"),
           notify: notify("local"),
-          saveCredential: (input) => nativeCredentialStore().setCredential(input),
+          // Each start pairs on a new random port; earlier origins are dead.
+          saveCredential: (input) => nativeCredentialStore().replaceProfileCredential(input),
         }) : null,
         ssh: new SshTunnelManager({
           notify: notify("ssh"),
@@ -137,11 +138,16 @@ class ElectronConnectionRuntimeImpl {
   }
 
   #hasResources() {
-    const status = this.#manager.getStatus();
-    return (
-      status.local.status !== "disconnected" ||
-      status.ssh.status !== "disconnected"
-    );
+    try {
+      const status = this.#manager.getStatus();
+      return (
+        status.local.status !== "disconnected" ||
+        status.ssh.status !== "disconnected"
+      );
+    } catch {
+      // An unreadable state must not skip the owned cleanup before quitting.
+      return true;
+    }
   }
 
   #beginOwnedQuit() {

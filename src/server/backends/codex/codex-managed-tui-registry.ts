@@ -261,12 +261,15 @@ export class CodexManagedTuiRegistry {
         process = await Promise.race([launchPromise, deadline]);
       } catch (error) {
         if (resource.controller.signal.aborted) {
-          void launchPromise.then(
-            async (lateProcess) => {
-              await lateProcess.close("codex_tui_launch_deadline_exceeded");
-            },
-            () => undefined,
-          );
+          // Like `#terminate`, a failed close of the abandoned launch must
+          // not become an unobserved rejection that terminates the server.
+          void launchPromise
+            .then(
+              (lateProcess) =>
+                lateProcess.close("codex_tui_launch_deadline_exceeded"),
+              () => undefined,
+            )
+            .catch(() => undefined);
         }
         throw error;
       } finally {

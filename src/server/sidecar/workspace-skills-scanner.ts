@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
-import { lstat, open, readdir, realpath } from "node:fs/promises";
+import { constants as fsConstants, type Dirent } from "node:fs";
+import { lstat, open, opendir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -15,6 +15,7 @@ import {
   type WorkspaceSkillsCatalogReadResponse,
 } from "../../internal/sidecar-protocol/index.js";
 import { revalidatedPathForOpenHandle } from "../local-file-descriptor-path.js";
+import { pathIsWithin } from "../path-containment.js";
 
 type SkillSource = WorkspaceSkillMetadata["source"];
 
@@ -133,16 +134,18 @@ async function scanRoots(
         root.rootPath,
       );
       try {
-        const entries = await readdir(current.directoryPath, {
-          withFileTypes: true,
-        });
+        // Count while listing so an oversized directory is never fully loaded.
+        const entries: Dirent[] = [];
+        for await (const entry of await opendir(current.directoryPath)) {
+          scannedEntries += 1;
+          if (scannedEntries > WORKSPACE_SKILLS_MAXIMUM_SCAN_ENTRIES) {
+            throw limitExceeded();
+          }
+          entries.push(entry);
+        }
         entries.sort((left, right) =>
           left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
         );
-        scannedEntries += entries.length;
-        if (scannedEntries > WORKSPACE_SKILLS_MAXIMUM_SCAN_ENTRIES) {
-          throw limitExceeded();
-        }
         const declared = entries.find((entry) => entry.name === "SKILL.md");
         if (declared) {
           if (declared.isFile() && !declared.isSymbolicLink()) {
@@ -371,7 +374,7 @@ async function readStableFile(
       !sameIdentity(identity(before), identity(after)) ||
       !sameIdentity(identity(before), identity(currentEntry)) ||
       openedPath !== filePath ||
-      !isWithin(rootPath, openedPath)
+      !pathIsWithin(rootPath, openedPath)
     ) {
       throw new UnstablePathError("skill entry changed");
     }
@@ -399,7 +402,7 @@ async function canonicalWorkspace(
   if (
     workspace !== path.resolve(workspacePath) ||
     policyRoot !== path.resolve(policyRootPath) ||
-    !isWithin(policyRoot, workspace)
+    !pathIsWithin(policyRoot, workspace)
   ) {
     throw new WorkspaceSkillsScannerError("workspace_skills_not_allowed");
   }
@@ -438,7 +441,7 @@ async function openVerifiedDirectory(directoryPath: string, rootPath: string) {
     const descriptor = await handle.stat({ bigint: true });
     if (
       openedPath !== directoryPath ||
-      !isWithin(rootPath, openedPath) ||
+      !pathIsWithin(rootPath, openedPath) ||
       !descriptor.isDirectory() ||
       !sameIdentity(identity(entry), identity(descriptor))
     ) {
@@ -512,13 +515,6 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   );
 }
 
-function isWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith(`..${path.sep}`))
-  );
-}
 
 function posixRelative(root: string, candidate: string): string {
   return path.relative(root, candidate).split(path.sep).join("/");

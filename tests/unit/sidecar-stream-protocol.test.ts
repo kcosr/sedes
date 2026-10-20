@@ -342,6 +342,174 @@ describe("sidecar retained streams", () => {
     } finally { await fixture.sedes.close("done"); }
   });
 
+  it("drains a retired stream's remaining frames with credit until its terminal", async () => {
+    const fixture = await streamFixture();
+    const streamId = randomUUID();
+    const data = vi.fn();
+    const terminal = vi.fn();
+    const registration = {
+      streamId, ...capability, initialCreditBytes: 2,
+      terminalSchema: workspaceToolsShellTerminalSchema,
+      onData: data, onTerminal: terminal,
+    };
+    const incoming = fixture.sedes.registerIncomingStream(registration);
+    const producer = fixture.sidecar.openOutgoingStream({ streamId, ...capability, initialCreditBytes: 2 });
+    try {
+      await producer.send("data", Buffer.from("a"));
+      await vi.waitFor(() => expect(data).toHaveBeenCalledOnce());
+      // The consumer withheld credit for "a"; retiring refills the window.
+      let drained = false;
+      const retirement = incoming.retire().then(() => { drained = true; });
+      expect(() => fixture.sedes.registerIncomingStream(registration)).toThrow("sidecar_stream_already_registered");
+      await expect(incoming.addCredit(1)).rejects.toThrow("sidecar_stream_not_registered");
+      for (let index = 0; index < 8; index += 1) {
+        await producer.send("data", Buffer.from("bc"));
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(drained).toBe(false);
+      await producer.terminal({ outcome: "exited", exitCode: 0, signal: null,
+        stdoutBytes: 17, stderrBytes: 0, emittedBytes: 17, omittedBytes: 0, truncated: false }, workspaceToolsShellTerminalSchema);
+      await retirement;
+      await expect(fixture.sedes.call(workspaceContextReadOperation, {
+        admissionId: randomUUID(), declaredPath: "/workspace", policyRootPath: "/workspace",
+      })).resolves.toMatchObject({ fingerprint: "a".repeat(64) });
+      expect(data).toHaveBeenCalledOnce();
+      expect(terminal).not.toHaveBeenCalled();
+      // The terminal ended the drain; the id can be registered again.
+      expect(() => fixture.sedes.registerIncomingStream(registration)).not.toThrow();
+    } finally { await fixture.sedes.close("done"); }
+  });
+
+  it("keeps every retired stream drainable however many are retired", async () => {
+    const fixture = await streamFixture();
+    const streamIds = Array.from({ length: 300 }, () => randomUUID());
+    const registrations = streamIds.map((streamId) => fixture.sedes.registerIncomingStream({
+      streamId, ...capability, initialCreditBytes: 4,
+      terminalSchema: workspaceToolsShellTerminalSchema,
+      onData: () => undefined, onTerminal: () => undefined,
+    }));
+    try {
+      const retirements = registrations.map((registration) => registration.retire());
+      // The first retired stream's producer is still live.
+      const producer = fixture.sidecar.openOutgoingStream({ streamId: streamIds[0]!, ...capability, initialCreditBytes: 4 });
+      for (let index = 0; index < 4; index += 1) {
+        await producer.send("data", Buffer.from("late"));
+      }
+      await producer.terminal({ outcome: "exited", exitCode: 0, signal: null,
+        stdoutBytes: 16, stderrBytes: 0, emittedBytes: 16, omittedBytes: 0, truncated: false }, workspaceToolsShellTerminalSchema);
+      await retirements[0];
+      await expect(fixture.sedes.call(workspaceContextReadOperation, {
+        admissionId: randomUUID(), declaredPath: "/workspace", policyRootPath: "/workspace",
+      })).resolves.toMatchObject({ fingerprint: "a".repeat(64) });
+    } finally { await fixture.sedes.close("done"); }
+  });
+
+  it("retries a retired stream's credit repayment that a congested queue refused", async () => {
+    const fixture = await streamFixture();
+    const streamId = randomUUID();
+    const incoming = fixture.sedes.registerIncomingStream({
+      streamId, ...capability, initialCreditBytes: 2,
+      terminalSchema: workspaceToolsShellTerminalSchema,
+      onData: () => undefined, onTerminal: () => undefined,
+    });
+    const producer = fixture.sidecar.openOutgoingStream({ streamId, ...capability, initialCreditBytes: 2 });
+    try {
+      await producer.send("data", Buffer.from("ab"));
+      const send = fixture.pair.left.send.bind(fixture.pair.left);
+      // Only credit frames leave Sedes here. The refill on retirement and the
+      // repayment for "cd" are each refused twice before the queue drains.
+      const refusedAttempts = new Set([1, 2, 4, 5]);
+      let attempts = 0;
+      vi.spyOn(fixture.pair.left, "send").mockImplementation(async (bytes, options) => {
+        attempts += 1;
+        if (refusedAttempts.has(attempts)) {
+          throw new SidecarFrameWriteError("sidecar_outbound_queue_limit", "not_sent");
+        }
+        return await send(bytes, options);
+      });
+      void incoming.retire();
+      await producer.send("data", Buffer.from("cd"));
+      await producer.send("data", Buffer.from("ef"));
+      expect(attempts).toBeGreaterThanOrEqual(6);
+      await producer.terminal({ outcome: "exited", exitCode: 0, signal: null,
+        stdoutBytes: 6, stderrBytes: 0, emittedBytes: 6, omittedBytes: 0, truncated: false }, workspaceToolsShellTerminalSchema);
+    } finally { await fixture.sedes.close("done"); }
+  });
+
+  it("waits out congestion before settling a stream's terminal", async () => {
+    const fixture = await streamFixture();
+    const streamId = randomUUID();
+    const terminal = vi.fn();
+    fixture.sedes.registerIncomingStream({
+      streamId, ...capability, initialCreditBytes: 1,
+      terminalSchema: workspaceToolsShellTerminalSchema,
+      onData: () => undefined, onTerminal: terminal,
+    });
+    const producer = fixture.sidecar.openOutgoingStream({ streamId, ...capability, initialCreditBytes: 1 });
+    const send = fixture.pair.right.send.bind(fixture.pair.right);
+    const refusals = ["sidecar_outbound_queue_limit", "sidecar_outbound_queue_limit"];
+    vi.spyOn(fixture.pair.right, "send").mockImplementation(async (bytes, options) => {
+      const refusal = options.settlement ? refusals.shift() : undefined;
+      if (refusal) throw new SidecarFrameWriteError(refusal, "not_sent");
+      return await send(bytes, options);
+    });
+    const settled = { outcome: "exited", exitCode: 0, signal: null, stdoutBytes: 0, stderrBytes: 0,
+      emittedBytes: 0, omittedBytes: 0, truncated: false } as const;
+    try {
+      await producer.terminal(settled, workspaceToolsShellTerminalSchema);
+      await vi.waitFor(() => expect(terminal).toHaveBeenCalledOnce());
+      expect(refusals).toEqual([]);
+
+      // Any other refusal still fails the terminal at once.
+      const other = randomUUID();
+      fixture.sedes.registerIncomingStream({
+        streamId: other, ...capability, initialCreditBytes: 1,
+        terminalSchema: workspaceToolsShellTerminalSchema,
+        onData: () => undefined, onTerminal: () => undefined,
+      });
+      refusals.push("sidecar_transport_closed");
+      await expect(fixture.sidecar.openOutgoingStream({ streamId: other, ...capability, initialCreditBytes: 1 })
+        .terminal(settled, workspaceToolsShellTerminalSchema)).rejects.toThrow("sidecar_transport_closed");
+    } finally { await fixture.sedes.close("done"); }
+  });
+
+  it("hands a success that crossed a timed-out call to its late-success handler", async () => {
+    let failNext = false;
+    const fixture = await streamFixture(async (_sidecar, request) => {
+      if (failNext) throw new Error("start_failed");
+      return { streamId: request.streamId, admitted: true as const };
+    });
+    // Hold Sedes-bound frames so each response crosses its deadline.
+    const queue = fixture.pair.left.queue;
+    const deliver = queue.push.bind(queue);
+    const held: SidecarFrame[] = [];
+    queue.push = (frame: SidecarFrame) => { held.push(frame); };
+    const start = (streamId: string, onLateSuccess: (response: unknown) => void) =>
+      fixture.sedes.call(workspaceToolsShellStartOperation, {
+        workspaceHandle: randomUUID(), operationId: randomUUID(), streamId,
+        command: "x", initialCreditBytes: 1, timeoutMilliseconds: 1_000,
+      }, { deadlineMilliseconds: 20, onLateSuccess });
+    try {
+      const streamId = randomUUID();
+      const late = vi.fn();
+      await expect(start(streamId, late)).rejects.toThrow("sidecar_request_timeout");
+      queue.push = deliver;
+      for (const frame of held.splice(0)) deliver(frame);
+      await vi.waitFor(() => expect(late).toHaveBeenCalledExactlyOnceWith({ streamId, admitted: true }));
+
+      failNext = true;
+      queue.push = (frame: SidecarFrame) => { held.push(frame); };
+      const lateFailure = vi.fn();
+      await expect(start(randomUUID(), lateFailure)).rejects.toThrow("sidecar_request_timeout");
+      queue.push = deliver;
+      for (const frame of held.splice(0)) deliver(frame);
+      await expect(fixture.sedes.call(workspaceContextReadOperation, {
+        admissionId: randomUUID(), declaredPath: "/workspace", policyRootPath: "/workspace",
+      })).resolves.toMatchObject({ fingerprint: "a".repeat(64) });
+      expect(lateFailure).not.toHaveBeenCalled();
+    } finally { await fixture.sedes.close("done"); }
+  });
+
   it("keeps a replacement registration when a completed stream's handle is used again", async () => {
     const fixture = await streamFixture();
     const streamId = randomUUID();

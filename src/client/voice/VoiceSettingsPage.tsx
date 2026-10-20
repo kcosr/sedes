@@ -19,7 +19,7 @@ import { inputPreference, selectedInputDevice } from "./native-voice-input.js";
 import { ThreadPicker } from "../components/ThreadPicker.js";
 import { defaultThreadChoices, useDefaultThread } from "../app/default-thread.js";
 import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
-import { canEnableVoice, resumeVoice, voiceThreadFilterWarning } from "./voice-session.js";
+import { canEnableVoice, resumeVoice, voiceReadiness, voiceThreadFilterWarning } from "./voice-session.js";
 import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery.js";
 import { VoiceSpeechContent } from "./VoiceSpeechContent.js";
 
@@ -304,11 +304,4 @@ export function inputDeviceLabels(devices: readonly { id: string; label: string;
     seen.set(label, number);
     return [device.id, `${label} #${number}`];
   }));
-}
-export function voiceReadiness(readiness: string): string {
-  return ({ disconnected: "Connect to Sedes to use voice.", connecting: "Connecting to Sedes…", off: "Voice is off.", needsResume: "Resume voice from this screen to start a new session.",
-    storageUnavailable: "Recording storage is unavailable. Retry the voice connection.",
-    permissionRequired: "Microphone permission is required to start voice.", speechConfigurationRequired: "Configure a speech endpoint, models and voice, and add the required credential.",
-    notificationsConnecting: "Connecting to Sedes notifications…", notificationsUnavailable: "Sedes notifications are unavailable. Explicit recording still works.",
-    ready: "Voice is ready.", error: "Voice needs attention." } as Record<string, string>)[readiness] ?? "Voice is starting…";
 }

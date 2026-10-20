@@ -1,7 +1,10 @@
 import {
+  APPLICATION_SNAPSHOT_COLLECTION_LIMITS,
+  MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES,
   applicationEventEnvelopeSchema,
   normalizedApplicationSessionSchema,
-  normalizedApplicationSnapshotSchema,
+  reportApplicationSnapshotReferenceIssues,
+  serializedUtf8Bytes,
   type ApplicationEventEnvelope,
   type NormalizedApplicationSnapshot,
   type NormalizedApplicationThreadSummary,
@@ -51,19 +54,70 @@ function transportCursor(eventId: string): TransportCursor {
   };
 }
 
-function upsertById<T extends { readonly id: string }>(
-  values: readonly T[],
-  value: T,
-): T[] {
-  const index = values.findIndex(({ id }) => id === value.id);
-  if (index < 0) return [...values, value];
-  const next = [...values];
-  next[index] = value;
-  return next;
+/** Collections that incremental application events replace entries in. */
+type IncrementalCollection = "environments" | "workspaces" | "threads" | "tasks";
+
+/**
+ * One incremental collection change. Untouched entries keep their identity,
+ * and `byteDelta` is the exact change in the snapshot's serialized size: an
+ * array entry serializes the same standalone, plus one separating comma.
+ */
+interface CollectionChange {
+  readonly snapshot: NormalizedApplicationSnapshot;
+  readonly byteDelta: number;
 }
+
+function upsertEntry<K extends IncrementalCollection>(
+  snapshot: NormalizedApplicationSnapshot,
+  collection: K,
+  value: NormalizedApplicationSnapshot[K][number],
+): CollectionChange {
+  const values: readonly NormalizedApplicationSnapshot[K][number][] =
+    snapshot[collection];
+  const index = values.findIndex(({ id }) => id === value.id);
+  const next = [...values];
+  let byteDelta = serializedUtf8Bytes(value);
+  if (index < 0) {
+    next.push(value);
+    if (values.length > 0) byteDelta += 1;
+  } else {
+    byteDelta -= serializedUtf8Bytes(values[index]);
+    next[index] = value;
+  }
+  return { snapshot: { ...snapshot, [collection]: next }, byteDelta };
+}
+
+function removeEntry(
+  snapshot: NormalizedApplicationSnapshot,
+  collection: IncrementalCollection,
+  id: string,
+): CollectionChange {
+  const values: readonly { readonly id: string }[] = snapshot[collection];
+  const index = values.findIndex((value) => value.id === id);
+  if (index < 0) return { snapshot, byteDelta: 0 };
+  const next = values.filter((_, valueIndex) => valueIndex !== index);
+  return {
+    snapshot: { ...snapshot, [collection]: next },
+    byteDelta:
+      -serializedUtf8Bytes(values[index]) - (next.length > 0 ? 1 : 0),
+  };
+}
+
+const collectionByEvent = {
+  environment_upsert: "environments",
+  environment_remove: "environments",
+  workspace_upsert: "workspaces",
+  workspace_remove: "workspaces",
+  thread_upsert: "threads",
+  thread_remove: "threads",
+  task_upsert: "tasks",
+  task_remove: "tasks",
+} as const satisfies Record<string, IncrementalCollection>;
 
 export class NormalizedApplicationStore {
   #state: NormalizedApplicationState = { authoritative: false };
+  /** Serialized size of the installed snapshot, maintained per event. */
+  #snapshotBytes = 0;
   #transport?: TransportCursor;
   readonly #listeners = new Set<() => void>();
   readonly #workpadListeners = new Set<
@@ -151,6 +205,7 @@ export class NormalizedApplicationStore {
 
     if (envelope.event.type === "snapshot") {
       this.#transport = cursor;
+      this.#snapshotBytes = serializedUtf8Bytes(envelope.event.snapshot);
       this.#replaceState({
         authoritative: true,
         ...(this.#state.csrfToken ? { csrfToken: this.#state.csrfToken } : {}),
@@ -230,69 +285,41 @@ export class NormalizedApplicationStore {
     snapshot: NormalizedApplicationSnapshot,
   ): NormalizedApplicationApplyResult {
     const event = envelope.event;
-    let next: NormalizedApplicationSnapshot;
+    let change: CollectionChange;
     switch (event.type) {
       case "environment_upsert":
-        next = {
-          ...snapshot,
-          environments: upsertById(snapshot.environments, event.environment),
-        };
+        change = upsertEntry(snapshot, "environments", event.environment);
         break;
       case "environment_remove":
-        next = {
-          ...snapshot,
-          environments: snapshot.environments.filter(
-            ({ id }) => id !== event.environmentId,
-          ),
-        };
+        change = removeEntry(snapshot, "environments", event.environmentId);
         break;
       case "workspace_upsert":
-        next = {
-          ...snapshot,
-          workspaces: upsertById(snapshot.workspaces, event.workspace),
-        };
+        change = upsertEntry(snapshot, "workspaces", event.workspace);
         break;
       case "workspace_remove":
-        next = {
-          ...snapshot,
-          workspaces: snapshot.workspaces.filter(
-            ({ id }) => id !== event.workspaceId,
-          ),
-        };
+        change = removeEntry(snapshot, "workspaces", event.workspaceId);
         break;
       case "thread_upsert": {
         const prior = snapshot.threads.find(({ id }) => id === event.thread.id);
         if (prior && revisionsRegress(prior, event.thread)) {
           return this.#invalidate("application_thread_revision_regressed");
         }
-        next = {
-          ...snapshot,
-          threads: upsertById(snapshot.threads, event.thread),
-        };
+        change = upsertEntry(snapshot, "threads", event.thread);
         break;
       }
       case "thread_remove":
-        next = {
-          ...snapshot,
-          threads: snapshot.threads.filter(({ id }) => id !== event.threadId),
-        };
+        change = removeEntry(snapshot, "threads", event.threadId);
         break;
       case "task_upsert": {
         const prior = snapshot.tasks.find(({ id }) => id === event.task.id);
         if (prior && event.task.revision < prior.revision) {
           return this.#invalidate("application_task_revision_regressed");
         }
-        next = {
-          ...snapshot,
-          tasks: upsertById(snapshot.tasks, event.task),
-        };
+        change = upsertEntry(snapshot, "tasks", event.task);
         break;
       }
       case "task_remove":
-        next = {
-          ...snapshot,
-          tasks: snapshot.tasks.filter(({ id }) => id !== event.taskId),
-        };
+        change = removeEntry(snapshot, "tasks", event.taskId);
         break;
       case "automation_changed":
         this.#notifyAutomations(event);
@@ -308,11 +335,25 @@ export class NormalizedApplicationStore {
         throw new Error("snapshot handled before incremental dispatch");
     }
 
-    const validated = normalizedApplicationSnapshotSchema.safeParse(next);
-    if (!validated.success) {
+    // The envelope schema validated the changed entity. The rest of the
+    // snapshot schema is checked for the result without re-parsing (and
+    // re-creating) every untouched entity.
+    const next = change.snapshot;
+    const snapshotBytes = this.#snapshotBytes + change.byteDelta;
+    const collection = collectionByEvent[event.type];
+    let referencesValid = true;
+    reportApplicationSnapshotReferenceIssues(next, () => {
+      referencesValid = false;
+    });
+    if (
+      !referencesValid ||
+      snapshotBytes > MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES ||
+      next[collection].length > APPLICATION_SNAPSHOT_COLLECTION_LIMITS[collection]
+    ) {
       return this.#invalidate("application_inventory_reference_invalid");
     }
-    this.#replaceState({ ...this.#state, snapshot: validated.data });
+    this.#snapshotBytes = snapshotBytes;
+    this.#replaceState({ ...this.#state, snapshot: next });
     if (event.type === "thread_upsert") this.#notifyThreadSummaries(event.thread.id);
     else if (event.type === "thread_remove") this.#notifyThreadSummaries(event.threadId);
     else if (event.type === "environment_upsert" || event.type === "environment_remove" ||
