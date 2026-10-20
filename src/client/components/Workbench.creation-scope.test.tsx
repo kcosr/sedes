@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SIDEBAR_VIEW_DEFAULTS } from "../app/sidebar-view-model.js";
 import { SIDEBAR_VIEW_STORAGE_KEY } from "../app/sidebar-view-model.js";
 import { installThreadPanelOpenRequestListener } from "../workspace-panels/thread-panel-navigation.js";
 
-const captured = vi.hoisted(() => ({ props: undefined as unknown }));
+const captured = vi.hoisted(() => ({ props: undefined as unknown, panelLayoutRenders: 0 }));
 
 vi.mock("./NewThreadControl.js", () => ({
   NewThreadControl: (props: unknown) => {
@@ -18,11 +18,15 @@ vi.mock("./SidebarNavTrigger.js", () => ({
   SidebarNavTrigger: () => null,
 }));
 vi.mock("../workspace-panels/PanelLayout.js", () => ({
-  PanelLayout: () => <div data-testid="panel-layout" />,
+  PanelLayout: () => {
+    captured.panelLayoutRenders += 1;
+    return <div data-testid="panel-layout" />;
+  },
 }));
 
 import { Workbench } from "./Workbench.js";
 import { TasksPanel } from "./tasks/TasksPanel.js";
+import { useApplicationStore } from "../stores/ApplicationClientStore.js";
 
 afterEach(() => {
   cleanup();
@@ -262,6 +266,46 @@ describe("Workbench new-thread creation scope", () => {
     expect(screen.getByTestId("panel-layout")).toBeVisible();
     expect(openPanel).not.toHaveBeenCalled();
     expect(threadRegistry.retain).toHaveBeenCalledWith("thread-deep-link");
+  });
+
+  it("does not re-render an open thread's workbench for sidebar search", () => {
+    let state = {
+      snapshot: { environments: [], workspaces: [], executionTargets: [], projects: [], groups: [] },
+      experimentalUsageEnabled: false,
+      search: "",
+      visibleThreads: [] as unknown[],
+    };
+    const listeners = new Set<() => void>();
+    const applicationStore = {
+      api: {},
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      getSnapshot: () => state,
+      workspaceIdForThread: () => "workspace-1",
+    };
+    const route = { name: "thread" as const, threadId: "thread-1" };
+    const props = {
+      applicationStore: applicationStore as never,
+      threadRegistry: { retain: vi.fn(), release: vi.fn() } as never,
+      panelLayoutStore: { open: vi.fn() } as never,
+      panelTenants: {} as never,
+    };
+    // Like the application shell, re-renders for every application change.
+    function Shell(): React.JSX.Element {
+      useApplicationStore(applicationStore as never);
+      return <Workbench {...props} route={route} />;
+    }
+    render(<Shell />);
+    captured.panelLayoutRenders = 0;
+
+    act(() => {
+      state = { ...state, search: "deploy", visibleThreads: [] };
+      for (const listener of listeners) listener();
+    });
+
+    expect(captured.panelLayoutRenders).toBe(0);
   });
 
   it("retains the panel host while a destination thread's workspace is unresolved", () => {

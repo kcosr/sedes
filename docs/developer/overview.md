@@ -125,6 +125,14 @@ than parse provider wording or inspect native payloads. Build presentation from
 the shared tokens, primitives, and settings kit described in
 [UI design system](ui-design-system.md).
 
+Views that a session may never open load as separate chunks on first use:
+Settings, Usage, Archived, the Files and Workpads panels, and transcript diffs.
+Route-level views use `lazyView` (`src/client/components/LazyView.tsx`), which
+shows a quiet loading state and, if the chunk cannot be fetched, offers Try
+again and Reload. Keep anything the initial screen or sidebar needs, such as
+the Settings page list, in eagerly imported modules. Android and Electron load
+the chunks from the bundled `dist/client` assets.
+
 ### Server application and domain
 
 The server owns identity scope, admission, persistence, mutation receipts,

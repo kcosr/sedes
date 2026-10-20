@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -50,7 +51,9 @@ import { useNativeVoice } from "../voice/VoiceProvider.js";
 
 const CONNECTING_BANNER_DELAY_MS = 5_000;
 
-export function ThreadView({
+// Memoized: the panel layout and workbench re-render for application-store
+// changes such as sidebar search; the thread view needs only its props.
+export const ThreadView = memo(function ThreadView({
   threadId,
   visible,
   focusTurnId,
@@ -149,6 +152,10 @@ export function ThreadView({
   const yieldTranscriptToFind = useCallback(
     () => transcript.current?.yieldToReaderNavigation(),
     [],
+  );
+  const returnToLive = useCallback(
+    () => navigate(threadPath(threadId), { replace: true }),
+    [threadId],
   );
   const seekBookmarkTurn = useCallback(
     (turnId: string) => {
@@ -686,9 +693,7 @@ export function ThreadView({
                   focusTurnId={focusTurnId}
                   focusResponse={focusResponse}
                   onHistoryPresentationChange={updateHistoryPresentation}
-                  onReturnToLive={() =>
-                    navigate(threadPath(threadId), { replace: true })
-                  }
+                  onReturnToLive={returnToLive}
                 />
               </div>
               {readOnly && (
@@ -779,4 +784,4 @@ export function ThreadView({
       </section>
     </QuestionInboxProvider>
   );
-}
+});

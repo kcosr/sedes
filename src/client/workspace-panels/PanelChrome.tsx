@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Maximize2, Minimize2, MoreVertical, X } from "lucide-react";
 import { Button } from "../components/ui/button.js";
 import {
@@ -56,6 +56,52 @@ export interface PanelChromeControls {
   readonly region?: PanelRegionControls;
   /** The tenant's own ⋯ items, after Move to. */
   readonly renderMenuItems?: React.ReactNode;
+}
+
+/**
+ * Keeps a panel's controls identical while what they present is unchanged, so
+ * a memoized panel body does not re-render with every layout render. The
+ * handlers always run the latest render's callbacks.
+ */
+export function useStablePanelChromeControls(
+  controls: PanelChromeControls,
+): PanelChromeControls {
+  const latest = useRef(controls);
+  useLayoutEffect(() => {
+    latest.current = controls;
+  });
+  const { active, closeAction, region, renderMenuItems } = controls;
+  const closable = controls.onClose !== undefined;
+  const regionId = region?.region;
+  const maximized = region?.maximized;
+  const extended = region?.extended;
+  return useMemo(
+    () => ({
+      ...(active !== undefined ? { active } : {}),
+      ...(closable
+        ? {
+            onClose: (invoker: HTMLElement) =>
+              latest.current.onClose?.(invoker),
+          }
+        : {}),
+      ...(closeAction ? { closeAction } : {}),
+      ...(regionId !== undefined && maximized !== undefined
+        ? {
+            region: {
+              region: regionId,
+              maximized,
+              ...(extended !== undefined ? { extended } : {}),
+              onMaximize: () => latest.current.region?.onMaximize(),
+              onRestore: () => latest.current.region?.onRestore(),
+              onMove: (target: RegionId) => latest.current.region?.onMove(target),
+              onExtend: (on: boolean) => latest.current.region?.onExtend(on),
+            },
+          }
+        : {}),
+      ...(renderMenuItems !== undefined ? { renderMenuItems } : {}),
+    }),
+    [active, closable, closeAction, regionId, maximized, extended, renderMenuItems],
+  );
 }
 
 export interface PanelChromeProps {

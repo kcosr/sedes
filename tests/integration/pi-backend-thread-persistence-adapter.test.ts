@@ -20,6 +20,7 @@ import { BackendConfigurationRepository } from "../../src/server/db/repositories
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { ConversationCreationRepository } from "../../src/server/db/repositories/conversation-creation-repository.js";
 import { ConversationDraftRepository } from "../../src/server/db/repositories/conversation-draft-repository.js";
+import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { ConnectionSettingPreferenceRepository } from "../../src/server/db/repositories/connection-setting-preference-repository.js";
 import { OverlayRepository } from "../support/schema9/overlay-repository.js";
 import { PiConversationRepository } from "../../src/server/backends/pi/pi-conversation-repository.js";
@@ -160,7 +161,7 @@ function createPrepared(
     now: 300,
   });
   target.adapter.initializeThread(target.scope, threadId, target.connection);
-  target.drafts.save(target.scope, threadId, {
+  new InventoryRepository(target.database).saveDraft(target.scope, threadId, {
     text: `Prompt ${suffix}`,
     contextExcerpts: [],
     attachmentIds: [],
@@ -933,7 +934,7 @@ describe("Pi backend thread persistence adapter", () => {
       revision: 0,
     });
 
-    target.drafts.save(target.scope, threadId, {
+    new InventoryRepository(target.database).saveDraft(target.scope, threadId, {
       text: "Prompt binding gate",
       contextExcerpts: [],
       attachmentIds: [],

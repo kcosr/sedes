@@ -124,10 +124,14 @@ import {
 } from "../../attachments/AttachmentCards.js";
 import { useComposerAttachmentUploads } from "../../attachments/useComposerAttachmentUploads.js";
 import { AttachmentGroup } from "../ui/attachment.js";
-import {
-  useApplicationStore,
-  type ApplicationClientStore,
+import type {
+  ApplicationClientState,
+  ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
+import {
+  sameSelectedFields,
+  useApplicationStoreSelector,
+} from "../../stores/use-application-store-selector.js";
 import { ApiError } from "../../api/ApiClient.js";
 import {
   ComposerPromptPicker,
@@ -166,6 +170,16 @@ const EMPTY_APPLICATION_STORE = {
   getSnapshot: () => EMPTY_APPLICATION_STATE,
   refresh: async () => undefined,
 } as unknown as ApplicationClientStore;
+
+/** The application state the composer renders; sidebar search is not part of it. */
+function selectComposerApplication(state: ApplicationClientState) {
+  return {
+    snapshot: state.snapshot,
+    descendantPages: state.descendantPages,
+    authoritative: state.authoritative,
+    connection: state.connection,
+  };
+}
 
 type DraftValue = {
   readonly text: string;
@@ -415,7 +429,11 @@ export function Composer({
     useComposerReasoningFit();
   const chatViewVisible = useContext(ChatViewVisibilityContext);
   const resolvedApplicationStore = applicationStore ?? EMPTY_APPLICATION_STORE;
-  const application = useApplicationStore(resolvedApplicationStore);
+  const application = useApplicationStoreSelector(
+    resolvedApplicationStore,
+    selectComposerApplication,
+    sameSelectedFields,
+  );
   const snapshot = state.snapshot;
   const serverDraft = snapshot?.draft;
   const retainedComposerState = getRetainedComposerDeliveryState(store);
@@ -1406,14 +1424,17 @@ export function Composer({
   const availableDeliveryModes =
     snapshot?.capabilities.deliveryModes.filter(({ available }) => available) ??
     [];
-  const currentTasks = new Map(
-    (application.snapshot?.tasks ?? []).map((task) => [task.id, task]),
+  // Inventory-derived and memoized: the composer renders on every keystroke.
+  const currentTasks = useMemo(
+    () => new Map((application.snapshot?.tasks ?? []).map((task) => [task.id, task])),
+    [application.snapshot?.tasks],
   );
-  const referenceThreads = [...new Map([
+  const referenceThreads = useMemo(() => [...new Map([
     ...Object.values(application.descendantPages ?? {}).flatMap((page) => page.descendants.map(({ thread }) => thread)),
     ...(application.snapshot?.threads ?? []),
   ].map((thread) => [thread.id, thread])).values()].filter((thread) =>
-    thread.id !== store.threadId && thread.inventoryState !== "archived");
+    thread.id !== store.threadId && thread.inventoryState !== "archived"),
+  [application.descendantPages, application.snapshot?.threads, store.threadId]);
   const referenceLocations = useMemo(() => {
     const catalog = application.snapshot;
     const locations = new Map<string, ThreadReferenceLocation>();
@@ -1429,12 +1450,17 @@ export function Composer({
     }
     return locations;
   }, [application.snapshot, referenceThreads.length]);
-  const threadChoices = referenceThreads.filter((thread) =>
-    !threadReferenceText.references.some(({ threadId }) => threadId === thread.id) &&
-    matchesSearchQuery(threadQuery, [thread.title.text, thread.backend.brand,
-      referenceLocations.get(thread.workspaceId)?.project ?? "",
-      referenceLocations.get(thread.workspaceId)?.environment ?? ""]),
-  ).slice(0, 30);
+  // The first 30 matches, without testing the rest of the inventory.
+  const threadChoices: NormalizedApplicationThreadSummary[] = [];
+  for (const thread of referenceThreads) {
+    if (threadChoices.length === 30) break;
+    if (
+      !threadReferenceText.references.some(({ threadId }) => threadId === thread.id) &&
+      matchesSearchQuery(threadQuery, [thread.title.text, thread.backend.brand,
+        referenceLocations.get(thread.workspaceId)?.project ?? "",
+        referenceLocations.get(thread.workspaceId)?.environment ?? ""])
+    ) threadChoices.push(thread);
+  }
   const taskProjectionChecking = !application.authoritative;
   const missingTaskReferences = taskProjectionChecking
     ? []

@@ -8,10 +8,11 @@ import type {
  * Derives one value from the application store and re-renders only when that
  * value changes.
  *
- * The application store publishes a new state object for every event, and its
- * normalized snapshot is re-parsed, so entity identities are not preserved
- * between events. A selector therefore receives its previous selection and
- * may return it (or reuse parts of it) when nothing it renders changed;
+ * The application store publishes a new state object for every event.
+ * Incremental events keep untouched entities and collections identical, but a
+ * replacement snapshot re-creates every entity. A selector therefore receives
+ * its previous selection and may return it (or reuse parts of it) when nothing
+ * it renders changed;
  * `isEqual` then decides whether a freshly built selection is equivalent to
  * the previous one. An equal selection keeps the previous reference, so
  * `useSyncExternalStore` skips the render.
@@ -57,4 +58,19 @@ export function useApplicationStoreSelector<Selection>(
     return selection;
   }, [isEqual, selector, store]);
   return useSyncExternalStore(store.subscribe, getSelection, getSelection);
+}
+
+/**
+ * Equality for a selection object of store fields: equal when it has the same
+ * fields with identical values.
+ */
+export function sameSelectedFields<Selection extends object>(
+  previous: Selection,
+  next: Selection,
+): boolean {
+  const keys = Object.keys(next) as (keyof Selection)[];
+  return (
+    keys.length === Object.keys(previous).length &&
+    keys.every((key) => Object.is(previous[key], next[key]))
+  );
 }

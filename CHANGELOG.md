@@ -107,6 +107,26 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Streaming replies, sidebar search and inventory updates do less work in the
+  browser: a flush re-renders only the turn that changed, and search or other
+  threads' updates no longer re-render the open thread.
+  ([#100](https://github.com/kcosr/sedes/pull/100))
+
+- Settings, Usage and Archived load on first use, which shrinks the initial
+  bundle. If their code cannot be fetched, the view offers Try again and Reload.
+  ([#100](https://github.com/kcosr/sedes/pull/100))
+
+- Thread actions and recovery checks no longer slow down as mutation history
+  grows: database migration **153** indexes mutation receipts by thread. Live
+  thread streams validate and encode each update once for every viewer and keep
+  less unusable reconnect history in memory.
+  ([#99](https://github.com/kcosr/sedes/pull/99))
+
+- The server sends the web client compressed (Brotli or gzip) and lets browsers
+  cache content-hashed assets for a year; `index.html` is still revalidated on
+  every load. The initial download drops from about 3.0 MB to 0.7 MB.
+  ([#99](https://github.com/kcosr/sedes/pull/99))
+
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See
   [parking](docs/user/organize-work.md#park-quiet-work).
@@ -170,6 +190,24 @@ User-facing changes are collected here before release. See the
   each root's selected review and no longer leaves **Start review** stuck on
   "Loading…". Sidebar thread shortcuts (Mod+1–9, Mod+Shift+↑/↓) no longer
   switch threads behind an open dialog.
+
+- The server no longer exits or hangs after rare failures: a client resetting
+  a refused terminal or outbound-host WebSocket upgrade, storage failing while
+  a terminal records history (only that terminal fails), a late Codex TUI
+  launch that cannot be closed, or a provider runtime closing while a thread
+  opens. Upgrade requests for unknown paths now get a 404 and are closed.
+  ([#101](https://github.com/kcosr/sedes/pull/101))
+
+- Threads with very large snapshots no longer reload and disconnect when a
+  small update follows a replacement on a slow connection. Exiting a terminal
+  shell while a mobile keyboard closes no longer drops the viewer with a
+  protocol error. Files change watching runs at most one Git metadata check
+  per short interval during installs and builds.
+  ([#101](https://github.com/kcosr/sedes/pull/101))
+
+- Deleting a Task that a force reset promoted now reports a conflict instead
+  of an internal server error. See [Tasks](docs/user/tasks-and-automations.md).
+  ([#101](https://github.com/kcosr/sedes/pull/101))
 
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the

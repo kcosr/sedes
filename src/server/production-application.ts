@@ -62,6 +62,7 @@ import { HostPairingRepository } from "./host-pairing/host-pairing-repository.js
 import type { HostPairingAdministration } from "./configuration-admin/host-pairing-routes.js";
 import { OutboundConnectionRegistry } from "./outbound/outbound-connection-registry.js";
 import { attachOutboundCarrier } from "./outbound/outbound-carrier.js";
+import { WebSocketUpgradeRouter } from "./http/websocket-upgrade-router.js";
 import { OutboundSidecarProvisioner } from "./sidecar/outbound-sidecar-provisioner.js";
 import { ConfigurationAdminService, type ConfigurationRuntimeAdapter } from "./configuration-admin/configuration-admin-service.js";
 import { ConfigurationProjection } from "./configuration-admin/configuration-projection.js";
@@ -111,6 +112,7 @@ import {
 } from "./conversations/thread-agent-tool-policy-dependencies.js";
 import { DatabaseThreadAgentToolRuntimeAvailabilityReader } from "./conversations/thread-agent-tool-runtime-availability.js";
 import { prepareBackendNormalizedDatabase } from "./db/backend-normalized-startup.js";
+import { DATABASE_OPTIMIZE_INTERVAL_MILLISECONDS, optimizeDatabase } from "./db/database.js";
 import { AutomationRepository } from "./db/repositories/automation-repository.js";
 import { BackendCheckpointRepository } from "./db/repositories/backend-checkpoint-repository.js";
 import { BackendConfigurationRepository } from "./db/repositories/backend-configuration-repository.js";
@@ -441,7 +443,21 @@ export async function startProductionApplication(
         environment.SEDES_QUIESCENT_CUTOVER_CONFIRMED === "1",
     });
     database = startup.database;
+    const applicationDatabase = database;
+    // Planner statistics are advisory: a failed refresh changes no application state.
+    const optimize = (phase: "opened" | "periodic" | "closing") => {
+      try {
+        optimizeDatabase(applicationDatabase, phase);
+      } catch {
+        // The next refresh retries; queries remain correct without statistics.
+      }
+    };
+    optimize("opened");
+    const optimizeTimer = setInterval(() => optimize("periodic"), DATABASE_OPTIMIZE_INTERVAL_MILLISECONDS);
+    optimizeTimer.unref();
     resources.defer("application database", () => {
+      clearInterval(optimizeTimer);
+      if (applicationDatabase.open && !applicationDatabase.inTransaction) optimize("closing");
       database?.close();
     });
     // This is the final publication gate. It is registered before every
@@ -3263,13 +3279,14 @@ export async function startProductionApplication(
       () => closeHttpServerBounded(server, longLivedConnections),
       { deadlineMilliseconds: 12_000 },
     );
-    const outboundCarrier = attachOutboundCarrier(listeningServer, {
+    const upgrades = new WebSocketUpgradeRouter(listeningServer);
+    const outboundCarrier = attachOutboundCarrier(upgrades, {
       authentication,
       config, identity, registry: outboundConnections, connections: longLivedConnections, drain,
     });
     resources.defer("outbound host carrier", () => outboundCarrier.close());
     const managedTerminalCarrier = attachManagedTerminalCarrier(
-      listeningServer,
+      upgrades,
       {
         authentication,
         config,
@@ -3285,7 +3302,7 @@ export async function startProductionApplication(
     resources.defer("managed terminal carrier", () =>
       managedTerminalCarrier.close(),
     );
-    const terminalCarrier = attachTerminalCarrier(listeningServer, {
+    const terminalCarrier = attachTerminalCarrier(upgrades, {
       authentication,
       config,
       identity,
