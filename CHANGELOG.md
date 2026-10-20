@@ -115,6 +115,7 @@ User-facing changes are collected here before release. See the
   **Try again** is a real button, and a stale diff stays readable under
   **Refresh**); and empty panels offer **New terminal** or **Configure
   comparison**.
+  ([#105](https://github.com/kcosr/sedes/pull/105))
 
 - The Workpads list has the Tasks keyboard model (one tab stop, arrow keys,
   **Delete**, **F2**); its row actions are announced, name the workpad when
@@ -197,12 +198,14 @@ User-facing changes are collected here before release. See the
   toolbars, diff headers, and changed-file rows, and small controls in Tasks,
   Workpads, voice, and Usage, take touch-sized targets, so a near miss on the
   voice card's chevron opens the thread picker rather than the thread.
+  ([#105](https://github.com/kcosr/sedes/pull/105))
 
 - Usage chart and heatmap readouts stay on screen after a tap instead of
   vanishing as the finger lifts, the heatmap can be read with the arrow keys,
   and its readout is announced to screen readers. With usage turned off, the
   Usage page explains how the operator enables it; the empty state now names
   OpenCode among the recorded backends.
+  ([#105](https://github.com/kcosr/sedes/pull/105))
 
 - Deleting a Files review comment or discarding a saved voice dictation asks
   for confirmation, and leaving **Settings → Notifications** with unsaved
