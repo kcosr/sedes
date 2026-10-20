@@ -457,6 +457,8 @@ export interface SetupInput {
   readonly unmountedFiles?: () => void;
   readonly mountedChat?: () => void;
   readonly unmountedChat?: () => void;
+  /** Observes each render of Chat by the layout. */
+  readonly renderedChat?: (controls: PanelChromeControls, visible: boolean) => void;
   readonly chatDisabledUntilAuthoritative?: boolean;
   readonly chatUnmountedUntilReady?: boolean;
   readonly tasksHost?: TasksHost;
@@ -481,9 +483,10 @@ export function setup(input: SetupInput = {}): SetupStore {
     threadId: "thread-1",
     storage: input.storage ?? noStorage,
   });
-  const chat = (controls: PanelChromeControls, visible: boolean) =>
-    input.chatUnmountedUntilReady &&
-    fakeThreadStore.getSnapshot().status === "loading" ? (
+  const chat = (controls: PanelChromeControls, visible: boolean) => {
+    input.renderedChat?.(controls, visible);
+    return input.chatUnmountedUntilReady &&
+      fakeThreadStore.getSnapshot().status === "loading" ? (
       <div aria-label="Loading Chat">Loading Chat</div>
     ) : (
       <Chat
@@ -497,6 +500,7 @@ export function setup(input: SetupInput = {}): SetupStore {
         unmounted={input.unmountedChat}
       />
     );
+  };
   let threadId = "thread-1";
   let workspaceId = "workspace-1";
   let active = true;

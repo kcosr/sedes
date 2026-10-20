@@ -1399,6 +1399,28 @@ describe("NormalizedThreadStore", () => {
     expect(store.snapshotSerializedBytes).toBe(serializedUtf8Bytes(store.state.snapshot));
   });
 
+  it("counts item upserts exactly into an empty and a populated timeline", () => {
+    const store = new NormalizedThreadStore();
+    expect(store.apply(envelope(0, { type: "snapshot", generation: "projection-1", snapshot: snapshot() })))
+      .toEqual({ kind: "applied" });
+    const message = (id: string, revision: number, text: string) => ({
+      id, turnId: "turn-1", kind: "assistant_message" as const, status: "streaming" as const, revision,
+      markdown: { text },
+    });
+    const upserts = [
+      message("first", 0, "First"),
+      message("second", 0, 'Second 雪🙂"\\'),
+      message("first", 1, "First, longer"),
+      message("third", 0, ""),
+    ];
+    upserts.forEach((item, index) => {
+      expect(store.apply(envelope(index + 1, { type: "item_upsert", generation: "projection-1", item })))
+        .toEqual({ kind: "applied" });
+      expect(store.snapshotSerializedBytes).toBe(serializedUtf8Bytes(store.state.snapshot));
+    });
+    expect(Object.keys(store.state.snapshot!.itemsById)).toEqual(["first", "second", "third"]);
+  });
+
   it("keeps a backend's per-turn fork unavailability when fork availability changes", () => {
     const store = new NormalizedThreadStore();
     const initial = snapshot();

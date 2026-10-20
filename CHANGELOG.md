@@ -107,6 +107,15 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Streaming replies, sidebar search and inventory updates do less work in the
+  browser: a flush re-renders only the turn that changed, and search or other
+  threads' updates no longer re-render the open thread.
+  ([#100](https://github.com/kcosr/sedes/pull/100))
+
+- Settings, Usage and Archived load on first use, which shrinks the initial
+  bundle. If their code cannot be fetched, the view offers Try again and Reload.
+  ([#100](https://github.com/kcosr/sedes/pull/100))
+
 - Thread actions and recovery checks no longer slow down as mutation history
   grows: database migration **153** indexes mutation receipts by thread. Live
   thread streams validate and encode each update once for every viewer and keep

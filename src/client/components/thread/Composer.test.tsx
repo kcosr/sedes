@@ -940,6 +940,23 @@ describe("thread references", () => {
     expect(screen.getByRole("option", { name: "Sprint 2 planning" })).toBeVisible();
   });
 
+  it("lists the first 30 matching threads and finds matches past them", async () => {
+    const threads = Array.from({ length: 45 }, (_, index) => ({
+      ...referencedThread,
+      id: `616946aa-4574-41f7-bd70-${String(index).padStart(12, "0")}`,
+      title: { text: index === 44 ? "Rare migration" : `Routine thread ${index}` },
+    }));
+    render(<Composer store={new FakeComposerStore(snapshot(), "Ask") as unknown as ThreadClientStore} applicationStore={referenceApplication(threads).store} />);
+    await openReferenceSuggestions();
+    const dialog = screen.getByRole("dialog", { name: "Reference a thread" });
+    expect(within(dialog).getAllByRole("option")).toHaveLength(30);
+    expect(within(dialog).queryByRole("option", { name: "Rare migration" })).not.toBeInTheDocument();
+    await userEvent.keyboard("rare");
+    expect(within(dialog).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      expect.stringContaining("Rare migration"),
+    ]);
+  });
+
   it("keeps mobile filtering and focus in the composer", async () => {
     render(<Composer store={new FakeComposerStore(snapshot(), "Ask ") as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
     const input = screen.getByRole("textbox") as HTMLTextAreaElement;
