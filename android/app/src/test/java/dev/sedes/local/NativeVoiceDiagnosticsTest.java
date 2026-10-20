@@ -55,6 +55,34 @@ public class NativeVoiceDiagnosticsTest {
         NativeVoiceDiagnostics log = new NativeVoiceDiagnostics(() -> { throw new IllegalStateException("private failure"); }, () -> 10);
         log.enabled(true);
         record(log, SOURCE, "turn.completed", null);
+        log.recordComposer(NativeVoiceDiagnostics.ComposerEvent.RECORDING_ROUTE_SELECTED, null, 1, true, true, true, true, true);
+        assertEquals(0, log.read().getJSONArray("entries").length());
+    }
+    @Test public void composerRoutesUseTheSameGateAndBufferWithoutExportingArbitraryIdentifiers() throws Exception {
+        NativeVoiceDiagnostics log = new NativeVoiceDiagnostics(() -> 123456, () -> 10);
+        String id = "9ff27a42-814a-466b-acef-c8aeb7d017f5";
+        log.recordComposer(NativeVoiceDiagnostics.ComposerEvent.RECORDING_ROUTE_SELECTED, id, 3, true, true, false, true, false);
+        assertEquals(0, log.read().getJSONArray("entries").length());
+        log.enabled(true);
+        log.recordComposer(NativeVoiceDiagnostics.ComposerEvent.RECORDING_ROUTE_SELECTED, id, 3, true, true, false, true, false);
+        JSONObject route = log.read().getJSONArray("entries").getJSONObject(0);
+        assertEquals(id, route.getString("recordingId"));
+        assertEquals("recording_route_selected", route.getString("event"));
+        assertTrue(route.getBoolean("targetMatchesForeground"));
+        assertFalse(route.getBoolean("composerAvailable"));
+        assertFalse(route.getBoolean("composerSelected"));
+        log.recordComposer(NativeVoiceDiagnostics.ComposerEvent.RECORDING_ROUTE_SELECTED, "private thread", 3, true, true, true, true, true);
+        JSONObject composer = log.read().getJSONArray("entries").getJSONObject(1);
+        assertTrue(composer.getBoolean("composerSelected"));
+        assertFalse(composer.has("recordingId"));
+        assertFalse(log.read().toString().contains("private"));
+        for (int i = 0; i < NativeVoiceDiagnostics.MAX_ENTRIES; i++)
+            log.recordComposer(NativeVoiceDiagnostics.ComposerEvent.FOREGROUND_CONTEXT, null, 3, true, true, true, true, false);
+        assertEquals(NativeVoiceDiagnostics.MAX_ENTRIES, log.read().getJSONArray("entries").length());
+        log.enabled(false);
+        log.recordComposer(NativeVoiceDiagnostics.ComposerEvent.HANDOFF_OFFERED, id, 3, true, true, true, true, true);
+        assertEquals(NativeVoiceDiagnostics.MAX_ENTRIES, log.read().getJSONArray("entries").length());
+        log.clear();
         assertEquals(0, log.read().getJSONArray("entries").length());
     }
     @Test public void queueReportsAdmissionDuplicateEvictionAndStopWithoutChangingQueueSemantics() throws Exception {

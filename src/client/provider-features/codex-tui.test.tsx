@@ -25,6 +25,7 @@ import type { CodexTuiTransport } from "./codex-tui-transport.js";
 import { CodexTuiThreadPresentation } from "./codex-tui.js";
 import type { ChatHistoryEntry } from "../components/thread/ChatHistoryRail.js";
 import { ChatViewVisibilityContext } from "../components/thread/chat-view-visibility.js";
+import { VoiceComposerTargetContext } from "../voice/voice-composer-target.js";
 import { CodexTuiTerminalControlContext } from "./codex-tui.js";
 
 beforeEach(() => {
@@ -115,6 +116,22 @@ describe("CodexTuiThreadPresentation", () => {
     expect(
       window.sessionStorage.getItem("sedes.codex-tui.view.v1:thread-1"),
     ).toBe("tui");
+  });
+
+  it.each([
+    { name: "current Chat behind another panel", threadActive: true, tui: false, eligible: true },
+    { name: "selected TUI behind another panel", threadActive: true, tui: true, eligible: false },
+    { name: "inactive workbench", threadActive: false, tui: false, eligible: false },
+  ])("sets voice eligibility for $name independently of panel visibility", ({ threadActive, tui, eligible }) => {
+    window.sessionStorage.setItem("sedes.codex-tui.view.v1:thread-1", tui ? "tui" : "chat");
+    renderPresentation(snapshot("available", { lifecycle: "running" }), {
+      visible: false, threadActive,
+      rendererFactory: () => fakeRenderer().value,
+      transportFactory: () => fakeTransport().value,
+    });
+    expect(screen.getByTestId("chat-view-visibility")).toHaveTextContent("false");
+    expect(screen.getByTestId("terminal-control-state")).toHaveTextContent("inactive");
+    expect(screen.getByTestId("voice-composer-target")).toHaveTextContent(String(eligible));
   });
 
   it("docks an interaction panel above a still-available Chat, TUI, and composer", () => {
@@ -710,8 +727,10 @@ function ChatVisibilityProbe() {
 
 function TerminalControlProbe() {
   const control = useContext(CodexTuiTerminalControlContext);
+  const voiceTarget = useContext(VoiceComposerTargetContext);
   return (
     <>
+      <div data-testid="voice-composer-target">{String(voiceTarget)}</div>
       <div data-testid="terminal-control-state">
         {control?.active ? "active" : "inactive"}
       </div>
@@ -735,6 +754,7 @@ function TerminalControlProbe() {
 }
 
 interface Options {
+  readonly threadActive?: boolean;
   readonly visible?: boolean;
   readonly historicalFocus?: boolean;
   readonly perform?: ReturnType<typeof vi.fn>;
@@ -753,6 +773,7 @@ function element(value: NormalizedThreadSnapshot, options: Options = {}) {
   return (
     <CodexTuiThreadPresentation
       threadId="thread-1"
+      threadActive={options.threadActive ?? true}
       visible={options.visible ?? true}
       snapshot={value}
       store={

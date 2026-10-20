@@ -55,6 +55,7 @@ const CONNECTING_BANNER_DELAY_MS = 5_000;
 // changes such as sidebar search; the thread view needs only its props.
 export const ThreadView = memo(function ThreadView({
   threadId,
+  threadActive,
   visible,
   focusTurnId,
   focusResponse,
@@ -63,6 +64,8 @@ export const ThreadView = memo(function ThreadView({
   panelControls,
 }: {
   threadId: string;
+  /** Whether this is the current thread in the active workbench, regardless of its visible panel. */
+  threadActive: boolean;
   /** Whether this retained singleton is currently presented in the layout. */
   visible: boolean;
   focusTurnId?: string;
@@ -669,6 +672,7 @@ export const ThreadView = memo(function ThreadView({
         />
         <CodexTuiThreadPresentation
           threadId={threadId}
+          threadActive={threadActive}
           visible={visible}
           snapshot={snapshot}
           store={store}

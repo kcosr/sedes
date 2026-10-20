@@ -18,6 +18,7 @@ import type { ApiClient } from "../api/ApiClient.js";
 import type { ThreadClientStore } from "../stores/ThreadClientStore.js";
 import { Button } from "../components/ui/button.js";
 import { ChatViewVisibilityContext } from "../components/thread/chat-view-visibility.js";
+import { VoiceComposerTargetContext } from "../voice/voice-composer-target.js";
 import { MobileChatHistoryThumbstick } from "../components/thread/MobileChatHistoryThumbstick.js";
 import type { ChatHistoryEntry } from "../components/thread/ChatHistoryRail.js";
 
@@ -115,6 +116,7 @@ export type CodexTuiFeatureState = z.infer<typeof codexTuiStateSchema>;
 
 export interface CodexTuiThreadPresentationProps {
   readonly threadId: string;
+  readonly threadActive: boolean;
   /** Whether the retained outer Chat panel is currently presented. */
   readonly visible: boolean;
   readonly snapshot: NormalizedThreadSnapshot;
@@ -141,6 +143,7 @@ export interface CodexTuiThreadPresentationProps {
 
 export function CodexTuiThreadPresentation({
   threadId,
+  threadActive,
   visible,
   snapshot,
   store,
@@ -458,7 +461,9 @@ export function CodexTuiThreadPresentation({
             {/* Docked in flow above the composer: a blocking request must never
                 sit on top of the controls the thread still owns. */}
             {takeover}
-            {composer}
+            <VoiceComposerTargetContext.Provider value={threadActive && !showTui}>
+              {composer}
+            </VoiceComposerTargetContext.Provider>
           </div>
         </div>
       </CodexTuiTerminalControlContext.Provider>

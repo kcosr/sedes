@@ -233,6 +233,12 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     void setDiagnosticsEnabled(boolean enabled) { diagnostics.enabled(enabled); }
     JSONObject readDiagnostics() { return diagnostics.read(); }
     void clearDiagnostics() { diagnostics.clear(); }
+    private void traceComposer(NativeVoiceDiagnostics.ComposerEvent event, Active item) {
+        diagnostics.recordComposer(event, item == null ? null : item.recordingId, connectionGeneration,
+            nativeVisible, foregroundVisible, foregroundComposerAvailable,
+            item != null && Objects.equals(item.targetId, foregroundThread),
+            item != null && item.frozenComposerContext != null);
+    }
     private void trace(NativeVoiceDiagnostics.Event event, String id, String kind, int chunk, String reason) {
         diagnostics.record(event, id, kind, connectionGeneration, streamGeneration, policyGeneration,
             queue.size(), queue.bytes(), chunk, reason);
@@ -806,6 +812,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         foregroundComposerAvailable = nextComposerAvailable;
         foregroundThread = nextThread;
         foregroundTitle = foregroundVisible ? title : null;
+        traceComposer(NativeVoiceDiagnostics.ComposerEvent.FOREGROUND_CONTEXT, active);
         if (nextThread != null) lastViewedThread = nextThread;
         if (active == null && viewedThreadChanged) {
             clearRetainedVoiceTarget();
@@ -2222,6 +2229,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         item.frozenComposerThread = item.targetId;
         item.frozenComposerContext = NativeVoiceComposerHandoff.eligible(nativeVisible, foregroundVisible,
             foregroundComposerAvailable, foregroundThread, item.targetId) ? composerVisibilityContext : null;
+        traceComposer(NativeVoiceDiagnostics.ComposerEvent.RECORDING_ROUTE_SELECTED, item);
     }
     /** The route was frozen before recognition completed; a declined offer never submits speech alone. */
     private void offerComposerHandoff(Active item, String text, boolean steer) {
@@ -2242,6 +2250,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 "connectionGeneration", offer.generation, "handoffId", offer.id, "recordingId", offer.recordingId,
                 "threadId", offer.threadId, "text", offer.text, "mode", offer.mode);
             final List<Observer> recipients = new ArrayList<>(observers);
+            traceComposer(NativeVoiceDiagnostics.ComposerEvent.HANDOFF_OFFERED, item);
             publish();
             main.post(() -> {
                 JSONObject current = state, foreground = current.optJSONObject("foreground"), currentActive = current.optJSONObject("active");
@@ -2274,6 +2283,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         Active item = requireComposerHandoff(NativeVoiceJson.string(args, "handoffId", 160));
         if (!item.composerHandoff.threadId.equals(item.targetId)) throw new IllegalStateException("composer_handoff_unavailable");
         item.composerHandoff.claim(binding, connectionGeneration, composerVisibilityContext, nativeVisible, foregroundVisible);
+        traceComposer(NativeVoiceDiagnostics.ComposerEvent.HANDOFF_CLAIMED, item);
         claimedComposerHandoffs.put(item.composerHandoff.id, item);
         composerSubmissions.claim(item.composerHandoff, composerSubmissionClock.getAsLong());
         composerSubmissionScheduler.schedule(() -> {
@@ -2301,6 +2311,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         claimedComposerHandoffs.remove(id);
         if (!submissionPending) composerSubmissions.release(id, expectedGeneration);
         if (outcome.equals("accepted")) {
+            traceComposer(NativeVoiceDiagnostics.ComposerEvent.HANDOFF_ACCEPTED, item);
             discardStoredRecording(item.recordingBinding, item.recordingId, expectedGeneration);
             if (active == item) finishItem(item);
             else { publish(); if (Objects.equals(item.recordingBinding, binding) && expectedGeneration == connectionGeneration) drain(); }
@@ -2312,6 +2323,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         declineComposerHandoff(item, null);
     }
     private void declineComposerHandoff(Active item, String detail) {
+        traceComposer(NativeVoiceDiagnostics.ComposerEvent.HANDOFF_DECLINED, item);
         item.composerHandoff.finished = true;
         claimedComposerHandoffs.remove(item.composerHandoff.id);
         composerSubmissions.release(item.composerHandoff.id, item.composerHandoff.generation);
@@ -2359,6 +2371,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     private void prepareAdmission(Active item, String target, String text, String originId, JSONObject policy) {
         if (active != item || binding == null) return;
+        traceComposer(NativeVoiceDiagnostics.ComposerEvent.NATIVE_SUBMISSION_STARTED, item);
         final String owner = item.recordingBinding, id = item.mutationId, recordingId = item.recordingId;
         final long generation = connectionGeneration;
         JSONObject request = item.record != null && item.record.request != null ? item.record.request :

@@ -4,6 +4,7 @@ import { ApiError, type ApiClient } from "../api/ApiClient.js";
 import type { VoiceComposerAdoption, VoiceDetachedComposerContext } from "./NativeVoiceStore.js";
 import type { NativeVoiceComposerHandoff } from "./native-voice-plugin.js";
 import { prependVoiceToDraft } from "./voice-composer-draft.js";
+import { recordVoiceSendDiagnostic, voiceDraftCounts } from "./voice-send-diagnostics.js";
 
 type DraftApi = Pick<ApiClient, "readThread" | "saveDraft" | "operateThread">;
 
@@ -45,11 +46,21 @@ export async function prepareDetachedVoiceSubmission(
   readTasks: () => readonly Task[] | undefined,
 ): Promise<VoiceComposerAdoption> {
   context.assertCurrent();
-  const snapshot = await api.readThread(event.threadId, context.signal);
+  const diagnostic = { recordingId: event.recordingId, source: "saved" as const };
+  recordVoiceSendDiagnostic("saved_draft_read_started", diagnostic);
+  let snapshot: NormalizedThreadSnapshot;
+  try {
+    snapshot = await api.readThread(event.threadId, context.signal);
+  } catch (error) {
+    recordVoiceSendDiagnostic("saved_draft_read_failed", diagnostic);
+    throw error;
+  }
+  recordVoiceSendDiagnostic("saved_draft_read_finished", { ...diagnostic, ...voiceDraftCounts(snapshot.draft), draftRevision: snapshot.draft.revision });
   context.assertCurrent();
   const parsed = normalizedDraftSchema.safeParse(prependVoiceToDraft(snapshot.draft, event.text));
   if (!parsed.success) throw new Error("Speech and the saved draft exceed the input limit. Review the original thread before sending.");
   const candidate = parsed.data;
+  recordVoiceSendDiagnostic("draft_captured", { ...diagnostic, ...voiceDraftCounts(candidate), draftRevision: candidate.revision });
   const tasks = readTasks();
   const selectedTasks: Task[] = [];
   for (const reference of candidate.taskReferences) {
@@ -66,8 +77,11 @@ export async function prepareDetachedVoiceSubmission(
   context.beginSave();
   let saved: NormalizedDraft;
   try {
+    recordVoiceSendDiagnostic("saved_draft_save_started", diagnostic);
     saved = await api.saveDraft(event.threadId, candidate);
+    recordVoiceSendDiagnostic("saved_draft_save_finished", { ...diagnostic, ...voiceDraftCounts(saved), draftRevision: saved.revision });
   } catch (error) {
+    recordVoiceSendDiagnostic("saved_draft_save_failed", diagnostic);
     // A definitive admission rejection has no saved contribution. A transport or
     // server failure can follow a successful write, so first look for that exact
     // contribution on the original connection, even if navigation was cancelled.
@@ -75,6 +89,7 @@ export async function prepareDetachedVoiceSubmission(
     try {
       const current = await api.readThread(event.threadId, AbortSignal.timeout(5_000));
       if (current.draft.revision > candidate.revision && sameContribution(current.draft, candidate)) {
+        recordVoiceSendDiagnostic("saved_draft_save_reconciled", { ...diagnostic, draftRevision: current.draft.revision });
         return { submission: Promise.reject(new Error("Speech was saved in the original thread's draft, but its save acknowledgement was lost. Open that thread before sending.")) };
       }
     } catch { /* Keep native recovery when a durable save cannot be established. */ }
@@ -93,6 +108,8 @@ export async function prepareDetachedVoiceSubmission(
     if (!capability?.available) throw new Error("Speech was saved in the original thread's draft. Open that thread and press Send when it is available.");
     let result;
     try {
+      recordVoiceSendDiagnostic("delivery_started", { ...diagnostic, mode: policy.mode,
+        ...voiceDraftCounts(saved), draftRevision: saved.revision });
       result = await api.operateThread(event.threadId, {
         kind: "deliver",
         mutationId: operationId,
@@ -101,6 +118,7 @@ export async function prepareDetachedVoiceSubmission(
         ...policy,
       }, { signal: context.signal });
     } catch (error) {
+      recordVoiceSendDiagnostic("delivery_failed", diagnostic);
       // This request may have crossed admission. Do not fetch, prepend, save or
       // send again: normal Chat receipts/recovery own the outcome from here.
       if (error instanceof ApiError && error.status >= 400 && error.status < 500 &&
@@ -113,9 +131,13 @@ export async function prepareDetachedVoiceSubmission(
           result.draft.revision <= saved.revision || result.draft.text !== "" || result.draft.attachments.length !== 0 ||
           result.draft.contextExcerpts.length !== 0 || result.draft.taskReferences.length !== 0)
         throw new Error("Voice delivery returned an invalid receipt. Check the original thread before sending again.");
+      recordVoiceSendDiagnostic("delivery_finished", diagnostic);
       return;
     }
-    if (result.status === "delivery_pending_materialization" && result.operationId === operationId) return;
+    if (result.status === "delivery_pending_materialization" && result.operationId === operationId) {
+      recordVoiceSendDiagnostic("delivery_finished", diagnostic);
+      return;
+    }
     throw new Error("Check the original thread's draft and delivery recovery before sending the dictation again.");
   })();
   return { submission };

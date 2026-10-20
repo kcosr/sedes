@@ -142,7 +142,7 @@ describe("ThreadView local voice Send", () => {
         content: [{ kind: "text", text: { text: "Local spoken message" } }] } },
     };
     const state = fixture(snapshot);
-    const view = render(<ThreadView threadId={threadId} visible={visible}
+    const view = render(<ThreadView threadActive threadId={threadId} visible={visible}
       registry={state.registry} applicationStore={state.applicationStore} />);
     const viewport = screen.getByRole("region", { name: "Messages", hidden: true });
     Object.defineProperty(viewport, "scrollTo", { configurable: true, value: vi.fn() });
@@ -173,7 +173,7 @@ describe("ThreadView local voice Send", () => {
     expect(f.registry.get(f.threadId).acceptNativeVoiceSubmission).toHaveBeenCalledTimes(reason === "disabled" ? 1 : 0);
     // Later enabling/revealing cannot replay an earlier local event.
     setSeekOnSubmit(true);
-    f.view.rerender(<ThreadView threadId={f.threadId} visible
+    f.view.rerender(<ThreadView threadActive threadId={f.threadId} visible
       registry={f.registry} applicationStore={f.applicationStore} />);
     expect(readDiagnostics().some(entry => entry.event === "seek_request_consumed")).toBe(false);
   });
@@ -193,7 +193,7 @@ describe("ThreadView saved dictation", () => {
     voiceContext.store = voice;
     await voice.initialize();
     const state = fixture(snapshot, [], reason === "unavailable" ? { status: "error", snapshot: undefined } : {});
-    render(<ThreadView threadId={snapshot.thread.id} visible
+    render(<ThreadView threadActive threadId={snapshot.thread.id} visible
       registry={state.registry} applicationStore={state.applicationStore} />);
     await act(async () => {
       await expect(voice.addRecordingToComposer({ expectedConnectionGeneration: 1, recordingId: saved.recordingId,
@@ -217,7 +217,7 @@ describe("ThreadView saved dictation", () => {
     voiceContext.store = voice;
     await voice.initialize();
     const state = fixture(snapshot);
-    const view = render(<ThreadView threadId={snapshot.thread.id} visible
+    const view = render(<ThreadView threadActive threadId={snapshot.thread.id} visible
       focusTurnId={transition === "historical" ? "older-turn" : undefined}
       registry={state.registry} applicationStore={state.applicationStore} />);
     let completed = false;
@@ -228,7 +228,7 @@ describe("ThreadView saved dictation", () => {
     expect(voice.getSnapshot().pending).toBe(true);
     expect(native.plugin.discardRecording).not.toHaveBeenCalled();
     if (transition === "historical") {
-      view.rerender(<ThreadView threadId={snapshot.thread.id} visible
+      view.rerender(<ThreadView threadActive threadId={snapshot.thread.id} visible
         registry={state.registry} applicationStore={state.applicationStore} />);
     } else {
       const ready = makeSnapshot("interactive", "idle");
@@ -252,7 +252,7 @@ describe("ThreadView saved dictation", () => {
       append("Recovered words");
       return () => undefined;
     });
-    const view = render(<ThreadView threadId={base.thread.id} visible
+    const view = render(<ThreadView threadActive threadId={base.thread.id} visible
       registry={state.registry} applicationStore={state.applicationStore} />);
     expect(registered).not.toHaveBeenCalled();
     const attachment = { id: "79b5e50e-9a0a-4c6f-9f2a-bdb93a418cb7", fileName: "remote.txt", kind: "file" as const,
@@ -273,7 +273,7 @@ describe("ThreadView load errors", () => {
     const snapshot = makeSnapshot("interactive", "disconnected");
     const state = fixture(snapshot, [], { status: "error", connection: "disconnected", authoritative: false,
       snapshot: undefined, error: "This backend is disabled." });
-    render(<ThreadView threadId={snapshot.thread.id} visible registry={state.registry} applicationStore={state.applicationStore} />);
+    render(<ThreadView threadActive threadId={snapshot.thread.id} visible registry={state.registry} applicationStore={state.applicationStore} />);
     expect(screen.getByText("Couldn’t open this thread")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Session stats" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
@@ -332,7 +332,7 @@ describe("ThreadView loading header", () => {
       threads: [state.summary],
     });
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={state.snapshot.thread.id}
         visible
         registry={state.registry}
@@ -365,7 +365,7 @@ describe("ThreadView loading header", () => {
   it("uses a generic header until matching inventory arrives and does not leak the previous thread title", () => {
     const state = loadingFixture();
     const view = render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={state.snapshot.thread.id}
         visible
         registry={state.registry}
@@ -379,7 +379,7 @@ describe("ThreadView loading header", () => {
     }));
     expect(screen.getByRole("heading", { name: "Loading inventory title" })).toBeInTheDocument();
     view.rerender(
-      <ThreadView
+      <ThreadView threadActive
         threadId="another-thread"
         visible
         registry={state.registry}
@@ -433,7 +433,7 @@ describe("ThreadView loading header", () => {
       getSnapshot: () => applicationState,
     } as unknown as ApplicationClientStore;
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={state.summary.id}
         visible
         registry={state.registry}
@@ -456,7 +456,7 @@ describe("ThreadView loading header", () => {
     };
     const panelControls = { onClose: vi.fn(), closeAction: "hide" as const, region };
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={state.snapshot.thread.id}
         visible
         registry={state.registry}
@@ -480,7 +480,7 @@ describe("ThreadView loading header", () => {
     const state = loadingFixture();
     state.updateApplicationSnapshot({ ...state.applicationSnapshot, threads: [state.summary] });
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={state.snapshot.thread.id}
         visible
         registry={state.registry}
@@ -511,7 +511,7 @@ describe("ThreadView background activity", () => {
     };
     const state = fixture(snapshot);
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={state.registry}
@@ -544,7 +544,7 @@ describe("ThreadView response bookmarks", () => {
       },
     };
     const state = fixture(snapshot, [], { bookmarks: [{ turnId: "bookmarked-turn", userPreview: "Saved question", assistantPreview: "Saved answer", responseState: "responded", createdAt: 1 }] });
-    render(<ThreadView threadId={snapshot.thread.id} visible focusTurnId="bookmarked-turn" focusResponse registry={state.registry} applicationStore={state.applicationStore} />);
+    render(<ThreadView threadActive threadId={snapshot.thread.id} visible focusTurnId="bookmarked-turn" focusResponse registry={state.registry} applicationStore={state.applicationStore} />);
     const viewport = screen.getByRole("region", { name: "Messages" });
     const scrollTo = vi.fn(({ top }: ScrollToOptions) => { viewport.scrollTop = top ?? 0; });
     Object.defineProperties(viewport, {
@@ -580,7 +580,7 @@ describe("ThreadView render isolation", () => {
     // Like the workbench and panel layout, re-renders for every application change.
     function Host(): React.JSX.Element {
       useApplicationStore(state.applicationStore);
-      return <ThreadView threadId={snapshot.thread.id} visible registry={state.registry} applicationStore={state.applicationStore} />;
+      return <ThreadView threadActive threadId={snapshot.thread.id} visible registry={state.registry} applicationStore={state.applicationStore} />;
     }
     render(<Host />);
     // Settle the mount's own follow-up renders first.
@@ -644,7 +644,7 @@ describe("ThreadView message keyboard navigation", () => {
     };
     const state = fixture(snapshot);
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible={visible}
         registry={state.registry}
@@ -770,7 +770,7 @@ describe("ThreadView backend interaction modes", () => {
         snapshot={applicationSnapshot as NormalizedApplicationSnapshot}
       >
         <TaskDragTestSource task={task} />
-        <ThreadView
+        <ThreadView threadActive
           threadId={snapshot.thread.id}
           visible
           registry={state.registry}
@@ -849,7 +849,7 @@ describe("ThreadView backend interaction modes", () => {
     });
 
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={state.registry}
@@ -890,7 +890,7 @@ describe("ThreadView backend interaction modes", () => {
     });
 
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={state.registry}
@@ -920,7 +920,7 @@ describe("ThreadView backend interaction modes", () => {
     });
 
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={state.registry}
@@ -947,7 +947,7 @@ describe("ThreadView backend interaction modes", () => {
     });
 
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={state.registry}
@@ -976,7 +976,7 @@ describe("ThreadView backend interaction modes", () => {
       });
 
       render(
-        <ThreadView
+        <ThreadView threadActive
           threadId={snapshot.thread.id}
           visible
           registry={state.registry}
@@ -1019,7 +1019,7 @@ describe("ThreadView backend interaction modes", () => {
         return { top: 600 } as DOMRect;
       });
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={full.thread.id}
         visible
         registry={state.registry}
@@ -1075,7 +1075,7 @@ describe("ThreadView backend interaction modes", () => {
         return { top: 600 } as DOMRect;
       });
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={full.thread.id}
         visible
         registry={state.registry}
@@ -1122,7 +1122,7 @@ describe("ThreadView backend interaction modes", () => {
     const { applicationStore, registry, updateSnapshot } = fixture(snapshot);
     beginThreadLoadAttempt(snapshot.thread.id, "navigation");
     const view = render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible={false}
         registry={registry}
@@ -1136,7 +1136,7 @@ describe("ThreadView backend interaction modes", () => {
     ).toBe(false);
 
     view.rerender(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={registry}
@@ -1182,7 +1182,7 @@ describe("ThreadView backend interaction modes", () => {
     const { applicationStore, registry } = fixture(snapshot);
 
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={registry}
@@ -1215,7 +1215,7 @@ describe("ThreadView backend interaction modes", () => {
     };
     const fixtureState = fixture(snapshot);
     const view = render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible={false}
         registry={fixtureState.registry}
@@ -1230,7 +1230,7 @@ describe("ThreadView backend interaction modes", () => {
     expect(fixtureState.acknowledgeVisibleCompletion).not.toHaveBeenCalled();
 
     view.rerender(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={fixtureState.registry}
@@ -1252,7 +1252,7 @@ describe("ThreadView backend interaction modes", () => {
     document.body.append(outside);
     outside.focus();
     const view = render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible={false}
         registry={registry}
@@ -1267,7 +1267,7 @@ describe("ThreadView backend interaction modes", () => {
     expect(outside).toHaveFocus();
 
     view.rerender(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={registry}
@@ -1291,7 +1291,7 @@ describe("ThreadView backend interaction modes", () => {
     const { applicationStore, registry } = fixture(snapshot);
 
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={registry}
@@ -1362,7 +1362,7 @@ describe("ThreadView backend interaction modes", () => {
       releaseCached: vi.fn(),
     } as unknown as ThreadStoreRegistry;
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={registry}
@@ -1389,7 +1389,7 @@ describe("ThreadView backend interaction modes", () => {
     const { applicationStore, registry } = fixture(snapshot);
 
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={registry}
@@ -1444,7 +1444,7 @@ describe("ThreadView backend interaction modes", () => {
     });
 
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={registry}
@@ -1485,7 +1485,7 @@ describe("ThreadView backend interaction modes", () => {
     const pendingSubmit = makePendingSubmit(snapshot, "queue-operation-1");
     const { applicationStore, registry } = fixture(snapshot, [pendingSubmit]);
     const view = render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={registry}
@@ -1497,7 +1497,7 @@ describe("ThreadView backend interaction modes", () => {
     expect(screen.queryByTestId("pending-input-strip")).not.toBeInTheDocument();
 
     view.rerender(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         focusTurnId="turn-fork-source"
@@ -1521,7 +1521,7 @@ describe("ThreadView backend interaction modes", () => {
     const { applicationStore, registry } = fixture(snapshot);
 
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={registry}
@@ -1553,7 +1553,7 @@ describe("ThreadView backend interaction modes", () => {
       fixture(idleSnapshot);
 
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={idleSnapshot.thread.id}
         visible
         registry={registry}
@@ -1580,7 +1580,7 @@ describe("ThreadView backend interaction modes", () => {
     const { applicationStore, registry, dismissAttention } = fixture(snapshot);
 
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={registry}
@@ -1609,7 +1609,7 @@ describe("ThreadView backend interaction modes", () => {
     }));
     const snapshot = { ...base, attention: { automationContexts: contexts } };
     const { applicationStore, registry, dismissAttention } = fixture(snapshot);
-    render(<ThreadView threadId={snapshot.thread.id} visible registry={registry} applicationStore={applicationStore} />);
+    render(<ThreadView threadActive threadId={snapshot.thread.id} visible registry={registry} applicationStore={applicationStore} />);
     for (const [index, text] of [
       "Reminder 0 triggered this thread.",
       "Reminder 1: this run failed.",
@@ -1631,7 +1631,7 @@ describe("ThreadView backend interaction modes", () => {
     const { applicationStore, registry } = fixture(snapshot);
 
     render(
-      <ThreadView
+      <ThreadView threadActive
         threadId={snapshot.thread.id}
         visible
         registry={registry}
@@ -1687,7 +1687,7 @@ describe("ThreadView backend interaction modes", () => {
       const { applicationStore, registry } = fixture(snapshot);
 
       render(
-        <ThreadView
+        <ThreadView threadActive
           threadId={snapshot.thread.id}
           visible
           registry={registry}

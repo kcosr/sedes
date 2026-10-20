@@ -13,6 +13,7 @@ import { resumeVoice, voiceReadiness, voiceThreadFilterWarning } from "./voice-s
 import { nativeThreadTitle, type NativeRecordingCommandContext, type NativeVoiceState } from "./native-voice-plugin.js";
 import { DiscardSavedDictationDialog, recordingRecoveryContext, recordingRecoveryLabel, recordingRecoveryStatus, recordingRecoveryTitle, savedRecording } from "./VoiceRecordingRecovery.js";
 import { voiceRecordingTarget } from "./voice-recording-target.js";
+import { recordVoiceSendDiagnostic } from "./voice-send-diagnostics.js";
 import "./voice.css";
 
 /** Card text: parts joined by dots, a named thread, or a muted placeholder. */
@@ -73,7 +74,15 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     let alive = true;
     const publish = () => {
       if (!alive) return;
-      void store.plugin.setForegroundContext({ expectedConnectionGeneration, visible: document.visibilityState !== "hidden", threadId, threadTitle, composerMode, composerAvailable }).catch(() => undefined);
+      const visible = document.visibilityState !== "hidden";
+      recordVoiceSendDiagnostic("foreground_context_requested", { connectionGeneration: expectedConnectionGeneration,
+        documentVisible: visible, composerAvailable });
+      void store.plugin.setForegroundContext({ expectedConnectionGeneration, visible, threadId, threadTitle, composerMode, composerAvailable })
+        .then(native => recordVoiceSendDiagnostic("foreground_context_applied", {
+          connectionGeneration: native.connectionGeneration, documentVisible: native.foreground.visible,
+          composerAvailable: native.foreground.composerAvailable,
+          targetMatchesForeground: native.foreground.threadId === threadId,
+        })).catch(() => recordVoiceSendDiagnostic("foreground_context_failed", { connectionGeneration: expectedConnectionGeneration }));
     };
     publish();
     document.addEventListener("visibilitychange", publish);

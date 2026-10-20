@@ -47,6 +47,11 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
+- Voice diagnostics trace composer availability, recording routes, task and
+  attachment counts, and draft save/delivery outcomes in the existing Copy log.
+  See [voice send diagnostics](docs/developer/diagnostics.md#voice-send-and-composer-handoff)
+  ([#109](https://github.com/kcosr/sedes/pull/109)).
+
 - Dismiss runtime warning banners, including Codex MCP failures and Claude
   usage warnings. Repeated notices with identical text and severity retain one
   copy per thread; a new occurrence after dismissal can appear again. See
@@ -193,8 +198,11 @@ User-facing changes are collected here before release. See the
 ### Fixed
 
 - Foreground voice Send continues in its original thread after switching threads,
-  combining speech with that thread's saved draft and uploaded attachments. See
-  [voice input](docs/operator/clients/voice.md) ([#108](https://github.com/kcosr/sedes/pull/108)).
+  combining speech with that thread's saved draft and uploaded attachments. While
+  Tasks, Files, or another workspace panel is open, voice still sends the current
+  thread's composer text, tasks, and other context together. See
+  [voice input](docs/operator/clients/voice.md)
+  ([#108](https://github.com/kcosr/sedes/pull/108), [#109](https://github.com/kcosr/sedes/pull/109)).
 
 - On phones and touch screens, text inputs (searches, renames, filters, the
   terminal command line, and interaction prompts) are 16px so iOS no longer

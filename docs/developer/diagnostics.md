@@ -344,6 +344,57 @@ to speech or audio interruption. Capture on both ends before reproducing:
 bounded logs cannot establish an exact history of offline notifications and do
 not add acknowledgments, retries, or catch-up delivery.
 
+### Voice send and composer handoff
+
+The same **Voice diagnostics** toggle also records voice submission. Rebuild
+the Android client to include both its bundled browser and native changes.
+Enable the toggle, choose **Clear copy buffer**, return to the thread, reproduce
+one send, then return to Diagnostics and choose **Copy log**. No server restart
+or server diagnostic flag is needed. Disable the toggle after collecting the log.
+
+The browser's `voice` entries include:
+
+- `composer_state` and `task_staged`: whether the retained composer is active,
+  Chat is visible, the view is live, and voice submission is available, plus
+  task/attachment/upload counts. `composerInstance` is a client-local counter
+  identifying the mounted composer, not a thread ID. `composer_state.targetActive`
+  identifies the current thread in Chat mode independently of panel visibility:
+  opening Tasks or Files can make `active` and `chatVisible` false while
+  `targetActive` and `composerAvailable` stay true.
+- `foreground_context_requested` / `foreground_context_applied`: availability
+  sent through the Android bridge and the native reply. A request does not
+  establish when Android applied it. Failures have their own marker.
+- `handoff_route_selected`: `live` captures the mounted composer; `saved` reads
+  the original thread's draft after the departure flush.
+- `draft_captured`, `draft_save_*`, `saved_draft_*`, `departure_flush_*`, and
+  `delivery_*`: captured counts, saves, and delivery outcomes. Save completion
+  is distinct from delivery completion. `submission_settled` only means the
+  client attempt settled; inspect `delivery_finished`, `delivery_failed`, or
+  `submission_failed` for its result. A save failure also prevents delivery
+  from starting. Delivery completion reports server acceptance/queueing, not
+  completion of the provider's response.
+
+The native buffer records `foreground_context`, `recording_route_selected`,
+handoff offer/claim/accept/decline, and `native_submission_started`. The route
+entry is recorded at capture end, with native/app visibility, composer
+availability, whether the recording targets the foreground thread, and
+`composerSelected`. False means native selected speech-only submission; the
+saved composer draft is not part of that path. True means a composer handoff
+was selected, even if the user navigates before recognition completes.
+
+Both buffers use the random recording UUID as `recordingId` for correlation.
+They never include thread/task IDs, task titles, draft text, attachments' names,
+audio, credentials, or raw errors. Browser and native elapsed clocks have
+different origins; compare ordering within each buffer and correlate recording
+IDs rather than subtracting their elapsed timestamps.
+
+For a missing task, compare a send from Chat with one from the mobile Tasks
+panel. Check `task_staged` and `composer_state`, then the native route decision.
+If a composer was selected, follow its captured task count through save and
+delivery. To distinguish timing from panel state, repeat each case immediately
+after staging and after allowing the draft save to finish. Capture must be
+enabled beforehand; these bounded logs cannot reconstruct a previous failure.
+
 ### Composer input
 
 Composer input diagnostics records native focus/blur, beforeinput/input and
