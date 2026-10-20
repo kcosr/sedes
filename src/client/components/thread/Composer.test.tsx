@@ -34,6 +34,7 @@ vi.mock("../../voice/VoiceProvider.js", async importOriginal => ({
   useNativeVoice: () => voiceForTests.current,
 }));
 import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
+import { VoiceComposerTargetContext } from "../../voice/voice-composer-target.js";
 import { CodexTuiTerminalControlContext } from "../../provider-features/codex-tui.js";
 import {
   ComposerDraftCoordinator,
@@ -6285,6 +6286,63 @@ describe("foreground voice composer ownership", () => {
     await waitFor(() => expect(store.deliver).toHaveBeenCalledWith("submit", expect.objectContaining({ text: "Explain this" }), expect.any(String)));
   });
 
+  it("keeps the current thread registered across panel switches and saves its full live draft before voice delivery", async () => {
+    localStorage.setItem("sedes-diagnostics-voice", "true");
+    const { fake, voice } = await native();
+    const register = vi.spyOn(voice, "registerSubmissionComposer");
+    const published = vi.spyOn(voice, "publishComposerDraftFlush");
+    const store = new FakeComposerStore(snapshot(), "saved text");
+    const task = { taskId: "84f9a3b0-9c14-456d-b08d-58d325d869d0", titleSnapshot: "Review task" };
+    const attachment = { id: "d0739b85-4f1b-4c40-b364-51e5093f128b", fileName: "notes.bin",
+      kind: "file" as const, mediaType: "application/octet-stream" as const, byteSize: 128 };
+    store.replaceDraft({ text: "saved text", selectedSkillId: "skill-review", contextExcerpts: [contextExcerpt],
+      attachments: [attachment], taskReferences: [task], revision: 2 });
+    const app = applicationStore([{ id: task.taskId, title: "Review task" }]);
+    function panel(visible: boolean) {
+      return <><button>Voice Send</button><VoiceComposerTargetContext.Provider value={true}>
+        <ChatViewVisibilityContext.Provider value={visible}>
+          <Composer active={visible} store={store as unknown as ThreadClientStore} applicationStore={app} />
+        </ChatViewVisibilityContext.Provider>
+      </VoiceComposerTargetContext.Provider></>;
+    }
+    const view = render(panel(true));
+    const input = screen.getByRole("textbox", { name: "Message Pi" });
+    type("latest local text");
+    register.mockClear();
+    view.rerender(panel(false));
+    view.rerender(panel(true));
+    view.rerender(panel(false));
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toBe(input);
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(true);
+    expect(register).not.toHaveBeenCalled();
+    expect(published).not.toHaveBeenCalled();
+
+    let release!: () => void;
+    const saving = new Promise<void>(resolve => { release = resolve; });
+    const saveDraft = store.saveDraft.getMockImplementation()!;
+    store.saveDraft.mockImplementationOnce(async (...args) => { await saving; return saveDraft(...args); });
+    screen.getByRole("button", { name: "Voice Send" }).focus();
+    offer(fake);
+    await accepted(fake);
+    const combined = { text: "Explain this\n\nlatest local text", selectedSkillId: "skill-review",
+      contextExcerpts: [contextExcerpt], attachments: [attachment], taskReferences: [task] };
+    await waitFor(() => expect(store.saveDraft).toHaveBeenCalledWith(expect.objectContaining(combined)));
+    expect(store.deliver).not.toHaveBeenCalled();
+    await act(async () => { release(); });
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledExactlyOnceWith("submit", expect.objectContaining(combined), expect.any(String)));
+    expect(screen.getByRole("button", { name: "Voice Send" })).toHaveFocus();
+    expect(readDiagnostics()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: "composer_state", details: expect.objectContaining({
+        active: false, chatVisible: false, targetActive: true, composerAvailable: true,
+      }) }),
+    ]));
+
+    published.mockClear();
+    view.unmount();
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(false);
+    expect(published).toHaveBeenCalledOnce();
+  });
+
   it("keeps visible composer intent while loading and reconnecting, marking it ready only after its draft and authority are available", async () => {
     const { voice } = await native();
     const store = new FakeComposerStore(snapshot(), "saved draft");
@@ -6638,20 +6696,49 @@ describe("foreground voice composer ownership", () => {
     expect(fake.plugin.settleComposerSubmission).not.toHaveBeenCalled();
   });
 
-  it.each(["inactive", "history", "tui", "hidden-chat"])("does not register the %s composer for foreground submission", async view => {
+  it.each(["missing task", "unavailable submit"] as const)("retains native speech and the original hidden draft when Send is blocked by %s", async fence => {
+    const { fake, voice } = await native();
+    const store = new FakeComposerStore(snapshot("idle", fence !== "unavailable submit"), "keep draft");
+    if (fence === "missing task") store.replaceDraft({ text: "keep draft", revision: 2,
+      taskReferences: [{ taskId: "84f9a3b0-9c14-456d-b08d-58d325d869d0", titleSnapshot: "Deleted task" }] });
+    const original = store.state.snapshot!.draft;
+    const saved = recordingRecovery({ recordingId: "recording", threadId: "thread-1", stage: "ready",
+      hasUnrecognizedAudio: false, canSend: true, canCopyRecognizedText: true });
+    fake.plugin.completeComposerHandoff.mockResolvedValueOnce(voiceSnapshot({ stateRevision: 2, recordingRecovery: saved }));
+    render(<VoiceComposerTargetContext.Provider value={true}>
+      <ChatViewVisibilityContext.Provider value={false}>
+        <Composer active={false} store={store as unknown as ThreadClientStore} applicationStore={applicationStore([])} />
+      </ChatViewVisibilityContext.Provider>
+    </VoiceComposerTargetContext.Provider>);
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(true);
+    offer(fake);
+    await waitFor(() => expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({
+      outcome: "declined", submissionPending: false,
+      message: "Open this thread's Chat to resolve the current Send restriction, then retry the saved dictation.",
+    })));
+    expect(screen.getByRole("textbox")).toHaveValue("keep draft");
+    expect(store.state.snapshot!.draft).toEqual(original);
+    expect(store.saveDraft).not.toHaveBeenCalled();
+    expect(store.stageComposerTransfer).not.toHaveBeenCalled();
+    expect(store.deliver).not.toHaveBeenCalled();
+    expect(fake.plugin.settleComposerSubmission).not.toHaveBeenCalled();
+    expect(voice.getSnapshot().native?.recordingRecovery).toEqual(saved);
+  });
+
+  it.each(["inactive", "history", "tui"])("does not register the %s composer for foreground submission", async view => {
     localStorage.setItem("sedes-diagnostics-voice", "true");
     const { fake, voice } = await native();
     const store = new FakeComposerStore(snapshot(), "keep draft");
-    render(<ChatViewVisibilityContext.Provider value={view !== "hidden-chat"}>
+    render(<VoiceComposerTargetContext.Provider value={view !== "inactive"}>
       <CodexTuiTerminalControlContext.Provider value={tuiControl({ active: view === "tui" })}>
         <Composer active={view !== "inactive"} optimisticTranscriptPresentationVisible={view !== "history"}
           store={store as unknown as ThreadClientStore} />
       </CodexTuiTerminalControlContext.Provider>
-    </ChatViewVisibilityContext.Provider>);
+    </VoiceComposerTargetContext.Provider>);
     expect(voice.hasSubmissionComposer("thread-1")).toBe(false);
     expect(readDiagnostics()).toEqual(expect.arrayContaining([
       expect.objectContaining({ event: "composer_state", details: expect.objectContaining({
-        active: view !== "inactive", chatVisible: view !== "hidden-chat", composerAvailable: false,
+        active: view !== "inactive", chatVisible: true, composerAvailable: false,
       }) }),
     ]));
     offer(fake);

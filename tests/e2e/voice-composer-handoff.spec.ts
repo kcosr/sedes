@@ -47,6 +47,17 @@ async function offerSpeech(page: Page, threadId: string, text: string): Promise<
   }, { threadId, text, handoffId: randomUUID(), recordingId: randomUUID() });
 }
 
+async function finishRecordedSpeech(page: Page, threadId: string, recordingId: string, text: string): Promise<NativeVoiceComposerHandoff> {
+  return page.evaluate(({ threadId, text, handoffId, recordingId }) => {
+    const state = window.__voiceFixture.state;
+    if (!state.profileId || !state.serverOrigin || !state.identity) throw new Error("Voice connection is not ready.");
+    const event: NativeVoiceComposerHandoff = { profileId: state.profileId, serverOrigin: state.serverOrigin, identity: state.identity,
+      connectionGeneration: state.connectionGeneration, handoffId, recordingId, threadId, text, mode: "queue" };
+    window.__voiceFixture.emitRecognizedRecording(event);
+    return event;
+  }, { threadId, text, handoffId: randomUUID(), recordingId });
+}
+
 async function expectHandoff(page: Page, event: NativeVoiceComposerHandoff, outcome: "accepted" | "declined", submissionPending = outcome === "accepted"): Promise<void> {
   await expect.poll(() => page.evaluate(handoffId => window.__voiceFixture.calls.find(call =>
     call.method === "completeComposerHandoff" && call.args.handoffId === handoffId)?.args, event.handoffId)).toMatchObject({ outcome, submissionPending });
@@ -77,71 +88,176 @@ function deliveredTo(page: Page, threadId: string) {
     response.request().postDataJSON().kind === "deliver" && response.ok());
 }
 
-test("mobile Voice diagnostics copies task staging, panel eligibility and combined submission", async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 1280, height: 1000 });
-  await openVoiceWorkspace(page, "voice-diagnostic-mobile");
-  const threadPath = await createDraftThread(page, "Voice diagnostic task");
-  const threadId = threadPath.split("/").at(-1)!;
-  await expectVoiceComposer(page, threadId);
-  await page.setViewportSize({ width: 412, height: 915 });
-  const settings = await openSettingsPage(page, "diagnostics");
-  await settings.getByTestId("voice-diagnostics-toggle").click();
-  await settings.getByRole("button", { name: "Clear copy buffer", exact: true }).click();
-  await expect(settings.getByText("Copy buffer cleared.")).toBeVisible();
-  await returnFromSettings(page);
-  const session = await (await page.request.get("/api/application/session")).json();
-  const created = await page.request.post("/api/tasks", { headers: { "X-CSRF-Token": session.csrfToken }, data: {
-    mutationId: randomUUID(), title: "Private diagnostic task", details: "Private task details",
-    scope: { kind: "thread", threadId },
-  } });
-  expect(created.status()).toBe(201);
-  const taskId = (await created.json()).task.id;
-  const composer = page.getByTestId("composer");
-  const originalComposer = await composer.elementHandle();
-  await openPanelFromMenu(page, "Tasks");
-  const tasks = page.locator('[data-slot="tasks-panel"]');
-  await tasks.getByRole("button", { name: "Private diagnostic task", exact: true }).click();
-  await tasks.getByRole("button", { name: "Add to prompt", exact: true }).click();
-  await expect(composer.getByLabel("Attached tasks")).toContainText("Private diagnostic task");
-  expect(await originalComposer!.evaluate(element => element.isConnected)).toBe(true);
-  await expect(composer).toBeHidden();
-  await expect.poll(() => page.evaluate(() => window.__voiceFixture.state.foreground.composerAvailable)).toBe(false);
-  await capture(page, testInfo, "voice-diagnostics-mobile-tasks.png");
-  await page.getByTestId("chat-panel-toggle").click();
-  await expectVoiceComposer(page, threadId);
-  const sent = deliveredTo(page, threadId);
-  const event = await offerSpeech(page, threadId, "Private diagnostic speech");
-  await expectHandoff(page, event, "accepted");
-  await sent;
-  await expectSubmissionSettled(page, event);
-  await expect(composer.getByLabel("Attached tasks")).toHaveCount(0);
-  const snapshot = normalizedThreadSnapshotSchema.parse(await (await page.request.get(`/api/threads/${threadId}?activityDetail=full`)).json());
-  expect(snapshot.draft.taskReferences).toEqual([]);
-  const copy = await page.evaluateHandle(() => {
-    const output = { text: "" };
-    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
-      writeText: async (text: string) => { output.text = text; },
+for (const scenario of [
+  { name: "task-only saved draft", draftText: "", pendingAutosave: false },
+  { name: "text and task with pending autosave", draftText: "Private diagnostic composer text", pendingAutosave: true },
+] as const) {
+  test(`mobile Voice sends ${scenario.name} from Tasks and copies safe diagnostics`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await openVoiceWorkspace(page, `voice-diagnostic-mobile-${scenario.pendingAutosave ? "pending" : "saved"}`);
+    const threadId = await createCodexThread(page, "Voice diagnostic task");
+    await expectVoiceComposer(page, threadId);
+    await page.setViewportSize({ width: 412, height: 915 });
+    const settings = await openSettingsPage(page, "diagnostics");
+    await settings.getByTestId("voice-diagnostics-toggle").click();
+    await settings.getByRole("button", { name: "Clear copy buffer", exact: true }).click();
+    await expect(settings.getByText("Copy buffer cleared.")).toBeVisible();
+    await returnFromSettings(page);
+    const session = await (await page.request.get("/api/application/session")).json();
+    const created = await page.request.post("/api/tasks", { headers: { "X-CSRF-Token": session.csrfToken }, data: {
+      mutationId: randomUUID(), title: "Private diagnostic task", details: "Private task details",
+      scope: { kind: "thread", threadId },
     } });
-    return output;
+    expect(created.status()).toBe(201);
+    const task = (await created.json()).task;
+    const taskId = task.id as string;
+    const composer = page.getByTestId("composer");
+    const textarea = composer.locator("textarea");
+    if (scenario.draftText) await fillAndPersistDraft(page, scenario.draftText, "Message Codex TCP");
+    const originalComposer = await composer.elementHandle();
+    const recordingId = randomUUID();
+    const base = voiceFixtureState();
+    await publishVoiceState(page, { phase: "listening", active: { id: randomUUID(), eventKind: "manual", threadId,
+      threadTitle: "Voice diagnostic task", recognitionThreadId: threadId, recognitionThreadTitle: "Voice diagnostic task",
+      automatic: false, recording: { id: recordingId, keepListening: false, reconnecting: false } },
+      actions: { ...base.actions, canStart: false, canStop: true, canRetarget: true, canSetKeepListening: true,
+        canSend: true, keepListeningBlockedReason: null } });
+
+    const speech = "Private diagnostic speech";
+    const combined = scenario.draftText ? `${speech}\n\n${scenario.draftText}` : speech;
+    const autosaveEntered = gate(), autosaveGate = gate();
+    const draftPattern = `**/api/threads/${threadId}/draft`;
+    const deliveries: { threadId: string; body: unknown }[] = [];
+    page.on("request", request => {
+      const match = /^\/api\/threads\/([^/]+)\/operations$/u.exec(new URL(request.url()).pathname);
+      if (request.method() === "POST" && match && request.postDataJSON().kind === "deliver")
+        deliveries.push({ threadId: match[1]!, body: request.postDataJSON() });
+    });
+    await page.route(draftPattern, async route => {
+      const body = route.request().method() === "PUT" ? route.request().postDataJSON() : undefined;
+      if (scenario.pendingAutosave && body?.text === scenario.draftText && body.taskReferenceIds?.includes(taskId)) {
+        autosaveEntered.release();
+        await autosaveGate.promise;
+      }
+      await route.continue();
+    });
+    const taskSaved = page.waitForResponse(response => response.request().method() === "PUT" &&
+      response.url().endsWith(`/threads/${threadId}/draft`) && response.ok() &&
+      response.request().postDataJSON().text === scenario.draftText && response.request().postDataJSON().taskReferenceIds?.includes(taskId));
+    const combinedSaved = page.waitForResponse(response => response.request().method() === "PUT" &&
+      response.url().endsWith(`/threads/${threadId}/draft`) && response.ok() && response.request().postDataJSON().text === combined);
+    const sent = deliveredTo(page, threadId);
+    expect((await page.request.post("/__e2e/codex/turn-completion/arm")).status()).toBe(204);
+    try {
+      await openPanelFromMenu(page, "Tasks");
+      const tasks = page.locator('[data-slot="tasks-panel"]');
+      await tasks.getByRole("button", { name: "Private diagnostic task", exact: true }).click();
+      await tasks.getByRole("button", { name: "Add to prompt", exact: true }).click();
+      await expect(composer.getByLabel("Attached tasks")).toContainText("Private diagnostic task");
+      expect(await originalComposer!.evaluate(element => element.isConnected)).toBe(true);
+      await expect(composer).toBeHidden();
+      await expect(tasks).toBeVisible();
+      await expectVoiceComposer(page, threadId);
+      if (scenario.pendingAutosave) {
+        await autosaveEntered.promise;
+        const before = normalizedThreadSnapshotSchema.parse(await (await page.request.get(`/api/threads/${threadId}?activityDetail=full`)).json());
+        expect(before.draft.text).toBe(scenario.draftText);
+        expect(before.draft.taskReferences).toEqual([]);
+      } else {
+        await taskSaved;
+        const before = normalizedThreadSnapshotSchema.parse(await (await page.request.get(`/api/threads/${threadId}?activityDetail=full`)).json());
+        expect(before.draft.taskReferences).toEqual([{ taskId, titleSnapshot: task.title }]);
+        for (const [title, panelId] of [["Workpads", "workpads"], ["Terminals", "terminals"]] as const) {
+          await openPanelFromMenu(page, title);
+          await expect(page.locator(`[data-panel-instance-id="${panelId}"]`)).toBeVisible();
+          await expect(composer).toBeHidden();
+          expect(await originalComposer!.evaluate(element => element.isConnected)).toBe(true);
+          await expect(composer.getByLabel("Attached tasks")).toContainText(task.title);
+          await expectVoiceComposer(page, threadId);
+        }
+        await openPanelFromMenu(page, "Tasks");
+        await expect(tasks).toBeVisible();
+        await expect(composer).toBeHidden();
+        await expectVoiceComposer(page, threadId);
+      }
+      await capture(page, testInfo, "voice-diagnostics-mobile-tasks.png");
+      await page.getByRole("button", { name: "Send voice recording", exact: true }).click();
+      await expect.poll(() => page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "sendRecording"))).toEqual([
+        { method: "sendRecording", args: { expectedConnectionGeneration: 1, recordingId } },
+      ]);
+      // This emits only when the real Send invocation froze an eligible composer.
+      const event = await finishRecordedSpeech(page, threadId, recordingId, speech);
+      await expectHandoff(page, event, "accepted");
+      if (scenario.pendingAutosave) {
+        expect(deliveries).toEqual([]);
+        expect(await submissionSettlements(page, event)).toEqual([]);
+      }
+      autosaveGate.release();
+      await taskSaved;
+      expect((await combinedSaved).request().postDataJSON()).toMatchObject({
+        text: combined, taskReferenceIds: [taskId], attachmentIds: [], contextExcerpts: [],
+      });
+      expect((await sent).request().postDataJSON()).toMatchObject({ kind: "deliver", mode: "submit" });
+      await expectSubmissionSettled(page, event);
+      await expect(composer.getByLabel("Attached tasks")).toHaveCount(0);
+      await expect(textarea).toHaveValue("");
+      await expect(composer).toBeHidden();
+      await expect(tasks).toBeVisible();
+      expect(await originalComposer!.evaluate(element => element.isConnected)).toBe(true);
+      await expect.poll(async () => {
+        const snapshot = normalizedThreadSnapshotSchema.parse(await (await page.request.get(`/api/threads/${threadId}?activityDetail=full`)).json());
+        return Object.values(snapshot.itemsById).filter(item => item.kind === "user_message").map(item => item.content);
+      }).toEqual([[
+        { kind: "task_context", task: { id: taskId, title: task.title, details: task.details, completedAt: null, revision: task.revision } },
+        { kind: "text", text: { text: combined } },
+      ]]);
+      expect(deliveries).toHaveLength(1);
+      expect(deliveries[0]?.threadId).toBe(threadId);
+      await capture(page, testInfo, "voice-diagnostics-mobile-tasks-streaming.png");
+      await page.getByTestId("chat-panel-toggle").click();
+      await expect(page.locator('[data-item-kind="user_message"]')).toHaveCount(1);
+      await expect(page.locator('[data-item-kind="user_message"]')).toContainText(combined);
+      await expect(page.locator(`.message-task-card[data-task-id="${taskId}"]`)).toContainText(task.title);
+      await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+      await capture(page, testInfo, "voice-diagnostics-mobile-chat-streaming.png");
+
+      const copy = await page.evaluateHandle(() => {
+        const output = { text: "" };
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+          writeText: async (text: string) => { output.text = text; },
+        } });
+        return output;
+      });
+      await openSettingsPage(page, "diagnostics");
+      await page.getByRole("button", { name: "Copy log", exact: true }).click();
+      await expect(page.getByText("Log copied.")).toBeVisible();
+      const text = await copy.evaluate(output => output.text);
+      const log = JSON.parse(text);
+      expect(log.entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ event: "task_staged", details: expect.objectContaining({ taskCount: 1, active: false, chatVisible: false }) }),
+        expect.objectContaining({ event: "composer_state", details: expect.objectContaining({ active: false, chatVisible: false, composerAvailable: true }) }),
+        expect.objectContaining({ event: "draft_captured", details: expect.objectContaining({ recordingId: event.recordingId, taskCount: 1 }) }),
+        expect.objectContaining({ event: "delivery_started", details: expect.objectContaining({ recordingId: event.recordingId, taskCount: 1 }) }),
+      ]));
+      expect(text).not.toMatch(/Private diagnostic|Private task details/);
+      expect(text).not.toContain(threadId);
+      expect(text).not.toContain(taskId);
+      expect(log.nativeVoice).toMatchObject({ enabled: true, maximumEntries: 512 });
+      await testInfo.attach("voice-send-diagnostics.json", { body: text, contentType: "application/json" });
+      await capture(page, testInfo, "voice-diagnostics-mobile-copy.png");
+      await returnFromSettings(page);
+    } finally {
+      autosaveGate.release();
+      await page.unroute(draftPattern);
+      expect((await page.request.post("/__e2e/codex/turn-completion/release")).status()).toBe(204);
+    }
+    await expect(page.locator(".conversation-turn").last()).toHaveAttribute("data-turn-status", "completed");
+    const snapshot = normalizedThreadSnapshotSchema.parse(await (await page.request.get(`/api/threads/${threadId}?activityDetail=full`)).json());
+    expect(snapshot.draft).toMatchObject({ text: "", taskReferences: [] });
+    expect(deliveries).toHaveLength(1);
+    await capture(page, testInfo, "voice-diagnostics-mobile-chat-completed.png");
   });
-  await openSettingsPage(page, "diagnostics");
-  await page.getByRole("button", { name: "Copy log", exact: true }).click();
-  await expect(page.getByText("Log copied.")).toBeVisible();
-  const text = await copy.evaluate(output => output.text);
-  const log = JSON.parse(text);
-  expect(log.entries).toEqual(expect.arrayContaining([
-    expect.objectContaining({ event: "task_staged", details: expect.objectContaining({ taskCount: 1, active: false, chatVisible: false }) }),
-    expect.objectContaining({ event: "foreground_context_applied", details: expect.objectContaining({ composerAvailable: false }) }),
-    expect.objectContaining({ event: "draft_captured", details: expect.objectContaining({ recordingId: event.recordingId, taskCount: 1 }) }),
-    expect.objectContaining({ event: "delivery_started", details: expect.objectContaining({ recordingId: event.recordingId, taskCount: 1 }) }),
-  ]));
-  expect(text).not.toMatch(/Private diagnostic|Private task details/);
-  expect(text).not.toContain(threadId);
-  expect(text).not.toContain(taskId);
-  expect(log.nativeVoice).toMatchObject({ enabled: true, maximumEntries: 512 });
-  await testInfo.attach("voice-send-diagnostics.json", { body: text, contentType: "application/json" });
-  await capture(page, testInfo, "voice-diagnostics-mobile-copy.png");
-});
+}
 
 async function uploadNotes(page: Page, fileName: string): Promise<void> {
   const linked = page.waitForResponse(response => response.request().method() === "PUT" &&

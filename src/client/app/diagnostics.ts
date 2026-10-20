@@ -8,7 +8,7 @@ type DiagnosticValue = string | number | boolean | null;
 
 const allowedDetailKeys = [
   "recordingId", "connectionGeneration", "composerInstance", "active", "chatVisible", "live", "tuiActive",
-  "ready", "documentVisible", "composerAvailable", "targetMatchesForeground", "dirty", "taskCount",
+  "ready", "targetActive", "documentVisible", "composerAvailable", "targetMatchesForeground", "dirty", "taskCount",
   "attachmentCount", "excerptCount", "pendingUploadCount", "hasSkill", "draftRevision", "submissionPending",
   "action",
   "animationActive",

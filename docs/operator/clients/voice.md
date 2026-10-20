@@ -370,11 +370,17 @@ is no longer available, or other queued input must deliver first, the input
 queues. Backend support remains explicit: Codex and Pi use a turn target,
 Claude and OpenCode a conversation target, and Grok has no steering. Spoken
 input uses the normal composer when capture ends with the Android Activity and
-app document foreground on the destination's active live Chat. This applies even
-to an empty composer and does not require keyboard focus. Speech precedes the existing text
+app document foreground on the destination's current live Chat. The composer
+remains available while Tasks, Files, or another workspace panel covers Chat;
+selecting TUI or historical Chat does not enable composer voice submission. This
+applies even to an empty composer and does not require keyboard focus. Speech precedes the existing text
 body with a blank line between them, retaining attachments, the selected skill,
 excerpts, notes, Task references, and thread references in one submission. Voice
 does not refocus the text field or open the keyboard.
+
+If Send is blocked while another panel covers Chat, the recording stays in
+**Saved dictation** and the composer draft is unchanged. Open Chat to resolve
+the restriction before retrying.
 
 Switching threads after capture ends does not cancel that composer send. If the
 original live composer is no longer available, the client waits for its final

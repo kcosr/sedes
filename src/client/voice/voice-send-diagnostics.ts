@@ -19,6 +19,7 @@ const detailsSchema = z.object({
   connectionGeneration: count.optional(),
   composerInstance: count.optional(),
   active: z.boolean().optional(),
+  targetActive: z.boolean().optional(),
   chatVisible: z.boolean().optional(),
   live: z.boolean().optional(),
   tuiActive: z.boolean().optional(),

@@ -2,6 +2,7 @@ import { usePickerFocus } from "../../lib/use-picker-focus.js";
 import { setComposerDeliveryMode, useComposerDeliveryMode } from "../../app/composer-delivery-mode.js";
 import { useComposerReasoningFit } from "./use-composer-reasoning-fit.js";
 import { useNativeVoice } from "../../voice/VoiceProvider.js";
+import { VoiceComposerTargetContext } from "../../voice/voice-composer-target.js";
 import type { VoiceComposerAdoption } from "../../voice/NativeVoiceStore.js";
 import { prependVoiceToDraft } from "../../voice/voice-composer-draft.js";
 import { recordVoiceSendDiagnostic, voiceDraftCounts } from "../../voice/voice-send-diagnostics.js";
@@ -433,6 +434,7 @@ export function Composer({
   const { footerRef: composerFooterRef, onReasoningPickerOpenChange } =
     useComposerReasoningFit();
   const chatViewVisible = useContext(ChatViewVisibilityContext);
+  const voiceTargetActive = useContext(VoiceComposerTargetContext);
   const voiceDiagnosticPresentation = useRef({ active, chatVisible: chatViewVisible });
   voiceDiagnosticPresentation.current = { active, chatVisible: chatViewVisible };
   const resolvedApplicationStore = applicationStore ?? EMPTY_APPLICATION_STORE;
@@ -1990,15 +1992,15 @@ export function Composer({
   // Set before the snapshot early-return as well: an old registration can never
   // use the previous render's eligibility or submission function.
   acceptVoiceHandoff.current = () => { throw new Error("The message composer is unavailable."); };
-  const voiceSubmissionVisible = active && chatViewVisible && optimisticTranscriptPresentationVisible && !tuiActive;
+  const voiceSubmissionEligible = voiceTargetActive && optimisticTranscriptPresentationVisible && !tuiActive;
   useLayoutEffect(() => {
     recordVoiceSendDiagnostic("composer_state", { composerInstance: voiceComposerInstance,
       active, chatVisible: chatViewVisible, live: optimisticTranscriptPresentationVisible, tuiActive,
-      ready: voiceComposerReady, composerAvailable: voiceSubmissionVisible, dirty,
+      ready: voiceComposerReady, targetActive: voiceTargetActive, composerAvailable: voiceSubmissionEligible, dirty,
       taskCount: taskReferences.length, attachmentCount: attachments.length,
       pendingUploadCount: attachmentUploads.uploads.length });
   }, [voiceComposerInstance, active, chatViewVisible, optimisticTranscriptPresentationVisible, tuiActive,
-    voiceComposerReady, voiceSubmissionVisible, dirty, taskReferences.length, attachments.length, attachmentUploads.uploads.length]);
+    voiceComposerReady, voiceTargetActive, voiceSubmissionEligible, dirty, taskReferences.length, attachments.length, attachmentUploads.uploads.length]);
   // Readiness can change without replacing this composer's draft operation queue.
   const voiceComposerOwner = useRef<object>({});
   const flushVoiceDeparture = useRef<() => Promise<unknown>>(() => Promise.resolve());
@@ -2017,10 +2019,10 @@ export function Composer({
     return persistDepartingDraft();
   };
   // Remove the callback during the unmount commit, before a native claim reply
-  // can arrive while passive effect cleanup is still pending. Visible presence
+  // can arrive while passive effect cleanup is still pending. Target presence
   // preserves voice-plus-draft intent while readiness controls live adoption.
   useLayoutEffect(() => {
-    if (!voice || !voiceSubmissionVisible) return;
+    if (!voice || !voiceSubmissionEligible) return;
     const unregister = voice.registerSubmissionComposer(store.threadId, event => acceptVoiceHandoff.current(event), voiceComposerReady, voiceComposerOwner.current);
     return () => {
       recordVoiceSendDiagnostic("departure_flush_started", { composerInstance: voiceComposerInstance,
@@ -2033,7 +2035,7 @@ export function Composer({
       voice.publishComposerDraftFlush(store.threadId, flush, voiceComposerOwner.current);
       unregister();
     };
-  }, [voice, store, voiceSubmissionVisible, voiceComposerReady]);
+  }, [voice, store, voiceSubmissionEligible, voiceComposerReady]);
 
   useEffect(() => {
     const element = textarea.current;
@@ -2573,7 +2575,7 @@ export function Composer({
   };
   excerptSendRef.current = (candidate) => send(candidate) !== false;
   acceptVoiceHandoff.current = event => {
-    if (!voiceSubmissionVisible || document.visibilityState === "hidden" || event.threadId !== store.threadId)
+    if (!voiceSubmissionEligible || document.visibilityState === "hidden" || event.threadId !== store.threadId)
       throw new Error("Open the recording's live Chat to send it with the composer.");
     if (draftEditingDisabled || !syncedDraft.current)
       throw new Error("The message composer is unavailable.");
@@ -2602,6 +2604,10 @@ export function Composer({
         : "queue";
     const attempt = send(candidate, mode, { refocus: false, voiceRecordingId: event.recordingId });
     if (attempt) return attempt;
+    // A covered composer cannot show the draft-only outcome. Leave ownership
+    // with native recovery until the user can resolve the Send restriction.
+    if (!chatViewVisible)
+      throw new Error("Open this thread's Chat to resolve the current Send restriction, then retry the saved dictation.");
     // An upload or capability fence must keep the entire draft, including its
     // outstanding uploads, rather than send speech with only part of its context.
     textRef.current = next;

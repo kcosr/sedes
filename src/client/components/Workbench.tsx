@@ -213,6 +213,7 @@ export const Workbench = memo(function Workbench({
               <ThreadView
                 key={route.threadId}
                 threadId={route.threadId}
+                threadActive={active}
                 focusTurnId={route.focusTurnId}
                 focusResponse={route.focusResponse}
                 registry={threadRegistry}

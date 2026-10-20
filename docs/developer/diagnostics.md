@@ -357,7 +357,10 @@ The browser's `voice` entries include:
 - `composer_state` and `task_staged`: whether the retained composer is active,
   Chat is visible, the view is live, and voice submission is available, plus
   task/attachment/upload counts. `composerInstance` is a client-local counter
-  identifying the mounted composer, not a thread ID.
+  identifying the mounted composer, not a thread ID. `composer_state.targetActive`
+  identifies the current thread in Chat mode independently of panel visibility:
+  opening Tasks or Files can make `active` and `chatVisible` false while
+  `targetActive` and `composerAvailable` stay true.
 - `foreground_context_requested` / `foreground_context_applied`: availability
   sent through the Android bridge and the native reply. A request does not
   establish when Android applied it. Failures have their own marker.

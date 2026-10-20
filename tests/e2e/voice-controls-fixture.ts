@@ -28,6 +28,7 @@ type VoiceFixture = {
   setForeground(context: NativeVoiceState["foreground"]): void;
   emitInputSubmitted(event: NativeVoiceInputSubmitted): void;
   emitComposerHandoff(event: NativeVoiceComposerHandoff): void;
+  emitRecognizedRecording(event: NativeVoiceComposerHandoff): void;
   holdRetarget(): void;
   settleRetarget(error?: string): void;
   holdComposerClaim(): void;
@@ -53,6 +54,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
     let listenerId = 0;
     let diagnosticsEnabled = false;
     let composerHandoff: { event: NativeVoiceComposerHandoff; claimed: boolean } | undefined;
+    let frozenComposerRoute: { recordingId: string; threadId: string | null; connectionGeneration: number; eligible: boolean } | undefined;
     let retargetGate: { promise: Promise<void>; resolve(): void; reject(error: Error): void } | undefined;
     let composerClaimGate: { promise: Promise<void>; resolve(): void } | undefined;
     let foregroundContextGate: { threadId: string; promise: Promise<void>; resolve(): void } | undefined;
@@ -165,6 +167,15 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             canDiscard: true, admission: null }, actions: { ...initial.actions, canStart: false } });
         emit("composerHandoff", event);
       },
+      emitRecognizedRecording(event) {
+        // The native route is selected at Send, before recognition completes.
+        // Do not let a panel regression pass by injecting an impossible handoff.
+        if (!frozenComposerRoute?.eligible || frozenComposerRoute.recordingId !== event.recordingId ||
+            frozenComposerRoute.threadId !== event.threadId || frozenComposerRoute.connectionGeneration !== event.connectionGeneration)
+          throw new Error("The recording did not select a composer handoff at Send.");
+        frozenComposerRoute = undefined;
+        fixture.emitComposerHandoff(event);
+      },
     };
     const snapshot = () => structuredClone(fixture.state);
     // Queued replay identities; the fake keeps only the queue count in state, and an emptied queue drops them.
@@ -247,8 +258,14 @@ export async function installVoiceFixture(page: Page): Promise<void> {
               throw new Error("The recording changed.");
             if (method === "setKeepListening") fixture.publish({ active: { ...current.active, automatic: false,
               recording: { ...current.active.recording, keepListening: args.enabled === true } } });
-            if (method === "sendRecording") fixture.publish({ phase: "recognizing", actions: { ...current.actions,
-              canSetKeepListening: false, canSend: false, canRetarget: false, keepListeningBlockedReason: "not_capturing" } });
+            if (method === "sendRecording") {
+              const threadId = current.active.recognitionThreadId;
+              frozenComposerRoute = { recordingId: current.active.recording.id, threadId,
+                connectionGeneration: current.connectionGeneration, eligible: current.foreground.visible &&
+                  current.foreground.composerAvailable && threadId !== null && current.foreground.threadId === threadId };
+              fixture.publish({ phase: "recognizing", actions: { ...current.actions,
+                canSetKeepListening: false, canSend: false, canRetarget: false, keepListeningBlockedReason: "not_capturing" } });
+            }
             if (method === "retargetActiveRecognition") {
               // Native persists the new destination before acknowledging it;
               // tests can hold that write while exercising the live controls.
