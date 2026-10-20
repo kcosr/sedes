@@ -3,6 +3,7 @@ import { setComposerDeliveryMode, useComposerDeliveryMode } from "../../app/comp
 import { useComposerReasoningFit } from "./use-composer-reasoning-fit.js";
 import { useNativeVoice } from "../../voice/VoiceProvider.js";
 import type { VoiceComposerAdoption } from "../../voice/NativeVoiceStore.js";
+import { prependVoiceToDraft } from "../../voice/voice-composer-draft.js";
 import { QuestionInboxButton, QuestionInboxPanel } from "./QuestionInbox.js";
 import {
   useCallback,
@@ -1136,6 +1137,27 @@ export function Composer({
     [],
   );
 
+  // Layout cleanup publishes this exact save before unregistering the voice
+  // composer. The later passive unmount cleanup shares it rather than issuing
+  // a second PUT against the same draft revision.
+  const departureDraftSave = useRef<{
+    readonly value: NormalizedDraft;
+    readonly promise: Promise<NormalizedDraft | undefined>;
+  } | undefined>(undefined);
+  const persistDepartingDraft = useCallback(() => {
+    const value = normalizedDraftFromValue(currentDraftValue(), syncedDraft.current?.revision ?? 0);
+    const previous = departureDraftSave.current;
+    if (previous && draftValueMatchesDraft(value, previous.value)) return previous.promise;
+    const promise = persistDraft();
+    const save = { value, promise };
+    departureDraftSave.current = save;
+    const forgetSettledSave = () => {
+      if (departureDraftSave.current === save) departureDraftSave.current = undefined;
+    };
+    void promise.then(forgetSettledSave, forgetSettledSave);
+    return promise;
+  }, [persistDraft]);
+
   useEffect(() => {
     if (!active) return;
     const focusComposerOnRightOption = (event: KeyboardEvent) => {
@@ -1259,10 +1281,10 @@ export function Composer({
             (transfer.rollbackRequired && !transfer.rollbackApplied)),
       );
       if (dirtyRef.current && !blockedBySteer) {
-        void persistDraft().catch(() => undefined);
+        void persistDepartingDraft().catch(() => undefined);
       }
     };
-  }, [store, persistDraft]);
+  }, [store, persistDraft, persistDepartingDraft]);
 
   // Server-side draft changes: adopt while clean (initial load, post-send
   // clears, remote edits with no local typing); while dirty, an echo of our
@@ -1956,12 +1978,34 @@ export function Composer({
   // use the previous render's eligibility or submission function.
   acceptVoiceHandoff.current = () => { throw new Error("The message composer is unavailable."); };
   const voiceSubmissionVisible = active && chatViewVisible && optimisticTranscriptPresentationVisible && !tuiActive;
+  // Readiness can change without replacing this composer's draft operation queue.
+  const voiceComposerOwner = useRef<object>({});
+  const flushVoiceDeparture = useRef<() => Promise<unknown>>(() => Promise.resolve());
+  flushVoiceDeparture.current = () => {
+    if (!syncedDraft.current) return Promise.reject(new Error("Draft is not loaded."));
+    if (conflictRef.current) return Promise.reject(new Error("Resolve the draft conflict first."));
+    if (attachmentUploadsRef.current.length > 0) {
+      return Promise.reject(new Error("Wait for attachment uploads to finish before sending the saved dictation."));
+    }
+    const latest = store.getSnapshot();
+    if (draftMutationRunning.current || queueRestoreRunning.current || latest.actionPending ||
+        latest.pendingDeliveryThreadRevision !== undefined || latest.pendingComposerTransfers.length > 0 ||
+        rollbackRestorations.current.size > 0) {
+      return Promise.reject(new Error("Wait for the current composer action to finish."));
+    }
+    return persistDepartingDraft();
+  };
   // Remove the callback during the unmount commit, before a native claim reply
-  // can arrive while passive effect cleanup is still pending.
+  // can arrive while passive effect cleanup is still pending. Visible presence
+  // preserves voice-plus-draft intent while readiness controls live adoption.
   useLayoutEffect(() => {
     if (!voice || !voiceSubmissionVisible) return;
-    return voice.registerSubmissionComposer(store.threadId, event => acceptVoiceHandoff.current(event));
-  }, [voice, store, voiceSubmissionVisible]);
+    const unregister = voice.registerSubmissionComposer(store.threadId, event => acceptVoiceHandoff.current(event), voiceComposerReady, voiceComposerOwner.current);
+    return () => {
+      voice.publishComposerDraftFlush(store.threadId, flushVoiceDeparture.current(), voiceComposerOwner.current);
+      unregister();
+    };
+  }, [voice, store, voiceSubmissionVisible, voiceComposerReady]);
 
   useEffect(() => {
     const element = textarea.current;
@@ -2502,9 +2546,8 @@ export function Composer({
     if (draftMutationRunning.current || queueRestoreRunning.current)
       throw new Error("Wait for the current composer action to finish.");
     const current = currentDraftValue();
-    const body = splitThreadReferenceText(current.text).text;
-    const next = replaceThreadReferenceBody(current.text, body.length ? `${event.text}\n\n${body}` : event.text);
-    const candidate = { ...current, text: next };
+    const candidate = prependVoiceToDraft(current, event.text);
+    const next = candidate.text;
     const parsed = normalizedDraftSchema.safeParse({ ...candidate, revision: syncedDraft.current.revision });
     const selectedTasks = candidate.taskReferences.flatMap(({ taskId }) => {
       const task = currentTasks.get(taskId);

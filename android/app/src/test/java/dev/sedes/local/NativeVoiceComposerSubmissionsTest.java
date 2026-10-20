@@ -79,7 +79,7 @@ public class NativeVoiceComposerSubmissionsTest {
         Object route = new Object();
         NativeVoiceComposerHandoff offer = new NativeVoiceComposerHandoff(id, binding, generation, route,
             "recording-" + id, "thread", "speech", false);
-        offer.claim(binding, generation, route, true, true, true, "thread");
+        offer.claim(binding, generation, route, true, true);
         return offer;
     }
 }

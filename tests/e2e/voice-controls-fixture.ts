@@ -30,6 +30,10 @@ type VoiceFixture = {
   emitComposerHandoff(event: NativeVoiceComposerHandoff): void;
   holdRetarget(): void;
   settleRetarget(error?: string): void;
+  holdComposerClaim(): void;
+  settleComposerClaim(): void;
+  holdForegroundContext(threadId: string): void;
+  settleForegroundContext(): void;
 };
 declare global { interface Window { __voiceFixture: VoiceFixture } }
 
@@ -49,6 +53,8 @@ export async function installVoiceFixture(page: Page): Promise<void> {
     let listenerId = 0;
     let composerHandoff: { event: NativeVoiceComposerHandoff; claimed: boolean } | undefined;
     let retargetGate: { promise: Promise<void>; resolve(): void; reject(error: Error): void } | undefined;
+    let composerClaimGate: { promise: Promise<void>; resolve(): void } | undefined;
+    let foregroundContextGate: { threadId: string; promise: Promise<void>; resolve(): void } | undefined;
     const emit = (event: string, value: unknown) => {
       for (const listener of listeners.values()) if (listener.plugin === "NativeVoice" && listener.event === event) listener.callback(structuredClone(value));
     };
@@ -57,6 +63,30 @@ export async function installVoiceFixture(page: Page): Promise<void> {
       state: retained ? JSON.parse(retained) as NativeVoiceState : initial,
       calls: [],
       recoveredText: "Recovered dictation text.",
+      holdComposerClaim() {
+        if (composerClaimGate) throw new Error("A composer claim is already held.");
+        let resolve!: () => void;
+        const promise = new Promise<void>(accept => { resolve = accept; });
+        composerClaimGate = { promise, resolve };
+      },
+      settleComposerClaim() {
+        if (!composerClaimGate) throw new Error("No composer claim is held.");
+        const gate = composerClaimGate;
+        composerClaimGate = undefined;
+        gate.resolve();
+      },
+      holdForegroundContext(threadId) {
+        if (foregroundContextGate) throw new Error("A foreground update is already held.");
+        let resolve!: () => void;
+        const promise = new Promise<void>(accept => { resolve = accept; });
+        foregroundContextGate = { threadId, promise, resolve };
+      },
+      settleForegroundContext() {
+        if (!foregroundContextGate) throw new Error("No foreground update is held.");
+        const gate = foregroundContextGate;
+        foregroundContextGate = undefined;
+        gate.resolve();
+      },
       holdRetarget() {
         if (retargetGate) throw new Error("A recording retarget is already held.");
         let resolve!: () => void, reject!: (error: Error) => void;
@@ -171,6 +201,8 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           if (method === "setConnection") {
             fixture.publish({ profileId: String(args.profileId), serverOrigin: String(args.serverOrigin), identity: String(args.identity) });
           } else if (method === "setForegroundContext") {
+            const foregroundGate = foregroundContextGate;
+            if (foregroundGate && foregroundGate.threadId === args.threadId) await foregroundGate.promise;
             const visible = args.visible === true;
             const threadId = visible && typeof args.threadId === "string" ? args.threadId : null;
             const threadTitle = visible && typeof args.threadTitle === "string" ? args.threadTitle : null;
@@ -179,6 +211,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             if (!composerHandoff || args.expectedConnectionGeneration !== current.connectionGeneration || args.handoffId !== composerHandoff.event.handoffId)
               throw new Error("The voice handoff changed.");
             if (method === "claimComposerHandoff") {
+              if (composerClaimGate) await composerClaimGate.promise;
               if (composerHandoff.claimed) throw new Error("The voice handoff was already claimed.");
               composerHandoff.claimed = true;
             } else {

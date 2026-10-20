@@ -365,24 +365,42 @@ ended service session clears it.
 
 By default, recognized input queues behind a running turn. **Follow composer's
 selected mode** instead captures the client-wide Queue/Steer preference when
-recognition finalizes. Steer names the exact current normalized target; if it
+capture ends. Steer names the exact current normalized target; if it
 is no longer available, or other queued input must deliver first, the input
 queues. Backend support remains explicit: Codex and Pi use a turn target,
 Claude and OpenCode a conversation target, and Grok has no steering. Spoken
-input uses the normal composer when the Android Activity and app document are
-foreground on the destination's active live Chat. This applies even to an empty
-composer and does not require keyboard focus. Speech precedes the existing text
+input uses the normal composer when capture ends with the Android Activity and
+app document foreground on the destination's active live Chat. This applies even
+to an empty composer and does not require keyboard focus. Speech precedes the existing text
 body with a blank line between them, retaining attachments, the selected skill,
 excerpts, notes, Task references, and thread references in one submission. Voice
 does not refocus the text field or open the keyboard.
 
-The client checks the current view and draft when recognition finishes; the
-server receives ordinary composer requests and applies normal input validation.
+Switching threads after capture ends does not cancel that composer send. If the
+original live composer is no longer available, the client waits for its final
+draft save, reads the original thread's latest saved draft, and combines it with
+the speech through the ordinary composer delivery API. Uploaded attachments and
+other draft context remain included; the newly viewed thread is untouched. A
+failed draft flush, draft conflict, or unfinished upload keeps the recording in
+voice recovery rather than submitting incomplete context.
+Returning to the original thread while its previous draft save is still pending
+can also leave speech in **Saved dictation**; let that save finish before retrying.
+
+Hiding or locking the app before speech is adopted, or a timeout preparing the
+saved draft, prevents automatic submission. Recover speech from **Saved
+dictation**, or from the original thread's draft if it was already saved there.
+If speech is saved but delivery is unavailable, it remains in that draft for a
+manual **Send**.
+
+The server receives ordinary composer requests and applies normal input
+validation.
 After the composer accepts the combined draft, native ends the recording and
 composer becomes the sole submission and recovery owner. Successful submission
 clears the captured draft through the normal composer path; later typing and
 ordinary Send recovery follow the same rules as typed input. No saved-dictation
-Send or Resume action remains for accepted speech.
+Send or Resume action remains for accepted speech. If a save or delivery
+acknowledgement is lost, inspect the original thread's draft, messages, and
+recovery before trying again; speech may already be present.
 
 Queued playback waits while that captured composer submission saves and sends.
 After Sedes accepts the message, older automatic replies on the same thread
@@ -395,9 +413,9 @@ playback continue through its normal checks; check Chat for the message's status
 Pending uploads or another temporary Send restriction leave the speech in the
 composer with a notice to press **Send** when ready. Oversized input, a draft
 conflict, or an in-progress draft mutation refuses the handoff before changing
-the draft and retains the speech for voice recovery. Background voice, another
-viewed thread, TUI, and historical Chat views use native submission, preserving
-the composer. Saved dictation can still be added explicitly through its recovery
+the draft and retains the speech for voice recovery. Recordings that finish in
+the background, on another viewed thread, in TUI, or in historical Chat use
+native submission, preserving the composer. Saved dictation can still be added explicitly through its recovery
 controls.
 
 The voice card under the composer appears while voice is connected and set to

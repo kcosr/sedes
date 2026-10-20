@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NativeVoiceStore, recentVoiceErrors } from "./NativeVoiceStore.js";
+import { NativeVoiceStore, recentVoiceErrors, type VoiceComposerAdoption, type VoiceDetachedComposerContext } from "./NativeVoiceStore.js";
 import type { NativeVoiceState } from "./native-voice-plugin.js";
 import { disconnectedVoiceSnapshot, fakeVoicePlugin, recordingRecovery, VOICE_CONNECTION, VOICE_IDENTITY, voiceComposerHandoffSnapshot, voiceSettings, voiceSnapshot as snapshot } from "./native-voice-test-fixture.js";
 
@@ -167,11 +167,11 @@ describe("foreground submission to composer", () => {
     const unsubscribe = store.subscribeSubmissionComposers(changed);
     expect(store.hasSubmissionComposer(null)).toBe(false);
     expect(store.hasSubmissionComposer("named")).toBe(false);
-    const unregisterOld = store.registerSubmissionComposer("named", vi.fn());
+    const unregisterOld = store.registerSubmissionComposer("named", vi.fn(), true, {});
     expect(store.hasSubmissionComposer("named")).toBe(true);
     expect(store.hasSubmissionComposer("other")).toBe(false);
     expect(changed).toHaveBeenCalledTimes(1);
-    const unregisterLatest = store.registerSubmissionComposer("named", vi.fn());
+    const unregisterLatest = store.registerSubmissionComposer("named", vi.fn(), true, {});
     unregisterOld();
     expect(store.hasSubmissionComposer("named")).toBe(true);
     expect(changed).toHaveBeenCalledTimes(2);
@@ -179,10 +179,25 @@ describe("foreground submission to composer", () => {
     expect(store.hasSubmissionComposer("named")).toBe(false);
     expect(changed).toHaveBeenCalledTimes(3);
     unsubscribe();
-    store.registerSubmissionComposer("named", vi.fn());
+    store.registerSubmissionComposer("named", vi.fn(), true, {});
     expect(changed).toHaveBeenCalledTimes(3);
     store.dispose();
     expect(store.hasSubmissionComposer("named")).toBe(false);
+  });
+
+  it("retains native composer intent for a present unready composer while using its saved draft", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    const accept = vi.fn(), detached = vi.fn(async (_event, context: VoiceDetachedComposerContext) => { context.beginSave(); });
+    store.registerSubmissionComposer("named", accept, false, {});
+    expect(store.hasSubmissionComposer("named")).toBe(true);
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "accepted", submissionPending: false }));
+    expect(accept).not.toHaveBeenCalled();
+    expect(detached).toHaveBeenCalledOnce();
+    store.dispose();
   });
 
   it("claims before capturing the complete live offer and accepts it only once", async () => {
@@ -194,7 +209,7 @@ describe("foreground submission to composer", () => {
       expect(plugin.claimComposerHandoff).toHaveBeenCalledExactlyOnceWith(context);
       expect(plugin.completeComposerHandoff).not.toHaveBeenCalled();
     });
-    store.registerSubmissionComposer("named", accept);
+    store.registerSubmissionComposer("named", accept, true, {});
     const offer = handoffEvent({ mode: "steer" });
     listeners.get("composerHandoff")!(offer);
     listeners.get("composerHandoff")!(offer);
@@ -216,7 +231,7 @@ describe("foreground submission to composer", () => {
   it("drops unhydrated, wrong-binding, stale, future and malformed offers before claim", async () => {
     const { store, plugin, listeners } = fixture();
     const accept = vi.fn();
-    store.registerSubmissionComposer("named", accept);
+    store.registerSubmissionComposer("named", accept, true, {});
     plugin.setConnection.mockImplementationOnce(async () => {
       listeners.get("composerHandoff")!(handoffEvent());
       return snapshot();
@@ -245,7 +260,7 @@ describe("foreground submission to composer", () => {
     const { store, plugin, listeners } = fixture();
     await store.initialize();
     const accept = vi.fn();
-    store.registerSubmissionComposer("named", accept);
+    store.registerSubmissionComposer("named", accept, true, {});
     vi.stubGlobal("document", { visibilityState: "hidden" });
     listeners.get("composerHandoff")!(handoffEvent());
     await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
@@ -265,7 +280,7 @@ describe("foreground submission to composer", () => {
     plugin.completeComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { acknowledge = resolve; }));
     let resolve!: () => void, reject!: (error: Error) => void;
     const submission = new Promise<void>((success, failure) => { resolve = success; reject = failure; });
-    store.registerSubmissionComposer("named", () => ({ submission }));
+    store.registerSubmissionComposer("named", () => ({ submission }), true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
       outcome: "accepted", submissionPending: true }));
@@ -287,7 +302,7 @@ describe("foreground submission to composer", () => {
     let finish!: () => void;
     const submission = new Promise<void>(resolve => { finish = resolve; });
     plugin.completeComposerHandoff.mockRejectedValueOnce(new Error("Ownership response lost."));
-    store.registerSubmissionComposer("named", () => ({ submission }));
+    store.registerSubmissionComposer("named", () => ({ submission }), true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     await vi.waitFor(() => expect(store.getSnapshot().error).toBe("Ownership response lost."));
     expect(plugin.settleComposerSubmission).not.toHaveBeenCalled();
@@ -303,7 +318,7 @@ describe("foreground submission to composer", () => {
     await store.initialize();
     let finish!: () => void;
     const submission = new Promise<void>(resolve => { finish = resolve; });
-    const unregister = store.registerSubmissionComposer("named", () => ({ submission }));
+    const unregister = store.registerSubmissionComposer("named", () => ({ submission }), true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledOnce());
     if (change === "unregister") unregister();
@@ -322,7 +337,7 @@ describe("foreground submission to composer", () => {
     const { store, plugin, listeners } = fixture();
     await store.initialize();
     plugin.settleComposerSubmission.mockRejectedValueOnce(new Error("Settlement unavailable."));
-    store.registerSubmissionComposer("named", () => ({ submission: Promise.resolve() }));
+    store.registerSubmissionComposer("named", () => ({ submission: Promise.resolve() }), true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     await vi.waitFor(() => expect(store.getSnapshot().error).toBe("Settlement unavailable."));
     expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
@@ -337,9 +352,9 @@ describe("foreground submission to composer", () => {
     let release!: (value: NativeVoiceState) => void;
     plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
     const old = vi.fn(), latest = vi.fn();
-    const unregisterOld = store.registerSubmissionComposer("named", old);
+    const unregisterOld = store.registerSubmissionComposer("named", old, true, {});
     listeners.get("composerHandoff")!(handoffEvent());
-    store.registerSubmissionComposer("named", latest);
+    store.registerSubmissionComposer("named", latest, true, {});
     unregisterOld();
     release(voiceComposerHandoffSnapshot(handoffEvent()));
     await vi.waitFor(() => expect(latest).toHaveBeenCalledExactlyOnceWith(handoffEvent()));
@@ -354,10 +369,10 @@ describe("foreground submission to composer", () => {
     let release!: (value: NativeVoiceState) => void;
     plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
     const original = vi.fn(), other = vi.fn();
-    const unregister = store.registerSubmissionComposer("named", original);
+    const unregister = store.registerSubmissionComposer("named", original, true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     unregister();
-    store.registerSubmissionComposer("other", other);
+    store.registerSubmissionComposer("other", other, true, {});
     release(voiceComposerHandoffSnapshot(handoffEvent()));
     await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
       outcome: "declined", submissionPending: false, message: "Open the recording's live Chat to send it with the composer." }));
@@ -367,13 +382,488 @@ describe("foreground submission to composer", () => {
     store.dispose();
   });
 
+  it("waits for the departing thread's latest draft flush before detached adoption without opening either thread", async () => {
+    const { store, plugin, listeners, open } = fixture();
+    await store.initialize();
+    let claim!: (value: NativeVoiceState) => void;
+    plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { claim = resolve; }));
+    let finishFirst!: () => void, finishLatest!: () => void;
+    const first = new Promise<void>(resolve => { finishFirst = resolve; });
+    const latest = new Promise<void>(resolve => { finishLatest = resolve; });
+    const original = vi.fn(), other = vi.fn();
+    const originalOwner = {};
+    const unregister = store.registerSubmissionComposer("named", original, true, originalOwner);
+    const detached = vi.fn(async (_event, context: VoiceDetachedComposerContext) => { context.assertCurrent(); });
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    store.publishComposerDraftFlush("named", first, originalOwner);
+    unregister();
+    store.registerSubmissionComposer("other", other, true, {});
+    claim(voiceComposerHandoffSnapshot(handoffEvent(), { stateRevision: 2,
+      foreground: { visible: true, threadId: "other", threadTitle: null, composerAvailable: true } }));
+    await Promise.resolve();
+    store.publishComposerDraftFlush("named", latest, {});
+    finishFirst();
+    await Promise.resolve();
+    expect(detached).not.toHaveBeenCalled();
+    finishLatest();
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "accepted", submissionPending: false }));
+    expect(detached).toHaveBeenCalledExactlyOnceWith(handoffEvent(), expect.objectContaining({ signal: expect.any(AbortSignal), assertCurrent: expect.any(Function) }));
+    expect(original).not.toHaveBeenCalled();
+    expect(other).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it("retains an old owner's pending write when a clean remount publishes a resolved flush before the offer", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let finishOriginal!: () => void;
+    store.publishComposerDraftFlush("named", new Promise<void>(resolve => { finishOriginal = resolve; }), {});
+    store.publishComposerDraftFlush("named", Promise.resolve(), {});
+    const detached = vi.fn(async () => undefined);
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(store.getSnapshot().native?.phase).toBe("submitting"));
+    await Promise.resolve();
+    expect(detached).not.toHaveBeenCalled();
+    expect(plugin.completeComposerHandoff).not.toHaveBeenCalled();
+    finishOriginal();
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "accepted", submissionPending: false }));
+    expect(detached).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+
+  it.each(["before claim", "during draft wait"] as const)("does not let the latest owner skip an older owner's pending write when ready %s", async ready => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let finishOriginal!: () => void;
+    const originalOwner = {}, latestOwner = {};
+    store.publishComposerDraftFlush("named", new Promise<void>(resolve => { finishOriginal = resolve; }), originalOwner);
+    store.publishComposerDraftFlush("named", Promise.resolve(), latestOwner);
+    const detached = vi.fn(async () => undefined), accept = vi.fn();
+    store.registerDetachedSubmissionHandler(detached);
+    if (ready === "before claim") store.registerSubmissionComposer("named", accept, true, latestOwner);
+    listeners.get("composerHandoff")!(handoffEvent());
+    if (ready === "during draft wait") {
+      await vi.waitFor(() => expect(store.getSnapshot().native?.phase).toBe("submitting"));
+      await Promise.resolve();
+      store.registerSubmissionComposer("named", accept, true, latestOwner);
+    }
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "declined", submissionPending: false,
+      message: "The original composer's draft is still saving. Wait for it to finish, then retry the saved dictation." }));
+    expect(accept).not.toHaveBeenCalled();
+    expect(detached).not.toHaveBeenCalled();
+    finishOriginal();
+    await Promise.resolve();
+    expect(accept).not.toHaveBeenCalled();
+    expect(detached).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it("retains native recovery when a different owner's pending write fails despite a newer clean flush", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let failOriginal!: (error: Error) => void;
+    const latestOwner = {};
+    store.publishComposerDraftFlush("named", new Promise<void>((_resolve, reject) => { failOriginal = reject; }), {});
+    store.publishComposerDraftFlush("named", Promise.resolve(), latestOwner);
+    const detached = vi.fn(async () => undefined);
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(store.getSnapshot().native?.phase).toBe("submitting"));
+    failOriginal(new Error("The previous composer's final edits could not be saved."));
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "declined", submissionPending: false, message: "The previous composer's final edits could not be saved." }));
+    expect(detached).not.toHaveBeenCalled();
+    // A subsequent known-new save can clear the settled failure; the clean
+    // remount published while it was pending was insufficient to do so.
+    store.publishComposerDraftFlush("named", Promise.resolve(), latestOwner);
+    listeners.get("composerHandoff")!(handoffEvent({ handoffId: "handoff-2" }));
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledWith({ ...context,
+      handoffId: "handoff-2", outcome: "accepted", submissionPending: false }));
+    expect(detached).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+
+  it("lets the current ready composer accept after a foreign mixed-owner save has settled with failure", async () => {
+    vi.useFakeTimers();
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let failOriginal!: (error: Error) => void;
+    const currentOwner = {};
+    store.publishComposerDraftFlush("named", new Promise<void>((_resolve, reject) => { failOriginal = reject; }), {});
+    store.publishComposerDraftFlush("named", Promise.resolve(), currentOwner);
+    const detached = vi.fn(async () => undefined), accept = vi.fn();
+    store.registerDetachedSubmissionHandler(detached);
+    store.registerSubmissionComposer("named", accept, true, currentOwner);
+    failOriginal(new Error("The departed composer's save failed."));
+    await vi.advanceTimersByTimeAsync(0);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "accepted", submissionPending: false });
+    expect(accept).toHaveBeenCalledExactlyOnceWith(handoffEvent());
+    expect(detached).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it("restores the same-owner shortcut for a new publication after a mixed-owner chain settles", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let finishOriginal!: () => void;
+    const latestOwner = {};
+    store.publishComposerDraftFlush("named", new Promise<void>(resolve => { finishOriginal = resolve; }), {});
+    store.publishComposerDraftFlush("named", Promise.resolve(), latestOwner);
+    const detached = vi.fn(async () => undefined);
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    finishOriginal();
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "accepted", submissionPending: false }));
+    let finishLatest!: () => void;
+    store.publishComposerDraftFlush("named", new Promise<void>(resolve => { finishLatest = resolve; }), latestOwner);
+    const accept = vi.fn();
+    const unregisterUnready = store.registerSubmissionComposer("named", accept, false, latestOwner);
+    listeners.get("composerHandoff")!(handoffEvent({ handoffId: "handoff-2" }));
+    await vi.waitFor(() => expect(store.getSnapshot().native?.phase).toBe("submitting"));
+    await Promise.resolve();
+    store.registerSubmissionComposer("named", accept, true, latestOwner);
+    unregisterUnready();
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledWith({ ...context,
+      handoffId: "handoff-2", outcome: "accepted", submissionPending: false }));
+    expect(accept).toHaveBeenCalledExactlyOnceWith(handoffEvent({ handoffId: "handoff-2" }));
+    expect(detached).toHaveBeenCalledOnce();
+    finishLatest();
+    store.dispose();
+  });
+
+  it("uses a frozen original-thread offer after navigation completed before the event", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    const other = vi.fn(), detached = vi.fn(async () => undefined);
+    store.registerSubmissionComposer("other", other, true, {});
+    store.registerDetachedSubmissionHandler(detached);
+    plugin.claimComposerHandoff.mockResolvedValueOnce(voiceComposerHandoffSnapshot(handoffEvent(), {
+      foreground: { visible: true, threadId: "other", threadTitle: null, composerAvailable: true },
+    }));
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "accepted", submissionPending: false }));
+    expect(detached).toHaveBeenCalledOnce();
+    expect(other).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it.each(["composer unavailable", "different thread"] as const)("uses the registered live composer when the native foreground snapshot still says %s", async lag => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    const accept = vi.fn(), detached = vi.fn(async () => undefined);
+    store.registerSubmissionComposer("named", accept, true, {});
+    store.registerDetachedSubmissionHandler(detached);
+    plugin.claimComposerHandoff.mockResolvedValueOnce(voiceComposerHandoffSnapshot(handoffEvent(), {
+      foreground: { visible: true, threadId: lag === "different thread" ? "other" : "named", threadTitle: null,
+        composerAvailable: lag !== "composer unavailable" },
+    }));
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "accepted", submissionPending: false }));
+    expect(accept).toHaveBeenCalledExactlyOnceWith(handoffEvent());
+    expect(detached).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it("declines a returned composer while its old departure flush is pending instead of racing its new draft queue", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let finish!: () => void;
+    const departedOwner = {}, remountedOwner = {};
+    store.publishComposerDraftFlush("named", new Promise<void>(resolve => { finish = resolve; }), departedOwner);
+    const detached = vi.fn(async () => undefined), accept = vi.fn();
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(store.getSnapshot().native?.phase).toBe("submitting"));
+    await Promise.resolve();
+    store.registerSubmissionComposer("named", accept, true, remountedOwner);
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "declined", submissionPending: false,
+      message: "The original composer's draft is still saving. Wait for it to finish, then retry the saved dictation." }));
+    expect(accept).not.toHaveBeenCalled();
+    expect(detached).not.toHaveBeenCalled();
+    finish();
+    await Promise.resolve();
+    expect(accept).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it("returns to the same mounted composer's draft queue when readiness returns during its pending flush", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    const owner = {};
+    let finish!: () => void;
+    const flush = new Promise<void>(resolve => { finish = resolve; });
+    const delivered = vi.fn();
+    const submission = flush.then(() => { delivered(); });
+    const accept = vi.fn(() => ({ submission }));
+    const unregisterReady = store.registerSubmissionComposer("named", accept, true, owner);
+    store.publishComposerDraftFlush("named", flush, owner);
+    unregisterReady();
+    const unregisterUnready = store.registerSubmissionComposer("named", accept, false, owner);
+    const detached = vi.fn(async () => undefined);
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(store.getSnapshot().native?.phase).toBe("submitting"));
+    await Promise.resolve();
+    store.registerSubmissionComposer("named", accept, true, owner);
+    unregisterUnready();
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "accepted", submissionPending: true }));
+    expect(accept).toHaveBeenCalledExactlyOnceWith(handoffEvent());
+    expect(detached).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+    expect(plugin.settleComposerSubmission).not.toHaveBeenCalled();
+    finish();
+    await vi.waitFor(() => expect(plugin.settleComposerSubmission).toHaveBeenCalledExactlyOnceWith(context));
+    expect(delivered).toHaveBeenCalledOnce();
+    expect(accept).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+
+  it("cancels a detached read when the original composer returns and uses its latest local draft exactly once", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let guard!: VoiceDetachedComposerContext;
+    const detached = vi.fn(async (_event, context: VoiceDetachedComposerContext) => {
+      guard = context;
+      await new Promise<void>((_resolve, reject) => context.signal.addEventListener("abort", () => reject(new Error("Read cancelled")), { once: true }));
+      context.beginSave();
+    });
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(detached).toHaveBeenCalledOnce());
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept, true, {});
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "accepted", submissionPending: false }));
+    expect(guard.signal.aborted).toBe(true);
+    expect(accept).toHaveBeenCalledExactlyOnceWith(handoffEvent());
+    expect(detached).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+
+  it("continues a detached read through an unready remount and yields only when that composer becomes ready", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let guard!: VoiceDetachedComposerContext;
+    const detached = vi.fn(async (_event, context: VoiceDetachedComposerContext) => {
+      guard = context;
+      await new Promise<void>((_resolve, reject) => context.signal.addEventListener("abort", () => reject(new Error("Read cancelled")), { once: true }));
+      context.beginSave();
+    });
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(detached).toHaveBeenCalledOnce());
+    const accept = vi.fn();
+    const owner = {};
+    const unregisterUnready = store.registerSubmissionComposer("named", accept, false, owner);
+    expect(store.hasSubmissionComposer("named")).toBe(true);
+    expect(guard.signal.aborted).toBe(false);
+    expect(() => guard.assertCurrent()).not.toThrow();
+    expect(accept).not.toHaveBeenCalled();
+    store.registerSubmissionComposer("named", accept, true, owner);
+    unregisterUnready();
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "accepted", submissionPending: false }));
+    expect(guard.signal.aborted).toBe(true);
+    expect(accept).toHaveBeenCalledExactlyOnceWith(handoffEvent());
+    expect(detached).toHaveBeenCalledOnce();
+    expect(store.hasSubmissionComposer("named")).toBe(true);
+    store.dispose();
+  });
+
+  it("does not dispatch to a remounted composer after the detached draft write has started", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let finish!: () => void;
+    let guard!: VoiceDetachedComposerContext;
+    const detached = vi.fn(async (_event, context: VoiceDetachedComposerContext) => {
+      guard = context;
+      context.beginSave();
+      await new Promise<void>(resolve => { finish = resolve; });
+    });
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(detached).toHaveBeenCalledOnce());
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept, true, {});
+    expect(guard.signal.aborted).toBe(false);
+    finish();
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "accepted", submissionPending: false }));
+    expect(accept).not.toHaveBeenCalled();
+    expect(detached).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+
+  it("does not turn a live composer refusal or an adopted delivery failure into a detached send", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    const detached = vi.fn(async () => undefined);
+    store.registerDetachedSubmissionHandler(detached);
+    store.registerSubmissionComposer("named", () => { throw new Error("Resolve the draft conflict first."); }, true, {});
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "declined" })));
+    store.registerSubmissionComposer("named", () => ({ submission: Promise.reject(new Error("Delivery response lost.")) }), true, {});
+    listeners.get("composerHandoff")!(handoffEvent({ handoffId: "handoff-2" }));
+    await vi.waitFor(() => expect(plugin.settleComposerSubmission).toHaveBeenCalledWith({ ...context, handoffId: "handoff-2" }));
+    expect(store.getSnapshot().error).toBe("Delivery response lost.");
+    expect(detached).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it("leaves dictation recoverable when the departure draft cannot be saved", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    const detached = vi.fn(async () => undefined);
+    store.registerDetachedSubmissionHandler(detached);
+    store.publishComposerDraftFlush("named", Promise.reject(new Error("An attachment has not finished uploading.")), {});
+    // Observe the rejected departure before the native offer arrives, as happens
+    // when recognition completes after the user has already changed threads.
+    await Promise.resolve();
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "declined", submissionPending: false, message: "An attachment has not finished uploading." }));
+    expect(detached).not.toHaveBeenCalled();
+    expect(plugin.sendRecording).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it("lets a newer successful flush from the same queue supersede an older failure while waiting", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let fail!: (error: Error) => void;
+    const owner = {};
+    store.publishComposerDraftFlush("named", new Promise<void>((_resolve, reject) => { fail = reject; }), owner);
+    const detached = vi.fn(async () => undefined);
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(store.getSnapshot().native?.phase).toBe("submitting"));
+    await Promise.resolve();
+    store.publishComposerDraftFlush("named", Promise.resolve(), owner);
+    fail(new Error("Earlier save failed."));
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "accepted", submissionPending: false }));
+    expect(detached).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+
+  it("bounds the wait for a departing draft without starting a detached send later", async () => {
+    vi.useFakeTimers();
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let finish!: () => void;
+    store.publishComposerDraftFlush("named", new Promise<void>(resolve => { finish = resolve; }), {});
+    const detached = vi.fn(async () => undefined);
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "declined", submissionPending: false,
+      message: "The saved composer draft is taking too long. Open the original thread to review the message." });
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(detached).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it.each(["stopped", "connection", "hidden", "dispose"] as const)("cancels a detached draft wait when %s", async change => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let finish!: () => void;
+    store.publishComposerDraftFlush("named", new Promise<void>(resolve => { finish = resolve; }), {});
+    const detached = vi.fn(async () => undefined);
+    store.registerDetachedSubmissionHandler(detached);
+    listeners.get("composerHandoff")!(handoffEvent());
+    // Claim has completed, but the saved draft still belongs to the departing composer.
+    await vi.waitFor(() => expect(store.getSnapshot().native?.phase).toBe("submitting"));
+    await Promise.resolve();
+    if (change === "dispose") store.dispose();
+    else listeners.get("stateChanged")!(voiceComposerHandoffSnapshot(handoffEvent(), { stateRevision: 2,
+      ...(change === "stopped" ? { active: null } : {}),
+      ...(change === "connection" ? { connectionGeneration: 2 } : {}),
+      ...(change === "hidden" ? { foreground: { visible: false, threadId: null, threadTitle: null, composerAvailable: false } } : {}),
+    }));
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({
+      ...context, outcome: "declined", submissionPending: false,
+    })));
+    finish();
+    await Promise.resolve();
+    expect(detached).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it("keeps durable detached adoption after cancellation during its save and settles the original attempt", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let finishSave!: (adoption: VoiceComposerAdoption) => void;
+    let guard!: VoiceDetachedComposerContext;
+    store.registerDetachedSubmissionHandler(async (_event, context) => {
+      guard = context;
+      context.assertCurrent();
+      return new Promise(resolve => { finishSave = resolve; });
+    });
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(finishSave).toBeDefined());
+    listeners.get("stateChanged")!(voiceComposerHandoffSnapshot(handoffEvent(), { stateRevision: 2, active: null }));
+    expect(guard.signal.aborted).toBe(true);
+    expect(() => guard.assertCurrent()).toThrow("recording changed");
+    expect(plugin.completeComposerHandoff).not.toHaveBeenCalled();
+    finishSave({ submission: Promise.resolve() });
+    await vi.waitFor(() => expect(plugin.settleComposerSubmission).toHaveBeenCalledExactlyOnceWith(context));
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context, outcome: "accepted", submissionPending: true });
+    store.dispose();
+  });
+
+  it("keeps cancellation active while an adopted detached delivery is still preparing its request", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let finish!: () => void;
+    let guard!: VoiceDetachedComposerContext;
+    plugin.completeComposerHandoff.mockResolvedValueOnce(snapshot({ stateRevision: 2,
+      foreground: { visible: true, threadId: "other", threadTitle: null, composerAvailable: true } }));
+    store.registerDetachedSubmissionHandler(async (_event, context) => {
+      guard = context;
+      return { submission: new Promise<void>(resolve => { finish = resolve; }) };
+    });
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "accepted" })));
+    // Acceptance retires the recording; this must not cancel the adopted send.
+    await vi.waitFor(() => expect(store.getSnapshot().native?.active).toBeNull());
+    expect(guard.signal.aborted).toBe(false);
+    // Like the live composer path, an adopted send continues in the background.
+    vi.stubGlobal("document", { visibilityState: "hidden" });
+    listeners.get("stateChanged")!(snapshot({ stateRevision: 3,
+      foreground: { visible: false, threadId: null, threadTitle: null, composerAvailable: false } }));
+    expect(guard.signal.aborted).toBe(false);
+    expect(() => guard.assertCurrent()).not.toThrow();
+    listeners.get("stateChanged")!(disconnectedVoiceSnapshot(2));
+    expect(guard.signal.aborted).toBe(true);
+    finish();
+    await vi.waitFor(() => expect(plugin.settleComposerSubmission).toHaveBeenCalledExactlyOnceWith(context));
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+
   it.each(["connection", "dispose"])("does not invoke a stale composer after %s changes during claim", async change => {
     const { store, plugin, listeners } = fixture();
     await store.initialize();
     let release!: (value: NativeVoiceState) => void;
     plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
     const accept = vi.fn();
-    store.registerSubmissionComposer("named", accept);
+    store.registerSubmissionComposer("named", accept, true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     if (change === "dispose") store.dispose();
     else listeners.get("stateChanged")!(snapshot({ connectionGeneration: 2 }));
@@ -392,7 +882,7 @@ describe("foreground submission to composer", () => {
       let release!: (value: NativeVoiceState) => void;
       plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
       const accept = vi.fn();
-      store.registerSubmissionComposer("named", accept);
+      store.registerSubmissionComposer("named", accept, true, {});
       const offer = handoffEvent();
       const claimed = voiceComposerHandoffSnapshot(offer, { stateRevision: 2 });
       listeners.get("composerHandoff")!(offer);
@@ -424,7 +914,7 @@ describe("foreground submission to composer", () => {
     plugin.claimComposerHandoff.mockResolvedValue(voiceComposerHandoffSnapshot(handoffEvent(), { recordingRecovery: saved }));
     plugin.completeComposerHandoff.mockResolvedValue(snapshot({ stateRevision: 2, recordingRecovery: saved }));
     await store.initialize();
-    store.registerSubmissionComposer("named", () => { throw new Error("Resolve the draft conflict first."); });
+    store.registerSubmissionComposer("named", () => { throw new Error("Resolve the draft conflict first."); }, true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
       outcome: "declined", submissionPending: false, message: "Resolve the draft conflict first." }));
@@ -435,14 +925,14 @@ describe("foreground submission to composer", () => {
     store.dispose();
   });
 
-  it.each(["not visible", "composer unavailable", "different thread"])(
+  it.each(["not visible"])(
     "declines a delayed claim when the latest native foreground is %s", async change => {
       const { store, plugin, listeners } = fixture();
       await store.initialize();
       let release!: (value: NativeVoiceState) => void;
       plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
       const accept = vi.fn();
-      store.registerSubmissionComposer("named", accept);
+      store.registerSubmissionComposer("named", accept, true, {});
       const offer = handoffEvent();
       const claimed = voiceComposerHandoffSnapshot(offer, { stateRevision: 2 });
       listeners.get("composerHandoff")!(offer);
@@ -466,7 +956,7 @@ describe("foreground submission to composer", () => {
     await store.initialize();
     plugin.claimComposerHandoff.mockRejectedValue(new Error("The recording is no longer current."));
     const accept = vi.fn();
-    store.registerSubmissionComposer("named", accept);
+    store.registerSubmissionComposer("named", accept, true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     await vi.waitFor(() => expect(store.getSnapshot().error).toBe("The recording is no longer current."));
     expect(accept).not.toHaveBeenCalled();
@@ -480,7 +970,7 @@ describe("foreground submission to composer", () => {
     await store.initialize();
     plugin.claimComposerHandoff.mockResolvedValueOnce({ version: 15 } as NativeVoiceState);
     const accept = vi.fn();
-    store.registerSubmissionComposer("named", accept);
+    store.registerSubmissionComposer("named", accept, true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledOnce());
     expect(plugin.completeComposerHandoff).toHaveBeenCalledWith({ ...context, outcome: "declined", submissionPending: false,
@@ -498,7 +988,7 @@ describe("foreground submission to composer", () => {
     plugin.claimComposerHandoff.mockRejectedValueOnce(new Error("Claim response lost."));
     plugin.completeComposerHandoff.mockRejectedValueOnce(new Error("The offer was already cancelled."));
     const accept = vi.fn();
-    store.registerSubmissionComposer("named", accept);
+    store.registerSubmissionComposer("named", accept, true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledWith({ ...context,
       outcome: "declined", submissionPending: false, message: "Claim response lost." }));
@@ -518,7 +1008,7 @@ describe("foreground submission to composer", () => {
     plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise((success, rejected) => { resolve = success; reject = rejected; }));
     plugin.completeComposerHandoff.mockResolvedValueOnce(snapshot({ profileId: "other-profile", connectionGeneration: 2 }));
     const accept = vi.fn();
-    store.registerSubmissionComposer("named", accept);
+    store.registerSubmissionComposer("named", accept, true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     if (change === "disposal") store.dispose();
     else listeners.get("stateChanged")!(snapshot({ connectionGeneration: 2, stateRevision: 3 }));
@@ -541,7 +1031,7 @@ describe("foreground submission to composer", () => {
     await store.initialize();
     plugin.completeComposerHandoff.mockRejectedValue(new Error("Native acknowledgement failed."));
     const accept = vi.fn();
-    store.registerSubmissionComposer("named", accept);
+    store.registerSubmissionComposer("named", accept, true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     await vi.waitFor(() => expect(store.getSnapshot().error).toBe("Native acknowledgement failed."));
     expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context, outcome: "accepted", submissionPending: false });
@@ -567,7 +1057,7 @@ describe("foreground submission to composer", () => {
     plugin.claimComposerHandoff.mockResolvedValueOnce(claimed);
     plugin.completeComposerHandoff.mockResolvedValueOnce(snapshot(patch));
     const accept = vi.fn();
-    store.registerSubmissionComposer("named", accept);
+    store.registerSubmissionComposer("named", accept, true, {});
     listeners.get("composerHandoff")!(handoffEvent());
     await vi.advanceTimersByTimeAsync(0);
     expect(accept).toHaveBeenCalledExactlyOnceWith(handoffEvent());

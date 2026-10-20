@@ -14,14 +14,13 @@ public class NativeVoiceComposerHandoffTest {
         assertFalse(NativeVoiceComposerHandoff.eligible(true, true, true, null, null));
     }
 
-    @Test public void claimRequiresTheOriginalBindingGenerationAndUninterruptedRoute() {
+    @Test public void claimRequiresTheOriginalBindingGenerationAndUninterruptedVisibility() {
         Object route = new Object();
-        for (String changed : new String[] { "binding", "generation", "route", "native", "web", "composer", "thread" }) {
+        for (String changed : new String[] { "binding", "generation", "visibility", "native", "web" }) {
             NativeVoiceComposerHandoff offer = offer(route);
             assertCode("composer_handoff_unavailable", () -> offer.claim(
                 changed.equals("binding") ? "another-owner" : "owner", changed.equals("generation") ? 8 : 7,
-                changed.equals("route") ? new Object() : route, !changed.equals("native"), !changed.equals("web"),
-                !changed.equals("composer"), changed.equals("thread") ? "another-thread" : "destination"));
+                changed.equals("visibility") ? new Object() : route, !changed.equals("native"), !changed.equals("web")));
             assertFalse("A rejected claim cannot own sending", offer.claimed);
             offer.complete("owner", 7, false);
             assertTrue("The raw recording may then be retained for manual recovery", offer.finished);
@@ -32,8 +31,8 @@ public class NativeVoiceComposerHandoffTest {
         Object route = new Object(); NativeVoiceComposerHandoff offer = offer(route);
         assertCode("composer_handoff_unclaimed", () -> offer.complete("owner", 7, true));
         assertFalse(offer.finished);
-        offer.claim("owner", 7, route, true, true, true, "destination");
-        assertCode("composer_handoff_changed", () -> offer.claim("owner", 7, route, true, true, true, "destination"));
+        offer.claim("owner", 7, route, true, true);
+        assertCode("composer_handoff_changed", () -> offer.claim("owner", 7, route, true, true));
         assertCode("composer_handoff_changed", () -> offer.complete("another-owner", 7, true));
         assertCode("composer_handoff_changed", () -> offer.complete("owner", 8, true));
         assertFalse(offer.finished);
@@ -46,13 +45,13 @@ public class NativeVoiceComposerHandoffTest {
 
     @Test public void declinedClaimedSpeechRemainsTheExactRecordingAndFrozenMode() {
         Object route = new Object(); NativeVoiceComposerHandoff offer = offer(route);
-        offer.claim("owner", 7, route, true, true, true, "destination");
+        offer.claim("owner", 7, route, true, true);
         offer.complete("owner", 7, false);
         assertTrue(offer.finished); assertEquals("recording", offer.recordingId);
         assertEquals("  speech\n完整🙂  ", offer.text); assertEquals("steer", offer.mode);
         assertEquals("queue", new NativeVoiceComposerHandoff("handoff", "owner", 7, route,
             "recording", "destination", "speech", false).mode);
-        assertCode("composer_handoff_changed", () -> offer.claim("owner", 7, route, true, true, true, "destination"));
+        assertCode("composer_handoff_changed", () -> offer.claim("owner", 7, route, true, true));
     }
 
     private static NativeVoiceComposerHandoff offer(Object route) {

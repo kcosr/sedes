@@ -192,6 +192,10 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Foreground voice Send continues in its original thread after switching threads,
+  combining speech with that thread's saved draft and uploaded attachments. See
+  [voice input](docs/operator/clients/voice.md).
+
 - On phones and touch screens, text inputs (searches, renames, filters, the
   terminal command line, and interaction prompts) are 16px so iOS no longer
   zooms the page on focus; the composer is unchanged. Files tabs, Changes

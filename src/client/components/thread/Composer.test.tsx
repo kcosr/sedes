@@ -6276,6 +6276,68 @@ describe("foreground voice composer ownership", () => {
     await waitFor(() => expect(store.deliver).toHaveBeenCalledWith("submit", expect.objectContaining({ text: "Explain this" }), expect.any(String)));
   });
 
+  it("keeps visible composer intent while loading and reconnecting, marking it ready only after its draft and authority are available", async () => {
+    const { voice } = await native();
+    const store = new FakeComposerStore(snapshot(), "saved draft");
+    const loadedSnapshot = store.state.snapshot;
+    store.replace({ snapshot: undefined, connection: "reconnecting", authoritative: false });
+    const notify = vi.fn();
+    voice.subscribeSubmissionComposers(notify);
+    const register = vi.spyOn(voice, "registerSubmissionComposer");
+    const published = vi.spyOn(voice, "publishComposerDraftFlush");
+    const view = render(<Composer store={store as unknown as ThreadClientStore} />);
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(true);
+    expect(register).toHaveBeenCalledOnce();
+    expect(register.mock.calls.at(-1)![2]).toBe(false);
+    const owner = register.mock.calls[0]![3];
+    expect(owner).toBeTypeOf("object");
+    expect(notify).toHaveBeenCalledOnce();
+    act(() => store.replace({ connection: "connected" }));
+    expect(notify).toHaveBeenCalledOnce();
+    act(() => store.replace({ authoritative: true }));
+    expect(notify).toHaveBeenCalledOnce();
+    act(() => store.replace({ snapshot: loadedSnapshot }));
+    await waitFor(() => expect(register.mock.calls.at(-1)![2]).toBe(true));
+    expect(register).toHaveBeenCalledTimes(2);
+    expect(register.mock.calls[1]![3]).toBe(owner);
+    expect(published.mock.calls[0]![2]).toBe(owner);
+    expect(notify).toHaveBeenCalledTimes(3);
+    register.mockClear();
+    published.mockClear();
+    notify.mockClear();
+
+    let save!: () => void;
+    const saving = new Promise<void>(resolve => { save = resolve; });
+    const saveDraft = store.saveDraft.getMockImplementation()!;
+    store.saveDraft.mockImplementationOnce(async (...args) => { await saving; return saveDraft(...args); });
+    type("latest local draft");
+    expect(notify).not.toHaveBeenCalled();
+    act(() => store.replace({ connection: "reconnecting", authoritative: false }));
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(true);
+    expect(register.mock.calls.at(-1)![2]).toBe(false);
+    expect(register.mock.calls.at(-1)![3]).toBe(owner);
+    expect(published).toHaveBeenCalledOnce();
+    expect(store.saveDraft).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: "latest local draft" }));
+    act(() => store.replace({ connection: "connected" }));
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(true);
+    expect(register.mock.calls.at(-1)![2]).toBe(false);
+    expect(notify).toHaveBeenCalledTimes(2);
+    act(() => store.replace({ authoritative: true }));
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(true);
+    expect(register.mock.calls.at(-1)![2]).toBe(true);
+    expect(register.mock.calls.at(-1)![3]).toBe(owner);
+    expect(register).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenCalledTimes(4);
+    view.unmount();
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(false);
+    expect(published).toHaveBeenCalledTimes(3);
+    expect(published.mock.calls[1]![1]).toBe(published.mock.calls[0]![1]);
+    expect(published.mock.calls[2]![1]).toBe(published.mock.calls[0]![1]);
+    for (const call of published.mock.calls) expect(call[2]).toBe(owner);
+    await act(async () => { save(); await published.mock.calls[0]![1]; });
+    expect(store.saveDraft).toHaveBeenCalledOnce();
+  });
+
   it.each(["submit", "queue", "steer"] as const)("keeps playback held through draft saving and the %s admission receipt", async mode => {
     const { fake } = await native();
     const base = snapshot(mode === "submit" ? "idle" : "running");
@@ -6339,6 +6401,95 @@ describe("foreground voice composer ownership", () => {
     await act(async () => release(voiceComposerHandoffSnapshot({ recordingId: "recording", threadId: "thread-1" })));
     await waitFor(() => expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "declined" })));
     expect(store.stageComposerTransfer).not.toHaveBeenCalled();
+    expect(store.deliver).not.toHaveBeenCalled();
+  });
+
+  it("publishes the final draft before unregistering and waits for its save before detached adoption", async () => {
+    const { fake, voice } = await native();
+    const store = new FakeComposerStore(snapshot(), "saved text");
+    const attachment = { id: "d0739b85-4f1b-4c40-b364-51e5093f128b", fileName: "notes.bin",
+      kind: "file" as const, mediaType: "application/octet-stream" as const, byteSize: 128 };
+    store.replaceDraft({ text: "saved text", attachments: [attachment], contextExcerpts: [contextExcerpt], revision: 2 });
+    let save!: () => void;
+    const saving = new Promise<void>(resolve => { save = resolve; });
+    const saveDraft = store.saveDraft.getMockImplementation()!;
+    store.saveDraft.mockImplementationOnce(async (...args) => { await saving; return saveDraft(...args); });
+    let claim!: (state: ReturnType<typeof voiceComposerHandoffSnapshot>) => void;
+    fake.plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { claim = resolve; }));
+    const detached = vi.fn(async () => undefined);
+    voice.registerDetachedSubmissionHandler(detached);
+    const publish = voice.publishComposerDraftFlush.bind(voice);
+    const published = vi.spyOn(voice, "publishComposerDraftFlush").mockImplementation((threadId, flush, owner) => {
+      expect(voice.hasSubmissionComposer(threadId)).toBe(true);
+      publish(threadId, flush, owner);
+    });
+    const view = render(<Composer store={store as unknown as ThreadClientStore} />);
+    type("last unsaved changes");
+    offer(fake);
+    view.unmount();
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(false);
+    expect(published).toHaveBeenCalledOnce();
+    expect(store.saveDraft).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      text: "last unsaved changes", attachments: [attachment], contextExcerpts: [contextExcerpt], revision: 2,
+    }));
+    await act(async () => claim(voiceComposerHandoffSnapshot({ recordingId: "recording", threadId: "thread-1" })));
+    expect(detached).not.toHaveBeenCalled();
+    await act(async () => save());
+    await accepted(fake);
+    expect(detached).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ threadId: "thread-1", text: "Explain this" }), expect.any(Object));
+    expect(store.saveDraft).toHaveBeenCalledOnce();
+    expect(store.deliver).not.toHaveBeenCalled();
+  });
+
+  it("queues the departure flush after an older autosave without reusing its stale text", async () => {
+    const { voice } = await native();
+    const store = new FakeComposerStore(snapshot(), "saved text");
+    let save!: () => void;
+    const saving = new Promise<void>(resolve => { save = resolve; });
+    const saveDraft = store.saveDraft.getMockImplementation()!;
+    store.saveDraft.mockImplementationOnce(async (...args) => { await saving; return saveDraft(...args); });
+    const published = vi.spyOn(voice, "publishComposerDraftFlush");
+    const view = render(<Composer store={store as unknown as ThreadClientStore} />);
+    type("older unsaved text");
+    const olderSave = store.registerDraftFlush.mock.calls.at(-1)![0]();
+    type("newest unsaved text");
+    view.unmount();
+    const finalFlush = published.mock.calls[0]![1];
+    expect(store.saveDraft).toHaveBeenCalledOnce();
+    await act(async () => { save(); await olderSave; await finalFlush; });
+    expect(store.saveDraft).toHaveBeenCalledTimes(2);
+    expect(store.saveDraft).toHaveBeenLastCalledWith(expect.objectContaining({ text: "newest unsaved text", revision: 2 }));
+  });
+
+  it.each(["uploading", "failed-upload", "conflict", "steer"] as const)("rejects detached draft adoption after departing with %s", async fence => {
+    const { voice } = await native();
+    const store = new FakeComposerStore(snapshot(), "keep draft");
+    if (fence === "uploading") store.uploadComposerAttachment.mockImplementationOnce(() => new Promise(() => {}));
+    if (fence === "failed-upload") store.uploadComposerAttachment.mockRejectedValueOnce(new Error("Upload failed"));
+    const published = vi.spyOn(voice, "publishComposerDraftFlush");
+    const view = render(<Composer store={store as unknown as ThreadClientStore} />);
+    if (fence === "uploading" || fence === "failed-upload") {
+      fireEvent.change(view.container.querySelector('input[type="file"]')!, {
+        target: { files: [new File(["payload"], "notes.bin", { type: "application/octet-stream" })] },
+      });
+      await waitFor(() => expect(store.uploadComposerAttachment).toHaveBeenCalledOnce());
+      if (fence === "failed-upload") await screen.findByText("Upload failed");
+    } else if (fence === "conflict") {
+      type("unsaved local text");
+      act(() => store.replaceDraft({ text: "remote text", revision: 2 }));
+      await screen.findByRole("button", { name: "Use latest" });
+    } else {
+      act(() => {
+        store.stageComposerTransfer("pending-steer", "steer", store.state.snapshot!.draft!);
+        store.updateTransfer("pending-steer", { steerPhase: "unconfirmed" });
+      });
+    }
+    view.unmount();
+    expect(published).toHaveBeenCalledOnce();
+    await expect(published.mock.calls[0]![1]).rejects.toThrow(fence === "conflict"
+      ? "Resolve the draft conflict first."
+      : fence === "steer" ? "Wait for the current composer action to finish."
+        : "Wait for attachment uploads to finish");
     expect(store.deliver).not.toHaveBeenCalled();
   });
 

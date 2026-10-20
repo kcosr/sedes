@@ -196,23 +196,13 @@ test("foreground dictation sends the live full draft as one composer input witho
   await capture(page, testInfo, "voice-full-draft-completed.png");
 });
 
-test("voice uses an empty visible composer and declines stale offers for another thread or a hidden app", async ({ page }) => {
+test("voice uses an empty visible composer and declines offers for a hidden app", async ({ page }) => {
   await openVoiceWorkspace(page, "voice-handoff-eligibility");
-  const targetPath = await createDraftThread(page, "Unviewed voice target");
-  const targetId = targetPath.split("/").at(-1)!;
-  await fillAndPersistDraft(page, "Keep the target draft.");
   const viewedPath = await createDraftThread(page, "Viewed voice target");
   const viewedId = viewedPath.split("/").at(-1)!;
   const composer = page.getByRole("textbox", { name: "Message Scripted agent", exact: true });
   await fillAndPersistDraft(page, "Keep the viewed draft.");
   await expectVoiceComposer(page, viewedId);
-  // A late native offer is rechecked against the current view before consuming it.
-  const wrongThread = await offerSpeech(page, targetId, "Do not consume either draft.");
-  await expectHandoff(page, wrongThread, "declined");
-  await expect(composer).toHaveValue("Keep the viewed draft.");
-  expect((await (await page.request.get(`/api/threads/${targetId}?activityDetail=full`)).json()).draft.text).toBe("Keep the target draft.");
-  expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery?.recordingId)).toBe(wrongThread.recordingId);
-  await publishVoiceState(page, { active: null, recordingRecovery: null, phase: "idle", actions: voiceFixtureState().actions });
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
     document.dispatchEvent(new Event("visibilitychange"));
