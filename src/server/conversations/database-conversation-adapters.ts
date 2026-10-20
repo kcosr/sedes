@@ -631,7 +631,7 @@ export class DatabaseThreadApplicationQueueReader implements ThreadApplicationQu
 
   async list(scope: RequestScope, applicationThreadId: string) {
     return projectQueuedInputSummaries(
-      this.queue.list(scope, applicationThreadId),
+      this.queue.listActive(scope, applicationThreadId),
     );
   }
 

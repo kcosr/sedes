@@ -222,6 +222,13 @@ Beyond that, opening a thread or forking fails with a message naming the limit
 and asking you to archive or close idle Claude threads in that environment.
 These rules require sidecar runtime protocol 14.
 
+A long-lived query keeps answering permission requests and accepting input
+indefinitely. It retains exact replay receipts for its newest 16,384 inputs and
+delivered permission responses and forgets older settled ones; once it has
+forgotten an input, recovery reports an unseen input on the ended query as
+ended rather than proven unsent. Rebuild local workers and upgrade remote
+sidecars to apply this; no database or protocol migration is required.
+
 Remote queries can remain alive across SSH or outbound connection loss,
 connector restart, or main-server restart.
 Reconnect reattaches the existing session and recovers retained runtime events

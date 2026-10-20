@@ -11,6 +11,7 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   type ExtensionUIContext,
+  type ExtensionUIDialogOptions,
   type LoadExtensionsResult,
   type SessionManager,
   type Theme,
@@ -213,6 +214,8 @@ interface PendingInteraction {
   readonly decisions?: ReadonlyMap<string, PiToolApprovalDecision>;
   readonly cancelValue: unknown;
   readonly resolve: (value: unknown) => void;
+  /** Disarms the extension's dialog timeout and abort signal. */
+  readonly release: () => void;
 }
 
 export interface PiInteractionBridgeOptions {
@@ -297,20 +300,12 @@ export class PiInteractionBridge {
   uiContext(): ExtensionUIContext {
     const theme = headlessTheme();
     return {
-      select: (title, options, settings) =>
-        this.#requestChoice(
-          title,
-          options,
-          settings &&
-            typeof settings === "object" &&
-            "detail" in settings &&
-            typeof (settings as { detail?: unknown }).detail === "string"
-            ? (settings as { detail: string }).detail
-            : undefined,
-        ),
-      confirm: (title, message) => this.#requestConfirmation(title, message),
-      input: (title, placeholder) =>
-        this.#requestText(title, "text_input", placeholder),
+      select: (title, options, dialog) =>
+        this.#requestChoice(title, options, dialog),
+      confirm: (title, message, dialog) =>
+        this.#requestConfirmation(title, message, dialog),
+      input: (title, placeholder, dialog) =>
+        this.#requestText(title, "text_input", placeholder, dialog),
       editor: (title, prefill) => this.#requestText(title, "editor", prefill),
       notify: (message, type = "info") => {
         this.#publishEvent({
@@ -480,7 +475,7 @@ export class PiInteractionBridge {
   #requestChoice(
     title: string,
     choices: readonly string[],
-    detail?: string,
+    dialog?: ExtensionUIDialogOptions,
   ): Promise<string | undefined> {
     if (choices.length === 0) return Promise.resolve(undefined);
     const limited = choices.slice(0, 64);
@@ -491,9 +486,6 @@ export class PiInteractionBridge {
         kind: "choice",
         sourceLabel: { text: "Pi extension" },
         title: boundedDisplay(title),
-        ...(detail !== undefined && detail.length > 0
-          ? { message: boundText(detail) }
-          : {}),
         openedAt: new Date().toISOString(),
         secret: false,
         // Extension choices may authorize side effects; treat as destructive
@@ -508,10 +500,16 @@ export class PiInteractionBridge {
       },
       undefined,
       limited,
+      undefined,
+      dialog,
     ) as Promise<string | undefined>;
   }
 
-  #requestConfirmation(title: string, message: string): Promise<boolean> {
+  #requestConfirmation(
+    title: string,
+    message: string,
+    dialog?: ExtensionUIDialogOptions,
+  ): Promise<boolean> {
     return this.#request(
       {
         backendInteractionId: randomUUID(),
@@ -525,6 +523,9 @@ export class PiInteractionBridge {
         message: boundText(message),
       },
       false,
+      undefined,
+      undefined,
+      dialog,
     ) as Promise<boolean>;
   }
 
@@ -532,6 +533,7 @@ export class PiInteractionBridge {
     title: string,
     kind: "text_input" | "editor",
     initial?: string,
+    dialog?: ExtensionUIDialogOptions,
   ): Promise<string | undefined> {
     const base = {
       backendInteractionId: randomUUID(),
@@ -555,34 +557,65 @@ export class PiInteractionBridge {
             multiline: false,
             ...(initial ? { placeholder: boundedDisplay(initial) } : {}),
           };
-    return this.#request(interaction, undefined) as Promise<string | undefined>;
+    return this.#request(
+      interaction,
+      undefined,
+      undefined,
+      undefined,
+      dialog,
+    ) as Promise<string | undefined>;
   }
 
+  /**
+   * Opens one interaction. An extension dialog's abort signal or timeout
+   * dismisses it with the cancel value, as Pi's own dialog modes do.
+   */
   #request(
     interaction: DriverInteraction,
     cancelValue: unknown,
     choices?: readonly string[],
     decisions?: ReadonlyMap<string, PiToolApprovalDecision>,
+    dialog?: ExtensionUIDialogOptions,
   ): Promise<unknown> {
-    if (this.#closed) return Promise.resolve(cancelValue);
+    if (this.#closed || dialog?.signal?.aborted) {
+      return Promise.resolve(cancelValue);
+    }
     if (!this.#publish && this.#options.cancelUnpublishedRequests) {
       return Promise.resolve(cancelValue);
     }
     return new Promise((resolve) => {
+      const signal = dialog?.signal;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const dismiss = (): void => this.#settle(pending, cancelValue);
       const pending: PendingInteraction = {
         interaction,
         ...(choices ? { choices } : {}),
         ...(decisions ? { decisions } : {}),
         cancelValue,
         resolve,
+        release: () => {
+          if (timer !== undefined) clearTimeout(timer);
+          signal?.removeEventListener("abort", dismiss);
+        },
       };
       this.#pending.set(interaction.backendInteractionId, pending);
       this.#publishEvent({ type: "interaction_opened", interaction });
+      signal?.addEventListener("abort", dismiss, { once: true });
+      if (
+        dialog?.timeout !== undefined &&
+        Number.isFinite(dialog.timeout) &&
+        dialog.timeout > 0
+      ) {
+        timer = setTimeout(dismiss, dialog.timeout);
+      }
     });
   }
 
   #settle(pending: PendingInteraction, value: unknown): void {
-    this.#pending.delete(pending.interaction.backendInteractionId);
+    const id = pending.interaction.backendInteractionId;
+    if (this.#pending.get(id) !== pending) return;
+    this.#pending.delete(id);
+    pending.release();
     pending.resolve(value);
     this.#publishEvent({
       type: "interaction_resolved",

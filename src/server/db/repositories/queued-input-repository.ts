@@ -1242,10 +1242,9 @@ export class QueuedInputRepository {
         );
       }
       this.#touchThread(scope, applicationThreadId, input.now, false);
-      return {
-        item: this.get(scope, applicationThreadId, id),
-        replayed: false,
-      };
+      const cancelled = this.get(scope, applicationThreadId, id);
+      this.#releaseUnacceptedCallback(scope, applicationThreadId, cancelled, input.now);
+      return { item: cancelled, replayed: false };
     })();
   }
 
@@ -1685,7 +1684,9 @@ export class QueuedInputRepository {
         );
       }
       this.#touchThread(scope, applicationThreadId, input.now, false);
-      return this.get(scope, applicationThreadId, id);
+      const failed = this.get(scope, applicationThreadId, id);
+      this.#releaseUnacceptedCallback(scope, applicationThreadId, failed, input.now);
+      return failed;
     })();
   }
 
@@ -1809,7 +1810,13 @@ export class QueuedInputRepository {
         throw new DomainError("invalid_transition", conflict);
       }
       this.#touchThread(scope, applicationThreadId, input.now, false);
-      return this.get(scope, applicationThreadId, id);
+      const failed = this.get(scope, applicationThreadId, id);
+      // Late evidence can still accept a Steer whose outcome is unknown, so
+      // only a proven-unsent one ends here; dismissal ends the other.
+      if (failureReason === "not_sent") {
+        this.#releaseUnacceptedCallback(scope, applicationThreadId, failed, input.now);
+      }
+      return failed;
     })();
   }
 
@@ -1952,7 +1959,9 @@ export class QueuedInputRepository {
         );
       }
       this.#touchThread(scope, applicationThreadId, input.now, false);
-      return this.get(scope, applicationThreadId, id);
+      const cancelled = this.get(scope, applicationThreadId, id);
+      this.#releaseUnacceptedCallback(scope, applicationThreadId, cancelled, input.now);
+      return cancelled;
     })();
   }
 
@@ -2133,6 +2142,40 @@ export class QueuedInputRepository {
     return rows.map((row) => this.#hydrate(scope, row));
   }
 
+  /**
+   * The thread's presented queue in delivery order: active rows and
+   * unacknowledged failures, bounded by the active capacity. Accepted,
+   * cancelled, and acknowledged rows are retained history; a projection read
+   * never selects or hydrates them, so its cost does not grow with thread age.
+   */
+  listActive(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): QueuedInputRecord[] {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT ${columns}
+          FROM queued_inputs
+          WHERE tenant_id = ? AND owner_principal_id = ?
+            AND application_thread_id = ?
+            AND (
+              state IN ('pending', 'retry_wait', 'dispatching', 'uncertain')
+              OR (state = 'failed' AND failure_acknowledged_at IS NULL)
+            )
+          ORDER BY sequence
+          LIMIT ?
+        `,
+      )
+      .all(
+        scope.tenantId,
+        scope.principalId,
+        applicationThreadId,
+        MAXIMUM_ACTIVE_QUEUED_INPUTS,
+      ) as QueuedInputRow[];
+    return rows.map((row) => this.#hydrate(scope, row));
+  }
+
   readProjectionState(
     scope: RequestScope,
     applicationThreadId: string,
@@ -2142,7 +2185,7 @@ export class QueuedInputRepository {
   } {
     return this.database.transaction(() => ({
       threadRevision: this.#threadRevision(scope, applicationThreadId),
-      records: this.list(scope, applicationThreadId),
+      records: this.listActive(scope, applicationThreadId),
     }))();
   }
 
@@ -2488,7 +2531,7 @@ export class QueuedInputRepository {
     id: string,
     now: number,
   ): number {
-    return prepareCached(this.database,
+    const changes = prepareCached(this.database,
         `
           UPDATE queued_inputs
           SET failure_acknowledged_at = ?
@@ -2499,6 +2542,15 @@ export class QueuedInputRepository {
       )
       .run(now, scope.tenantId, scope.principalId, applicationThreadId, id)
       .changes;
+    if (changes === 1) {
+      this.#releaseUnacceptedCallback(
+        scope,
+        applicationThreadId,
+        this.get(scope, applicationThreadId, id),
+        now,
+      );
+    }
+    return changes;
   }
 
   #assertActiveCapacity(
@@ -2600,7 +2652,41 @@ export class QueuedInputRepository {
       );
     }
     this.#touchThread(scope, applicationThreadId, now, false);
-    return this.get(scope, applicationThreadId, item.id);
+    const failed = this.get(scope, applicationThreadId, item.id);
+    this.#releaseUnacceptedCallback(scope, applicationThreadId, failed, now);
+    return failed;
+  }
+
+  /**
+   * A cancelled row, a dismissed failure, or a failure no later evidence can
+   * accept was never authoritatively accepted, so its operation can never
+   * record the completion an agent-control callback awaits. Release that
+   * obligation in the same transaction; otherwise it would stay registered
+   * and block archive and snooze for both threads.
+   */
+  #releaseUnacceptedCallback(
+    scope: RequestScope,
+    applicationThreadId: string,
+    item: QueuedInputRecord,
+    now: number,
+  ): void {
+    if (item.state !== "failed" && item.state !== "cancelled") {
+      throw new Error("queued_input_callback_release_requires_terminal_row");
+    }
+    const callback = this.#callbacks.findForTargetOperation(
+      scope,
+      applicationThreadId,
+      item.mutationId,
+    );
+    if (callback?.state !== "registered") return;
+    this.#callbacks.cancelRegistered(scope, callback.id, {
+      cancelledAt: now,
+      reason:
+        item.state === "failed"
+          ? "The target input failed before authoritative acceptance."
+          : "The target input was cancelled before authoritative acceptance.",
+      cancellationMutationId: `${callback.id}:target_input_${item.state}`,
+    });
   }
 
   #assertRetryPolicy(policy: QueueRetryPolicy): void {

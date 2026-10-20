@@ -165,6 +165,9 @@ An actor must replay current authoritative pending interactions to late
 subscribers, including the interaction broker. Remove resolved requests and
 rebuild the pending view from the handle's replay on projection replacement;
 neither resolved requests nor obsolete projection state may be resurrected.
+A replacement captures after its predecessor rail is retired, so its replay
+omits a request that rail resolved; the actor still forwards such a retired-rail
+resolution to the broker, because resolution can only remove a request.
 A thread event-stream reader retains its hub subscription after setup and
 releases its execution borrow. Viewing a thread prevents idle eviction without
 blocking an explicitly confirmed backend Stop. Confirmation revisions track
@@ -2060,7 +2063,11 @@ transaction open across provider RPC.
 
 Receipts are scoped, bounded, and replay the result of the exact accepted
 operation. They are not a cross-principal cache and cannot be reused across a
-configuration or runtime generation that invalidates their authority.
+configuration or runtime generation that invalidates their authority. A
+resident handle's in-memory replay receipts are a recency cache that a
+reattached handle starts without; cap them with `rememberBoundedReceipt`
+(`src/server/backends/bounded-receipts.ts`), evicting only settled acceptances
+and never an unknown outcome or a Steer still awaiting materialization.
 
 A persistent Codex transport may compact a reconciled receipt only by atomically
 moving its bounded deduplication proof onto the existing final application

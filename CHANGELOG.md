@@ -365,6 +365,27 @@ User-facing changes are collected here before release. See the
   Park controls; active work and unresolved operations still block those actions.
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
+- An agent `thread send` with `callback: true` whose target input fails or is
+  cancelled before acceptance releases its callback, so neither thread stays
+  blocked from archive or snooze. See
+  [agent tools](docs/internals/agent-tools.md#durable-callback-lifecycle).
+  ([#107](https://github.com/kcosr/sedes/pull/107))
+
+- Queued input resumes when a Stop is later proven not applied, instead of
+  waiting on an idle thread for an unrelated event. A prompt the provider
+  withdraws during a transcript refresh no longer stays pending, and Pi
+  extension dialogs honor their `signal` and `timeout` options. See
+  [Pi capabilities](docs/operator/backends/pi.md#topologies-and-capabilities).
+  ([#107](https://github.com/kcosr/sedes/pull/107))
+
+- Workpads on a discarded unfinished fork move to its project, like its Tasks,
+  instead of disappearing. Long-lived threads stay bounded: queue projections no
+  longer reread a thread's whole input history, resident Pi and Codex handles
+  cap their operation receipts, and a persistent Claude query keeps accepting
+  approvals and input past 16,384 of them (upgrade remote sidecars). See
+  [Claude runtimes](docs/operator/backends/claude.md).
+  ([#107](https://github.com/kcosr/sedes/pull/107))
+
 ### Removed
 
 ## [0.2.0] - 2026-10-14

@@ -1819,6 +1819,128 @@ describe("Pi interaction bridge", () => {
     }
   });
 
+  it("dismisses an extension dialog when its timeout elapses", async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = new PiInteractionBridge();
+      const events: BackendConversationEvent[] = [];
+      bridge.setPublisher((event) => events.push(event));
+      const pending = bridge
+        .uiContext()
+        .confirm("Allow?", "Run the timed command?", { timeout: 50 });
+      const opened = events[0];
+      if (opened?.type !== "interaction_opened") {
+        throw new Error("expected interaction");
+      }
+      const id = opened.interaction.backendInteractionId;
+      await vi.advanceTimersByTimeAsync(49);
+      expect(bridge.hasPending(id)).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toBe(false);
+      expect(bridge.hasPending(id)).toBe(false);
+      expect(events).toEqual([
+        opened,
+        { type: "interaction_resolved", backendInteractionId: id },
+      ]);
+      expect(() =>
+        bridge.respond({
+          applicationOperationId: "late-timed-confirmation",
+          interactionId: id,
+          kind: "confirmation",
+          confirmed: true,
+        }),
+      ).toThrow("pi_interaction_not_found");
+      expect(vi.getTimerCount()).toBe(0);
+      bridge.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("dismisses extension select and input dialogs when their signal aborts", async () => {
+    const bridge = new PiInteractionBridge();
+    const events: BackendConversationEvent[] = [];
+    bridge.setPublisher((event) => events.push(event));
+    const controller = new AbortController();
+    const choice = bridge
+      .uiContext()
+      .select("Choose", ["one", "two"], { signal: controller.signal });
+    const text = bridge
+      .uiContext()
+      .input("Name", "placeholder", { signal: controller.signal });
+    const ids = events.map((event) => {
+      if (event.type !== "interaction_opened") {
+        throw new Error("expected interaction");
+      }
+      return event.interaction.backendInteractionId;
+    });
+    expect(ids).toHaveLength(2);
+    expect(ids.every((id) => bridge.hasPending(id))).toBe(true);
+    controller.abort();
+    await expect(choice).resolves.toBeUndefined();
+    await expect(text).resolves.toBeUndefined();
+    expect(ids.some((id) => bridge.hasPending(id))).toBe(false);
+    expect(events.slice(2)).toEqual(
+      ids.map((id) => ({
+        type: "interaction_resolved",
+        backendInteractionId: id,
+      })),
+    );
+    bridge.close();
+  });
+
+  it("does not open an extension dialog whose signal is already aborted", async () => {
+    const bridge = new PiInteractionBridge();
+    const events: BackendConversationEvent[] = [];
+    bridge.setPublisher((event) => events.push(event));
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      bridge
+        .uiContext()
+        .confirm("Allow?", "Continue?", { signal: controller.signal }),
+    ).resolves.toBe(false);
+    await expect(
+      bridge
+        .uiContext()
+        .select("Choose", ["one"], { signal: controller.signal }),
+    ).resolves.toBeUndefined();
+    expect(events).toEqual([]);
+    bridge.close();
+  });
+
+  it("disarms an answered extension dialog's timeout and signal", async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = new PiInteractionBridge();
+      const events: BackendConversationEvent[] = [];
+      bridge.setPublisher((event) => events.push(event));
+      const controller = new AbortController();
+      const pending = bridge.uiContext().input("Name", undefined, {
+        signal: controller.signal,
+        timeout: 1_000,
+      });
+      const opened = events[0];
+      if (opened?.type !== "interaction_opened") {
+        throw new Error("expected interaction");
+      }
+      bridge.respond({
+        applicationOperationId: "answered-timed-input",
+        interactionId: opened.interaction.backendInteractionId,
+        kind: "text_input",
+        value: "Ada",
+      });
+      await expect(pending).resolves.toBe("Ada");
+      expect(vi.getTimerCount()).toBe(0);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(events).toHaveLength(2);
+      bridge.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("settles a pending approval exactly once when the bridge closes", async () => {
     const bridge = new PiInteractionBridge();
     const events: BackendConversationEvent[] = [];

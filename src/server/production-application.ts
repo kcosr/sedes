@@ -1683,7 +1683,7 @@ export async function startProductionApplication(
       repository: pageRepository, files: workspaceFiles, inventory: inventoryRepository,
       onPublished: (eventScope, page) => actors!.refreshApplicationPublications(eventScope, page.threadId),
     });
-    forks.bindTaskPublications(tasks);
+    forks.bindPromotionPublications({ tasks, workpads });
     const threadArchives = new ThreadArchiveService({
       inventory: inventoryRepository,
       lineage: lineageRepository,

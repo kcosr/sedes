@@ -5029,7 +5029,7 @@ async function main(): Promise<void> {
   );
   const tasks = new TaskService(taskRepository, applicationSnapshots);
   const workpads = new WorkpadService(new WorkpadRepository(database), applicationSnapshots);
-  forks.bindTaskPublications(tasks);
+  forks.bindPromotionPublications({ tasks, workpads });
   const threadArchives = new ThreadArchiveService({
     inventory: inventoryRepository,
     lineage: lineageRepository,

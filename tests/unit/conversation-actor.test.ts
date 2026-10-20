@@ -31,6 +31,7 @@ import type {
 } from "../../src/server/conversations/conversation-actor-manager.js";
 import type { ConversationActor, ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
 import { applicationTurnIdForBackendTurn, ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
+import { InteractionBroker } from "../../src/server/conversations/interaction-broker.js";
 import type { ConversationEventBridge } from "../../src/server/events/conversation-event-bridge.js";
 import {
   ScopedThreadEventHubRegistry,
@@ -6788,6 +6789,29 @@ describe("authoritative pending interaction subscription replay", () => {
     const unsubscribe = acquired.actor.subscribe(event => events.push(event));
     expect(events.some(event => event.type === "backend_event" && event.event.type === "interaction_opened")).toBe(false);
     unsubscribe(); acquired.release(); await manager.close();
+  });
+  it("resolves a broker request the provider withdrew on the rail a replacement retired", async () => {
+    const { manager, handle, driver } = fixture();
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const publisher = { opened: vi.fn(), resolved: vi.fn() };
+    const broker = new InteractionBroker();
+    const brokerBinding = broker.bind(scope, binding.applicationThreadId, acquired.actor, publisher);
+    handle.emit(0, opened, 0);
+    await acquired.actor.captureSnapshotState();
+    const [pending] = broker.listPending(scope, binding.applicationThreadId);
+    expect(pending).toBeDefined();
+    // Both events queue on the old rail before the mailbox drains. The
+    // replacement captures after the withdrawal, so its replay omits it.
+    handle.emit(0, { type: "resnapshot_required", reason: "buffer_overflow" }, 1);
+    handle.emit(0, { type: "interaction_resolved", backendInteractionId: opened.interaction.backendInteractionId }, 2);
+    await vi.waitFor(() => expect(handle.establishCount).toBe(2));
+    await acquired.actor.captureSnapshotState();
+    expect(broker.listPending(scope, binding.applicationThreadId)).toEqual([]);
+    expect(publisher.resolved).toHaveBeenCalledWith(
+      scope, binding.applicationThreadId, acquired.actor.timeline.generation, pending!.id,
+    );
+    expect(acquired.actor.peekInputState()?.blockingInteractionIds).toEqual([]);
+    await brokerBinding.release(); acquired.release(); await manager.close(); await broker.close();
   });
 });
 

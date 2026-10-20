@@ -221,6 +221,9 @@ Pi intentionally does not advertise structured questionnaires, a managed
 provider terminal/TUI, provider-output native image artifacts, or
 `latest_provider_snapshot`. Generic extension prompts retain their primitive
 interaction kind instead of being inferred as approvals or questionnaires.
+An extension `select`, `confirm`, or `input` dialog honors its `signal` and
+`timeout` options as Pi's own modes do: abort or expiry withdraws the prompt
+and returns the dialog's cancel value to the extension.
 
 A built-in `read` of a path ending in `png`, `jpg`, `jpeg`, `gif`, `webp`, or
 `bmp` (any case) appears as a viewed-image row in every topology. Its image is

@@ -875,6 +875,101 @@ describe("queue dispatch and existing conversation Stop control", () => {
       await gateway.close(); await queue.close(); fixture.database.close();
     }
   });
+
+  function stopGateway(
+    fixture: Fixture,
+    queue: QueuedInputDispatcher,
+    queueGateway: FakeGateway,
+    control: {
+      readonly interrupt: (input: unknown, onDispatch?: () => void) => Promise<void>;
+      readonly reconcileInterrupt: () => Promise<{ readonly outcome: "unknown" | "not_applied" | "applied" }>;
+    },
+  ): ThreadMutationGateway {
+    return new ThreadMutationGateway({
+      actors: {} as never,
+      bindings: new ConversationBindingRepository(fixture.database), inventory: new InventoryRepository(fixture.database),
+      operations: new ConversationOperationRepository(fixture.database),
+      completions: new SubmissionCompletionRepository(fixture.database), queue, queueGateway,
+      runtimes: { acquire: async () => { throw new Error("Stop must not acquire transcript projection"); }, acquireExistingControl: () => ({ control: {
+        generation: "existing-native-owner", lifetime: new AbortController().signal, ...control,
+      }, release: () => undefined }) } as never,
+      lifecycle: {} as never, forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("unexpected fork discard"); } },
+      interactions: {} as never, presentation: {} as never,
+      agentToolPolicies: { database: fixture.database, get: () => { throw new Error("unexpected policy read"); }, update: () => { throw new Error("unexpected policy write"); } },
+      actionPersistence: new Map(), publishThreadSnapshot: async () => undefined, now: () => 700,
+    });
+  }
+
+  it("resumes a pending head fenced by a Stop the provider proves it did not apply", async () => {
+    const fixture = createFixture();
+    const threadId = fixture.threadIds[0];
+    const repository = new QueuedInputRepository(fixture.database);
+    const nativeGateway = new FakeGateway();
+    const scheduler = new ManualScheduler();
+    const { dispatcher: queue } = createDispatcher(repository, nativeGateway, { now: { value: 700 }, scheduler });
+    const operations = new ConversationOperationRepository(fixture.database);
+    let blockedDuringStop: boolean | undefined;
+    const gateway = stopGateway(fixture, queue, nativeGateway, {
+      interrupt: async (_input, onDispatch) => {
+        onDispatch?.();
+        // The turn settles while Stop is in flight; the uncertain receipt
+        // fences that settle-driven dispatch.
+        await queue.onAuthoritativeSettled(fixture.scope, threadId);
+        blockedDuringStop = operations.hasBlockingThreadOperation(fixture.scope, threadId, "submit");
+        throw new BackendError({ category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+          safeMessage: "The turn changed before Stop was applied." });
+      },
+      reconcileInterrupt: async () => ({ outcome: "unknown" }),
+    });
+    try {
+      nativeGateway.authoritativelySettled = false;
+      await queue.recover(fixture.scope);
+      enqueueUser(fixture, repository, threadId, "queued-before-stop", 650);
+      nativeGateway.authoritativelySettled = true;
+      await expect(gateway.mutate(fixture.scope, threadId, { kind: "interrupt", operationId: "stop-rejected" }))
+        .rejects.toThrow(/Stop was applied/);
+      expect(blockedDuringStop).toBe(true);
+      expect(operations.findInterrupt(fixture.scope, "stop-rejected")).toBeUndefined();
+      await vi.waitFor(() => expect(nativeGateway.submitted).toHaveLength(1));
+      expect(repository.get(fixture.scope, threadId, "queued-before-stop").state).toBe("accepted");
+    } finally {
+      await gateway.close(); await queue.close(); fixture.database.close();
+    }
+  });
+
+  it("resumes a pending head when an uncertain Stop reconciles as not applied", async () => {
+    const fixture = createFixture();
+    const threadId = fixture.threadIds[0];
+    const repository = new QueuedInputRepository(fixture.database);
+    const nativeGateway = new FakeGateway();
+    const scheduler = new ManualScheduler();
+    const { dispatcher: queue } = createDispatcher(repository, nativeGateway, { now: { value: 700 }, scheduler });
+    const operations = new ConversationOperationRepository(fixture.database);
+    const interrupt = vi.fn(async () => undefined);
+    const gateway = stopGateway(fixture, queue, nativeGateway, {
+      interrupt,
+      reconcileInterrupt: async () => ({ outcome: "not_applied" }),
+    });
+    try {
+      // A Stop that crossed into the provider before a restart stays uncertain.
+      operations.prepareInterrupt(fixture.scope, threadId, { operationId: "stop-before-restart", now: 690 });
+      operations.markInterruptStarted(fixture.scope, "stop-before-restart");
+      await queue.recover(fixture.scope);
+      enqueueUser(fixture, repository, threadId, "queued-behind-uncertain-stop", 650);
+      await queue.onAuthoritativeSettled(fixture.scope, threadId);
+      expect(nativeGateway.submitted).toHaveLength(0);
+      expect(repository.get(fixture.scope, threadId, "queued-behind-uncertain-stop").state).toBe("pending");
+
+      await expect(gateway.mutate(fixture.scope, threadId, { kind: "interrupt", operationId: "stop-before-restart" }))
+        .rejects.toThrow(/previous Stop was not applied/);
+      expect(interrupt).not.toHaveBeenCalled();
+      expect(operations.findInterrupt(fixture.scope, "stop-before-restart")).toBeUndefined();
+      await vi.waitFor(() => expect(nativeGateway.submitted).toHaveLength(1));
+      expect(repository.get(fixture.scope, threadId, "queued-behind-uncertain-stop").state).toBe("accepted");
+    } finally {
+      await gateway.close(); await queue.close(); fixture.database.close();
+    }
+  });
 });
 
 describe("ConversationOperationRepository interrupt rejection", () => {
@@ -1035,6 +1130,148 @@ describe("ThreadCompletionCallbackDispatcher", () => {
         }),
       ).toThrow(/awaiting an agent result cannot be snoozed/i);
     } finally {
+      fixture.database.close();
+    }
+  });
+
+  it("releases a callback obligation when its target agent-control input fails before acceptance", async () => {
+    const fixture = createFixture();
+    const [callerThreadId, targetThreadId] = fixture.threadIds;
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    gateway.submitBehaviors.push(new BackendError({
+      category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+      safeMessage: "The model is unavailable.",
+    }));
+    const now = { value: 1_000 };
+    const { dispatcher } = createDispatcher(repository, gateway, { now });
+    const callbacks = new ThreadCompletionCallbackRepository(fixture.database);
+    const inventory = new InventoryRepository(fixture.database);
+    try {
+      await dispatcher.recover(fixture.scope);
+      const callbackId = "3b0a6a43-2b55-4a0e-9b9e-6a3f3d8f1f11";
+      const enqueued = await dispatcher.enqueue(fixture.scope, targetThreadId, {
+        mutationId: "agent-send-fails",
+        text: "please do the thing",
+        contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: {
+          kind: "agent_control",
+          expectedThreadRevision: repository.getThreadRevision(fixture.scope, targetThreadId),
+          initiatingAgentThreadId: callerThreadId,
+          completionCallback: { id: callbackId, callerThreadId },
+        },
+        now: now.value,
+      });
+      expect(enqueued.item.state).toBe("failed");
+      expect(callbacks.get(fixture.scope, callbackId)).toMatchObject({
+        state: "cancelled",
+        cancelledAt: 1_000,
+        cancellationReason: "The target input failed before authoritative acceptance.",
+        cancellationMutationId: `${callbackId}:target_input_failed`,
+      });
+      // Only the target's own unacknowledged failure still needs attention.
+      expect([...inventory.findArchiveDurablyBlockedThreadIds(fixture.scope, fixture.threadIds)])
+        .toEqual([targetThreadId]);
+      const caller = inventory.getInventory(fixture.scope, callerThreadId);
+      expect(inventory.transitionInventory(fixture.scope, callerThreadId, {
+        expectedRevision: caller.inventoryRevision,
+        mutationId: "snooze-after-failed-callback-target",
+        change: { action: "snooze", snoozedUntil: 10_000 },
+        now: 1_010,
+      }).state.inventoryState).toBe("snoozed");
+
+      await dispatcher.acknowledgeFailure(fixture.scope, targetThreadId, enqueued.item.id, 1_020);
+      expect(callbacks.get(fixture.scope, callbackId).state).toBe("cancelled");
+      expect(inventory.findArchiveDurablyBlockedThreadIds(fixture.scope, fixture.threadIds).size).toBe(0);
+    } finally {
+      await dispatcher.close();
+      fixture.database.close();
+    }
+  });
+
+  it("keeps a callback while a Steer of its target input has an unknown outcome, then releases it on dismissal", () => {
+    const fixture = createFixture();
+    try {
+      const [callerThreadId, targetThreadId] = fixture.threadIds;
+      const repository = new QueuedInputRepository(fixture.database);
+      const callbacks = new ThreadCompletionCallbackRepository(fixture.database);
+      const callbackId = "7d2c9c65-4d77-4c2a-9d8b-8c5f5fa03f33";
+      repository.enqueue(fixture.scope, targetThreadId, {
+        id: "agent-steer", mutationId: "agent-steer-send", text: "steer this in",
+        contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: {
+          kind: "agent_control",
+          expectedThreadRevision: repository.getThreadRevision(fixture.scope, targetThreadId),
+          initiatingAgentThreadId: callerThreadId,
+          completionCallback: { id: callbackId, callerThreadId },
+        },
+        now: 1_000,
+      });
+      repository.reserveHeadForSteer(fixture.scope, targetThreadId, "agent-steer", {
+        steerOperationId: "agent-steer-operation",
+        expectedThreadRevision: repository.getThreadRevision(fixture.scope, targetThreadId),
+        now: 1_010,
+      });
+      repository.failSteerUnknown(fixture.scope, targetThreadId, "agent-steer", {
+        steerOperationId: "agent-steer-operation", expectedState: "dispatching",
+        diagnostic: "Delivery outcome is unknown.", now: 1_020,
+      });
+      // Late provider evidence may still accept this failed Steer.
+      expect(repository.get(fixture.scope, targetThreadId, "agent-steer").state).toBe("failed");
+      expect(callbacks.get(fixture.scope, callbackId).state).toBe("registered");
+
+      repository.acknowledgeFailure(fixture.scope, targetThreadId, "agent-steer", 1_030);
+      expect(callbacks.get(fixture.scope, callbackId)).toMatchObject({
+        state: "cancelled",
+        cancelledAt: 1_030,
+        cancellationMutationId: `${callbackId}:target_input_failed`,
+      });
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  it("releases a callback obligation when its pending target agent-control input is cancelled", async () => {
+    const fixture = createFixture();
+    const [callerThreadId, targetThreadId] = fixture.threadIds;
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    gateway.authoritativelySettled = false;
+    const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 1_000 } });
+    const callbacks = new ThreadCompletionCallbackRepository(fixture.database);
+    const inventory = new InventoryRepository(fixture.database);
+    try {
+      await dispatcher.recover(fixture.scope);
+      const callbackId = "5c1b7b54-3c66-4b1f-8c7a-7b4f4e9f2f22";
+      const enqueued = await dispatcher.enqueue(fixture.scope, targetThreadId, {
+        mutationId: "agent-send-cancelled",
+        text: "please do the other thing",
+        contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: {
+          kind: "agent_control",
+          expectedThreadRevision: repository.getThreadRevision(fixture.scope, targetThreadId),
+          initiatingAgentThreadId: callerThreadId,
+          completionCallback: { id: callbackId, callerThreadId },
+        },
+        now: 1_000,
+      });
+      expect(enqueued.item.state).toBe("pending");
+      expect(callbacks.get(fixture.scope, callbackId).state).toBe("registered");
+
+      await dispatcher.cancelUserInput(fixture.scope, targetThreadId, enqueued.item.id, {
+        mutationId: "cancel-agent-send",
+        expectedThreadRevision: repository.getThreadRevision(fixture.scope, targetThreadId),
+        now: 1_010,
+      });
+      expect(gateway.submitted).toHaveLength(0);
+      expect(callbacks.get(fixture.scope, callbackId)).toMatchObject({
+        state: "cancelled",
+        cancellationReason: "The target input was cancelled before authoritative acceptance.",
+        cancellationMutationId: `${callbackId}:target_input_cancelled`,
+      });
+      expect(inventory.findArchiveDurablyBlockedThreadIds(fixture.scope, fixture.threadIds).size).toBe(0);
+    } finally {
+      await dispatcher.close();
       fixture.database.close();
     }
   });
@@ -5382,6 +5619,85 @@ describe("QueuedInputDispatcher", () => {
         enqueueUser(fixture, repository, threadId, "user-over-capacity", 6_000),
       ).toThrow("active-item limit");
     } finally {
+      fixture.database.close();
+    }
+  });
+
+  it("reads only the presented queue for projections, independent of retained history", async () => {
+    const fixture = createFixture();
+    const [threadId, sourceThreadId] = fixture.threadIds;
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    gateway.submitBehaviors.push(new BackendError({
+      category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+      safeMessage: "Rejected before acceptance.",
+    }));
+    const now = { value: 1_000 };
+    const { dispatcher } = createDispatcher(repository, gateway, { now });
+    const send = (id: string) => dispatcher.enqueue(fixture.scope, threadId, {
+      id, mutationId: `operation-${id}`, text: `text-${id}`,
+      contextExcerpts: [], attachmentIds: [], taskReferences: [],
+      source: {
+        kind: "agent_control",
+        expectedThreadRevision: repository.getThreadRevision(fixture.scope, threadId),
+        initiatingAgentThreadId: sourceThreadId,
+      },
+      now: now.value++,
+    });
+    const preparedDuring = (read: () => void): number => {
+      const prepare = vi.spyOn(fixture.database, "prepare");
+      try {
+        read();
+        return prepare.mock.calls.length;
+      } finally {
+        prepare.mockRestore();
+      }
+    };
+    try {
+      await dispatcher.recover(fixture.scope);
+      // History: an acknowledged failure, accepted sends, and cancellations.
+      await send("acknowledged");
+      await dispatcher.acknowledgeFailure(fixture.scope, threadId, "acknowledged", now.value++);
+      for (let index = 0; index < 20; index += 1) await send(`accepted-${index}`);
+      gateway.authoritativelySettled = false;
+      for (let index = 0; index < 5; index += 1) {
+        await send(`cancelled-${index}`);
+        await dispatcher.cancel(fixture.scope, threadId, `cancelled-${index}`, { now: now.value++ });
+      }
+      await send("active-1");
+      await send("active-2");
+      gateway.authoritativelySettled = true;
+      gateway.submitBehaviors.push(new BackendError({
+        category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+        safeMessage: "Rejected before acceptance.",
+      }));
+      await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+      gateway.authoritativelySettled = false;
+
+      const all = repository.list(fixture.scope, threadId);
+      expect(all).toHaveLength(28);
+      const projection = repository.readProjectionState(fixture.scope, threadId);
+      expect(projection.records.map(({ id, state }) => [id, state])).toEqual([
+        ["active-1", "failed"],
+        ["active-2", "pending"],
+      ]);
+      expect(projection.records).toEqual(repository.listActive(fixture.scope, threadId));
+      expect(projectQueuedInputSummaries(projection.records)).toEqual(projectQueuedInputSummaries(all));
+
+      const before = preparedDuring(() => repository.readProjectionState(fixture.scope, threadId));
+      gateway.authoritativelySettled = true;
+      await dispatcher.acknowledgeFailure(fixture.scope, threadId, "active-1", now.value++);
+      await vi.waitFor(() => expect(repository.get(fixture.scope, threadId, "active-2").state).toBe("accepted"));
+      for (let index = 0; index < 20; index += 1) await send(`later-accepted-${index}`);
+      gateway.authoritativelySettled = false;
+      await send("active-3");
+      await send("active-4");
+      expect(repository.list(fixture.scope, threadId)).toHaveLength(50);
+      expect(repository.listActive(fixture.scope, threadId).map(({ id }) => id)).toEqual(["active-3", "active-4"]);
+      // Twice the retained history, same projection read.
+      expect(preparedDuring(() => repository.readProjectionState(fixture.scope, threadId))).toBe(before);
+    } finally {
+      await dispatcher.close();
       fixture.database.close();
     }
   });

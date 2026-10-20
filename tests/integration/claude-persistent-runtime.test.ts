@@ -35,6 +35,7 @@ async function fixture(options: {
   readonly validateAgentToolMcp?: (agentToolMcp: NonNullable<ClaudeRuntimeSessionOptions["agentToolMcp"]>) => void;
   readonly detachedSessionTtlMs?: number;
   readonly maximumCompactReceiptBytes?: number;
+  readonly maximumJournaledOperations?: number;
 } = {}) {
   const native = createFakePersistentClaudeRuntime();
   const archive = vi.fn(async (_record: unknown) => {});
@@ -51,6 +52,7 @@ async function fixture(options: {
     ...(options.validateAgentToolMcp ? { validateAgentToolMcp: options.validateAgentToolMcp } : {}),
     ...(options.detachedSessionTtlMs !== undefined ? { detachedSessionTtlMs: options.detachedSessionTtlMs } : {}),
     ...(options.maximumCompactReceiptBytes !== undefined ? { maximumCompactReceiptBytes: options.maximumCompactReceiptBytes } : {}),
+    ...(options.maximumJournaledOperations !== undefined ? { maximumJournaledOperations: options.maximumJournaledOperations } : {}),
   });
   let current: SidecarRuntimeLease | undefined;
   const sidecarRuntime: SidecarRuntimeProvider = {
@@ -1710,6 +1712,100 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(f.hosts.inspect(runtimeId).blockers).toEqual(["unsettled_outcome"]);
     await attached.connection.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: snapshot.events[0]!.sequence } });
     expect(f.hosts.inspect(runtimeId).blockers).toEqual([]);
+  });
+
+  it("keeps answering permissions past the journal bound, retaining undelivered and the newest delivered responses", async () => {
+    const f = await fixture({ maximumJournaledOperations: 2 });
+    const attached = await f.attach();
+    const runtimeId = await attached.connection.ensure(configuration);
+    attached.connection.onEvent(runtimeId, () => {});
+    const authority = { runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const sessionId = randomUUID();
+    await attached.connection.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", environment: {}, enableCanUseTool: true,
+    } });
+    const native = f.sessions[0]!;
+    const response = { behavior: "allow" as const, updatedInput: {} };
+    const respond = (index: number) => attached.connection.execute({ ...authority, action: "respond_permission",
+      request: { sessionId, requestId: `ask-${index}`, toolUseID: `tool-${index}`, response } });
+    const ask = (index: number) => native.options.canUseTool!("Read", {},
+      { requestId: `ask-${index}`, toolUseID: `tool-${index}`, signal: new AbortController().signal });
+    // Three answered permissions still await delivery: none may be forgotten.
+    const undelivered = [0, 1, 2].map(ask);
+    for (const index of [0, 1, 2]) await expect(respond(index)).resolves.toEqual({ responded: true });
+    await expect(Promise.all(undelivered)).resolves.toEqual([response, response, response]);
+    await expect(respond(0)).resolves.toEqual({ responded: true });
+    for (const index of [0, 1, 2]) {
+      await native.options.onPermissionResponseDelivered!({ requestId: `ask-${index}`, toolUseID: `tool-${index}` });
+    }
+    // A long-lived query keeps answering beyond the bound.
+    for (const index of [3, 4, 5]) {
+      const pending = ask(index);
+      await expect(respond(index)).resolves.toEqual({ responded: true });
+      await expect(pending).resolves.toEqual(response);
+      await native.options.onPermissionResponseDelivered!({ requestId: `ask-${index}`, toolUseID: `tool-${index}` });
+    }
+    // The newest delivered responses still replay exactly; the oldest are gone.
+    await expect(respond(5)).resolves.toEqual({ responded: true });
+    await expect(respond(4)).resolves.toEqual({ responded: true });
+    await expect(f.hosts.get(runtimeId).execute({ ...authority, action: "respond_permission",
+      request: { sessionId, requestId: "ask-0", toolUseID: "tool-0", response } }, () => {}))
+      .rejects.toThrow("claude_persistent_permission_not_found");
+  });
+
+  it("keeps admitting sends past the journal bound and stops proving non-admission once it forgets one", async () => {
+    const f = await fixture({ maximumJournaledOperations: 2 });
+    const attached = await f.attach();
+    const runtimeId = await attached.connection.ensure(configuration);
+    attached.connection.onEvent(runtimeId, () => {});
+    const authority = { runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const sessionId = randomUUID();
+    await attached.connection.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", environment: {}, enableCanUseTool: false,
+    } });
+    const host = f.hosts.get(runtimeId);
+    const seen: ClaudePersistentEvent[] = [];
+    await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, event => seen.push(event));
+    const disposition = (operationId: string) => attached.connection.execute({ ...authority, action: "submission_disposition",
+      request: { sessionId, operationId, cwd: "/workspace" } });
+    const operations = [0, 1, 2, 3].map(index => ({ queryId: sessionId, operationId: randomUUID(), content: `Turn ${index}` }));
+    for (const operation of operations) {
+      await expect(attached.connection.execute({ ...authority, action: "send", request: operation })).resolves.toEqual({ accepted: true });
+      await f.sessions[0]!.emit({ type: "result", session_id: sessionId, uuid: randomUUID(), user_message_uuid: operation.operationId } as SDKMessage);
+    }
+    for (const event of seen) await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, () => {});
+    await expect(disposition(operations[3]!.operationId)).resolves.toEqual({ disposition: "submitted" });
+    await expect(disposition(operations[2]!.operationId)).resolves.toEqual({ disposition: "submitted" });
+    await expect(disposition(operations[0]!.operationId)).resolves.toEqual({ disposition: "unknown" });
+    await attached.connection.execute({ ...authority, action: "evict", request: { sessionId } });
+    expect(f.sessions[0]!.closed).toBe(true);
+    // A forgotten send means an absent ID no longer proves it was never sent.
+    await expect(disposition(randomUUID())).resolves.toEqual({ disposition: "session_ended" });
+    await expect(disposition(operations[3]!.operationId)).resolves.toEqual({ disposition: "session_ended" });
+  });
+
+  it("forgets the oldest withdrawn inputs with their sends past the journal bound", async () => {
+    const f = await fixture({ maximumJournaledOperations: 2 });
+    const attached = await f.attach();
+    const runtimeId = await attached.connection.ensure(configuration);
+    attached.connection.onEvent(runtimeId, () => {});
+    const authority = { runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const sessionId = randomUUID();
+    await attached.connection.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", environment: {}, enableCanUseTool: false,
+    } });
+    const disposition = (operationId: string) => attached.connection.execute({ ...authority, action: "submission_disposition",
+      request: { sessionId, operationId, cwd: "/workspace" } });
+    const operations = [0, 1, 2, 3].map(index => ({ queryId: sessionId, operationId: randomUUID(), content: `Queued ${index}` }));
+    // Each input is admitted, then withdrawn by Claude before it starts.
+    for (const operation of operations) {
+      await expect(attached.connection.execute({ ...authority, action: "send", request: operation })).resolves.toEqual({ accepted: true });
+      await f.sessions[0]!.emit(lifecycle(sessionId, operation.operationId, "cancelled"));
+    }
+    await expect(disposition(operations[3]!.operationId)).resolves.toEqual({ disposition: "cancelled" });
+    await expect(disposition(operations[2]!.operationId)).resolves.toEqual({ disposition: "cancelled" });
+    // The withdrawal left the journal with its send, so the set stays bounded.
+    await expect(disposition(operations[0]!.operationId)).resolves.toEqual({ disposition: "unknown" });
   });
 });
 

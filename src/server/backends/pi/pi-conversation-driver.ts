@@ -1,6 +1,7 @@
 import { ConversationInterruptLedger } from "../conversation-interrupt.js";
 import { PiUsageAccounting } from "./pi-usage-accounting.js";
 import { TurnThroughputRecorder } from "../turn-throughput.js";
+import { rememberBoundedReceipt } from "../bounded-receipts.js";
 import type { UsageSink } from "../../usage/contracts.js";
 import type {
   OutputArtifactPublisher,
@@ -2438,7 +2439,9 @@ class PiConversationHandle implements ConversationHandle {
     string,
     Extract<BackendConversationEvent, { type: "interaction_opened" }>
   >();
+  /** Accepted submissions; a miss rereads the durable session marker. */
   readonly #submissionResults = new Map<string, SubmitTurnResult>();
+  /** Steer results; an accepted one may leave, as a miss rereads its marker. */
   readonly #steerResults = new Map<string, SteerTurnResult>();
   readonly #interrupts = new ConversationInterruptLedger();
   readonly #controlLifetime = new AbortController();
@@ -2449,7 +2452,8 @@ class PiConversationHandle implements ConversationHandle {
     interrupt: (input: InterruptConversationInput) => this.interrupt(input),
     reconcileInterrupt: (input: InterruptConversationInput) => this.reconcileInterrupt(input),
   });
-  readonly #markedToolCalls = new Set<string>();
+  /** Recently verified tool identity markers; a miss rescans the branch. */
+  readonly #markedToolCalls = new Map<string, true>();
   readonly #assistantItems = new Map<
     string,
     {
@@ -2879,7 +2883,7 @@ class PiConversationHandle implements ConversationHandle {
           ? { backendTurnId: persisted.userEntryId }
           : {}),
       };
-      this.#submissionResults.set(input.applicationOperationId, result);
+      rememberBoundedReceipt(this.#submissionResults, input.applicationOperationId, result);
       return result;
     }
     if (!this.#session.isIdle) {
@@ -3012,7 +3016,7 @@ class PiConversationHandle implements ConversationHandle {
       completionCorrelation: input.applicationOperationId,
       backendTurnId: durable.userEntryId,
     };
-    this.#submissionResults.set(input.applicationOperationId, result);
+    rememberBoundedReceipt(this.#submissionResults, input.applicationOperationId, result);
     return result;
   }
 
@@ -3145,7 +3149,7 @@ class PiConversationHandle implements ConversationHandle {
         completionCorrelation: persisted.marker.applicationOperationId,
         backendTurnId,
       };
-      this.#steerResults.set(input.applicationOperationId, result);
+      this.#rememberSteerResult(input.applicationOperationId, result);
       return result;
     }
     if (this.#session.isIdle) {
@@ -3359,7 +3363,7 @@ class PiConversationHandle implements ConversationHandle {
     if (result.status === "accepted") {
       this.#livePendingSteers.delete(input.applicationOperationId);
     }
-    this.#steerResults.set(input.applicationOperationId, result);
+    this.#rememberSteerResult(input.applicationOperationId, result);
     return result;
   }
 
@@ -4074,6 +4078,12 @@ class PiConversationHandle implements ConversationHandle {
     });
   }
 
+  /** Bounded like submissions; a Steer awaiting materialization stays. */
+  #rememberSteerResult(applicationOperationId: string, result: SteerTurnResult): void {
+    rememberBoundedReceipt(this.#steerResults, applicationOperationId, result,
+      (retained) => retained.status === "accepted");
+  }
+
   #recordToolIdentityMarker(toolCallId: string, toolName: string): void {
     const branch = this.#session.sessionManager.getBranch();
     const assistantEntryId = findPiToolCallAssistantEntryId(
@@ -4106,7 +4116,7 @@ class PiConversationHandle implements ConversationHandle {
             samePiToolIdentity(marker.identity, identity),
         )
       ) {
-        this.#markedToolCalls.add(key);
+        rememberBoundedReceipt(this.#markedToolCalls, key, true);
         return;
       }
       throw new Error("pi_tool_identity_marker_conflict");
@@ -4123,7 +4133,7 @@ class PiConversationHandle implements ConversationHandle {
         this.#toolIdentityAuthentication,
       ),
     );
-    this.#markedToolCalls.add(key);
+    rememberBoundedReceipt(this.#markedToolCalls, key, true);
   }
 
   #consumeAssistantUpdate(
@@ -4241,7 +4251,7 @@ class PiConversationHandle implements ConversationHandle {
     for (const pending of live) {
       const found = correlations.get(pending.applicationOperationId);
       if (found?.userEntryId) {
-        this.#steerResults.set(pending.applicationOperationId, {
+        this.#rememberSteerResult(pending.applicationOperationId, {
           status: "accepted",
           reconciliationToken: found.marker.reconciliationToken,
           completionCorrelation: found.marker.applicationOperationId,
@@ -4379,7 +4389,7 @@ class PiConversationHandle implements ConversationHandle {
           completionCorrelation,
           backendTurnId,
         };
-        this.#steerResults.set(completionCorrelation, acceptedResult);
+        this.#rememberSteerResult(completionCorrelation, acceptedResult);
         this.#livePendingSteers.delete(completionCorrelation);
       }
       const sourceOrder = steeringExistingTurn

@@ -5,6 +5,7 @@ import type { UsageSink } from "../../usage/contracts.js";
 import { CodexUsageCapture } from "./codex-usage-capture.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import { randomUUID } from "node:crypto";
+import { rememberBoundedReceipt } from "../bounded-receipts.js";
 import type {
   BackendCapabilityDocument,
   BackendConversationEvent,
@@ -1649,7 +1650,7 @@ export class CodexConversationHandle implements ConversationHandle {
           completionCorrelation: input.applicationOperationId,
           backendTurnId: acceptedBackendTurnId,
         } satisfies SubmitTurnResult;
-        this.#submitOperations.set(input.applicationOperationId, {
+        rememberBoundedReceipt(this.#submitOperations, input.applicationOperationId, {
           reconciliationToken: input.reconciliationToken,
           source: input.source,
           selectedSkillId: input.selectedSkillId,
@@ -1658,7 +1659,7 @@ export class CodexConversationHandle implements ConversationHandle {
           attachmentsFingerprint,
           state: "accepted",
           result,
-        });
+        }, settledCodexSubmission);
         return result;
       } catch (error) {
         this.#pendingUsageTuple = undefined;
@@ -1674,7 +1675,7 @@ export class CodexConversationHandle implements ConversationHandle {
           (error instanceof CodexRpcDeliveryError &&
             error.delivery === "sent_outcome_unknown")
         ) {
-          this.#submitOperations.set(input.applicationOperationId, {
+          rememberBoundedReceipt(this.#submitOperations, input.applicationOperationId, {
             reconciliationToken: input.reconciliationToken,
             source: input.source,
             selectedSkillId: input.selectedSkillId,
@@ -1682,7 +1683,7 @@ export class CodexConversationHandle implements ConversationHandle {
             contextExcerptsFingerprint,
             attachmentsFingerprint,
             state: "outcome_unknown",
-          });
+          }, settledCodexSubmission);
         }
         const mapped = mapCodexMutationError(error, "submit");
         if (!submissionBoundaryCrossed || mapped.crossedSubmissionBoundary) {
@@ -1773,10 +1774,10 @@ export class CodexConversationHandle implements ConversationHandle {
             status: "accepted",
             backendTurnId: expectedBackendTurnId,
           } satisfies SteerTurnResult;
-          this.#steerOperations.set(input.applicationOperationId, {
+          rememberBoundedReceipt(this.#steerOperations, input.applicationOperationId, {
             ...previous,
             result: accepted,
-          });
+          }, (receipt) => settledCodexSteer(receipt, this.#nativeThread));
           return accepted;
         }
         return previous.result;
@@ -1924,7 +1925,7 @@ export class CodexConversationHandle implements ConversationHandle {
           completionCorrelation: input.applicationOperationId,
           backendTurnId: expectedBackendTurnId,
         } satisfies SteerTurnResult;
-        this.#steerOperations.set(input.applicationOperationId, {
+        rememberBoundedReceipt(this.#steerOperations, input.applicationOperationId, {
           reconciliationToken: input.reconciliationToken,
           selectedSkillId: input.selectedSkillId,
           taskContextsFingerprint,
@@ -1932,21 +1933,21 @@ export class CodexConversationHandle implements ConversationHandle {
           attachmentsFingerprint,
           state: "accepted",
           result,
-        });
+        }, (receipt) => settledCodexSteer(receipt, this.#nativeThread));
         return result;
       } catch (error) {
         if (
           error instanceof CodexRpcDeliveryError &&
           error.delivery === "sent_outcome_unknown"
         ) {
-          this.#steerOperations.set(input.applicationOperationId, {
+          rememberBoundedReceipt(this.#steerOperations, input.applicationOperationId, {
             reconciliationToken: input.reconciliationToken,
             selectedSkillId: input.selectedSkillId,
             taskContextsFingerprint,
             contextExcerptsFingerprint,
             attachmentsFingerprint,
             state: "outcome_unknown",
-          });
+          }, (receipt) => settledCodexSteer(receipt, this.#nativeThread));
         }
         throw mapCodexMutationError(error, "steer");
       }
@@ -2183,9 +2184,11 @@ export class CodexConversationHandle implements ConversationHandle {
               { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS },
             );
             this.#assertMutationReceipt(response.generation);
-            this.#compactOperations.set(
+            rememberBoundedReceipt(
+              this.#compactOperations,
               input.applicationOperationId,
               "accepted",
+              (receipt) => receipt === "accepted",
             );
             return { accepted: true };
           } catch (error) {
@@ -2193,9 +2196,11 @@ export class CodexConversationHandle implements ConversationHandle {
               error instanceof CodexRpcDeliveryError &&
               error.delivery === "sent_outcome_unknown"
             ) {
-              this.#compactOperations.set(
+              rememberBoundedReceipt(
+                this.#compactOperations,
                 input.applicationOperationId,
                 "outcome_unknown",
+                (receipt) => receipt === "accepted",
               );
             }
             throw mapCodexMutationError(error, "compact");
@@ -6977,6 +6982,42 @@ function isMissingPaginatedSourceRolloutError(
 
 function isExecutionPolicyRejected(error: unknown): error is BackendError {
   return error instanceof BackendError && error.backendCode === "codex_execution_policy_rejected";
+}
+
+/**
+ * Resident replay receipts are bounded. Only a settled acceptance may leave
+ * the cache; an unknown outcome or a Steer awaiting materialization stays.
+ */
+function settledCodexSubmission(receipt: {
+  readonly state: "accepted" | "outcome_unknown";
+}): boolean {
+  return receipt.state === "accepted";
+}
+
+/**
+ * A Steer receipt is settled once it is accepted, or once it is pending
+ * materialization on a turn that is no longer the active one. Codex usually
+ * answers pending, and the dispatcher reconciles through the driver rather
+ * than replaying here, so waiting for acceptance alone would keep most Steer
+ * receipts forever. A replay after eviction fails closed with
+ * `codex_steer_target_changed` before sending. An unknown outcome, or a Steer
+ * pending on the running turn, stays.
+ */
+function settledCodexSteer(
+  receipt:
+    | { readonly state: "outcome_unknown" }
+    | { readonly state: "accepted"; readonly result: SteerTurnResult },
+  thread: CodexThread | undefined,
+): boolean {
+  if (receipt.state !== "accepted") return false;
+  if (receipt.result.status === "accepted") return true;
+  if (!thread) return false;
+  if (thread.status.type !== "active") return true;
+  const activeTurnId = activeNativeTurnId(thread);
+  return (
+    activeTurnId !== undefined &&
+    codexBackendTurnId(thread.id, activeTurnId) !== receipt.result.backendTurnId
+  );
 }
 
 function sameSubmissionSource(

@@ -25,7 +25,7 @@ import type {
   ConversationCreationRepository,
 } from "../db/repositories/conversation-creation-repository.js";
 import type { BackendCheckpointRepository } from "../db/repositories/backend-checkpoint-repository.js";
-import type { ThreadLineageRepository } from "../db/repositories/thread-lineage-repository.js";
+import type { PromotedWorkpad, ThreadLineageRepository } from "../db/repositories/thread-lineage-repository.js";
 import type { InventoryRepository } from "../db/repositories/inventory-repository.js";
 import type { ConversationOperationRepository } from "../db/repositories/conversation-operation-repository.js";
 import type { DeliveryInputSnapshotRepository } from "../db/repositories/delivery-input-snapshot-repository.js";
@@ -217,6 +217,21 @@ function forkRequestFingerprint(
   ]);
 }
 
+/** Non-throwing publishers for user records promoted off a discarded fork child. */
+export type ForkPromotionPublications = {
+  readonly tasks: {
+    publishTaskChange(scope: RequestScope, taskId: string): Promise<void>;
+  };
+  readonly workpads: {
+    publishWorkpadChange(
+      scope: RequestScope,
+      workpadId: string,
+      revision: number,
+      change: "document",
+    ): Promise<void>;
+  };
+};
+
 export class ThreadForkService {
   readonly #inFlight = new Map<
     string,
@@ -229,9 +244,7 @@ export class ThreadForkService {
   readonly #id: () => string;
   readonly #cursorSigningKey: Buffer;
   #applicationSnapshots?: ApplicationSnapshotPublicationBoundary;
-  #taskPublications?: {
-    publishTaskChange(scope: RequestScope, taskId: string): Promise<void>;
-  };
+  #promotionPublications?: ForkPromotionPublications;
   #descendantRunStates?: Pick<ThreadRuntimeCoordinator, "captureLoadedState">;
 
   constructor(
@@ -311,17 +324,34 @@ export class ThreadForkService {
   }
 
   /**
-   * Binds the non-throwing, queue-on-failure task publisher used for tasks
-   * promoted off an aborted fork child, so a failed publication enters the
-   * same scheduler-driven retry queue as every other task change.
+   * Binds the non-throwing, queue-on-failure Task and Workpad publishers used
+   * for records promoted off an aborted fork child, so a failed publication
+   * enters the same scheduler-driven retry queue as every other change.
    */
-  bindTaskPublications(taskPublications: {
-    publishTaskChange(scope: RequestScope, taskId: string): Promise<void>;
-  }): void {
-    if (this.#taskPublications) {
-      throw new Error("thread_fork_task_publications_already_bound");
+  bindPromotionPublications(publications: ForkPromotionPublications): void {
+    if (this.#promotionPublications) {
+      throw new Error("thread_fork_promotion_publications_already_bound");
     }
-    this.#taskPublications = taskPublications;
+    this.#promotionPublications = publications;
+  }
+
+  async #publishPromoted(
+    scope: RequestScope,
+    promoted: {
+      readonly taskIds: readonly string[];
+      readonly workpads: readonly PromotedWorkpad[];
+    },
+  ): Promise<void> {
+    const publications = this.#promotionPublications;
+    if (!publications) return;
+    for (const taskId of promoted.taskIds) {
+      await publications.tasks.publishTaskChange(scope, taskId);
+    }
+    for (const workpad of promoted.workpads) {
+      await publications.workpads.publishWorkpadChange(
+        scope, workpad.id, workpad.revision, "document",
+      );
+    }
   }
 
   bindDescendantRunStates(
@@ -685,23 +715,24 @@ export class ThreadForkService {
       );
     }
     const origin = this.input.lineage.getOrigin(scope, childThreadId);
-    let promotedTaskIds: readonly string[] = [];
+    const promoted = { taskIds: [] as readonly string[], workpads: [] as readonly PromotedWorkpad[] };
     const abortInput = {
       creationOperationId: attempt.mutationId,
       diagnostic: "The fork was discarded.",
       restartable: true,
       now: this.#now(),
       onThreadTasksPromoted: (taskIds: readonly string[]) => {
-        promotedTaskIds = taskIds;
+        promoted.taskIds = taskIds;
+      },
+      onThreadWorkpadsPromoted: (workpads: readonly PromotedWorkpad[]) => {
+        promoted.workpads = workpads;
       },
     };
     const aborted =
       origin.boundaryKind === "provider_snapshot_at_acceptance"
         ? this.input.lineage.abortPreparedProviderSnapshotFork(scope, childThreadId, abortInput)
         : this.input.lineage.abortPreparedFork(scope, childThreadId, abortInput);
-    for (const promotedTaskId of promotedTaskIds) {
-      await this.#taskPublications?.publishTaskChange(scope, promotedTaskId);
-    }
+    await this.#publishPromoted(scope, promoted);
     await this.#collectOutputArtifactGarbage();
     await this.#publications().publishAuthoritativeReplacement(scope);
     return {
@@ -1773,14 +1804,17 @@ export class ThreadForkService {
         })`,
       )(error);
       if (discard) {
-        let promotedTaskIds: readonly string[] = [];
+        const promoted = { taskIds: [] as readonly string[], workpads: [] as readonly PromotedWorkpad[] };
         const abortInput = {
           creationOperationId: input.mutationId,
           diagnostic: safeDiagnostic(error),
           restartable: error.forkRestart !== "futile",
           now: this.#now(),
           onThreadTasksPromoted: (taskIds: readonly string[]) => {
-            promotedTaskIds = taskIds;
+            promoted.taskIds = taskIds;
+          },
+          onThreadWorkpadsPromoted: (workpads: readonly PromotedWorkpad[]) => {
+            promoted.workpads = workpads;
           },
         };
         const aborted =
@@ -1795,15 +1829,10 @@ export class ThreadForkService {
                 attempt.applicationThreadId,
                 abortInput,
               );
-        for (const promotedTaskId of promotedTaskIds) {
-          // The bound publisher (TaskService) queues a scheduler-driven
-          // retry on failure instead of throwing, so the successful abort
-          // result is preserved without abandoning the publication.
-          await this.#taskPublications?.publishTaskChange(
-            input.scope,
-            promotedTaskId,
-          );
-        }
+        // The bound publishers queue a scheduler-driven retry on failure
+        // instead of throwing, so the successful abort result is preserved
+        // without abandoning the publication.
+        await this.#publishPromoted(input.scope, promoted);
         await this.#collectOutputArtifactGarbage();
         return {
           status: "aborted",
