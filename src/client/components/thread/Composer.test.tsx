@@ -2325,6 +2325,7 @@ describe("Composer delivery guards", () => {
     fireEvent.paste(input, {
       clipboardData: {
         files: [new File(["one"], "pasted.bin")],
+        getData: () => "",
       },
     });
     await screen.findByText("pasted.bin");
@@ -2339,6 +2340,49 @@ describe("Composer delivery guards", () => {
 
     expect(input).toHaveValue("keep this text");
     expect(store.uploadComposerAttachment).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["its name", "photo.png"],
+    ["its path", "/Users/me/Pictures/photo.png"],
+    ["its file URL", "file:///C:/Users/me/My%20Pictures/photo.png"],
+    ["its Windows path", "C:\\Users\\me\\photo.png"],
+  ])("pastes a copied file as an attachment without %s as text", async (_label, text) => {
+    const store = new FakeComposerStore(snapshot(), "keep this text");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    const input = screen.getByRole("textbox");
+
+    const pasted = fireEvent.paste(input, {
+      clipboardData: {
+        files: [new File(["png"], "photo.png", { type: "image/png" })],
+        getData: (type: string) => (type === "text/plain" ? text : ""),
+      },
+    });
+
+    expect(pasted).toBe(false);
+    await waitFor(() =>
+      expect(store.uploadComposerAttachment).toHaveBeenCalledOnce(),
+    );
+    expect(input).toHaveValue("keep this text");
+  });
+
+  it("keeps the browser's text paste when the clipboard carries more than file names", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    const input = screen.getByRole("textbox");
+
+    const pasted = fireEvent.paste(input, {
+      clipboardData: {
+        files: [new File(["png"], "cells.png", { type: "image/png" })],
+        getData: (type: string) =>
+          type === "text/plain" ? "Region\tRevenue\nNorth\t42" : "",
+      },
+    });
+
+    expect(pasted).toBe(true);
+    await waitFor(() =>
+      expect(store.uploadComposerAttachment).toHaveBeenCalledOnce(),
+    );
   });
 
   it("rejects a fifth image before upload while retaining the four-image allowance", async () => {
@@ -3973,6 +4017,54 @@ describe("Composer delivery guards", () => {
     ).toBeNull();
   });
 
+  it("does not send with the Enter that confirms an IME composition after compositionend", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    const input = screen.getByRole("textbox");
+    input.focus();
+
+    fireEvent.compositionStart(input, { data: "にほ" });
+    type("日本語");
+    fireEvent.compositionEnd(input, { data: "日本語" });
+    // Safari reports the confirming Enter after compositionend, with
+    // isComposing false and the IME's keyCode 229.
+    expect(
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 229 }),
+    ).toBe(true);
+    await act(async () => undefined);
+    expect(store.deliver).not.toHaveBeenCalled();
+    expect(input).toHaveValue("日本語");
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
+  });
+
+  it("leaves IME Enter and arrows to the composition while the command menu is open", () => {
+    const withCommands = snapshot();
+    withCommands.composerCommands = [
+      { invocation: "/review", source: "prompt" },
+      { invocation: "/release", source: "extension" },
+    ];
+    const store = new FakeComposerStore(withCommands, "");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    const input = screen.getByRole("textbox");
+
+    type("/re");
+    const [review, release] = within(
+      screen.getByRole("listbox", { name: "Commands" }),
+    ).getAllByRole("option");
+    fireEvent.keyDown(input, { key: "ArrowDown", isComposing: true });
+    expect(review).toHaveAttribute("data-active", "true");
+    expect(release).not.toHaveAttribute("data-active");
+    expect(fireEvent.keyDown(input, { key: "Enter", isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(input, { key: "Tab", keyCode: 229 })).toBe(true);
+    expect(input).toHaveValue("/re");
+    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input).toHaveValue("/review ");
+  });
+
   it("lists slash commands as menu rows with one active wash", () => {
     const withCommands = snapshot();
     withCommands.composerCommands = [
@@ -4283,6 +4375,244 @@ describe("Composer delivery guards", () => {
       taskReferences: [],
       attachments: [],
       revision: 1,
+    });
+  });
+
+  describe("page lifecycle and autosave retry", () => {
+    afterEach(() => {
+      Reflect.deleteProperty(document, "visibilityState");
+    });
+
+    const hidePage = () => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+    };
+
+    it("flushes the typed draft with keepalive when the page is hidden before the debounce", async () => {
+      vi.useFakeTimers();
+      try {
+        const store = new FakeComposerStore(snapshot(), "");
+        render(<Composer store={store as unknown as ThreadClientStore} />);
+
+        type("closing the tab now");
+        hidePage();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+        expect(store.saveDraft).toHaveBeenCalledWith(
+          {
+            text: "closing the tab now",
+            contextExcerpts: [],
+            taskReferences: [],
+            attachments: [],
+            revision: 1,
+          },
+          { keepalive: true },
+        );
+
+        // The flushed draft is clean, so the debounce has nothing left to do.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("flushes the typed draft when the page is unloaded", async () => {
+      const store = new FakeComposerStore(snapshot(), "");
+      render(<Composer store={store as unknown as ThreadClientStore} />);
+
+      type("reloading");
+      act(() => {
+        window.dispatchEvent(new Event("pagehide"));
+      });
+
+      await waitFor(() =>
+        expect(store.saveDraft).toHaveBeenCalledWith(
+          {
+            text: "reloading",
+            contextExcerpts: [],
+            taskReferences: [],
+            attachments: [],
+            revision: 1,
+          },
+          { keepalive: true },
+        ),
+      );
+    });
+
+    it("sends the page-hide save after an in-flight autosave, at the revision it returns", async () => {
+      vi.useFakeTimers();
+      try {
+        const store = new FakeComposerStore(snapshot(), "");
+        let finishAutosave!: () => void;
+        store.saveDraft.mockImplementationOnce(
+          (draft) =>
+            new Promise((resolve) => {
+              finishAutosave = () =>
+                resolve({
+                  ...draft,
+                  revision: draft.revision + 1,
+                  updatedAt: "2026-07-30T15:01:00.000Z",
+                });
+            }),
+        );
+        render(<Composer store={store as unknown as ThreadClientStore} />);
+
+        type("first part");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+
+        type("first part, then more");
+        act(() => {
+          window.dispatchEvent(new Event("pagehide"));
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        // A save names the revision it replaces, so the newer draft waits for
+        // the in-flight save's revision instead of guessing it. A page that
+        // unloads before that save answers loses the newer edits.
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+
+        await act(async () => {
+          finishAutosave();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(store.saveDraft).toHaveBeenCalledTimes(2);
+        expect(store.saveDraft).toHaveBeenLastCalledWith(
+          {
+            text: "first part, then more",
+            contextExcerpts: [],
+            taskReferences: [],
+            attachments: [],
+            revision: 2,
+          },
+          { keepalive: true },
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not save a clean draft when the page is hidden", async () => {
+      const store = new FakeComposerStore(snapshot(), "saved");
+      render(<Composer store={store as unknown as ThreadClientStore} />);
+
+      hidePage();
+      await act(async () => undefined);
+
+      expect(store.saveDraft).not.toHaveBeenCalled();
+    });
+
+    it("retries a failed autosave with backoff without another keystroke", async () => {
+      vi.useFakeTimers();
+      try {
+        const store = new FakeComposerStore(snapshot(), "");
+        store.saveDraft.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+        render(<Composer store={store as unknown as ThreadClientStore} />);
+
+        type("survive a network blip");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(3_999);
+        });
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+        expect(store.saveDraft).toHaveBeenCalledTimes(2);
+        expect(store.saveDraft).toHaveBeenLastCalledWith({
+          text: "survive a network blip",
+          contextExcerpts: [],
+          taskReferences: [],
+          attachments: [],
+          revision: 1,
+        });
+
+        // The retry succeeded; nothing else is pending.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(60_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("retries a failed autosave promptly once the thread reconnects", async () => {
+      vi.useFakeTimers();
+      try {
+        const store = new FakeComposerStore(snapshot(), "");
+        store.saveDraft
+          .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+          .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+        render(<Composer store={store as unknown as ThreadClientStore} />);
+
+        type("typed before the server restarted");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        act(() => store.replace({ connection: "reconnecting" }));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(4_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledTimes(2);
+
+        // The next backoff step is long; reconnecting retries without it.
+        act(() => store.replace({ connection: "connected" }));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledTimes(3);
+        expect(store.saveDraft).toHaveBeenLastCalledWith({
+          text: "typed before the server restarted",
+          contextExcerpts: [],
+          taskReferences: [],
+          attachments: [],
+          revision: 1,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not retry an autosave the server rejected definitively", async () => {
+      vi.useFakeTimers();
+      try {
+        const store = new FakeComposerStore(snapshot(), "");
+        store.saveDraft.mockRejectedValueOnce(
+          new ApiError(400, "bad_request", "Invalid draft.", false),
+        );
+        render(<Composer store={store as unknown as ThreadClientStore} />);
+
+        type("rejected");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(120_000);
+        });
+        expect(store.saveDraft).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

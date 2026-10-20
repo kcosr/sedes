@@ -29,7 +29,11 @@ class TestHighlight {
 const highlights = new Map<string, TestHighlight>();
 let rangeTop = 20;
 
-function FindHarness(): React.JSX.Element {
+function FindHarness({
+  onNavigate = () => undefined,
+}: {
+  readonly onNavigate?: () => void;
+}): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const scopeRef = useRef<HTMLElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -55,6 +59,7 @@ function FindHarness(): React.JSX.Element {
         scopeRef={scopeRef}
         viewportRef={viewportRef}
         contentRef={contentRef}
+        onNavigate={onNavigate}
       />
       <div className="message-viewport-frame">
         <div ref={viewportRef} className="message-viewport">
@@ -326,6 +331,36 @@ describe("ThreadFindBar", () => {
       expect(screen.getByRole("status")).toHaveTextContent("2 of 6"),
     );
     expect(viewport!.scrollTo).toHaveBeenCalledTimes(scrollCallCount);
+  });
+
+  it("hands the transcript to the reader before every jump to a match", async () => {
+    const order: string[] = [];
+    const onNavigate = vi.fn(() => order.push("navigate"));
+    render(<FindHarness onNavigate={onNavigate} />);
+    const viewport = document.querySelector<HTMLElement>(".message-viewport")!;
+    vi.mocked(viewport.scrollTo).mockImplementation(() => {
+      order.push("scroll");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Find in thread" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Find in thread" }),
+      { target: { value: "thread" } },
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("1 of 5"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+    fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
+
+    expect(order).toEqual([
+      "navigate",
+      "scroll",
+      "navigate",
+      "scroll",
+      "navigate",
+      "scroll",
+    ]);
   });
 
   it("leaves find open when a focused control consumes Escape", async () => {
