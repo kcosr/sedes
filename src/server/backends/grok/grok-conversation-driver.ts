@@ -390,7 +390,7 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
     }
     const releaseOperation = this.#beginOperation();
     try {
-      throwIfAborted(input.signal);
+      input.signal.throwIfAborted();
       const binding = this.#discoveryBinding(input.workspace);
       if (input.cursor) {
         return this.#snapshots.continuePage({
@@ -405,7 +405,7 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
       try {
         lifecycle = await this.#openLifecycle(input.workspace, input.signal);
         const sessions = await lifecycle.listSessions({ signal: input.signal });
-        throwIfAborted(input.signal);
+        input.signal.throwIfAborted();
         const conversations: DiscoveredConversation[] = sessions.map(
           (session) => {
             const updatedAt = normalizedTimestamp(session.updatedAt);
@@ -914,7 +914,7 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
     sourceThreadId?: string,
     publishAuthoritative?: () => void | Promise<void>,
   ): Promise<GrokSessionLifecycle> {
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     return await this.#openLifecycleAtPath(
       workspace.canonicalPath,
       signal,
@@ -941,7 +941,7 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
     },
     publishAuthoritative?: () => void | Promise<void>,
   ): Promise<GrokSessionLifecycle> {
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     this.#startupLaunchAttempted = true;
     const trustedAgentToolSource = agentToolSource
       ? {
@@ -1001,7 +1001,7 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
       throw error;
     }
     runtimeObservation?.admitted(runtime.executable.assessment);
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     const factory = new GrokOwnedStdioTransportFactory({
       runtime,
       channels: this.#environmentChannel,
@@ -1534,7 +1534,7 @@ class GrokConversationHandle implements ConversationHandle {
     input: EstablishProjectionInput,
   ): Promise<EstablishedBackendProjection> {
     this.#assertOpen();
-    throwIfAborted(input.signal);
+    input.signal.throwIfAborted();
     let revision = this.#historyRevision;
     let page = await this.#lifecycle.historyPage(this.#sessionId, {
       limit: 10,
@@ -1562,7 +1562,7 @@ class GrokConversationHandle implements ConversationHandle {
         this.#generatedImages,
         input.signal,
       );
-    throwIfAborted(input.signal);
+    input.signal.throwIfAborted();
     this.#assertOpen();
     writeGrokDeliveryDiagnostic({
       phase: "snapshot_projected",
@@ -3234,10 +3234,6 @@ function grokError(
     },
     cause === undefined ? undefined : { cause },
   );
-}
-
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw signal.reason;
 }
 
 function bounded(value: unknown, maximumBytes: number): value is string {

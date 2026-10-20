@@ -41,13 +41,6 @@ export function serializeTaskReferences(
   return JSON.stringify(composerTaskReferencesSchema.parse(value));
 }
 
-export function sameTaskReferences(
-  left: readonly ComposerTaskReference[],
-  right: readonly ComposerTaskReference[],
-): boolean {
-  return serializeTaskReferences(left) === serializeTaskReferences(right);
-}
-
 export function parseStoredTaskContexts(
   value: string,
 ): MaterializedTaskContext[] {

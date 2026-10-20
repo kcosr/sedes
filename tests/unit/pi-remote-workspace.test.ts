@@ -4,18 +4,18 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 import {
-  assertCompletePiRemoteBuiltinOverrides,
-  assertPiRemoteBuiltinDefinitionSet,
-  createPiRemoteWorkspaceToolDefinitions,
-  PI_REMOTE_BUILTIN_TOOL_NAMES,
+  assertCompletePiExecutorBuiltinOverrides,
+  assertPiExecutorBuiltinDefinitionSet,
+  createPiExecutorWorkspaceToolDefinitions,
+  PI_EXECUTOR_BUILTIN_TOOL_NAMES,
   RemotePiResourceLoader,
-  type RemotePiWorkspaceServices,
+  type PiExecutorWorkspaceServices,
 } from "../../src/server/backends/pi/pi-remote-workspace.js";
 import { WorkspaceToolOutcomeUnknownError } from "../../src/server/workspace-tools/contracts.js";
 import { WorkspaceSkillReaderError } from "../../src/server/workspace-skills/contracts.js";
 
 function remoteFixture(): {
-  readonly remote: RemotePiWorkspaceServices;
+  readonly remote: PiExecutorWorkspaceServices;
   readonly calls: Record<string, ReturnType<typeof vi.fn>>;
 } {
   const shellCredit = vi.fn(async (_bytes: number) => undefined);
@@ -117,20 +117,20 @@ function remoteFixture(): {
 describe("Pi remote workspace integration", () => {
   it("replaces the exact seven built-ins with SDK identities", () => {
     const { remote } = remoteFixture();
-    const definitions = createPiRemoteWorkspaceToolDefinitions(remote);
-    expect(() => assertPiRemoteBuiltinDefinitionSet(definitions)).not.toThrow();
+    const definitions = createPiExecutorWorkspaceToolDefinitions(remote);
+    expect(() => assertPiExecutorBuiltinDefinitionSet(definitions)).not.toThrow();
     expect(definitions.map(({ name }) => name)).toEqual(
-      PI_REMOTE_BUILTIN_TOOL_NAMES,
+      PI_EXECUTOR_BUILTIN_TOOL_NAMES,
     );
-    assertCompletePiRemoteBuiltinOverrides(
+    assertCompletePiExecutorBuiltinOverrides(
       definitions.map(({ name }) => ({
         name,
         sourceInfo: { source: "sdk", path: `<sdk:${name}>` },
       })) as ToolInfo[],
     );
-    for (const omitted of PI_REMOTE_BUILTIN_TOOL_NAMES) {
+    for (const omitted of PI_EXECUTOR_BUILTIN_TOOL_NAMES) {
       expect(() =>
-        assertCompletePiRemoteBuiltinOverrides(
+        assertCompletePiExecutorBuiltinOverrides(
           definitions
             .filter(({ name }) => name !== omitted)
             .map(({ name }) => ({
@@ -141,7 +141,7 @@ describe("Pi remote workspace integration", () => {
       ).toThrow("pi_executor_builtin_override_incomplete");
     }
     expect(() =>
-      assertCompletePiRemoteBuiltinOverrides(
+      assertCompletePiExecutorBuiltinOverrides(
         definitions.map(({ name }) => ({
           name,
           sourceInfo: {
@@ -152,7 +152,7 @@ describe("Pi remote workspace integration", () => {
       ),
     ).toThrow("pi_executor_host_builtin_residual");
     expect(() =>
-      assertCompletePiRemoteBuiltinOverrides([
+      assertCompletePiExecutorBuiltinOverrides([
         ...definitions.map(({ name }) => ({
           name,
           sourceInfo: { source: "sdk", path: `<sdk:${name}>` },
@@ -167,7 +167,7 @@ describe("Pi remote workspace integration", () => {
       ] as ToolInfo[]),
     ).toThrow("pi_builtin_tool_intentionally_unsupported");
     expect(() =>
-      assertCompletePiRemoteBuiltinOverrides([
+      assertCompletePiExecutorBuiltinOverrides([
         ...definitions.map(({ name }) => ({
           name,
           sourceInfo: { source: "sdk", path: `<sdk:${name}>` },
@@ -186,7 +186,7 @@ describe("Pi remote workspace integration", () => {
   it("routes every execute through the neutral executor without local fallback", async () => {
     const { remote, calls } = remoteFixture();
     const [bash, read, write, edit, grep, find, ls] =
-      createPiRemoteWorkspaceToolDefinitions(remote);
+      createPiExecutorWorkspaceToolDefinitions(remote);
     await read.execute(
       "r",
       { path: "README.md" },
@@ -253,7 +253,7 @@ describe("Pi remote workspace integration", () => {
 
   it("reports the remote bash duration limit before wire validation", async () => {
     const { remote } = remoteFixture();
-    const [bash] = createPiRemoteWorkspaceToolDefinitions(remote);
+    const [bash] = createPiExecutorWorkspaceToolDefinitions(remote);
     await expect(
       bash.execute(
         "long-bash",
@@ -531,7 +531,7 @@ describe("Pi remote workspace integration", () => {
     remote.executor.write = vi.fn(async () => {
       throw new WorkspaceToolOutcomeUnknownError();
     });
-    const [, , write] = createPiRemoteWorkspaceToolDefinitions(remote);
+    const [, , write] = createPiExecutorWorkspaceToolDefinitions(remote);
     await expect(
       write.execute(
         "uncertain-write",
@@ -553,7 +553,7 @@ describe("Pi remote workspace integration", () => {
         diagnosticCode: "workspace_tools_shell_outcome_unknown" as const,
       });
     });
-    const [bash] = createPiRemoteWorkspaceToolDefinitions(remote);
+    const [bash] = createPiExecutorWorkspaceToolDefinitions(remote);
     await expect(
       bash.execute(
         "uncertain-shell",

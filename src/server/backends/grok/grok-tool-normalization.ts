@@ -4,6 +4,8 @@
  * dispositions and must latch one before publishing an item.
  */
 
+import { isRecord } from "../../../shared/json-guards.js";
+
 const GROK_TOOL_META_KEY = "x.ai/tool";
 const GROK_TOOL_META_VERSION = 1;
 
@@ -437,8 +439,4 @@ function ownRecordValue(value: unknown, key: string): unknown {
 function ownValue(value: unknown, key: string): unknown {
   if (!isRecord(value)) return undefined;
   return Object.getOwnPropertyDescriptor(value, key)?.value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

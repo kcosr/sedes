@@ -21,6 +21,7 @@ import {
   readClaudeSessionMessages,
   type ClaudeTranscriptReadOptions,
 } from "./claude-native-transcript.js";
+import { isRecord } from "../../../shared/json-guards.js";
 
 export interface ClaudeCliAuthStatus {
   readonly loggedIn: boolean;
@@ -84,10 +85,6 @@ export async function readClaudeCliAuthStatus(
     ...(subscriptionType !== undefined ? { subscriptionType } : {}),
     ...(apiKeySource !== undefined ? { apiKeySource } : {}),
   });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readOptionalString(

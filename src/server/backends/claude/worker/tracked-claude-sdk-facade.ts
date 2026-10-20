@@ -7,6 +7,7 @@ import {
 } from "../claude-sdk-facade.js";
 import type { ClaudeChildEnvironment } from "../claude-child-environment.js";
 import type { ClaudeChildProcessSupervisor } from "./claude-child-process-supervisor.js";
+import { isRecord } from "../../../../shared/json-guards.js";
 
 /** Processes launched for one SDK query, with the facade that launches them. */
 export interface ClaudeQueryProcessScope {
@@ -163,10 +164,6 @@ export class TrackedClaudeSdkFacade implements ClaudeSdkFacade {
   renameSession(...input: Parameters<ClaudeSdkFacade["renameSession"]>) {
     return this.#delegate.renameSession(...input);
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function optionalAuthField(

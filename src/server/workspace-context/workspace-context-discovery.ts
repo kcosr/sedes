@@ -72,7 +72,7 @@ export async function discoverWorkspaceContext(input: {
   readonly signal?: AbortSignal;
   readonly testHooks?: WorkspaceContextDiscoveryTestHooks;
 }): Promise<WorkspaceContextSnapshot> {
-  throwIfAborted(input.signal);
+  input.signal?.throwIfAborted();
   const authority = await selectAuthority(
     input.workspacePath,
     input.policyRoots,
@@ -159,7 +159,7 @@ async function discoverAttempt(input: {
   readonly testHooks?: WorkspaceContextDiscoveryTestHooks;
   readonly attempt: 1 | 2;
 }): Promise<WorkspaceContextSnapshot> {
-  throwIfAborted(input.signal);
+  input.signal?.throwIfAborted();
   const relativeWorkspace = path.relative(input.rootPath, input.workspacePath);
   if (
     relativeWorkspace === ".." ||
@@ -181,7 +181,7 @@ async function discoverAttempt(input: {
   const accepted: WorkspaceContextFile[] = [];
   let aggregateBytes = 0;
   for (const directoryPath of directories) {
-    throwIfAborted(input.signal);
+    input.signal?.throwIfAborted();
     const directory = await openVerifiedDirectory(
       directoryPath,
       input.rootPath,
@@ -208,7 +208,7 @@ async function discoverAttempt(input: {
       await directory.handle.close().catch(() => undefined);
     }
   }
-  throwIfAborted(input.signal);
+  input.signal?.throwIfAborted();
   const files = accepted.map((file) => Object.freeze(file));
   return {
     files,
@@ -229,7 +229,7 @@ async function readPriorityFile(input: {
   readonly attempt: 1 | 2;
 }): Promise<WorkspaceContextFile | undefined> {
   for (const filename of WORKSPACE_CONTEXT_FILENAMES) {
-    throwIfAborted(input.signal);
+    input.signal?.throwIfAborted();
     const candidate = path.join(input.directoryPath, filename);
     let entry;
     try {
@@ -263,7 +263,7 @@ async function readPriorityFile(input: {
       const bytes = Buffer.allocUnsafe(expectedBytes + 1);
       let offset = 0;
       while (offset < bytes.byteLength) {
-        throwIfAborted(input.signal);
+        input.signal?.throwIfAborted();
         const result = await handle.read(
           bytes,
           offset,
@@ -277,7 +277,7 @@ async function readPriorityFile(input: {
         posixRelative(input.rootPath, candidate),
         input.attempt,
       );
-      throwIfAborted(input.signal);
+      input.signal?.throwIfAborted();
       const [after, currentEntry, openedPath, parentAfter, parentPath] =
         await Promise.all([
           handle.stat({ bigint: true }),
@@ -377,14 +377,14 @@ async function canonicalDirectory(
   candidate: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  throwIfAborted(signal);
+  signal?.throwIfAborted();
   const resolved = path.resolve(candidate);
   const directory = await openVerifiedDirectory(
     resolved,
     path.parse(resolved).root,
   );
   try {
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     return directory.path;
   } finally {
     await directory.handle.close().catch(() => undefined);
@@ -440,10 +440,6 @@ function snapshotFingerprint(
       ]),
     )
     .digest("hex");
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  signal?.throwIfAborted();
 }
 
 function isMissing(error: unknown): boolean {

@@ -143,27 +143,3 @@ export interface SavedAgentBackendAdapter {
     readonly resolved: ResolvedSavedAgentBackendConfiguration;
   }): void;
 }
-
-export function assertPreparedSavedAgentBackendContext(
-  adapter: SavedAgentBackendAdapter,
-  prepared: PreparedSavedAgentBackendContext,
-): void {
-  if (
-    prepared.backendTypeId !== adapter.typeId ||
-    prepared.schemaVersion !== adapter.overrideSchemaVersion
-  ) {
-    throw new Error("saved_agent_backend_prepared_context_invalid");
-  }
-}
-
-export function assertResolvedSavedAgentBackendConfiguration(
-  adapter: SavedAgentBackendAdapter,
-  resolved: ResolvedSavedAgentBackendConfiguration,
-): void {
-  if (
-    resolved.backendTypeId !== adapter.typeId ||
-    resolved.schemaVersion !== adapter.overrideSchemaVersion
-  ) {
-    throw new Error("saved_agent_backend_resolution_invalid");
-  }
-}

@@ -71,8 +71,3 @@ export function roundedTopRect(x: number, y: number, width: number, height: numb
   const r = Math.max(0, Math.min(radius, width / 2, height));
   return `M${x},${y + height}V${y + r}Q${x},${y} ${x + r},${y}H${x + width - r}Q${x + width},${y} ${x + width},${y + r}V${y + height}Z`;
 }
-/** Path for a horizontal bar with a rounded data end on the right. */
-export function roundedRightRect(x: number, y: number, width: number, height: number, radius: number): string {
-  const r = Math.max(0, Math.min(radius, height / 2, width));
-  return `M${x},${y}H${x + width - r}Q${x + width},${y} ${x + width},${y + r}V${y + height - r}Q${x + width},${y + height} ${x + width - r},${y + height}H${x}Z`;
-}

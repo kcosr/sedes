@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  PI_EXCLUDED_TOOL_NAMES,
+  PI_INTENTIONALLY_UNSUPPORTED_BUILTIN_TOOL_NAMES,
   PI_SUPPORTED_BUILTIN_TOOL_NAMES,
 } from "../../src/server/backends/pi/pi-builtin-tool-policy.js";
 
@@ -323,7 +323,7 @@ describe("Pi 0.86.0 built-in exclusion gate", () => {
         id: randomUUID(),
       }),
       settingsManager: SettingsManager.inMemory(),
-      excludeTools: [...PI_EXCLUDED_TOOL_NAMES],
+      excludeTools: [...PI_INTENTIONALLY_UNSUPPORTED_BUILTIN_TOOL_NAMES],
     });
     try {
       const names = created.session.getAllTools().map(({ name }) => name);

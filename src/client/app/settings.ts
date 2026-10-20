@@ -43,7 +43,6 @@ const clickNamesToFilterKey = "sedes-filter-by-project-name";
 
 export const DEFAULT_ACTIVITY_DETAIL: ActivityDetailMode = "full";
 export const DEFAULT_MOBILE_COMPOSER_REFOCUS_AFTER_SEND = true;
-export const DEFAULT_MOBILE_HISTORY_SEEK_CONTROL = true;
 export const DEFAULT_SHOW_PROMPTS_TAB = true;
 export type PromptsPlacement = "above_composer" | "toolbar";
 export const DEFAULT_PROMPTS_PLACEMENT: PromptsPlacement = "above_composer";
@@ -66,6 +65,37 @@ export interface TerminalPreferences {
   readonly cursorBlink: boolean;
   readonly fontSize: number;
   readonly scrollback: number;
+}
+
+/** Announces a same-window write; other windows observe the storage event. */
+function announceSettingChange(key: string): void {
+  window.dispatchEvent(
+    new CustomEvent(settingsChangeEvent, { detail: { key } }),
+  );
+}
+
+/**
+ * Calls `onChange` for a same-window announcement of `announcedKey` and for a
+ * cross-window write to any of `storageKeys` or a cleared store.
+ */
+function subscribeSettingChange(
+  announcedKey: string,
+  onChange: () => void,
+  storageKeys: readonly string[] = [announcedKey],
+): () => void {
+  const onLocalChange = (event: Event) => {
+    const detail = (event as CustomEvent<{ key?: string }>).detail;
+    if (detail?.key === announcedKey) onChange();
+  };
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === null || storageKeys.includes(event.key)) onChange();
+  };
+  window.addEventListener(settingsChangeEvent, onLocalChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(settingsChangeEvent, onLocalChange);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 export function getActivityDetail(): ActivityDetailMode {
@@ -127,33 +157,15 @@ export function getConfirmTerminalTermination(): boolean {
 
 export function setConfirmTerminalTermination(value: boolean): void {
   localStorage.setItem(confirmTerminalTerminationKey, value ? "true" : "false");
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key: confirmTerminalTerminationKey },
-    }),
-  );
+  announceSettingChange(confirmTerminalTerminationKey);
 }
 
 export function subscribeConfirmTerminalTermination(
   listener: (value: boolean) => void,
 ): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === confirmTerminalTerminationKey) {
-      listener(getConfirmTerminalTermination());
-    }
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === confirmTerminalTerminationKey) {
-      listener(getConfirmTerminalTermination());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(confirmTerminalTerminationKey, () =>
+    listener(getConfirmTerminalTermination()),
+  );
 }
 
 export function getDiffLineWrap(): boolean {
@@ -162,29 +174,15 @@ export function getDiffLineWrap(): boolean {
 
 export function setDiffLineWrap(value: boolean): void {
   localStorage.setItem(diffLineWrapKey, value ? "true" : "false");
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, { detail: { key: diffLineWrapKey } }),
-  );
+  announceSettingChange(diffLineWrapKey);
 }
 
 export function subscribeDiffLineWrap(
   listener: (value: boolean) => void,
 ): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === diffLineWrapKey) listener(getDiffLineWrap());
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === diffLineWrapKey) {
-      listener(getDiffLineWrap());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(diffLineWrapKey, () =>
+    listener(getDiffLineWrap()),
+  );
 }
 
 export function getHistoryPageSize(): HistoryPageSize {
@@ -199,31 +197,15 @@ export function setHistoryPageSize(value: HistoryPageSize): void {
     throw new Error("History page size is not supported.");
   }
   localStorage.setItem(historyPageSizeKey, String(value));
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key: historyPageSizeKey },
-    }),
-  );
+  announceSettingChange(historyPageSizeKey);
 }
 
 export function subscribeHistoryPageSize(
   listener: (value: HistoryPageSize) => void,
 ): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === historyPageSizeKey) listener(getHistoryPageSize());
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === historyPageSizeKey) {
-      listener(getHistoryPageSize());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(historyPageSizeKey, () =>
+    listener(getHistoryPageSize()),
+  );
 }
 
 export function getSeekOnSubmit(): boolean {
@@ -232,29 +214,15 @@ export function getSeekOnSubmit(): boolean {
 
 export function setSeekOnSubmit(value: boolean): void {
   localStorage.setItem(seekOnSubmitKey, value ? "true" : "false");
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, { detail: { key: seekOnSubmitKey } }),
-  );
+  announceSettingChange(seekOnSubmitKey);
 }
 
 export function subscribeSeekOnSubmit(
   listener: (value: boolean) => void,
 ): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === seekOnSubmitKey) listener(getSeekOnSubmit());
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === seekOnSubmitKey) {
-      listener(getSeekOnSubmit());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(seekOnSubmitKey, () =>
+    listener(getSeekOnSubmit()),
+  );
 }
 
 export function getRightOptionFocusesComposer(): boolean {
@@ -263,33 +231,15 @@ export function getRightOptionFocusesComposer(): boolean {
 
 export function setRightOptionFocusesComposer(value: boolean): void {
   localStorage.setItem(rightOptionFocusesComposerKey, value ? "true" : "false");
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key: rightOptionFocusesComposerKey },
-    }),
-  );
+  announceSettingChange(rightOptionFocusesComposerKey);
 }
 
 export function subscribeRightOptionFocusesComposer(
   listener: (value: boolean) => void,
 ): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === rightOptionFocusesComposerKey) {
-      listener(getRightOptionFocusesComposer());
-    }
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === rightOptionFocusesComposerKey) {
-      listener(getRightOptionFocusesComposer());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(rightOptionFocusesComposerKey, () =>
+    listener(getRightOptionFocusesComposer()),
+  );
 }
 
 export function getMobileComposerRefocusAfterSend(): boolean {
@@ -304,33 +254,15 @@ export function setMobileComposerRefocusAfterSend(value: boolean): void {
     mobileComposerRefocusAfterSendKey,
     value ? "true" : "false",
   );
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key: mobileComposerRefocusAfterSendKey },
-    }),
-  );
+  announceSettingChange(mobileComposerRefocusAfterSendKey);
 }
 
 export function subscribeMobileComposerRefocusAfterSend(
   listener: (value: boolean) => void,
 ): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === mobileComposerRefocusAfterSendKey) {
-      listener(getMobileComposerRefocusAfterSend());
-    }
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === mobileComposerRefocusAfterSendKey) {
-      listener(getMobileComposerRefocusAfterSend());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(mobileComposerRefocusAfterSendKey, () =>
+    listener(getMobileComposerRefocusAfterSend()),
+  );
 }
 
 export function getMobileHistorySeekControl(): boolean {
@@ -339,33 +271,15 @@ export function getMobileHistorySeekControl(): boolean {
 
 export function setMobileHistorySeekControl(value: boolean): void {
   localStorage.setItem(mobileHistorySeekControlKey, value ? "true" : "false");
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key: mobileHistorySeekControlKey },
-    }),
-  );
+  announceSettingChange(mobileHistorySeekControlKey);
 }
 
 export function subscribeMobileHistorySeekControl(
   listener: (value: boolean) => void,
 ): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === mobileHistorySeekControlKey) {
-      listener(getMobileHistorySeekControl());
-    }
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === mobileHistorySeekControlKey) {
-      listener(getMobileHistorySeekControl());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(mobileHistorySeekControlKey, () =>
+    listener(getMobileHistorySeekControl()),
+  );
 }
 
 /** Whether this browser shows prompt-library access in the composer. */
@@ -378,31 +292,15 @@ export function getShowPromptsTab(): boolean {
 
 export function setShowPromptsTab(value: boolean): void {
   localStorage.setItem(showPromptsTabKey, value ? "true" : "false");
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key: showPromptsTabKey },
-    }),
-  );
+  announceSettingChange(showPromptsTabKey);
 }
 
 export function subscribeShowPromptsTab(
   listener: (value: boolean) => void,
 ): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === showPromptsTabKey) listener(getShowPromptsTab());
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === showPromptsTabKey) {
-      listener(getShowPromptsTab());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(showPromptsTabKey, () =>
+    listener(getShowPromptsTab()),
+  );
 }
 
 /** Where this browser places the Prompts control at every screen size. */
@@ -414,33 +312,15 @@ export function getPromptsPlacement(): PromptsPlacement {
 
 export function setPromptsPlacement(value: PromptsPlacement): void {
   localStorage.setItem(promptsPlacementKey, value);
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key: promptsPlacementKey },
-    }),
-  );
+  announceSettingChange(promptsPlacementKey);
 }
 
 export function subscribePromptsPlacement(
   listener: (value: PromptsPlacement) => void,
 ): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === promptsPlacementKey) {
-      listener(getPromptsPlacement());
-    }
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === promptsPlacementKey) {
-      listener(getPromptsPlacement());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(promptsPlacementKey, () =>
+    listener(getPromptsPlacement()),
+  );
 }
 
 /**
@@ -457,33 +337,15 @@ export function getSmoothStreamingEnabled(): boolean {
 
 export function setSmoothStreamingEnabled(value: boolean): void {
   localStorage.setItem(smoothStreamingKey, value ? "true" : "false");
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key: smoothStreamingKey },
-    }),
-  );
+  announceSettingChange(smoothStreamingKey);
 }
 
 export function subscribeSmoothStreamingEnabled(
   listener: (value: boolean) => void,
 ): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === smoothStreamingKey) {
-      listener(getSmoothStreamingEnabled());
-    }
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === smoothStreamingKey) {
-      listener(getSmoothStreamingEnabled());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(smoothStreamingKey, () =>
+    listener(getSmoothStreamingEnabled()),
+  );
 }
 
 /** Whether to render the animated point field behind visible conversations. */
@@ -493,33 +355,15 @@ export function getChatAtmosphereEnabled(): boolean {
 
 export function setChatAtmosphereEnabled(value: boolean): void {
   localStorage.setItem(chatAtmosphereKey, value ? "true" : "false");
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key: chatAtmosphereKey },
-    }),
-  );
+  announceSettingChange(chatAtmosphereKey);
 }
 
 export function subscribeChatAtmosphereEnabled(
   listener: (value: boolean) => void,
 ): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === chatAtmosphereKey) {
-      listener(getChatAtmosphereEnabled());
-    }
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === chatAtmosphereKey) {
-      listener(getChatAtmosphereEnabled());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(chatAtmosphereKey, () =>
+    listener(getChatAtmosphereEnabled()),
+  );
 }
 
 export type ClientDiagnosticCategory = keyof typeof diagnosticCategoryKeys;
@@ -536,11 +380,7 @@ export function setDiagnosticCategoryEnabled(
 ): void {
   const key = diagnosticCategoryKeys[category];
   localStorage.setItem(key, value ? "true" : "false");
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key },
-    }),
-  );
+  announceSettingChange(key);
 }
 
 export function subscribeDiagnosticCategoryEnabled(
@@ -548,23 +388,9 @@ export function subscribeDiagnosticCategoryEnabled(
   listener: (value: boolean) => void,
 ): () => void {
   const key = diagnosticCategoryKeys[category];
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === key) {
-      listener(getDiagnosticCategoryEnabled(category));
-    }
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === key) {
-      listener(getDiagnosticCategoryEnabled(category));
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(key, () =>
+    listener(getDiagnosticCategoryEnabled(category)),
+  );
 }
 
 export function getTerminalPreferences(): TerminalPreferences {
@@ -605,36 +431,17 @@ export function setTerminalPreferences(preferences: TerminalPreferences): void {
   localStorage.setItem(terminalCursorBlinkKey, String(preferences.cursorBlink));
   localStorage.setItem(terminalFontSizeKey, String(preferences.fontSize));
   localStorage.setItem(terminalScrollbackKey, String(preferences.scrollback));
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key: terminalSettingsKey },
-    }),
-  );
+  announceSettingChange(terminalSettingsKey);
 }
 
 export function subscribeTerminalPreferences(
   listener: (preferences: TerminalPreferences) => void,
 ): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === terminalSettingsKey) listener(getTerminalPreferences());
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (
-      event.key === null ||
-      event.key === terminalCursorBlinkKey ||
-      event.key === terminalFontSizeKey ||
-      event.key === terminalScrollbackKey
-    ) {
-      listener(getTerminalPreferences());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(
+    terminalSettingsKey,
+    () => listener(getTerminalPreferences()),
+    [terminalCursorBlinkKey, terminalFontSizeKey, terminalScrollbackKey],
+  );
 }
 
 function boundedStoredInteger(
@@ -664,25 +471,9 @@ export function getClickNamesToFilter(): boolean {
 
 export function setClickNamesToFilter(value: boolean): void {
   localStorage.setItem(clickNamesToFilterKey, String(value));
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key: clickNamesToFilterKey },
-    }),
-  );
+  announceSettingChange(clickNamesToFilterKey);
 }
 
 export function subscribeClickNamesToFilter(listener: () => void): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === clickNamesToFilterKey) listener();
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === clickNamesToFilterKey) listener();
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
+  return subscribeSettingChange(clickNamesToFilterKey, listener);
 }

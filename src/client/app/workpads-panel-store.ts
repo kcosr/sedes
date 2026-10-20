@@ -5,6 +5,7 @@ import {
   type ScopeListSort,
   type ScopeView,
 } from "../components/scope-view/scope-views.js";
+import { isRecord } from "../../shared/json-guards.js";
 
 /**
  * Viewer-local Workpads preferences, mirroring Tasks'. Workpads are
@@ -68,10 +69,6 @@ if (typeof window !== "undefined") {
       cachedSnapshot = null;
     }
   });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function pick<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {

@@ -1367,12 +1367,12 @@ export class ThreadRuntimeCoordinator {
     signal: AbortSignal,
     onTargetResolved: (access: "execution" | "history") => void,
   ): Promise<EstablishedRuntime> {
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     const target = await abortable(
       this.#targets.resolve(scope, applicationThreadId),
       signal,
     );
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     onTargetResolved(target.access ?? "execution");
     const actorAcquisition = this.#actors.acquire(target, {
       idleRelease: "evict",
@@ -1911,10 +1911,6 @@ export class ThreadRuntimeCoordinator {
   }
 }
 
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw signal.reason;
-}
-
 function runtimeMatches(
   runtime: EstablishedRuntime,
   expected: ThreadForceResetConversationRuntimeBlocker,
@@ -1932,7 +1928,7 @@ async function abortable<T>(
   value: Promise<T>,
   signal: AbortSignal,
 ): Promise<T> {
-  throwIfAborted(signal);
+  signal.throwIfAborted();
   let abort: (() => void) | undefined;
   try {
     return await Promise.race([

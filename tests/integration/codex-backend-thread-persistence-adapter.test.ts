@@ -14,7 +14,7 @@ import {
 } from "../../src/server/backends/codex/codex-binding-codec.js";
 import { CodexThreadExecutionSettingsRepository } from "../../src/server/backends/codex/codex-thread-execution-settings-repository.js";
 import type { CodexExecutionPolicySelection } from "../../src/server/backends/codex/codex-execution-policy.js";
-import { codexObservedThreadExecutionSettings } from "../../src/server/backends/codex/codex-conversation-handle.js";
+import { codexObservedThreadExecutionSettings } from "../../src/server/backends/codex/codex-observed-execution-settings.js";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
 import {

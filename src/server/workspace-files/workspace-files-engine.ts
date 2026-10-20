@@ -89,10 +89,6 @@ function combineAbortSignals(
   return AbortSignal.any([providerSignal, consumerSignal]);
 }
 
-function isWithin(root: string, candidate: string): boolean {
-  return pathIsWithin(root, candidate);
-}
-
 function isMaximumBufferError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -557,7 +553,7 @@ export class WorkspaceFilesEngine {
     const primary = records
       .filter(({ worktreePath }) => {
         const normalized = normalizedAbsolutePath(worktreePath);
-        return normalized !== undefined && isWithin(normalized, root);
+        return normalized !== undefined && pathIsWithin(normalized, root);
       })
       .sort(
         (left, right) => right.worktreePath.length - left.worktreePath.length,
@@ -595,7 +591,7 @@ export class WorkspaceFilesEngine {
         continue;
       if (
         policyRoots &&
-        !policyRoots.some((policyRoot) => isWithin(policyRoot, canonical))
+        !policyRoots.some((policyRoot) => pathIsWithin(policyRoot, canonical))
       ) {
         continue;
       }
@@ -702,8 +698,8 @@ export class WorkspaceFilesEngine {
       checkout !== target.canonicalCheckoutPath ||
       normalizedAbsolutePath(checkout ?? "") === undefined ||
       (target.policyRootPath !== undefined &&
-        !isWithin(target.policyRootPath, checkout!)) ||
-      isWithin(checkout!, primaryRoot)
+        !pathIsWithin(target.policyRootPath, checkout!)) ||
+      pathIsWithin(checkout!, primaryRoot)
     ) {
       throw new WorkspaceFileRootUnavailableError();
     }
@@ -857,7 +853,7 @@ export class WorkspaceFilesEngine {
       reference.kind === "absolute"
         ? reference.path
         : path.join(root, ...reference.path.split("/"));
-    if (!path.isAbsolute(absolutePath) || !isWithin(root, absolutePath)) {
+    if (!path.isAbsolute(absolutePath) || !pathIsWithin(root, absolutePath)) {
       return undefined;
     }
     const requestedRelative = normalizedPath(
@@ -871,7 +867,7 @@ export class WorkspaceFilesEngine {
       return undefined;
     }
     const canonical = await realpath(absolutePath).catch(() => undefined);
-    if (!canonical || !isWithin(root, canonical)) return undefined;
+    if (!canonical || !pathIsWithin(root, canonical)) return undefined;
     const canonicalRelative = normalizedPath(
       path.relative(root, canonical).split(path.sep).join("/"),
     );
@@ -1008,7 +1004,7 @@ export class WorkspaceFilesEngine {
       path.relative(root, canonical).split(path.sep).join("/"),
     );
     if (
-      !isWithin(root, canonical) ||
+      !pathIsWithin(root, canonical) ||
       !canonicalRelative ||
       isSensitiveWorkspacePath(canonicalRelative) ||
       isWorkspaceFileWriteTemporaryPath(canonicalRelative)
@@ -1023,7 +1019,7 @@ export class WorkspaceFilesEngine {
       // the parent-directory swap race between the initial realpath and open.
       const openedPath = await revalidatedPathForOpenHandle(handle, canonical);
       if (!openedPath) throw new WorkspaceFileAccessError();
-      if (!isWithin(root, openedPath) || openedPath !== canonical) {
+      if (!pathIsWithin(root, openedPath) || openedPath !== canonical) {
         throw new WorkspaceFileAccessError();
       }
       const metadata = await handle.stat({ bigint: true }).catch(() => {
@@ -1067,7 +1063,7 @@ export class WorkspaceFilesEngine {
         });
       if (
         revalidatedOpenedPath !== openedPath ||
-        !isWithin(root, revalidatedOpenedPath) ||
+        !pathIsWithin(root, revalidatedOpenedPath) ||
         !revalidatedMetadata.isFile() ||
         revisionToken(revalidatedMetadata as never) !== descriptorRevision
       ) {
@@ -1178,7 +1174,7 @@ export class WorkspaceFilesEngine {
       path.relative(root, canonical).split(path.sep).join("/"),
     );
     if (
-      !isWithin(root, canonical) ||
+      !pathIsWithin(root, canonical) ||
       !canonicalRelative ||
       isSensitiveWorkspacePath(canonicalRelative) ||
       isWorkspaceFileWriteTemporaryPath(canonicalRelative)
@@ -1191,7 +1187,7 @@ export class WorkspaceFilesEngine {
     try {
       const openedPath = await revalidatedPathForOpenHandle(handle, canonical);
       if (!openedPath) throw new WorkspaceFileAccessError();
-      if (openedPath !== canonical || !isWithin(root, openedPath)) {
+      if (openedPath !== canonical || !pathIsWithin(root, openedPath)) {
         throw new WorkspaceFileAccessError();
       }
       const metadata = await handle.stat({ bigint: true }).catch(() => {
@@ -1292,7 +1288,7 @@ export class WorkspaceFilesEngine {
     const admittedParent = await realpath(requestedParent).catch(() => {
       throw new WorkspaceFileAccessError();
     });
-    if (!isWithin(admittedRoot, admittedParent)) {
+    if (!pathIsWithin(admittedRoot, admittedParent)) {
       throw new WorkspaceFileAccessError();
     }
     const basename = path.basename(candidate);
@@ -1307,7 +1303,7 @@ export class WorkspaceFilesEngine {
       });
       if (
         canonicalParent !== admittedParent ||
-        !isWithin(root, canonicalParent)
+        !pathIsWithin(root, canonicalParent)
       ) {
         throw new WorkspaceFileRevisionConflictError();
       }
@@ -1327,7 +1323,7 @@ export class WorkspaceFilesEngine {
         );
         if (
           openedParent !== canonicalParent ||
-          !isWithin(root, canonicalParent)
+          !pathIsWithin(root, canonicalParent)
         ) {
           throw new WorkspaceFileRevisionConflictError();
         }
@@ -1385,7 +1381,7 @@ export class WorkspaceFilesEngine {
             );
             if (
               !openedTemporaryPath ||
-              !isWithin(root, openedTemporaryPath) ||
+              !pathIsWithin(root, openedTemporaryPath) ||
               path.dirname(openedTemporaryPath) !== canonicalParent
             ) {
               throw new WorkspaceFileRevisionConflictError();
@@ -1402,7 +1398,7 @@ export class WorkspaceFilesEngine {
             parentHandle,
             canonicalParent,
           );
-          if (freshParent !== canonicalParent || !isWithin(root, freshParent)) {
+          if (freshParent !== canonicalParent || !pathIsWithin(root, freshParent)) {
             throw new WorkspaceFileRevisionConflictError();
           }
           const fresh = await this.#openedTarget(
@@ -1644,7 +1640,7 @@ export class WorkspaceFilesEngine {
       const openedPath = await revalidatedPathForOpenHandle(handle, candidate);
       if (
         !openedPath ||
-        !isWithin(root, openedPath) ||
+        !pathIsWithin(root, openedPath) ||
         path.dirname(openedPath) !== canonicalParent
       ) {
         return undefined;
@@ -1772,7 +1768,7 @@ export class WorkspaceFilesEngine {
             path.relative(root, canonical).split(path.sep).join("/"),
           );
     if (
-      !isWithin(root, canonical) ||
+      !pathIsWithin(root, canonical) ||
       canonicalRelative === undefined ||
       (canonicalRelative !== "" &&
         (isSensitiveWorkspacePath(canonicalRelative) ||
@@ -1786,7 +1782,7 @@ export class WorkspaceFilesEngine {
     try {
       const opened = await revalidatedPathForOpenHandle(handle, canonical);
       if (!opened) throw new WorkspaceFileAccessError();
-      if (opened !== canonical || !isWithin(root, opened)) {
+      if (opened !== canonical || !pathIsWithin(root, opened)) {
         throw new WorkspaceFileAccessError();
       }
       const entries: WorkspaceFileDirectoryEntry[] = [];
@@ -1804,7 +1800,7 @@ export class WorkspaceFilesEngine {
         );
         if (
           currentDirectory !== canonical ||
-          !isWithin(root, currentDirectory)
+          !pathIsWithin(root, currentDirectory)
         ) {
           throw new WorkspaceFileAccessError();
         }
@@ -1876,7 +1872,7 @@ export class WorkspaceFilesEngine {
         );
         if (
           currentDirectory !== canonicalDirectory ||
-          !isWithin(root, currentDirectory)
+          !pathIsWithin(root, currentDirectory)
         ) {
           return;
         }
@@ -1910,7 +1906,7 @@ export class WorkspaceFilesEngine {
             );
             if (
               openedDirectory !== expectedDirectory ||
-              !isWithin(root, openedDirectory)
+              !pathIsWithin(root, openedDirectory)
             ) {
               continue;
             }

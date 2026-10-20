@@ -10,7 +10,7 @@
   "fontSizeLiterals": {
     "components/thread/flat-thread-row.css": 12,
     "components/thread/thread-group-roster.css": 1,
-    "styles.css": 212,
+    "styles.css": 209,
     "usage/usage.css": 22,
     "workpads/WorkpadDocument.css": 2,
     "workspace-files/workspace-compare.css": 19,
@@ -19,7 +19,7 @@
   "fontWeightLiterals": {
     "components/thread/flat-thread-row.css": 5,
     "components/thread/thread-group-roster.css": 1,
-    "styles.css": 73,
+    "styles.css": 72,
     "usage/usage.css": 13,
     "workspace-files/workspace-compare.css": 2
   },

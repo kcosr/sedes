@@ -99,18 +99,17 @@ export function openCodeNativeParser<T>(schema: Schema.Constraint, json = true):
     catch { throw new OpenCodeNativeProtocolError(); }
   };
 }
-export const parser = openCodeNativeParser;
-export const parseOpenCodeNativeMessage = parser<OpenCodeNativeMessage>(PublicSessionMessage);
-export const parseOpenCodeNativeEvent = parser<OpenCodeNativeEvent>(EventSchema, false);
-export const parseSession = parser<OpenCodeNativeSession>(NativeSession);
-export const parseMessagePage = parser<SessionMessagesResponse>(MessagePage);
-export const parseSessionPage = parser<SessionsResponse>(SessionPage);
-export const parseActive = parser<Record<string, { type: "running" }>>(Active);
-export const parseInbox = parser<OpenCodeNativeInboxItem[]>(Schema.Array(NativeInbox));
-export const parsePermissions = parser<PermissionRequest[]>(Schema.Array(Permission.Request));
-export const parseForms = parser<FormInfo[]>(Schema.Array(Form.Info));
-export const parseShells = parser<{ location: { directory?: string }; data: OpenCodeNativeShell[] }>(ShellList);
-export const parseInterrupt = parser<{ interrupted: boolean }>(Interrupt);
+export const parseOpenCodeNativeMessage = openCodeNativeParser<OpenCodeNativeMessage>(PublicSessionMessage);
+export const parseOpenCodeNativeEvent = openCodeNativeParser<OpenCodeNativeEvent>(EventSchema, false);
+export const parseSession = openCodeNativeParser<OpenCodeNativeSession>(NativeSession);
+export const parseMessagePage = openCodeNativeParser<SessionMessagesResponse>(MessagePage);
+export const parseSessionPage = openCodeNativeParser<SessionsResponse>(SessionPage);
+export const parseActive = openCodeNativeParser<Record<string, { type: "running" }>>(Active);
+export const parseInbox = openCodeNativeParser<OpenCodeNativeInboxItem[]>(Schema.Array(NativeInbox));
+export const parsePermissions = openCodeNativeParser<PermissionRequest[]>(Schema.Array(Permission.Request));
+export const parseForms = openCodeNativeParser<FormInfo[]>(Schema.Array(Form.Info));
+export const parseShells = openCodeNativeParser<{ location: { directory?: string }; data: OpenCodeNativeShell[] }>(ShellList);
+export const parseInterrupt = openCodeNativeParser<{ interrupted: boolean }>(Interrupt);
 
 export function decodedBytes(value: unknown): number {
   try { return Buffer.byteLength(JSON.stringify(value)); }

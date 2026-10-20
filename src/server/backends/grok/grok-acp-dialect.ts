@@ -10,6 +10,7 @@ import {
   decodeGrokSubagentEvent,
   type GrokSubagentEvent,
 } from "./grok-subagent-reducer.js";
+import { isRecord } from "../../../shared/json-guards.js";
 
 export const GROK_ACP_DIALECT_PROFILE = GROK_ACP_REVIEWED_PROFILE;
 export const GROK_CACHED_TOKEN_AUTH_METHOD_ID = "cached_token" as const;
@@ -853,8 +854,4 @@ function boundedString(
     Buffer.byteLength(value) <= maximumBytes
     ? value
     : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

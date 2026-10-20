@@ -5,6 +5,7 @@ import {
   boundDisplayText,
   boundText,
 } from "../../conversations/payload-policy.js";
+import { isRecord } from "../../../shared/json-guards.js";
 
 const MAXIMUM_IDENTIFIER_BYTES = 1_024;
 const MAXIMUM_RETAINED_PROGRESS_TOOL_NAMES = 16;
@@ -533,10 +534,6 @@ function invalidIdentity(): GrokSubagentReduction {
 }
 
 const INVALID = Symbol("invalid");
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function own(value: Readonly<Record<string, unknown>>, key: string): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(value, key);

@@ -56,6 +56,7 @@ import {
   type GrokSessionRoute,
   type GrokSessionState,
 } from "./grok-session-registry.js";
+import { isRecord } from "../../../shared/json-guards.js";
 
 const MAXIMUM_LISTED_SESSIONS = 1_000;
 const MAXIMUM_LIST_PAGES = 32;
@@ -2307,10 +2308,6 @@ function rejectDeferred<T>(deferredValue: Deferred<T>, reason: unknown): void {
   if (deferredValue.settled) return;
   deferredValue.settled = true;
   deferredValue.reject(reason);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function sameRoute(left: GrokSessionRoute, right: GrokSessionRoute): boolean {

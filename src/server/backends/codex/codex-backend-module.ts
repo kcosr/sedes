@@ -45,10 +45,8 @@ import {
 import { CodexThreadPresentationProvider } from "./codex-thread-presentation-provider.js";
 import { CodexGoalSessionRegistry } from "./codex-goal-session.js";
 import { CodexFastModeSessionRegistry } from "./codex-fast-mode-session.js";
-import type {
-  CodexExecutionSettingsProvider,
-  CodexObservedExecutionSettings,
-} from "./codex-conversation-handle.js";
+import type { CodexExecutionSettingsProvider } from "./codex-conversation-handle.js";
+import type { CodexObservedExecutionSettings } from "./codex-observed-execution-settings.js";
 import {
   CodexThreadExecutionSettingsRepository,
   type CodexExecutionSettingsTuple,

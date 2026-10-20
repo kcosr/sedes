@@ -32,8 +32,8 @@ vi.mock("@pierre/diffs/react", () => ({
 }));
 
 vi.mock("../../context-excerpts/coordinator.js", () => ({
-  useContextExcerptStaging: () => ({ stage: stagingCaptures.stage }),
-  useContextExcerptStagingSnapshot: () => ({
+  useComposerDraftStaging: () => ({ stage: stagingCaptures.stage }),
+  useComposerDraftStagingSnapshot: () => ({
     available: stagingCaptures.available,
   }),
 }));

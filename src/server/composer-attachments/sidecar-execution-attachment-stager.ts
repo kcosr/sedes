@@ -73,7 +73,7 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
       attempt < MAXIMUM_RECONCILIATION_ATTEMPTS;
       attempt += 1
     ) {
-      throwIfAborted(request.signal);
+      request.signal?.throwIfAborted();
       let lease: SidecarRuntimeLease<SidecarClientSession>;
       try {
         lease = await this.#runtime.acquireOperation(
@@ -214,7 +214,7 @@ async function* chunksFromOffset(
 ): AsyncIterable<Uint8Array> {
   let skipped = 0;
   for await (const input of source) {
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     if (!(input instanceof Uint8Array)) {
       throw new Error("composer_attachment_content_invalid");
     }
@@ -256,10 +256,6 @@ function unavailable(
   return new ExecutionAttachmentStagingUnavailableError(
     error === undefined ? undefined : { cause: error },
   );
-}
-
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw signal.reason;
 }
 
 function withoutState(input: {

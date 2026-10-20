@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { isRecord } from "../../../../shared/json-guards.js";
 
 export type ClaudeWorkerSupervisionMessage =
   | Readonly<{
@@ -195,8 +196,4 @@ export function parseClaudeWorkerSupervisionMessage(
     throw new Error("claude_runtime_worker_parent_ipc_message_invalid");
   }
   return value as ClaudeWorkerSupervisionMessage;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
