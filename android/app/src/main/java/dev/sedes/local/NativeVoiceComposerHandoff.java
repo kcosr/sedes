@@ -2,7 +2,7 @@ package dev.sedes.local;
 
 import java.util.Objects;
 
-/** Live-process reservation: once offered, this recording cannot fall back to native submission. */
+/** Live-process reservation for a composer route chosen when recording finishes. */
 final class NativeVoiceComposerHandoff {
     final String id, binding, recordingId, threadId, text, mode;
     final long generation;
@@ -22,16 +22,14 @@ final class NativeVoiceComposerHandoff {
             targetThread.equals(foregroundThread);
     }
 
-    boolean current(String owner, long generation, Object context, boolean nativeVisible,
-            boolean foregroundVisible, boolean composerAvailable, String foregroundThread) {
+    boolean current(String owner, long generation, Object context, boolean nativeVisible, boolean foregroundVisible) {
         return !finished && Objects.equals(binding, owner) && this.generation == generation &&
-            this.context == context && eligible(nativeVisible, foregroundVisible, composerAvailable, foregroundThread, threadId);
+            this.context == context && nativeVisible && foregroundVisible;
     }
 
-    void claim(String owner, long generation, Object context, boolean nativeVisible,
-            boolean foregroundVisible, boolean composerAvailable, String foregroundThread) {
+    void claim(String owner, long generation, Object context, boolean nativeVisible, boolean foregroundVisible) {
         if (claimed || finished) throw new IllegalStateException("composer_handoff_changed");
-        if (!current(owner, generation, context, nativeVisible, foregroundVisible, composerAvailable, foregroundThread))
+        if (!current(owner, generation, context, nativeVisible, foregroundVisible))
             throw new IllegalStateException("composer_handoff_unavailable");
         claimed = true;
     }

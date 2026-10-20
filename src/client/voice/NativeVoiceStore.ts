@@ -16,6 +16,24 @@ export interface VoiceClientState {
 export type VoiceSettingsPatch = Partial<NativeVoiceSettings> | ((current: NativeVoiceState) => Partial<NativeVoiceSettings> | null);
 /** Ownership is synchronous; optional submission work outlives the mounted composer. */
 export type VoiceComposerAdoption = { readonly submission?: Promise<void> } | void;
+/** Only pre-adoption work is cancellable. Once speech is saved, return ownership even if this guard changed during the write. */
+export interface VoiceDetachedComposerContext {
+  readonly signal: AbortSignal;
+  assertCurrent(): void;
+  /** Final synchronous check before the first draft write; a returning live composer can take over only before this boundary. */
+  beginSave(): void;
+}
+type DetachedSubmissionHandler = (event: NativeVoiceComposerHandoff, context: VoiceDetachedComposerContext) => Promise<VoiceComposerAdoption>;
+interface ComposerDraftFlush {
+  readonly promise: Promise<void>;
+  /** Mixed pending queues cannot use the same-composer shortcut. */
+  readonly owner: object | undefined;
+  settled?: PromiseSettledResult<void>;
+}
+class ComposerReturnedBeforeSave extends Error {
+  constructor() { super("The original message composer is available again."); }
+}
+const COMPOSER_HANDOFF_WAIT_MS = 30_000;
 const RETRY_BASE_MS = 2_000;
 const RETRY_MAX_MS = 60_000;
 /** Entering one of these phases means a new interaction is under way, so an earlier failure no longer describes the bar. */
@@ -42,7 +60,10 @@ export class NativeVoiceStore {
   #stopping = new Map<string, Promise<void>>();
   #composers = new Map<string, (text: string) => void>();
   #composerListeners = new Set<() => void>();
-  #submissionComposers = new Map<string, (event: NativeVoiceComposerHandoff) => VoiceComposerAdoption>();
+  #submissionComposers = new Map<string, { readonly accept: (event: NativeVoiceComposerHandoff) => VoiceComposerAdoption; readonly ready: boolean; readonly owner: object }>();
+  #detachedSubmissionHandler: DetachedSubmissionHandler | undefined;
+  #composerDraftFlushes = new Map<string, ComposerDraftFlush>();
+  #handoffControllers = new Set<AbortController>();
   #submissionComposerListeners = new Set<() => void>();
   #seenHandoffs = new Set<string>();
   constructor(readonly plugin: NativeVoicePlugin, readonly connection: { profileId: string; serverOrigin: string; identity: string }, readonly openThread: (threadId: string) => void) {}
@@ -66,15 +87,41 @@ export class NativeVoiceStore {
     for (const listener of this.#composerListeners) listener();
     return () => { if (this.#composers.get(threadId) === append) this.#composers.delete(threadId); };
   }
-  /** Separate from recovery insertion: only the current live Chat can take ownership and send. */
-  registerSubmissionComposer(threadId: string, accept: (event: NativeVoiceComposerHandoff) => VoiceComposerAdoption): () => void {
-    this.#submissionComposers.set(threadId, accept);
+  /** Presence freezes native composer intent independently of readiness to capture the live draft. */
+  registerSubmissionComposer(threadId: string, accept: (event: NativeVoiceComposerHandoff) => VoiceComposerAdoption, ready: boolean, owner: object): () => void {
+    const registration = { accept, ready, owner };
+    this.#submissionComposers.set(threadId, registration);
     this.#notifySubmissionComposers();
     return () => {
-      if (this.#submissionComposers.get(threadId) !== accept) return;
+      if (this.#submissionComposers.get(threadId) !== registration) return;
       this.#submissionComposers.delete(threadId);
       this.#notifySubmissionComposers();
     };
+  }
+  /** Mounted above thread navigation, this submits the original thread's saved composer after its departing view has flushed. */
+  registerDetachedSubmissionHandler(handler: DetachedSubmissionHandler): () => void {
+    this.#detachedSubmissionHandler = handler;
+    return () => { if (this.#detachedSubmissionHandler === handler) this.#detachedSubmissionHandler = undefined; };
+  }
+  /** Publish synchronously before unregistering, including rejected flushes that must prevent an incomplete draft from sending. */
+  publishComposerDraftFlush(threadId: string, flush: Promise<unknown>, owner: object): void {
+    const previous = this.#composerDraftFlushes.get(threadId);
+    const current = flush.then(() => undefined);
+    const pendingPrevious = previous && !previous.settled ? previous : undefined;
+    const pendingOwner = pendingPrevious && pendingPrevious.owner !== owner ? undefined : owner;
+    // A clean remount can publish an already-resolved flush while the old view's
+    // final PUT is still pending. Retain every unfinished write before reading.
+    const pending = pendingPrevious ? Promise.allSettled([pendingPrevious.promise, current]).then(([earlier, latest]) => {
+      if (latest.status === "rejected") throw latest.reason;
+      // One queue's corrected successor can supersede its earlier failure. A
+      // different queue's clean flush cannot prove those unsaved edits survived.
+      if (earlier.status === "rejected" && pendingOwner === undefined) throw earlier.reason;
+    }) : current;
+    const record: ComposerDraftFlush = { promise: pending, owner: pendingOwner };
+    // Departure can happen long before a voice handoff. Observe failures now,
+    // retaining the rejection for a later handoff to report through recovery.
+    void pending.then(() => { record.settled = { status: "fulfilled", value: undefined }; }, reason => { record.settled = { status: "rejected", reason }; });
+    this.#composerDraftFlushes.set(threadId, record);
   }
   hasSubmissionComposer = (threadId: string | null): boolean => threadId !== null && this.#submissionComposers.has(threadId);
   subscribeSubmissionComposers = (listener: () => void): (() => void) => {
@@ -97,6 +144,116 @@ export class NativeVoiceStore {
         state.profileId === event.profileId && state.serverOrigin === event.serverOrigin && state.identity === event.identity)
       this.#accept(state);
   }
+  #assertHandoffBinding(event: NativeVoiceComposerHandoff): void {
+    if (!this.#matchesHandoff(event))
+      throw new Error("Open the recording's live Chat to send it with the composer.");
+  }
+  #assertHandoffCurrent(event: NativeVoiceComposerHandoff, interactionId: string | undefined): void {
+    this.#assertHandoffBinding(event);
+    const current = this.#state.native!;
+    if ((typeof document !== "undefined" && document.visibilityState === "hidden") || !current.foreground.visible)
+      throw new Error("Open the recording's live Chat to send it with the composer.");
+    if (current.phase !== "submitting" || current.active?.id !== interactionId ||
+        current.active?.recording?.id !== event.recordingId || current.active.recognitionThreadId !== event.threadId)
+      throw new Error("The recording changed before the composer could accept it.");
+  }
+  #readySubmissionComposer(threadId: string): ((event: NativeVoiceComposerHandoff) => VoiceComposerAdoption) | undefined {
+    const composer = this.#submissionComposers.get(threadId);
+    if (!composer?.ready) return;
+    // The newest record includes every preceding unfinished write. One queue
+    // can serialize its own flush, but cannot overtake another queue's edits.
+    const flush = this.#composerDraftFlushes.get(threadId);
+    if (flush && !flush.settled && composer.owner !== flush.owner)
+      throw new Error("The original composer's draft is still saving. Wait for it to finish, then retry the saved dictation.");
+    return composer.accept;
+  }
+  async #adoptDetached(event: NativeVoiceComposerHandoff, interactionId: string | undefined): Promise<VoiceComposerAdoption> {
+    const handler = this.#detachedSubmissionHandler;
+    if (!handler) throw new Error("Open the recording's live Chat to send it with the composer.");
+    const controller = new AbortController();
+    this.#handoffControllers.add(controller);
+    let speechAdopted = false;
+    let saveStarted = false;
+    const assertCurrent = () => {
+      if (controller.signal.aborted) throw controller.signal.reason;
+      // Native retires the recording once ownership is acknowledged. A send
+      // already adopted into its draft still belongs to the original connection.
+      if (speechAdopted) this.#assertHandoffBinding(event);
+      else this.#assertHandoffCurrent(event, interactionId);
+      if (!speechAdopted && !saveStarted && this.#submissionComposers.get(event.threadId)?.ready) throw new ComposerReturnedBeforeSave();
+    };
+    const beginSave = () => { assertCurrent(); saveStarted = true; };
+    const check = () => {
+      try { assertCurrent(); }
+      catch (error) { controller.abort(error); }
+    };
+    const unsubscribe = this.subscribe(check);
+    const unsubscribeComposers = this.subscribeSubmissionComposers(check);
+    const timer = setTimeout(() => controller.abort(new Error("The saved composer draft is taking too long. Open the original thread to review the message.")), COMPOSER_HANDOFF_WAIT_MS);
+    if (typeof document !== "undefined") document.addEventListener?.("visibilitychange", check);
+    const cleanup = () => {
+      clearTimeout(timer);
+      unsubscribe();
+      unsubscribeComposers();
+      if (typeof document !== "undefined") document.removeEventListener?.("visibilitychange", check);
+      this.#handoffControllers.delete(controller);
+    };
+    let submissionOwnsGuard = false;
+    try {
+      let flush: ComposerDraftFlush | undefined;
+      // A new departure can supersede a flush while an earlier save is pending.
+      // Do not read the server draft until the latest published write settles.
+      do {
+        assertCurrent();
+        flush = this.#composerDraftFlushes.get(event.threadId);
+        if (flush) {
+          try {
+            await this.#awaitHandoffFlush(flush.promise, controller.signal);
+          }
+          catch (error) {
+            // A subsequent departure may already be saving a corrected draft.
+            // Only the current flush's failure fences this handoff.
+            if (controller.signal.aborted || flush === this.#composerDraftFlushes.get(event.threadId)) throw error;
+          }
+        }
+      } while (flush !== this.#composerDraftFlushes.get(event.threadId));
+      assertCurrent();
+      // Do not race this promise against cancellation: a write already in flight
+      // may have durably adopted speech and must settle ownership exactly once.
+      const adopted = await handler(event, { signal: controller.signal, assertCurrent, beginSave });
+      speechAdopted = true;
+      if (adopted?.submission) {
+        submissionOwnsGuard = true;
+        // Delivery may still be preparing its authenticated request. Keep
+        // cancellation live until it settles, but the adoption deadline is over.
+        void adopted.submission.then(cleanup, cleanup);
+      }
+      return adopted;
+    } catch (error) {
+      if (!saveStarted && controller.signal.reason instanceof ComposerReturnedBeforeSave) {
+        // The detached read/flush was cancelled before any mutation. Capture the
+        // returned composer's current local contents synchronously, just like an
+        // original live handoff. Its own refusal remains final.
+        this.#assertHandoffCurrent(event, interactionId);
+        const accept = this.#readySubmissionComposer(event.threadId);
+        if (accept) return accept(event);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      if (!submissionOwnsGuard) cleanup();
+    }
+  }
+  #awaitHandoffFlush(flush: Promise<void>, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const abort = () => { signal.removeEventListener("abort", abort); reject(signal.reason); };
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+      void flush.then(() => { signal.removeEventListener("abort", abort); resolve(); }, error => {
+        signal.removeEventListener("abort", abort); reject(error);
+      });
+    });
+  }
   async #handoff(event: NativeVoiceComposerHandoff): Promise<void> {
     const context = { expectedConnectionGeneration: event.connectionGeneration, handoffId: event.handoffId };
     let claimed: NativeVoiceState;
@@ -118,19 +275,13 @@ export class NativeVoiceStore {
     let message: string | undefined;
     let submission: Promise<{ failed: false } | { failed: true; error: unknown }> | undefined;
     try {
-      if (!this.#matchesHandoff(event) || (typeof document !== "undefined" && document.visibilityState === "hidden"))
-        throw new Error("Open the recording's live Chat to send it with the composer.");
-      const current = this.#state.native;
-      if (!current?.foreground.visible || !current.foreground.composerAvailable || current.foreground.threadId !== event.threadId)
-        throw new Error("Open the recording's live Chat to send it with the composer.");
-      if (current?.phase !== "submitting" || current.active?.id !== claimed.active?.id ||
-          current.active?.recording?.id !== event.recordingId ||
-          current.active.recognitionThreadId !== event.threadId)
-        throw new Error("The recording changed before the composer could accept it.");
-      const accept = this.#submissionComposers.get(event.threadId);
-      if (!accept) throw new Error("Open the recording's live Chat to send it with the composer.");
+      this.#assertHandoffCurrent(event, claimed.active?.id);
+      // Layout registration is the current view's authority. Native foreground
+      // thread/composer snapshots may still describe the preceding navigation.
+      const accept = this.#readySubmissionComposer(event.threadId);
       // No await between checking the latest view and capturing its live draft.
-      const adopted = accept(event);
+      // A ready composer's refusal is final. An absent or resuming view uses the saved draft.
+      const adopted = accept ? accept(event) : await this.#adoptDetached(event, claimed.active?.id);
       // Observe rejection immediately, including while native ownership acknowledgement
       // is pending. Delivery failure cannot return already adopted speech to recovery.
       submission = adopted?.submission?.then(() => ({ failed: false as const }), error => ({ failed: true as const, error }));
@@ -360,6 +511,10 @@ export class NativeVoiceStore {
   }
   dispose(): void {
     this.#disposed = true;
+    for (const controller of this.#handoffControllers) controller.abort(new Error("This voice connection is no longer active."));
+    this.#handoffControllers.clear();
+    this.#composerDraftFlushes.clear();
+    this.#detachedSubmissionHandler = undefined;
     for (const listener of this.#composerListeners) listener();
     this.#composers.clear();
     this.#submissionComposers.clear();

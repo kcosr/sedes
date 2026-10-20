@@ -65,7 +65,8 @@ import {
 import { Button } from "../components/ui/button.js";
 import { ThreadArchiveOperationHost } from "../operations/ThreadArchiveOperationHost.js";
 import { OperationOverlayHost } from "../operations/OperationOverlay.js";
-import { useClientOrigin } from "../voice/VoiceProvider.js";
+import { useClientOrigin, useNativeVoice } from "../voice/VoiceProvider.js";
+import { prepareDetachedVoiceSubmission } from "../voice/detached-composer-submission.js";
 import { disconnectNativeVoice } from "../voice/native-voice-plugin.js";
 
 export function App({
@@ -689,6 +690,7 @@ function ConnectedApp({
   // Deliveries read the advisory origin when sent. It arrives after startup on Android and changes on native reconnects,
   // neither of which may rebuild the API client, transport, or stores.
   const clientOrigin = useClientOrigin();
+  const voice = useNativeVoice();
   const clientOriginRef = useRef(clientOrigin);
   useLayoutEffect(() => { clientOriginRef.current = clientOrigin; }, [clientOrigin]);
   const dependencies = useMemo(() => {
@@ -700,6 +702,7 @@ function ConnectedApp({
       threadRegistry.setExperimentalUsageEnabled(applicationStore.getSnapshot().experimentalUsageEnabled);
     });
     return {
+      api,
       unsubscribeUsage,
       transport,
       applicationStore,
@@ -711,6 +714,13 @@ function ConnectedApp({
     };
   }, [endpoint.baseUrl, panelTenants]);
   const state = useApplicationStore(dependencies.applicationStore);
+
+  useLayoutEffect(() => {
+    if (!voice) return;
+    return voice.registerDetachedSubmissionHandler((event, context) =>
+      prepareDetachedVoiceSubmission(dependencies.api, event, context,
+        () => dependencies.applicationStore.getSnapshot().snapshot?.tasks));
+  }, [voice, dependencies]);
 
   useEffect(() => {
     dependencies.mounted = true;

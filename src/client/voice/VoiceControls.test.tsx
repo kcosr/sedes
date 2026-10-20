@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { navigate, threadPath } from "../app/router.js";
@@ -40,9 +40,10 @@ function ShowWhenOff({ value }: { value: boolean }) {
   useEffect(() => { setShow(value); }, [setShow, value]);
   return null;
 }
-function SubmissionComposerFixture({ threadId }: { threadId: string }) {
+function SubmissionComposerFixture({ threadId, ready }: { threadId: string; ready: boolean }) {
   const store = useNativeVoice();
-  useEffect(() => store?.registerSubmissionComposer(threadId, () => {}), [store, threadId]);
+  const owner = useRef<object>({}).current;
+  useEffect(() => store?.registerSubmissionComposer(threadId, () => {}, ready, owner), [store, threadId, ready, owner]);
   return null;
 }
 function renderControls(showWhenOff?: boolean) {
@@ -1758,12 +1759,17 @@ describe("voice controls card lifecycle", () => {
   it("publishes live composer presence separately from the viewed route and updates it on registration changes", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready());
     navigate(threadPath("named"), { replace: true });
-    const tree = (registeredThread?: string) => <VoiceProvider profileId={VOICE_CONNECTION.profileId}
+    const tree = (registeredThread?: string, composerReady = true) => <VoiceProvider profileId={VOICE_CONNECTION.profileId}
       endpoint={{ baseUrl: VOICE_CONNECTION.serverOrigin }} identity={VOICE_IDENTITY}>
-      {registeredThread && <SubmissionComposerFixture threadId={registeredThread} />}
+      {registeredThread && <SubmissionComposerFixture threadId={registeredThread} ready={composerReady} />}
       <VoiceControls threads={threads} />
     </VoiceProvider>;
-    const view = render(tree("named"));
+    const view = render(tree("named", false));
+    // A visible composer still determines native voice intent while its draft
+    // loads. Readiness controls live adoption independently of this presence.
+    await waitFor(() => expect(voice.fake.plugin.setForegroundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threadId: "named", composerAvailable: true })));
+    view.rerender(tree("named", true));
     await waitFor(() => expect(voice.fake.plugin.setForegroundContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ threadId: "named", composerAvailable: true })));
     view.rerender(tree("other-thread"));

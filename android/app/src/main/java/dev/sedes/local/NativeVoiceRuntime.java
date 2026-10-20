@@ -107,6 +107,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private volatile boolean nativeVisible;
     /** Invalidates a queued local UI event even if navigation or visibility changes back before dispatch. */
     private volatile Object inputSubmissionContext = new Object();
+    /** Composer sends survive navigation, but a visibility interruption still revokes an unclaimed handoff. */
+    private volatile Object composerVisibilityContext = new Object();
     private static final AtomicReferenceFieldUpdater<NativeVoiceRuntime, Object> INPUT_CONTEXT =
         AtomicReferenceFieldUpdater.newUpdater(NativeVoiceRuntime.class, Object.class, "inputSubmissionContext");
     private volatile String sessionStartId;
@@ -164,6 +166,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         volatile boolean captureStopping, captureEnded, endpointReached;
         boolean finishIntentSaved, finishQueued;
         boolean frozenSteer;
+        /** Non-null only when this recording committed to the original composer's draft at finish. */
+        Object frozenComposerContext;
+        long frozenComposerGeneration;
+        String frozenComposerThread;
         long lastPcmElapsed, longDictationDeadline;
         String frozenOrigin, mutationId, recordingBinding;
         String completedText;
@@ -272,7 +278,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     void nativeVisibility(boolean visible) {
         boolean becameVisible = visible && !nativeVisible;
-        if (visible != nativeVisible) inputSubmissionContext = new Object();
+        if (visible != nativeVisible) {
+            inputSubmissionContext = new Object(); composerVisibilityContext = new Object();
+        }
         // Also gate the main-thread service launch immediately when Android pauses the activity.
         nativeVisible = visible;
         handler.post(() -> {
@@ -781,6 +789,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         boolean nextVisible = visible && nativeVisible;
         String nextThread = nextVisible ? thread : null;
         boolean nextComposerAvailable = nextVisible && thread != null && composerAvailable;
+        if (foregroundVisible != nextVisible) composerVisibilityContext = new Object();
         boolean viewedThreadChanged = nextThread != null && !Objects.equals(lastViewedThread, nextThread);
         boolean cancelledVoice = false;
         if (foregroundVisible && nextVisible && !Objects.equals(foregroundThread, nextThread)) {
@@ -1286,7 +1295,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         item.adopted = false; item.keepListening = false; item.reconnecting = false; item.longDictationDeadline = 0;
         item.captureStopping = false; item.captureEnded = false; item.endpointReached = false; item.endpoint = null;
         item.finishReason = null; item.finishIntentSaved = false; item.finishQueued = false; item.completionReceived = false; item.recognitionFinalized = false;
-        item.record = null; item.completedText = null; item.mutationId = null;
+        item.record = null; item.completedText = null; item.mutationId = null; item.frozenComposerContext = null;
         item.capturePolicy = new NativeVoiceCapturePolicy(item.recordingSettings.number("recognitionStartTimeoutMs"),
             item.recordingSettings.number("recognitionCompletionTimeoutMs"), item.recordingSettings.number("recognitionEndSilenceMs"));
         final String id = item.recordingId, owner = binding, secret = speechCredential;
@@ -2125,6 +2134,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             item.recording.beginFinish(reason);
         }
         item.frozenSteer = item.recordingSettings.flag("followComposerMode") && composerMode.equals("steer");
+        freezeComposerRoute(item);
         item.frozenOrigin = originId; item.mutationId = UUID.randomUUID().toString();
         phase = "recognizing"; publish();
         String captureId = item.captureId;
@@ -2186,7 +2196,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         final long generation = connectionGeneration;
         phase = "submitting"; publish();
         if (item.composerHandoff != null) return;
-        if (NativeVoiceComposerHandoff.eligible(nativeVisible, foregroundVisible, foregroundComposerAvailable, foregroundThread, target)) {
+        if (item.frozenComposerContext != null) {
             offerComposerHandoff(item, frozenText, steer); return;
         }
         if (item.record != null && item.record.request != null) {
@@ -2207,10 +2217,16 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 prepareAdmission(item, target, frozenText, frozenOrigin, policy);
             }));
     }
-    /** Capture route eligibility before any asynchronous work; a declined offer never submits speech alone. */
+    private void freezeComposerRoute(Active item) {
+        item.frozenComposerGeneration = connectionGeneration;
+        item.frozenComposerThread = item.targetId;
+        item.frozenComposerContext = NativeVoiceComposerHandoff.eligible(nativeVisible, foregroundVisible,
+            foregroundComposerAvailable, foregroundThread, item.targetId) ? composerVisibilityContext : null;
+    }
+    /** The route was frozen before recognition completed; a declined offer never submits speech alone. */
     private void offerComposerHandoff(Active item, String text, boolean steer) {
         final NativeVoiceComposerHandoff offer = new NativeVoiceComposerHandoff(UUID.randomUUID().toString(),
-            item.recordingBinding, connectionGeneration, inputSubmissionContext, item.recordingId, item.targetId, text, steer);
+            item.recordingBinding, item.frozenComposerGeneration, item.frozenComposerContext, item.recordingId, item.frozenComposerThread, text, steer);
         item.composerHandoff = offer;
         // Existing saved-recording ownership preserves the raw transcript if the UI cannot adopt the complete draft.
         item.adopted = true;
@@ -2218,8 +2234,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (!ownsRecording(item, offer.recordingId) || item.composerHandoff != offer) return;
             if (error != null) { interruptRecording(item, code(error)); return; }
             item.record = record; acceptDictation(record);
-            if (!offer.current(binding, connectionGeneration, inputSubmissionContext, nativeVisible,
-                    foregroundVisible, foregroundComposerAvailable, foregroundThread)) {
+            if (!offer.threadId.equals(item.targetId) ||
+                    !offer.current(binding, connectionGeneration, composerVisibilityContext, nativeVisible, foregroundVisible)) {
                 declineComposerHandoff(item); return;
             }
             final JSONObject event = NativeVoiceJson.object("profileId", profileId, "serverOrigin", origin, "identity", identity,
@@ -2229,14 +2245,15 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             publish();
             main.post(() -> {
                 JSONObject current = state, foreground = current.optJSONObject("foreground"), currentActive = current.optJSONObject("active");
-                if (offer.context != inputSubmissionContext || !nativeVisible ||
+                JSONObject currentRecording = currentActive == null ? null : currentActive.optJSONObject("recording");
+                if (offer.context != composerVisibilityContext || !nativeVisible ||
                     current.optLong("connectionGeneration", -1) != offer.generation ||
                     !event.optString("profileId").equals(current.optString("profileId")) ||
                     !event.optString("serverOrigin").equals(current.optString("serverOrigin")) ||
                     !event.optString("identity").equals(current.optString("identity")) || foreground == null ||
-                    !foreground.optBoolean("visible") || !foreground.optBoolean("composerAvailable") ||
-                    !offer.threadId.equals(foreground.optString("threadId")) || currentActive == null ||
-                    !item.id.equals(currentActive.optString("id"))) return;
+                    !foreground.optBoolean("visible") || currentActive == null || currentRecording == null ||
+                    !current.optString("phase").equals("submitting") || !offer.threadId.equals(currentActive.optString("recognitionThreadId")) ||
+                    !offer.recordingId.equals(currentRecording.optString("id")) || !item.id.equals(currentActive.optString("id"))) return;
                 for (Observer observer : recipients) if (observers.contains(observer)) observer.event("composerHandoff", event);
             });
             // A WebView that disappears before claiming leaves ordinary, explicit recording recovery.
@@ -2255,8 +2272,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void claimComposerHandoff(JSONObject args) {
         NativeVoiceJson.keys(args, "handoffId");
         Active item = requireComposerHandoff(NativeVoiceJson.string(args, "handoffId", 160));
-        item.composerHandoff.claim(binding, connectionGeneration, inputSubmissionContext,
-            nativeVisible, foregroundVisible, foregroundComposerAvailable, foregroundThread);
+        if (!item.composerHandoff.threadId.equals(item.targetId)) throw new IllegalStateException("composer_handoff_unavailable");
+        item.composerHandoff.claim(binding, connectionGeneration, composerVisibilityContext, nativeVisible, foregroundVisible);
         claimedComposerHandoffs.put(item.composerHandoff.id, item);
         composerSubmissions.claim(item.composerHandoff, composerSubmissionClock.getAsLong());
         composerSubmissionScheduler.schedule(() -> {
@@ -2618,6 +2635,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         item.recordingSettings = settings; item.frozenOrigin = record.preference == null ? originId : record.preference.optString("originClientId");
         item.frozenSteer = record.preference == null ? settings.flag("followComposerMode") && composerMode.equals("steer") : record.preference.optString("mode").equals("steer");
         item.mutationId = record.mutationId == null ? UUID.randomUUID().toString() : record.mutationId;
+        freezeComposerRoute(item);
         activate(item); phase = "submitting";
         final long operation = beginDictationOperation(); publish();
         JSONObject preference = NativeVoiceJson.object("mode", item.frozenSteer ? "steer" : "queue", "originClientId", item.frozenOrigin);

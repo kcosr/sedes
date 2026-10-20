@@ -134,6 +134,7 @@ import {
   normalizedThreadDescendantsPageSchema,
   normalizedThreadLineagePlacementSchema,
   normalizedDraftSchema,
+  normalizedThreadSnapshotSchema,
   normalizedStashSchema,
   putComposerAttachmentResultSchema,
   forkThreadRequestSchema,
@@ -1760,6 +1761,7 @@ export class ApiClient {
   operateThread(
     threadId: string,
     rawOperation: Exclude<ThreadApplicationOperation, { kind: "deliver" }> | Omit<Extract<ThreadApplicationOperation, { kind: "deliver" }>, "origin">,
+    options: { readonly signal?: AbortSignal } = {},
   ): Promise<ThreadApplicationMutationResult> {
     if ("origin" in rawOperation) return Promise.reject(new ApiError(400, "bad_request", "Input attribution comes from client registration.", false));
     const operation = threadApplicationOperationSchema.parse(rawOperation);
@@ -1771,7 +1773,7 @@ export class ApiClient {
             operation.kind === "steer_queued_input"
           ? threadQueueMutationResultSchema
           : threadApplicationMutationResultSchema,
-      { method: "POST", body: JSON.stringify(operation) },
+      { method: "POST", body: JSON.stringify(operation), signal: options.signal },
     );
   }
 
@@ -1820,6 +1822,16 @@ export class ApiClient {
       normalizedThreadLineagePlacementSchema,
       { method: "PATCH", body: JSON.stringify(input) },
     );
+  }
+
+  async readThread(threadId: string, signal?: AbortSignal) {
+    const snapshot = await this.#request(
+      `/api/threads/${encodeURIComponent(threadId)}?activityDetail=summary`,
+      { signal, cache: "no-store" },
+      normalizedThreadSnapshotSchema,
+    );
+    if (snapshot.thread.id !== threadId) throw new Error("The returned thread did not match the requested thread.");
+    return snapshot;
   }
 
   async readThreadSummary(threadId: string, signal?: AbortSignal): Promise<NormalizedApplicationThreadSummary> {
