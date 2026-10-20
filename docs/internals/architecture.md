@@ -430,6 +430,11 @@ configuration before database mutation, obtains state ownership gates, backs
 up a supported older database before migration, checks integrity, and rejects
 a database newer than the running source.
 
+The server's long-lived SQLite connection uses WAL with full synchronous
+commits. It refreshes bounded query-planner statistics with `PRAGMA optimize`
+after startup migration, hourly, and before closing; statistics only guide plan
+choice.
+
 An installation key supplies separate cryptographic domains for authenticated
 control markers, encrypted restart-safe agent-tool thread references, and
 principal Tool-client secret verification. Persisted references hold the
@@ -558,7 +563,11 @@ checkpoint. Idle application projections expire after one hour, with at most
 128 idle scopes and 256 MiB of accounted projection, replay and checkpoint
 bytes. The fold, checkpoint, eviction and recovery rules behind those bounds
 are in [Materialized application projection](application-projection.md).
-Each thread replay independently retains 4,096 events within 32 MiB. The browser keeps
+Each thread replay independently retains 4,096 events within 32 MiB, and drops
+its oldest events once the retained suffix costs more than 64 KiB plus twice the
+current snapshot and notices in every activity mode. A reconnect replays a suffix
+only while it is at most 64 KiB or costs no more than the current checkpoint, so
+those cursors already received a checkpoint. The browser keeps
 up to 32 inactive thread projections for one hour within a 256 MiB serialized
 desktop budget or a 64 MiB serialized Android budget; normalized object graphs
 can occupy several times their serialized size in a mobile WebView heap.
@@ -571,7 +580,11 @@ security headers, and bounded bodies protect expected browser flows; they are
 independent of client authentication. By default, production composition installs paired
 client admission before protected management routes and upgrades. Public
 frontend assets and the downloadable connector enable enrollment; they confer
-no application authority. Same-origin browsers use HttpOnly cookies, while
+no application authority. Built client files are sent with Brotli or gzip when
+the browser accepts it (compressed once per file version in a bounded process
+cache; API and SSE responses are never compressed). Content-hashed `assets/`
+files are cached as immutable for a year; `index.html` and unhashed files are
+revalidated on every use. Same-origin browsers use HttpOnly cookies, while
 packaged clients use per-profile bearer credentials held in native encrypted
 storage. A server-account CLI issues five-minute single-use codes and manages
 90-day revocable credentials in a separate, installation-owned

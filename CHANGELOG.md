@@ -107,6 +107,26 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Streaming replies, sidebar search and inventory updates do less work in the
+  browser: a flush re-renders only the turn that changed, and search or other
+  threads' updates no longer re-render the open thread.
+  ([#100](https://github.com/kcosr/sedes/pull/100))
+
+- Settings, Usage and Archived load on first use, which shrinks the initial
+  bundle. If their code cannot be fetched, the view offers Try again and Reload.
+  ([#100](https://github.com/kcosr/sedes/pull/100))
+
+- Thread actions and recovery checks no longer slow down as mutation history
+  grows: database migration **153** indexes mutation receipts by thread. Live
+  thread streams validate and encode each update once for every viewer and keep
+  less unusable reconnect history in memory.
+  ([#99](https://github.com/kcosr/sedes/pull/99))
+
+- The server sends the web client compressed (Brotli or gzip) and lets browsers
+  cache content-hashed assets for a year; `index.html` is still revalidated on
+  every load. The initial download drops from about 3.0 MB to 0.7 MB.
+  ([#99](https://github.com/kcosr/sedes/pull/99))
+
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See
   [parking](docs/user/organize-work.md#park-quiet-work).

@@ -1,11 +1,19 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DropdownMenuItem } from "../components/ui/dropdown-menu.js";
 import {
   PanelChrome,
   panelContentId,
+  useStablePanelChromeControls,
   type PanelChromeControls,
   type PanelRegionControls,
 } from "./PanelChrome.js";
@@ -356,5 +364,67 @@ describe("PanelChrome", () => {
 
   it("keeps content ids safe for DOM use", () => {
     expect(panelContentId("files/a b")).toBe("workspace-panel-content-files_a_b");
+  });
+});
+
+describe("stable panel chrome controls", () => {
+  it("keeps the controls identical while their values are unchanged", () => {
+    const firstClose = vi.fn();
+    const latestClose = vi.fn();
+    const latestMove = vi.fn();
+    const { result, rerender } = renderHook(
+      (input: PanelChromeControls) => useStablePanelChromeControls(input),
+      {
+        initialProps: controls({
+          active: true,
+          onClose: firstClose,
+          closeAction: "hide",
+          region: regionControls("middle"),
+        }),
+      },
+    );
+    const first = result.current;
+
+    rerender(
+      controls({
+        active: true,
+        onClose: latestClose,
+        closeAction: "hide",
+        region: regionControls("middle", { onMove: latestMove }),
+      }),
+    );
+
+    expect(result.current).toBe(first);
+    const invoker = document.createElement("button");
+    result.current.onClose?.(invoker);
+    result.current.region?.onMove("left");
+    expect(firstClose).not.toHaveBeenCalled();
+    expect(latestClose).toHaveBeenCalledWith(invoker);
+    expect(latestMove).toHaveBeenCalledWith("left");
+  });
+
+  it("presents changed values and removed controls", () => {
+    const { result, rerender } = renderHook(
+      (input: PanelChromeControls) => useStablePanelChromeControls(input),
+      {
+        initialProps: controls({
+          active: true,
+          region: regionControls("middle"),
+        }),
+      },
+    );
+    const first = result.current;
+
+    rerender(
+      controls({
+        active: true,
+        region: regionControls("middle", { maximized: true }),
+      }),
+    );
+    expect(result.current).not.toBe(first);
+    expect(result.current.region).toMatchObject({ region: "middle", maximized: true });
+
+    rerender({ active: false });
+    expect(result.current).toEqual({ active: false });
   });
 });

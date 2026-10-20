@@ -27,6 +27,47 @@ describe("EventHub", () => {
     subscription.close();
   });
 
+  it("drops the oldest events once the retained suffix costs more than any subscriber accepts", () => {
+    let servableBytes = Number.POSITIVE_INFINITY;
+    const hub = new EventHub<{ reducible: boolean; text: string }>({
+      supersedesReplay: (type) => type === "replace",
+      servableReplay: {
+        costFloor: (_type, data, bytes) => (data as { reducible: boolean }).reducible ? 0 : bytes,
+        servableBytes: () => servableBytes,
+      },
+    });
+    const text = "x".repeat(60);
+    const first = hub.publish("change", { reducible: false, text });
+    const eventBytes = hub.retainedBytes;
+    servableBytes = 3.5 * eventBytes;
+    const reducible = Array.from({ length: 10 }, () => hub.publish("change", { reducible: true, text }));
+    // Events with no cost floor never make an older cursor unservable.
+    expect(hub.canReplay(`${hub.generation}.0`)).toBe(true);
+    expect(hub.retainedEventCount).toBe(11);
+    const second = hub.publish("change", { reducible: false, text });
+    const third = hub.publish("change", { reducible: false, text });
+    expect(hub.canReplay(`${hub.generation}.0`)).toBe(true);
+    const fourth = hub.publish("change", { reducible: false, text });
+    // Four irreducible events cost more than servable, so a cursor before the
+    // first could never be replayed; later cursors still can.
+    expect(hub.canReplay(`${hub.generation}.0`)).toBe(false);
+    expect(hub.canReplay(first.id)).toBe(true);
+    expect(hub.subscribe(vi.fn(), first.id).replay).toEqual([...reducible, second, third, fourth]);
+    expect(hub.retainedBytes).toBe(hub.replayBytesAfter(first.id));
+
+    servableBytes = 1;
+    const fifth = hub.publish("change", { reducible: false, text });
+    expect(hub.canReplay(fourth.id)).toBe(false);
+    expect(hub.subscribe(vi.fn(), fifth.id).replay).toEqual([]);
+    expect(hub.retainedEventCount).toBe(0);
+
+    // A replacement resets the accounted floor with the retained suffix.
+    servableBytes = 3.5 * eventBytes;
+    const replacement = hub.publish("replace", { reducible: false, text });
+    const after = hub.publish("change", { reducible: false, text });
+    expect(hub.subscribe(vi.fn(), `${hub.generation}.${replacement.sequence - 1}`).replay).toEqual([replacement, after]);
+  });
+
   it("rejects stale generations and removes closed subscribers", () => {
     const hub = new EventHub<string>();
     const listener = vi.fn();
