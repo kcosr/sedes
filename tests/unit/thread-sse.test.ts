@@ -390,12 +390,61 @@ describe("serveThreadEventStream", () => {
     request.emit("close");
   });
 
+  it("validates and encodes each published event and checkpoint once for every subscriber", async () => {
+    const hub = new ThreadEventHub();
+    hub.publish({ type: "snapshot", generation: "projection-1", snapshot: snapshotWithMessage("initial") });
+    const envelopeParse = vi.spyOn(threadEventEnvelopeSchema, "parse");
+    const checkpointParse = vi.spyOn(threadCheckpointSchema, "parse");
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      const streams = await Promise.all((["full", "full", "summary"] as const).map(async (activityDetail) => {
+        const response = new FakeResponse();
+        const request = new FakeRequest();
+        await serveThreadEventStream(asRequest(request), asResponse(response), hub, source(hub, { capture: vi.fn() }), { activityDetail });
+        return { request, response, activityDetail };
+      }));
+      // The hub captures one checkpoint; both full-detail attaches share its frame.
+      expect(checkpointParse).toHaveBeenCalledTimes(1);
+      expect(streams[0]!.response.writes[0]).toBe(streams[1]!.response.writes[0]);
+      const checkpointFrames = stringify.mock.calls.filter(([value]) =>
+        typeof value === "object" && value !== null && "capabilityRunState" in value).length;
+      expect(checkpointFrames).toBe(2);
+
+      stringify.mockClear();
+      const assistant = hub.snapshot!.itemsById["assistant-1"]!;
+      const published = hub.publish({ type: "item_upsert", generation: "projection-1", item: { ...assistant, revision: 2 } });
+      expect(Object.isFrozen(published)).toBe(true);
+      // Messages are written unchanged in summary mode, so all three share one frame.
+      expect(envelopeParse).not.toHaveBeenCalled();
+      expect(stringify.mock.calls.filter(([value]) => value === published)).toHaveLength(1);
+      for (const { response } of streams) expect(envelopes(response)).toEqual([published]);
+      expect(streams[0]!.response.writes.at(-1)).toBe(streams[2]!.response.writes.at(-1));
+      for (const { request } of streams) request.emit("close");
+    } finally {
+      envelopeParse.mockRestore();
+      checkpointParse.mockRestore();
+      stringify.mockRestore();
+    }
+  });
+
   it("replaces a large repeated-message suffix with its smaller current checkpoint", async () => {
     const hub = new ThreadEventHub();
+    // Older retained activity keeps the snapshot large enough that the suffix
+    // stays retained and the handshake compares its cost with the checkpoint.
+    const initial = snapshotWithMessage("initial");
+    const olderActivity = initial.itemsById["reasoning-activity"]!;
+    if (olderActivity.kind !== "reasoning")
+      throw new Error("fixture_reasoning_required");
     const anchor = hub.publish({
       type: "snapshot",
       generation: "projection-1",
-      snapshot: snapshotWithMessage("initial"),
+      snapshot: {
+        ...initial,
+        itemsById: {
+          ...initial.itemsById,
+          "reasoning-activity": { ...olderActivity, markdown: { text: "older reasoning ".repeat(4_000) } },
+        },
+      },
     });
     let latest: ThreadEventEnvelope | undefined;
     const assistant = hub.snapshot!.itemsById["assistant-1"]!;
@@ -445,6 +494,51 @@ describe("serveThreadEventStream", () => {
     });
     expect(envelopes(response)).toEqual([after]);
     request.emit("close");
+  });
+
+  it("serves a checkpoint for a repeated-message suffix no subscriber could replay without retaining it", async () => {
+    const hub = new ThreadEventHub();
+    const capture = vi.fn();
+    const anchor = hub.publish({
+      type: "snapshot",
+      generation: "projection-1",
+      snapshot: snapshotWithMessage("initial"),
+    });
+    const assistant = hub.snapshot!.itemsById["assistant-1"]!;
+    if (assistant.kind !== "assistant_message")
+      throw new Error("fixture_assistant_required");
+    let latest: ThreadEventEnvelope | undefined;
+    let previous: ThreadEventEnvelope | undefined;
+    for (let revision = 2; revision <= 30; revision += 1) {
+      previous = latest;
+      latest = hub.publish({
+        type: "item_upsert",
+        generation: "projection-1",
+        item: { ...assistant, revision, markdown: { text: "Accumulated output ".repeat(300) + revision } },
+      });
+    }
+    // Retention keeps only what a checkpoint comparison could still choose.
+    expect(hub.canReplay(anchor.eventId)).toBe(false);
+    expect(hub.retainedBytes).toBeLessThanOrEqual(65_536 + 2 * Buffer.byteLength(JSON.stringify(hub.snapshot), "utf8"));
+    expect(hub.canReplay(previous!.eventId)).toBe(true);
+    for (const activityDetail of ["summary", "full"] as const) {
+      const response = new FakeResponse();
+      const request = new FakeRequest(anchor.eventId);
+      await serveThreadEventStream(asRequest(request), asResponse(response), hub, source(hub, { capture }), { activityDetail });
+      expect(envelopes(response)).toEqual([]);
+      expect(checkpoints(response)).toMatchObject([{
+        eventId: latest!.eventId,
+        snapshot: { itemsById: { "assistant-1": { revision: 30 } } },
+      }]);
+      request.emit("close");
+    }
+    const recent = new FakeResponse();
+    const recentRequest = new FakeRequest(previous!.eventId);
+    await serveThreadEventStream(asRequest(recentRequest), asResponse(recent), hub, source(hub, { capture }));
+    expect(checkpoints(recent)).toEqual([]);
+    expect(envelopes(recent)).toEqual([latest]);
+    recentRequest.emit("close");
+    expect(capture).not.toHaveBeenCalled();
   });
 
   it("compares projected summary bytes so large detailed activity does not resend old messages", async () => {
@@ -498,6 +592,47 @@ describe("serveThreadEventStream", () => {
       request.emit("close");
     }
     expect(capture).not.toHaveBeenCalled();
+  });
+
+  it("keeps a replacement snapshot replayable while its summary suffix costs less than a checkpoint", async () => {
+    const hub = new ThreadEventHub();
+    hub.publish({ type: "snapshot", generation: "projection-1", snapshot: snapshotWithMessage("answer") });
+    const notices = publishNotices(hub, Array.from({ length: 80 }, (_, index) => `notice-${index}`));
+    const cursor = hub.eventIdAt(hub.watermark);
+    // A same-generation replacement keeps the notices; its detailed activity
+    // is large in full detail but a short summary in summary mode.
+    const initial = snapshotWithMessage("answer");
+    const reasoning = initial.itemsById["reasoning-activity"]!;
+    if (reasoning.kind !== "reasoning")
+      throw new Error("fixture_reasoning_required");
+    const replacement = hub.publish({
+      type: "snapshot",
+      generation: "projection-1",
+      snapshot: {
+        ...initial,
+        itemsById: {
+          ...initial.itemsById,
+          "reasoning-activity": { ...reasoning, markdown: { text: "推理".repeat(30_000) } },
+        },
+      },
+    });
+    // The activity then shrinks, so the current snapshot is far smaller.
+    const compacted = hub.publish({
+      type: "item_upsert",
+      generation: "projection-1",
+      item: { ...reasoning, revision: reasoning.revision + 1, markdown: { text: "compacted" } },
+    });
+    expect(hub.replayBytesAfter(cursor)).toBeGreaterThan(65_536);
+    expect(hub.canReplay(cursor)).toBe(true);
+
+    const response = new FakeResponse();
+    const request = new FakeRequest(cursor);
+    await serveThreadEventStream(asRequest(request), asResponse(response), hub, source(hub, { capture: vi.fn() }), { activityDetail: "summary" });
+    expect(checkpoints(response)).toEqual([]);
+    expect(envelopes(response).map(({ eventId }) => eventId)).toEqual([replacement.eventId, compacted.eventId]);
+    expect(response.writes.join("")).not.toContain("推理");
+    expect(hub.currentCheckpoint()?.notices).toHaveLength(notices.length);
+    request.emit("close");
   });
 
   it("recovers overflow while live and resumes strictly after the checkpoint watermark", async () => {
