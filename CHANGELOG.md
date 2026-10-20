@@ -177,15 +177,18 @@ User-facing changes are collected here before release. See the
   Files watch events, aborted writes, and slow runtime bodies. Agent tools and
   the shell accept a filesystem-root workspace root (`/`, `C:\`). Service
   receipts and Windows IPC keys are written atomically.
+  ([#103](https://github.com/kcosr/sedes/pull/103))
 
 - `sedes` and `sedes mcp` no longer crash on a bodyless HTTP reply. Malformed
   tool IDs or input over a transport limit report `invalid_input`, and only
   one option per command may read stdin (`-`).
+  ([#103](https://github.com/kcosr/sedes/pull/103))
 
 - Electron no longer raises a main-process error when it quits during an SSH
   connect, and still waits for connection cleanup. Managed Local keeps one
   saved credential and reports keyring guidance when secure storage is
   unavailable. See [Electron](docs/operator/clients/electron.md#connection-credentials).
+  ([#103](https://github.com/kcosr/sedes/pull/103))
 
 - Composer drafts are saved when you close, reload, or leave the page or
   background the Android app, except edits made while an earlier save is still
