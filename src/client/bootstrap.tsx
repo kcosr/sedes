@@ -1,6 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
+import { AppErrorBoundary } from "./app/AppErrorBoundary";
 import { installNativeVoiceDiagnostics } from "./voice/native-voice-diagnostics.js";
 import { installAppearance } from "./app/appearance";
 import { installEnvironmentColors } from "./app/environment-palette";
@@ -30,7 +31,9 @@ export function startApplication(
 
   createRoot(root).render(
     <React.StrictMode>
-      <App panelTenants={panelTenants} />
+      <AppErrorBoundary>
+        <App panelTenants={panelTenants} />
+      </AppErrorBoundary>
     </React.StrictMode>,
   );
 }

@@ -5,6 +5,7 @@ import type {
   VoiceAction,
 } from "../../shared/protocol/notification.js";
 import { ApiError } from "../api/ApiClient.js";
+import { useDirtyNavigationGuard } from "../app/use-dirty-navigation-guard.js";
 import {
   type NotificationSettingsStore,
   useNotificationSettings,
@@ -12,6 +13,7 @@ import {
 import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import { Checkbox } from "@client/components/ui/checkbox";
+import { DiscardChangesDialog } from "@client/components/ui/discard-changes-dialog";
 import { Input } from "@client/components/ui/input";
 import { Label } from "@client/components/ui/label";
 import { Textarea } from "@client/components/ui/textarea";
@@ -138,6 +140,7 @@ export function NotificationSettingsPage({
   const [savedAt, setSavedAt] = useState<number>();
   const [testResult, setTestResult] = useState<TestResult>();
   const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const timeoutInput = useRef<HTMLInputElement>(null);
   const phasesLabel = useId();
   useEffect(() => {
@@ -190,6 +193,7 @@ export function NotificationSettingsPage({
     if (!draft) return;
     setSaveError("");
     setTestResult(undefined);
+    setSaving(true);
     try {
       const result = await store.save({
         ...scriptInput(),
@@ -207,6 +211,8 @@ export function NotificationSettingsPage({
           ? "Notification settings changed in another session. Reload saved settings and review them before saving again."
           : errorMessage(cause),
       );
+    } finally {
+      setSaving(false);
     }
   };
   const test = async () => {
@@ -241,8 +247,13 @@ export function NotificationSettingsPage({
       setTesting(false);
     }
   };
+  const saved = state.settings;
+  const dirty = Boolean(draft && saved && draftChanged(draft, saved));
+  // Leaving while this form saves is allowed. The bell's Silence/Resume shares
+  // the store's pending state but saves none of these edits.
+  const guard = useDirtyNavigationGuard(dirty && !saving);
   const description =
-    "Choose script and Android voice delivery for each event. Settings apply across your clients.";
+    "Choose script and Android voice delivery for each event. Settings apply across your clients. Changes apply when you save.";
   if (!draft)
     return (
       <SettingsPage title="Notifications" description={description}>
@@ -266,9 +277,7 @@ export function NotificationSettingsPage({
       </SettingsPage>
     );
   const pending = state.pending || testing;
-  const saved = state.settings;
   const changedElsewhere = saved && saved.revision !== draft.settings.revision;
-  const dirty = Boolean(saved && draftChanged(draft, saved));
   return (
     <SettingsPage title="Notifications" description={description}>
       {state.settings?.silenced ? (
@@ -459,6 +468,15 @@ export function NotificationSettingsPage({
           setTestResult(undefined);
         }}
         onSave={() => void save()}
+      />
+      <DiscardChangesDialog
+        open={Boolean(guard.pendingRoute)}
+        onOpenChange={(open) => {
+          if (!open) guard.cancel();
+        }}
+        description="Your notification settings have edits that have not been saved."
+        discardLabel="Discard and leave"
+        onDiscard={guard.discardAndContinue}
       />
     </SettingsPage>
   );

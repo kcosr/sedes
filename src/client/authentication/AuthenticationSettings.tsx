@@ -25,13 +25,16 @@ export function AuthenticationSettings(): React.JSX.Element | null {
   const [clients, setClients] = useState<AuthenticationClient[]>();
   const [error, setError] = useState("");
   const [unpairing, setUnpairing] = useState<AuthenticationClient>();
+  const [reloadToken, setReloadToken] = useState(0);
   useEffect(() => {
     let alive = true;
+    setClients(undefined);
+    setError("");
     void controls?.list()
       .then((result) => { if (alive) setClients(result); })
       .catch(() => { if (alive) { setClients([]); setError("Could not load paired clients."); } });
     return () => { alive = false; };
-  }, [controls]);
+  }, [controls, reloadToken]);
   if (!controls) return null;
   const current = (client: AuthenticationClient) => client.id === controls.client.id;
   async function unpair(client: AuthenticationClient): Promise<void> {
@@ -48,7 +51,19 @@ export function AuthenticationSettings(): React.JSX.Element | null {
       title="Paired clients"
       description="Clients paired with this server can reconnect automatically. Unpairing ends their access; sessions and files stay on the server."
     >
-      {error ? <Callout tone="danger" role="alert">{error}</Callout> : null}
+      {error ? (
+        <Callout
+          tone="danger"
+          role="alert"
+          action={
+            <Button variant="outline" size="sm" onClick={() => setReloadToken((token) => token + 1)}>
+              Try again
+            </Button>
+          }
+        >
+          {error}
+        </Callout>
+      ) : null}
       {clients === undefined ? (
         <p className="settings-loading" role="status">Loading paired clients…</p>
       ) : clients.length === 0 ? (
@@ -67,8 +82,8 @@ export function AuthenticationSettings(): React.JSX.Element | null {
               title={<><span>{client.name}</span>{current(client) ? <Tag>This connection</Tag> : null}</>}
               description={`${client.kind === "sidecar" ? "Sidecar" : "Application client"} · Paired ${new Date(client.createdAt).toLocaleDateString()}`}
               actions={
-                <Button variant="outline" onClick={() => setUnpairing(client)}>
-                  Unpair
+                <Button variant="destructive-outline" onClick={() => setUnpairing(client)}>
+                  Unpair…
                 </Button>
               }
             />

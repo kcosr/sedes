@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@client/components/ui/button";
+import { EmptyState } from "@client/components/ui/empty-state";
+import { ErrorBoundary } from "@client/components/ui/error-boundary";
 import { useComposerDraftStaging } from "../context-excerpts/coordinator.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
@@ -83,9 +86,40 @@ export function TenantContent({
       data-visible={visible ? "true" : "false"}
       tabIndex={-1}
     >
-      {tenant.render(context)}
+      {/* A failing panel shows its own recovery; Chat and the other panels keep working. */}
+      <ErrorBoundary
+        // What the crashed content reported (busy, unsaved) went with it.
+        onError={() => setStatus({})}
+        fallback={({ reset }) => (
+          <EmptyState
+            className="m-3"
+            title={`${tenant.title} couldn’t be displayed.`}
+            description="Something went wrong in this panel. The rest of Sedes still works."
+            action={
+              <>
+                <Button variant="outline" size="sm" onClick={reset}>
+                  Reload panel
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => closeRef.current()}>
+                  Close panel
+                </Button>
+              </>
+            }
+          />
+        )}
+      >
+        <TenantBody tenant={tenant} context={context} />
+      </ErrorBoundary>
     </div>
   );
+}
+
+/** Renders inside the boundary, so a tenant whose render throws is contained too. */
+function TenantBody({ tenant, context }: {
+  readonly tenant: WorkspacePanelTenant;
+  readonly context: WorkspacePanelContext;
+}): React.ReactNode {
+  return tenant.render(context);
 }
 
 /** A tenant's static ⋯ items, for the panel header's menu. */

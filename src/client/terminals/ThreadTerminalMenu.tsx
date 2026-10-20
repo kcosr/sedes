@@ -417,10 +417,12 @@ export function ThreadTerminalMenu({
               const alreadyDisplayed =
                 displayedTerminalIds?.has(terminal.terminalId) === true;
               const live = isTerminalProcessLive(terminal.lifecycle);
-              const teardownLabel =
-                terminal.terminationEffect === "disconnect_transport" && live
+              // Named as its confirmation names the action.
+              const teardownLabel = !live
+                ? `Remove ${terminal.displayName}`
+                : terminal.terminationEffect === "disconnect_transport"
                   ? `Disconnect and remove ${terminal.displayName}`
-                  : `Tear down and remove ${terminal.displayName}`;
+                  : `End ${terminal.displayName}`;
               return (
                 // One row per terminal: open it, rename it, or tear it down.
                 <DropdownMenuGroup

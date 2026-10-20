@@ -35,7 +35,7 @@ describe("Android logout with native voice", () => {
     }));
     render(<AuthenticationGate endpoint={configuredSedesServer("https://device.example")} profileId="profile"><AuthenticationSettings /></AuthenticationGate>);
     await waitFor(() => expect(voice.setConnection).toHaveBeenCalledWith({ profileId: "profile", serverOrigin: "https://device.example", identity: VOICE_IDENTITY }));
-    fireEvent.click(await screen.findByRole("button", { name: "Unpair" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Unpair…" }));
     fireEvent.click(screen.getByRole("button", { name: "Unpair this browser" }));
     expect(await screen.findByLabelText("Pairing URL or code")).toBeInTheDocument();
     expect(credentials.remove).toHaveBeenCalledExactlyOnceWith("profile", "https://device.example");

@@ -68,7 +68,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   {
     id: "general",
     label: "General",
-    description: "Sidebar, panels, history and the composer.",
+    description: "Default thread, sidebar, history and composer.",
     icon: SlidersHorizontal,
     group: "preferences",
     available: always,

@@ -8,7 +8,7 @@ it("requires confirmation before unpairing and calls logout for this connection"
   const controls = { client, list: vi.fn().mockResolvedValue([client]), revoke: vi.fn(), logout: vi.fn().mockResolvedValue(undefined) };
   render(<AuthenticationContext.Provider value={controls}><AuthenticationSettings /></AuthenticationContext.Provider>);
   expect(await screen.findByText("This connection")).toBeVisible();
-  fireEvent.click(await screen.findByRole("button", { name: "Unpair" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Unpair…" }));
   expect(controls.logout).not.toHaveBeenCalled();
   const dialog = screen.getByRole("dialog", { name: "Unpair This browser?" });
   expect(within(dialog).getByRole("button", { name: "Unpair this browser" })).toHaveAttribute("data-variant", "destructive");
@@ -19,7 +19,7 @@ it("requires confirmation before unpairing and calls logout for this connection"
 it("revokes another client without logging out this connection", async () => {
   const controls = { client, list: vi.fn().mockResolvedValue([{ ...client, id: "other", name: "Other device" }]), revoke: vi.fn().mockResolvedValue(undefined), logout: vi.fn() };
   render(<AuthenticationContext.Provider value={controls}><AuthenticationSettings /></AuthenticationContext.Provider>);
-  fireEvent.click(await screen.findByRole("button", { name: "Unpair" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Unpair…" }));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Unpair Other device?" })).getByRole("button", { name: "Unpair client" }));
   await waitFor(() => expect(controls.revoke).toHaveBeenCalledWith("other"));
   await waitFor(() => expect(screen.queryByText("Other device")).toBeNull());
@@ -28,9 +28,21 @@ it("revokes another client without logging out this connection", async () => {
 it("keeps the dialog open with the error when unpairing fails", async () => {
   const controls = { client, list: vi.fn().mockResolvedValue([{ ...client, id: "other", name: "Other device" }]), revoke: vi.fn().mockRejectedValue(new Error("offline")), logout: vi.fn() };
   render(<AuthenticationContext.Provider value={controls}><AuthenticationSettings /></AuthenticationContext.Provider>);
-  fireEvent.click(await screen.findByRole("button", { name: "Unpair" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Unpair…" }));
   const dialog = screen.getByRole("dialog", { name: "Unpair Other device?" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Unpair client" }));
   expect(await within(dialog).findByRole("alert")).toHaveTextContent("Could not unpair this client. Try again.");
   expect(screen.getByText("Other device")).toBeInTheDocument();
+});
+it("retries loading paired clients in place and marks Unpair as destructive", async () => {
+  const list = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue([client]);
+  const controls = { client, list, revoke: vi.fn(), logout: vi.fn() };
+  render(<AuthenticationContext.Provider value={controls}><AuthenticationSettings /></AuthenticationContext.Provider>);
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("Could not load paired clients.");
+  fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+  expect(await screen.findByText("This connection")).toBeVisible();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(list).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole("button", { name: "Unpair…" })).toHaveAttribute("data-variant", "destructive-outline");
 });

@@ -95,8 +95,9 @@ describe("PanelChrome", () => {
 
     expect(screen.getByText("Files")).toBeTruthy();
     expect(screen.getByText("demo")).toBeTruthy();
-    expect(screen.getByLabelText("Unsaved changes")).toBeTruthy();
-    expect(screen.getByLabelText("Busy")).toBeTruthy();
+    // Named images, so screen readers read the markers.
+    expect(screen.getByRole("img", { name: "Unsaved changes" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Busy" })).toBeTruthy();
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryByRole("tab")).toBeNull();
   });

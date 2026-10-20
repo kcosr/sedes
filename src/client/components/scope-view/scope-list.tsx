@@ -63,7 +63,8 @@ export type ListHeadingProps = Omit<
   readonly label: string;
   /** Omitted while it is not known. */
   readonly count?: number;
-  readonly "data-tasks-nav"?: string;
+  /** Its key as a stop of the list's keyboard navigation (`use-scoped-list-nav`). */
+  readonly "data-list-nav"?: string;
 };
 
 /**

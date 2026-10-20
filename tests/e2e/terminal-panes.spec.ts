@@ -216,7 +216,7 @@ test("terminal resources outlive panels and transfer control across three client
   const afterClose = await fixtureTerminalState(page, terminalId);
   expect(afterClose.closed).toBe(false);
   const secondMenu = await openTerminalMenu(second);
-  await secondMenu.getByRole("menuitem", { name: "Tear down and remove E2E shell" }).click();
+  await secondMenu.getByRole("menuitem", { name: "End E2E shell" }).click();
   const endConfirmation = second.getByRole("dialog", {
     name: "End terminal?",
   });

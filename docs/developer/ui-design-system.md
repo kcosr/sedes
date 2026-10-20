@@ -103,7 +103,11 @@ rows' leading inset, `--list-heading-inset`, and its chevron follows the
 count), `ViewFilterChips` with the `view-options-trigger` dot, and the View options
 rows `SortOptionItems` and `ScopeOptionItem`. Their styles are in
 `scope-view.css`; the panels are size containers, so its narrow rules follow
-the panel.
+the panel. Both lists take their keyboard navigation from
+`useScopedListNav`: row titles and section headings marked `data-list-nav`
+share one roving tab stop and ↑/↓/Home/End, a row's other controls carry
+`data-list-nav-for`, and a focused row that leaves the list hands focus to
+its neighbour.
 
 ## Tokens
 
@@ -180,6 +184,13 @@ an action with `variant="destructive"` instead.
 | `Callout` | The one notice and error style, with `title` and `action`; pass `role="alert"` for errors the user just caused |
 | `EmptyState` | Nothing to show: `panel` for a page or pane, `inline` inside a list |
 | `KeyValueList` | Labelled facts in a `max-content 1fr` grid; `mono` for identifiers |
+
+**Error boundaries.** `ErrorBoundary` contains a render failure and adds no
+markup while its children render. Three are in place: the app root
+(`app/AppErrorBoundary.tsx`, a full page with Try again, Reload and Copy
+details), each workspace panel (`TenantContent`, an `EmptyState` with Reload
+panel and Close panel), and each transcript item (`ConversationItemView`, a
+one-line danger `Callout` with Try again, retried when the item updates).
 
 ## Dialogs
 

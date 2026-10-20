@@ -201,6 +201,7 @@ function PanelMenuRow({
         title,
         entry.stateLabel,
         entry.status?.dirty ? "unsaved changes" : undefined,
+        entry.status?.busy ? "busy" : undefined,
       ]
         .filter(Boolean)
         .join(", ")}
@@ -211,10 +212,10 @@ function PanelMenuRow({
       <PanelGlyph kind={entry.kind} brand={brand} size={16} />
       <span className="min-w-0 flex-1 truncate">{title}</span>
       {entry.status?.dirty ? (
-        <span className="workspace-panel-dirty" aria-label="Unsaved changes" />
+        <span className="workspace-panel-dirty" role="img" aria-label="Unsaved changes" />
       ) : null}
       {entry.status?.busy ? (
-        <span className="comet-spinner workspace-panel-spinner" aria-label="Busy" />
+        <span className="comet-spinner workspace-panel-spinner" role="img" aria-label="Busy" />
       ) : null}
       {entry.stateLabel ? (
         <DropdownMenuValue>{entry.stateLabel}</DropdownMenuValue>

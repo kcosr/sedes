@@ -107,6 +107,15 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- The Workpads list has the Tasks keyboard model (one tab stop, arrow keys,
+  **Delete**, **F2**); its row actions are announced, name the workpad when
+  they fail, and keep focus in the list, and a search with no match offers
+  **Clear search**. Workpad autosave no longer repeats its sync state to
+  screen readers, panel headers' unsaved and busy markers are read, and a
+  terminal menu ✕ names what it does (**End** or **Remove**). See
+  [workpads](docs/user/workpads.md).
+  ([#104](https://github.com/kcosr/sedes/pull/104))
+
 - Streaming replies, sidebar search and inventory updates do less work in the
   browser: a flush re-renders only the turn that changed, and search or other
   threads' updates no longer re-render the open thread.
@@ -172,6 +181,20 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Deleting a Files review comment or discarding a saved voice dictation asks
+  for confirmation, and leaving **Settings → Notifications** with unsaved
+  edits asks before discarding them. See
+  [saved dictation](docs/operator/clients/voice.md).
+  ([#104](https://github.com/kcosr/sedes/pull/104))
+
+- A rendering failure no longer blanks the app: a transcript message shows
+  **Try again** in its place, a failing panel offers **Reload panel** while
+  Chat keeps working, and the app offers **Try again**, **Reload** and **Copy
+  details**. A failed Workpads, **Tool clients** or **Paired clients** load
+  offers **Try again** in place instead of a false empty state or an app
+  reload, and Files Browse with no open file offers **Browse files**.
+  ([#104](https://github.com/kcosr/sedes/pull/104))
 
 - Execution sidecar sessions stay open through bursts of small frames, late
   Files watch events, aborted writes, and slow runtime bodies. Agent tools and
