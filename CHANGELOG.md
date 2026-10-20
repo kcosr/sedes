@@ -178,15 +178,18 @@ User-facing changes are collected here before release. See the
   a terminal records history (only that terminal fails), a late Codex TUI
   launch that cannot be closed, or a provider runtime closing while a thread
   opens. Upgrade requests for unknown paths now get a 404 and are closed.
+  ([#101](https://github.com/kcosr/sedes/pull/101))
 
 - Threads with very large snapshots no longer reload and disconnect when a
   small update follows a replacement on a slow connection. Exiting a terminal
   shell while a mobile keyboard closes no longer drops the viewer with a
   protocol error. Files change watching runs at most one Git metadata check
   per short interval during installs and builds.
+  ([#101](https://github.com/kcosr/sedes/pull/101))
 
 - Deleting a Task that a force reset promoted now reports a conflict instead
   of an internal server error. See [Tasks](docs/user/tasks-and-automations.md).
+  ([#101](https://github.com/kcosr/sedes/pull/101))
 
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
