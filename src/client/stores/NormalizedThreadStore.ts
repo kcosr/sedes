@@ -818,14 +818,14 @@ export class NormalizedThreadStore {
         ? serializedUtf8Bytes(turn) - serializedUtf8Bytes(prior)
         : serializedUtf8Bytes({ [turn.id]: turn }) -
           2 +
-          (Object.keys(snapshot.turnsById).length > 0 ? 1 : 0) +
+          (hasEntries(snapshot.turnsById) ? 1 : 0) +
           serializedUtf8Bytes(turn.id) +
           (snapshot.orderedTurnIds.length > 0 ? 1 : 0)) +
       (priorFork
         ? serializedUtf8Bytes(fork) - serializedUtf8Bytes(priorFork)
         : serializedUtf8Bytes({ [turn.id]: fork }) -
           2 +
-          (Object.keys(snapshot.forksByTurnId).length > 0 ? 1 : 0));
+          (hasEntries(snapshot.forksByTurnId) ? 1 : 0));
     if (
       next.orderedTurnIds.length > MAXIMUM_NORMALIZED_TIMELINE_TURNS ||
       snapshotBytes > MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES
@@ -850,19 +850,20 @@ export class NormalizedThreadStore {
     const revision = revisionResult(prior, item);
     if (revision) return this.#invalidate(revision);
     if (prior && sameValue(prior, item)) return { kind: "ignored" };
-    const next = {
-      ...snapshot,
-      itemsById: { ...snapshot.itemsById, [item.id]: item },
-    };
+    const priorItemCount = itemCount(snapshot.itemsById);
+    const itemsById = { ...snapshot.itemsById, [item.id]: item };
+    const nextItemCount = prior ? priorItemCount : priorItemCount + 1;
+    itemCounts.set(itemsById, nextItemCount);
+    const next = { ...snapshot, itemsById };
     const snapshotBytes =
       this.#snapshotBytes +
       (prior
         ? serializedUtf8Bytes(item) - serializedUtf8Bytes(prior)
         : serializedUtf8Bytes({ [item.id]: item }) -
           2 +
-          (Object.keys(snapshot.itemsById).length > 0 ? 1 : 0));
+          (priorItemCount > 0 ? 1 : 0));
     if (
-      Object.keys(next.itemsById).length > MAXIMUM_NORMALIZED_TIMELINE_ITEMS ||
+      nextItemCount > MAXIMUM_NORMALIZED_TIMELINE_ITEMS ||
       snapshotBytes > MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES
     ) {
       return this.#invalidate("timeline_window_limit_exceeded");
@@ -1054,6 +1055,33 @@ export class NormalizedThreadStore {
     this.#state = state;
     for (const listener of this.#listeners) listener();
   }
+}
+
+/**
+ * Entry counts of item maps. Maps are immutable, so a count is measured at
+ * most once per map; each upsert derives its new map's count from the prior.
+ */
+const itemCounts = new WeakMap<
+  Readonly<Record<string, ConversationItem>>,
+  number
+>();
+
+function itemCount(
+  itemsById: Readonly<Record<string, ConversationItem>>,
+): number {
+  let count = itemCounts.get(itemsById);
+  if (count === undefined) {
+    count = Object.keys(itemsById).length;
+    itemCounts.set(itemsById, count);
+  }
+  return count;
+}
+
+function hasEntries(record: object): boolean {
+  for (const key in record) {
+    if (Object.hasOwn(record, key)) return true;
+  }
+  return false;
 }
 
 function snapshotFieldByteDelta(

@@ -1,6 +1,7 @@
 import { steerTargetSchema, type SteerTarget } from "../../../shared/protocol/conversation.js";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
+import { prepareCached } from "../prepared-statements.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import {
@@ -735,8 +736,7 @@ export class ConversationOperationRepository {
             );
           })(),
       };
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             INSERT INTO mutation_receipts(
               tenant_id, principal_id, thread_id, mutation_id,
@@ -795,8 +795,7 @@ export class ConversationOperationRepository {
     scope: RequestScope,
     operationId: string,
   ): InteractionResponseOperationRecord {
-    this.database
-      .prepare(
+    prepareCached(this.database,
         `
           UPDATE mutation_receipts
           SET result_code = 'uncertain', replayable = 0
@@ -814,8 +813,7 @@ export class ConversationOperationRepository {
     operationId: string,
   ): InteractionResponseOperationRecord {
     const current = this.getInteractionResponse(scope, operationId);
-    this.database
-      .prepare(
+    prepareCached(this.database,
         `
           UPDATE mutation_receipts
           SET result_code = 'accepted', replayable = 1,
@@ -853,8 +851,7 @@ export class ConversationOperationRepository {
       input.interactionId,
       input.response,
     ]);
-    const result = this.database
-      .prepare(
+    const result = prepareCached(this.database,
         `
           UPDATE mutation_receipts
           SET result_code = 'accepted', replayable = 1,
@@ -884,8 +881,7 @@ export class ConversationOperationRepository {
     scope: RequestScope,
     operationId: string,
   ): void {
-    this.database
-      .prepare(
+    prepareCached(this.database,
         `
           DELETE FROM mutation_receipts
           WHERE tenant_id = ? AND principal_id = ? AND mutation_id = ?
@@ -900,8 +896,7 @@ export class ConversationOperationRepository {
     scope: RequestScope,
   ): InteractionResponseOperationRecord[] {
     return (
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             SELECT ${rowColumns}
             FROM mutation_receipts
@@ -950,8 +945,7 @@ export class ConversationOperationRepository {
         applicationOperationId: input.operationId,
         deadlineAt: input.now + 30_000,
       };
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             INSERT INTO mutation_receipts(
               tenant_id, principal_id, thread_id, mutation_id,
@@ -1005,8 +999,7 @@ export class ConversationOperationRepository {
     return this.database.transaction(() => {
       const current = this.getInterrupt(scope, operationId);
       if (current.state === "prepared") {
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               UPDATE mutation_receipts
               SET result_code = 'uncertain', replayable = 0
@@ -1028,8 +1021,7 @@ export class ConversationOperationRepository {
     return this.database.transaction(() => {
       const current = this.getInterrupt(scope, operationId);
       if (current.state !== "accepted") {
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               UPDATE mutation_receipts
               SET result_code = 'accepted', replayable = 1
@@ -1056,8 +1048,7 @@ export class ConversationOperationRepository {
           "A terminal interrupt cannot be rejected.",
         );
       }
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             DELETE FROM mutation_receipts
             WHERE tenant_id = ? AND principal_id = ? AND mutation_id = ?
@@ -1077,13 +1068,13 @@ export class ConversationOperationRepository {
         AND operation_kind = 'conversation_interrupt'
         AND json_extract(result_json, '$.deadlineAt') <= ?
         ${threadId ? "AND thread_id = ?" : ""}`;
-      const affected = this.database.prepare(`SELECT DISTINCT thread_id AS threadId FROM mutation_receipts
+      const affected = prepareCached(this.database, `SELECT DISTINCT thread_id AS threadId FROM mutation_receipts
         WHERE ${predicate} AND result_code IN ('prepared', 'uncertain')`).all(...parameters) as { threadId: string }[];
       // Prepared proves that no provider effect was attempted. Its deletion is
       // the same safe refusal policy used by other undispatched operations.
-      this.database.prepare(`DELETE FROM mutation_receipts
+      prepareCached(this.database, `DELETE FROM mutation_receipts
         WHERE ${predicate} AND result_code = 'prepared'`).run(...parameters);
-      this.database.prepare(`UPDATE mutation_receipts
+      prepareCached(this.database, `UPDATE mutation_receipts
         SET result_code = 'failed_unknown', replayable = 1,
           result_json = json_set(result_json, '$.failureDiagnostic',
             'Stop reached its deadline without a confirmed outcome. You may issue a new Stop.')
@@ -1142,8 +1133,7 @@ export class ConversationOperationRepository {
               expectedSettingsRevision: input.expectedSettingsRevision,
             }),
       };
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             INSERT INTO mutation_receipts(
               tenant_id, principal_id, thread_id, mutation_id,
@@ -1201,8 +1191,7 @@ export class ConversationOperationRepository {
     return this.database.transaction(() => {
       const current = this.getBackendAction(scope, mutationId);
       if (current.state === "prepared") {
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               UPDATE mutation_receipts
               SET result_code = 'uncertain', replayable = 0
@@ -1229,8 +1218,7 @@ export class ConversationOperationRepository {
     return this.database.transaction(() => {
       const current = this.getBackendAction(scope, mutationId);
       if (current.state !== "accepted") {
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               UPDATE mutation_receipts
               SET result_code = 'accepted', replayable = 1
@@ -1262,8 +1250,7 @@ export class ConversationOperationRepository {
           "An accepted backend action cannot be rejected.",
         );
       }
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             DELETE FROM mutation_receipts
             WHERE tenant_id = ? AND principal_id = ? AND mutation_id = ?
@@ -1334,8 +1321,7 @@ export class ConversationOperationRepository {
           "Wait for the previous steering input to appear before steering again.",
         );
       }
-      const thread = this.database
-        .prepare(
+      const thread = prepareCached(this.database,
           `
             SELECT revision, backing_state AS backingState
             FROM application_threads
@@ -1345,8 +1331,7 @@ export class ConversationOperationRepository {
         .get(scope.tenantId, scope.principalId, threadId) as
         | { readonly revision: number; readonly backingState: string }
         | undefined;
-      const draft = this.database
-        .prepare(
+      const draft = prepareCached(this.database,
           `
             SELECT text, selected_skill_id AS selectedSkillId,
               context_excerpts_json AS contextExcerptsJson,
@@ -1432,8 +1417,7 @@ export class ConversationOperationRepository {
         { kind: "operation", threadId, mutationId: input.mutationId },
         input.attachmentIds,
       );
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             INSERT INTO mutation_receipts(
               tenant_id, principal_id, thread_id, mutation_id,
@@ -1555,8 +1539,7 @@ export class ConversationOperationRepository {
           "The queued-input Steer receipt is invalid.",
         );
       }
-      const queued = this.database
-        .prepare(
+      const queued = prepareCached(this.database,
           `
             SELECT text, selected_skill_id AS selectedSkillId,
               context_excerpts_json AS contextExcerptsJson,
@@ -1636,8 +1619,7 @@ export class ConversationOperationRepository {
         { kind: "operation", threadId, mutationId: input.mutationId },
         input.attachmentIds,
       );
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             INSERT INTO mutation_receipts(
               tenant_id, principal_id, thread_id, mutation_id,
@@ -1703,8 +1685,7 @@ export class ConversationOperationRepository {
                 priorNextAttemptAt: current.priorNextAttemptAt,
                 priorDiagnostic: current.priorDiagnostic,
               };
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               UPDATE mutation_receipts
               SET result_code = 'uncertain', result_json = ?, replayable = 0
@@ -1745,8 +1726,7 @@ export class ConversationOperationRepository {
           "The steering operation cannot await materialization from its current state.",
         );
       }
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE mutation_receipts
             SET result_code = 'pending_materialization', replayable = 1
@@ -1763,8 +1743,7 @@ export class ConversationOperationRepository {
         );
       }
       if (current.source === "draft") {
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               UPDATE application_threads
               SET revision = revision + 1, updated_at = ?
@@ -1791,7 +1770,7 @@ export class ConversationOperationRepository {
           "Only a pending steering operation can require materialization recovery.",
         );
       }
-      this.database.prepare(`
+      prepareCached(this.database, `
         UPDATE mutation_receipts
         SET result_code = 'uncertain', replayable = 0
         WHERE tenant_id = ? AND principal_id = ? AND mutation_id = ?
@@ -1799,7 +1778,7 @@ export class ConversationOperationRepository {
           AND result_code = 'pending_materialization'
       `).run(scope.tenantId, scope.principalId, mutationId);
       if (current.source === "draft") {
-        this.database.prepare(`
+        prepareCached(this.database, `
           UPDATE application_threads SET revision = revision + 1, updated_at = ?
           WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
         `).run(now, scope.tenantId, scope.principalId, current.threadId);
@@ -1822,7 +1801,7 @@ export class ConversationOperationRepository {
           diagnostic.length < 1 || diagnostic.length > 500) {
         throw new DomainError("invalid_transition", "This steering operation cannot close with an unknown outcome.");
       }
-      this.database.prepare(`
+      prepareCached(this.database, `
         UPDATE mutation_receipts
         SET result_code = 'failed_unknown', replayable = 1,
           result_json = json_set(result_json, '$.failureDiagnostic', ?)
@@ -1831,7 +1810,7 @@ export class ConversationOperationRepository {
           AND result_code IN ('pending_materialization', 'uncertain')
       `).run(diagnostic, scope.tenantId, scope.principalId, mutationId);
       if (current.source === "draft") {
-        this.database.prepare(`
+        prepareCached(this.database, `
           UPDATE application_threads SET revision = revision + 1, updated_at = ?
           WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
         `).run(now, scope.tenantId, scope.principalId, current.threadId);
@@ -1851,8 +1830,7 @@ export class ConversationOperationRepository {
       if (current.state === "failed_unknown" && !this.#canAcceptFailedSteer(scope, current)) {
         throw new DomainError("invalid_transition", "The steering operation was closed with an unknown outcome.");
       }
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             UPDATE mutation_receipts
             SET result_code = 'accepted', replayable = 1,
@@ -1869,8 +1847,7 @@ export class ConversationOperationRepository {
           { kind: "draft", threadId: current.threadId },
           [],
         );
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               UPDATE thread_drafts
               SET text = '', selected_skill_id = NULL,
@@ -1888,8 +1865,7 @@ export class ConversationOperationRepository {
             current.threadId,
             current.expectedDraftRevision,
           );
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               UPDATE application_threads
               SET revision = revision + 1, last_activity_at = ?, updated_at = ?
@@ -1917,8 +1893,7 @@ export class ConversationOperationRepository {
           "A closed steering operation cannot be rejected.",
         );
       }
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             DELETE FROM mutation_receipts
             WHERE tenant_id = ? AND principal_id = ? AND mutation_id = ?
@@ -1942,8 +1917,7 @@ export class ConversationOperationRepository {
           "Only a pending steering operation can be closed as not materialized.",
         );
       }
-      const deleted = this.database
-        .prepare(
+      const deleted = prepareCached(this.database,
           `
             DELETE FROM mutation_receipts
             WHERE tenant_id = ? AND principal_id = ? AND mutation_id = ?
@@ -1959,8 +1933,7 @@ export class ConversationOperationRepository {
         );
       }
       if (current.source === "draft") {
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               UPDATE application_threads
               SET revision = revision + 1, updated_at = ?
@@ -2002,8 +1975,7 @@ export class ConversationOperationRepository {
     scope: RequestScope,
     threadId: string,
   ): DraftSteerOperationRecord | undefined {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT ${rowColumns}
           FROM mutation_receipts
@@ -2025,8 +1997,7 @@ export class ConversationOperationRepository {
     scope: RequestScope,
     threadId: string,
   ): SteerOperationRecord | undefined {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT ${rowColumns}
           FROM mutation_receipts
@@ -2047,8 +2018,7 @@ export class ConversationOperationRepository {
     threadId: string,
     applicationOperationId: string,
   ): SteerOperationRecord | undefined {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT ${rowColumns}
           FROM mutation_receipts
@@ -2077,7 +2047,7 @@ export class ConversationOperationRepository {
 
   #canAcceptFailedSteer(scope: RequestScope, receipt: SteerOperationRecord): boolean {
     if (receipt.source !== "queued_input") return false;
-    return this.database.prepare(`
+    return prepareCached(this.database, `
       SELECT 1 FROM queued_inputs
       WHERE tenant_id = ? AND owner_principal_id = ?
         AND application_thread_id = ? AND id = ?
@@ -2096,8 +2066,7 @@ export class ConversationOperationRepository {
     threadId: string,
     purpose: "submit" | "steer" = "submit",
   ): boolean {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT 1
           FROM mutation_receipts
@@ -2137,8 +2106,7 @@ export class ConversationOperationRepository {
     threadId: string,
   ): boolean {
     return (
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             SELECT 1
             FROM mutation_receipts
@@ -2157,8 +2125,7 @@ export class ConversationOperationRepository {
     scope: RequestScope,
   ): SteerOperationRecord[] {
     return (
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             SELECT ${rowColumns}
             FROM mutation_receipts
@@ -2187,8 +2154,7 @@ export class ConversationOperationRepository {
     scope: RequestScope,
     threadId: string,
   ): UncertainThreadOperationRecord | undefined {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT ${rowColumns}
           FROM mutation_receipts
@@ -2209,8 +2175,7 @@ export class ConversationOperationRepository {
 
   listUncertainSteers(scope: RequestScope): DraftSteerOperationRecord[] {
     return (
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             SELECT ${rowColumns}
             FROM mutation_receipts
@@ -2231,8 +2196,7 @@ export class ConversationOperationRepository {
 
   listPreparedDraftSteers(scope: RequestScope): DraftSteerOperationRecord[] {
     return (
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             SELECT ${rowColumns}
             FROM mutation_receipts
@@ -2253,8 +2217,7 @@ export class ConversationOperationRepository {
 
   listUncertainInterrupts(scope: RequestScope): InterruptOperationRecord[] {
     return (
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             SELECT ${rowColumns}
             FROM mutation_receipts
@@ -2272,8 +2235,7 @@ export class ConversationOperationRepository {
     scope: RequestScope,
   ): BackendActionOperationRecord[] {
     return (
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             SELECT ${rowColumns}
             FROM mutation_receipts
@@ -2295,8 +2257,7 @@ export class ConversationOperationRepository {
     scope: RequestScope,
     mutationId: string,
   ): ReceiptRow | undefined {
-    return this.database
-      .prepare(
+    return prepareCached(this.database,
         `
           SELECT ${rowColumns}
           FROM mutation_receipts

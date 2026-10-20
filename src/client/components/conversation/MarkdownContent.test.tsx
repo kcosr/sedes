@@ -42,6 +42,88 @@ const fileRequest = (reference: WorkspaceFileLinkReference) => ({
   target: { kind: "file" as const },
 });
 
+describe("MarkdownContent streaming updates", () => {
+  it("keeps a rendered link's element while the message keeps streaming", () => {
+    const view = render(
+      <MarkdownContent streaming>{"See [the docs](https://example.com/docs) and"}</MarkdownContent>,
+    );
+    const link = screen.getByRole("link", { name: /the docs/ });
+
+    view.rerender(
+      <MarkdownContent streaming>
+        {"See [the docs](https://example.com/docs) and more words"}
+      </MarkdownContent>,
+    );
+
+    expect(screen.getByRole("link", { name: /the docs/ })).toBe(link);
+  });
+
+  it("follows a streaming link's destination when it changes", () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    try {
+      const view = render(
+        <MarkdownContent streaming>{"See [the docs](https://example.com/a)"}</MarkdownContent>,
+      );
+      expect(screen.getByRole("link", { name: /the docs/ })).toHaveAttribute(
+        "href",
+        "https://example.com/a",
+      );
+
+      view.rerender(
+        <MarkdownContent streaming>
+          {"See [the docs](https://example.com/b) and more words"}
+        </MarkdownContent>,
+      );
+
+      const link = screen.getByRole("link", { name: /the docs/ });
+      expect(link).toHaveAttribute("href", "https://example.com/b");
+      fireEvent.click(link);
+      expect(open).toHaveBeenCalledExactlyOnceWith(
+        "https://example.com/b",
+        "_blank",
+        "noopener,noreferrer",
+      );
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it("resolves rendered links against the current file source and handler", () => {
+    const rootId = workspaceFileRootIdSchema.parse("markdown-context");
+    const first = vi.fn();
+    const second = vi.fn();
+    function Host({
+      handler,
+      path,
+    }: {
+      readonly handler?: { readonly openReference: typeof first };
+      readonly path: string;
+    }) {
+      return (
+        <WorkspaceFileLinkProvider handler={handler}>
+          <MarkdownContent fileLinkSource={{ rootId, path }}>
+            {"[Sibling](next.md)"}
+          </MarkdownContent>
+        </WorkspaceFileLinkProvider>
+      );
+    }
+    const view = render(<Host path="docs/one.md" />);
+    expect(screen.queryByRole("link", { name: "Sibling" })).not.toBeInTheDocument();
+
+    view.rerender(<Host handler={{ openReference: first }} path="docs/one.md" />);
+    fireEvent.click(screen.getByRole("link", { name: "Sibling" }));
+    view.rerender(<Host handler={{ openReference: second }} path="guides/two.md" />);
+    fireEvent.click(screen.getByRole("link", { name: "Sibling" }));
+
+    expect(first).toHaveBeenCalledExactlyOnceWith(
+      fileRequest({ kind: "root_relative", rootId, path: "docs/next.md" }),
+    );
+    expect(second).toHaveBeenCalledExactlyOnceWith(
+      fileRequest({ kind: "root_relative", rootId, path: "guides/next.md" }),
+    );
+  });
+});
+
 describe("MarkdownContent line breaks", () => {
   it("joins single newlines by default and shows them as line breaks when lineBreaks is on", () => {
     const source = "First line\nSecond line\n\nNext paragraph";

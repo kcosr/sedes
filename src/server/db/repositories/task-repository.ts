@@ -949,21 +949,7 @@ export class TaskRepository {
           "Only completed tasks can be deleted.",
         );
       }
-      const retainedByReset = this.database
-        .prepare(
-          `
-            SELECT 1 FROM thread_force_reset_promoted_tasks
-            WHERE tenant_id = ? AND principal_id = ? AND task_id = ?
-            LIMIT 1
-          `,
-        )
-        .get(scope.tenantId, scope.principalId, taskId);
-      if (retainedByReset) {
-        throw new DomainError(
-          "conflict",
-          "The task is still referenced by a thread reset.",
-        );
-      }
+      this.#assertNotRetainedByReset(scope, taskId);
       const changed = this.database
         .prepare(
           `
@@ -984,16 +970,38 @@ export class TaskRepository {
 
   /** Idempotent, receipt-less delete following the stash-delete convention. */
   remove(scope: RequestScope, taskId: string): boolean {
-    return (
-      this.database
-        .prepare(
-          `
-            DELETE FROM tasks
-            WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
-          `,
-        )
-        .run(scope.tenantId, scope.principalId, taskId).changes === 1
-    );
+    return this.database.transaction(() => {
+      this.#assertNotRetainedByReset(scope, taskId);
+      return (
+        this.database
+          .prepare(
+            `
+              DELETE FROM tasks
+              WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
+            `,
+          )
+          .run(scope.tenantId, scope.principalId, taskId).changes === 1
+      );
+    })();
+  }
+
+  /** Force-reset receipts permanently record the Tasks they promoted. */
+  #assertNotRetainedByReset(scope: RequestScope, taskId: string): void {
+    const retainedByReset = this.database
+      .prepare(
+        `
+          SELECT 1 FROM thread_force_reset_promoted_tasks
+          WHERE tenant_id = ? AND principal_id = ? AND task_id = ?
+          LIMIT 1
+        `,
+      )
+      .get(scope.tenantId, scope.principalId, taskId);
+    if (retainedByReset) {
+      throw new DomainError(
+        "conflict",
+        "The task is still referenced by a thread reset.",
+      );
+    }
   }
 
   /**

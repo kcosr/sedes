@@ -4,6 +4,7 @@ import { steerTargetSchema, type SteerTarget } from "../../../shared/protocol/co
 import { createHash, randomUUID } from "node:crypto";
 import { UserInputRevisionRepository } from "./user-input-revision-repository.js";
 import type Database from "better-sqlite3";
+import { prepareCached } from "../prepared-statements.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { MAXIMUM_THREAD_INPUT_BYTES, type ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
@@ -333,8 +334,7 @@ export class QueuedInputRepository {
    * fallback, and input-context availability share this single predicate.
    */
   hasSteerBlockingInput(scope: RequestScope, applicationThreadId: string): boolean {
-    return this.database
-      .prepare(
+    return prepareCached(this.database,
         `
           SELECT 1
           FROM queued_inputs
@@ -630,8 +630,7 @@ export class QueuedInputRepository {
         }
       }
       if (input.source.kind === "composer") {
-        const draft = this.database
-          .prepare(
+        const draft = prepareCached(this.database,
             `
               SELECT text, selected_skill_id AS selectedSkillId,
                 context_excerpts_json AS contextExcerptsJson,
@@ -700,8 +699,7 @@ export class QueuedInputRepository {
         }
       }
       const sequence = (
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               SELECT coalesce(max(sequence), 0) + 1 AS sequence
               FROM queued_inputs
@@ -721,8 +719,7 @@ export class QueuedInputRepository {
         { kind: "queue", threadId: applicationThreadId, queuedInputId: id },
         input.attachmentIds,
       );
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             INSERT INTO queued_inputs(
               tenant_id, owner_principal_id, id, application_thread_id,
@@ -814,8 +811,7 @@ export class QueuedInputRepository {
           materializedAt: input.now,
         });
       }
-      const advanced = this.database
-        .prepare(
+      const advanced = prepareCached(this.database,
           `
             UPDATE application_threads
             SET revision = revision + 1, last_activity_at = ?, updated_at = ?
@@ -843,8 +839,7 @@ export class QueuedInputRepository {
           { kind: "draft", threadId: applicationThreadId },
           [],
         );
-        const cleared = this.database
-          .prepare(
+        const cleared = prepareCached(this.database,
             `
               UPDATE thread_drafts
               SET text = '', selected_skill_id = NULL,
@@ -894,8 +889,7 @@ export class QueuedInputRepository {
     now: number,
   ): QueuedInputRecord | undefined {
     return this.database.transaction(() => {
-      const headRow = this.database
-        .prepare(
+      const headRow = prepareCached(this.database,
           `
             SELECT ${columns}
             FROM queued_inputs
@@ -921,8 +915,7 @@ export class QueuedInputRepository {
       ) {
         return undefined;
       }
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE queued_inputs
             SET state = 'dispatching', dispatch_started_at = ?,
@@ -983,8 +976,7 @@ export class QueuedInputRepository {
         backendCorrelation: input.backendCorrelation,
         attachmentIds: item.attachments.map(({ id }) => id),
       });
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE queued_inputs
             SET state = 'accepted', accepted_at = ?, resolved_at = ?,
@@ -1031,8 +1023,7 @@ export class QueuedInputRepository {
     },
   ): QueuedInputRecord {
     return this.database.transaction(() => {
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE queued_inputs
             SET state = 'uncertain',
@@ -1083,8 +1074,7 @@ export class QueuedInputRepository {
         );
       }
       if (item.invalidStateRequeues === 0) {
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               UPDATE queued_inputs
               SET state = 'pending', dispatch_started_at = NULL,
@@ -1179,8 +1169,7 @@ export class QueuedInputRepository {
   ): { readonly item: QueuedInputRecord; readonly replayed: boolean } {
     const requestFingerprint = cancellationFingerprint(applicationThreadId, id);
     return this.database.transaction(() => {
-      const replayRow = this.database
-        .prepare(
+      const replayRow = prepareCached(this.database,
           `
             SELECT ${columns}
             FROM queued_inputs
@@ -1217,8 +1206,7 @@ export class QueuedInputRepository {
           "The thread changed before the queued input could be cancelled.",
         );
       }
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE queued_inputs
             SET state = 'cancelled', resolved_at = ?, next_attempt_at = NULL,
@@ -1284,8 +1272,7 @@ export class QueuedInputRepository {
     );
     return this.database
       .transaction(() => {
-        const existingReceipt = this.database
-          .prepare(
+        const existingReceipt = prepareCached(this.database,
             `
             SELECT thread_id AS threadId, operation_kind AS operationKind,
               request_fingerprint AS requestFingerprint,
@@ -1339,8 +1326,7 @@ export class QueuedInputRepository {
             replayed: true,
           };
         }
-        const cancellationReuse = this.database
-          .prepare(
+        const cancellationReuse = prepareCached(this.database,
             `
             SELECT 1
             FROM queued_inputs
@@ -1414,8 +1400,7 @@ export class QueuedInputRepository {
           item.attachments.map(({ id: attachmentId }) => attachmentId),
         );
         const taskReferences = taskReferencesFromContexts(item.taskContexts);
-        const draftChanged = this.database
-          .prepare(
+        const draftChanged = prepareCached(this.database,
             `
             UPDATE thread_drafts
             SET text = ?, selected_skill_id = ?, context_excerpts_json = ?,
@@ -1444,8 +1429,7 @@ export class QueuedInputRepository {
             "The composer draft changed while the queued input was restored.",
           );
         }
-        const queueChanged = this.database
-          .prepare(
+        const queueChanged = prepareCached(this.database,
             `
             UPDATE queued_inputs
             SET state = 'cancelled', resolved_at = ?, next_attempt_at = NULL,
@@ -1471,8 +1455,7 @@ export class QueuedInputRepository {
             "The queued input changed while it was restored.",
           );
         }
-        const threadChanged = this.database
-          .prepare(
+        const threadChanged = prepareCached(this.database,
             `
             UPDATE application_threads
             SET revision = revision + 1, last_activity_at = ?, updated_at = ?
@@ -1494,8 +1477,7 @@ export class QueuedInputRepository {
             "The thread changed while the queued input was restored.",
           );
         }
-        const generationChanged = this.database
-          .prepare(
+        const generationChanged = prepareCached(this.database,
             `
             UPDATE principal_generations
             SET inventory_generation = inventory_generation + 1
@@ -1509,8 +1491,7 @@ export class QueuedInputRepository {
             "The principal inventory generation is missing.",
           );
         }
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
             INSERT INTO mutation_receipts(
               tenant_id, principal_id, thread_id, mutation_id,
@@ -1571,8 +1552,7 @@ export class QueuedInputRepository {
           "Only pending user queued input can be steered.",
         );
       }
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE queued_inputs
             SET state = 'dispatching', delivery_mode = 'steer',
@@ -1637,8 +1617,7 @@ export class QueuedInputRepository {
     },
   ): QueuedInputRecord {
     return this.database.transaction(() => {
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE queued_inputs
             SET state = 'uncertain',
@@ -1680,8 +1659,7 @@ export class QueuedInputRepository {
     },
   ): QueuedInputRecord {
     return this.database.transaction(() => {
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE queued_inputs
             SET state = 'failed', resolved_at = ?, next_attempt_at = NULL,
@@ -1718,8 +1696,7 @@ export class QueuedInputRepository {
     input: { readonly now: number },
   ): QueuedInputRecord {
     return this.database.transaction(() => {
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE queued_inputs
             SET state = 'pending', steer_fallback_at = CASE
@@ -1817,7 +1794,7 @@ export class QueuedInputRepository {
     conflict: string,
   ): QueuedInputRecord {
     return this.database.transaction(() => {
-      const changed = this.database.prepare(`
+      const changed = prepareCached(this.database, `
         UPDATE queued_inputs
         SET state = 'failed', resolved_at = ?, next_attempt_at = NULL,
           reconciliation_token = NULL, retry_anchor = NULL,
@@ -1859,8 +1836,7 @@ export class QueuedInputRepository {
       );
     }
     return this.database.transaction(() => {
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE queued_inputs
             SET state = ?, delivery_mode = NULL,
@@ -1906,8 +1882,7 @@ export class QueuedInputRepository {
     },
   ): QueuedInputRecord {
     return this.database.transaction(() => {
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE queued_inputs
             SET state = 'accepted', delivery_mode = NULL,
@@ -1952,8 +1927,7 @@ export class QueuedInputRepository {
     input: { readonly diagnostic?: string; readonly now: number },
   ): QueuedInputRecord {
     return this.database.transaction(() => {
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE queued_inputs
             SET state = 'cancelled', resolved_at = ?, next_attempt_at = NULL,
@@ -2066,8 +2040,7 @@ export class QueuedInputRepository {
         );
       }
       const sequence = (
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               SELECT coalesce(max(sequence), 0) + 1 AS sequence
               FROM queued_inputs
@@ -2097,8 +2070,7 @@ export class QueuedInputRepository {
           queuedInputId: id,
         },
       );
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             INSERT INTO queued_inputs(
               tenant_id, owner_principal_id, id, application_thread_id,
@@ -2144,8 +2116,7 @@ export class QueuedInputRepository {
   }
 
   list(scope: RequestScope, applicationThreadId: string): QueuedInputRecord[] {
-    const rows = this.database
-      .prepare(
+    const rows = prepareCached(this.database,
         `
           SELECT ${columns}
           FROM queued_inputs
@@ -2213,8 +2184,7 @@ export class QueuedInputRepository {
   }
 
   #getDraft(scope: RequestScope, applicationThreadId: string): RestoredDraft {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT text, selected_skill_id AS selectedSkillId,
             context_excerpts_json AS contextExcerptsJson,
@@ -2252,8 +2222,7 @@ export class QueuedInputRepository {
   }
 
   listRecoveryRequired(scope: RequestScope): QueuedInputRecord[] {
-    const rows = this.database
-      .prepare(
+    const rows = prepareCached(this.database,
         `
           SELECT ${columns}
           FROM queued_inputs
@@ -2270,8 +2239,7 @@ export class QueuedInputRepository {
     scope: RequestScope,
     applicationThreadId: string,
   ): QueueFailureAttention | undefined {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT id AS queuedInputId, resolved_at AS failedAt, diagnostic
           FROM queued_inputs
@@ -2292,8 +2260,7 @@ export class QueuedInputRepository {
    * Accepted, cancelled, and acknowledged failures no longer block ordering.
    */
   listActiveHeads(scope: RequestScope): QueuedInputRecord[] {
-    const rows = this.database
-      .prepare(
+    const rows = prepareCached(this.database,
         `
           SELECT ${qualifiedColumns}
           FROM queued_inputs AS q
@@ -2340,8 +2307,7 @@ export class QueuedInputRepository {
     scope: RequestScope,
     applicationThreadId: string,
   ): QueuedInputRecord | undefined {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT ${qualifiedColumns}
           FROM queued_inputs AS q
@@ -2366,8 +2332,7 @@ export class QueuedInputRepository {
     scope: RequestScope,
     applicationThreadId: string,
   ): QueuedInputRecord[] {
-    const rows = this.database
-      .prepare(
+    const rows = prepareCached(this.database,
         `
           SELECT ${qualifiedColumns}
           FROM queued_inputs AS q
@@ -2387,8 +2352,7 @@ export class QueuedInputRepository {
     applicationThreadId: string,
     id: string,
   ): QueuedInputRecord {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT ${columns}
           FROM queued_inputs
@@ -2408,8 +2372,7 @@ export class QueuedInputRepository {
     applicationThreadId: string,
     mutationId: string,
   ): QueuedInputRecord | undefined {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT ${columns}
           FROM queued_inputs
@@ -2486,8 +2449,7 @@ export class QueuedInputRepository {
       policy.maximumDelayMilliseconds,
       policy.baseDelayMilliseconds * 2 ** exponent,
     );
-    const changed = this.database
-      .prepare(
+    const changed = prepareCached(this.database,
         `
           UPDATE queued_inputs
           SET state = 'retry_wait', dispatch_started_at = NULL,
@@ -2526,8 +2488,7 @@ export class QueuedInputRepository {
     id: string,
     now: number,
   ): number {
-    return this.database
-      .prepare(
+    return prepareCached(this.database,
         `
           UPDATE queued_inputs
           SET failure_acknowledged_at = ?
@@ -2545,8 +2506,7 @@ export class QueuedInputRepository {
     applicationThreadId: string,
     automation = false,
   ): void {
-    const active = this.database
-      .prepare(
+    const active = prepareCached(this.database,
         `
           SELECT count(*) AS count
           FROM queued_inputs
@@ -2573,8 +2533,7 @@ export class QueuedInputRepository {
     now: number,
     acceptedActivity: boolean,
   ): void {
-    const changed = this.database
-      .prepare(
+    const changed = prepareCached(this.database,
         `
           UPDATE application_threads
           SET revision = revision + 1, updated_at = ?,
@@ -2611,8 +2570,7 @@ export class QueuedInputRepository {
     now: number,
     failureReason?: "not_sent",
   ): QueuedInputRecord {
-    const changed = this.database
-      .prepare(
+    const changed = prepareCached(this.database,
         `
           UPDATE queued_inputs
           SET state = 'failed', resolved_at = ?, next_attempt_at = NULL,
@@ -2678,8 +2636,7 @@ export class QueuedInputRepository {
       }
       inputOrigin = parsed;
     } else if (row.initiatingAgentThreadId !== null) {
-      const source = this.database
-        .prepare(
+      const source = prepareCached(this.database,
           `
             SELECT title
             FROM application_threads
@@ -2732,8 +2689,7 @@ export class QueuedInputRepository {
     scope: RequestScope,
     applicationThreadId: string,
   ): number {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT thread.backing_state AS backingState, thread.revision,
             inventory.inventory_state AS inventoryState
@@ -2770,8 +2726,7 @@ export class QueuedInputRepository {
   }
 
   #threadRevision(scope: RequestScope, applicationThreadId: string): number {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT revision
           FROM application_threads
