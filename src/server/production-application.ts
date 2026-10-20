@@ -111,6 +111,7 @@ import {
 } from "./conversations/thread-agent-tool-policy-dependencies.js";
 import { DatabaseThreadAgentToolRuntimeAvailabilityReader } from "./conversations/thread-agent-tool-runtime-availability.js";
 import { prepareBackendNormalizedDatabase } from "./db/backend-normalized-startup.js";
+import { DATABASE_OPTIMIZE_INTERVAL_MILLISECONDS, optimizeDatabase } from "./db/database.js";
 import { AutomationRepository } from "./db/repositories/automation-repository.js";
 import { BackendCheckpointRepository } from "./db/repositories/backend-checkpoint-repository.js";
 import { BackendConfigurationRepository } from "./db/repositories/backend-configuration-repository.js";
@@ -441,7 +442,21 @@ export async function startProductionApplication(
         environment.SEDES_QUIESCENT_CUTOVER_CONFIRMED === "1",
     });
     database = startup.database;
+    const applicationDatabase = database;
+    // Planner statistics are advisory: a failed refresh changes no application state.
+    const optimize = (phase: "opened" | "periodic" | "closing") => {
+      try {
+        optimizeDatabase(applicationDatabase, phase);
+      } catch {
+        // The next refresh retries; queries remain correct without statistics.
+      }
+    };
+    optimize("opened");
+    const optimizeTimer = setInterval(() => optimize("periodic"), DATABASE_OPTIMIZE_INTERVAL_MILLISECONDS);
+    optimizeTimer.unref();
     resources.defer("application database", () => {
+      clearInterval(optimizeTimer);
+      if (applicationDatabase.open && !applicationDatabase.inTransaction) optimize("closing");
       database?.close();
     });
     // This is the final publication gate. It is registered before every
