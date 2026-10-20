@@ -62,6 +62,7 @@ import { HostPairingRepository } from "./host-pairing/host-pairing-repository.js
 import type { HostPairingAdministration } from "./configuration-admin/host-pairing-routes.js";
 import { OutboundConnectionRegistry } from "./outbound/outbound-connection-registry.js";
 import { attachOutboundCarrier } from "./outbound/outbound-carrier.js";
+import { WebSocketUpgradeRouter } from "./http/websocket-upgrade-router.js";
 import { OutboundSidecarProvisioner } from "./sidecar/outbound-sidecar-provisioner.js";
 import { ConfigurationAdminService, type ConfigurationRuntimeAdapter } from "./configuration-admin/configuration-admin-service.js";
 import { ConfigurationProjection } from "./configuration-admin/configuration-projection.js";
@@ -3278,13 +3279,14 @@ export async function startProductionApplication(
       () => closeHttpServerBounded(server, longLivedConnections),
       { deadlineMilliseconds: 12_000 },
     );
-    const outboundCarrier = attachOutboundCarrier(listeningServer, {
+    const upgrades = new WebSocketUpgradeRouter(listeningServer);
+    const outboundCarrier = attachOutboundCarrier(upgrades, {
       authentication,
       config, identity, registry: outboundConnections, connections: longLivedConnections, drain,
     });
     resources.defer("outbound host carrier", () => outboundCarrier.close());
     const managedTerminalCarrier = attachManagedTerminalCarrier(
-      listeningServer,
+      upgrades,
       {
         authentication,
         config,
@@ -3300,7 +3302,7 @@ export async function startProductionApplication(
     resources.defer("managed terminal carrier", () =>
       managedTerminalCarrier.close(),
     );
-    const terminalCarrier = attachTerminalCarrier(listeningServer, {
+    const terminalCarrier = attachTerminalCarrier(upgrades, {
       authentication,
       config,
       identity,

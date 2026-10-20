@@ -362,17 +362,22 @@ export async function serveThreadEventStream(
     return response.write(encoded.frame);
   };
 
+  // A complete replacement is independently bounded by the normalized
+  // snapshot and full SSE-frame limits. It may exceed the much smaller
+  // incremental buffer, so only incrementals queued behind it count against
+  // `pendingByteLimit`; at most one replacement is retained.
+  const pendingIncrementalBytes = ({ envelope, encoded }: PendingEnvelope): number =>
+    envelope.event.type === "snapshot" ? 0 : encoded.bytes;
+
   const resetPendingAtReplacement = (envelope: ThreadEventEnvelope): void => {
+    // Encoding enforces the frame bound before the replacement is retained.
     const encoded = encode(envelope);
     pending = [{ envelope, encoded }];
-    pendingBytes = encoded.bytes;
+    pendingBytes = 0;
     // A replacement supersedes the entire pending array. The prior flush
     // index belongs to that discarded array and must never skip the new
     // authoritative anchor after backpressure drains.
     flushIndex = 0;
-    // A complete replacement is independently bounded by the normalized
-    // snapshot and full SSE-frame limits. It may exceed the much smaller
-    // incremental handshake buffer, but only one replacement is retained.
     overflowed = pending.length > pendingEventLimit;
   };
 
@@ -731,7 +736,7 @@ export async function serveThreadEventStream(
         ({ envelope }) => sequenceOf(hub, envelope) > baselineSequence,
       );
       pendingBytes = pending.reduce(
-        (total, { encoded }) => total + encoded.bytes,
+        (total, item) => total + pendingIncrementalBytes(item),
         0,
       );
       return drainPending(baselineSequence);
@@ -742,8 +747,9 @@ export async function serveThreadEventStream(
     ): Promise<boolean> => {
       if (overflowed) return recoverFromOverflow();
       while (pending.length > 0) {
-        const { envelope, encoded } = pending.shift()!;
-        pendingBytes -= encoded.bytes;
+        const item = pending.shift()!;
+        const { envelope, encoded } = item;
+        pendingBytes -= pendingIncrementalBytes(item);
         if (
           minimumExclusive !== undefined &&
           sequenceOf(hub, envelope) <= minimumExclusive

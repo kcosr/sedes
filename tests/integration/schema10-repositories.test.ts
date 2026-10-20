@@ -2260,7 +2260,7 @@ describe("inactive schema-10 repositories", () => {
         mutationId: "task-context-create-accepted",
         now: 560,
       });
-      const draft = drafts.save(fixture.scope, fixture.threadId, {
+      const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "",
         contextExcerpts: [],
         attachmentIds: [],
@@ -2364,7 +2364,7 @@ describe("inactive schema-10 repositories", () => {
         mutationId: "task-context-create-missing",
         now: 570,
       });
-      const missingDraft = drafts.save(fixture.scope, fixture.threadId, {
+      const missingDraft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "",
         contextExcerpts: [],
         attachmentIds: [],
@@ -2373,7 +2373,7 @@ describe("inactive schema-10 repositories", () => {
         now: 571,
       });
       tasks.remove(fixture.scope, missingTask.id);
-      const retained = drafts.save(fixture.scope, fixture.threadId, {
+      const retained = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "Still keep the stale chip",
         contextExcerpts: [],
         attachmentIds: [],
@@ -2568,7 +2568,7 @@ describe("inactive schema-10 repositories", () => {
         now: 590,
       });
       const emptyDraft = drafts.get(fixture.scope, fixture.threadId);
-      const steerDraft = drafts.save(fixture.scope, fixture.threadId, {
+      const steerDraft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "Do not admit this behind ordinary queued work",
         contextExcerpts: [],
         attachmentIds: [],
@@ -2629,7 +2629,7 @@ describe("inactive schema-10 repositories", () => {
         now: 593,
       });
       const emptyDraft = drafts.get(fixture.scope, fixture.threadId);
-      const secondDraft = drafts.save(fixture.scope, fixture.threadId, {
+      const secondDraft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "Stack this behind the first resolved Steer",
         contextExcerpts: [],
         attachmentIds: [],
@@ -2678,7 +2678,7 @@ describe("inactive schema-10 repositories", () => {
         mutationId: "creation-task-context-create",
         now: 580,
       });
-      const draft = drafts.save(fixture.scope, fixture.threadId, {
+      const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "",
         contextExcerpts: [],
         attachmentIds: [],
@@ -2818,7 +2818,7 @@ describe("inactive schema-10 repositories", () => {
             taskContexts,
           }),
         ).toBe(MAXIMUM_THREAD_INPUT_BYTES + extraByte);
-        const draft = drafts.save(fixture.scope, fixture.threadId, {
+        const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
           text,
           contextExcerpts: [],
           attachmentIds: [],
@@ -4194,7 +4194,6 @@ describe("inactive schema-10 repositories", () => {
     try {
       bindDiscovered(fixture);
       const queue = new QueuedInputRepository(fixture.database);
-      const drafts = new ConversationDraftRepository(fixture.database);
       const queuedConversationExcerpt = {
         id: "018f47cb-5f45-7f93-8d8d-bdb808b1f014",
         excerpt: "Retry this selected response.",
@@ -4209,7 +4208,7 @@ describe("inactive schema-10 repositories", () => {
           suffix: " After retry.",
         },
       };
-      drafts.save(fixture.scope, fixture.threadId, {
+      new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "first",
         contextExcerpts: [queuedConversationExcerpt],
         attachmentIds: [],
@@ -4648,7 +4647,7 @@ describe("inactive schema-10 repositories", () => {
         ),
       );
 
-      const queuedDraft = drafts.save(fixture.scope, fixture.threadId, {
+      const queuedDraft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "steer this queued input",
         contextExcerpts: [],
         attachmentIds: [],
@@ -4673,7 +4672,7 @@ describe("inactive schema-10 repositories", () => {
         },
         now: 640,
       }).item;
-      const currentDraft = drafts.save(fixture.scope, fixture.threadId, {
+      const currentDraft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "do not clear this current draft",
         contextExcerpts: [],
         attachmentIds: [],
@@ -4879,7 +4878,7 @@ describe("inactive schema-10 repositories", () => {
       const queue = new QueuedInputRepository(fixture.database);
       const drafts = new ConversationDraftRepository(fixture.database);
       const initialDraft = drafts.get(fixture.scope, fixture.threadId);
-      drafts.save(fixture.scope, fixture.threadId, { text: "", contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
+      new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, { text: "", contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
         expectedRevision: initialDraft.revision, now: 590 });
       const text = "é".repeat(Math.floor(bytes / 2)) + (bytes % 2 ? "x" : "");
       const queued = queue.enqueue(fixture.scope, fixture.threadId, {
@@ -4954,7 +4953,7 @@ describe("inactive schema-10 repositories", () => {
         },
       };
       const current = drafts.get(fixture.scope, fixture.threadId);
-      const source = drafts.save(fixture.scope, fixture.threadId, {
+      const source = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "restore every structured field",
         selectedSkillId: "skill:restore",
         contextExcerpts: [excerpt],
@@ -5042,7 +5041,7 @@ describe("inactive schema-10 repositories", () => {
         const queue = new QueuedInputRepository(fixture.database);
         const drafts = new ConversationDraftRepository(fixture.database);
         const current = drafts.get(fixture.scope, fixture.threadId);
-        const source = drafts.save(fixture.scope, fixture.threadId, {
+        const source = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
           text: "queued restore source",
           contextExcerpts: [],
           attachmentIds: [],
@@ -5104,7 +5103,7 @@ describe("inactive schema-10 repositories", () => {
             endLine: 1,
           },
         };
-        const occupied = drafts.save(fixture.scope, fixture.threadId, {
+        const occupied = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
           text: dimension === "text" ? " " : "",
           ...(dimension === "skill"
             ? { selectedSkillId: "skill:occupied" }
@@ -5208,7 +5207,7 @@ describe("inactive schema-10 repositories", () => {
       ).toThrow("Only browser-origin user queued input");
 
       const current = drafts.get(fixture.scope, fixture.threadId);
-      const source = drafts.save(fixture.scope, fixture.threadId, {
+      const source = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "browser restore input",
         contextExcerpts: [],
         attachmentIds: [],
@@ -5476,8 +5475,7 @@ describe("inactive schema-10 repositories", () => {
     const fixture = createFixture();
     try {
       bindDiscovered(fixture);
-      const drafts = new ConversationDraftRepository(fixture.database);
-      const draft = drafts.save(fixture.scope, fixture.threadId, {
+      const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "",
         selectedSkillId: "opaque-review-skill",
         contextExcerpts: [],
@@ -5524,7 +5522,7 @@ describe("inactive schema-10 repositories", () => {
       bindDiscovered(fixture);
       const drafts = new ConversationDraftRepository(fixture.database);
       const operations = new ConversationOperationRepository(fixture.database);
-      const submitted = drafts.save(fixture.scope, fixture.threadId, {
+      const submitted = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "Steer this exact draft",
         contextExcerpts: [],
         attachmentIds: [],
@@ -5592,7 +5590,7 @@ describe("inactive schema-10 repositories", () => {
         }),
       ).toThrow("Wait for the previous steering input to appear");
 
-      const newer = drafts.save(fixture.scope, fixture.threadId, {
+      const newer = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
         text: "A newer composer edit",
         contextExcerpts: [],
         attachmentIds: [],

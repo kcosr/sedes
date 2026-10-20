@@ -2377,7 +2377,7 @@ describe("normalized HTTP application contract", () => {
       const pending = current.questions.list(current.owner, threadId)
         .requests[0]!;
       const drafts = new ConversationDraftRepository(current.database);
-      const draft = drafts.save(current.owner, threadId, {
+      const draft = new InventoryRepository(current.database).saveDraft(current.owner, threadId, {
         text: "Unfinished message",
         contextExcerpts: [],
         attachmentIds: [],

@@ -1332,6 +1332,54 @@ describe("serveThreadEventStream", () => {
     expect(response.end).not.toHaveBeenCalled();
   });
 
+  it("bounds only incrementals queued behind an oversized live replacement", async () => {
+    const hub = new ThreadEventHub();
+    publishedSnapshot(hub, "projection-1");
+    const response = new FakeResponse();
+    const request = new FakeRequest();
+    const capture = vi.fn();
+    await serveThreadEventStream(
+      asRequest(request),
+      asResponse(response),
+      hub,
+      source(hub, { capture }),
+      { pendingByteLimit: 4_096 },
+    );
+    expect(checkpoints(response)).toHaveLength(1);
+    const large = {
+      ...snapshot("Large replacement"),
+      draft: {
+        text: "x".repeat(6_000),
+        contextExcerpts: [],
+        attachments: [],
+        taskReferences: [],
+        revision: 0,
+      },
+    };
+    let totalMessages = 0;
+    const usage = () => hub.publish({
+      type: "usage_changed",
+      generation: "projection-1",
+      usage: { counters: { totalMessages: ++totalMessages } },
+    });
+    // Each round exceeds the incremental buffer only when the replacement
+    // itself is counted; a second overflow would close the stream.
+    for (let round = 0; round < 2; round += 1) {
+      const delivered = envelopes(response).length;
+      response.writeResult = () => false;
+      usage();
+      const replacement = hub.publish({ type: "snapshot", generation: "projection-1", snapshot: large });
+      const after = usage();
+      response.writeResult = () => true;
+      response.emit("drain");
+      expect(envelopes(response).slice(delivered + 1)).toEqual([replacement, after]);
+    }
+    expect(checkpoints(response)).toHaveLength(1);
+    expect(capture).not.toHaveBeenCalled();
+    expect(response.end).not.toHaveBeenCalled();
+    request.emit("close");
+  });
+
   it("delivers the newest genuine replacement and its suffix after a checkpoint", async () => {
     const hub = new ThreadEventHub();
     const anchor = publishedSnapshot(hub, "projection-1");
