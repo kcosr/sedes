@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import { prepareCached } from "../db/prepared-statements.js";
 import type { ClientOrigin, ThreadInputContext } from "../../shared/protocol/thread-input.js";
 import { DirectInputRepository } from "../db/repositories/direct-input-repository.js";
 import { MAXIMUM_ACTIVE_QUEUED_INPUTS, QueuedInputRepository } from "../db/repositories/queued-input-repository.js";
@@ -141,7 +142,7 @@ export class ThreadActivityService {
   }
 
   #capture(scope: RequestScope, threadId: string): Captured {
-    const stored = this.input.database.prepare(`SELECT
+    const stored = prepareCached(this.input.database, `SELECT
       thread.title AS threadTitle, thread.backing_state AS backingState, thread.availability,
       thread.input_activity_revision AS activityRevision, inventory.inventory_state AS inventoryState,
       thread.user_input_revision AS userInputRevision,

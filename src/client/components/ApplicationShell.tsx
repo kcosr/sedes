@@ -45,7 +45,8 @@ import {
   getSidebarViewPreferences,
   hasActiveSidebarFilters,
 } from "../app/sidebar-view-store.js";
-import { SettingsView, useSettingsPages } from "./SettingsView.js";
+import { useSettingsPages } from "./settings/use-settings-pages.js";
+import { lazyView } from "./LazyView.js";
 import { SettingsNav } from "./settings/SettingsNav.js";
 import { settingsNavInSidebar } from "./settings/settings-navigation.js";
 import { SIDEBAR_NAV_MEDIA_QUERY } from "./SidebarNavTrigger.js";
@@ -70,6 +71,18 @@ import { describeProjectLocations } from "../app/project-locations.js";
 import { VoiceControls } from "../voice/VoiceControls.js";
 import { shownAutomationUp } from "./automation/automation-navigation.js";
 import { useAutomationThreadId } from "./automation/automation-route-thread.js";
+
+const SettingsView = lazyView(
+  "Settings",
+  async () => (await import("./SettingsView.js")).SettingsView,
+  function SettingsViewFrame({ children }) {
+    return (
+      <main className="settings-view" aria-label="Settings">
+        {children}
+      </main>
+    );
+  },
+);
 
 export function ApplicationShell(props: Parameters<typeof ApplicationShellContent>[0]): React.JSX.Element {
   return <DefaultThreadResolutionProvider store={props.applicationStore}><ApplicationShellContent {...props} /></DefaultThreadResolutionProvider>;

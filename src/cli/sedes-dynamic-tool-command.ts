@@ -164,6 +164,13 @@ export async function parseDynamicToolInput(
     };
   }
 
+  if (
+    supplied.filter(
+      ({ spec, value }) => spec.representation === "file" && value === "-",
+    ).length > 1
+  ) {
+    throw usage("Standard input (-) may be read by only one input option.");
+  }
   const input: Record<string, unknown> = {};
   const assigned = new Map<string, { readonly repeatable: boolean }>();
   for (const { spec, value: rawValue } of supplied) {

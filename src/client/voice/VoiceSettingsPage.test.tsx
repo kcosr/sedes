@@ -112,6 +112,9 @@ describe("voice settings page", () => {
       recordingId: saved.recordingId, expectedRecoveryRevision: 8 }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Discard" })).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    const confirm = await screen.findByRole("dialog", { name: "Discard saved dictation?" });
+    expect(confirm).toHaveAttribute("data-layer", "dialog");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Discard dictation" }));
     await waitFor(() => expect(fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
       recordingId: saved.recordingId, expectedRecoveryRevision: 9 }));
     store.dispose();

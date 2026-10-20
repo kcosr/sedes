@@ -13,8 +13,7 @@ import { Switch } from "../components/ui/switch.js";
 import { cn } from "../lib/utils.js";
 import { useVoiceState } from "./VoiceProvider.js";
 import type { NativeVoiceStore } from "./NativeVoiceStore.js";
-import { voiceReadiness } from "./VoiceSettingsPage.js";
-import { canEnableVoice, resumeVoice, voiceThreadFilterWarning } from "./voice-session.js";
+import { canEnableVoice, resumeVoice, voiceReadiness, voiceThreadFilterWarning } from "./voice-session.js";
 import { nativeThreadTitle, type NativeVoiceSettings } from "./native-voice-plugin.js";
 import { ThreadPicker } from "../components/ThreadPicker.js";
 import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery.js";
@@ -96,7 +95,7 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
           {native?.readiness === "storageUnavailable" ? <Button className={cn("h-(--control-touch) w-full", lockedClass)} aria-disabled={locked}
             onClick={() => { if (!state.pending) void store.reconnect().catch(() => undefined); }}>Retry voice connection</Button> : null}
         </div>
-        <VoiceRecordingRecovery store={store} threads={threads} onAddedToComposer={() => onOpenChange(false)} />
+        <VoiceRecordingRecovery store={store} threads={threads} onAddedToComposer={() => onOpenChange(false)} confirmLayer="over-dialog" />
         {native?.actions.keepListeningBlockedReason === "saved_recording_pending" ? <p className="voice-sheet-help">Resolve saved dictation first to enable Keep listening for the current recording.</p>
           : settings.keepListeningByDefault && saved && !native?.actions.canStart ? <p className="voice-sheet-help">Resolve saved dictation first to start with Keep listening.</p> : null}
         {native && saved?.admission && native.actions.canStart ? <Button variant="outline" disabled={state.pending} onClick={start}>Start new recording</Button> : null}

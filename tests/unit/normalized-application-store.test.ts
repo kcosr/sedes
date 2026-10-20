@@ -10,7 +10,10 @@ import {
   normalizedThreadForkOriginSchema,
   normalizedThreadDescendantsPageSchema,
   normalizedSidebarAttentionSchema,
+  MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES,
+  serializedUtf8Bytes,
   type ApplicationEventEnvelope,
+  type AssociatedTask,
   type NormalizedApplicationSnapshot,
   type NormalizedApplicationThreadSummary,
 } from "../../src/shared/index.js";
@@ -853,5 +856,174 @@ describe("NormalizedApplicationStore", () => {
     ).toEqual({ kind: "ignored" });
     expect(store.state.generation).toBe("application-1");
     expect(store.state.snapshot?.environments[0]?.label.text).toBe("Machine");
+  });
+});
+
+describe("normalized application store incremental events", () => {
+  function task(index: number, details = ""): AssociatedTask {
+    return {
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      scope: { kind: "global" },
+      title: `Task ${index}`,
+      details,
+      pinned: false,
+      backlog: false,
+      files: [],
+      completedAt: null,
+      revision: 0,
+      createdAt: now,
+      updatedAt: now,
+      associatedProjectId: null,
+    };
+  }
+
+  it("keeps untouched entities and collections identical", () => {
+    const store = new NormalizedApplicationStore();
+    seedStore(store, {
+      ...snapshot(),
+      threads: [thread(), thread({ id: "thread-2" })],
+      tasks: [task(1)],
+    });
+    const before = store.state.snapshot!;
+
+    expect(
+      store.apply(
+        envelope(5, {
+          type: "thread_upsert",
+          generation: "application-1",
+          thread: thread({ threadRevision: 1, runState: "running" }),
+        }),
+      ),
+    ).toEqual({ kind: "applied" });
+
+    const after = store.state.snapshot!;
+    expect(after).not.toBe(before);
+    expect(after.threads[0]).toMatchObject({ id: "thread-1", runState: "running" });
+    expect(after.threads[1]).toBe(before.threads[1]);
+    expect(after.workspaces).toBe(before.workspaces);
+    expect(after.environments).toBe(before.environments);
+    expect(after.tasks).toBe(before.tasks);
+    expect(normalizedApplicationSnapshotSchema.parse(after)).toEqual(after);
+  });
+
+  it("rejects removals that leave dangling lineage or task references", () => {
+    const store = new NormalizedApplicationStore();
+    const lineage = {
+      ...snapshot(),
+      threads: [thread(), thread({ id: "child" })],
+      forkOrigins: [
+        {
+          childThreadId: "child",
+          sourceThreadId: "thread-1",
+          sourceTurnId: "turn-1",
+          sourceTurnCompletedAt: "2026-07-30T14:59:00.000Z",
+          boundaryKind: "completed_turn_inclusive" as const,
+          originKind: "user_fork" as const,
+          initiatingAgentThreadId: null,
+          initiatingToolClientId: null,
+          branchMethod: "provider_native" as const,
+          createdAt: now,
+        },
+      ],
+      lineagePlacements: [
+        {
+          childThreadId: "child",
+          mode: "nested_under_source" as const,
+          revision: 0,
+          updatedAt: now,
+        },
+      ],
+    };
+    seedStore(store, lineage);
+    expect(
+      store.apply(
+        envelope(5, {
+          type: "thread_remove",
+          generation: "application-1",
+          threadId: "thread-1",
+        }),
+      ),
+    ).toEqual({
+      kind: "resnapshot_required",
+      reason: "application_inventory_reference_invalid",
+    });
+    expect(store.state.snapshot?.threads).toHaveLength(2);
+
+    seedStore(store);
+    expect(
+      store.apply(
+        envelope(5, {
+          type: "task_upsert",
+          generation: "application-1",
+          task: {
+            ...task(1),
+            scope: { kind: "project", projectId: "00000000-0000-4000-8000-0000000000ff" },
+            associatedProjectId: "00000000-0000-4000-8000-0000000000ff",
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "resnapshot_required",
+      reason: "application_inventory_reference_invalid",
+    });
+  });
+
+  it("enforces the serialized snapshot limit exactly across incremental events", () => {
+    // Three-byte characters reach the limit with fewer than 200 tasks. Fill
+    // to within 30-60 KB of the limit.
+    const tasks: AssociatedTask[] = [];
+    const seeded = () => ({ ...snapshot(), tasks });
+    let remaining = MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES - serializedUtf8Bytes(seeded());
+    while (remaining > 60_000) {
+      const next = task(tasks.length + 1);
+      const characters = Math.min(
+        65_536,
+        Math.floor((remaining - 30_000 - serializedUtf8Bytes(next) - 1) / 3),
+      );
+      const filled = { ...next, details: "\u20ac".repeat(characters) };
+      remaining -= serializedUtf8Bytes(filled) + (tasks.length > 0 ? 1 : 0);
+      tasks.push(filled);
+    }
+    const store = new NormalizedApplicationStore();
+    seedStore(store, seeded());
+    const seededBytes = serializedUtf8Bytes(seeded());
+    let sequence = 5;
+    const apply = (event: ApplicationEventEnvelope["event"]) =>
+      store.apply(envelope(sequence++, event));
+
+    // Removing and restoring an entry nets out.
+    expect(
+      apply({ type: "task_remove", generation: "application-1", taskId: tasks[0]!.id }),
+    ).toEqual({ kind: "applied" });
+    expect(
+      apply({ type: "task_upsert", generation: "application-1", task: tasks[0]! }),
+    ).toEqual({ kind: "applied" });
+
+    // An appended entry adds its bytes and one separator.
+    const boundaryIndex = tasks.length + 1;
+    const emptyBytes = serializedUtf8Bytes(task(boundaryIndex));
+    const fill =
+      MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES - seededBytes - emptyBytes - 1;
+    expect(fill).toBeGreaterThan(0);
+    expect(fill).toBeLessThan(65_536);
+    const boundary = task(boundaryIndex, "x".repeat(fill));
+    expect(
+      apply({ type: "task_upsert", generation: "application-1", task: boundary }),
+    ).toEqual({ kind: "applied" });
+    expect(serializedUtf8Bytes(store.state.snapshot)).toBe(
+      MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES,
+    );
+
+    // A replacement one byte larger crosses the limit.
+    expect(
+      apply({
+        type: "task_upsert",
+        generation: "application-1",
+        task: { ...boundary, details: `${boundary.details}x`, revision: 1 },
+      }),
+    ).toEqual({
+      kind: "resnapshot_required",
+      reason: "application_inventory_reference_invalid",
+    });
   });
 });

@@ -1,6 +1,8 @@
-import { Search } from "lucide-react";
+import { CircleAlert, Search, SquareTerminal } from "lucide-react";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { Button } from "../components/ui/button.js";
+import { Callout } from "../components/ui/callout.js";
+import { EmptyState } from "../components/ui/empty-state.js";
 import {
   Dialog,
   DialogContent,
@@ -232,19 +234,27 @@ export function TerminalsPanelBody({
       aria-label={activeTab ? undefined : "Terminals"}
     >
       {lifecycleError && lifecycleError.terminalId !== activeTab?.terminalId && (
-        <p role="alert">{lifecycleError.message}</p>
+        <Callout tone="danger" role="alert" className="terminal-panel-callout">
+          {lifecycleError.message}
+        </Callout>
       )}
       {!activeTab ? (
-        <div className="workspace-panel-availability">
-          <p>No terminals open</p>
-          <Button
-            variant="outline"
-            size="sm"
-            data-workspace-primary-focus="preferred"
-            onClick={(event) => onCreate(event.currentTarget)}
-          >
-            New terminal
-          </Button>
+        <div className="terminal-panel-empty">
+          <EmptyState
+            icon={<SquareTerminal />}
+            title="No terminals open"
+            description="A new terminal starts in the project's workspace directory."
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                data-workspace-primary-focus="preferred"
+                onClick={(event) => onCreate(event.currentTarget)}
+              >
+                New terminal
+              </Button>
+            }
+          />
         </div>
       ) : terminal ? (
         <TerminalPanel
@@ -271,27 +281,32 @@ export function TerminalsPanelBody({
           }
         />
       ) : (
-        <div className="workspace-panel-availability" role="status">
+        <div className="terminal-panel-empty" role="status">
           {lifecycleError?.terminalId === activeTab.terminalId && (
-            <p role="alert">{lifecycleError.message}</p>
+            <Callout tone="danger" role="alert" className="terminal-panel-callout">
+              {lifecycleError.message}
+            </Callout>
           )}
           {lookupFailure ? (
-            <>
-              <p>
-                {lookupFailure.kind === "gone"
+            <EmptyState
+              icon={<CircleAlert />}
+              title={
+                lookupFailure.kind === "gone"
                   ? "This terminal is no longer available."
-                  : `Couldn’t load this terminal. ${lookupFailure.message}`}
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => terminals.retryLookup(activeTab.terminalId)}
-              >
-                {lookupFailure.kind === "gone" ? "Re-attempt lookup" : "Retry"}
-              </Button>
-            </>
+                  : `Couldn’t load this terminal. ${lookupFailure.message}`
+              }
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => terminals.retryLookup(activeTab.terminalId)}
+                >
+                  {lookupFailure.kind === "gone" ? "Re-attempt lookup" : "Retry"}
+                </Button>
+              }
+            />
           ) : (
-            "Loading terminal…"
+            <p className="terminal-panel-loading">Loading terminal…</p>
           )}
         </div>
       )}

@@ -603,6 +603,14 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-saved-rejected-narrow.png");
   await toolbar.getByRole("button", { name: "Discard saved dictation" }).click();
+  // Discarding asks first; the saved dictation stays until confirmed.
+  const discardConfirmation = page.getByRole("dialog", { name: "Discard saved dictation?", exact: true });
+  await expect(discardConfirmation).toContainText("Discarding deletes this saved dictation from this device.");
+  await expect(discardConfirmation.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "discardRecording"))).toEqual([]);
+  await capture(page, testInfo, "voice-discard-confirmation-narrow.png");
+  await discardConfirmation.getByRole("button", { name: "Discard dictation", exact: true }).click();
+  await expect(discardConfirmation).toHaveCount(0);
   await expect(toolbar.getByRole("button", { name: "Discard saved dictation" })).toHaveCount(0);
   expect(await page.evaluate(() => ({ active: window.__voiceFixture.state.active, saved: window.__voiceFixture.state.recordingRecovery }))).toEqual({ active: null, saved: null });
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "discardRecording"))).toEqual([

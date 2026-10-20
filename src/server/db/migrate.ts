@@ -1,3 +1,4 @@
+import { mutationReceiptThreadIndexMigration } from "./migrations/153-mutation-receipt-thread-index.js";
 import { threadAppliedToolPolicySetsMigration } from "./migrations/152-thread-applied-tool-policy-sets.js";
 import { threadToolPolicyOriginsMigration } from "./migrations/151-thread-tool-policy-origins.js";
 import { templateToolPoliciesMigration } from "./migrations/150-template-tool-policies.js";
@@ -318,6 +319,7 @@ export const backendNormalizedMigrations = [
   templateToolPoliciesMigration,
   threadToolPolicyOriginsMigration,
   threadAppliedToolPolicySetsMigration,
+  mutationReceiptThreadIndexMigration,
 ] as const;
 
 export type DatabaseMigration = {

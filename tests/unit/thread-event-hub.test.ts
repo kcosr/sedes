@@ -4,7 +4,7 @@ import type {
   NormalizedThreadSnapshot,
   ThreadEventEnvelope,
 } from "../../src/shared/protocol/conversation.js";
-import { MAXIMUM_NORMALIZED_TIMELINE_TURNS, normalizedThreadSnapshotSchema, pageItemSchema, type PageItem } from "../../src/shared/protocol/conversation.js";
+import { MAXIMUM_NORMALIZED_TIMELINE_TURNS, normalizedThreadSnapshotSchema, pageItemSchema, threadEventEnvelopeSchema, type PageItem } from "../../src/shared/protocol/conversation.js";
 import { ScopedThreadEventHubRegistry } from "../../src/server/events/thread-runtime-coordinator.js";
 import { ThreadEventHub } from "../../src/server/events/thread-event-hub.js";
 import { fitApplicationItemsToSnapshot } from "../../src/server/conversations/application-publication-projection.js";
@@ -1027,6 +1027,33 @@ describe("ThreadEventHub", () => {
     });
     expect(listener).toHaveBeenCalledOnce();
     subscription.close();
+  });
+
+  it("shares one immutable validated envelope with every subscriber and replay", () => {
+    const hub = new ThreadEventHub();
+    const first = hub.publish(replacement("projection-1"));
+    const external = vi.fn();
+    const internal = vi.fn();
+    const subscriptions = [hub.subscribe(external), hub.subscribeInternal(internal)];
+    const envelopeParse = vi.spyOn(threadEventEnvelopeSchema, "parse");
+    try {
+      const published = hub.publish({ type: "run_state", generation: "projection-1", state: "idle" });
+      expect(envelopeParse).not.toHaveBeenCalled();
+      expect(Object.isFrozen(published)).toBe(true);
+      expect(threadEventEnvelopeSchema.parse(published)).toEqual(published);
+      expect(published.eventId).toBe(hub.eventIdAt(hub.watermark));
+      expect(external.mock.calls[0]![0]).toBe(published);
+      expect(internal.mock.calls[0]![0]).toBe(published);
+      const replay = hub.subscribe(vi.fn(), first.eventId);
+      expect(replay.replay[0]).toBe(published);
+      replay.close();
+      // Invalid events are still rejected at publication, before any subscriber sees them.
+      expect(() => hub.publish({ type: "run_state", generation: "projection-1", state: "unknown" } as never)).toThrow();
+      expect(external).toHaveBeenCalledOnce();
+    } finally {
+      envelopeParse.mockRestore();
+      for (const subscription of subscriptions) subscription.close();
+    }
   });
 
   it("drops superseded replay when a replacement is published", () => {

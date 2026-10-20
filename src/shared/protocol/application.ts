@@ -350,15 +350,14 @@ export type NormalizedThreadDescendantsPage = z.infer<
 
 function requireUniqueIds(
   values: readonly { readonly id: string }[],
-  context: z.RefinementCtx,
+  report: (issue: ApplicationSnapshotIssue) => void,
   path: string,
 ): void {
   const seen = new Set<string>();
   for (let index = 0; index < values.length; index += 1) {
     const id = values[index]!.id;
     if (seen.has(id)) {
-      context.addIssue({
-        code: "custom",
+      report({
         message: `Duplicate ${path} identifier.`,
         path: [path, index, "id"],
       });
@@ -377,293 +376,321 @@ export type NormalizedProjectSummary = z.infer<
   typeof normalizedProjectSummarySchema
 >;
 
-export const normalizedApplicationSnapshotSchema = z
-  .strictObject({
-    environments: z.array(normalizedEnvironmentSummarySchema).max(256),
-    projects: z.array(normalizedProjectSummarySchema).max(10_000),
-    workspaces: z.array(normalizedWorkspaceSummarySchema).max(10_000),
-    threads: z.array(normalizedApplicationThreadSummarySchema).max(10_000),
-    groups: z.array(normalizedThreadGroupSchema).max(10_000),
-    forkOrigins: z.array(normalizedThreadForkOriginSchema).max(10_000),
-    lineagePlacements: z
-      .array(normalizedThreadLineagePlacementSchema)
-      .max(10_000),
-    lineageFamilies: z.array(normalizedThreadLineageFamilySchema).max(10_000),
-    executionTargets: z
-      .array(normalizedExecutionTargetDescriptorSchema)
-      .max(256),
-    advisories: z
-      .array(normalizedInstallationAdvisorySchema)
-      .max(MAXIMUM_ACTIVE_INSTALLATION_ADVISORIES),
-    defaultNewThreadTargetId: applicationEntityIdSchema.nullable(),
-    tasks: z.array(associatedTaskSchema).max(10_000),
-  })
-  .superRefine((snapshot, context) => {
+/** Maximum entries in each application snapshot collection. */
+export const APPLICATION_SNAPSHOT_COLLECTION_LIMITS = {
+  environments: 256,
+  projects: 10_000,
+  workspaces: 10_000,
+  threads: 10_000,
+  groups: 10_000,
+  forkOrigins: 10_000,
+  lineagePlacements: 10_000,
+  lineageFamilies: 10_000,
+  executionTargets: 256,
+  advisories: MAXIMUM_ACTIVE_INSTALLATION_ADVISORIES,
+  tasks: 10_000,
+} as const;
+const collectionLimits = APPLICATION_SNAPSHOT_COLLECTION_LIMITS;
+const normalizedApplicationSnapshotEntitiesSchema = z.strictObject({
+  environments: z
+    .array(normalizedEnvironmentSummarySchema)
+    .max(collectionLimits.environments),
+  projects: z
+    .array(normalizedProjectSummarySchema)
+    .max(collectionLimits.projects),
+  workspaces: z
+    .array(normalizedWorkspaceSummarySchema)
+    .max(collectionLimits.workspaces),
+  threads: z
+    .array(normalizedApplicationThreadSummarySchema)
+    .max(collectionLimits.threads),
+  groups: z.array(normalizedThreadGroupSchema).max(collectionLimits.groups),
+  forkOrigins: z
+    .array(normalizedThreadForkOriginSchema)
+    .max(collectionLimits.forkOrigins),
+  lineagePlacements: z
+    .array(normalizedThreadLineagePlacementSchema)
+    .max(collectionLimits.lineagePlacements),
+  lineageFamilies: z
+    .array(normalizedThreadLineageFamilySchema)
+    .max(collectionLimits.lineageFamilies),
+  executionTargets: z
+    .array(normalizedExecutionTargetDescriptorSchema)
+    .max(collectionLimits.executionTargets),
+  advisories: z
+    .array(normalizedInstallationAdvisorySchema)
+    .max(collectionLimits.advisories),
+  defaultNewThreadTargetId: applicationEntityIdSchema.nullable(),
+  tasks: z.array(associatedTaskSchema).max(collectionLimits.tasks),
+});
+
+/** A cross-entity invariant violation in an application snapshot. */
+export interface ApplicationSnapshotIssue {
+  readonly message: string;
+  readonly path: readonly (string | number)[];
+}
+
+/**
+ * Reports violations of the snapshot's cross-entity invariants: identifier
+ * uniqueness and references between entities. The snapshot schema applies it
+ * after validating every entity; a consumer that has already validated each
+ * changed entity can apply it to an incrementally updated snapshot instead.
+ */
+export function reportApplicationSnapshotReferenceIssues(
+  snapshot: z.infer<typeof normalizedApplicationSnapshotEntitiesSchema>,
+  report: (issue: ApplicationSnapshotIssue) => void,
+): void {
+  requireUniqueIds(snapshot.environments, report, "environments");
+  requireUniqueIds(snapshot.projects, report, "projects");
+  requireUniqueIds(snapshot.workspaces, report, "workspaces");
+  requireUniqueIds(snapshot.threads, report, "threads");
+  requireUniqueIds(snapshot.groups, report, "groups");
+  requireUniqueIds(snapshot.executionTargets, report, "executionTargets");
+  requireUniqueIds(snapshot.advisories, report, "advisories");
+
+  const environmentIds = new Set(
+    snapshot.environments.map((environment) => environment.id),
+  );
+  const projectIds = new Set(snapshot.projects.map(({ id }) => id));
+  for (let index = 0; index < snapshot.workspaces.length; index += 1) {
+    if (!environmentIds.has(snapshot.workspaces[index]!.environmentId)) {
+      report({
+        message: "Workspace references an unknown environment.",
+        path: ["workspaces", index, "environmentId"],
+      });
+    }
+    if (!projectIds.has(snapshot.workspaces[index]!.projectId)) {
+      report({
+        message: "Workspace references an unknown project.",
+        path: ["workspaces", index, "projectId"],
+      });
+    }
+  }
+
+  for (let index = 0; index < snapshot.executionTargets.length; index += 1) {
+    if (
+      !environmentIds.has(snapshot.executionTargets[index]!.environmentId)
+    ) {
+      report({
+        message: "Execution target references an unknown environment.",
+        path: ["executionTargets", index, "environmentId"],
+      });
+    }
+  }
+  // Environment availability describes its primary execution channel. A
+  // target may instead use independently configured operations whose live
+  // reachability is checked only when active work starts.
+
+  const targetById = new Map(
+    snapshot.executionTargets.map((target) => [target.id, target]),
+  );
+  if (
+    snapshot.defaultNewThreadTargetId !== null &&
+    !targetById.get(snapshot.defaultNewThreadTargetId)?.available
+  ) {
+    report({
+      message: "The default new-thread target is not available.",
+      path: ["defaultNewThreadTargetId"],
+    });
+  }
+
+  const workspaceById = new Map(
+    snapshot.workspaces.map((workspace) => [workspace.id, workspace]),
+  );
+  const groupIds = new Set(snapshot.groups.map(({ id }) => id));
+  for (let index = 0; index < snapshot.threads.length; index += 1) {
+    const thread = snapshot.threads[index]!;
+    if (thread.groupId !== null && !groupIds.has(thread.groupId)) {
+      report({
+        message: "Thread references an unknown group.",
+        path: ["threads", index, "groupId"],
+      });
+    }
+    const workspace = workspaceById.get(thread.workspaceId);
+    if (!workspace) {
+      report({
+        message: "Thread references an unknown workspace.",
+        path: ["threads", index, "workspaceId"],
+      });
+    }
+    const target = targetById.get(thread.targetId);
+    if (!target) {
+      report({
+        message: "Thread references an unknown execution target.",
+        path: ["threads", index, "targetId"],
+      });
+    } else if (
+      workspace &&
+      target.environmentId !== workspace.environmentId
+    ) {
+      report({
+        message: "Thread target and workspace environments must match.",
+        path: ["threads", index, "targetId"],
+      });
+    } else if (
+      target.backend.brand !== thread.backend.brand ||
+      target.backend.label.text !== thread.backend.label.text
+    ) {
+      report({
+        message:
+          "Thread and execution-target backend presentation must match.",
+        path: ["threads", index, "backend"],
+      });
+    }
+  }
+
+  const taskThreadById = new Map(
+    snapshot.threads.map((thread) => [thread.id, thread] as const),
+  );
+  requireUniqueIds(snapshot.tasks, report, "tasks");
+  for (let index = 0; index < snapshot.tasks.length; index += 1) {
+    const task = snapshot.tasks[index]!;
+    const taskScope = task.scope;
+    if (
+      task.associatedProjectId !== null &&
+      !projectIds.has(task.associatedProjectId)
+    ) {
+      report({
+        message: "Task association references an unknown project.",
+        path: ["tasks", index, "associatedProjectId"],
+      });
+    }
+    if (taskScope.kind !== "thread") continue;
+    // Archived or otherwise omitted threads remain valid. When a thread is
+    // present, the task belongs to the project of the thread's location.
+    const thread = taskThreadById.get(taskScope.threadId);
+    const threadWorkspace = thread
+      ? workspaceById.get(thread.workspaceId)
+      : undefined;
+    if (
+      threadWorkspace &&
+      task.associatedProjectId !== threadWorkspace.projectId
+    ) {
+      report({
+        message: "A thread task must belong to the project of its thread's location.",
+        path: ["tasks", index, "associatedProjectId"],
+      });
+    }
+  }
+
+  const threadIds = new Set(snapshot.threads.map(({ id }) => id));
+  const originChildIds = new Set<string>();
+  const sourceByChild = new Map<string, string>();
+  for (let index = 0; index < snapshot.forkOrigins.length; index += 1) {
+    const origin = snapshot.forkOrigins[index]!;
+    if (!threadIds.has(origin.childThreadId)) {
+      report({
+        message: "Fork origin references an unknown child thread.",
+        path: ["forkOrigins", index, "childThreadId"],
+      });
+    }
+    if (
+      origin.sourceThreadId !== null &&
+      !threadIds.has(origin.sourceThreadId)
+    ) {
+      report({
+        message: "Fork origin references an unknown source thread.",
+        path: ["forkOrigins", index, "sourceThreadId"],
+      });
+    }
+    if (origin.sourceThreadId === origin.childThreadId) {
+      report({
+        message: "A fork origin cannot reference its child as its source.",
+        path: ["forkOrigins", index, "sourceThreadId"],
+      });
+    }
+    if (originChildIds.has(origin.childThreadId)) {
+      report({
+        message: "Fork origin child identifiers must be unique.",
+        path: ["forkOrigins", index, "childThreadId"],
+      });
+    }
+    originChildIds.add(origin.childThreadId);
+    if (origin.sourceThreadId !== null) {
+      sourceByChild.set(origin.childThreadId, origin.sourceThreadId);
+    }
+  }
+  const checkedOrigins = new Set<string>();
+  for (const childThreadId of sourceByChild.keys()) {
+    if (checkedOrigins.has(childThreadId)) continue;
+    const seen = new Set<string>();
+    const path: string[] = [];
+    let current: string | undefined = childThreadId;
+    while (
+      current &&
+      sourceByChild.has(current) &&
+      !checkedOrigins.has(current)
+    ) {
+      if (seen.has(current)) {
+        report({
+          message: "Fork origins must not contain an ancestry cycle.",
+          path: ["forkOrigins"],
+        });
+        break;
+      }
+      seen.add(current);
+      path.push(current);
+      current = sourceByChild.get(current);
+    }
+    for (const id of path) checkedOrigins.add(id);
+  }
+  const placementChildIds = new Set<string>();
+  for (let index = 0; index < snapshot.lineagePlacements.length; index += 1) {
+    const placement = snapshot.lineagePlacements[index]!;
+    if (!originChildIds.has(placement.childThreadId)) {
+      report({
+        message: "Lineage placement references an unknown fork origin.",
+        path: ["lineagePlacements", index, "childThreadId"],
+      });
+    }
+    if (placementChildIds.has(placement.childThreadId)) {
+      report({
+        message: "Lineage placement child identifiers must be unique.",
+        path: ["lineagePlacements", index, "childThreadId"],
+      });
+    }
+    placementChildIds.add(placement.childThreadId);
+  }
+  for (let index = 0; index < snapshot.forkOrigins.length; index += 1) {
+    const childThreadId = snapshot.forkOrigins[index]!.childThreadId;
+    if (!placementChildIds.has(childThreadId)) {
+      report({
+        message: "Every fork origin requires a lineage placement.",
+        path: ["forkOrigins", index, "childThreadId"],
+      });
+    }
+  }
+  const familySourceIds = new Set<string>();
+  for (let index = 0; index < snapshot.lineageFamilies.length; index += 1) {
+    const family = snapshot.lineageFamilies[index]!;
+    if (!threadIds.has(family.sourceThreadId)) {
+      report({
+        message:
+          "Lineage family summary references an unknown source thread.",
+        path: ["lineageFamilies", index, "sourceThreadId"],
+      });
+    }
+    if (familySourceIds.has(family.sourceThreadId)) {
+      report({
+        message: "Lineage family source identifiers must be unique.",
+        path: ["lineageFamilies", index, "sourceThreadId"],
+      });
+    }
+    familySourceIds.add(family.sourceThreadId);
+  }
+}
+
+export const normalizedApplicationSnapshotSchema =
+  normalizedApplicationSnapshotEntitiesSchema.superRefine((snapshot, context) => {
     requireSerializedByteLimit(
       snapshot,
       context,
       MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES,
       "Normalized application snapshot exceeds the serialized byte limit.",
     );
-    requireUniqueIds(snapshot.environments, context, "environments");
-    requireUniqueIds(snapshot.projects, context, "projects");
-    requireUniqueIds(snapshot.workspaces, context, "workspaces");
-    requireUniqueIds(snapshot.threads, context, "threads");
-    requireUniqueIds(snapshot.groups, context, "groups");
-    requireUniqueIds(snapshot.executionTargets, context, "executionTargets");
-    requireUniqueIds(snapshot.advisories, context, "advisories");
-
-    const environmentIds = new Set(
-      snapshot.environments.map((environment) => environment.id),
+    reportApplicationSnapshotReferenceIssues(snapshot, ({ message, path }) =>
+      context.addIssue({ code: "custom", message, path: [...path] }),
     );
-    const projectIds = new Set(snapshot.projects.map(({ id }) => id));
-    for (let index = 0; index < snapshot.workspaces.length; index += 1) {
-      if (!environmentIds.has(snapshot.workspaces[index]!.environmentId)) {
-        context.addIssue({
-          code: "custom",
-          message: "Workspace references an unknown environment.",
-          path: ["workspaces", index, "environmentId"],
-        });
-      }
-      if (!projectIds.has(snapshot.workspaces[index]!.projectId)) {
-        context.addIssue({
-          code: "custom",
-          message: "Workspace references an unknown project.",
-          path: ["workspaces", index, "projectId"],
-        });
-      }
-    }
-
-    for (let index = 0; index < snapshot.executionTargets.length; index += 1) {
-      if (
-        !environmentIds.has(snapshot.executionTargets[index]!.environmentId)
-      ) {
-        context.addIssue({
-          code: "custom",
-          message: "Execution target references an unknown environment.",
-          path: ["executionTargets", index, "environmentId"],
-        });
-      }
-    }
-    // Environment availability describes its primary execution channel. A
-    // target may instead use independently configured operations whose live
-    // reachability is checked only when active work starts.
-
-    const targetById = new Map(
-      snapshot.executionTargets.map((target) => [target.id, target]),
-    );
-    if (
-      snapshot.defaultNewThreadTargetId !== null &&
-      !targetById.get(snapshot.defaultNewThreadTargetId)?.available
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "The default new-thread target is not available.",
-        path: ["defaultNewThreadTargetId"],
-      });
-    }
-
-    const workspaceById = new Map(
-      snapshot.workspaces.map((workspace) => [workspace.id, workspace]),
-    );
-    const groupIds = new Set(snapshot.groups.map(({ id }) => id));
-    for (let index = 0; index < snapshot.threads.length; index += 1) {
-      const thread = snapshot.threads[index]!;
-      if (thread.groupId !== null && !groupIds.has(thread.groupId)) {
-        context.addIssue({
-          code: "custom",
-          message: "Thread references an unknown group.",
-          path: ["threads", index, "groupId"],
-        });
-      }
-      const workspace = workspaceById.get(thread.workspaceId);
-      if (!workspace) {
-        context.addIssue({
-          code: "custom",
-          message: "Thread references an unknown workspace.",
-          path: ["threads", index, "workspaceId"],
-        });
-      }
-      const target = targetById.get(thread.targetId);
-      if (!target) {
-        context.addIssue({
-          code: "custom",
-          message: "Thread references an unknown execution target.",
-          path: ["threads", index, "targetId"],
-        });
-      } else if (
-        workspace &&
-        target.environmentId !== workspace.environmentId
-      ) {
-        context.addIssue({
-          code: "custom",
-          message: "Thread target and workspace environments must match.",
-          path: ["threads", index, "targetId"],
-        });
-      } else if (
-        target.backend.brand !== thread.backend.brand ||
-        target.backend.label.text !== thread.backend.label.text
-      ) {
-        context.addIssue({
-          code: "custom",
-          message:
-            "Thread and execution-target backend presentation must match.",
-          path: ["threads", index, "backend"],
-        });
-      }
-    }
-
-    const taskThreadById = new Map(
-      snapshot.threads.map((thread) => [thread.id, thread] as const),
-    );
-    requireUniqueIds(snapshot.tasks, context, "tasks");
-    for (let index = 0; index < snapshot.tasks.length; index += 1) {
-      const task = snapshot.tasks[index]!;
-      const taskScope = task.scope;
-      if (
-        task.associatedProjectId !== null &&
-        !projectIds.has(task.associatedProjectId)
-      ) {
-        context.addIssue({
-          code: "custom",
-          message: "Task association references an unknown project.",
-          path: ["tasks", index, "associatedProjectId"],
-        });
-      }
-      if (taskScope.kind !== "thread") continue;
-      // Archived or otherwise omitted threads remain valid. When a thread is
-      // present, the task belongs to the project of the thread's location.
-      const thread = taskThreadById.get(taskScope.threadId);
-      const threadWorkspace = thread
-        ? workspaceById.get(thread.workspaceId)
-        : undefined;
-      if (
-        threadWorkspace &&
-        task.associatedProjectId !== threadWorkspace.projectId
-      ) {
-        context.addIssue({
-          code: "custom",
-          message: "A thread task must belong to the project of its thread's location.",
-          path: ["tasks", index, "associatedProjectId"],
-        });
-      }
-    }
-
-    const threadIds = new Set(snapshot.threads.map(({ id }) => id));
-    const originChildIds = new Set<string>();
-    const sourceByChild = new Map<string, string>();
-    for (let index = 0; index < snapshot.forkOrigins.length; index += 1) {
-      const origin = snapshot.forkOrigins[index]!;
-      if (!threadIds.has(origin.childThreadId)) {
-        context.addIssue({
-          code: "custom",
-          message: "Fork origin references an unknown child thread.",
-          path: ["forkOrigins", index, "childThreadId"],
-        });
-      }
-      if (
-        origin.sourceThreadId !== null &&
-        !threadIds.has(origin.sourceThreadId)
-      ) {
-        context.addIssue({
-          code: "custom",
-          message: "Fork origin references an unknown source thread.",
-          path: ["forkOrigins", index, "sourceThreadId"],
-        });
-      }
-      if (origin.sourceThreadId === origin.childThreadId) {
-        context.addIssue({
-          code: "custom",
-          message: "A fork origin cannot reference its child as its source.",
-          path: ["forkOrigins", index, "sourceThreadId"],
-        });
-      }
-      if (originChildIds.has(origin.childThreadId)) {
-        context.addIssue({
-          code: "custom",
-          message: "Fork origin child identifiers must be unique.",
-          path: ["forkOrigins", index, "childThreadId"],
-        });
-      }
-      originChildIds.add(origin.childThreadId);
-      if (origin.sourceThreadId !== null) {
-        sourceByChild.set(origin.childThreadId, origin.sourceThreadId);
-      }
-    }
-    const checkedOrigins = new Set<string>();
-    for (const childThreadId of sourceByChild.keys()) {
-      if (checkedOrigins.has(childThreadId)) continue;
-      const seen = new Set<string>();
-      const path: string[] = [];
-      let current: string | undefined = childThreadId;
-      while (
-        current &&
-        sourceByChild.has(current) &&
-        !checkedOrigins.has(current)
-      ) {
-        if (seen.has(current)) {
-          context.addIssue({
-            code: "custom",
-            message: "Fork origins must not contain an ancestry cycle.",
-            path: ["forkOrigins"],
-          });
-          break;
-        }
-        seen.add(current);
-        path.push(current);
-        current = sourceByChild.get(current);
-      }
-      for (const id of path) checkedOrigins.add(id);
-    }
-    const placementChildIds = new Set<string>();
-    for (let index = 0; index < snapshot.lineagePlacements.length; index += 1) {
-      const placement = snapshot.lineagePlacements[index]!;
-      if (!originChildIds.has(placement.childThreadId)) {
-        context.addIssue({
-          code: "custom",
-          message: "Lineage placement references an unknown fork origin.",
-          path: ["lineagePlacements", index, "childThreadId"],
-        });
-      }
-      if (placementChildIds.has(placement.childThreadId)) {
-        context.addIssue({
-          code: "custom",
-          message: "Lineage placement child identifiers must be unique.",
-          path: ["lineagePlacements", index, "childThreadId"],
-        });
-      }
-      placementChildIds.add(placement.childThreadId);
-    }
-    for (let index = 0; index < snapshot.forkOrigins.length; index += 1) {
-      const childThreadId = snapshot.forkOrigins[index]!.childThreadId;
-      if (!placementChildIds.has(childThreadId)) {
-        context.addIssue({
-          code: "custom",
-          message: "Every fork origin requires a lineage placement.",
-          path: ["forkOrigins", index, "childThreadId"],
-        });
-      }
-    }
-    const familySourceIds = new Set<string>();
-    for (let index = 0; index < snapshot.lineageFamilies.length; index += 1) {
-      const family = snapshot.lineageFamilies[index]!;
-      if (!threadIds.has(family.sourceThreadId)) {
-        context.addIssue({
-          code: "custom",
-          message:
-            "Lineage family summary references an unknown source thread.",
-          path: ["lineageFamilies", index, "sourceThreadId"],
-        });
-      }
-      if (familySourceIds.has(family.sourceThreadId)) {
-        context.addIssue({
-          code: "custom",
-          message: "Lineage family source identifiers must be unique.",
-          path: ["lineageFamilies", index, "sourceThreadId"],
-        });
-      }
-      familySourceIds.add(family.sourceThreadId);
-    }
   });
 export type NormalizedApplicationSnapshot = z.infer<
   typeof normalizedApplicationSnapshotSchema

@@ -1,5 +1,8 @@
 import { memo } from "react";
 import type { ConversationItem } from "../../../shared/index.js";
+import { Button } from "@client/components/ui/button";
+import { Callout } from "@client/components/ui/callout";
+import { ErrorBoundary } from "@client/components/ui/error-boundary";
 import { ProviderFeatureConversationItems } from "../../provider-features/registry.js";
 import { renderConversationItem } from "./registry";
 import { defaultItemRenderContext, type ItemRenderContext } from "./types";
@@ -16,7 +19,6 @@ export const ConversationItemView = memo(function ConversationItemView({
   item: ConversationItem;
   context?: ItemRenderContext;
 }): React.JSX.Element {
-  const providerFeatureCapabilities = context.providerFeatureCapabilities ?? [];
   return (
     <div
       className="conversation-item"
@@ -24,6 +26,39 @@ export const ConversationItemView = memo(function ConversationItemView({
       data-item-kind={item.kind}
       data-item-status={item.status}
     >
+      {/* One item that cannot render does not take the transcript with it.
+          The boundary adds no markup; an update to the item retries it. */}
+      <ErrorBoundary
+        resetKeys={[item, context]}
+        fallback={({ reset }) => (
+          <Callout
+            tone="danger"
+            action={
+              <Button variant="outline" size="xs" onClick={reset}>
+                Try again
+              </Button>
+            }
+          >
+            This message couldn’t be displayed.
+          </Callout>
+        )}
+      >
+        <ConversationItemContent item={item} context={context} />
+      </ErrorBoundary>
+    </div>
+  );
+});
+
+function ConversationItemContent({
+  item,
+  context,
+}: {
+  item: ConversationItem;
+  context: ItemRenderContext;
+}): React.JSX.Element {
+  const providerFeatureCapabilities = context.providerFeatureCapabilities ?? [];
+  return (
+    <>
       {renderConversationItem(item, context)}
       {item.providerFeatures?.length ? (
         <ProviderFeatureConversationItems
@@ -31,9 +66,9 @@ export const ConversationItemView = memo(function ConversationItemView({
           capabilities={providerFeatureCapabilities}
         />
       ) : null}
-    </div>
+    </>
   );
-});
+}
 
 export { conversationItemRenderers, renderConversationItem } from "./registry";
 export type {

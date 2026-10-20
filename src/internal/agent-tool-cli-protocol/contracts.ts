@@ -207,6 +207,10 @@ export const agentToolDescriptionsResponseSchema = z.strictObject({
     .max(AGENT_TOOL_MAXIMUM_DESCRIPTION_IDS)
     .readonly(),
 });
+// Schema maxLength counts code points; this transport bound counts UTF-16
+// code units, so astral-heavy text can pass a schema and still exceed it.
+const AGENT_TOOL_INPUT_BOUNDS_MESSAGE =
+  "Tool input must be plain JSON within the transport bounds, such as strings up to 65,536 UTF-16 code units and arrays up to 1,024 items.";
 export const createAgentToolInvocationRequestSchema = z.strictObject({
   toolId: agentToolCliToolIdSchema,
   schemaVersion: z.number().int().positive().max(1_000_000),
@@ -215,7 +219,7 @@ export const createAgentToolInvocationRequestSchema = z.strictObject({
 }).superRefine((request, context) => {
   const contentError = workpadInputContentError(request.toolId, request.input);
   if (contentError || !isBoundedAgentToolJson(request.input, path => isWorkpadInputContentPath(request.toolId, path))) {
-    context.addIssue({ code: "custom", path: ["input"], message: contentError ?? "A bounded JSON value is required." });
+    context.addIssue({ code: "custom", path: ["input"], message: contentError ?? AGENT_TOOL_INPUT_BOUNDS_MESSAGE });
   }
 });
 export const agentToolCliErrorSchema = z.strictObject({

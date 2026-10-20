@@ -3347,6 +3347,18 @@ must neither credit nor unregister a replacement using the same stream ID.
 Preserve byte, sequence, and terminal validation. This shared transport rule applies to Pi,
 Codex, Claude, and OpenCode remote operations; Grok remains local-only.
 
+A consumer that gives up on an unfinished stream whose producer may still send
+retires it instead of unregistering it. The peer then keeps the registration
+until the producer's terminal or session close, validates the remaining frames,
+grants their credit back, and drops them, so a late frame is never
+protocol-fatal; the stream ID cannot be registered again meanwhile. The peer
+never evicts a retired stream, so consumers bound retirement through admission:
+runtime bodies refuse new offers while 64 expired bodies still drain. Terminal
+frames and retired-stream credit wait out outbound-queue congestion rather than
+being dropped. A request that creates a remote resource passes
+`onLateSuccess`, so a success that crosses its cancellation or deadline still
+releases that resource; the Files watch open does this.
+
 Environment availability may aggregate independent, typed backend and
 operations-carrier observations only at the execution-environment scope. Keep
 backend scopes exact; never invent a synthetic backend identity for shared

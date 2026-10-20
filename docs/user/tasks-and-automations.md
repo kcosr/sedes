@@ -246,7 +246,8 @@ The row's **⋯** menu has:
 share a name show a host or path hint.
 
 Deleting a Task is permanent and asks first. Prompts that already carry the
-Task keep their copy.
+Task keep their copy. A Task that a thread's force reset promoted stays part
+of that reset's record, so deleting it is refused with a conflict message.
 
 Archived threads are not offered as destinations. Moving a Task that links to
 files out of its project asks first, because the absolute file paths do not

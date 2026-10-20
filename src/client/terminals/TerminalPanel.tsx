@@ -14,6 +14,8 @@ import {
   subscribeTerminalPreferences,
 } from "../app/settings.js";
 import { Button } from "../components/ui/button.js";
+import { Callout } from "../components/ui/callout.js";
+import { Input } from "../components/ui/input.js";
 import { FindBarControl } from "../components/FindBarControl.js";
 import { useMediaQuery } from "../app/use-media-query.js";
 import {
@@ -542,6 +544,35 @@ function TerminalPanel({
     setShowTranscript(true);
   }
 
+  const recovery = [
+    state.retryInputAvailable ? (
+      <Button key="retry" variant="outline" size="xs" onClick={() => sessionRef.current?.retryNotSentInput()}>
+        Retry unsent input
+      </Button>
+    ) : null,
+    state.uncertainInputSeq !== undefined ? (
+      <Button
+        key="discard"
+        variant="outline"
+        size="xs"
+        disabled={
+          state.connection !== "ready" ||
+          !state.caughtUp ||
+          state.role !== "controller"
+        }
+        onClick={() => sessionRef.current?.discardUnconfirmedInput()}
+      >
+        Discard unconfirmed input
+      </Button>
+    ) : null,
+    state.connection === "reconnecting" ? (
+      <Button key="reconnect" variant="outline" size="xs" onClick={() => sessionRef.current?.retryConnection()}>
+        Reconnect now
+      </Button>
+    ) : null,
+  ].filter((action) => action !== null);
+  const notice = terminalNotice(state);
+
   return (
     <section ref={panelRef} className="terminal-panel" aria-label={`${terminal.displayName} terminal`} data-terminal-role={state.role}>
       <div className="sr-only" role="status" aria-atomic="true">
@@ -573,36 +604,19 @@ function TerminalPanel({
         </div>
       ) : null}
       {lifecycleError ? (
-        <p className="terminal-panel-notice" role="alert">{lifecycleError}</p>
+        <Callout tone="danger" role="alert" className="terminal-panel-callout">
+          {lifecycleError}
+        </Callout>
       ) : null}
-      {state.message ? <p className="terminal-panel-notice" role="status">{state.message}</p> : null}
-      {state.retryInputAvailable ? (
-        <Button variant="outline" size="sm" onClick={() => sessionRef.current?.retryNotSentInput()}>
-          Retry unsent input
-        </Button>
-      ) : null}
-      {state.uncertainInputSeq !== undefined ? (
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={
-            state.connection !== "ready" ||
-            !state.caughtUp ||
-            state.role !== "controller"
-          }
-          onClick={() => sessionRef.current?.discardUnconfirmedInput()}
+      {notice ? (
+        <Callout
+          tone={notice.tone}
+          role={state.message ? "status" : undefined}
+          className="terminal-panel-callout"
+          action={recovery.length > 0 ? <>{recovery}</> : undefined}
         >
-          Discard unconfirmed input
-        </Button>
-      ) : null}
-      {state.connection === "reconnecting" ? (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => sessionRef.current?.retryConnection()}
-        >
-          Reconnect now
-        </Button>
+          {notice.text}
+        </Callout>
       ) : null}
       <div
         key={terminalIdentity}
@@ -656,6 +670,7 @@ function TerminalPanel({
             <Button variant="ghost" size="icon-sm" aria-label="Close transcript" onClick={() => setShowTranscript(false)}><X aria-hidden="true" /></Button>
           </header>
           <form
+            className="terminal-transcript-search"
             role="search"
             aria-label="Search terminal transcript"
             onSubmit={(event) => {
@@ -666,11 +681,13 @@ function TerminalPanel({
               );
             }}
           >
-            <label htmlFor={`terminal-transcript-search-${terminal.terminalId}`}>
+            <label className="sr-only" htmlFor={`terminal-transcript-search-${terminal.terminalId}`}>
               Search transcript text
             </label>
-            <input
+            <Input
               id={`terminal-transcript-search-${terminal.terminalId}`}
+              autoComplete="off"
+              placeholder="Search transcript"
               value={transcriptSearchDraft}
               onChange={(event) => {
                 const nextDraft = event.target.value;
@@ -748,6 +765,35 @@ function initialSnapshot(terminal: TerminalResource): TerminalSessionSnapshot {
     queuedInputCount: 0,
     queuedInputBytes: 0,
     inputQueueOverflowed: false,
+  };
+}
+
+/**
+ * The panel's one session notice: the session's message, or a short line for
+ * a recovery that needs no message. Failures are danger, a reconnect or input
+ * that needs attention is a warning, anything else is information.
+ */
+export function terminalNotice(
+  state: TerminalSessionSnapshot,
+): { readonly tone: "danger" | "warning" | "info"; readonly text: string } | undefined {
+  const attention =
+    state.connection === "reconnecting" ||
+    state.retryInputAvailable ||
+    state.uncertainInputSeq !== undefined ||
+    state.inputQueueOverflowed;
+  const text =
+    state.message ??
+    (state.uncertainInputSeq !== undefined
+      ? "Input delivery could not be confirmed."
+      : state.retryInputAvailable
+        ? "Terminal input was not sent; it is safe to retry."
+        : state.connection === "reconnecting"
+          ? "Reconnecting to the terminal."
+          : undefined);
+  if (!text) return undefined;
+  return {
+    tone: state.connection === "failed" ? "danger" : attention ? "warning" : "info",
+    text,
   };
 }
 

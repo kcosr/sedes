@@ -9,10 +9,14 @@ import {
 import { useEnvironmentPalette } from "../app/use-environment-palette.js";
 import { usePublishTasksDock } from "../components/tasks/tasks-host.js";
 import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
-import {
-  useApplicationStore,
-  type ApplicationClientStore,
+import type {
+  ApplicationClientState,
+  ApplicationClientStore,
 } from "../stores/ApplicationClientStore.js";
+import {
+  sameSelectedFields,
+  useApplicationStoreSelector,
+} from "../stores/use-application-store-selector.js";
 import {
   useThreadStore,
   type ThreadClientStore,
@@ -26,6 +30,7 @@ import {
 import {
   PanelChrome,
   panelContentId,
+  useStablePanelChromeControls,
   type PanelChromeControls,
   type PanelChromeStatus,
   type PanelRegionControls,
@@ -120,6 +125,15 @@ export interface PanelLayoutProps {
   ) => React.ReactElement;
 }
 
+/** The application state the layout renders; sidebar search is not part of it. */
+function selectLayoutApplication(state: ApplicationClientState) {
+  return {
+    snapshot: state.snapshot,
+    authoritative: state.authoritative,
+    connection: state.connection,
+  };
+}
+
 export function PanelLayout(props: PanelLayoutProps): React.JSX.Element {
   const threadStore = useMemo(
     () => props.threadRegistry.get(props.threadId),
@@ -147,7 +161,11 @@ function PanelLayoutReady({
   const snapshot = usePanelRegions(store);
   const { view, focusRequest } = snapshot;
   const threadState = useThreadStore(threadStore);
-  const applicationState = useApplicationStore(applicationStore);
+  const applicationState = useApplicationStoreSelector(
+    applicationStore,
+    selectLayoutApplication,
+    sameSelectedFields,
+  );
   const threadSnapshot = threadState.snapshot;
   const chatAutofocus = useChatAutofocus();
   const hints = useMemo(() => panelSizeHints(tenants), [tenants]);
@@ -540,6 +558,9 @@ function PanelLayoutReady({
     };
   };
 
+  // The chat body is memoized; layout renders must not hand it new controls.
+  const chatControls = useStablePanelChromeControls(controlsFor("chat"));
+
   // Escape restores a maximized layout, unless something else owns the key.
   useEffect(() => {
     if (!active || !desktop || snapshot.maximized === null) return undefined;
@@ -909,7 +930,7 @@ function PanelLayoutReady({
       </div>
 
       {createPortal(
-        renderChat(controlsFor("chat"), active && onStage("chat")),
+        renderChat(chatControls, active && onStage("chat")),
         targets.chat,
         `chat:${threadId}`,
       )}

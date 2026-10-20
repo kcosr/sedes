@@ -547,16 +547,19 @@ export class ApplicationClientStore {
 
   /**
    * `placement` creates the task pinned or in the backlog, so a task added
-   * while Only › Pinned or Only › Backlog is on stays in view.
+   * while Only › Pinned or Only › Backlog is on stays in view. The caller
+   * owns `mutationId`: retrying the identical request after an unknown
+   * outcome reuses it, so the server replays rather than creates twice.
    */
   async createTask(
     title: string,
     scope: TaskScope,
-    details?: string,
-    placement: { readonly pinned?: boolean; readonly backlog?: boolean } = {},
+    details: string | undefined,
+    placement: { readonly pinned?: boolean; readonly backlog?: boolean },
+    mutationId: string,
   ): Promise<Task> {
     return this.api.createTask({
-      mutationId: crypto.randomUUID(),
+      mutationId,
       title,
       scope,
       ...(details === undefined || details.length === 0 ? {} : { details }),

@@ -431,6 +431,27 @@ describe("sedes mcp server", () => {
     await mcp.close();
   });
 
+  it("rejects malformed gateway tool IDs as invalid input before calling Sedes", async () => {
+    const client = fakeClient();
+    const { mcp } = await connect(client, "progressive");
+    const describeCalls = vi.mocked(client.describeTools).mock.calls.length;
+    for (const call of [
+      { name: "sedes_catalog", arguments: { action: "describe", toolIds: ["task..list"] } },
+      { name: "sedes_catalog", arguments: { action: "describe", toolIds: ["Task.List"] } },
+      { name: "sedes_read", arguments: { toolId: "thread..status", schemaVersion: 3, input: { threadId } } },
+      { name: "sedes_act", arguments: { toolId: "-thread.send", schemaVersion: 4, input: {} } },
+    ]) {
+      const result = await mcp.callTool(call);
+      expect(result.isError).toBe(true);
+      expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toMatchObject({
+        error: { code: "invalid_input", retryable: false },
+      });
+    }
+    expect(vi.mocked(client.describeTools).mock.calls.length).toBe(describeCalls);
+    expect(client.invoke).not.toHaveBeenCalled();
+    await mcp.close();
+  });
+
   it("omits newer tool fields for older negotiated protocol versions", async () => {
     const older = raw();
     expect(await older.initialize("2025-03-26")).toMatchObject({

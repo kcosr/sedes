@@ -22,7 +22,9 @@ interface WatchEntry {
   closing: boolean;
   debounceTimer?: NodeJS.Timeout;
   maximumTimer?: NodeJS.Timeout;
-  metadataRefresh?: Promise<void>;
+  metadataRefreshTimer?: NodeJS.Timeout;
+  metadataRefreshRunning: boolean;
+  metadataRefreshRequested: boolean;
 }
 
 export interface LocalWorkspaceFileWatcherOptions {
@@ -160,10 +162,12 @@ export class LocalWorkspaceFileWatcherRegistry {
       resolveFailure,
       failed: false,
       closing: false,
+      metadataRefreshRunning: false,
+      metadataRefreshRequested: false,
     };
     const invalidate = (): void => {
       this.#schedule(entry);
-      this.#enqueueMetadataRefresh(key, entry, canonicalRoot, invalidate);
+      this.#requestMetadataRefresh(key, entry, canonicalRoot, invalidate);
     };
     try {
       const resolvedRoot = await realpath(canonicalRoot);
@@ -224,18 +228,44 @@ export class LocalWorkspaceFileWatcherRegistry {
     });
   }
 
-  #enqueueMetadataRefresh(
+  /**
+   * Refreshes git metadata watches at most once per debounce period and never
+   * concurrently, so a burst such as `npm ci` or a checkout cannot queue one
+   * `git rev-parse` per filesystem event. A request made while a refresh runs
+   * schedules exactly one more, so the last event is always observed.
+   */
+  #requestMetadataRefresh(
     key: string,
     entry: WatchEntry,
     canonicalRoot: string,
     invalidate: () => void,
   ): void {
     if (entry.closing || entry.failed) return;
-    entry.metadataRefresh = (entry.metadataRefresh ?? Promise.resolve())
-      .then(() =>
-        this.#replaceMetadataWatchers(key, entry, canonicalRoot, invalidate),
-      )
-      .catch(() => this.#fail(key, entry));
+    entry.metadataRefreshRequested = true;
+    if (entry.metadataRefreshRunning || entry.metadataRefreshTimer) return;
+    entry.metadataRefreshTimer = setTimeout(() => {
+      entry.metadataRefreshTimer = undefined;
+      entry.metadataRefreshRequested = false;
+      entry.metadataRefreshRunning = true;
+      void this.#replaceMetadataWatchers(
+        key,
+        entry,
+        canonicalRoot,
+        invalidate,
+      ).then(
+        () => {
+          entry.metadataRefreshRunning = false;
+          if (entry.metadataRefreshRequested) {
+            this.#requestMetadataRefresh(key, entry, canonicalRoot, invalidate);
+          }
+        },
+        () => {
+          entry.metadataRefreshRunning = false;
+          this.#fail(key, entry);
+        },
+      );
+    }, this.#debounceMilliseconds);
+    entry.metadataRefreshTimer.unref();
   }
 
   async #replaceMetadataWatchers(
@@ -356,6 +386,8 @@ async function gitMetadataDirectories(
 function closeEntry(entry: WatchEntry): void {
   entry.closing = true;
   clearEntryTimers(entry);
+  if (entry.metadataRefreshTimer) clearTimeout(entry.metadataRefreshTimer);
+  entry.metadataRefreshTimer = undefined;
   for (const watcher of entry.watchers) watcher.close();
   entry.watchers.length = 0;
   entry.metadataWatchers.clear();

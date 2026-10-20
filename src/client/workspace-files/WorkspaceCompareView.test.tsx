@@ -174,6 +174,79 @@ describe("WorkspaceCompareView", () => {
     vi.unstubAllGlobals();
   });
 
+  it("offers Configure comparison from the empty state before a comparison exists", async () => {
+    const dataSource = createDataSource(1);
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const empty = (
+      await screen.findByText("Choose sources to compare workspace changes.")
+    ).closest("[data-slot=empty-state]") as HTMLElement;
+    expect(empty).toHaveAttribute("data-variant", "panel");
+    fireEvent.click(
+      within(empty).getByRole("button", { name: "Configure comparison" }),
+    );
+    expect(await screen.findByRole("button", { name: "Compare" })).toBeVisible();
+  });
+
+  it("shows a comparison with no changed files as an empty state with Refresh", async () => {
+    const dataSource = createDataSource(0);
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const compare = await configureComparison();
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    const empty = (
+      await screen.findByText("No changed files in this comparison.")
+    ).closest("[data-slot=empty-state]") as HTMLElement;
+    expect(screen.queryByRole("status")).toBeNull();
+    fireEvent.click(within(empty).getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledTimes(2),
+    );
+  });
+
+  it("keeps a stale diff on screen under a compact warning with Refresh", async () => {
+    const dataSource = createDataSource(1, {
+      loadPatch: async () => ({
+        status: "stale",
+        currentFingerprint: "fingerprint_987654321",
+      }) as WorkspaceDiffPatchResult,
+    });
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const compare = await configureComparison();
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    const callout = (await screen.findByText(/comparison is stale/)).closest(
+      "[data-slot=callout]",
+    ) as HTMLElement;
+    expect(callout).toHaveAttribute("data-tone", "warning");
+    expect(callout).toHaveAttribute("role", "status");
+    // The diff stays below the notice instead of sharing the body with it.
+    expect(screen.getByTestId("code-view")).toBeInTheDocument();
+    expect(screen.queryByText("Choose sources to compare workspace changes.")).toBeNull();
+    fireEvent.click(within(callout).getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledTimes(2),
+    );
+  });
+
+  it("reports a failed comparison as a danger alert over the empty state", async () => {
+    const dataSource = createDataSource(1);
+    vi.mocked(dataSource.createComparison).mockResolvedValueOnce({
+      status: "unavailable",
+      diagnosticCode: "git_failed",
+    } as never);
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const compare = await configureComparison();
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveAttribute("data-slot", "callout");
+    expect(alert).toHaveAttribute("data-tone", "danger");
+    expect(alert).toHaveTextContent("Could not create comparison (git_failed).");
+    expect(
+      screen.getByRole("button", { name: "Configure comparison" }),
+    ).toBeVisible();
+  });
+
   it("creates a comparison from catalogued opaque selections and lazily loads patches", async () => {
     const dataSource = createDataSource(10);
     render(
@@ -213,6 +286,12 @@ describe("WorkspaceCompareView", () => {
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(8));
     expect(screen.queryByText("Sedes")).toBeNull();
     expect(screen.queryByText(/Load more diffs/)).not.toBeInTheDocument();
+    // Directory rows give way from their start, keeping the full path as
+    // their tooltip.
+    const directory = screen.getByRole("treeitem", { name: "src/" });
+    expect(
+      directory.querySelector("[data-slot=path-label]"),
+    ).toHaveAttribute("title", "src/");
     fireEvent.click(screen.getByRole("treeitem", { name: /file-9.ts/ }));
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(10));
   });
@@ -351,6 +430,46 @@ describe("WorkspaceCompareView", () => {
       expect(strategy).toHaveTextContent("Differences between sources"),
     );
     expect(await mergeBaseOption()).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("renders inline comment actions as buttons with Open before Delete", async () => {
+    const dataSource = createDataSource(1);
+    const onDeleteAnnotation = vi.fn();
+    const onSelectAnnotation = vi.fn();
+    render(
+      <WorkspaceCompareView
+        rootId="primary"
+        dataSource={dataSource}
+        onDeleteAnnotation={onDeleteAnnotation}
+        onSelectAnnotation={onSelectAnnotation}
+      />,
+    );
+    const compare = await configureComparison();
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    await waitFor(() =>
+      expect(capturedCodeViewProps?.renderAnnotation).toBeTypeOf("function"),
+    );
+    const metadata = {
+      annotationId: "comment-1",
+      side: "additions" as const,
+      lineNumber: 1,
+      body: "Check this",
+    };
+    const renderAnnotation = capturedCodeViewProps?.renderAnnotation as (
+      annotation: { metadata: typeof metadata },
+    ) => React.ReactNode;
+    const { container } = render(<>{renderAnnotation({ metadata })}</>);
+    const buttons = within(container as HTMLElement).getAllByRole("button");
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Open",
+      "Delete",
+    ]);
+    expect(buttons[0]).toHaveAttribute("data-variant", "ghost");
+    expect(buttons[1]).toHaveAttribute("data-variant", "destructive-outline");
+    fireEvent.click(buttons[1]!);
+    expect(onDeleteAnnotation).toHaveBeenCalledWith(metadata);
+    expect(onSelectAnnotation).not.toHaveBeenCalled();
   });
 
   it("captures exact displayed diff lines for the shared selection action", async () => {
@@ -721,9 +840,13 @@ describe("WorkspaceCompareView", () => {
     const reviewed = await screen.findByRole("button", {
       name: "Mark reviewed",
     });
-    expect(
-      within(screen.getByTestId("code-view")).getByText("src/file-1.ts"),
-    ).toBeVisible();
+    const path = within(screen.getByTestId("code-view")).getByTitle(
+      "src/file-1.ts",
+    );
+    expect(path).toBeVisible();
+    expect(path).toHaveTextContent("src/file-1.ts");
+    // The file name is its own segment, so a narrow header keeps it whole.
+    expect(within(path).getByText("file-1.ts")).toBeVisible();
     fireEvent.click(reviewed);
     expect(onReviewedChange).toHaveBeenCalledWith("file-1", true);
     fireEvent.click(screen.getByRole("button", { name: "Open file" }));

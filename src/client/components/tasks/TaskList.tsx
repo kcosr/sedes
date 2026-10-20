@@ -221,6 +221,7 @@ export function TaskRowMenu({
             size="icon-sm"
             className="tasks-row-more"
             aria-label={`Actions for "${task.title}"`}
+            data-list-nav-for={taskNavKey(task.id)}
             tabIndex={focusable ? 0 : -1}
             onClick={(event) => event.stopPropagation()}
             onKeyDown={(event) => {
@@ -579,7 +580,7 @@ export function TaskRow({
         <button
           type="button"
           className="tasks-row-title"
-          data-tasks-nav={taskNavKey(task.id)}
+          data-list-nav={taskNavKey(task.id)}
           tabIndex={focusable ? 0 : -1}
           aria-expanded={expanded}
           aria-controls={expanded && inlineDetail ? detailId : undefined}
@@ -661,7 +662,7 @@ export function TaskListHeading({
 }): React.JSX.Element {
   return (
     <ListHeading
-      data-tasks-nav={navKey}
+      data-list-nav={navKey}
       tabIndex={focusable ? 0 : -1}
       expanded={expanded}
       onToggle={onToggle}

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { ArrowDownRight, ArrowUpRight, ChevronDown } from "lucide-react";
 import { useTouchDensity } from "@client/app/use-touch-density";
 import { Button } from "@client/components/ui/button";
+import { SegmentedControl, SegmentedControlItem } from "@client/components/ui/segmented-control";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger,
 } from "@client/components/ui/dropdown-menu";
@@ -83,21 +84,24 @@ export function MenuSelect<T extends string>({ label, value, options, onChange, 
   );
 }
 
-/** Two to four mutually exclusive icon or text choices. */
+/**
+ * Two to four mutually exclusive icon or text choices: compact beside the
+ * card's small buttons, touch-sized under the density switch.
+ */
 export function Segmented<T extends string>({ label, value, options, onChange }: {
   readonly label: string; readonly value: T;
   readonly options: readonly { value: T; label: string; icon?: ReactNode }[]; readonly onChange: (value: T) => void;
 }) {
+  const touch = useTouchDensity();
   return (
-    <div className="usage-segmented" role="radiogroup" aria-label={label}>
+    <SegmentedControl aria-label={label} size={touch ? "default" : "sm"} value={value} onValueChange={(next) => onChange(next as T)}>
       {options.map((option) => (
-        <button key={option.value} type="button" role="radio" aria-checked={option.value === value}
-          aria-label={option.icon ? option.label : undefined} title={option.icon ? option.label : undefined}
-          onClick={() => onChange(option.value)}>
+        <SegmentedControlItem key={option.value} value={option.value}
+          aria-label={option.icon ? option.label : undefined} title={option.icon ? option.label : undefined}>
           {option.icon ?? option.label}
-        </button>
+        </SegmentedControlItem>
       ))}
-    </div>
+    </SegmentedControl>
   );
 }
 

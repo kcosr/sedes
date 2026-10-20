@@ -359,6 +359,8 @@ describe("WorkpadsPanel", () => {
     await waitFor(() => expect(api.commitWorkpadDraft).toHaveBeenCalledWith("pad", { expectedDraftRevision: 1, expectedRevision: 1 }));
     expect(api.saveWorkpadDraft).toHaveBeenCalledWith("pad", { expectedRevision: 0, baseRevision: 1, content: "Original with new agreement" });
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "Workpad content" })).not.toBeInTheDocument());
+    // An explicit save is announced, unlike autosave.
+    await waitFor(() => expect(document.querySelector(".workpads-panel > [aria-live]")).toHaveTextContent("Saved revision 2."));
   });
   it("reports unsynced text to the panel host and retains it while collapsed", async () => {
     const { store, api, emit } = fixture();
@@ -605,6 +607,17 @@ describe("WorkpadsPanel", () => {
     expect(screen.queryByRole("button", { name: "Old result" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New result" })).toBeInTheDocument();
   });
+  it("offers Clear search when a search matches nothing", async () => {
+    const listWorkpads = vi.fn(async (request?: { query?: string }) => ({ items: request?.query ? [] : [pad] }));
+    const { store } = fixture({ listWorkpads });
+    render(<Panel context={panelContext(store)} />);
+    await screen.findByRole("button", { name: "Integration" });
+    fireEvent.change(openSearch(), { target: { value: "nothing" } });
+    expect(await screen.findByText("No workpads match “nothing”.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(screen.queryByRole("textbox", { name: "Search workpads" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Integration" })).toBeInTheDocument();
+  });
   it("refreshes on document events and reconnect, without periodic reads", async () => {
     const { store, api, emit } = fixture();
     render(<Panel context={panelContext(store)} />);
@@ -752,6 +765,22 @@ describe("WorkpadsPanel", () => {
     expect(screen.getByRole("menuitemradio", { name: /^Revision 3 · latest/ })).toHaveAttribute("aria-checked", "false");
   });
 
+  it("shows a failed list load in place of the list, with Try again", async () => {
+    const { store, api } = fixture();
+    api.listWorkpads.mockRejectedValueOnce(new Error("Failed to fetch"));
+    render(<Panel context={panelContext(store)} />);
+    const failure = await screen.findByText("Couldn't load workpads.");
+    // One alert, in the list's place, never the false empty state.
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("Failed to fetch");
+    expect(failure.closest("[data-slot=empty-state]")).toBe(screen.getByRole("alert"));
+    expect(screen.queryByText(/No .*workpads yet/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss error" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("button", { name: "Integration" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(api.listWorkpads).toHaveBeenCalledTimes(2);
+  });
   it("clears recovered refresh failures without clearing mutation errors", async () => {
     const { store, api, emit } = fixture();
     render(<Panel context={panelContext(store)} />);
@@ -1463,7 +1492,11 @@ describe("WorkpadsPanel", () => {
       const editor = await startEditing();
       const save = screen.getByRole("button", { name: "Save workpad" });
       expect(save).toBeDisabled();
-      expect(screen.getByRole("status")).toHaveTextContent("No changes");
+      // The routine sync label is shown, not announced.
+      const sync = document.querySelector(".workpads-sync")!;
+      expect(sync).toHaveTextContent("No changes");
+      expect(sync).not.toHaveAttribute("role");
+      expect(sync.closest("[aria-live], [role=status]")).toBeNull();
       fireEvent.change(editor, { target: { value: "Original, amended" } });
       expect(save).toBeEnabled();
       fireEvent.change(editor, { target: { value: "Original" } });
@@ -1718,12 +1751,74 @@ describe("WorkpadsPanel", () => {
       await screen.findByRole("button", { name: "Integration" });
       fireEvent.click(await screen.findByRole("button", { name: /^Archived/ }));
       await waitFor(() => expect(listWorkpads).toHaveBeenCalledWith(expect.objectContaining({ archived: true })));
-      expect(screen.getByText("No archived workpads")).toBeInTheDocument();
+      expect(screen.getByText("No archived workpads.")).toBeInTheDocument();
       openMenu("Actions for “Integration”"); choose("Archive");
       const section = screen.getByRole("region", { name: "Archived workpads" });
       expect(await within(section).findByRole("button", { name: "Integration" })).toBeInTheDocument();
       expect(api.updateWorkpad).toHaveBeenCalledWith("pad", { expectedRevision: 1, archived: true });
       expect(screen.getAllByRole("button", { name: "Integration" })).toHaveLength(1);
+    });
+
+    it("shows a failed Archived read in the section, with Try again", async () => {
+      let fail = true;
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => {
+        if (request?.archived && fail) { fail = false; throw new Error("Archive unavailable"); }
+        return { items: request?.archived ? [archivedPad("old-1", "Old notes")] : [pad] };
+      });
+      const { store } = fixture({ listWorkpads, getWorkpadCounts: vi.fn(async () => archivedCounts(1)) });
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build" }} />);
+      await screen.findByRole("button", { name: "Integration" });
+      fireEvent.click(await screen.findByRole("button", { name: /^Archived/ }));
+      const section = screen.getByRole("region", { name: "Archived workpads" });
+      expect(await within(section).findByText("Couldn't load archived workpads.")).toBeInTheDocument();
+      expect(within(section).getByRole("alert")).toHaveTextContent("Archive unavailable");
+      expect(within(section).queryByText("No archived workpads.")).not.toBeInTheDocument();
+      fireEvent.click(within(section).getByRole("button", { name: "Try again" }));
+      expect(await within(section).findByRole("button", { name: "Old notes" })).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("ends an Archived failure when a later read lands, even an empty one", async () => {
+      let fail = true;
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => {
+        if (request?.archived && fail) { fail = false; throw new Error("Archive unavailable"); }
+        return { items: request?.archived ? [] : [pad] };
+      });
+      const { store, emit } = fixture({ listWorkpads, getWorkpadCounts: vi.fn(async () => archivedCounts(1)) });
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build" }} />);
+      await screen.findByRole("button", { name: "Integration" });
+      fireEvent.click(await screen.findByRole("button", { name: /^Archived/ }));
+      const section = screen.getByRole("region", { name: "Archived workpads" });
+      expect(await within(section).findByText("Couldn't load archived workpads.")).toBeInTheDocument();
+      // A change refreshes the list and, with it, the expanded section.
+      const reads = listWorkpads.mock.calls.length;
+      await act(async () => { emit(); });
+      await waitFor(() => expect(listWorkpads.mock.calls.length).toBeGreaterThan(reads));
+      expect(await within(section).findByText("No archived workpads.")).toBeInTheDocument();
+      expect(within(section).queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("replaces earlier Archived rows with a failed read of the section", async () => {
+      let fail = false;
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => {
+        if (request?.archived && fail) throw new Error("Archive unavailable");
+        return { items: request?.archived ? [archivedPad("old-1", "Old notes")] : [pad] };
+      });
+      const { store } = fixture({ listWorkpads, getWorkpadCounts: vi.fn(async () => archivedCounts(1)) });
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build" }} />);
+      await screen.findByRole("button", { name: "Integration" });
+      const heading = await screen.findByRole("button", { name: /^Archived/ });
+      fireEvent.click(heading);
+      const section = screen.getByRole("region", { name: "Archived workpads" });
+      expect(await within(section).findByRole("button", { name: "Old notes" })).toBeInTheDocument();
+      // Collapsing and expanding reads the section again; that read fails.
+      fireEvent.click(heading);
+      fail = true;
+      fireEvent.click(heading);
+      expect(await within(section).findByText("Couldn't load archived workpads.")).toBeInTheDocument();
+      expect(within(section).queryByRole("button", { name: "Old notes" })).not.toBeInTheDocument();
+      // The list keeps one tab stop among the rows still shown.
+      expect(screen.getByRole("button", { name: "Integration" })).toHaveAttribute("tabindex", "0");
     });
 
     it("names each archived workpad's place in All", async () => {
@@ -1737,6 +1832,149 @@ describe("WorkpadsPanel", () => {
       fireEvent.click(await screen.findByRole("button", { name: /^Archived/ }));
       expect(await screen.findByRole("button", { name: "Old notes" })).toHaveAccessibleDescription("In docs");
       expect(listWorkpads).toHaveBeenCalledWith({ scope: { kind: "global" }, scopeMode: "subtree", sort: "updated", archived: true });
+    });
+  });
+
+  describe("row actions", () => {
+    const other: Workpad = { ...pad, id: "other", title: "Other" };
+    const status = () => document.querySelector<HTMLElement>(".workpads-panel > [aria-live]")!;
+
+    it("announces Archive and hands focus to the neighbouring row once the row leaves", async () => {
+      let active: Workpad[] = [pad, other];
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => ({ items: request?.archived ? [] : active }));
+      let release: (() => void) | undefined;
+      const updateWorkpad = vi.fn(() => new Promise<Workpad>(resolve => {
+        release = () => { active = [other]; resolve({ ...pad, archivedAt: time, revision: 2 }); };
+      }));
+      const { store } = fixture({ listWorkpads, updateWorkpad });
+      render(<Panel context={panelContext(store)} />);
+      await screen.findByRole("button", { name: "Other" });
+      const trigger = screen.getByRole("button", { name: "Actions for “Integration”" });
+      act(() => trigger.focus());
+      openMenu("Actions for “Integration”"); choose("Archive");
+      // The ⋯ stays focusable while the change runs; its items wait.
+      await waitFor(() => expect(trigger).toHaveFocus());
+      expect(trigger).not.toBeDisabled();
+      openMenu("Actions for “Integration”");
+      expect(screen.getByRole("menuitem", { name: "Archive" })).toHaveAttribute("aria-disabled", "true");
+      closeMenu();
+      await act(async () => { release!(); });
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Integration" })).not.toBeInTheDocument());
+      await waitFor(() => expect(status()).toHaveTextContent("Archived “Integration”."));
+      expect(screen.getByRole("button", { name: "Other" })).toHaveFocus();
+    });
+
+    it("announces Rename and returns focus from its dialog to the row's ⋯", async () => {
+      const renamed = { ...pad, title: "Plan", revision: 2 };
+      let listed: Workpad[] = [pad];
+      const listWorkpads = vi.fn(async () => ({ items: listed }));
+      const updateWorkpad = vi.fn(async () => { listed = [renamed]; return renamed; });
+      const { store } = fixture({ listWorkpads, updateWorkpad });
+      render(<Panel context={panelContext(store)} />);
+      await screen.findByRole("button", { name: "Integration" });
+      openMenu("Actions for “Integration”"); choose("Rename…");
+      fireEvent.change(screen.getByRole("textbox", { name: "Workpad title" }), { target: { value: "Plan" } });
+      fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(await screen.findByRole("button", { name: "Plan" })).toBeInTheDocument();
+      await waitFor(() => expect(status()).toHaveTextContent("Renamed “Integration” to “Plan”."));
+      expect(screen.getByRole("button", { name: "Actions for “Plan”" })).toHaveFocus();
+    });
+
+    it("focuses the next row when a Rename takes its row out of the search while the dialog closes", async () => {
+      // jsdom runs no CSS animations; report the dialog's motion so a closed
+      // dialog stays mounted, animating out, as it does in a browser.
+      const computed = window.getComputedStyle.bind(window);
+      vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!(element instanceof HTMLElement) || element.dataset.slot !== "dialog-content") return style;
+        return new Proxy(style, {
+          get(target, property) {
+            if (property === "animationName") return element.dataset.state === "closed" ? "ui-dialog-out" : "ui-dialog-in";
+            const value = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+      let listed: Workpad[] = [pad, { ...other, title: "Interview" }];
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => ({
+        items: request?.archived ? [] : listed.filter(({ title }) => typeof request?.query !== "string" || title.includes(request.query)),
+      }));
+      const updateWorkpad = vi.fn(async (id: string, change: object) => {
+        listed = listed.map(item => item.id === id ? { ...item, ...change, revision: 2 } : item);
+        return listed.find(item => item.id === id)!;
+      });
+      const { store } = fixture({ listWorkpads, updateWorkpad });
+      render(<Panel context={panelContext(store)} />);
+      await screen.findByRole("button", { name: "Interview" });
+      fireEvent.change(openSearch(), { target: { value: "Int" } });
+      await waitFor(() => expect(listWorkpads).toHaveBeenCalledWith(expect.objectContaining({ query: "Int" })));
+      openMenu("Actions for “Integration”"); choose("Rename…");
+      const dialog = screen.getByRole("dialog", { name: "Rename workpad" });
+      fireEvent.change(within(dialog).getByRole("textbox", { name: "Workpad title" }), { target: { value: "Plan" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+      // The refresh drops the row while the dialog is still animating out.
+      await waitFor(() => expect(document.querySelector('[data-workpad-id="pad"]')).toBeNull());
+      expect(dialog).toHaveAttribute("data-state", "closed");
+      const end = new Event("animationend");
+      Object.defineProperty(end, "animationName", { value: "ui-dialog-out" });
+      act(() => { dialog.dispatchEvent(end); });
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
+      expect(document.querySelector('[data-workpad-id="other"]')).toHaveFocus();
+    });
+
+    it("navigates rows by keyboard as Tasks does: one tab stop, arrows, →⋯, Delete and F2", async () => {
+      const archived = { ...pad, id: "old", title: "Old notes", archivedAt: time };
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => ({ items: request?.archived ? [archived] : [pad, other] }));
+      const { store } = fixture({ listWorkpads, getWorkpadCounts: vi.fn(async () => ({ active: viewCounts({ global: 2, all: 2 }), archived: viewCounts({ global: 1, all: 1 }) })) });
+      render(<Panel context={panelContext(store)} />);
+      const first = await screen.findByRole("button", { name: "Integration" });
+      const second = screen.getByRole("button", { name: "Other" });
+      const heading = await screen.findByRole("button", { name: /^Archived/ });
+      // One tab stop for the rows: the first row's title and its ⋯.
+      expect(first).toHaveAttribute("tabindex", "0");
+      expect(screen.getByRole("button", { name: "Actions for “Integration”" })).toHaveAttribute("tabindex", "0");
+      expect(second).toHaveAttribute("tabindex", "-1");
+      expect(screen.getByRole("button", { name: "Actions for “Other”" })).toHaveAttribute("tabindex", "-1");
+      expect(heading).toHaveAttribute("tabindex", "-1");
+
+      act(() => first.focus());
+      fireEvent.keyDown(first, { key: "ArrowDown" });
+      expect(second).toHaveFocus();
+      expect(second).toHaveAttribute("tabindex", "0");
+      expect(first).toHaveAttribute("tabindex", "-1");
+      fireEvent.keyDown(second, { key: "ArrowRight" });
+      expect(screen.getByRole("button", { name: "Actions for “Other”" })).toHaveFocus();
+      fireEvent.keyDown(screen.getByRole("button", { name: "Actions for “Other”" }), { key: "ArrowLeft" });
+      expect(second).toHaveFocus();
+      fireEvent.keyDown(second, { key: "End" });
+      expect(heading).toHaveFocus();
+      fireEvent.keyDown(heading, { key: "ArrowRight" });
+      expect(heading).toHaveAttribute("aria-expanded", "true");
+      const archivedRow = await screen.findByRole("button", { name: "Old notes" });
+      fireEvent.keyDown(heading, { key: "ArrowDown" });
+      expect(archivedRow).toHaveFocus();
+      fireEvent.keyDown(archivedRow, { key: "Home" });
+      expect(first).toHaveFocus();
+
+      fireEvent.keyDown(first, { key: "F2" });
+      expect(screen.getByRole("dialog", { name: "Rename workpad" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(first).toHaveFocus());
+      fireEvent.keyDown(first, { key: "Delete" });
+      expect(screen.getByRole("dialog", { name: "Delete workpad?" })).toHaveAccessibleDescription(/“Integration” will be permanently deleted/);
+    });
+
+    it("names the workpad and the action when a Move fails", async () => {
+      const { store, api } = fixture({ updateWorkpad: vi.fn(async () => { throw new Error("The workpad changed."); }) });
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build" }} />);
+      await screen.findByRole("button", { name: "Integration" });
+      openMenu("Actions for “Integration”");
+      openSubmenu("Move to");
+      choose("This thread");
+      expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't move “Integration”: The workpad changed.");
+      expect(api.updateWorkpad).toHaveBeenCalledWith("pad", { expectedRevision: 1, scope: { kind: "thread", threadId: "thread-build" } });
+      expect(status()).toBeEmptyDOMElement();
     });
   });
 
@@ -1774,7 +2012,7 @@ describe("WorkpadsPanel", () => {
       const lists = api.listWorkpads.mock.calls.length;
       const counts = api.getWorkpadCounts.mock.calls.length;
       openMenu("Actions for “Integration”"); choose("Delete…");
-      const confirm = within(deleteDialog()).getByRole("button", { name: "Delete" });
+      const confirm = within(deleteDialog()).getByRole("button", { name: "Delete workpad" });
       expect(confirm).toHaveAttribute("data-variant", "destructive");
       fireEvent.click(confirm);
       expect(api.deleteWorkpad).toHaveBeenCalledExactlyOnceWith("pad");
@@ -1800,7 +2038,7 @@ describe("WorkpadsPanel", () => {
       await openRow();
       await screen.findByRole("button", { name: "Edit workpad" });
       documentMenu(); choose("Delete…");
-      fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete" }));
+      fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete workpad" }));
       await finish();
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(api.deleteWorkpad).toHaveBeenCalledExactlyOnceWith("pad");
@@ -1821,7 +2059,7 @@ describe("WorkpadsPanel", () => {
       fireEvent.click(heading());
       await screen.findByRole("button", { name: "Old notes" });
       openMenu("Actions for “Old notes”"); choose("Delete…");
-      fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete" }));
+      fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete workpad" }));
       await finish();
       await waitFor(() => expect(heading()).toHaveTextContent(/^Archived1$/));
       expect(api.deleteWorkpad).toHaveBeenCalledExactlyOnceWith("old");
@@ -1835,7 +2073,7 @@ describe("WorkpadsPanel", () => {
       await openRow();
       await screen.findByRole("button", { name: "Edit workpad" });
       documentMenu(); choose("Delete…");
-      await act(async () => { fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete" })); });
+      await act(async () => { fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete workpad" })); });
       expect(within(deleteDialog()).getByRole("alert")).toHaveTextContent("The workpad was not found.");
       expect(api.deleteWorkpad).toHaveBeenCalledOnce();
       fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Cancel" }));

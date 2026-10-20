@@ -13,6 +13,8 @@ import {
   workspaceFilesRootOpenOperation,
   workspaceFilesRootValidateOperation,
   workspaceFilesResolveLinkOperation,
+  workspaceFilesWatchCloseOperation,
+  workspaceFilesWatchOpenOperation,
   workspaceFilesWriteOperation,
   workspaceFilesMutationInspectOperation,
 } from "../../src/internal/sidecar-protocol/index.js";
@@ -1046,6 +1048,65 @@ describe("SidecarWorkspaceFileProvider", () => {
     await provider.close();
   });
 
+  it("closes a remote watch whose open completes after the provider closes", async () => {
+    const gate = deferred<void>();
+    const session = fakeSession("first", { watchOpenGate: gate.promise });
+    const provider = providerFor(fakeRuntime([session]));
+    const pending = provider.watch(scope, root, vi.fn());
+    await vi.waitFor(() =>
+      expect(
+        vi.mocked(session.call).mock.calls.some(
+          ([definition]) => definition === workspaceFilesWatchOpenOperation,
+        ),
+      ).toBe(true),
+    );
+    await provider.close();
+    gate.resolve();
+
+    await expect(pending).rejects.toBeInstanceOf(
+      WorkspaceFileProviderUnavailableError,
+    );
+    const subscriptionHandle = "de8e220b-0000-4000-8000-000000000021";
+    expect(session.retireWatch).toHaveBeenCalledWith(subscriptionHandle);
+    expect(session.call).toHaveBeenCalledWith(
+      workspaceFilesWatchCloseOperation,
+      { subscriptionHandle },
+    );
+    expect(session.registerInvalidation).not.toHaveBeenCalled();
+  });
+
+  it("closes a replacement watch whose open completes after the subscription closes", async () => {
+    const gate = deferred<void>();
+    const first = fakeSession("first");
+    const second = fakeSession("second", { watchOpenGate: gate.promise });
+    const runtime = fakeRuntime([first, second]);
+    const provider = providerFor(runtime);
+    const listener = vi.fn();
+    const subscription = await provider.watch(scope, root, listener);
+    first.failWatch();
+    await vi.waitFor(() =>
+      expect(
+        vi.mocked(second.call).mock.calls.some(
+          ([definition]) => definition === workspaceFilesWatchOpenOperation,
+        ),
+      ).toBe(true),
+    );
+    subscription.close();
+    gate.resolve();
+
+    const subscriptionHandle = "de8e220b-0000-4000-8000-000000000021";
+    await vi.waitFor(() =>
+      expect(second.call).toHaveBeenCalledWith(
+        workspaceFilesWatchCloseOperation,
+        { subscriptionHandle },
+      ),
+    );
+    expect(second.retireWatch).toHaveBeenCalledWith(subscriptionHandle);
+    expect(second.registerInvalidation).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+    await provider.close();
+  });
+
   it("resolves watch failure after bounded replacement attempts fail", async () => {
     vi.useFakeTimers();
     try {
@@ -1104,7 +1165,10 @@ function watchLease(
   return { session, carrierGeneration, serviceStatus, release: vi.fn() };
 }
 
-function fakeSession(label: string) {
+function fakeSession(
+  label: string,
+  options?: { readonly watchOpenGate?: Promise<void> },
+) {
   const closure = deferred<void>();
   const watchFailures = new Map<
     string,
@@ -1113,7 +1177,14 @@ function fakeSession(label: string) {
   let watchIndex = 0;
   const session = {
     closed: closure.promise,
-    call: vi.fn(async (definition: unknown) => {
+    call: vi.fn(async (
+      definition: unknown,
+      _request?: unknown,
+      callOptions?: {
+        readonly signal?: AbortSignal;
+        readonly onLateSuccess?: (response: unknown) => void;
+      },
+    ) => {
       if (definition === workspaceFilesRootOpenOperation) {
         return {
           rootHandle: `de8e220b-0000-4000-8000-${label === "first" ? "000000000011" : "000000000012"}`,
@@ -1123,9 +1194,30 @@ function fakeSession(label: string) {
         (definition as { operation?: string }).operation === "files.watch_open"
       ) {
         watchIndex += 1;
-        return {
+        const response = {
           subscriptionHandle: `de8e220b-0000-4000-8000-${watchIndex === 1 ? "000000000021" : "000000000022"}`,
         };
+        if (options?.watchOpenGate) {
+          // Like the protocol peer, a cancelled call rejects at once and hands
+          // the success response that arrives later only to onLateSuccess.
+          const signal = callOptions?.signal;
+          let cancelled = false;
+          void options.watchOpenGate.then(() => {
+            if (cancelled) callOptions?.onLateSuccess?.(response);
+          });
+          await Promise.race([
+            options.watchOpenGate,
+            new Promise<never>((_resolve, reject) => {
+              const cancel = () => {
+                cancelled = true;
+                reject(new Error("sidecar_request_cancelled"));
+              };
+              if (signal?.aborted) cancel();
+              signal?.addEventListener("abort", cancel, { once: true });
+            }),
+          ]);
+        }
+        return response;
       }
       if (
         (definition as { operation?: string }).operation === "files.watch_close"
@@ -1135,6 +1227,7 @@ function fakeSession(label: string) {
       throw new Error(`unexpected_operation:${label}`);
     }),
     registerInvalidation: vi.fn(() => vi.fn()),
+    retireWatch: vi.fn(),
     registerWatchFailure: vi.fn(
       (
         subscriptionHandle: string,

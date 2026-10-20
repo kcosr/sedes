@@ -1,4 +1,5 @@
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,9 @@ async function fixture(capacity: number) {
   const root = await mkdtemp(path.join(tmpdir(), "sedes-control-receipts-")); roots.push(root);
   const directory = path.join(root, "receipts");
   return { receipts: new PersistentSidecarManagementReceipts(directory, capacity), directory };
+}
+function receiptPath(directory: string, mutationId: string): string {
+  return path.join(directory, `${createHash("sha256").update(mutationId).digest("hex")}.json`);
 }
 function request(requestId: string, incarnation = "incarnation-a") { return {
   managementVersion: 1 as const, requestId, scope, operation: "stop" as const, expectedServiceIncarnation: incarnation,
@@ -144,6 +148,47 @@ describe("bounded durable sidecar control receipts", () => {
     await expect(receipts.begin(request("b"), "incarnation-a")).rejects.toThrow("sidecar_management_receipt_capacity_exceeded");
     expect(await receipts.begin(request("c", "incarnation-b"), "incarnation-b")).toMatchObject({ created: true });
     expect(await receipts.read("a")).toBeUndefined();
+  });
+
+  it("never publishes a receipt whose contents were not written", async () => {
+    const { receipts, directory } = await fixture(2);
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+    const privacy = vi.spyOn(windowsSidecarPlatform, "privacy").mockImplementation(async (filename, operation) => {
+      if (operation === "ensure-directory") await mkdir(filename);
+      if (operation === "secure-file") throw new Error("sidecar_windows_privacy_invalid");
+    });
+    await expect(receipts.begin(request("a"), "incarnation-a")).rejects.toThrow("sidecar_windows_privacy_invalid");
+    expect(await readdir(directory)).toEqual([]);
+    expect(await receipts.read("a")).toBeUndefined();
+    privacy.mockImplementation(async () => undefined);
+    expect(await receipts.withdraw("a", "incarnation-a")).toMatchObject({ created: true, receipt: { state: "withdrawn" } });
+  });
+
+  it.skipIf(process.platform === "win32")("reclaims around a torn receipt and refuses its id deterministically", async () => {
+    const { receipts, directory } = await fixture(2);
+    await receipts.withdraw("old", "incarnation-a");
+    await writeFile(receiptPath(directory, "torn"), "", { mode: 0o600 });
+    await chmod(receiptPath(directory, "torn"), 0o600);
+
+    expect(await receipts.withdraw("new", "incarnation-b")).toMatchObject({ created: true, receipt: { state: "withdrawn" } });
+    expect(await receipts.read("old")).toBeUndefined();
+    await expect(receipts.read("torn")).rejects.toThrow("sidecar_management_receipt_invalid");
+    await expect(receipts.withdraw("torn", "incarnation-b")).rejects.toThrow("sidecar_management_receipt_invalid");
+    await expect(receipts.begin(request("torn", "incarnation-b"), "incarnation-b")).rejects.toThrow("sidecar_management_receipt_invalid");
+  });
+
+  it("does not count leftover temporaries toward capacity and removes stale ones", async () => {
+    const { receipts, directory } = await fixture(1);
+    await receipts.withdraw("old", "incarnation-a");
+    const stale = `${receiptPath(directory, "crashed")}.10000000-0000-4000-8000-000000000001`;
+    const fresh = `${receiptPath(directory, "writing")}.10000000-0000-4000-8000-000000000002`;
+    await writeFile(stale, "{", { mode: 0o600 });
+    await writeFile(fresh, "{", { mode: 0o600 });
+    const past = new Date(Date.now() - 10 * 60_000);
+    await utimes(stale, past, past);
+
+    expect(await receipts.begin(request("current", "incarnation-b"), "incarnation-b")).toMatchObject({ created: true });
+    expect((await readdir(directory)).sort()).toEqual([path.basename(fresh), path.basename(receiptPath(directory, "current"))].sort());
   });
 
 });

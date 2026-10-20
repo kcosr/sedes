@@ -103,7 +103,11 @@ rows' leading inset, `--list-heading-inset`, and its chevron follows the
 count), `ViewFilterChips` with the `view-options-trigger` dot, and the View options
 rows `SortOptionItems` and `ScopeOptionItem`. Their styles are in
 `scope-view.css`; the panels are size containers, so its narrow rules follow
-the panel.
+the panel. Both lists take their keyboard navigation from
+`useScopedListNav`: row titles and section headings marked `data-list-nav`
+share one roving tab stop and ↑/↓/Home/End, a row's other controls carry
+`data-list-nav-for`, and a focused row that leaves the list hands focus to
+its neighbour.
 
 ## Tokens
 
@@ -141,7 +145,15 @@ reads the tokens the switch sets; TypeScript uses `useTouchDensity()` or
 
 Inputs, `NativeSelect`, `SelectTrigger`, tabs, and switch hit areas follow
 `--control-default`. Buttons keep fixed heights; a container opts its buttons
-into touch height, as dialog footers and the settings save bar do. Component
+into touch height, as dialog footers and the settings save bar do. A small
+control that must keep its look (a corner dismiss, a chip's remove, a
+callout's action) instead takes an invisible `::before` hit area under the
+switch, `inset: calc((100% - var(--control-touch)) / 2)` on a positioned
+control (`inset-block` only for wide ones). Select such buttons by element
+(`> button`): a `Button` used as a menu trigger carries the trigger's
+`data-slot`. A text input whose desktop size is below `--text-input` keeps it
+and switches to `--text-input` in a touch-density block;
+`touch-density.test.ts` checks both rules. Component
 layout uses container queries; media queries come only from the allowed set in
 the guardrails (the breakpoint, 519px footer stacking, pointer, hover, and
 reduced motion). The sidebar-to-drawer swap uses `(max-width: 819px)` alone.
@@ -167,6 +179,12 @@ item) share the control box in `components/ui/control.ts`. `Field` takes `label`
 inside dialogs, sheets, popovers, and menus, so a dialog opened from a field
 starts a new form.
 
+**Paths.** `PathLabel` shows a file or directory path on one line: its muted
+directory gives way from the start, so the last segment stays visible, and its
+tooltip keeps the whole path (or a caller's `title`, such as a rename's
+`old → new`). Use it wherever a path labels a file, as in the Files editor
+toolbar and the Changes diff headers and navigator.
+
 **Status and feedback.** One tone vocabulary (`components/ui/tone.ts`),
 `neutral | info | success | warning | danger`, serves every status primitive. Buttons and menu items name
 an action with `variant="destructive"` instead.
@@ -180,6 +198,13 @@ an action with `variant="destructive"` instead.
 | `Callout` | The one notice and error style, with `title` and `action`; pass `role="alert"` for errors the user just caused |
 | `EmptyState` | Nothing to show: `panel` for a page or pane, `inline` inside a list |
 | `KeyValueList` | Labelled facts in a `max-content 1fr` grid; `mono` for identifiers |
+
+**Error boundaries.** `ErrorBoundary` contains a render failure and adds no
+markup while its children render. Three are in place: the app root
+(`app/AppErrorBoundary.tsx`, a full page with Try again, Reload and Copy
+details), each workspace panel (`TenantContent`, an `EmptyState` with Reload
+panel and Close panel), and each transcript item (`ConversationItemView`, a
+one-line danger `Callout` with Try again, retried when the item updates).
 
 ## Dialogs
 

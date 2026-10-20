@@ -47,6 +47,10 @@ import { deliveryDiagnosticsEnabled } from "../diagnostics/delivery-diagnostic-o
 
 const HEARTBEAT_INTERVAL_MILLISECONDS = 10_000;
 const MAXIMUM_EARLY_WATCH_EVENTS = 256;
+// An event may precede its watch registration only while the open response is
+// being handled; older unclaimed entries belong to opens that were abandoned.
+const EARLY_WATCH_EVENT_TTL_MILLISECONDS = 30_000;
+const MAXIMUM_RETIRED_WATCH_HANDLES = 1_024;
 
 export class SidecarClientSession implements SidecarRuntimeSession {
   /** Remote account identity established by the admitted artifact installation. */
@@ -62,8 +66,11 @@ export class SidecarClientSession implements SidecarRuntimeSession {
     string,
     (event: { readonly subscriptionHandle: string }) => void
   >();
-  readonly #earlyInvalidations = new Set<string>();
-  readonly #earlyWatchFailures = new Set<string>();
+  // Handle -> first retention time, in retention order.
+  readonly #earlyInvalidations = new Map<string, number>();
+  readonly #earlyWatchFailures = new Map<string, number>();
+  // Closed watches whose in-flight events are dropped, oldest first.
+  readonly #retiredWatchHandles = new Set<string>();
   readonly #removeEventListeners: readonly (() => void)[];
   readonly #heartbeatIntervalMilliseconds: number;
   readonly #diagnosticContext: { attachmentId: string; executionEnvironmentId?: string; transportKind: string; carrierGeneration: number };
@@ -324,6 +331,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
     options?: {
       readonly signal?: AbortSignal;
       readonly deadlineMilliseconds?: number;
+      readonly onLateSuccess?: (response: Response) => void;
     },
   ): Promise<Response> {
     return this.#peer.call(definition, request, options);
@@ -378,7 +386,12 @@ export class SidecarClientSession implements SidecarRuntimeSession {
         }
       });
     }
-    return () => this.#invalidationListeners.delete(subscriptionHandle);
+    return () => {
+      if (this.#invalidationListeners.get(subscriptionHandle) === listener) {
+        this.#invalidationListeners.delete(subscriptionHandle);
+      }
+      this.retireWatch(subscriptionHandle);
+    };
   }
 
   registerWatchFailure(
@@ -390,10 +403,31 @@ export class SidecarClientSession implements SidecarRuntimeSession {
     }
     if (this.#earlyWatchFailures.delete(subscriptionHandle)) {
       queueMicrotask(() => listener(Object.freeze({ subscriptionHandle })));
-      return () => undefined;
+      return () => this.retireWatch(subscriptionHandle);
     }
     this.#watchFailureListeners.set(subscriptionHandle, listener);
-    return () => this.#watchFailureListeners.delete(subscriptionHandle);
+    return () => {
+      if (this.#watchFailureListeners.get(subscriptionHandle) === listener) {
+        this.#watchFailureListeners.delete(subscriptionHandle);
+      }
+      this.retireWatch(subscriptionHandle);
+    };
+  }
+
+  /**
+   * Marks a watch handle as closed so events already in flight for it are
+   * dropped instead of being retained for a registration that never comes.
+   */
+  retireWatch(subscriptionHandle: string): void {
+    if (this.#closed) return;
+    this.#earlyInvalidations.delete(subscriptionHandle);
+    this.#earlyWatchFailures.delete(subscriptionHandle);
+    this.#retiredWatchHandles.delete(subscriptionHandle);
+    this.#retiredWatchHandles.add(subscriptionHandle);
+    if (this.#retiredWatchHandles.size > MAXIMUM_RETIRED_WATCH_HANDLES) {
+      const oldest = this.#retiredWatchHandles.values().next().value;
+      if (oldest !== undefined) this.#retiredWatchHandles.delete(oldest);
+    }
   }
 
   close(reason: string): Promise<void> {
@@ -470,6 +504,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
     this.#watchFailureListeners.clear();
     this.#earlyInvalidations.clear();
     this.#earlyWatchFailures.clear();
+    this.#retiredWatchHandles.clear();
   }
 
   #diagnose(event: string, reason?: string, error?: unknown, durationMs?: number): void {
@@ -486,10 +521,16 @@ export class SidecarClientSession implements SidecarRuntimeSession {
   }
 
   #retainEarlyWatchEvent(
-    handles: Set<string>,
+    handles: Map<string, number>,
     subscriptionHandle: string,
   ): void {
-    handles.add(subscriptionHandle);
+    if (this.#retiredWatchHandles.has(subscriptionHandle)) return;
+    const now = Date.now();
+    for (const [handle, retainedAt] of handles) {
+      if (now - retainedAt < EARLY_WATCH_EVENT_TTL_MILLISECONDS) break;
+      handles.delete(handle);
+    }
+    if (!handles.has(subscriptionHandle)) handles.set(subscriptionHandle, now);
     if (handles.size <= MAXIMUM_EARLY_WATCH_EVENTS) return;
     void this.close("sidecar_early_watch_event_limit").catch(() => undefined);
   }
