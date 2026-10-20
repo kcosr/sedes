@@ -105,4 +105,35 @@ describe("useComposerAttachmentUploads", () => {
     await waitFor(() => expect(onUploaded).toHaveBeenCalledOnce());
     expect(upload.mock.calls[1]![0]).toBe(id);
   });
+
+  it("keeps uploading later files while an earlier one waits for a retry", async () => {
+    const upload = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network unavailable"))
+      .mockImplementation(async (id: string) => ({ ...descriptor, id }));
+    const onUploaded = vi.fn(
+      (_attachment: ComposerAttachmentDescriptor) => true,
+    );
+    const { result } = renderHook(() =>
+      useComposerAttachmentUploads({ upload, onUploaded }),
+    );
+
+    act(() =>
+      result.current.add([
+        new File(["a"], "first.bin"),
+        new File(["b"], "second.bin"),
+        new File(["c"], "third.bin"),
+      ]),
+    );
+
+    await waitFor(() => expect(onUploaded).toHaveBeenCalledTimes(2));
+    expect(upload.mock.calls.map(([, file]) => (file as File).name)).toEqual([
+      "first.bin",
+      "second.bin",
+      "third.bin",
+    ]);
+    expect(result.current.uploads).toEqual([
+      expect.objectContaining({ phase: "error", error: "network unavailable" }),
+    ]);
+  });
 });

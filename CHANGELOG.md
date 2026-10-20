@@ -173,6 +173,27 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Composer drafts are saved when you close, reload, or leave the page or
+  background the Android app, except edits made while an earlier save is still
+  in progress. A failed draft save retries without another keystroke. A failed
+  attachment upload no longer holds back later files,
+  pasting a copied file no longer inserts its name or path, and Safari's
+  IME-confirming Enter no longer sends. See
+  [Build a prompt](docs/user/conversations.md#build-a-prompt).
+  ([#102](https://github.com/kcosr/sedes/pull/102))
+
+- Tasks: quick actions in a row on one task, such as Pin then Backlog, no
+  longer fail as "changed elsewhere"; retrying an add or paste whose response
+  was lost no longer creates the Task twice; and Escape restores a maximized
+  layout from Tasks.
+  ([#102](https://github.com/kcosr/sedes/pull/102))
+
+- Find in thread stays on its match while a reply streams. Files compare keeps
+  each root's selected review and no longer leaves **Start review** stuck on
+  "Loading…". Sidebar thread shortcuts (Mod+1–9, Mod+Shift+↑/↓) no longer
+  switch threads behind an open dialog.
+  ([#102](https://github.com/kcosr/sedes/pull/102))
+
 - The server no longer exits or hangs after rare failures: a client resetting
   a refused terminal or outbound-host WebSocket upgrade, storage failing while
   a terminal records history (only that terminal fails), a late Codex TUI

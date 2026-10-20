@@ -4210,6 +4210,31 @@ describe("Transcript seek-on-submit", () => {
     },
   );
 
+  it("yields an active live-edge follower to find navigation", () => {
+    const { ref, viewport, resize, setScrollHeight } = mountLiveEdgeFollower();
+    setScrollHeight(1_000);
+    act(resize);
+    act(() => {
+      stepRaf();
+      stepRaf();
+    });
+    expect(rafCallbacks.size).toBe(1);
+
+    act(() => ref.current!.yieldToReaderNavigation());
+    expect(rafCallbacks.size).toBe(0);
+    // Find scrolls to its match; streaming keeps growing the transcript.
+    viewport.scrollTop = 120;
+    fireEvent.scroll(viewport);
+    setScrollHeight(1_100);
+    act(resize);
+    act(flushRaf);
+
+    expect(viewport.scrollTop).toBe(120);
+    expect(
+      screen.getByRole("button", { name: "Jump to latest" }),
+    ).toBeInTheDocument();
+  });
+
   it.each([
     ["horizontal trackpad pan", { deltaX: 24, deltaY: 0 }],
     ["pinch zoom", { ctrlKey: true, deltaY: -24 }],

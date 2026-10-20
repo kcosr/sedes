@@ -86,6 +86,11 @@ export interface ThreadFindBarProps {
   readonly contentRef: RefObject<HTMLDivElement | null>;
   readonly viewportRef: RefObject<HTMLDivElement | null>;
   readonly id: string;
+  /**
+   * Called before each jump to a match, so the transcript stops following
+   * its live edge and cannot pull the viewport back while a reply streams.
+   */
+  readonly onNavigate: () => void;
 }
 
 interface TextNodeSpan {
@@ -260,6 +265,7 @@ export function ThreadFindBar({
   contentRef,
   viewportRef,
   id,
+  onNavigate,
 }: ThreadFindBarProps): React.JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null);
   const allHighlight = useRef<HighlightLike | undefined>(undefined);
@@ -267,6 +273,8 @@ export function ThreadFindBar({
   const matchesRef = useRef<readonly Range[]>([]);
   const currentIndexRef = useRef(-1);
   const scrollAfterScan = useRef(false);
+  const onNavigateRef = useRef(onNavigate);
+  onNavigateRef.current = onNavigate;
   const wasOpen = useRef(false);
   const [query, setQuery] = useState("");
   const [matchCase, setMatchCase] = useState(false);
@@ -390,7 +398,10 @@ export function ThreadFindBar({
       scrollAfterScan.current = false;
       const currentRange = nextMatches[nextIndex];
       const viewport = viewportRef.current;
-      if (currentRange && viewport) scrollRangeIntoView(currentRange, viewport);
+      if (currentRange && viewport) {
+        onNavigateRef.current();
+        scrollRangeIntoView(currentRange, viewport);
+      }
     }
   }, [
     clearHighlights,
@@ -454,7 +465,9 @@ export function ThreadFindBar({
     if (!range) return;
     currentIndexRef.current = index;
     setCurrentIndex(index);
-    if (viewport) scrollRangeIntoView(range, viewport);
+    if (!viewport) return;
+    onNavigate();
+    scrollRangeIntoView(range, viewport);
   };
 
   const move = (direction: -1 | 1) => {

@@ -149,6 +149,10 @@ export const ThreadView = memo(function ThreadView({
     (itemId: string) => transcript.current?.seekHistoryItem(itemId),
     [],
   );
+  const yieldTranscriptToFind = useCallback(
+    () => transcript.current?.yieldToReaderNavigation(),
+    [],
+  );
   const returnToLive = useCallback(
     () => navigate(threadPath(threadId), { replace: true }),
     [threadId],
@@ -525,6 +529,7 @@ export const ThreadView = memo(function ThreadView({
           scopeRef={threadView}
           contentRef={findContent}
           viewportRef={findViewport}
+          onNavigate={yieldTranscriptToFind}
         />
         {state.loadFailure && (
           <div className="runtime-banner error" role="alert">

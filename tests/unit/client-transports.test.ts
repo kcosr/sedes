@@ -119,6 +119,48 @@ describe("ApiClient normalized contract", () => {
     });
   });
 
+  it("requests keepalive delivery for a page-hide draft save within the browser quota", async () => {
+    const requests: RequestInit[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input) === "/api/application/session") {
+          return Response.json(session());
+        }
+        requests.push(init!);
+        const body = JSON.parse(String(init!.body)) as { text: string };
+        return Response.json({
+          text: body.text,
+          contextExcerpts: [],
+          taskReferences: [],
+          attachments: [],
+          revision: 2,
+        });
+      }),
+    );
+    const client = new ApiClient();
+    await client.session();
+    const draft = (text: string) => ({
+      text,
+      contextExcerpts: [],
+      taskReferences: [],
+      attachments: [],
+      revision: 1,
+    });
+
+    await client.saveDraft(threadId, draft("ordinary"));
+    await client.saveDraft(threadId, draft("closing"), { keepalive: true });
+    await client.saveDraft(threadId, draft("x".repeat(70_000)), {
+      keepalive: true,
+    });
+
+    expect(requests.map(({ keepalive }) => keepalive)).toEqual([
+      undefined,
+      true,
+      undefined,
+    ]);
+  });
+
   it("includes durable context excerpts when saving a draft", async () => {
     const excerpt = {
       id: "20000000-0000-4000-8000-000000000001",
