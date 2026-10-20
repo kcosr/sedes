@@ -46,6 +46,7 @@ export class PersistentSidecarServiceServer {
   #endpointIdentity: { readonly dev: number; readonly ino: number } | undefined;
   #endpointKey: Buffer | undefined;
   #started = false;
+  #listening = false;
   #closePromise: Promise<void> | undefined;
 
   constructor(input: {
@@ -69,6 +70,16 @@ export class PersistentSidecarServiceServer {
       socket.once("close", () => this.#sockets.delete(socket));
       void this.#accept(socket).catch(() => socket.destroy());
     });
+    // Accept failures (EMFILE, ENOMEM, ...) surface as server errors while the
+    // server keeps listening; unhandled, one would kill the long-lived daemon
+    // and every PTY, shell and provider it owns.
+    this.#server.on("error", (error) => {
+      if (!this.#listening) return;
+      attachmentDiagnostic("sidecar_service_accept_failed", {
+        executionEnvironmentId: this.#registry.scope.executionEnvironmentId,
+        transportKind: "persistent_sidecar_unix", role: "sidecar",
+      }, error);
+    });
     this.attachment.subscribe((event) => {
       if (event === "detached") this.#registry.detach(this.attachment.controllerEpoch);
     });
@@ -83,6 +94,7 @@ export class PersistentSidecarServiceServer {
       this.#server.once("error", error);
       this.#server.listen(this.#endpointPath, () => {
         this.#server.removeListener("error", error);
+        this.#listening = true;
         resolve();
       });
     });

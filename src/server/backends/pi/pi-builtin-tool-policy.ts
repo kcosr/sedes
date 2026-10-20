@@ -53,9 +53,6 @@ export const PI_INTENTIONALLY_UNSUPPORTED_BUILTIN_TOOL_NAMES = Object.freeze([
   "powershell",
 ] as const satisfies readonly PiReviewedBuiltinToolName[]);
 
-export const PI_EXCLUDED_TOOL_NAMES =
-  PI_INTENTIONALLY_UNSUPPORTED_BUILTIN_TOOL_NAMES;
-
 const supportedBuiltinNames = new Set<string>(PI_SUPPORTED_BUILTIN_TOOL_NAMES);
 const unsupportedBuiltinNames = new Set<string>(
   PI_INTENTIONALLY_UNSUPPORTED_BUILTIN_TOOL_NAMES,

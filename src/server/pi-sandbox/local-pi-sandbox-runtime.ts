@@ -18,6 +18,7 @@ import {
   type SidecarArtifactRegistration,
 } from "../sidecar/sidecar-artifact.js";
 import type { SidecarArtifactInstallation } from "../sidecar/sidecar-provisioner.js";
+import { pathIsWithin } from "../path-containment.js";
 import { SidecarClientSession } from "../sidecar/sidecar-client-session.js";
 import {
   buildPiBubblewrapArguments,
@@ -347,16 +348,6 @@ async function validateAllocationPaths(
   ) {
     throw new Error("pi_sandbox_allocation_paths_invalid");
   }
-}
-
-function pathIsWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) &&
-      relative !== ".." &&
-      !path.isAbsolute(relative))
-  );
 }
 
 async function canonicalDirectory(value: string): Promise<string> {

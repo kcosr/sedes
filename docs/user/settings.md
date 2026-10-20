@@ -19,7 +19,7 @@ example, **Connection** exists only in the Electron app, and **Server** and
 | Preferences | General, Appearance, Mobile, Terminal, Voice |
 | Account | Prompts, Notifications |
 | Execution | Environments, Backends, Projects, Agents |
-| Access | Tool clients, Paired clients, Connection or Server |
+| Access | Tool policies, Tool clients, Paired clients, Connection or Server |
 | Support | Diagnostics |
 
 **With the desktop sidebar showing**, the sidebar lists the Settings pages by

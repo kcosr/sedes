@@ -1,6 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Search, X } from "lucide-react";
 import { WORKSPACE_COMPARE_FILTER_MAX_LENGTH } from "./workspace-compare-navigation.js";
+import { PathLabel } from "../components/ui/path-label.js";
+import { useTouchDensity } from "../app/use-touch-density.js";
 import type {
   WorkspaceDiffChangedFileSummary,
   WorkspaceDiffFileId,
@@ -11,7 +13,9 @@ import {
   workspaceCompareFilePath,
 } from "./workspace-compare-state.js";
 
+/** Virtual-list row heights: the control step, and 44px under touch density. */
 const ROW_HEIGHT = 32;
+const TOUCH_ROW_HEIGHT = 44;
 type Row =
   | { kind: "directory"; path: string }
   | { kind: "file"; file: WorkspaceDiffChangedFileSummary };
@@ -43,6 +47,7 @@ export function WorkspaceChangedFileNavigator({
   readonly truncated: boolean;
 }) {
   const id = useId();
+  const rowHeight = useTouchDensity() ? TOUCH_ROW_HEIGHT : ROW_HEIGHT;
   const listRef = useRef<HTMLDivElement>(null);
   const userScrollUntilRef = useRef(0);
   const [scrollTop, setScrollTop] = useState(0);
@@ -77,31 +82,31 @@ export function WorkspaceChangedFileNavigator({
       (row) => row.kind === "file" && row.file.fileId === currentFileId,
     );
     if (index < 0) return;
-    const top = index * ROW_HEIGHT;
+    const top = index * rowHeight;
     if (top < list.scrollTop) list.scrollTop = top;
-    else if (top + ROW_HEIGHT > list.scrollTop + list.clientHeight)
-      list.scrollTop = top + ROW_HEIGHT - list.clientHeight;
-  }, [currentFileId, rows]);
+    else if (top + rowHeight > list.scrollTop + list.clientHeight)
+      list.scrollTop = top + rowHeight - list.clientHeight;
+  }, [currentFileId, rows, rowHeight]);
   const toggle = (path: string) =>
     onCollapsedDirectoriesChange(
       collapsedDirectories.includes(path)
         ? collapsedDirectories.filter((item) => item !== path)
         : [...collapsedDirectories, path],
     );
-  const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 8);
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 8);
   const end = Math.min(
     rows.length,
-    start + Math.ceil((listRef.current?.clientHeight || 600) / ROW_HEIGHT) + 16,
+    start + Math.ceil((listRef.current?.clientHeight || 600) / rowHeight) + 16,
   );
   const focusRow = (index: number) => {
     const next = Math.max(0, Math.min(rows.length - 1, index));
     setFocused(next);
     const list = listRef.current;
     if (list) {
-      if (next * ROW_HEIGHT < list.scrollTop)
-        list.scrollTop = next * ROW_HEIGHT;
-      else if ((next + 1) * ROW_HEIGHT > list.scrollTop + list.clientHeight)
-        list.scrollTop = (next + 1) * ROW_HEIGHT - list.clientHeight;
+      if (next * rowHeight < list.scrollTop)
+        list.scrollTop = next * rowHeight;
+      else if ((next + 1) * rowHeight > list.scrollTop + list.clientHeight)
+        list.scrollTop = (next + 1) * rowHeight - list.clientHeight;
     }
   };
   return (
@@ -187,7 +192,7 @@ export function WorkspaceChangedFileNavigator({
           }
         }}
       >
-        <div style={{ height: rows.length * ROW_HEIGHT, position: "relative" }}>
+        <div style={{ height: rows.length * rowHeight, position: "relative" }}>
           {rows.slice(start, end).map((row, offset) => {
             const index = start + offset;
             return row.kind === "directory" ? (
@@ -201,7 +206,7 @@ export function WorkspaceChangedFileNavigator({
                   !collapsedDirectories.includes(row.path) || !!filter
                 }
                 className="workspace-compare-directory"
-                style={{ top: index * ROW_HEIGHT }}
+                style={{ top: index * rowHeight, height: rowHeight }}
                 onClick={() => {
                   setFocused(index);
                   toggle(row.path);
@@ -212,7 +217,7 @@ export function WorkspaceChangedFileNavigator({
                 ) : (
                   <ChevronDown />
                 )}
-                <span>{row.path}/</span>
+                <PathLabel path={`${row.path}/`} />
               </div>
             ) : (
               <div
@@ -225,7 +230,7 @@ export function WorkspaceChangedFileNavigator({
                 }
                 aria-selected={row.file.fileId === currentFileId}
                 className="workspace-compare-tree-file"
-                style={{ top: index * ROW_HEIGHT }}
+                style={{ top: index * rowHeight, height: rowHeight }}
                 onClick={() => {
                   setFocused(index);
                   onNavigate(row.file);

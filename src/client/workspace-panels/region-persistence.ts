@@ -29,6 +29,7 @@ import {
   type TerminalTab,
   type TerminalsPanelState,
 } from "./regions.js";
+import { isRecord } from "../../shared/json-guards.js";
 
 /**
  * Saved panel regions.
@@ -94,10 +95,6 @@ function readItem(storage: RegionStorage | undefined, key: string): string | nul
   } catch {
     return null;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function hasExactKeys(

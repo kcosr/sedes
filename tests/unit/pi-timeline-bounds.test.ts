@@ -7,7 +7,7 @@ import type {
 import {
   selectPiHistoryPage,
   selectPiSnapshotWindow,
-} from "../../src/server/backends/pi/pi-conversation-driver.js";
+} from "../../src/server/backends/pi/pi-timeline-window.js";
 import { serializedUtf8Bytes } from "../../src/shared/protocol/payload.js";
 
 const LARGE_TEXT = "x".repeat(65_536);

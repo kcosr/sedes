@@ -5,8 +5,6 @@ export const GROK_ACP_REVIEWED_PROFILE = "grok-acp/1.0.4" as const;
 export const GROK_ACP_REVIEWED_PROFILE_FLOOR = "1.0.4" as const;
 /** Newest Grok runtime release exercised against the pinned ACP profile. */
 export const GROK_RUNTIME_TESTED_THROUGH_VERSION = "1.0.4" as const;
-export const GROK_ACP_IMAGE_INPUT_PROFILE = GROK_ACP_REVIEWED_PROFILE;
-export const GROK_ACP_IMAGE_INPUT_FLOOR = GROK_ACP_REVIEWED_PROFILE_FLOOR;
 /** Reviewed incompatible stable releases; intentionally empty at this gate. */
 export const GROK_RUNTIME_EXCLUDED_RELEASES: ReadonlySet<string> = new Set();
 
@@ -113,9 +111,9 @@ export function admittedGrokRuntimeSupportsImageInput(
   runtime: AdmittedGrokRuntimeVersion,
 ): boolean {
   return (
-    runtime.reviewedProfile === GROK_ACP_IMAGE_INPUT_PROFILE &&
+    runtime.reviewedProfile === GROK_ACP_REVIEWED_PROFILE &&
     runtime.compatibilityRelease === GROK_ACP_COMPATIBILITY_RELEASE &&
-    stableRuntimeAtLeast(runtime.version, GROK_ACP_IMAGE_INPUT_FLOOR)
+    stableRuntimeAtLeast(runtime.version, GROK_ACP_REVIEWED_PROFILE_FLOOR)
   );
 }
 

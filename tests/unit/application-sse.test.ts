@@ -857,6 +857,47 @@ describe("serveApplicationEventStream", () => {
     }
   });
 
+  it("bounds only changes queued behind an oversized live replacement", async () => {
+    const hub = new ApplicationEventHub();
+    const initial = hub.publish({
+      type: "snapshot",
+      generation: hub.generation,
+      snapshot: emptySnapshot,
+    });
+    const request = new FakeRequest();
+    const response = new FakeResponse();
+    await serveApplicationEventStream(
+      request as unknown as Request,
+      response as unknown as Response,
+      hub,
+      async () => ({ envelope: hub.currentCheckpoint()! }),
+      { pendingByteLimit: hub.encoded(initial).bytes },
+    );
+    expect(envelopes(response)).toEqual([initial]);
+    response.writeResult = () => false;
+    const blocked = hub.publish({
+      type: "environment_upsert",
+      generation: hub.generation,
+      environment: renamedEnvironment(1),
+    });
+    const replacement = hub.publish({
+      type: "snapshot",
+      generation: hub.generation,
+      snapshot: { ...emptySnapshot, environments: [renamedEnvironment(2)] },
+    });
+    expect(hub.encoded(replacement).bytes).toBeGreaterThan(hub.encoded(initial).bytes);
+    const later = hub.publish({
+      type: "environment_upsert",
+      generation: hub.generation,
+      environment: renamedEnvironment(3),
+    });
+    response.writeResult = () => true;
+    response.emit("drain");
+    expect(envelopes(response)).toEqual([initial, blocked, replacement, later]);
+    expect(response.end).not.toHaveBeenCalled();
+    request.emit("close");
+  });
+
   it("supersedes pending changes during backpressure and closes on hub retirement", async () => {
     const hub = new ApplicationEventHub();
     hub.publish({

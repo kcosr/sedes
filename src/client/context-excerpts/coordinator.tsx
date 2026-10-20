@@ -176,14 +176,6 @@ export function useComposerDraftStaging():
   return useContext(ContextExcerptStagingContext) ?? undefined;
 }
 
-export const useContextExcerptStaging = useComposerDraftStaging;
-
-export function useContextExcerptStagingSnapshot(
-  target?: ContextExcerptStagingTarget,
-): ContextExcerptStagingSnapshot {
-  return useComposerDraftStagingSnapshot(target);
-}
-
 export function useComposerDraftStagingSnapshot(
   suppliedTarget?: ContextExcerptStagingTarget,
 ): ContextExcerptStagingSnapshot {

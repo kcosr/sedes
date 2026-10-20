@@ -98,6 +98,13 @@ confirm: its content, revision history, and any draft are gone, on every
 client, and can't be restored. Archive a workpad instead to keep it out of
 the way. Agents can archive workpads but never delete them.
 
+In the list, the Up and Down arrows move between workpads and the
+**Archived** heading, and Home and End go to the first and last. The Right
+arrow moves from a row to its **⋯** button and the Left arrow back; on the
+**Archived** heading they expand and collapse it. **Delete** asks to delete
+the workpad and **F2** renames it. Archiving or moving the focused workpad
+keeps focus in the list, on the next row.
+
 ## Open a workpad
 
 Selecting a row opens the workpad in the panel. The header stays **Workpads**,

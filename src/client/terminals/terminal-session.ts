@@ -15,6 +15,7 @@ import {
   TerminalInputSequencer,
   type SequencedTerminalInput,
 } from "./input-sequencer.js";
+import { isRecord } from "../../shared/json-guards.js";
 
 export type TerminalConnectionState =
   | "idle"
@@ -948,8 +949,4 @@ function terminalCloseMessage(event: CloseEvent): string | undefined {
     return "Terminal output outpaced this viewer; restoring the latest screen.";
   }
   return undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

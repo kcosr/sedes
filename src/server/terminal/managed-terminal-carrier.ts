@@ -1,6 +1,6 @@
 import type { AuthenticationAdmission } from "../authentication/authentication-admission.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { IncomingMessage, Server } from "node:http";
+import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { RequestHandler } from "express";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -8,6 +8,10 @@ import { z } from "zod";
 import { threadRouteParametersSchema } from "../../shared/protocol/api.js";
 import type { AppConfig } from "../config/config.js";
 import { ApiError } from "../http/errors.js";
+import {
+  rejectWebSocketUpgrade,
+  type WebSocketUpgradeRouter,
+} from "../http/websocket-upgrade-router.js";
 import type {
   IdentityProvider,
   RequestScope,
@@ -342,7 +346,7 @@ export interface ManagedTerminalCarrier {
 }
 
 export function attachManagedTerminalCarrier(
-  server: Server,
+  upgrades: WebSocketUpgradeRouter,
   input: {
     readonly config: AppConfig;
     readonly identity: IdentityProvider<IncomingMessage>;
@@ -384,7 +388,6 @@ export function attachManagedTerminalCarrier(
     socket: Duplex,
     head: Buffer,
   ) => {
-    if (request.url !== MANAGED_TERMINAL_WEBSOCKET_PATH) return;
     socket.pause();
     void authorizeUpgrade(request)
       .then(({ record, clientId }) => {
@@ -394,7 +397,7 @@ export function attachManagedTerminalCarrier(
         });
         socket.resume();
       })
-      .catch(() => rejectUpgrade(socket));
+      .catch(() => rejectWebSocketUpgrade(socket, 403));
   };
 
   const authorizeUpgrade = async (
@@ -565,13 +568,13 @@ export function attachManagedTerminalCarrier(
     },
   );
 
-  server.on("upgrade", onUpgrade);
+  const unroute = upgrades.route(MANAGED_TERMINAL_WEBSOCKET_PATH, onUpgrade);
   let closePromise: Promise<void> | undefined;
   return {
     close() {
       closePromise ??= new Promise<void>((resolve) => {
         closing = true;
-        server.off("upgrade", onUpgrade);
+        unroute();
         for (const client of webSockets.clients) {
           closeWebSocketBounded(client);
         }
@@ -678,14 +681,6 @@ function requestedAdmissionToken(request: IncomingMessage): string {
     throw invalidAdmission();
   }
   return protocols[1];
-}
-
-function rejectUpgrade(socket: Duplex): void {
-  if (!socket.destroyed) {
-    socket.end(
-      "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
-    );
-  }
 }
 
 function rawDataByteLength(data: RawData): number {

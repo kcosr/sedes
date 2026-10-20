@@ -297,7 +297,7 @@ function enqueueUser(
 ): void {
   const drafts = new ConversationDraftRepository(fixture.database);
   const current = drafts.get(fixture.scope, threadId);
-  const draft = drafts.save(fixture.scope, threadId, {
+  const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
     text,
     contextExcerpts: [],
     attachmentIds: [],
@@ -350,7 +350,7 @@ function enqueueUserWithAttachment(
   );
   const drafts = new ConversationDraftRepository(fixture.database);
   const current = drafts.get(fixture.scope, threadId);
-  const draft = drafts.save(fixture.scope, threadId, {
+  const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
     text: `text-${id}`,
     contextExcerpts: [],
     attachmentIds: [attachmentId],
@@ -1687,7 +1687,7 @@ describe("QueuedInputDispatcher", () => {
     try {
       await dispatcher.recover(fixture.scope);
       const drafts = new ConversationDraftRepository(fixture.database);
-      const draft = drafts.save(fixture.scope, threadId, {
+      const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
         text: "Keep my unfinished message",
         contextExcerpts: [],
         attachmentIds: [],
@@ -1903,7 +1903,7 @@ describe("QueuedInputDispatcher", () => {
     const [threadId] = fixture.threadIds;
     try {
       await dispatcher.recover(fixture.scope);
-      const draft = drafts.save(fixture.scope, threadId, {
+      const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
         text: "Use the new requirement", contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
         expectedRevision: drafts.get(fixture.scope, threadId).revision, now: 810,
       });
@@ -1955,7 +1955,7 @@ describe("QueuedInputDispatcher", () => {
       const [threadId] = fixture.threadIds;
       try {
         await dispatcher.recover(fixture.scope);
-        const draft = drafts.save(fixture.scope, threadId, {
+        const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
           text: "Keep this input when Steer is unavailable", contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
           expectedRevision: drafts.get(fixture.scope, threadId).revision, now: 810,
         });
@@ -2019,7 +2019,7 @@ describe("QueuedInputDispatcher", () => {
       await dispatcher.recover(fixture.scope);
       const enqueueSteer = async (id: string, text: string, at: number) => {
         const current = drafts.get(fixture.scope, threadId);
-        const draft = drafts.save(fixture.scope, threadId, {
+        const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
           text,
           contextExcerpts: [],
           attachmentIds: [],
@@ -2110,7 +2110,7 @@ describe("QueuedInputDispatcher", () => {
       target: SteerTarget = { kind: "turn", turnId: "active-turn-1" },
     ) => {
       const drafts = new ConversationDraftRepository(fixture.database);
-      const draft = drafts.save(fixture.scope, threadId, {
+      const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
         text: `Steer ${id}`, contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
         expectedRevision: drafts.get(fixture.scope, threadId).revision, now: at,
       });
@@ -2133,7 +2133,7 @@ describe("QueuedInputDispatcher", () => {
       at: number,
     ) => {
       const drafts = new ConversationDraftRepository(fixture.database);
-      const draft = drafts.save(fixture.scope, threadId, {
+      const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
         text: `Send ${id}`, contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
         expectedRevision: drafts.get(fixture.scope, threadId).revision, now: at,
       });
@@ -2413,7 +2413,7 @@ describe("QueuedInputDispatcher", () => {
     const drafts = new ConversationDraftRepository(fixture.database);
     const [threadId] = fixture.threadIds;
     const currentDraft = drafts.get(fixture.scope, threadId);
-    const draft = drafts.save(fixture.scope, threadId, {
+    const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
       text: "Resume this Steer after restart",
       contextExcerpts: [],
       attachmentIds: [],
@@ -2471,7 +2471,7 @@ describe("QueuedInputDispatcher", () => {
     const drafts = new ConversationDraftRepository(fixture.database);
     const [threadId] = fixture.threadIds;
     const currentDraft = drafts.get(fixture.scope, threadId);
-    const draft = drafts.save(fixture.scope, threadId, {
+    const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
       text: "Retry this Steer after runtime acquisition recovers",
       contextExcerpts: [],
       attachmentIds: [],
@@ -2550,7 +2550,7 @@ describe("QueuedInputDispatcher", () => {
     const drafts = new ConversationDraftRepository(fixture.database);
     const [threadId] = fixture.threadIds;
     const currentDraft = drafts.get(fixture.scope, threadId);
-    const draft = drafts.save(fixture.scope, threadId, {
+    const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
       text: "Wait for the uncertain operation",
       contextExcerpts: [],
       attachmentIds: [],
@@ -2631,7 +2631,7 @@ describe("QueuedInputDispatcher", () => {
     const drafts = new ConversationDraftRepository(fixture.database);
     const [threadId] = fixture.threadIds;
     const currentDraft = drafts.get(fixture.scope, threadId);
-    const draft = drafts.save(fixture.scope, threadId, {
+    const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
       text: "Keep this Steer valid across an unrelated revision bump",
       contextExcerpts: [],
       attachmentIds: [],
@@ -2742,7 +2742,7 @@ describe("QueuedInputDispatcher", () => {
     const drafts = new ConversationDraftRepository(fixture.database);
     const [threadId] = fixture.threadIds;
     const currentDraft = drafts.get(fixture.scope, threadId);
-    const draft = drafts.save(fixture.scope, threadId, {
+    const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
       text: "Do not retarget this stale Steer",
       contextExcerpts: [],
       attachmentIds: [],
@@ -2856,7 +2856,7 @@ describe("QueuedInputDispatcher", () => {
 
     try {
       const current = drafts.get(fixture.scope, threadId);
-      const draft = drafts.save(fixture.scope, threadId, {
+      const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
         text: "Deliver this after the active turn",
         contextExcerpts: [],
         attachmentIds: [],
@@ -2932,7 +2932,7 @@ describe("QueuedInputDispatcher", () => {
     );
     try {
       const current = genericDrafts.get(genericFixture.scope, genericThreadId);
-      const draft = genericDrafts.save(genericFixture.scope, genericThreadId, {
+      const draft = new InventoryRepository(genericFixture.database).saveDraft(genericFixture.scope, genericThreadId, {
         text: "Do not silently fallback",
         contextExcerpts: [],
         attachmentIds: [],
@@ -3035,8 +3035,7 @@ describe("QueuedInputDispatcher", () => {
           suffix: " after.",
         },
       };
-      const drafts = new ConversationDraftRepository(fixture.database);
-      const draft = drafts.save(fixture.scope, threadId, {
+      const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
         text: "",
         contextExcerpts: [excerpt],
         attachmentIds: [],
@@ -3093,8 +3092,7 @@ describe("QueuedInputDispatcher", () => {
         mutationId: "create-queued-task-context",
         now: 500,
       });
-      const drafts = new ConversationDraftRepository(fixture.database);
-      const draft = drafts.save(fixture.scope, threadId, {
+      const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
         text: "",
         contextExcerpts: [],
         attachmentIds: [],
@@ -4877,7 +4875,7 @@ describe("QueuedInputDispatcher", () => {
       );
       const drafts = new ConversationDraftRepository(fixture.database);
       const empty = drafts.get(fixture.scope, threadId);
-      const currentDraft = drafts.save(fixture.scope, threadId, {
+      const currentDraft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
         text: "keep this draft",
         contextExcerpts: [],
         attachmentIds: [],
@@ -5199,7 +5197,7 @@ describe("QueuedInputDispatcher", () => {
       enqueueUser(fixture, repository, threadId, "live-observed-steer", 960);
       const drafts = new ConversationDraftRepository(fixture.database);
       const before = drafts.get(fixture.scope, threadId);
-      const currentDraft = drafts.save(fixture.scope, threadId, {
+      const currentDraft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, threadId, {
         text: "keep this live-observation draft",
         contextExcerpts: [],
         attachmentIds: [],

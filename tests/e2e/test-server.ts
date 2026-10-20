@@ -265,6 +265,7 @@ import {
   TerminalAdmissionTokens,
   attachTerminalCarrier,
 } from "../../src/server/terminals/terminal-carrier.js";
+import { WebSocketUpgradeRouter } from "../../src/server/http/websocket-upgrade-router.js";
 import { CodexTuiE2eFixture } from "./codex-tui-fixture.js";
 import { TerminalE2eFixture } from "./terminal-fixture.js";
 import { installE2EServerProcessLifecycle } from "./server-process-lifecycle.js";
@@ -6184,7 +6185,8 @@ async function main(): Promise<void> {
     }),
   );
   const server = app.listen(listenPort, config.host);
-  const managedTerminalCarrier = attachManagedTerminalCarrier(server, {
+  const upgrades = new WebSocketUpgradeRouter(server);
+  const managedTerminalCarrier = attachManagedTerminalCarrier(upgrades, {
     config,
     identity,
     admissions: managedTerminalAdmissions,
@@ -6192,7 +6194,7 @@ async function main(): Promise<void> {
     connections: longLivedConnections,
     drain,
   });
-  const terminalCarrier = attachTerminalCarrier(server, {
+  const terminalCarrier = attachTerminalCarrier(upgrades, {
     config,
     identity,
     admissions: terminalAdmissions,

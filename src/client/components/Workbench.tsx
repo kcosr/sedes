@@ -1,9 +1,22 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { Route } from "../app/router";
-import type { ApplicationClientStore } from "../stores/ApplicationClientStore";
-import { useApplicationStore } from "../stores/ApplicationClientStore";
+import type {
+  ApplicationClientState,
+  ApplicationClientStore,
+} from "../stores/ApplicationClientStore";
+import {
+  sameSelectedFields,
+  useApplicationStoreSelector,
+} from "../stores/use-application-store-selector.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry";
-import { ArchivedView } from "./ArchivedView";
 import { AutomationEditor } from "./automation/AutomationEditor";
 import { AutomationPage } from "./automation/AutomationPage";
 import { AutomationsView } from "./automation/AutomationsView";
@@ -22,12 +35,27 @@ import {
   createWorkspaceFileLinkHandler,
   WorkspaceFileLinkProvider,
 } from "../workspace-files/workspace-file-link-routing";
-import { UsageView } from "../usage/UsageView";
 import { useSidebarInventoryScope } from "../app/use-sidebar-inventory-scope";
 import { useEnvironmentColorsEnabled } from "../app/use-environment-colors-enabled";
 import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
+import { lazyView } from "./LazyView.js";
 
-export function Workbench({
+const ArchivedView = lazyView(
+  "archived threads",
+  async () => (await import("./ArchivedView")).ArchivedView,
+);
+const UsageView = lazyView(
+  "usage",
+  async () => (await import("../usage/UsageView")).UsageView,
+);
+const UsageDisabledView = lazyView(
+  "usage",
+  async () => (await import("../usage/UsageView")).UsageDisabledView,
+);
+
+// Memoized with field-level application subscriptions: sidebar search and
+// other inventory-only changes re-render the shell, not the workbench.
+export const Workbench = memo(function Workbench({
   route,
   active = true,
   applicationStore,
@@ -42,7 +70,25 @@ export function Workbench({
   panelLayoutStore: PanelRegionStore;
   panelTenants: WorkspacePanelTenantRegistry;
 }): React.JSX.Element {
-  const application = useApplicationStore(applicationStore);
+  // Only the welcome view's Continue recent follows the sidebar's search.
+  const welcome = route.name === "home" || route.name === "settings";
+  const selectApplication = useCallback(
+    (state: ApplicationClientState) => ({
+      snapshot: state.snapshot,
+      experimentalUsageEnabled: state.experimentalUsageEnabled,
+      recent: welcome
+        ? state.visibleThreads.find(
+            (thread) => thread.inventoryState === "active",
+          )
+        : undefined,
+    }),
+    [welcome],
+  );
+  const application = useApplicationStoreSelector(
+    applicationStore,
+    selectApplication,
+    sameSelectedFields,
+  );
   const projects = application.snapshot?.projects ?? [];
   const workspaces = application.snapshot?.workspaces ?? [];
   const environments = application.snapshot?.environments ?? [];
@@ -135,7 +181,7 @@ export function Workbench({
           <div className="pane-nav-header">
             <SidebarNavTrigger />
           </div>
-          {application.experimentalUsageEnabled ? <UsageView store={applicationStore} /> : <p>Experimental usage accounting is disabled on this server.</p>}
+          {application.experimentalUsageEnabled ? <UsageView store={applicationStore} /> : <UsageDisabledView />}
         </div>
       </main>
     );
@@ -186,9 +232,7 @@ export function Workbench({
     );
   }
 
-  const recent = application.visibleThreads.find(
-    (thread) => thread.inventoryState === "active",
-  );
+  const recent = application.recent;
 
   return (
     <main className="workbench">
@@ -243,7 +287,7 @@ export function Workbench({
       </div>
     </main>
   );
-}
+});
 
 /**
  * The automation pages' pane. Its bar shows where the sidebar does not

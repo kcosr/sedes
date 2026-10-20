@@ -18,6 +18,7 @@ import type {
   ConversationTurn,
   HistoryPage,
   ThreadRunState,
+  TurnForkCapability,
   UserMessageItem,
 } from "../../../shared/index.js";
 import {
@@ -25,6 +26,7 @@ import {
   type PendingComposerTransfer,
   type ThreadProjectionViewportAnchor,
   type ThreadClientStore,
+  type TurnForkAttempt,
 } from "../../stores/ThreadClientStore.js";
 import { ConversationItemView } from "../conversation/ConversationItemView.js";
 import {
@@ -45,13 +47,19 @@ import {
 } from "../../app/diagnostics.js";
 import { getDiagnosticCategoryEnabled } from "../../app/settings.js";
 import { currentFailedTurn, TurnFailureDetails } from "./ThreadFailureNotice.js";
-import { turnBookmarkPreview, turnResponseItemId } from "./turn-bookmark-presentation.js";
+import {
+  turnBookmarkPreview,
+  turnResponseItemId,
+  type TurnBookmarkPreview,
+} from "./turn-bookmark-presentation.js";
+import { sameTurnItems } from "./turn-derivation.js";
 import { TurnForkDivider } from "./TurnForkDivider.js";
 import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
 import { useSmoothStreaming } from "../../app/use-smooth-streaming.js";
 import {
   ChatHistoryRail,
   createChatHistoryEntries,
+  sameChatHistoryEntries,
   type ChatHistoryEntry,
 } from "./ChatHistoryRail.js";
 import { ActivityGroup } from "./ActivityGroup.js";
@@ -90,6 +98,11 @@ export type TranscriptHandle = {
    * Returns false when the caller must fall back to targeted history lookup.
    */
   readonly seekTurn: (turnId: string, target?: "turn" | "response") => boolean;
+  /**
+   * Hands the viewport to a reader-driven jump that scrolls it directly,
+   * such as find: stops following the live edge and releases a seek pin.
+   */
+  readonly yieldToReaderNavigation: () => void;
 };
 
 export type TranscriptProps = {
@@ -105,6 +118,14 @@ export type TranscriptProps = {
   readonly findContentRef?: RefObject<HTMLDivElement | null>;
   readonly findViewportRef?: RefObject<HTMLDivElement | null>;
 };
+
+type TranscriptFocusStatus =
+  | "idle"
+  | "loading"
+  | "found"
+  | "not_found"
+  | "unavailable"
+  | "error";
 
 const seekRequestTtlMilliseconds = 15_000;
 const seekCompletionCheckMilliseconds = 1_000;
@@ -130,7 +151,9 @@ const keyboardControlSelector = [
   '[role="listbox"], [role="menu"], [role="tree"], [role="grid"], [role="tablist"]',
 ].join(", ");
 
-export function Transcript({
+// Memoized: ThreadView re-renders for its own state and the panel layout;
+// the transcript re-renders only for its props and its thread store.
+export const Transcript = memo(function Transcript({
   ref,
   store,
   seekRequest,
@@ -227,9 +250,16 @@ export function Transcript({
   const [historyLoadIntent, setHistoryLoadIntent] = useState<
     "more" | "all" | undefined
   >();
-  const [focusStatus, setFocusStatus] = useState<
-    "idle" | "loading" | "found" | "not_found" | "unavailable" | "error"
-  >("idle");
+  const [focusStatus, setFocusStatus] = useState<TranscriptFocusStatus>("idle");
+  // The focus effects re-assert the status on every snapshot. A same-value
+  // update right after a commit still re-renders the whole transcript, so
+  // skip updates that request the status already requested.
+  const requestedFocusStatus = useRef<TranscriptFocusStatus>("idle");
+  const updateFocusStatus = useCallback((next: TranscriptFocusStatus) => {
+    if (requestedFocusStatus.current === next) return;
+    requestedFocusStatus.current = next;
+    setFocusStatus(next);
+  }, []);
   const [focusDiagnostic, setFocusDiagnostic] = useState<string>();
   const [focusRetryable, setFocusRetryable] = useState(false);
   const [focusPage, setFocusPage] = useState<
@@ -276,6 +306,11 @@ export function Transcript({
   );
   const unanchoredOptimisticTransfers =
     optimisticByPlacement.get(optimisticStartPlacement) ?? [];
+  const optimisticByTurn = optimisticPlacementsByTurn(
+    optimisticByPlacement,
+    turnIds,
+    viewTurnsById,
+  );
   const presentationItemIds = [
     ...unanchoredOptimisticTransfers.map((transfer) =>
       provisionalItemId(transfer.operationId),
@@ -380,20 +415,28 @@ export function Transcript({
       providerFeatureCapabilities,
     ],
   );
-  const historyEntries = useMemo(
+  const bookmarkedTurnIds = useMemo(
+    () => new Set(bookmarks.map((bookmark) => bookmark.turnId)),
+    [bookmarks],
+  );
+  const computedHistoryEntries = useMemo(
     () =>
       createChatHistoryEntries(
         turnIds,
         viewTurnsById,
         viewItemsById,
-        new Set(bookmarks.map((bookmark) => bookmark.turnId)),
+        bookmarkedTurnIds,
       ),
-    [bookmarks, turnIds, viewItemsById, viewTurnsById],
+    [bookmarkedTurnIds, turnIds, viewItemsById, viewTurnsById],
   );
-  const bookmarkedTurnIds = useMemo(
-    () => new Set(bookmarks.map((bookmark) => bookmark.turnId)),
-    [bookmarks],
-  );
+  // Every streaming flush rebuilds the entries. Keep the published array while
+  // its values are unchanged so the rail publication does not re-render the
+  // thread a second time.
+  const stableHistoryEntries = useRef(computedHistoryEntries);
+  if (!sameChatHistoryEntries(stableHistoryEntries.current, computedHistoryEntries)) {
+    stableHistoryEntries.current = computedHistoryEntries;
+  }
+  const historyEntries = stableHistoryEntries.current;
   const pendingBookmarkTurnIdSet = useMemo(
     () => new Set(pendingBookmarkTurnIds),
     [pendingBookmarkTurnIds],
@@ -438,15 +481,16 @@ export function Transcript({
   ]);
   const historyEntriesRef = useRef(historyEntries);
   historyEntriesRef.current = historyEntries;
-  const historyEntryKey = historyEntries
-    .map((entry) => entry.itemId)
-    .join("\u0000");
-  const historyEntryIdsRef = useRef(
-    new Set(historyEntries.map((entry) => entry.itemId)),
+  const historyEntryKey = useMemo(
+    () => historyEntries.map((entry) => entry.itemId).join("\u0000"),
+    [historyEntries],
   );
-  historyEntryIdsRef.current = new Set(
-    historyEntries.map((entry) => entry.itemId),
+  const historyEntryIds = useMemo(
+    () => new Set(historyEntries.map((entry) => entry.itemId)),
+    [historyEntries],
   );
+  const historyEntryIdsRef = useRef(historyEntryIds);
+  historyEntryIdsRef.current = historyEntryIds;
   const runState = snapshot?.runState ?? "idle";
   const readOnly = snapshot?.capabilities.interactionMode === "read_only";
   const diagnosticState = useRef({ runState, itemCount: itemIds.length });
@@ -822,6 +866,14 @@ export function Transcript({
       behavior: navigationScrollBehavior(element, destination, requestedBehavior),
     });
     setActiveHistoryItemId(itemId);
+    wasAtLiveEdge.current = false;
+    setAtLiveEdge(false);
+  };
+
+  const yieldToReaderNavigation = () => {
+    viewportResizeFollowIntent.current = false;
+    cancelLiveEdgeFollow();
+    releaseSeekPin("reader_navigation");
     wasAtLiveEdge.current = false;
     setAtLiveEdge(false);
   };
@@ -1365,8 +1417,9 @@ export function Transcript({
         const target = takeSeekTarget();
         if (target) beginSeek(target);
       },
+      yieldToReaderNavigation,
     }),
-    [scrollToHistoryItem, seekAdjacentHistoryItem, seekLoadedTurn, takeSeekTarget, beginSeek],
+    [scrollToHistoryItem, seekAdjacentHistoryItem, seekLoadedTurn, takeSeekTarget, beginSeek, yieldToReaderNavigation],
   );
 
   useLayoutEffect(
@@ -1516,17 +1569,17 @@ export function Transcript({
     setFocusPage(undefined);
     setFocusDiagnostic(undefined);
     setFocusRetryable(false);
-    setFocusStatus(focusTurnId ? "loading" : "idle");
+    updateFocusStatus(focusTurnId ? "loading" : "idle");
   }, [activityDetail, focusTurnId, focusResponse, store]);
 
   useEffect(() => {
     if (!focusTurnId || !snapshot) {
-      setFocusStatus("idle");
+      updateFocusStatus("idle");
       return;
     }
     const targetTurn = viewTurnsById?.[focusTurnId];
     if (targetTurn) {
-      setFocusStatus("found");
+      updateFocusStatus("found");
       const handlingKey = `${activityDetail}:${focusTurnId}:${focusResponse}:${focusRetryNonce}`;
       if (handledFocusTarget.current === handlingKey) return;
       const frame = requestAnimationFrame(() => {
@@ -1551,13 +1604,13 @@ export function Transcript({
       return () => cancelAnimationFrame(frame);
     }
     if (connection !== "connected" || !authoritative) {
-      setFocusStatus("loading");
+      updateFocusStatus("loading");
       return;
     }
     const attemptKey = `${activityDetail}:${focusTurnId}:${focusResponse}:${focusRetryNonce}`;
     if (focusAttemptTarget.current === attemptKey) return;
     focusAttemptTarget.current = attemptKey;
-    setFocusStatus("loading");
+    updateFocusStatus("loading");
     void store.seekHistoryTurn(focusTurnId).then(
       (result) => {
         if (focusAttemptTarget.current !== attemptKey) return;
@@ -1568,16 +1621,16 @@ export function Transcript({
             page: result.page,
           });
         } else if (result.status === "not_found") {
-          setFocusStatus("not_found");
+          updateFocusStatus("not_found");
         } else {
           setFocusDiagnostic(result.reason.text);
           setFocusRetryable(result.retryable);
-          setFocusStatus("unavailable");
+          updateFocusStatus("unavailable");
         }
       },
       () => {
         if (focusAttemptTarget.current === attemptKey) {
-          setFocusStatus("error");
+          updateFocusStatus("error");
         }
       },
     );
@@ -2032,193 +2085,37 @@ export function Transcript({
             {turnIds.map((turnId, turnIndex) => {
               const turn = viewTurnsById?.[turnId];
               if (!turn) return null;
-              const lastItemId = turn.orderedItemIds.at(-1);
-              const bookmarkPreview = bookmarkPreviews.get(turn.id);
-              const responseItemId = viewItemsById ? turnResponseItemId(turn, viewItemsById) : undefined;
-              const selected =
-                (turn.id === focusTurnId && focusStatus === "found") ||
-                turn.id === locallySelectedTurnId;
               return (
-                <section
+                <TranscriptTurn
                   key={turn.id}
-                  className={`conversation-turn${
-                    selected ? " source-turn-highlight" : ""
-                  }`}
-                  data-turn-id={turn.id}
-                  data-response-item-id={responseItemId}
-                  data-turn-status={turn.status}
-                  data-latest-completed-turn={
-                    turn.id === latestCompletedTurnId ? "true" : undefined
+                  turn={turn}
+                  itemsById={viewItemsById ?? noItems}
+                  transfers={optimisticByTurn.get(turn.id)}
+                  selected={
+                    (turn.id === focusTurnId && focusStatus === "found") ||
+                    turn.id === locallySelectedTurnId
                   }
-                  tabIndex={selected ? -1 : undefined}
-                  aria-label={selected ? "Selected turn" : undefined}
-                >
-                  {(() => {
-                    const presentation: ReactNode[] = [];
-                    let activityItems: ActivityItem[] = [];
-                    const flushActivity = () => {
-                      if (activityItems.length === 0) return;
-                      const items = activityItems;
-                      activityItems = [];
-                      presentation.push(
-                        <ActivityGroup
-                          key={`activity:${items[0]!.id}`}
-                          items={items}
-                          threadId={store.threadId}
-                          {...(itemRenderContext
-                            ? { context: itemRenderContext }
-                            : {})}
-                        />,
-                      );
-                    };
-                    const appendTransfer = (
-                      transfer: TranscriptSubmission,
-                    ) => {
-                      flushActivity();
-                      presentation.push(
-                        <TranscriptUserMessage
-                          key={`delivery:${transfer.operationId}`}
-                          transfer={transfer}
-                          context={itemRenderContext}
-                        />,
-                      );
-                    };
-
-                    // A viewed image's captured image directly follows it.
-                    const disclosedImageIds = new Set<string>();
-                    turn.orderedItemIds.forEach((itemId, itemIndex) => {
-                      const item = viewItemsById?.[itemId];
-                      if (!item) return;
-                      const precedingTransfers =
-                        optimisticByPlacement.get(
-                          optimisticBeforeItemPlacement(itemId),
-                        ) ?? [];
-                      precedingTransfers.forEach(appendTransfer);
-
-                      if (disclosedImageIds.has(item.id)) {
-                        // Rendered inside its viewed-image disclosure.
-                      } else if (item.kind === "viewed_image") {
-                        const next = viewItemsById?.[
-                          turn.orderedItemIds[itemIndex + 1] ?? ""
-                        ];
-                        const image =
-                          next?.kind === "image" && next.origin.kind === "viewed"
-                            ? next
-                            : undefined;
-                        if (image) disclosedImageIds.add(image.id);
-                        flushActivity();
-                        presentation.push(
-                          <ViewedImageGroup
-                            key={`viewed-image:${item.id}`}
-                            item={item}
-                            {...(image ? { image } : {})}
-                            {...(itemRenderContext
-                              ? { context: itemRenderContext }
-                              : {})}
-                          />,
-                        );
-                      } else if (isActivityItem(item)) {
-                        activityItems.push(item);
-                      } else {
-                        flushActivity();
-                        presentation.push(
-                          item.kind === "user_message" ? (
-                            <TranscriptUserMessage
-                              key={
-                                item.deliveryOperationId
-                                  ? `delivery:${item.deliveryOperationId}`
-                                  : item.id
-                              }
-                              item={item}
-                              suppressLiveAnnouncement={
-                                item.deliveryOperationId !== undefined &&
-                                presentedOptimisticOperations.current.operationIds.has(
-                                  item.deliveryOperationId,
-                                )
-                              }
-                              context={itemRenderContext}
-                            />
-                          ) : (
-                            <ConversationItemView
-                              key={item.id}
-                              item={item}
-                              {...(itemRenderContext
-                                ? { context: itemRenderContext }
-                                : {})}
-                            />
-                          ),
-                        );
-                      }
-
-                      const anchoredTransfers =
-                        itemIndex === turn.orderedItemIds.length - 1
-                          ? []
-                          : (optimisticByPlacement.get(
-                              optimisticAfterItemPlacement(itemId),
-                            ) ?? []);
-                      anchoredTransfers.forEach(appendTransfer);
-                    });
-                    flushActivity();
-                    return presentation;
-                  })()}
-                  {currentFailureTurnId !== turn.id && <TurnFailureDetails turn={turn} />}
-                  <TurnForkDivider
-                    turn={turn}
-                    bookmark={bookmarkPreview ? {
-                      turnId: turn.id,
-                      preview: bookmarkPreview,
-                      bookmarked: bookmarkedTurnIds.has(turn.id),
-                      disabled: bookmarkStatus !== "ready",
-                      pending: pendingBookmarkTurnIdSet.has(turn.id),
-                      store,
-                    } : undefined}
-                    copyText={
-                      turn.orderedItemIds
-                        .flatMap((itemId) => {
-                          const item = viewItemsById?.[itemId];
-                          return item?.kind === "assistant_message" &&
-                            item.status === "completed"
-                            ? [item.markdown.text]
-                            : [];
-                        })
-                        .filter((text) => text.length > 0)
-                        .join("\n\n") || undefined
-                    }
-                    turnNumber={
-                      !selectedFocusPage && !snapshot.history.hasOlder
-                        ? turnIndex + 1
-                        : undefined
-                    }
-                    capability={viewForksByTurnId?.[turn.id]}
-                    attempt={forkAttempts[turn.id]}
-                    connected={connection === "connected"}
-                    authoritative={authoritative}
-                    store={store}
-                  />
-                  {lastItemId &&
-                    (
-                      optimisticByPlacement.get(
-                        optimisticAfterItemPlacement(lastItemId),
-                      ) ?? []
-                    ).map((transfer) => (
-                      <TranscriptUserMessage
-                        key={`delivery:${transfer.operationId}`}
-                        transfer={transfer}
-                        context={itemRenderContext}
-                      />
-                    ))}
-                  {(
-                    optimisticByPlacement.get(
-                      optimisticAfterTurnPlacement(turn.id),
-                    ) ?? []
-                  ).map((transfer) => (
-                    <TranscriptUserMessage
-                      key={`delivery:${transfer.operationId}`}
-                      transfer={transfer}
-                      context={itemRenderContext}
-                    />
-                  ))}
-                </section>
+                  latestCompleted={turn.id === latestCompletedTurnId}
+                  turnNumber={
+                    !selectedFocusPage && !snapshot.history.hasOlder
+                      ? turnIndex + 1
+                      : undefined
+                  }
+                  failureDetails={currentFailureTurnId !== turn.id}
+                  bookmarkPreview={bookmarkPreviews.get(turn.id)}
+                  bookmarked={bookmarkedTurnIds.has(turn.id)}
+                  bookmarkDisabled={bookmarkStatus !== "ready"}
+                  bookmarkPending={pendingBookmarkTurnIdSet.has(turn.id)}
+                  forkCapability={viewForksByTurnId?.[turn.id]}
+                  forkAttempt={forkAttempts[turn.id]}
+                  connected={connection === "connected"}
+                  authoritative={authoritative}
+                  store={store}
+                  context={itemRenderContext}
+                  presentedOperationIds={
+                    presentedOptimisticOperations.current.operationIds
+                  }
+                />
               );
             })}
             {runState === "starting" && (
@@ -2255,7 +2152,7 @@ export function Transcript({
       )}
     </div>
   );
-}
+});
 
 function isActiveRun(runState: ThreadRunState): boolean {
   return [
@@ -2418,6 +2315,253 @@ function optimisticUserContent(
   }
   return content;
 }
+
+const noItems: Readonly<Record<string, ConversationItem>> = {};
+const noTransfers: readonly TranscriptSubmission[] = [];
+
+/** Each turn's optimistic placements; turns without any are absent. */
+function optimisticPlacementsByTurn(
+  byPlacement: ReadonlyMap<string, readonly TranscriptSubmission[]>,
+  orderedTurnIds: readonly string[],
+  turnsById: Readonly<Record<string, ConversationTurn>> | undefined,
+): Map<string, ReadonlyMap<string, readonly TranscriptSubmission[]>> {
+  const result = new Map<
+    string,
+    ReadonlyMap<string, readonly TranscriptSubmission[]>
+  >();
+  if (byPlacement.size === 0) return result;
+  for (const turnId of orderedTurnIds) {
+    const turn = turnsById?.[turnId];
+    if (!turn) continue;
+    const placements = [
+      optimisticAfterTurnPlacement(turnId),
+      ...turn.orderedItemIds.flatMap((itemId) => [
+        optimisticBeforeItemPlacement(itemId),
+        optimisticAfterItemPlacement(itemId),
+      ]),
+    ];
+    let turnPlacements:
+      | Map<string, readonly TranscriptSubmission[]>
+      | undefined;
+    for (const placement of placements) {
+      const transfers = byPlacement.get(placement);
+      if (transfers) (turnPlacements ??= new Map()).set(placement, transfers);
+    }
+    if (turnPlacements) result.set(turnId, turnPlacements);
+  }
+  return result;
+}
+
+type TranscriptTurnProps = {
+  readonly turn: ConversationTurn;
+  /** Only this turn's items are read; see sameTranscriptTurnProps. */
+  readonly itemsById: Readonly<Record<string, ConversationItem>>;
+  readonly transfers:
+    | ReadonlyMap<string, readonly TranscriptSubmission[]>
+    | undefined;
+  readonly selected: boolean;
+  readonly latestCompleted: boolean;
+  readonly turnNumber: number | undefined;
+  readonly failureDetails: boolean;
+  readonly bookmarkPreview: TurnBookmarkPreview | undefined;
+  readonly bookmarked: boolean;
+  readonly bookmarkDisabled: boolean;
+  readonly bookmarkPending: boolean;
+  readonly forkCapability: TurnForkCapability | undefined;
+  readonly forkAttempt: TurnForkAttempt | undefined;
+  readonly connected: boolean;
+  readonly authoritative: boolean;
+  readonly store: ThreadClientStore;
+  readonly context: ItemRenderContext | undefined;
+  /** Operations already presented optimistically; grows in place. */
+  readonly presentedOperationIds: ReadonlySet<string>;
+};
+
+/**
+ * Item maps change on every streamed delta. A turn re-renders only when one
+ * of its own items, or another prop, changed.
+ */
+function sameTranscriptTurnProps(
+  previous: TranscriptTurnProps,
+  next: TranscriptTurnProps,
+): boolean {
+  for (const key of Object.keys(next) as (keyof TranscriptTurnProps)[]) {
+    if (key !== "itemsById" && !Object.is(previous[key], next[key])) {
+      return false;
+    }
+  }
+  return sameTurnItems(next.turn, previous.itemsById, next.itemsById);
+}
+
+const TranscriptTurn = memo(function TranscriptTurn({
+  turn,
+  itemsById,
+  transfers,
+  selected,
+  latestCompleted,
+  turnNumber,
+  failureDetails,
+  bookmarkPreview,
+  bookmarked,
+  bookmarkDisabled,
+  bookmarkPending,
+  forkCapability,
+  forkAttempt,
+  connected,
+  authoritative,
+  store,
+  context,
+  presentedOperationIds,
+}: TranscriptTurnProps): React.JSX.Element {
+  const placed = (placement: string) =>
+    transfers?.get(placement) ?? noTransfers;
+  const lastItemId = turn.orderedItemIds.at(-1);
+  const responseItemId = turnResponseItemId(turn, itemsById);
+  const presentation: ReactNode[] = [];
+  let activityItems: ActivityItem[] = [];
+  const flushActivity = () => {
+    if (activityItems.length === 0) return;
+    const items = activityItems;
+    activityItems = [];
+    presentation.push(
+      <ActivityGroup
+        key={`activity:${items[0]!.id}`}
+        items={items}
+        threadId={store.threadId}
+        {...(context ? { context } : {})}
+      />,
+    );
+  };
+  const appendTransfer = (transfer: TranscriptSubmission) => {
+    flushActivity();
+    presentation.push(
+      <TranscriptUserMessage
+        key={`delivery:${transfer.operationId}`}
+        transfer={transfer}
+        context={context}
+      />,
+    );
+  };
+
+  // A viewed image's captured image directly follows it.
+  const disclosedImageIds = new Set<string>();
+  turn.orderedItemIds.forEach((itemId, itemIndex) => {
+    const item = itemsById[itemId];
+    if (!item) return;
+    placed(optimisticBeforeItemPlacement(itemId)).forEach(appendTransfer);
+
+    if (disclosedImageIds.has(item.id)) {
+      // Rendered inside its viewed-image disclosure.
+    } else if (item.kind === "viewed_image") {
+      const next = itemsById[turn.orderedItemIds[itemIndex + 1] ?? ""];
+      const image =
+        next?.kind === "image" && next.origin.kind === "viewed"
+          ? next
+          : undefined;
+      if (image) disclosedImageIds.add(image.id);
+      flushActivity();
+      presentation.push(
+        <ViewedImageGroup
+          key={`viewed-image:${item.id}`}
+          item={item}
+          {...(image ? { image } : {})}
+          {...(context ? { context } : {})}
+        />,
+      );
+    } else if (isActivityItem(item)) {
+      activityItems.push(item);
+    } else {
+      flushActivity();
+      presentation.push(
+        item.kind === "user_message" ? (
+          <TranscriptUserMessage
+            key={
+              item.deliveryOperationId
+                ? `delivery:${item.deliveryOperationId}`
+                : item.id
+            }
+            item={item}
+            suppressLiveAnnouncement={
+              item.deliveryOperationId !== undefined &&
+              presentedOperationIds.has(item.deliveryOperationId)
+            }
+            context={context}
+          />
+        ) : (
+          <ConversationItemView
+            key={item.id}
+            item={item}
+            {...(context ? { context } : {})}
+          />
+        ),
+      );
+    }
+
+    if (itemIndex !== turn.orderedItemIds.length - 1) {
+      placed(optimisticAfterItemPlacement(itemId)).forEach(appendTransfer);
+    }
+  });
+  flushActivity();
+
+  return (
+    <section
+      className={`conversation-turn${selected ? " source-turn-highlight" : ""}`}
+      data-turn-id={turn.id}
+      data-response-item-id={responseItemId}
+      data-turn-status={turn.status}
+      data-latest-completed-turn={latestCompleted ? "true" : undefined}
+      tabIndex={selected ? -1 : undefined}
+      aria-label={selected ? "Selected turn" : undefined}
+    >
+      {presentation}
+      {failureDetails && <TurnFailureDetails turn={turn} />}
+      <TurnForkDivider
+        turn={turn}
+        bookmark={bookmarkPreview ? {
+          turnId: turn.id,
+          preview: bookmarkPreview,
+          bookmarked,
+          disabled: bookmarkDisabled,
+          pending: bookmarkPending,
+          store,
+        } : undefined}
+        copyText={
+          turn.orderedItemIds
+            .flatMap((itemId) => {
+              const item = itemsById[itemId];
+              return item?.kind === "assistant_message" &&
+                item.status === "completed"
+                ? [item.markdown.text]
+                : [];
+            })
+            .filter((text) => text.length > 0)
+            .join("\n\n") || undefined
+        }
+        turnNumber={turnNumber}
+        capability={forkCapability}
+        attempt={forkAttempt}
+        connected={connected}
+        authoritative={authoritative}
+        store={store}
+      />
+      {lastItemId &&
+        placed(optimisticAfterItemPlacement(lastItemId)).map((transfer) => (
+          <TranscriptUserMessage
+            key={`delivery:${transfer.operationId}`}
+            transfer={transfer}
+            context={context}
+          />
+        ))}
+      {placed(optimisticAfterTurnPlacement(turn.id)).map((transfer) => (
+        <TranscriptUserMessage
+          key={`delivery:${transfer.operationId}`}
+          transfer={transfer}
+          context={context}
+        />
+      ))}
+    </section>
+  );
+}, sameTranscriptTurnProps);
 
 const TranscriptUserMessage = memo(function TranscriptUserMessage({
   item,

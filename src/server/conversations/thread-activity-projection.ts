@@ -7,7 +7,6 @@ import type {
   ThreadHistorySeekResult,
 } from "../../shared/protocol/conversation.js";
 import {
-  historyPageSchema,
   normalizedThreadSnapshotSchema,
   threadEventEnvelopeSchema,
   threadHistorySeekResultSchema,
@@ -37,7 +36,7 @@ const activityKinds = new Set<ConversationItem["kind"]>([
   "web_search",
 ]);
 
-function isDetailedActivityItem(
+export function isDetailedActivityItem(
   item: ConversationItem,
 ): item is DetailedActivityItem {
   return activityKinds.has(item.kind);
@@ -101,14 +100,6 @@ function projectThreadSnapshotActivityValue(
   };
 }
 
-export function projectHistoryPageActivity(
-  page: HistoryPage,
-  detail: ActivityDetailMode,
-): HistoryPage {
-  if (detail === "full") return page;
-  return historyPageSchema.parse(projectHistoryPageActivityValue(page, detail));
-}
-
 function projectHistoryPageActivityValue(
   page: HistoryPage,
   detail: ActivityDetailMode,
@@ -142,14 +133,15 @@ export function projectThreadEventEnvelopeActivity(
           page: projectHistoryPageActivityValue(event.page, detail),
         },
       });
-    case "item_upsert":
+    case "item_upsert": {
+      const item = projectConversationItemActivity(event.item, detail);
+      // Messages and other undetailed items are written unchanged.
+      if (item === event.item) return envelope;
       return threadEventEnvelopeSchema.parse({
         ...envelope,
-        event: {
-          ...event,
-          item: projectConversationItemActivity(event.item, detail),
-        },
+        event: { ...event, item },
       });
+    }
     default:
       return envelope;
   }

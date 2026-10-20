@@ -117,6 +117,8 @@ export function ToolClientsSettingsPage({
   const [confirmation, setConfirmation] = useState<Confirmation>();
   const [createOrigin, setCreateOrigin] = useState<ToolClientDraft>();
   const [discarding, setDiscarding] = useState(false);
+  // Try again re-reads the page in place; the thread behind Settings stays loaded.
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -138,7 +140,7 @@ export function ToolClientsSettingsPage({
       },
     );
     return () => abort.abort();
-  }, [controls.api]);
+  }, [controls.api, reloadToken]);
 
   const openDraft = (next: ToolClientDraft | undefined): void => {
     setDraft(next);
@@ -328,8 +330,8 @@ export function ToolClientsSettingsPage({
           tone="danger"
           role="alert"
           action={
-            <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
-              Reload
+            <Button variant="outline" size="sm" onClick={() => setReloadToken((token) => token + 1)}>
+              Try again
             </Button>
           }
         >

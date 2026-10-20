@@ -624,6 +624,10 @@ the runtime. Input that fails its canonical schema, policy denials, failed
 invocations, and transport failures return `isError` tool results carrying
 `{ "error": { "code", "message", "retryable" } }`, so the model can correct
 itself; an unknown tool name or malformed request is a JSON-RPC error.
+A malformed gateway tool ID or input that exceeds a transport bound is
+`invalid_input`. Canonical schema `maxLength` counts code points, while the
+transport bounds each string at 65,536 UTF-16 code units, so text dense in
+astral characters (such as emoji) can pass its schema and still be rejected.
 `notifications/cancelled` aborts the exact invocation and suppresses its
 response.
 
@@ -717,7 +721,8 @@ native presentation: discovery and invocation read like an ordinary human CLI
 without first printing the complete JSON catalog.
 
 Every string option also has a `-file` form; `-` reads the exact value from
-stdin. Use it for multiline Markdown and text containing backticks, `$()`,
+stdin, and at most one option per command may use it. Use it for multiline
+Markdown and text containing backticks, `$()`,
 quotes, or other shell syntax. `--input-file` reads a complete canonical JSON
 object and cannot be mixed with named options. File/stdin reads use only the
 CLI process's existing filesystem authority and do not grant Sedes Files

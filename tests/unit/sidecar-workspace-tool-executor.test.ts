@@ -18,7 +18,7 @@ import {
   WorkspaceToolOutcomeUnknownError,
 } from "../../src/server/workspace-tools/contracts.js";
 import { SidecarWorkspaceToolExecutor } from "../../src/server/workspace-tools/sidecar-workspace-tool-executor.js";
-import { createPiRemoteWorkspaceToolDefinitions } from "../../src/server/backends/pi/pi-remote-workspace.js";
+import { createPiExecutorWorkspaceToolDefinitions } from "../../src/server/backends/pi/pi-remote-workspace.js";
 
 const pathOperations = [
   {
@@ -86,7 +86,7 @@ describe("SidecarWorkspaceToolExecutor remote path encoding", () => {
       expect(operation).toBe(definition);
       return definition.responseSchema.parse(response);
     });
-    const tools = createPiRemoteWorkspaceToolDefinitions({
+    const tools = createPiExecutorWorkspaceToolDefinitions({
       executor: createExecutor(call, vi.fn()),
       semanticCwd: "/srv/workspace",
       serviceCwd: "/local/pi/services",

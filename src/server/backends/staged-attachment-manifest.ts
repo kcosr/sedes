@@ -3,6 +3,7 @@ import { normalizedAbsolutePath } from "../../shared/absolute-path.js";
 import type { ComposerAttachmentDescriptor } from "../../shared/protocol/composer-attachments.js";
 import { composerAttachmentDescriptorSchema } from "../../shared/protocol/composer-attachments.js";
 import { BackendError, type StagedComposerAttachment } from "./contracts.js";
+import { isRecord } from "../../shared/json-guards.js";
 
 const VERSION_1_HEADER = '<sedes-staged-attachments version="1">';
 const VERSION_1_GUIDANCE =
@@ -225,8 +226,4 @@ function authenticationDigest(
     hmac.update(length).update(bytes);
   }
   return hmac.digest();
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -22,9 +22,9 @@ import {
   operationPhaseSchema,
   requireSerializedByteLimit,
   requireConsistentFileReplacement,
+  serializedUtf8Bytes,
   safeItemErrorSchema,
   turnFailureSchema,
-  truncationInfoSchema,
   unifiedDiffSchema,
 } from "./payload.js";
 import { imageItemOriginSchema, normalizedImageSchema } from "./output-artifacts.js";
@@ -577,12 +577,6 @@ export type ConversationHistoryWindow = z.infer<
   typeof conversationHistoryWindowSchema
 >;
 
-export const truncationBearingSchemas = {
-  text: boundedTextSchema,
-  displayText: boundedDisplayTextSchema,
-  truncation: truncationInfoSchema,
-} as const;
-
 const safeCountSchema = z
   .number()
   .int()
@@ -1003,10 +997,7 @@ function requireBoundedInteraction(
   interaction: unknown,
   context: z.RefinementCtx,
 ): void {
-  if (
-    new TextEncoder().encode(JSON.stringify(interaction)).byteLength >
-    MAXIMUM_BROWSER_ENTITY_BYTES
-  ) {
+  if (serializedUtf8Bytes(interaction) > MAXIMUM_BROWSER_ENTITY_BYTES) {
     context.addIssue({
       code: "custom",
       message: "Interaction payload exceeds the serialized byte limit.",

@@ -140,12 +140,6 @@ function assertExecutableCommandName(commandName: string): void {
   }
 }
 
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) {
-    throw signal.reason ?? new Error("environment_operation_aborted");
-  }
-}
-
 type PrivateUnixFilesystemSnapshot = Readonly<{
   readonly resolvedPath: string;
   readonly socketIdentity: string;
@@ -431,7 +425,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     signal: AbortSignal,
   ): Promise<PreparedEnvironmentManagedProcessEndpoint> {
     this.#assertScope(scope);
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     if (
       !Number.isSafeInteger(connectionGeneration) ||
       connectionGeneration <= 0
@@ -441,7 +435,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     if (request.kind === "private_unix_websocket") {
       const snapshot = await inspectPrivateUnixSocket(request.socketPath);
       this.#assertScope(scope);
-      throwIfAborted(signal);
+      signal.throwIfAborted();
       return Object.freeze({
         kind: "managed_process_endpoint" as const,
         processAddress: `unix://${snapshot.resolvedPath}`,
@@ -465,7 +459,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     );
     if (signal.aborted) {
       authentication.discard();
-      throwIfAborted(signal);
+      signal.throwIfAborted();
     }
     return Object.freeze({
       kind: "managed_process_endpoint" as const,
@@ -746,7 +740,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     purpose: EnvironmentSecretPurpose,
   ): Promise<ResolvedEnvironmentSecret> {
     this.#assertScope(scope);
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     if (
       !Number.isSafeInteger(connectionGeneration) ||
       connectionGeneration <= 0
@@ -762,7 +756,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     // environment-backed value. Close must linearize before identity minting
     // and prevent a resolved value from escaping a closed provider.
     this.#assertScope(scope);
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     if (purpose === "capability_token") assertCapabilityToken(value);
     else if (purpose === "http_basic_password") assertHttpBasicPassword(value);
     else throw new Error("environment_secret_purpose_invalid");
@@ -1286,17 +1280,17 @@ async function resolveProtectedFileSecret(
   configuredPath: string,
   signal: AbortSignal,
 ): Promise<string> {
-  throwIfAborted(signal);
+  signal.throwIfAborted();
   assertConfiguredPath(configuredPath);
   let handle: Awaited<ReturnType<typeof openFile>> | undefined;
   try {
     const parentPath = path.dirname(configuredPath);
     const canonicalParent = await realpath(parentPath);
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     const parent = await lstat(parentPath, { bigint: true });
     const canonicalPath = await realpath(configuredPath);
     const before = await lstat(configuredPath, { bigint: true });
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     if (canonicalPath !== configuredPath || canonicalParent !== parentPath) {
       throw new Error("environment_secret_file_path_unsafe");
     }
@@ -1316,9 +1310,9 @@ async function resolveProtectedFileSecret(
       configuredPath,
       fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
     );
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     const opened = await handle.stat({ bigint: true });
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     const mode = opened.mode & 0o777n;
     if (
       !opened.isFile() ||
@@ -1335,7 +1329,7 @@ async function resolveProtectedFileSecret(
     }
     const bytes = await handle.readFile({ signal });
     const after = await handle.stat({ bigint: true });
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     if (
       opened.dev !== after.dev ||
       opened.ino !== after.ino ||
@@ -1353,7 +1347,7 @@ async function resolveProtectedFileSecret(
       parentAfter = await lstat(parentPath, { bigint: true });
       canonicalPathAfter = await realpath(configuredPath);
       pathAfter = await lstat(configuredPath, { bigint: true });
-      throwIfAborted(signal);
+      signal.throwIfAborted();
     } catch {
       throw new Error("environment_secret_file_identity_replaced");
     }

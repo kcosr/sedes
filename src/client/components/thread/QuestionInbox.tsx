@@ -21,6 +21,9 @@ import {
   type ThreadClientStore,
 } from "../../stores/ThreadClientStore.js";
 import { Button } from "../ui/button.js";
+import { Callout } from "../ui/callout.js";
+import { CountBadge } from "../ui/count-badge.js";
+import { Textarea } from "../ui/textarea.js";
 import "./question-inbox.css";
 
 const QuestionInboxContext = createContext<{
@@ -232,7 +235,7 @@ function QuestionTrigger({
     >
       <MessageCircleQuestion size={15} aria-hidden="true" />
       {count === 1 ? "Question" : "Questions"}
-      {count > 1 && <span className="thread-questions-count">{count}</span>}
+      {count > 1 && <CountBadge count={count} />}
     </button>
   );
 }
@@ -349,14 +352,27 @@ function QuestionPanel({ store }: { store: ThreadClientStore }) {
           <X size={16} />
         </Button>
       </header>
-      {disabled && <p role="status">Reconnect to send or dismiss questions.</p>}
+      {disabled && (
+        <Callout tone="warning" role="status">
+          Reconnect to send or dismiss questions.
+        </Callout>
+      )}
       {state.questionError && (
-        <p role="alert">
-          {state.questionError}{" "}
-          <button onClick={() => void store.loadQuestionRequests()}>
-            Try again
-          </button>
-        </p>
+        <Callout
+          tone="danger"
+          role="alert"
+          action={
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => void store.loadQuestionRequests()}
+            >
+              Try again
+            </Button>
+          }
+        >
+          {state.questionError}
+        </Callout>
       )}
       <QuestionCard
         key={request.id}
@@ -457,8 +473,9 @@ function QuestionCard({
                 <label className="sr-only" htmlFor={`${id}-${index}`}>
                   Answer: {question.title}
                 </label>
-                <textarea
+                <Textarea
                   id={`${id}-${index}`}
+                  className="resize-y"
                   autoFocus={custom.has(index)}
                   rows={2}
                   placeholder="Your answer…"
@@ -488,9 +505,9 @@ function QuestionCard({
         );
       })}
       {error && (
-        <p role="alert" className="question-inbox-error">
+        <Callout tone="danger" role="alert">
           {error}
-        </p>
+        </Callout>
       )}
       <footer className="question-inbox-card-actions">
         {pending && <span role="status">Saving…</span>}

@@ -5,6 +5,7 @@ import {
   type BackendModelPolicy,
   type CompiledBackendModelPolicy,
 } from "../model-policy.js";
+import { deepFreeze } from "../../../shared/json-guards.js";
 
 const canonicalAbsolutePathSchema = z
   .string()
@@ -205,11 +206,4 @@ export function parseGrokBackendConfiguration(
     ...(executionEnvironmentId ? { executionEnvironmentId } : {}),
     connections,
   });
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value))
-    return value;
-  for (const child of Object.values(value)) deepFreeze(child);
-  return Object.freeze(value);
 }

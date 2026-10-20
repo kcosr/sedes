@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessageItem } from "../../../shared/index.js";
@@ -514,13 +515,39 @@ describe("Question composer trigger counts", () => {
     show(store);
     const button = screen.getByRole("button", { name: "Open questions, 1 pending" });
     expect(button).toHaveTextContent(/^Question$/);
-    expect(button.querySelector(".thread-questions-count")).toBeNull();
+    expect(button.querySelector("[data-slot=count-badge]")).toBeNull();
     const panel = screen.getByRole("region", { name: "Open questions" });
     expect(panel.querySelector("header strong")).toHaveTextContent(/^Question$/);
     expect(screen.queryByRole("navigation", { name: "Question requests" })).toBeNull();
     act(() => store.replace({ questionRequests: [request("one", 2)] }));
     expect(button).toHaveAccessibleName("Open questions, 2 pending");
     expect(button).toHaveTextContent("Questions");
-    expect(button.querySelector(".thread-questions-count")).toHaveTextContent("2");
+    expect(button.querySelector("[data-slot=count-badge]")).toHaveTextContent("2");
+  });
+});
+
+describe("Question panel notices", () => {
+  it("shows a refresh failure as a danger callout with a Try again button", () => {
+    const store = new FakeQuestionStore();
+    store.replace({ questionError: "Connection failed" });
+    show(store);
+    const panel = screen.getByRole("region", { name: "Open questions" });
+    const alert = within(panel).getByRole("alert");
+    expect(alert).toHaveAttribute("data-slot", "callout");
+    expect(alert).toHaveAttribute("data-tone", "danger");
+    expect(alert).toHaveTextContent("Connection failed");
+    const retry = within(alert).getByRole("button", { name: "Try again" });
+    expect(retry).toHaveAttribute("data-slot", "button");
+    fireEvent.click(retry);
+    expect(store.loadQuestionRequests).toHaveBeenCalledOnce();
+  });
+
+  it("explains a disconnected panel in a warning callout", () => {
+    const store = new FakeQuestionStore();
+    store.replace({ connection: "reconnecting" } as Partial<ThreadClientState>);
+    show(store);
+    const panel = screen.getByRole("region", { name: "Open questions" });
+    const status = within(panel).getByText("Reconnect to send or dismiss questions.");
+    expect(status.closest("[data-slot=callout]")).toHaveAttribute("data-tone", "warning");
   });
 });

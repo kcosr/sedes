@@ -7,7 +7,7 @@ import {
   WorkspaceToolError,
   type WorkspaceToolExecutor,
 } from "../../workspace-tools/contracts.js";
-import type { RemotePiWorkspaceServices } from "./pi-remote-workspace.js";
+import type { PiExecutorWorkspaceServices } from "./pi-remote-workspace.js";
 
 /**
  * Backend-private view of one thread's isolated Pi workspace.
@@ -49,7 +49,7 @@ const unavailablePassiveExecutor: WorkspaceToolExecutor = {
  */
 export function passivePiIsolatedWorkspaceServices(
   resolution: Extract<PiIsolatedWorkspaceResolution, { access: "passive" }>,
-): RemotePiWorkspaceServices {
+): PiExecutorWorkspaceServices {
   return {
     semanticCwd: PI_SANDBOX_HOME,
     serviceCwd: resolution.effectiveWorkspace.canonicalPath,

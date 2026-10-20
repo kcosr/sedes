@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { deepFreeze } from "../../shared/json-guards.js";
 
 export type BackendModelPolicyMatcher = Readonly<{
   providerIds?: readonly string[];
@@ -252,12 +253,4 @@ function matcherSignature(matcher: BackendModelPolicyMatcher): string {
       ? [...matcher.reasoningEfforts].sort()
       : null,
   });
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
-    return value;
-  }
-  for (const child of Object.values(value)) deepFreeze(child);
-  return Object.freeze(value);
 }

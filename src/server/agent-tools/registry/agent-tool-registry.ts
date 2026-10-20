@@ -18,6 +18,7 @@ import {
 import { canonicalCliOptionSpecs } from "../schema/canonical-cli-options.js";
 import { deterministicJsonArtifact } from "../../canonical-json.js";
 import { compareCanonicalAgentToolDefinitions } from "./canonical-agent-tool-catalog.js";
+import { deepFreeze } from "../../../shared/json-guards.js";
 
 const toolIdPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const capabilityPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
@@ -61,14 +62,6 @@ interface RegisteredAgentTool {
   readonly outputValidator: CanonicalSchemaValidator;
   readonly artifact: AgentToolContractArtifact;
   readonly serializedArtifact: string;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
-    return value;
-  }
-  for (const child of Object.values(value)) deepFreeze(child);
-  return Object.freeze(value);
 }
 
 function assertBoundedString(

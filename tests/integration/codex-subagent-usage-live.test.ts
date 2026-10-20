@@ -17,7 +17,7 @@ import { codexThreadResumeMethod } from "../../src/server/backends/codex/codex-c
 import { codexC2NotificationSchemas, codexModelListMethod, codexThreadStartMethod, codexTurnStartMethod } from "../../src/server/backends/codex/codex-c2-protocol.js";
 import { serializeCodexBindingDetail } from "../../src/server/backends/codex/codex-binding-codec.js";
 import { unavailableCodexAgentToolCliEnvironmentProvider } from "../../src/server/backends/codex/codex-agent-tool-cli-environment.js";
-import type { CodexExecutionSettingsTuple } from "../../src/server/backends/codex/codex-conversation-handle.js";
+import type { CodexExecutionSettingsTuple } from "../../src/server/backends/codex/codex-thread-execution-settings-repository.js";
 import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
 import { usageGapSessionScopeMigration } from "../../src/server/db/migrations/111-usage-gap-session-scope.js";

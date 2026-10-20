@@ -19,6 +19,7 @@ import {
   isCodexExecutionPolicyAllowed,
 } from "./codex-execution-policy.js";
 import { CODEX_APP_SERVER_RELEASE } from "./codex-release-guard.js";
+import { deepFreeze } from "../../../shared/json-guards.js";
 
 const absoluteCanonicalPathSchema = z
   .string()
@@ -414,14 +415,4 @@ function assertDefaultsAllowed(
       throw new Error("codex_connection_defaults_outside_backend_policy");
     }
   }
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
-    return value;
-  }
-  for (const child of Object.values(value)) {
-    deepFreeze(child);
-  }
-  return Object.freeze(value);
 }

@@ -14,6 +14,7 @@ import {
   type ClaudePermissionMode,
   type ClaudePermissionPolicy,
 } from "./claude-permission-policy.js";
+import { deepFreeze } from "../../../shared/json-guards.js";
 
 const canonicalEnvironmentAbsolutePathSchema = z
   .string()
@@ -160,14 +161,4 @@ function parseConnection(
       connection.moduleConfiguration,
     ),
   };
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
-    return value;
-  }
-  for (const child of Object.values(value)) {
-    deepFreeze(child);
-  }
-  return Object.freeze(value);
 }

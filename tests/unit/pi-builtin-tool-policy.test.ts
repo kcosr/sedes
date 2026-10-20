@@ -3,7 +3,6 @@ import {
   assertAuditedPiBuiltinToolCatalog,
   classifyPiBuiltinTool,
   PI_BUILTIN_TOOL_DISPOSITIONS,
-  PI_EXCLUDED_TOOL_NAMES,
   PI_INTENTIONALLY_UNSUPPORTED_BUILTIN_TOOL_NAMES,
   PI_MUTATING_BUILTIN_TOOL_NAMES,
   PI_READ_ONLY_BUILTIN_TOOL_NAMES,
@@ -45,7 +44,6 @@ describe("Pi 0.86.0 built-in tool policy", () => {
     expect(PI_INTENTIONALLY_UNSUPPORTED_BUILTIN_TOOL_NAMES).toEqual([
       "powershell",
     ]);
-    expect(PI_EXCLUDED_TOOL_NAMES).toEqual(["powershell"]);
   });
 
   it("classifies direct and trusted executor built-ins by source identity", () => {

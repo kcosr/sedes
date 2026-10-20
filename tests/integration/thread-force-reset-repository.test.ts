@@ -974,7 +974,7 @@ describe("thread force-reset repository", () => {
     },
   );
 
-  it("preserves completed tasks retained by force-reset history when deletion is requested", () => {
+  it("preserves tasks retained by force-reset history when deletion is requested", () => {
     const current = fixture();
     try {
       const seeded = prepareRootBlockers(current);
@@ -998,6 +998,20 @@ describe("thread force-reset repository", () => {
         }),
       );
       expect(tasks.get(current.scope, completed.id)).toEqual(completed);
+      expect(() => tasks.remove(current.scope, completed.id)).toThrow(
+        expect.objectContaining({
+          code: "conflict",
+          message: "The task is still referenced by a thread reset.",
+        }),
+      );
+      expect(tasks.get(current.scope, completed.id)).toEqual(completed);
+      expect(reset.promotedTaskIds).toContain(seeded.taskId);
+      const open = tasks.get(current.scope, seeded.taskId);
+      expect(open.completedAt).toBeNull();
+      expect(() => tasks.remove(current.scope, open.id)).toThrow(
+        expect.objectContaining({ code: "conflict" }),
+      );
+      expect(tasks.get(current.scope, open.id)).toEqual(open);
     } finally {
       current.database.close();
     }

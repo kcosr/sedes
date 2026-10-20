@@ -89,6 +89,9 @@ import {
 } from "./sidebar-view-store.js";
 import { SEDES_CLIENT_PROTOCOL_VERSION } from "../../shared/index.js";
 import { SEDES_VERSION } from "../../shared/version.js";
+// Load the lazily imported Settings code up front, as a warm browser cache
+// would, so a test's first visit to Settings waits only for React.
+import "../components/SettingsView.js";
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -549,7 +552,8 @@ describe("application endpoint startup", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name: "Connection" }));
-    fireEvent.click(screen.getByRole("button", { name: "Switch connection" }));
+    // Settings loads its code on first use.
+    fireEvent.click(await screen.findByRole("button", { name: "Switch connection" }));
     const localCard = (
       await screen.findByRole("heading", { name: "Local" })
     ).closest("li")!;
@@ -633,7 +637,8 @@ describe("application endpoint startup", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name: "Connection" }));
-    fireEvent.click(screen.getByRole("button", { name: "Switch connection" }));
+    // Settings loads its code on first use.
+    fireEvent.click(await screen.findByRole("button", { name: "Switch connection" }));
     const directCard = (
       await screen.findByRole("heading", { name: "Direct server" })
     ).closest("li")!;
@@ -677,7 +682,8 @@ describe("application endpoint startup", () => {
     try {
       fireEvent.click(screen.getByRole("button", { name: "Settings" }));
       fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name: "Connection" }));
-      fireEvent.click(screen.getByRole("button", { name: "Switch connection" }));
+      // Settings loads its code on first use.
+      fireEvent.click(await screen.findByRole("button", { name: "Switch connection" }));
       const card = (await screen.findByRole("heading", { name: "Direct server" })).closest("li")!;
       fireEvent.click(within(card).getByRole("button", { name: "Connect" }));
       fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Connect to Direct server" }));
@@ -728,7 +734,8 @@ describe("application endpoint startup", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name: "Connection" }));
-    fireEvent.click(screen.getByRole("button", { name: "Switch connection" }));
+    // Settings loads its code on first use.
+    fireEvent.click(await screen.findByRole("button", { name: "Switch connection" }));
     const sshCard = (
       await screen.findByRole("heading", { name: "Remote SSH" })
     ).closest("li")!;
@@ -785,7 +792,8 @@ describe("application endpoint startup", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name: "Connection" }));
-    fireEvent.click(screen.getByRole("button", { name: "Switch connection" }));
+    // Settings loads its code on first use.
+    fireEvent.click(await screen.findByRole("button", { name: "Switch connection" }));
     const directCard = (
       await screen.findByRole("heading", { name: "Direct server" })
     ).closest("li")!;
@@ -821,7 +829,8 @@ describe("application endpoint startup", () => {
     await screen.findByRole("heading", { name: "What should the agent work on?" });
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name: "Connection" }));
-    expect(screen.getByText("Authentication disabled")).toBeInTheDocument();
+    // Settings loads its code on first use.
+    expect(await screen.findByText("Authentication disabled")).toBeInTheDocument();
   });
 
   it("opens an auth-disabled Electron server without waiting for the credential vault", async () => {

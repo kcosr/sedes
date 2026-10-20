@@ -1,6 +1,7 @@
-import { useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { Button } from "../components/ui/button.js";
+import { ConfirmDialog } from "../components/ui/confirm-dialog.js";
 import { useVoiceState } from "./VoiceProvider.js";
 import type { NativeVoiceStore } from "./NativeVoiceStore.js";
 import type { NativeRecordingRecovery, NativeRecordingRecoveryCommandContext, NativeVoiceState } from "./native-voice-plugin.js";
@@ -29,18 +30,47 @@ export function recordingRecoveryStatus(saved: NativeRecordingRecovery): string 
 export function recordingRecoveryContext(native: NativeVoiceState, saved: NativeRecordingRecovery): NativeRecordingRecoveryCommandContext {
   return { expectedConnectionGeneration: native.connectionGeneration, recordingId: saved.recordingId, expectedRecoveryRevision: saved.revision };
 }
+/**
+ * Confirms discarding a saved dictation. It follows the saved item's latest
+ * revision and closes itself when that item resolves another way.
+ */
+export function DiscardSavedDictationDialog({ store, recordingId, onClose, layer }: {
+  store: NativeVoiceStore; recordingId: string | null; onClose: () => void; layer?: "dialog" | "over-dialog";
+}): React.JSX.Element {
+  const native = useVoiceState(store).native;
+  const saved = native ? savedRecording(native) : null;
+  const target = recordingId !== null && saved?.recordingId === recordingId ? saved : null;
+  useEffect(() => { if (recordingId !== null && target === null) onClose(); }, [onClose, recordingId, target]);
+  return <ConfirmDialog open={target !== null} onOpenChange={open => { if (!open) onClose(); }} layer={layer}
+    title="Discard saved dictation?" tone="danger" confirmLabel="Discard dictation" pendingLabel="Discarding…"
+    description={target?.hasUnrecognizedAudio
+      ? "Part of this recording hasn't been transcribed. Discarding deletes its audio for good."
+      : "Discarding deletes this saved dictation from this device."}
+    confirmDisabled={!target?.canDiscard}
+    onConfirm={async () => {
+      if (!native || !target) return;
+      const context = recordingRecoveryContext(native, target);
+      await store.run(() => store.plugin.discardRecording(context));
+    }} />;
+}
 const actionClass = "min-h-(--control-touch) min-w-0 px-2 aria-disabled:cursor-not-allowed aria-disabled:opacity-(--disabled-opacity)";
 
 /** Recovery stays available after copying text, including an explicit copy into the original thread's composer. */
-export function VoiceRecordingRecovery({ store, threads, onAddedToComposer }: {
+export function VoiceRecordingRecovery({ store, threads, onAddedToComposer, confirmLayer }: {
   store: NativeVoiceStore; threads: readonly NormalizedApplicationThreadSummary[]; onAddedToComposer?: () => void;
+  /** `over-dialog` when the recovery sits in a sheet. */
+  confirmLayer?: "dialog" | "over-dialog";
 }): React.JSX.Element | null {
   const state = useVoiceState(store);
   const native = state.native;
   const saved = native ? savedRecording(native) : null;
   const id = useId();
   const [copied, setCopied] = useState(false);
+  const [discarding, setDiscarding] = useState<string | null>(null);
+  const closeDiscard = useCallback(() => setDiscarding(null), []);
   useEffect(() => { setCopied(false); }, [native?.connectionGeneration, saved?.recordingId, saved?.revision]);
+  // A confirmation belongs to one saved item; it never reopens for it later.
+  if (discarding !== null && saved?.recordingId !== discarding) setDiscarding(null);
   if (!native || !saved) return null;
   const context = recordingRecoveryContext(native, saved);
   const run = (enabled: boolean, action: () => Promise<NativeVoiceState>) => {
@@ -89,13 +119,14 @@ export function VoiceRecordingRecovery({ store, threads, onAddedToComposer }: {
             setCopied(true);
         }).catch(() => undefined);
       }}>Copy text</Button> : null}
-      <Button variant="outline" className={actionClass} aria-disabled={state.pending || !saved.canDiscard || undefined}
-        onClick={() => run(saved.canDiscard, () => store.plugin.discardRecording(context))}>Discard</Button>
+      <Button variant="destructive-outline" className={actionClass} aria-disabled={state.pending || !saved.canDiscard || undefined}
+        onClick={() => { if (!state.pending && saved.canDiscard) setDiscarding(saved.recordingId); }}>Discard</Button>
       {saved.hasUnrecognizedAudio || saved.canRetryRecognition ? <Button variant="outline" className={actionClass} aria-label="Retry recognition" aria-disabled={state.pending || !saved.canRetryRecognition || undefined}
         onClick={() => run(saved.canRetryRecognition, () => store.plugin.retryRecordingRecognition(context))}>Retry</Button> : null}
       {offersSend ? <Button className={actionClass} aria-disabled={state.pending || !saved.canSend || undefined}
         onClick={() => run(saved.canSend, () => store.plugin.sendRecoveredRecording(context))}>Send</Button> : null}
     </div>
     {copied ? <p className="text-sm text-muted-foreground" role="status">Copied.</p> : null}
+    <DiscardSavedDictationDialog store={store} recordingId={discarding} onClose={closeDiscard} layer={confirmLayer} />
   </section>;
 }

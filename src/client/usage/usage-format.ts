@@ -108,7 +108,6 @@ export function formatCountPrecise(value: string | number): string {
   const number = toNumber(value);
   return Math.abs(number) >= 1_000_000 ? compactPrecise.format(number) : integer.format(number);
 }
-export const formatExact = (value: string | number): string => integer.format(toNumber(value));
 
 const currencyFormats = new Map<string, Intl.NumberFormat[]>();
 /** Two decimals for ordinary amounts; small estimates keep two significant digits instead of rounding to zero. */

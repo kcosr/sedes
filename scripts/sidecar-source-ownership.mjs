@@ -218,6 +218,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/shared/workspace-file-limits.ts",
   "src/shared/workpad-content-limits.ts",
   "src/shared/absolute-path.ts",
+  "src/shared/json-guards.ts",
   "src/shared/version.ts",
   "src/shared/workspace-diff-limits.ts",
   "src/shared/composer-attachment-staging-limits.ts",

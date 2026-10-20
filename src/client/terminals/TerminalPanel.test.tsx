@@ -31,7 +31,7 @@ Object.defineProperty(window, "matchMedia", {
   })),
 });
 
-const { TerminalPanel } = await import("./TerminalPanel.js");
+const { TerminalPanel, terminalNotice } = await import("./TerminalPanel.js");
 
 afterEach(cleanup);
 
@@ -72,6 +72,10 @@ describe("TerminalPanel accessibility", () => {
     expect(
       screen.getByRole("search", { name: "Search terminal transcript" }),
     ).toBeInTheDocument();
+    // The shared Input, labelled for assistive technology.
+    expect(
+      screen.getByRole("textbox", { name: "Search transcript text" }),
+    ).toHaveAttribute("data-slot", "input");
     fireEvent.change(
       screen.getByRole("textbox", { name: "Search transcript text" }),
       {
@@ -162,3 +166,62 @@ const terminal: TerminalResource = {
   exitedAt: null,
   updatedAt: "2026-08-27T00:00:00.000Z",
 };
+
+describe("terminalNotice", () => {
+  const ready = {
+    connection: "ready",
+    role: "controller",
+    controlRequestPending: false,
+    controllerEpoch: 1,
+    lifecycle: "running",
+    lifecycleRevision: 1,
+    rows: 24,
+    columns: 80,
+    caughtUp: true,
+    inputAvailable: true,
+    retryInputAvailable: false,
+    queuedInputCount: 0,
+    queuedInputBytes: 0,
+    inputQueueOverflowed: false,
+  } as const;
+
+  it("shows nothing for a quiet session", () => {
+    expect(terminalNotice(ready)).toBeUndefined();
+  });
+
+  it("marks a failed connection as danger", () => {
+    expect(
+      terminalNotice({ ...ready, connection: "failed", message: "Protocol error." }),
+    ).toEqual({ tone: "danger", text: "Protocol error." });
+  });
+
+  it("warns while reconnecting, with a line for the Reconnect now action", () => {
+    expect(terminalNotice({ ...ready, connection: "reconnecting" })).toEqual({
+      tone: "warning",
+      text: "Reconnecting to the terminal.",
+    });
+  });
+
+  it("warns about input that needs a retry or a discard", () => {
+    expect(terminalNotice({ ...ready, retryInputAvailable: true })).toEqual({
+      tone: "warning",
+      text: "Terminal input was not sent; it is safe to retry.",
+    });
+    expect(
+      terminalNotice({
+        ...ready,
+        uncertainInputSeq: 4,
+        message: "Input delivery could not be confirmed. It may already have reached the terminal.",
+      })?.tone,
+    ).toBe("warning");
+  });
+
+  it("shows other session messages as information", () => {
+    expect(
+      terminalNotice({ ...ready, message: "Terminal history changed; restoring the latest screen." }),
+    ).toEqual({
+      tone: "info",
+      text: "Terminal history changed; restoring the latest screen.",
+    });
+  });
+});

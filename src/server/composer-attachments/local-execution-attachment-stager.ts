@@ -56,7 +56,7 @@ export class LocalExecutionAttachmentStager implements ExecutionAttachmentStager
     request: ExecutionAttachmentMaterializationRequest,
   ) {
     this.#assert(scope, request.lease);
-    throwIfAborted(request.signal);
+    request.signal?.throwIfAborted();
     const identity = this.#identity(request);
     const admissionId = randomUUID();
     const opened = await this.#engine.open(admissionId, identity);
@@ -64,7 +64,7 @@ export class LocalExecutionAttachmentStager implements ExecutionAttachmentStager
     let offset = 0;
     try {
       for await (const source of request.content()) {
-        throwIfAborted(request.signal);
+        request.signal?.throwIfAborted();
         let chunk = source;
         while (chunk.byteLength > 0) {
           const piece = chunk.subarray(0, 256 * 1_024);
@@ -78,7 +78,7 @@ export class LocalExecutionAttachmentStager implements ExecutionAttachmentStager
           chunk = chunk.subarray(piece.byteLength);
         }
       }
-      throwIfAborted(request.signal);
+      request.signal?.throwIfAborted();
       return await this.#engine.commit(opened.uploadHandle);
     } catch (error) {
       await this.#engine.abort(opened.uploadHandle).catch(() => undefined);
@@ -91,7 +91,7 @@ export class LocalExecutionAttachmentStager implements ExecutionAttachmentStager
     request: ExecutionAttachmentReleaseRequest,
   ): Promise<void> {
     this.#assert(scope, request.lease);
-    throwIfAborted(request.signal);
+    request.signal?.throwIfAborted();
     await this.#engine.release({
       scopeKey: this.#scopeKey,
       threadId: request.applicationThreadId,
@@ -128,10 +128,6 @@ export class LocalExecutionAttachmentStager implements ExecutionAttachmentStager
     }
     assertStagingLease(scope, this.#environmentId, lease);
   }
-}
-
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw signal.reason;
 }
 
 function withoutState(input: {

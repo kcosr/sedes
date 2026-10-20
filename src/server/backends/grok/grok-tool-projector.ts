@@ -13,6 +13,7 @@ import {
   type GrokCanonicalToolMetadata,
   type GrokRawToolOutputVariant,
 } from "./grok-tool-normalization.js";
+import { isRecord } from "../../../shared/json-guards.js";
 
 export interface GrokMutableToolBlock {
   readonly kind: "tool";
@@ -696,10 +697,6 @@ function ownValue(value: unknown, key: string): unknown {
 function ownString(value: unknown, key: string): string | undefined {
   const candidate = ownValue(value, key);
   return typeof candidate === "string" ? candidate : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function invalid(): never {

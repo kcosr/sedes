@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import { prepareCached } from "../prepared-statements.js";
 import { MAXIMUM_PROJECT_NAME_LENGTH } from "../../../shared/protocol/domain.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -677,8 +678,7 @@ export class InventoryRepository {
     scope: RequestScope,
     environmentId: string,
   ): InventoryEnvironmentRecord {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT ${environmentColumns}
           FROM execution_environments
@@ -700,8 +700,7 @@ export class InventoryRepository {
     // Configuration controls admission, while retained workspaces (including
     // unavailable ones) keep their environment labels and history addressable.
     // Availability diagnostics are observations, not configuration membership.
-    return this.database
-      .prepare(
+    return prepareCached(this.database,
         `
           WITH configuration AS (
             SELECT configuration_json
@@ -731,8 +730,7 @@ export class InventoryRepository {
   }
 
   getLocalEnvironment(scope: RequestScope): InventoryEnvironmentRecord {
-    const rows = this.database
-      .prepare(
+    const rows = prepareCached(this.database,
         `
           SELECT ${environmentColumns}
           FROM execution_environments
@@ -771,8 +769,7 @@ export class InventoryRepository {
       return current;
     }
     this.database.transaction(() => {
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             UPDATE execution_environments
             SET availability = ?, diagnostic_code = ?, revision = revision + 1,
@@ -789,8 +786,7 @@ export class InventoryRepository {
           environmentId,
         );
       if (input.available) {
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               UPDATE application_threads
               SET availability = 'available', revision = revision + 1,
@@ -813,8 +809,7 @@ export class InventoryRepository {
   ): InventoryWorkspaceRecord {
     this.getEnvironment(scope, input.environmentId);
     return this.database.transaction(() => {
-      const existing = this.database
-        .prepare(
+      const existing = prepareCached(this.database,
           `
             SELECT ${workspaceColumns}
             FROM workspaces
@@ -834,8 +829,7 @@ export class InventoryRepository {
         }
         const projectId = this.#admitProject(scope, input.project, input.now);
         const id = input.id ?? randomUUID();
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               INSERT INTO workspaces(
                 tenant_id, owner_principal_id, environment_id, id, project_id,
@@ -925,8 +919,7 @@ export class InventoryRepository {
         existing.trustState !== input.trustState ||
         existing.environmentConfigurationRevision !==
           input.environmentConfigurationRevision;
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             UPDATE workspaces
             SET removed_at = NULL, removed_with_project = 0,
@@ -959,8 +952,7 @@ export class InventoryRepository {
     scope: RequestScope,
     workspaceId: string,
   ): InventoryWorkspaceRecord {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT ${workspaceColumns}
           FROM workspaces
@@ -975,7 +967,7 @@ export class InventoryRepository {
   }
 
   isWorkspaceRemoved(scope: RequestScope, workspaceId: string): boolean {
-    const row = this.database.prepare(`SELECT removed_at AS removedAt FROM workspaces
+    const row = prepareCached(this.database, `SELECT removed_at AS removedAt FROM workspaces
       WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
       .get(scope.tenantId, scope.principalId, workspaceId) as { removedAt: number | null } | undefined;
     if (!row) throw new DomainError("not_found", "The project was not found.");
@@ -983,7 +975,7 @@ export class InventoryRepository {
   }
 
   isProjectRemoved(scope: RequestScope, projectId: string): boolean {
-    const row = this.database.prepare(`SELECT removed_at AS removedAt FROM projects
+    const row = prepareCached(this.database, `SELECT removed_at AS removedAt FROM projects
       WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
       .get(scope.tenantId, scope.principalId, projectId) as { removedAt: number | null } | undefined;
     if (!row) throw new DomainError("not_found", "The project was not found.");
@@ -997,7 +989,7 @@ export class InventoryRepository {
   }
 
   listWorkspaces(scope: RequestScope): InventoryWorkspaceRecord[] {
-    return this.database.prepare(`SELECT ${workspaceColumns} FROM workspaces
+    return prepareCached(this.database, `SELECT ${workspaceColumns} FROM workspaces
       WHERE tenant_id = ? AND owner_principal_id = ? AND removed_at IS NULL
       ORDER BY last_opened_at DESC, id`)
       .all(scope.tenantId, scope.principalId) as InventoryWorkspaceRecord[];
@@ -1036,7 +1028,7 @@ export class InventoryRepository {
     this.database.transaction(() => {
       this.assertWorkspaceRemovable(scope, workspaceId, input);
       if (this.isWorkspaceRemoved(scope, workspaceId)) return;
-      this.database.prepare(`UPDATE workspaces SET removed_at = ?, removed_with_project = 0,
+      prepareCached(this.database, `UPDATE workspaces SET removed_at = ?, removed_with_project = 0,
         revision = revision + 1, updated_at = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
         .run(input.now, input.now, scope.tenantId, scope.principalId, workspaceId);
@@ -1047,7 +1039,7 @@ export class InventoryRepository {
 
   /** Active projects, including empty ones, without their locations. */
   listActiveProjects(scope: RequestScope): InventoryProjectRecord[] {
-    return this.database.prepare(`SELECT ${projectColumns} FROM projects
+    return prepareCached(this.database, `SELECT ${projectColumns} FROM projects
       WHERE tenant_id = ? AND owner_principal_id = ? AND removed_at IS NULL
       ORDER BY name COLLATE NOCASE, id`)
       .all(scope.tenantId, scope.principalId) as InventoryProjectRecord[];
@@ -1067,7 +1059,7 @@ export class InventoryRepository {
   /** Thread IDs of the project's active locations, in ID order. */
   listActiveThreadIdsForProject(scope: RequestScope, projectId: string): string[] {
     this.#project(scope, projectId);
-    return (this.database.prepare(`SELECT thread.id FROM application_threads AS thread
+    return (prepareCached(this.database, `SELECT thread.id FROM application_threads AS thread
       JOIN workspaces AS workspace ON workspace.tenant_id = thread.tenant_id
         AND workspace.owner_principal_id = thread.owner_principal_id AND workspace.id = thread.workspace_id
       WHERE thread.tenant_id = ? AND thread.owner_principal_id = ?
@@ -1089,7 +1081,7 @@ export class InventoryRepository {
         throw new DomainError("invalid_transition", "Restore the project before renaming it.");
       }
       if (project.name === input.name) return;
-      this.database.prepare(`UPDATE projects SET name = ?, revision = revision + 1, updated_at = ?
+      prepareCached(this.database, `UPDATE projects SET name = ?, revision = revision + 1, updated_at = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
         .run(input.name, input.now, scope.tenantId, scope.principalId, projectId);
       this.#bumpGeneration(scope);
@@ -1128,7 +1120,7 @@ export class InventoryRepository {
         throw new DomainError("invalid_transition", "Resolve running, queued, or uncertain work before moving this location.");
       }
       const projectId = this.#admitProject(scope, input.target, input.now);
-      this.database.prepare(`UPDATE workspaces SET project_id = ?, removed_with_project = 0,
+      prepareCached(this.database, `UPDATE workspaces SET project_id = ?, removed_with_project = 0,
         revision = revision + 1, updated_at = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
         .run(projectId, input.now, scope.tenantId, scope.principalId, workspaceId);
@@ -1175,19 +1167,19 @@ export class InventoryRepository {
       if (this.findArchiveDurablyBlockedThreadIds(scope, threadIds).size > 0) {
         throw new DomainError("invalid_transition", "Resolve running, queued, or uncertain work before merging this project.");
       }
-      this.database.prepare(`UPDATE workspaces SET project_id = ?, removed_with_project = 0,
+      prepareCached(this.database, `UPDATE workspaces SET project_id = ?, removed_with_project = 0,
         revision = revision + 1, updated_at = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND project_id = ?`)
         .run(target.id, input.now, scope.tenantId, scope.principalId, source.id);
       this.#touchProjectMembership(scope, target.id, input.now);
-      const movedTaskIds = (this.database.prepare(`UPDATE tasks SET project_id = ?,
+      const movedTaskIds = (prepareCached(this.database, `UPDATE tasks SET project_id = ?,
         revision = revision + 1, updated_at = max(updated_at, ?)
         WHERE tenant_id = ? AND owner_principal_id = ? AND scope_kind = 'project' AND project_id = ?
         RETURNING id`)
         .all(target.id, input.now, scope.tenantId, scope.principalId, source.id) as Array<{ id: string }>)
         .map(({ id }) => id).sort();
       const workpads = new WorkpadRepository(this.database);
-      const movedWorkpads = (this.database.prepare(`SELECT id, revision FROM workpads
+      const movedWorkpads = (prepareCached(this.database, `SELECT id, revision FROM workpads
         WHERE tenant_id = ? AND owner_principal_id = ? AND scope_kind = 'project' AND project_id = ?
         ORDER BY id`)
         .all(scope.tenantId, scope.principalId, source.id) as Array<{ id: string; revision: number }>)
@@ -1197,7 +1189,7 @@ export class InventoryRepository {
           }, { kind: "user" }, input.now);
           return { id: pad.id, revision: pad.revision };
         });
-      this.database.prepare(`DELETE FROM projects
+      prepareCached(this.database, `DELETE FROM projects
         WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
         .run(scope.tenantId, scope.principalId, source.id);
       this.#bumpGeneration(scope);
@@ -1244,16 +1236,16 @@ export class InventoryRepository {
       if (project.removedAt !== null) return;
       // Only this removal's locations stay marked: an earlier removal's marks
       // on locations a partial restore left removed are stale.
-      const unmarked = this.database.prepare(`UPDATE workspaces SET removed_with_project = 0,
+      const unmarked = prepareCached(this.database, `UPDATE workspaces SET removed_with_project = 0,
         revision = revision + 1, updated_at = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND project_id = ?
           AND removed_at IS NOT NULL AND removed_with_project = 1`)
         .run(input.now, scope.tenantId, scope.principalId, projectId);
-      const removed = this.database.prepare(`UPDATE workspaces SET removed_at = ?, removed_with_project = 1,
+      const removed = prepareCached(this.database, `UPDATE workspaces SET removed_at = ?, removed_with_project = 1,
         revision = revision + 1, updated_at = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND project_id = ? AND removed_at IS NULL`)
         .run(input.now, input.now, scope.tenantId, scope.principalId, projectId);
-      this.database.prepare(`UPDATE projects SET removed_at = ?, revision = revision + 1,
+      prepareCached(this.database, `UPDATE projects SET removed_at = ?, revision = revision + 1,
         membership_revision = membership_revision + ?, updated_at = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
         .run(input.now, removed.changes + unmarked.changes > 0 ? 1 : 0, input.now,
@@ -1272,7 +1264,7 @@ export class InventoryRepository {
       const project = this.#project(scope, projectId);
       this.#assertProjectRevision(project, input.expectedRevision);
       if (project.removedAt === null) return;
-      this.database.prepare(`UPDATE projects SET removed_at = NULL, revision = revision + 1, updated_at = ?
+      prepareCached(this.database, `UPDATE projects SET removed_at = NULL, revision = revision + 1, updated_at = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
         .run(input.now, scope.tenantId, scope.principalId, projectId);
       this.#bumpGeneration(scope);
@@ -1285,8 +1277,7 @@ export class InventoryRepository {
     environmentId: string,
   ): string[] {
     return (
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             SELECT id
             FROM application_threads
@@ -1302,8 +1293,7 @@ export class InventoryRepository {
   }
 
   getThread(scope: RequestScope, threadId: string): InventoryThreadAggregate & {readonly thread: InventoryThreadRecord & {readonly projectId: string}} {
-    const thread = this.database
-      .prepare(
+    const thread = prepareCached(this.database,
         `
           SELECT ${threadColumns}
           FROM application_threads
@@ -1325,8 +1315,7 @@ export class InventoryRepository {
     scope: RequestScope,
     threadId: string,
   ): InventoryPrincipalStateRecord {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT ${inventoryColumns}
           FROM thread_principal_state
@@ -1340,8 +1329,7 @@ export class InventoryRepository {
   }
 
   getDraft(scope: RequestScope, threadId: string): InventoryDraftRecord {
-    const row = this.database
-      .prepare(
+    const row = prepareCached(this.database,
         `
           SELECT ${draftColumns}
           FROM thread_drafts
@@ -1408,8 +1396,7 @@ export class InventoryRepository {
         );
       }
       if (input.rootId !== null) {
-        const available = this.database
-          .prepare(
+        const available = prepareCached(this.database,
             `SELECT 1 FROM workspace_file_linked_worktree_roots
              WHERE tenant_id = ? AND owner_principal_id = ?
                AND workspace_id = ? AND root_id = ?
@@ -1432,8 +1419,7 @@ export class InventoryRepository {
         thread.inventory.preferredWorktreeRootId !== input.rootId;
       const nextRevision = input.expectedRevision + (changedPreference ? 1 : 0);
       if (changedPreference) {
-        const changed = this.database
-          .prepare(
+        const changed = prepareCached(this.database,
             `UPDATE thread_principal_state
              SET preferred_worktree_root_id = ?, preferred_worktree_revision = ?
              WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
@@ -1491,8 +1477,7 @@ export class InventoryRepository {
         { kind: "draft", threadId },
         input.attachmentIds,
       );
-      const result = this.database
-        .prepare(
+      const result = prepareCached(this.database,
           `
             UPDATE thread_drafts
             SET text = ?, selected_skill_id = ?, context_excerpts_json = ?,
@@ -1536,8 +1521,7 @@ export class InventoryRepository {
 
   listStashes(scope: RequestScope, threadId: string): InventoryStashRecord[] {
     this.getInventory(scope, threadId);
-    const rows = this.database
-      .prepare(
+    const rows = prepareCached(this.database,
         `
           SELECT ${stashColumns}
           FROM prompt_stashes
@@ -1640,8 +1624,7 @@ export class InventoryRepository {
         { kind: "draft", threadId },
         [],
       );
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             INSERT INTO prompt_stashes(
               tenant_id, principal_id, thread_id, id, text,
@@ -1662,8 +1645,7 @@ export class InventoryRepository {
           serializeTaskReferences(draft.taskReferences),
           input.now,
         );
-      const cleared = this.database
-        .prepare(
+      const cleared = prepareCached(this.database,
           `
             UPDATE thread_drafts
             SET text = '', selected_skill_id = NULL,
@@ -1799,8 +1781,7 @@ export class InventoryRepository {
         { kind: "draft", threadId },
         attachmentIds,
       );
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             UPDATE thread_drafts
             SET text = ?, selected_skill_id = ?, context_excerpts_json = ?,
@@ -1822,8 +1803,7 @@ export class InventoryRepository {
           threadId,
           input.expectedDraftRevision,
         );
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             DELETE FROM prompt_stashes
             WHERE tenant_id = ? AND principal_id = ? AND thread_id = ? AND id = ?
@@ -1848,8 +1828,7 @@ export class InventoryRepository {
     return this.database.transaction(() => {
       this.getInventory(scope, threadId);
       const removed =
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
             DELETE FROM prompt_stashes
             WHERE tenant_id = ? AND principal_id = ? AND thread_id = ? AND id = ?
@@ -1973,8 +1952,7 @@ export class InventoryRepository {
       const changed = (current.pinned === 1) !== input.pinned;
       const pinRevision = current.pinRevision + (changed ? 1 : 0);
       if (changed) {
-        const result = this.database
-          .prepare(
+        const result = prepareCached(this.database,
             `
               UPDATE thread_principal_state
               SET pinned = ?, pin_revision = pin_revision + 1
@@ -2660,8 +2638,7 @@ export class InventoryRepository {
 
   isThreadCreationForceReset(scope: RequestScope, threadId: string): boolean {
     return (
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `SELECT 1
            FROM application_threads
            WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
@@ -2680,8 +2657,7 @@ export class InventoryRepository {
   ): InventoryPrincipalStateRecord {
     return this.database.transaction(() => {
       this.getInventory(scope, threadId);
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE thread_principal_state
             SET wake_acknowledged_at = ?, wake_reminder_text = NULL,
@@ -2706,8 +2682,7 @@ export class InventoryRepository {
     return this.database.transaction(() => {
       const current = this.getInventory(scope, threadId);
       if (current.inventoryState !== "snoozed") return current;
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE thread_principal_state
             SET inventory_state = 'active', state_changed_at = ?,
@@ -2743,8 +2718,7 @@ export class InventoryRepository {
     readonly state: InventoryPrincipalStateRecord;
   }> {
     return this.database.transaction(() => {
-      const due = this.database
-        .prepare(
+      const due = prepareCached(this.database,
           `
             SELECT tenant_id AS tenantId, principal_id AS principalId,
               thread_id AS threadId
@@ -2763,8 +2737,7 @@ export class InventoryRepository {
           tenantId: row.tenantId,
           principalId: row.principalId,
         };
-        const result = this.database
-          .prepare(
+        const result = prepareCached(this.database,
             `
               UPDATE thread_principal_state
               SET inventory_state = 'active', state_changed_at = ?,
@@ -2791,8 +2764,7 @@ export class InventoryRepository {
 
   getNearestSnoozeDeadline(): number | null {
     return (
-      this.database
-        .prepare(
+      prepareCached(this.database,
           `
             SELECT min(snoozed_until) AS deadline
             FROM thread_principal_state
@@ -2830,8 +2802,7 @@ export class InventoryRepository {
         );
         return this.getThread(scope, threadId);
       }
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE application_threads
             SET title = ?, revision = revision + 1, updated_at = ?
@@ -2882,8 +2853,7 @@ export class InventoryRepository {
         (input.title !== undefined && input.title !== current.title) ||
         current.availability !== "available" ||
         input.updatedAt > current.lastActivityAt;
-      const changed = this.database
-        .prepare(
+      const changed = prepareCached(this.database,
           `
             UPDATE application_threads
             SET title = coalesce(?, title), availability = 'available',
@@ -2989,8 +2959,7 @@ export class InventoryRepository {
       const changed: InventoryThreadAggregate[] = [];
       for (const candidate of candidates) {
         if (seenBackendConversationIds.has(candidate.backendConversationId)) continue;
-        this.database
-          .prepare(
+        prepareCached(this.database,
             `
               UPDATE application_threads
               SET availability = 'missing', reconciliation_at = ?,
@@ -3047,8 +3016,7 @@ export class InventoryRepository {
       ).map(({ id }) => id);
       const changed: InventoryThreadAggregate[] = [];
       for (const threadId of threadIds) {
-        const result = this.database
-          .prepare(
+        const result = prepareCached(this.database,
             `
               UPDATE application_threads
               SET availability = 'quarantined', reconciliation_at = ?,
@@ -3186,8 +3154,7 @@ export class InventoryRepository {
     change: InventoryTransition,
   ): void {
     if (change.action === "snooze") {
-      const callback = this.database
-        .prepare(
+      const callback = prepareCached(this.database,
           `
             SELECT 1
             FROM thread_completion_callbacks
@@ -3203,8 +3170,7 @@ export class InventoryRepository {
           "A thread awaiting an agent result cannot be snoozed.",
         );
       }
-      const dispatching = this.database
-        .prepare(
+      const dispatching = prepareCached(this.database,
           `
             SELECT 1
             FROM automation_runs
@@ -3223,8 +3189,7 @@ export class InventoryRepository {
       }
     }
     if (change.action === "archive") {
-      const active = this.database
-        .prepare(
+      const active = prepareCached(this.database,
           `
             SELECT 1
             FROM automation_runs
@@ -3250,8 +3215,7 @@ export class InventoryRepository {
     scope: RequestScope,
     threadId: string,
   ): readonly string[] {
-    const rows = this.database
-      .prepare(
+    const rows = prepareCached(this.database,
         `SELECT family.threadId
          FROM (
            SELECT root.id AS threadId, 0 AS familyOrder
@@ -3360,8 +3324,7 @@ export class InventoryRepository {
   }
 
   #writeInventory(state: InventoryPrincipalStateRecord): void {
-    const result = this.database
-      .prepare(
+    const result = prepareCached(this.database,
         `
           UPDATE thread_principal_state
           SET inventory_state = ?, state_changed_at = ?,
@@ -3399,8 +3362,7 @@ export class InventoryRepository {
     scope: RequestScope,
     mutationId: string,
   ): MutationReceipt | undefined {
-    return this.database
-      .prepare(
+    return prepareCached(this.database,
         `
           SELECT thread_id AS threadId, operation_kind AS operationKind,
             request_fingerprint AS requestFingerprint,
@@ -3440,8 +3402,7 @@ export class InventoryRepository {
     result: unknown,
     now: number,
   ): void {
-    this.database
-      .prepare(
+    prepareCached(this.database,
         `
           INSERT INTO mutation_receipts(
             tenant_id, principal_id, thread_id, mutation_id, operation_kind,
@@ -3463,7 +3424,7 @@ export class InventoryRepository {
   }
 
   #project(scope: RequestScope, projectId: string): InventoryProjectRecord {
-    const row = this.database.prepare(`SELECT ${projectColumns} FROM projects
+    const row = prepareCached(this.database, `SELECT ${projectColumns} FROM projects
       WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
       .get(scope.tenantId, scope.principalId, projectId) as InventoryProjectRecord | undefined;
     if (!row) throw new DomainError("not_found", "The project was not found.");
@@ -3487,7 +3448,7 @@ export class InventoryRepository {
     if (assignment.kind === "new") {
       assertProjectName(assignment.name);
       const id = randomUUID();
-      this.database.prepare(`INSERT INTO projects(
+      prepareCached(this.database, `INSERT INTO projects(
           tenant_id, owner_principal_id, id, name, revision, membership_revision,
           removed_at, created_at, updated_at
         ) VALUES (?, ?, ?, ?, 0, 0, NULL, ?, ?)`)
@@ -3505,7 +3466,7 @@ export class InventoryRepository {
   }
 
   #touchProjectMembership(scope: RequestScope, projectId: string, now: number): void {
-    const result = this.database.prepare(`UPDATE projects
+    const result = prepareCached(this.database, `UPDATE projects
       SET membership_revision = membership_revision + 1, revision = revision + 1, updated_at = ?
       WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
       .run(now, scope.tenantId, scope.principalId, projectId);
@@ -3513,13 +3474,13 @@ export class InventoryRepository {
   }
 
   #threadIdsForWorkspace(scope: RequestScope, workspaceId: string): string[] {
-    return (this.database.prepare(`SELECT id FROM application_threads
+    return (prepareCached(this.database, `SELECT id FROM application_threads
       WHERE tenant_id = ? AND owner_principal_id = ? AND workspace_id = ? ORDER BY id`)
       .all(scope.tenantId, scope.principalId, workspaceId) as Array<{ id: string }>).map(row => row.id);
   }
 
   #activeLocations(scope: RequestScope, projectId: string): ProjectRemovalLocation[] {
-    return (this.database.prepare(`SELECT id AS workspaceId, environment_id AS environmentId FROM workspaces
+    return (prepareCached(this.database, `SELECT id AS workspaceId, environment_id AS environmentId FROM workspaces
       WHERE tenant_id = ? AND owner_principal_id = ? AND project_id = ? AND removed_at IS NULL ORDER BY id`)
       .all(scope.tenantId, scope.principalId, projectId) as Array<{ workspaceId: string; environmentId: string }>)
       .map(location => ({ ...location, threadIds: this.#threadIdsForWorkspace(scope, location.workspaceId) }));
@@ -3537,13 +3498,13 @@ export class InventoryRepository {
       threadIds.length === 0 ? [] : [{ workspaceId: location.workspaceId, environmentId: location.environmentId, kind, threadIds }];
     const ids = (rows: unknown[]) => (rows as Array<{ threadId: string }>).map(row => row.threadId);
     const durable = this.findArchiveDurablyBlockedThreadIds(scope, location.threadIds);
-    const scheduled = ids(this.database.prepare(`SELECT DISTINCT thread.id AS threadId FROM automation_definitions AS automation
+    const scheduled = ids(prepareCached(this.database, `SELECT DISTINCT thread.id AS threadId FROM automation_definitions AS automation
       JOIN application_threads AS thread ON thread.tenant_id = automation.tenant_id
         AND thread.owner_principal_id = automation.owner_principal_id AND thread.id = automation.anchor_thread_id
       WHERE thread.tenant_id = ? AND thread.owner_principal_id = ? AND thread.workspace_id = ?
         AND automation.enabled = 1 AND automation.deleted_at IS NULL AND automation.completed_at IS NULL
       ORDER BY thread.id`).all(scope.tenantId, scope.principalId, location.workspaceId));
-    const terminals = ids(this.database.prepare(`SELECT DISTINCT thread_id AS threadId FROM terminals
+    const terminals = ids(prepareCached(this.database, `SELECT DISTINCT thread_id AS threadId FROM terminals
       WHERE tenant_id = ? AND owner_principal_id = ? AND workspace_id = ?
         AND lifecycle NOT IN ('exited', 'failed') ORDER BY thread_id`)
       .all(scope.tenantId, scope.principalId, location.workspaceId));
@@ -3556,11 +3517,11 @@ export class InventoryRepository {
 
   #projectListings(scope: RequestScope, projectId?: string): InventoryProjectListing[] {
     const only = projectId === undefined ? [] : [projectId];
-    const projects = this.database.prepare(`SELECT ${projectColumns} FROM projects
+    const projects = prepareCached(this.database, `SELECT ${projectColumns} FROM projects
       WHERE tenant_id = ? AND owner_principal_id = ? ${projectId === undefined ? "" : "AND id = ?"}
       ORDER BY name COLLATE NOCASE, id`)
       .all(scope.tenantId, scope.principalId, ...only) as InventoryProjectRecord[];
-    const rows = this.database.prepare(`SELECT workspace.project_id AS projectId, workspace.id,
+    const rows = prepareCached(this.database, `SELECT workspace.project_id AS projectId, workspace.id,
         workspace.environment_id AS environmentId, environment.label AS environmentLabel,
         workspace.display_name AS displayName, workspace.canonical_path AS canonicalPath,
         workspace.availability = 'available' AND environment.availability = 'available' AS available,
@@ -3590,7 +3551,7 @@ export class InventoryRepository {
     // objects, including completed tasks and archived workpads, without joining
     // locations (which would multiply shared objects across directories).
     const counts = (table: "tasks" | "workpads") => new Map(
-      (this.database.prepare(`SELECT project_id AS projectId, COUNT(*) AS count FROM ${table}
+      (prepareCached(this.database, `SELECT project_id AS projectId, COUNT(*) AS count FROM ${table}
         WHERE tenant_id = ? AND owner_principal_id = ? AND scope_kind = 'project'
           ${projectId === undefined ? "" : "AND project_id = ?"}
         GROUP BY project_id`).all(scope.tenantId, scope.principalId, ...only) as Array<{
@@ -3606,8 +3567,7 @@ export class InventoryRepository {
   }
 
   #bumpGeneration(scope: RequestScope): void {
-    const result = this.database
-      .prepare(
+    const result = prepareCached(this.database,
         `
           UPDATE principal_generations
           SET inventory_generation = inventory_generation + 1

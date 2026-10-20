@@ -26,6 +26,7 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowLeftRight,
+  GitCompareArrows,
   Columns2,
   PanelLeft,
   ChevronDown,
@@ -82,6 +83,8 @@ import {
   type WorkspaceComparePreferences,
 } from "./workspace-compare-state.js";
 import { Button } from "../components/ui/button.js";
+import { Callout } from "../components/ui/callout.js";
+import { EmptyState } from "../components/ui/empty-state.js";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -94,6 +97,7 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
 import { Field } from "../components/ui/field.js";
+import { PathLabel } from "../components/ui/path-label.js";
 import {
   Popover,
   PopoverContent,
@@ -403,7 +407,7 @@ export function WorkspaceCompareView({
   const [busy, setBusy] = useState<
     "repositories" | "revisions" | "comparison" | "idle"
   >("repositories");
-  const [notice, setNotice] = useState<string>();
+  const [notice, setNotice] = useState<CompareNotice>();
   const [pendingScrollFileId, setPendingScrollFileId] =
     useState<WorkspaceDiffFileId>();
   const preserveEndpointModeRef = useRef(false);
@@ -478,12 +482,10 @@ export function WorkspaceCompareView({
       .then((result) => {
         if (generation !== requestGenerationRef.current) return;
         if (result.status === "unavailable") {
-          setNotice(
-            diagnosticMessage(
-              "Comparison is unavailable",
-              result.diagnosticCode,
-            ),
-          );
+          setNotice({
+            kind: "error",
+            text: diagnosticMessage("Comparison is unavailable", result.diagnosticCode),
+          });
           return;
         }
         setRepositories(result.repositories);
@@ -495,18 +497,25 @@ export function WorkspaceCompareView({
           : result.repositories[0];
         setRepositoryId(matching?.repositoryId);
         if (saved && !matching)
-          setNotice(
-            "The saved repository is no longer available. Choose a repository to continue.",
-          );
+          setNotice({
+            kind: "attention",
+            text: "The saved repository is no longer available. Choose a repository to continue.",
+          });
         if (result.repositories.length === 0)
-          setNotice("No Git repository was found for this Files root.");
+          setNotice({
+            kind: "empty",
+            text: "No Git repository was found for this Files root.",
+          });
       })
       .catch((error: unknown) => {
         if (
           !controller.signal.aborted &&
           generation === requestGenerationRef.current
         )
-          setNotice(errorMessage("Could not discover repositories", error));
+          setNotice({
+            kind: "error",
+            text: errorMessage("Could not discover repositories", error),
+          });
       })
       .finally(() => {
         if (generation === requestGenerationRef.current && !repositoryId)
@@ -550,12 +559,10 @@ export function WorkspaceCompareView({
       .then(async (result) => {
         if (generation !== requestGenerationRef.current) return;
         if (result.status === "unavailable") {
-          setNotice(
-            diagnosticMessage(
-              "Revisions are unavailable",
-              result.diagnosticCode,
-            ),
-          );
+          setNotice({
+            kind: "error",
+            text: diagnosticMessage("Revisions are unavailable", result.diagnosticCode),
+          });
           return;
         }
         let catalog = [...result.revisions];
@@ -606,19 +613,26 @@ export function WorkspaceCompareView({
         setBase(restoredBase);
         setHead(restoredHead ?? { kind: "working_tree" });
         if (saved && (!restoredBase || !restoredHead))
-          setNotice(
-            "A saved revision is no longer available. Select the comparison endpoints again.",
-          );
+          setNotice({
+            kind: "attention",
+            text: "A saved revision is no longer available. Select the comparison endpoints again.",
+          });
         if (saved) setMode(saved.mode);
         if (!defaults.base)
-          setNotice("This repository has no revision available as a base.");
+          setNotice({
+            kind: "empty",
+            text: "This repository has no revision available as a base.",
+          });
       })
       .catch((error: unknown) => {
         if (
           !controller.signal.aborted &&
           generation === requestGenerationRef.current
         )
-          setNotice(errorMessage("Could not load revisions", error));
+          setNotice({
+            kind: "error",
+            text: errorMessage("Could not load revisions", error),
+          });
       })
       .finally(() => {
         if (generation === requestGenerationRef.current) setBusy("idle");
@@ -794,12 +808,10 @@ export function WorkspaceCompareView({
         );
         if (generation !== requestGenerationRef.current) return;
         if (result.status === "unavailable") {
-          setNotice(
-            diagnosticMessage(
-              "Could not create comparison",
-              result.diagnosticCode,
-            ),
-          );
+          setNotice({
+            kind: "error",
+            text: diagnosticMessage("Could not create comparison", result.diagnosticCode),
+          });
           return;
         }
         appliedEndpointsRef.current = {
@@ -830,18 +842,17 @@ export function WorkspaceCompareView({
           if (page.status === "stale") {
             activeComparisonRef.current = undefined;
             onComparisonChangeRef.current?.(undefined);
-            setNotice(
-              "The working tree changed while this comparison was loading. Refresh to compare the current state.",
-            );
+            setNotice({
+              kind: "attention",
+              text: "The working tree changed while this comparison was loading. Refresh to compare the current state.",
+            });
             return;
           }
           if (page.status === "unavailable") {
-            setNotice(
-              diagnosticMessage(
-                "Changed files are unavailable",
-                page.diagnosticCode,
-              ),
-            );
+            setNotice({
+              kind: "error",
+              text: diagnosticMessage("Changed files are unavailable", page.diagnosticCode),
+            });
             return;
           }
           accumulated.push(
@@ -918,13 +929,19 @@ export function WorkspaceCompareView({
         restoreRef.current = undefined;
         setSettingsOpen(false);
         if (accumulated.length === 0)
-          setNotice("No changed files in this comparison.");
+          setNotice({
+            kind: "empty",
+            text: "No changed files in this comparison.",
+          });
       } catch (error: unknown) {
         if (
           !controller.signal.aborted &&
           generation === requestGenerationRef.current
         )
-          setNotice(errorMessage("Could not load comparison", error));
+          setNotice({
+            kind: "error",
+            text: errorMessage("Could not load comparison", error),
+          });
       } finally {
         if (comparisonAbortRef.current === controller)
           comparisonAbortRef.current = undefined;
@@ -1042,9 +1059,10 @@ export function WorkspaceCompareView({
         if (result.status === "stale") {
           activeComparisonRef.current = undefined;
           onComparisonChangeRef.current?.(undefined);
-          setNotice(
-            "The comparison is stale because the working tree changed. Refresh it before continuing review.",
-          );
+          setNotice({
+            kind: "attention",
+            text: "The comparison is stale because the working tree changed. Refresh it before continuing review.",
+          });
           updatePatches((current) =>
             new Map(current).set(file.fileId, { status: "unavailable" }),
           );
@@ -2068,33 +2086,69 @@ export function WorkspaceCompareView({
         )}
         <div className="workspace-compare-body">
           {initialLoading && (
-            <CompareState
-              icon={<LoaderCircle className="workspace-compare-spin" />}
-              title="Finding repositories…"
-            />
+            <p className="workspace-compare-loading" role="status">
+              <LoaderCircle
+                className="workspace-compare-spin"
+                aria-hidden="true"
+              />
+              Finding repositories…
+            </p>
           )}
-          {!initialLoading && notice && (
-            <CompareState
-              title={notice}
+          {/* Errors and stale or lost selections sit above whatever is
+              shown, so a stale diff stays readable under its Refresh. */}
+          {!initialLoading && notice && notice.kind !== "empty" && (
+            <Callout
+              className="workspace-compare-callout"
+              tone={notice.kind === "error" ? "danger" : "warning"}
+              role={notice.kind === "error" ? "alert" : "status"}
               action={
                 comparison ? (
-                  <button type="button" onClick={() => void loadComparison()}>
-                    Refresh comparison
-                  </button>
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    onClick={() => void loadComparison()}
+                  >
+                    Refresh
+                  </Button>
                 ) : undefined
               }
-            />
+            >
+              {notice.text}
+            </Callout>
           )}
-          {!initialLoading && !notice && !comparison && (
-            <CompareState
-              title="Choose sources to compare workspace changes."
-              action={
-                <button type="button" onClick={() => setSettingsOpen(true)}>
-                  Configure comparison
-                </button>
-              }
-            />
-          )}
+          {!initialLoading &&
+            (!comparison ||
+              (changedFiles.length === 0 && notice?.kind === "empty")) && (
+              <div className="workspace-compare-empty">
+                <EmptyState
+                  icon={<GitCompareArrows />}
+                  title={
+                    notice?.kind === "empty"
+                      ? notice.text
+                      : "Choose sources to compare workspace changes."
+                  }
+                  action={
+                    comparison ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void loadComparison()}
+                      >
+                        Refresh
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setSettingsOpen(true)}
+                      >
+                        Configure comparison
+                      </Button>
+                    )
+                  }
+                />
+              </div>
+            )}
           {comparison && changedFiles.length > 0 && (
             <CodeView<WorkspaceCompareReviewAnnotation>
               ref={codeViewRef}
@@ -2127,16 +2181,17 @@ export function WorkspaceCompareView({
                         : "workspace-compare-status-card"
                     }
                   >
-                    <strong
-                      title={
-                        file.oldPath &&
-                        file.newPath &&
-                        file.oldPath !== file.newPath
-                          ? `${file.oldPath} → ${file.newPath}`
-                          : workspaceCompareFilePath(file)
-                      }
-                    >
-                      {workspaceCompareFilePath(file)}
+                    <strong>
+                      <PathLabel
+                        path={workspaceCompareFilePath(file)}
+                        title={
+                          file.oldPath &&
+                          file.newPath &&
+                          file.oldPath !== file.newPath
+                            ? `${file.oldPath} → ${file.newPath}`
+                            : undefined
+                        }
+                      />
                     </strong>
                     {item.type === "diff" && <FileStats file={file} />}
                     {item.type !== "diff" && (
@@ -2311,21 +2366,27 @@ export function WorkspaceCompareView({
                     )}
                   </div>
                   <p>{annotation.metadata.body}</p>
-                  {onDeleteAnnotation && (
-                    <button
-                      type="button"
-                      onClick={() => onDeleteAnnotation(annotation.metadata)}
-                    >
-                      Delete
-                    </button>
-                  )}
-                  {onSelectAnnotation && (
-                    <button
-                      type="button"
-                      onClick={() => onSelectAnnotation(annotation.metadata)}
-                    >
-                      Open
-                    </button>
+                  {(onSelectAnnotation || onDeleteAnnotation) && (
+                    <div className="workspace-compare-annotation-actions">
+                      {onSelectAnnotation && (
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => onSelectAnnotation(annotation.metadata)}
+                        >
+                          Open
+                        </Button>
+                      )}
+                      {onDeleteAnnotation && (
+                        <Button
+                          variant="destructive-outline"
+                          size="xs"
+                          onClick={() => onDeleteAnnotation(annotation.metadata)}
+                        >
+                          Delete
+                        </Button>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -2432,23 +2493,14 @@ function FileStats({
   );
 }
 
-function CompareState({
-  icon,
-  title,
-  action,
-}: {
-  readonly icon?: React.ReactNode;
-  readonly title: string;
-  readonly action?: React.ReactNode;
-}): React.JSX.Element {
-  return (
-    <div className="workspace-compare-state" role="status">
-      {icon}
-      <p>{title}</p>
-      {action}
-    </div>
-  );
-}
+/**
+ * What the comparison body reports: an error or a stale or lost selection
+ * as a callout over whatever is shown, or the text of its empty state.
+ */
+type CompareNotice = {
+  readonly kind: "error" | "attention" | "empty";
+  readonly text: string;
+};
 
 function parseFilePatch(
   patch: string,

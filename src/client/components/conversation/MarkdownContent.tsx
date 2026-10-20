@@ -3,6 +3,7 @@ import {
   createContext,
   isValidElement,
   memo,
+  useCallback,
   useContext,
   useEffect,
   Fragment,
@@ -24,6 +25,7 @@ import { Check, Copy, ExternalLink, FileText, X } from "lucide-react";
 import {
   classifyMarkdownHref,
   type MarkdownFileLinkSource,
+  type WorkspaceFileLinkHandler,
   useWorkspaceFileLinkHandler,
 } from "../../workspace-files/workspace-file-link-routing.js";
 import { rehypeMarkdownSourcePositions } from "./markdown-source-positions.js";
@@ -148,6 +150,133 @@ const PLAIN_PRE_COMPONENT: NonNullable<MarkdownComponents["pre"]> = ({
   );
 };
 
+type MarkdownLinkState = {
+  readonly fileLinkSource?: MarkdownFileLinkSource;
+  readonly workspaceFileLinks?: WorkspaceFileLinkHandler;
+  /** Shows or clears the file link notice while the content is mounted. */
+  readonly showFileLinkNotice: (notice: string | undefined) => void;
+};
+
+const MarkdownLinkContext = createContext<MarkdownLinkState>({
+  showFileLinkNotice: () => undefined,
+});
+
+const LINK_COMPONENT: NonNullable<MarkdownComponents["a"]> = ({
+  href,
+  children: linkChildren,
+}) => {
+  const { fileLinkSource, workspaceFileLinks, showFileLinkNotice } =
+    useContext(MarkdownLinkContext);
+  const classification = href
+    ? classifyMarkdownHref(href, fileLinkSource)
+    : { kind: "ordinary" as const };
+  if (classification.kind === "invalid_file") {
+    return <span>{linkChildren}</span>;
+  }
+  if (classification.kind === "workspace_file") {
+    const fallbackOnUnresolved =
+      !classification.explicit &&
+      classification.request.reference.kind === "workspace_relative";
+    const fallbackWithoutResolver =
+      !classification.explicit &&
+      classification.request.reference.kind !== "root_relative";
+    const fallbackHref =
+      (workspaceFileLinks
+        ? fallbackOnUnresolved
+        : fallbackWithoutResolver) && href
+        ? safeUrl(href)
+        : undefined;
+    if (!workspaceFileLinks) {
+      if (!fallbackHref) return <span>{linkChildren}</span>;
+      return (
+        <a
+          href={fallbackHref}
+          onClick={(event) => {
+            event.preventDefault();
+            openExternal(fallbackHref);
+          }}
+          rel="noopener noreferrer"
+          target="_blank"
+        >
+          {linkChildren}
+          <ExternalLink size={12} strokeWidth={1.8} />
+        </a>
+      );
+    }
+    return (
+      <a
+        href={fallbackHref ?? "#"}
+        onClick={(event) => {
+          event.preventDefault();
+          showFileLinkNotice(undefined);
+          void Promise.resolve(
+            workspaceFileLinks.openReference(classification.request),
+          )
+            .then((opened) => {
+              if (opened === false && fallbackOnUnresolved && fallbackHref) {
+                openExternal(fallbackHref);
+              } else if (opened === false && !fallbackOnUnresolved) {
+                showFileLinkNotice(
+                  "That file is not available in this workspace.",
+                );
+              }
+            })
+            .catch(() => {
+              showFileLinkNotice(
+                "Could not check that file. Check your connection and try again.",
+              );
+            });
+        }}
+      >
+        {linkChildren}
+        <FileText size={12} strokeWidth={1.8} />
+      </a>
+    );
+  }
+  const safe = href && safeUrl(href);
+  if (!safe) return <span>{linkChildren}</span>;
+  return (
+    <a
+      href={safe}
+      onClick={(event) => {
+        event.preventDefault();
+        openExternal(safe);
+      }}
+      rel="noopener noreferrer"
+      target="_blank"
+    >
+      {linkChildren}
+      <ExternalLink size={12} strokeWidth={1.8} />
+    </a>
+  );
+};
+
+const OMITTED_IMAGE_COMPONENT: NonNullable<MarkdownComponents["img"]> = ({
+  alt,
+}) => {
+  const description = alt?.trim();
+  return (
+    <span className="markdown-image-omitted" role="note">
+      Image omitted
+      {description ? ` · ${description}` : ""}
+    </span>
+  );
+};
+
+// Stable component identities: a new component function per render would
+// remount every link and image of a streaming message on each update.
+const PLAIN_COMPONENTS: MarkdownComponents = {
+  input: CHECKLIST_INPUT_COMPONENT,
+  span: MarkdownStreamSpan,
+  pre: PLAIN_PRE_COMPONENT,
+  a: LINK_COMPONENT,
+  img: OMITTED_IMAGE_COMPONENT,
+};
+const MERMAID_COMPONENTS: MarkdownComponents = {
+  ...PLAIN_COMPONENTS,
+  pre: MERMAID_PRE_COMPONENT,
+};
+
 // Memoized: react-markdown re-parses the full document on every render, so
 // a stable `children` string must not pay that parse again.
 export const MarkdownContent = memo(function MarkdownContent({
@@ -207,9 +336,17 @@ export const MarkdownContent = memo(function MarkdownContent({
       mounted.current = false;
     };
   }, []);
+  const showFileLinkNotice = useCallback((notice: string | undefined) => {
+    if (mounted.current) setFileLinkNotice(notice);
+  }, []);
+  const linkState = useMemo(
+    () => ({ fileLinkSource, workspaceFileLinks, showFileLinkNotice }),
+    [fileLinkSource, workspaceFileLinks, showFileLinkNotice],
+  );
   return (
     <div className="markdown">
       <MarkdownRenderContext.Provider value={renderState}>
+      <MarkdownLinkContext.Provider value={linkState}>
         <ReactMarkdown
           remarkPlugins={lineBreaks
             ? checklistEnabled ? CHECKLIST_LINE_BREAK_REMARK_PLUGINS : LINE_BREAK_REMARK_PLUGINS
@@ -222,120 +359,11 @@ export const MarkdownContent = memo(function MarkdownContent({
               ? url
               : defaultUrlTransform(url)
           }
-          components={{
-            input: CHECKLIST_INPUT_COMPONENT,
-            span: MarkdownStreamSpan,
-            pre: enableMermaid ? MERMAID_PRE_COMPONENT : PLAIN_PRE_COMPONENT,
-            a({ href, children: linkChildren }) {
-              const classification = href
-                ? classifyMarkdownHref(href, fileLinkSource)
-                : { kind: "ordinary" as const };
-              if (classification.kind === "invalid_file") {
-                return <span>{linkChildren}</span>;
-              }
-              if (classification.kind === "workspace_file") {
-                const fallbackOnUnresolved =
-                  !classification.explicit &&
-                  classification.request.reference.kind ===
-                    "workspace_relative";
-                const fallbackWithoutResolver =
-                  !classification.explicit &&
-                  classification.request.reference.kind !== "root_relative";
-                const fallbackHref =
-                  (workspaceFileLinks
-                    ? fallbackOnUnresolved
-                    : fallbackWithoutResolver) && href
-                    ? safeUrl(href)
-                    : undefined;
-                if (!workspaceFileLinks) {
-                  if (!fallbackHref) return <span>{linkChildren}</span>;
-                  return (
-                    <a
-                      href={fallbackHref}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        openExternal(fallbackHref);
-                      }}
-                      rel="noopener noreferrer"
-                      target="_blank"
-                    >
-                      {linkChildren}
-                      <ExternalLink size={12} strokeWidth={1.8} />
-                    </a>
-                  );
-                }
-                return (
-                  <a
-                    href={fallbackHref ?? "#"}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      setFileLinkNotice(undefined);
-                      void Promise.resolve(
-                        workspaceFileLinks.openReference(
-                          classification.request,
-                        ),
-                      )
-                        .then((opened) => {
-                          if (
-                            opened === false &&
-                            fallbackOnUnresolved &&
-                            fallbackHref
-                          ) {
-                            openExternal(fallbackHref);
-                          } else if (
-                            mounted.current &&
-                            opened === false &&
-                            !fallbackOnUnresolved
-                          ) {
-                            setFileLinkNotice(
-                              "That file is not available in this workspace.",
-                            );
-                          }
-                        })
-                        .catch(() => {
-                          if (mounted.current) {
-                            setFileLinkNotice(
-                              "Could not check that file. Check your connection and try again.",
-                            );
-                          }
-                        });
-                    }}
-                  >
-                    {linkChildren}
-                    <FileText size={12} strokeWidth={1.8} />
-                  </a>
-                );
-              }
-              const safe = href && safeUrl(href);
-              if (!safe) return <span>{linkChildren}</span>;
-              return (
-                <a
-                  href={safe}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    openExternal(safe);
-                  }}
-                  rel="noopener noreferrer"
-                  target="_blank"
-                >
-                  {linkChildren}
-                  <ExternalLink size={12} strokeWidth={1.8} />
-                </a>
-              );
-            },
-            img({ alt }) {
-              const description = alt?.trim();
-              return (
-                <span className="markdown-image-omitted" role="note">
-                  Image omitted
-                  {description ? ` · ${description}` : ""}
-                </span>
-              );
-            },
-          }}
+          components={enableMermaid ? MERMAID_COMPONENTS : PLAIN_COMPONENTS}
         >
           {children}
         </ReactMarkdown>
+      </MarkdownLinkContext.Provider>
       </MarkdownRenderContext.Provider>
       {fileLinkNotice && (
         <p className="markdown-file-link-notice" role="status">

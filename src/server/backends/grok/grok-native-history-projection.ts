@@ -10,6 +10,7 @@ import {
   type GrokHistoryProjectionResult,
 } from "./grok-history-projector.js";
 import type { GrokNativeHistoryReadResult } from "./grok-native-history-reader.js";
+import { isRecord } from "../../../shared/json-guards.js";
 
 const CURSOR_PREFIX = "grok-native-history:v2:";
 const MAXIMUM_CURSOR_BYTES = 512;
@@ -373,8 +374,4 @@ function dataInvalid(): never {
   throw new GrokNativeHistoryProjectionError(
     "grok_native_history_data_invalid",
   );
-}
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

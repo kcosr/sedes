@@ -41,7 +41,7 @@ import { assertNoPiAgentToolExtensionCollisions } from "./pi-agent-tool-adapter.
 import type { PiAgentToolCliEnvironment } from "./pi-agent-tool-presentation.js";
 import {
   assertAuditedPiBuiltinToolCatalog,
-  PI_EXCLUDED_TOOL_NAMES,
+  PI_INTENTIONALLY_UNSUPPORTED_BUILTIN_TOOL_NAMES,
 } from "./pi-builtin-tool-policy.js";
 import {
   PI_TOOL_APPROVAL_APPROVE_ACTION_ID,
@@ -1100,7 +1100,7 @@ export class DefaultPiSdkSessionFactory implements PiSdkSessionFactory {
     const result = await createAgentSessionFromServices({
       services,
       sessionManager: input.manager,
-      excludeTools: [...PI_EXCLUDED_TOOL_NAMES],
+      excludeTools: [...PI_INTENTIONALLY_UNSUPPORTED_BUILTIN_TOOL_NAMES],
       ...(sessionTools.length > 0
         ? { customTools: fencedCustomTools(sessionTools, fence) }
         : {}),

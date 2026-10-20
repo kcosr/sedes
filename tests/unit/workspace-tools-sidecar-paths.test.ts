@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -46,6 +46,22 @@ describe("workspace tools sidecar literal path boundary", () => {
       expect(listed.entries).toContainEqual({ name: path.basename(filename), kind: "file" });
     },
   );
+
+  it("opens a workspace beneath a filesystem-root policy root", async () => {
+    const value = await fixture();
+    const workspace = await realpath(value.root);
+    const filesystemRoot = path.parse(workspace).root;
+    const context = { requestId: randomUUID(), signal: new AbortController().signal };
+    const { workspaceHandle } = await value.host.handlers.openWorkspace({
+      admissionId: randomUUID(), declaredPath: workspace, policyRootPath: filesystemRoot,
+    }, context);
+    await value.host.handlers.writeFile(workspaceToolsFileWriteOperation.requestSchema.parse({
+      workspaceHandle, operationId: randomUUID(), path: "root-policy.txt", content: "written",
+    }), context);
+    await expect(value.host.handlers.readFile(workspaceToolsFileReadOperation.requestSchema.parse({
+      workspaceHandle, path: "root-policy.txt",
+    }), context)).resolves.toMatchObject({ content: "written" });
+  });
 
   it("retains sidecar symlink confinement for literal wire paths", async () => {
     const value = await fixture();

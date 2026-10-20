@@ -13,6 +13,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from "react";
 import { recordComposerInputDiagnostic } from "../../app/diagnostics.js";
@@ -123,10 +124,14 @@ import {
 } from "../../attachments/AttachmentCards.js";
 import { useComposerAttachmentUploads } from "../../attachments/useComposerAttachmentUploads.js";
 import { AttachmentGroup } from "../ui/attachment.js";
-import {
-  useApplicationStore,
-  type ApplicationClientStore,
+import type {
+  ApplicationClientState,
+  ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
+import {
+  sameSelectedFields,
+  useApplicationStoreSelector,
+} from "../../stores/use-application-store-selector.js";
 import { ApiError } from "../../api/ApiClient.js";
 import {
   ComposerPromptPicker,
@@ -135,6 +140,7 @@ import {
 import { useTouchDensity } from "../../app/use-touch-density.js";
 import { useTaskDrag } from "../../tasks/task-drag.js";
 import { OPEN_OVERLAY_SELECTOR } from "../../app/android-back.js";
+import { subscribePageHide } from "../../app/page-hide.js";
 import { useThreadDrag } from "../../threads/thread-drag.js";
 import {
   formatThreadReferenceText,
@@ -150,6 +156,7 @@ import { environmentDisplayLabel } from "../../app/sidebar-scope-presentation.js
 export const OPEN_PROMPTS_SETTINGS_EVENT = "sedes-open-settings-prompts";
 
 const DRAFT_SAVE_DELAY_MS = 2_000;
+const DRAFT_SAVE_RETRY_MAX_DELAY_MS = 30_000;
 const RESTORE_FOCUS_SETTLE_DELAY_MS = 500;
 const EMPTY_APPLICATION_STATE = Object.freeze({
   status: "loading" as const,
@@ -163,6 +170,16 @@ const EMPTY_APPLICATION_STORE = {
   getSnapshot: () => EMPTY_APPLICATION_STATE,
   refresh: async () => undefined,
 } as unknown as ApplicationClientStore;
+
+/** The application state the composer renders; sidebar search is not part of it. */
+function selectComposerApplication(state: ApplicationClientState) {
+  return {
+    snapshot: state.snapshot,
+    descendantPages: state.descendantPages,
+    authoritative: state.authoritative,
+    connection: state.connection,
+  };
+}
 
 type DraftValue = {
   readonly text: string;
@@ -184,6 +201,7 @@ type DraftQueueEntry =
       readonly kind: "save";
       value: DraftValue;
       readonly exact: boolean;
+      keepalive: boolean;
       waiters: Array<{
         resolve: (draft: NormalizedDraft) => void;
         reject: (error: unknown) => void;
@@ -212,20 +230,29 @@ class DraftOperationQueue {
   #blocked = false;
 
   constructor(
-    private readonly save: (value: DraftValue) => Promise<NormalizedDraft>,
+    private readonly save: (
+      value: DraftValue,
+      keepalive: boolean,
+    ) => Promise<NormalizedDraft>,
   ) {}
 
-  persist(value: DraftValue, exact: boolean): Promise<NormalizedDraft> {
+  persist(
+    value: DraftValue,
+    exact: boolean,
+    keepalive = false,
+  ): Promise<NormalizedDraft> {
     return new Promise((resolve, reject) => {
       const tail = this.#entries.at(-1);
       if (!exact && tail?.kind === "save" && !tail.exact) {
         tail.value = value;
+        tail.keepalive ||= keepalive;
         tail.waiters.push({ resolve, reject });
       } else {
         this.#entries.push({
           kind: "save",
           value,
           exact,
+          keepalive,
           waiters: [{ resolve, reject }],
         });
       }
@@ -282,7 +309,7 @@ class DraftOperationQueue {
         const entry = this.#entries.shift()!;
         if (entry.kind === "save") {
           try {
-            const saved = await this.save(entry.value);
+            const saved = await this.save(entry.value, entry.keepalive);
             for (const waiter of entry.waiters) waiter.resolve(saved);
           } catch (error) {
             for (const waiter of entry.waiters) waiter.reject(error);
@@ -292,7 +319,7 @@ class DraftOperationQueue {
         try {
           let saved: NormalizedDraft;
           try {
-            saved = await this.save(entry.value);
+            saved = await this.save(entry.value, false);
           } catch (error) {
             for (const waiter of entry.saveWaiters) waiter.reject(error);
             throw error;
@@ -311,6 +338,45 @@ class DraftOperationQueue {
     }
   }
 }
+
+/**
+ * A key the input method owns. Safari fires the Enter that confirms a
+ * composition after compositionend, with `isComposing` false and the IME's
+ * keyCode 229; other browsers report `isComposing`.
+ */
+const imeKeyEvent = (event: ReactKeyboardEvent): boolean =>
+  event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+
+/**
+ * Whether pasted text only names the pasted files. File managers put the
+ * copied files' names, paths, or file URLs on the clipboard beside the files.
+ */
+const textOnlyNamesFiles = (text: string, files: readonly File[]): boolean => {
+  const names = new Set(files.map(({ name }) => name));
+  return text.split(/\r?\n/u).every((line) => {
+    let entry = line.trim();
+    if (entry.length === 0) return true;
+    if (/^file:\/\//iu.test(entry)) {
+      try {
+        entry = decodeURIComponent(new URL(entry).pathname);
+      } catch {
+        return false;
+      }
+    }
+    return names.has(
+      entry.slice(Math.max(entry.lastIndexOf("/"), entry.lastIndexOf("\\")) + 1),
+    );
+  });
+};
+
+/**
+ * A failed transport or server-side fault may succeed unchanged later; a
+ * definitive rejection (validation, conflict, authorization) needs an edit.
+ */
+const draftSaveFailureIsTransient = (error: unknown): boolean =>
+  error instanceof ApiError
+    ? error.status >= 500 || (error.retryable && error.status !== 409)
+    : error instanceof TypeError;
 
 const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
@@ -363,7 +429,11 @@ export function Composer({
     useComposerReasoningFit();
   const chatViewVisible = useContext(ChatViewVisibilityContext);
   const resolvedApplicationStore = applicationStore ?? EMPTY_APPLICATION_STORE;
-  const application = useApplicationStore(resolvedApplicationStore);
+  const application = useApplicationStoreSelector(
+    resolvedApplicationStore,
+    selectComposerApplication,
+    sameSelectedFields,
+  );
   const snapshot = state.snapshot;
   const serverDraft = snapshot?.draft;
   const retainedComposerState = getRetainedComposerDeliveryState(store);
@@ -690,7 +760,7 @@ export function Composer({
   }, [store]);
 
   const saveDraftValue = useCallback(
-    async (value: DraftValue) => {
+    async (value: DraftValue, keepalive = false) => {
       const base = syncedDraft.current;
       if (!base) throw new Error("Draft is not loaded.");
       if (conflictRef.current)
@@ -732,14 +802,17 @@ export function Composer({
         lastSavedContextExcerpts.current = excerptsToSave;
         lastSavedAttachments.current = attachmentsToSave;
         lastSavedTaskReferences.current = taskReferencesToSave;
-        const saved = await store.saveDraft({
+        const draft = {
           text: textToSave,
           ...(skillToSave ? { selectedSkillId: skillToSave } : {}),
           contextExcerpts: [...excerptsToSave],
           attachments: [...attachmentsToSave],
           taskReferences: [...taskReferencesToSave],
           revision: base.revision,
-        });
+        };
+        const saved = await (keepalive
+          ? store.saveDraft(draft, { keepalive: true })
+          : store.saveDraft(draft));
         if (
           !syncedDraft.current ||
           syncedDraft.current.revision <= saved.revision
@@ -1035,7 +1108,7 @@ export function Composer({
   }, [state.pendingComposerTransfers, store]);
 
   const persistDraft = useCallback(
-    (exact = true): Promise<NormalizedDraft | undefined> => {
+    (exact = true, keepalive = false): Promise<NormalizedDraft | undefined> => {
       const base = syncedDraft.current;
       if (!base) return Promise.resolve(undefined);
       const value = {
@@ -1058,7 +1131,7 @@ export function Composer({
       ) {
         return Promise.resolve(base);
       }
-      return draftQueue.current!.persist(value, exact);
+      return draftQueue.current!.persist(value, exact, keepalive);
     },
     [],
   );
@@ -1085,13 +1158,39 @@ export function Composer({
       window.removeEventListener("keydown", focusComposerOnRightOption, true);
   }, [active]);
 
-  // Debounced autosave. Silent on success; failures surface through the
-  // store's actionError (and 409 through the conflict banner).
+  // Autosave. Silent on success; failures surface through the store's
+  // actionError (and 409 through the conflict banner). A transient failure
+  // re-arms the debounce with backoff, and the thread reconnecting retries
+  // promptly, so an unsaved draft does not wait for the next keystroke.
+  const [autosaveFailures, setAutosaveFailures] = useState(0);
+  const threadConnected = state.connection === "connected";
+  useEffect(() => {
+    if (threadConnected) setAutosaveFailures(0);
+  }, [threadConnected]);
+  const autosaveDraft = useCallback(
+    (keepalive = false) => {
+      void persistDraft(false, keepalive).then(
+        () => setAutosaveFailures(0),
+        (error: unknown) => {
+          if (!conflictRef.current && draftSaveFailureIsTransient(error)) {
+            setAutosaveFailures((failures) => failures + 1);
+          }
+        },
+      );
+    },
+    [persistDraft],
+  );
   useEffect(() => {
     if (!dirty) return;
-    const timer = window.setTimeout(() => {
-      void persistDraft(false).catch(() => undefined);
-    }, DRAFT_SAVE_DELAY_MS);
+    const timer = window.setTimeout(
+      () => autosaveDraft(),
+      autosaveFailures === 0
+        ? DRAFT_SAVE_DELAY_MS
+        : Math.min(
+            DRAFT_SAVE_DELAY_MS * 2 ** autosaveFailures,
+            DRAFT_SAVE_RETRY_MAX_DELAY_MS,
+          ),
+    );
     return () => window.clearTimeout(timer);
   }, [
     dirty,
@@ -1100,8 +1199,22 @@ export function Composer({
     contextExcerpts,
     attachments,
     taskReferences,
-    persistDraft,
+    autosaveFailures,
+    threadConnected,
+    autosaveDraft,
   ]);
+
+  // Closing, reloading, or backgrounding the page does not unmount React, and
+  // the debounce may never fire afterwards. Save immediately instead. A save
+  // already in flight still goes first: each save names the revision it
+  // replaces, so this one waits for that revision rather than guessing it.
+  useEffect(
+    () =>
+      subscribePageHide(() => {
+        if (dirtyRef.current) autosaveDraft(true);
+      }),
+    [autosaveDraft],
+  );
 
   useEffect(() => {
     if (skillPickerOpen || selectedSkillId) void loadSkills();
@@ -1311,14 +1424,17 @@ export function Composer({
   const availableDeliveryModes =
     snapshot?.capabilities.deliveryModes.filter(({ available }) => available) ??
     [];
-  const currentTasks = new Map(
-    (application.snapshot?.tasks ?? []).map((task) => [task.id, task]),
+  // Inventory-derived and memoized: the composer renders on every keystroke.
+  const currentTasks = useMemo(
+    () => new Map((application.snapshot?.tasks ?? []).map((task) => [task.id, task])),
+    [application.snapshot?.tasks],
   );
-  const referenceThreads = [...new Map([
+  const referenceThreads = useMemo(() => [...new Map([
     ...Object.values(application.descendantPages ?? {}).flatMap((page) => page.descendants.map(({ thread }) => thread)),
     ...(application.snapshot?.threads ?? []),
   ].map((thread) => [thread.id, thread])).values()].filter((thread) =>
-    thread.id !== store.threadId && thread.inventoryState !== "archived");
+    thread.id !== store.threadId && thread.inventoryState !== "archived"),
+  [application.descendantPages, application.snapshot?.threads, store.threadId]);
   const referenceLocations = useMemo(() => {
     const catalog = application.snapshot;
     const locations = new Map<string, ThreadReferenceLocation>();
@@ -1334,12 +1450,17 @@ export function Composer({
     }
     return locations;
   }, [application.snapshot, referenceThreads.length]);
-  const threadChoices = referenceThreads.filter((thread) =>
-    !threadReferenceText.references.some(({ threadId }) => threadId === thread.id) &&
-    matchesSearchQuery(threadQuery, [thread.title.text, thread.backend.brand,
-      referenceLocations.get(thread.workspaceId)?.project ?? "",
-      referenceLocations.get(thread.workspaceId)?.environment ?? ""]),
-  ).slice(0, 30);
+  // The first 30 matches, without testing the rest of the inventory.
+  const threadChoices: NormalizedApplicationThreadSummary[] = [];
+  for (const thread of referenceThreads) {
+    if (threadChoices.length === 30) break;
+    if (
+      !threadReferenceText.references.some(({ threadId }) => threadId === thread.id) &&
+      matchesSearchQuery(threadQuery, [thread.title.text, thread.backend.brand,
+        referenceLocations.get(thread.workspaceId)?.project ?? "",
+        referenceLocations.get(thread.workspaceId)?.environment ?? ""])
+    ) threadChoices.push(thread);
+  }
   const taskProjectionChecking = !application.authoritative;
   const missingTaskReferences = taskProjectionChecking
     ? []
@@ -3321,16 +3442,22 @@ export function Composer({
                   onCompositionEnd={() => { mentionComposing.current = false; }}
                   onPaste={(event) => {
                     const files = Array.from(event.clipboardData.files);
-                    if (files.length > 0) addAttachmentFiles(files);
+                    if (files.length === 0) return;
+                    addAttachmentFiles(files);
+                    // Other text, such as copied spreadsheet cells, still pastes.
+                    if (textOnlyNamesFiles(event.clipboardData.getData("text/plain"), files)) {
+                      event.preventDefault();
+                    }
                   }}
                   onKeyDown={(event) => {
+                    const ime = imeKeyEvent(event);
                     if (
-                      threadPickerOpen && !event.nativeEvent.isComposing &&
+                      threadPickerOpen && !ime &&
                       (event.key === "ArrowDown" || event.key === "ArrowUp") && threadChoices.length > 0
                     ) {
                       event.preventDefault();
                       setThreadChoiceIndex((index) => (index + (event.key === "ArrowDown" ? 1 : -1) + threadChoices.length) % threadChoices.length);
-                    } else if (threadPickerOpen && !event.nativeEvent.isComposing &&
+                    } else if (threadPickerOpen && !ime &&
                       (event.key === "Enter" || event.key === "Tab") && !event.shiftKey && threadChoices[threadChoiceIndex]) {
                       event.preventDefault();
                       stageThreadReference(threadChoices[threadChoiceIndex]!);
@@ -3338,7 +3465,7 @@ export function Composer({
                       event.preventDefault();
                       event.stopPropagation();
                       closeThreadPicker();
-                    } else if (commandMenuOpen &&
+                    } else if (commandMenuOpen && !ime &&
                       (event.key === "ArrowDown" || event.key === "ArrowUp")
                     ) {
                       event.preventDefault();
@@ -3350,6 +3477,7 @@ export function Composer({
                       );
                     } else if (
                       commandMenuOpen &&
+                      !ime &&
                       activeCommand &&
                       (event.key === "Enter" || event.key === "Tab")
                     ) {
@@ -3360,7 +3488,7 @@ export function Composer({
                       setDismissedCommandDraft(text);
                     } else if (
                       event.key === "Escape" &&
-                      !event.nativeEvent.isComposing &&
+                      !ime &&
                       document.querySelector(OPEN_OVERLAY_SELECTOR) === null
                     ) {
                       event.preventDefault();
@@ -3375,7 +3503,7 @@ export function Composer({
                     } else if (
                       event.key === "Enter" &&
                       !event.shiftKey &&
-                      !event.nativeEvent.isComposing &&
+                      !ime &&
                       window.matchMedia("(pointer: fine)").matches
                     ) {
                       event.preventDefault();

@@ -13,7 +13,7 @@ import { MAXIMUM_CONTEXT_EXCERPT_NOTE_BYTES } from "../../shared/index.js";
 import { OPEN_OVERLAY_SELECTOR } from "../app/android-back.js";
 import { Button } from "../components/ui/button.js";
 
-import { useContextExcerptStagingSnapshot, type ContextExcerptStagingTarget } from "./coordinator.js";
+import { useComposerDraftStagingSnapshot, type ContextExcerptStagingTarget } from "./coordinator.js";
 
 const VIEWPORT_GUTTER = 12;
 const SELECTION_GAP = 8;
@@ -67,7 +67,7 @@ export function PierreSelectionAction({
   readonly stageWithNoteLabel?: string;
 }): React.JSX.Element {
   const sendHintId = useId();
-  const { deliveryMode = "submit" } = useContextExcerptStagingSnapshot(stagingTarget);
+  const { deliveryMode = "submit" } = useComposerDraftStagingSnapshot(stagingTarget);
   const sendLabel = deliveryMode === "submit" ? "send" : deliveryMode;
   const markerRef = useRef<HTMLSpanElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);

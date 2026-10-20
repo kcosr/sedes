@@ -8,7 +8,6 @@ import {
 
 export const DIRECTORY_BROWSER_CAPABILITY_ID = "directory_browser" as const;
 export const DIRECTORY_BROWSER_MAJOR_VERSION = 1 as const;
-export const DIRECTORY_BROWSER_DEFAULT_PAGE_SIZE = 50;
 export const DIRECTORY_BROWSER_MAXIMUM_PAGE_SIZE = 200;
 
 const canonicalAbsolutePathSchema = z

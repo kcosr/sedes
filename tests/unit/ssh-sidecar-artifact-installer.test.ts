@@ -27,7 +27,7 @@ import {
   SshSidecarConnectionError,
 } from "../../src/server/sidecar/ssh-sidecar-artifact-installer.js";
 import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelopes.js";
-import type { SidecarServiceControlBoundary } from "../../src/server/sidecar/sidecar-provisioner.js";
+import { SidecarProvisionerCleanupError, type SidecarServiceControlBoundary } from "../../src/server/sidecar/sidecar-provisioner.js";
 import {
   sidecarManagementRequestSchema,
   type SidecarManagementRequest,
@@ -807,6 +807,86 @@ describe("SshSidecarArtifactInstaller", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   }, 10_000);
+
+  it.each(["inspect", "attachExisting"] as const)(
+    "fences %s when its management child survives cleanup",
+    async (operation) => {
+      const artifact = await artifactFixture(Buffer.from("surviving management bundle"));
+      const child = fakeChild();
+      child.kill.mockImplementation(() => true);
+      child.stdin.on("data", () => {
+        child.stdout.write(`${JSON.stringify({ managementVersion: 1, requestId: "wrong-request", outcome: "absent" })}\n`);
+      });
+      const installer = new SshSidecarArtifactInstaller({
+        serviceScope, configuration, host: "srv", artifact,
+        agentToolEndpointKey: AGENT_TOOL_ENDPOINT_KEY,
+        spawnProcess: captureSpawn([], child, () => undefined),
+      });
+      if (operation === "attachExisting") {
+        vi.spyOn(installer, "inspect").mockResolvedValue({
+          scope: serviceScope, serviceIncarnation: "original-service",
+          runtimeWireVersion: SIDECAR_WIRE_VERSION,
+          buildId: "fixture", artifactSha256: "a".repeat(64),
+          controllerEpoch: 1, attached: false, attachmentMode: "recovery", state: "ready",
+          desiredConfiguration: configuration, effectiveConfiguration: configuration,
+          configurationState: "applied", resources: [], resourcesFingerprint: "b".repeat(64),
+        });
+      }
+      const signal = new AbortController().signal;
+      const result = operation === "attachExisting"
+        ? installer.attachExisting(1, "n".repeat(48), signal)
+        : installer.inspect(signal);
+      await expect(result).rejects.toMatchObject({
+        name: SshSidecarArtifactCleanupError.name,
+        cause: { diagnosticCode: "ssh_child_survived_cleanup" },
+      });
+      await expect(result).rejects.toBeInstanceOf(SidecarProvisionerCleanupError);
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    },
+    15_000,
+  );
+
+  it.each(["inspect", "attachExisting"] as const)(
+    "fences %s when its cancelled configuration probe survives cleanup",
+    async (operation) => {
+      const artifact = await artifactFixture(Buffer.from("surviving probe bundle"));
+      const probe = fakeChild();
+      probe.kill.mockImplementation(() => true);
+      const controller = new AbortController();
+      const spawned: string[][] = [];
+      const installer = new SshSidecarArtifactInstaller({
+        serviceScope, configuration, host: "srv", artifact,
+        agentToolEndpointKey: AGENT_TOOL_ENDPOINT_KEY,
+        spawnProcess: (_executable, arguments_) => {
+          spawned.push([...arguments_]);
+          if (!arguments_.includes("-G")) throw new Error("carrier_must_not_start");
+          queueMicrotask(() => controller.abort(new Error("caller_cancelled")));
+          return probe as unknown as ChildProcess;
+        },
+      });
+      if (operation === "attachExisting") {
+        vi.spyOn(installer, "inspect").mockResolvedValue({
+          scope: serviceScope, serviceIncarnation: "original-service",
+          runtimeWireVersion: SIDECAR_WIRE_VERSION,
+          buildId: "fixture", artifactSha256: "a".repeat(64),
+          controllerEpoch: 1, attached: false, attachmentMode: "recovery", state: "ready",
+          desiredConfiguration: configuration, effectiveConfiguration: configuration,
+          configurationState: "applied", resources: [], resourcesFingerprint: "b".repeat(64),
+        });
+      }
+      const result = operation === "attachExisting"
+        ? installer.attachExisting(1, "n".repeat(48), controller.signal)
+        : installer.inspect(controller.signal);
+      await expect(result).rejects.toMatchObject({
+        name: SshSidecarArtifactCleanupError.name,
+        cause: { cause: { diagnosticCode: "ssh_child_survived_cleanup" } },
+      });
+      await expect(result).rejects.toBeInstanceOf(SidecarProvisionerCleanupError);
+      expect(probe.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(spawned).toHaveLength(1);
+    },
+    15_000,
+  );
 
   it("atomically repairs an incomplete digest target left by a prior crash", async () => {
     const bundle = Buffer.from("complete atomic bundle");

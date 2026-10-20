@@ -42,10 +42,6 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw signal.reason ?? new Error("operation_aborted");
-}
-
 /**
  * Principal-scoped workspace discovery and admission shared by HTTP and
  * canonical agent tools. Execution-environment configuration remains operator
@@ -219,7 +215,7 @@ export class WorkspaceApplicationService {
     } = {},
   ): Promise<OpenedWorkspaceSummary> {
     const signal = options.signal ?? new AbortController().signal;
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     const current = this.input.inventory.getWorkspace(scope, workspaceId);
     if (options.expectedProjectId !== undefined && current.projectId !== options.expectedProjectId) {
       throw new DomainError(
@@ -261,7 +257,7 @@ export class WorkspaceApplicationService {
     environmentAuthority: TrustedEnvironmentAuthorityGrant | undefined,
     signal: AbortSignal,
   ): Promise<ValidatedWorkspace> {
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     this.input.inventory.getEnvironment(scope, request.environmentId);
     const validated = await callRuntime(() =>
       this.input.execution.validateWorkspace(
@@ -270,7 +266,7 @@ export class WorkspaceApplicationService {
         request.path,
       ),
     );
-    throwIfAborted(signal);
+    signal.throwIfAborted();
     if (validated.summary.environmentId !== request.environmentId) {
       throw new DomainError(
         "conflict",

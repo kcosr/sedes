@@ -8,11 +8,10 @@ import { useNativeVoice, useVoiceState } from "./VoiceProvider.js";
 import type { NativeVoiceStore } from "./NativeVoiceStore.js";
 import { VoiceQuickSheet } from "./VoiceQuickSheet.js";
 import { ThreadPicker } from "../components/ThreadPicker.js";
-import { voiceReadiness } from "./VoiceSettingsPage.js";
 import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
-import { resumeVoice, voiceThreadFilterWarning } from "./voice-session.js";
+import { resumeVoice, voiceReadiness, voiceThreadFilterWarning } from "./voice-session.js";
 import { nativeThreadTitle, type NativeRecordingCommandContext, type NativeVoiceState } from "./native-voice-plugin.js";
-import { recordingRecoveryContext, recordingRecoveryLabel, recordingRecoveryStatus, recordingRecoveryTitle, savedRecording } from "./VoiceRecordingRecovery.js";
+import { DiscardSavedDictationDialog, recordingRecoveryContext, recordingRecoveryLabel, recordingRecoveryStatus, recordingRecoveryTitle, savedRecording } from "./VoiceRecordingRecovery.js";
 import { voiceRecordingTarget } from "./voice-recording-target.js";
 import "./voice.css";
 
@@ -56,6 +55,8 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
       keepButton.current?.focus({ preventScroll: true });
   }, [store]);
   const [sheet, setSheet] = useState(false);
+  const [discarding, setDiscarding] = useState<string | null>(null);
+  const closeDiscard = useCallback(() => setDiscarding(null), []);
   const statusId = useId();
   const threadId = route.name === "thread" ? route.threadId : null;
   const composerAvailable = useSyncExternalStore(store.subscribeSubmissionComposers, () => store.hasSubmissionComposer(threadId));
@@ -79,8 +80,8 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     return () => { alive = false; document.removeEventListener("visibilitychange", publish); };
   }, [store, threadId, threadTitle, composerMode, composerAvailable, state.native?.connectionGeneration, state.native?.settingsRevision, state.native?.readiness]);
   const native = state.native;
-  // A lost connection closes the sheet and picker, so neither reopens by itself when voice reconnects.
-  if (!native && (sheet || picker)) { setSheet(false); setPicker(null); }
+  // A lost connection closes the sheet, picker and discard confirmation, so none reopens by itself when voice reconnects.
+  if (!native && (sheet || picker || discarding)) { setSheet(false); setPicker(null); setDiscarding(null); }
   // Unavailable voice is reported and retried in Settings → Voice; the card appears only for a connected session.
   if (!native) return null;
   const { phase, active, settings } = native;
@@ -244,10 +245,9 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                   act(() => store.plugin.retryRecordingRecognition(command));
                 }}><RotateCcw aria-hidden="true" /></button>}
             <button type="button" className="voice-card-button" aria-label="Discard saved dictation" title="Discard"
-              aria-disabled={state.pending || !saved.canDiscard || undefined} onClick={() => {
+              aria-haspopup="dialog" aria-disabled={state.pending || !saved.canDiscard || undefined} onClick={() => {
                 if (state.pending || !saved.canDiscard) return;
-                const command = recordingRecoveryContext(native, saved);
-                act(() => store.plugin.discardRecording(command));
+                setDiscarding(saved.recordingId);
               }}><X strokeWidth={1.8} aria-hidden="true" /></button>
             <button type="button" className="voice-card-button" aria-label="Send saved dictation" title="Send"
               aria-disabled={state.pending || !saved.canSend || saved.stage !== "ready" || saved.hasUnrecognizedAudio || undefined} onClick={() => {
@@ -362,6 +362,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
       }} />
     {/* Beside the card, so choosing Off in the sheet keeps it open even when Off hides the card. */}
     <VoiceQuickSheet store={store} threads={threads} open={sheet} onOpenChange={setSheet} />
+    <DiscardSavedDictationDialog store={store} recordingId={discarding} onClose={closeDiscard} />
   </>;
 }
 function subscribeDocumentVisibility(listener: () => void): () => void {

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile, rm } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, unlink, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { app, safeStorage } from "electron";
 
@@ -33,7 +33,10 @@ export class CredentialStore {
   }
   requireEncryption() {
     if (!this.storage.isEncryptionAvailable() || (process.platform === "linux" && this.storage.getSelectedStorageBackend?.() === "basic_text")) {
-      throw new Error("Secure credential storage is unavailable. Configure an OS keyring before pairing.");
+      throw Object.assign(
+        new Error("Secure credential storage is unavailable. Configure an OS keyring before pairing."),
+        { code: "credential_storage_unavailable" },
+      );
     }
   }
   async getCredential(input) {
@@ -59,6 +62,18 @@ export class CredentialStore {
       await writeFile(temporary, encrypted, { mode: 0o600, flag: "wx" });
       await rename(temporary, filename);
     } finally { await unlink(temporary).catch(() => undefined); }
+  }
+  /** Stores the credential as the profile's only one, removing its other origins. */
+  async replaceProfileCredential(input) {
+    await this.setCredential(input);
+    const directory = this.profileDirectory(input.profileId);
+    const retained = path.basename(this.filename(identity(input)));
+    for (const entry of await readdir(directory)) {
+      if (entry === retained || !entry.endsWith(".enc")) continue;
+      // The new credential is saved; a superseded one that cannot be removed
+      // now is retried by the next replacement instead of failing this save.
+      await unlink(path.join(directory, entry)).catch(() => undefined);
+    }
   }
   async removeCredential(input) {
     await unlink(this.filename(identity(input))).catch((error) => { if (error.code !== "ENOENT") throw error; });

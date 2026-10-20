@@ -4,7 +4,7 @@ import { parseCodexBindingDetail } from "./codex-binding-codec.js";
 import type { UsageSink } from "../../usage/contracts.js";
 import { CodexUsageCapture } from "./codex-usage-capture.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { rememberBoundedReceipt } from "../bounded-receipts.js";
 import type {
   BackendCapabilityDocument,
@@ -23,7 +23,6 @@ import {
   hasDeliverableComposerInput,
   type UsageSnapshot,
 } from "../../../shared/protocol/conversation.js";
-import type { ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
 import {
   boundedDisplayTextSchema,
   MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES,
@@ -64,10 +63,7 @@ import type {
   CodexNotificationListener,
   CodexSharedClientFacade,
 } from "./codex-client-facade.js";
-import {
-  assertCodexAttestedServerNotificationParams,
-  CodexAppServerBindingError,
-} from "../../provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
+import { assertCodexAttestedServerNotificationParams } from "../../provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import {
   CODEX_C1_MAX_ITEMS_PER_TURN,
   codexThreadReadMethod,
@@ -105,11 +101,7 @@ import {
   resolveCodexSkill,
   type CodexComposerSkillPreferenceReader,
 } from "./codex-skills.js";
-import {
-  codexContextExcerptCarrier,
-  codexContextExcerptFingerprint,
-} from "./codex-context-excerpts.js";
-import { codexTaskContextFingerprint } from "./codex-task-contexts.js";
+import { codexContextExcerptCarrier } from "./codex-context-excerpts.js";
 import {
   stagedAttachmentFingerprint,
   stagedAttachmentManifest,
@@ -144,29 +136,16 @@ import {
   copyCodexSubmissionCorrelationKey,
   type CodexSubmissionCorrelationScope,
 } from "./codex-submission-correlation.js";
-import {
-  CodexRpcDeliveryError,
-  CodexRpcProtocolError,
-  CodexRpcRemoteError,
-} from "./rpc/errors.js";
+import { CodexRpcDeliveryError, CodexRpcRemoteError } from "./rpc/errors.js";
 import { type CodexRpcNotification, isCodexRpcUndecodableNotification } from "./rpc/codex-rpc-client.js";
-import {
-  CodexInteractionBridge,
-  CodexInteractionBridgeError,
-} from "./codex-interaction-bridge.js";
+import { CodexInteractionBridge } from "./codex-interaction-bridge.js";
 import type {
   CodexServerRequestRoute,
   CodexServerRequestRouter,
 } from "./codex-server-request-router.js";
 import {
   codexExecutionPolicy,
-  isCodexApprovalPolicy,
-  isCodexApprovalReviewer,
-  type CodexApprovalPolicy,
-  type CodexApprovalReviewer,
   type CodexExecutionPolicySelection,
-  type CodexNetworkAccess,
-  type CodexSandboxMode,
 } from "./codex-execution-policy.js";
 import {
   withCodexAgentToolCliEnvironment,
@@ -176,7 +155,6 @@ import {
 } from "./codex-agent-tool-cli-environment.js";
 import type { CodexExecutionSettingsTuple } from "./codex-thread-execution-settings-repository.js";
 import {
-  decodeCodexServiceTier,
   encodeCodexServiceTier,
   type CodexServiceTierSelection,
 } from "./codex-service-tier.js";
@@ -202,28 +180,35 @@ import {
   CODEX_TUI_FEATURE_REF,
   type CodexTuiActionId,
 } from "./codex-tui-feature.js";
-
-export type { CodexExecutionSettingsTuple };
-
-interface CodexObservedExecutionSettingsBase {
-  readonly model: string;
-  readonly reasoningEffort: string | null;
-  readonly serviceTier: CodexServiceTierSelection | null;
-  readonly serviceTierClassification: "recognized" | "external_custom";
-  readonly sandboxMode: CodexSandboxMode | null;
-  readonly sandboxClassification: "recognized" | "external_custom";
-  readonly networkAccess: CodexNetworkAccess | null;
-  readonly networkClassification: "recognized" | "external_custom";
-  readonly approvalPolicy: CodexApprovalPolicy | null;
-  readonly approvalPolicyClassification: "recognized" | "external_custom";
-  readonly approvalReviewer: CodexApprovalReviewer | null;
-  readonly approvalReviewerClassification: "recognized" | "external_custom";
-}
-
-export type CodexObservedExecutionSettings =
-  CodexObservedExecutionSettingsBase & {
-    readonly policyObservation: "complete" | "incomplete";
-  };
+import { isRecord } from "../../../shared/json-guards.js";
+import {
+  codexObservedExecutionSettings,
+  codexObservedThreadExecutionSettings,
+  importedDesiredSettings,
+  sameDesiredSettings,
+  sameExecutionSettingsTuple,
+  sameProjection,
+  sameSettingsObservation,
+  sameSpeedPolicyProjection,
+  type CodexObservedExecutionSettings,
+  type CodexServiceTierResolution,
+  type CodexSettingsObservationReceipt,
+} from "./codex-observed-execution-settings.js";
+import { serializeCodexSubmissionRetryAnchor } from "./codex-submission-retry-anchor.js";
+import {
+  assertCodexHistoryMode,
+  bindingMismatch,
+  codexContextExcerptMutationFingerprint,
+  codexError,
+  codexSteerTargetUnavailable,
+  codexTaskContextMutationFingerprint,
+  conversationClosed,
+  mapCodexInteractionError,
+  mapCodexMutationError,
+  mapCodexReadError,
+  mutationOutcomeUnknown,
+  projectionCancelled,
+} from "./codex-conversation-errors.js";
 
 /**
  * Backend-owned execution-settings authority. The driver never imports the
@@ -286,8 +271,6 @@ const MAXIMUM_PAGINATED_ESTABLISHMENT_NOTIFICATION_BYTES =
   MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES;
 const SNAPSHOT_TURN_LIMIT = 10;
 const HISTORY_PAGE_LIMIT = 500;
-const MAXIMUM_RETRY_ANCHOR_BYTES = 4_096;
-const RETRY_ANCHOR_PREFIX = "codex-retry-anchor:";
 const CODEX_LIVE_PROJECTION_INTERVAL_MILLISECONDS = 50;
 const CODEX_AUTH_RECOVERY_STARTED_NOTICE =
   "Codex is recovering model provider authentication.";
@@ -297,13 +280,6 @@ const CODEX_AUTH_RECOVERY_COMPLETED_NOTICE =
 type EventSubscriber = {
   readonly after: number;
   readonly listener: BackendEventListener;
-};
-
-type CodexSettingsObservationReceipt = {
-  readonly generation: number;
-  readonly inboundSequence: number;
-  readonly modelProvider: string;
-  readonly settings: CodexObservedExecutionSettings;
 };
 
 type CodexStableResumeProjection = {
@@ -6465,41 +6441,6 @@ function assertCompleteLegacyResume(response: CodexThreadResumeResponse): void {
   }
 }
 
-export function selectCodexSnapshotWindow(
-  snapshot: BackendConversationSnapshot,
-): {
-  readonly snapshot: BackendConversationSnapshot;
-  readonly start: number;
-} {
-  const start = Math.max(
-    0,
-    snapshot.orderedBackendTurnIds.length - SNAPSHOT_TURN_LIMIT,
-  );
-  const turnIds = snapshot.orderedBackendTurnIds.slice(start);
-  const turnsById = Object.fromEntries(
-    turnIds.map((turnId) => [turnId, snapshot.turnsById[turnId]!]),
-  );
-  const itemIds = turnIds.flatMap(
-    (turnId) => turnsById[turnId]!.orderedBackendItemIds,
-  );
-  const itemsById = Object.fromEntries(
-    itemIds.map((itemId) => [itemId, snapshot.itemsById[itemId]!]),
-  );
-  return {
-    start,
-    snapshot: {
-      orderedBackendTurnIds: turnIds,
-      turnsById,
-      itemsById,
-      runState: snapshot.runState,
-      ...(snapshot.activeBackendTurnId &&
-      turnsById[snapshot.activeBackendTurnId]
-        ? { activeBackendTurnId: snapshot.activeBackendTurnId }
-        : {}),
-    },
-  };
-}
-
 function historyPage(
   snapshot: BackendConversationSnapshot,
   turnIds: readonly string[],
@@ -6674,137 +6615,6 @@ function materializeLiveThread(
       ),
     })),
   };
-}
-
-type CodexSubmissionRetryAnchor = {
-  readonly version: 2;
-  readonly threadId: string;
-  readonly historyMode: "legacy" | "paginated";
-  readonly terminalTurnId: string | null;
-  readonly terminalIdentityDigest: string;
-};
-
-export function serializeCodexSubmissionRetryAnchor(
-  thread: CodexThread,
-): string {
-  return serializeCodexSubmissionRetryAnchorWithDomain(
-    thread,
-    "sedes.codex-terminal-identity.v1\0",
-  );
-}
-
-function serializeCodexSubmissionRetryAnchorWithDomain(
-  thread: CodexThread,
-  terminalIdentityDomain: string,
-): string {
-  const terminalTurn = thread.turns.at(-1);
-  const anchor: CodexSubmissionRetryAnchor = {
-    version: 2,
-    threadId: thread.id,
-    historyMode: thread.historyMode,
-    terminalTurnId: terminalTurn?.id ?? null,
-    terminalIdentityDigest: terminalTurnIdentityDigest(
-      terminalTurn,
-      terminalIdentityDomain,
-    ),
-  };
-  const encoded = Buffer.from(JSON.stringify(anchor), "utf8").toString(
-    "base64url",
-  );
-  const serialized = `${RETRY_ANCHOR_PREFIX}${encoded}`;
-  if (Buffer.byteLength(serialized, "utf8") > MAXIMUM_RETRY_ANCHOR_BYTES) {
-    throw codexError(
-      "internal",
-      "Codex could not capture a bounded submission retry anchor.",
-      "codex_submission_anchor_oversized",
-    );
-  }
-  return serialized;
-}
-
-export function codexSubmissionRetryAnchorMatches(
-  serialized: string,
-  thread: CodexThread,
-): boolean {
-  const anchor = parseCodexSubmissionRetryAnchor(serialized);
-  if (!anchor) return false;
-  const current = serializeCodexSubmissionRetryAnchor(thread);
-  if (current === serialized) return true;
-  // Pre-rename v2 anchors are durable retry evidence. Recompute their exact
-  // historical bytes only for comparison; newly captured anchors stay Sedes.
-  return (
-    serializeCodexSubmissionRetryAnchorWithDomain(
-      thread,
-      "harness.codex-terminal-identity.v1\0",
-    ) === serialized
-  );
-}
-
-function parseCodexSubmissionRetryAnchor(
-  serialized: string,
-): CodexSubmissionRetryAnchor | undefined {
-  if (
-    !serialized.startsWith(RETRY_ANCHOR_PREFIX) ||
-    Buffer.byteLength(serialized, "utf8") > MAXIMUM_RETRY_ANCHOR_BYTES
-  ) {
-    return undefined;
-  }
-  const encoded = serialized.slice(RETRY_ANCHOR_PREFIX.length);
-  if (!/^[A-Za-z0-9_-]+$/u.test(encoded)) return undefined;
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
-  } catch {
-    return undefined;
-  }
-  if (
-    typeof decoded !== "object" ||
-    decoded === null ||
-    Object.keys(decoded).length !== 5 ||
-    !("version" in decoded) ||
-    decoded.version !== 2 ||
-    !("threadId" in decoded) ||
-    typeof decoded.threadId !== "string" ||
-    decoded.threadId.length === 0 ||
-    !("historyMode" in decoded) ||
-    (decoded.historyMode !== "legacy" && decoded.historyMode !== "paginated") ||
-    !("terminalTurnId" in decoded) ||
-    (decoded.terminalTurnId !== null &&
-      (typeof decoded.terminalTurnId !== "string" ||
-        decoded.terminalTurnId.length === 0)) ||
-    !("terminalIdentityDigest" in decoded) ||
-    typeof decoded.terminalIdentityDigest !== "string" ||
-    !/^[A-Za-z0-9_-]{43}$/u.test(decoded.terminalIdentityDigest)
-  ) {
-    return undefined;
-  }
-  return decoded as CodexSubmissionRetryAnchor;
-}
-
-function terminalTurnIdentityDigest(
-  turn: CodexThread["turns"][number] | undefined,
-  domain: string,
-) {
-  const hash = createHash("sha256").update(domain);
-  if (!turn) return hash.update("empty").digest("base64url");
-  hash
-    .update(turn.id)
-    .update("\0")
-    .update(turn.status)
-    .update("\0")
-    .update(turn.error?.message ?? "");
-  for (const item of turn.items) {
-    hash
-      .update("\0")
-      .update(item.type)
-      .update("\0")
-      .update(item.id)
-      .update("\0");
-    if ("status" in item && typeof item.status === "string") {
-      hash.update(item.status);
-    }
-  }
-  return hash.digest("base64url");
 }
 
 export function normalizeCodexTurnStatuses(thread: CodexThread): CodexThread {
@@ -7137,32 +6947,6 @@ function lifecycleRunState(
   }
 }
 
-function projectionCancelled(cause: unknown): BackendError {
-  return codexError(
-    "unavailable",
-    "Codex projection establishment was cancelled.",
-    "codex_projection_cancelled",
-    true,
-    cause,
-  );
-}
-
-function conversationClosed(): BackendError {
-  return codexError(
-    "invalid_state",
-    "The Codex conversation is closed.",
-    "codex_conversation_closed",
-  );
-}
-
-function bindingMismatch(): BackendError {
-  return codexError(
-    "permission_denied",
-    "The Codex thread does not match this conversation binding.",
-    "codex_thread_binding_mismatch",
-  );
-}
-
 function isUnmaterializedThreadError(
   error: unknown,
 ): error is CodexRpcRemoteError {
@@ -7198,347 +6982,6 @@ function isMissingPaginatedSourceRolloutError(
 
 function isExecutionPolicyRejected(error: unknown): error is BackendError {
   return error instanceof BackendError && error.backendCode === "codex_execution_policy_rejected";
-}
-
-export function codexObservedExecutionSettings(
-  model: string,
-  reasoningEffort: string | null,
-  nativeServiceTier: string | null,
-  approvalPolicy: unknown,
-  approvalsReviewer: unknown,
-  sandboxPolicy: unknown,
-): CodexObservedExecutionSettings {
-  const sandbox = observedSandboxPolicy(sandboxPolicy);
-  const observedApprovalPolicy = isCodexApprovalPolicy(approvalPolicy)
-    ? approvalPolicy
-    : null;
-  const observedApprovalReviewer = isCodexApprovalReviewer(approvalsReviewer)
-    ? approvalsReviewer
-    : null;
-  const serviceTier = decodeCodexServiceTier(nativeServiceTier);
-  return {
-    model,
-    reasoningEffort,
-    serviceTier: serviceTier ?? null,
-    serviceTierClassification:
-      serviceTier === undefined ? "external_custom" : "recognized",
-    ...sandbox,
-    approvalPolicy: observedApprovalPolicy,
-    approvalPolicyClassification:
-      observedApprovalPolicy === null ? "external_custom" : "recognized",
-    approvalReviewer: observedApprovalReviewer,
-    approvalReviewerClassification:
-      observedApprovalReviewer === null ? "external_custom" : "recognized",
-    policyObservation: "complete",
-  };
-}
-
-export function codexObservedThreadExecutionSettings(
-  model: string,
-  reasoningEffort: string | null,
-  nativeServiceTier: string | null,
-  approvalPolicy: unknown,
-  approvalsReviewer: unknown,
-  sandboxPolicy: unknown,
-): CodexObservedExecutionSettings {
-  return {
-    ...codexObservedExecutionSettings(
-      model,
-      reasoningEffort,
-      nativeServiceTier,
-      approvalPolicy,
-      approvalsReviewer,
-      sandboxPolicy,
-    ),
-    policyObservation: "complete",
-  };
-}
-
-function observedSandboxPolicy(
-  sandboxPolicy: unknown,
-): Pick<
-  CodexObservedExecutionSettingsBase,
-  | "sandboxMode"
-  | "sandboxClassification"
-  | "networkAccess"
-  | "networkClassification"
-> {
-  if (!isRecord(sandboxPolicy) || typeof sandboxPolicy.type !== "string") {
-    return externalSandboxObservation();
-  }
-  if (sandboxPolicy.type === "dangerFullAccess") {
-    return {
-      sandboxMode: "danger-full-access",
-      sandboxClassification: "recognized",
-      networkAccess: "enabled",
-      networkClassification: "recognized",
-    };
-  }
-  if (
-    sandboxPolicy.type === "readOnly" &&
-    typeof sandboxPolicy.networkAccess === "boolean"
-  ) {
-    return {
-      sandboxMode: "read-only",
-      sandboxClassification: "recognized",
-      networkAccess: observedNetworkAccess(sandboxPolicy.networkAccess),
-      networkClassification: "recognized",
-    };
-  }
-  if (
-    sandboxPolicy.type === "workspaceWrite" &&
-    typeof sandboxPolicy.networkAccess === "boolean"
-  ) {
-    const sandboxRecognized =
-      Array.isArray(sandboxPolicy.writableRoots) &&
-      sandboxPolicy.writableRoots.length === 0 &&
-      sandboxPolicy.excludeTmpdirEnvVar === true &&
-      sandboxPolicy.excludeSlashTmp === true;
-    return {
-      sandboxMode: sandboxRecognized ? "workspace-write" : null,
-      sandboxClassification: sandboxRecognized
-        ? "recognized"
-        : "external_custom",
-      networkAccess: observedNetworkAccess(sandboxPolicy.networkAccess),
-      networkClassification: "recognized",
-    };
-  }
-  if (sandboxPolicy.type === "externalSandbox") {
-    // External `restricted` is not equivalent to Sedes's disabled boolean;
-    // an explicit native `enabled` value is still independently recognizable.
-    const enabled = sandboxPolicy.networkAccess === "enabled";
-    return {
-      sandboxMode: null,
-      sandboxClassification: "external_custom",
-      networkAccess: enabled ? "enabled" : null,
-      networkClassification: enabled ? "recognized" : "external_custom",
-    };
-  }
-  return externalSandboxObservation();
-}
-
-function externalSandboxObservation(): Pick<
-  CodexObservedExecutionSettingsBase,
-  | "sandboxMode"
-  | "sandboxClassification"
-  | "networkAccess"
-  | "networkClassification"
-> {
-  return {
-    sandboxMode: null,
-    sandboxClassification: "external_custom",
-    networkAccess: null,
-    networkClassification: "external_custom",
-  };
-}
-
-function observedNetworkAccess(value: boolean): CodexNetworkAccess {
-  return value ? "enabled" : "disabled";
-}
-
-function importedDesiredSettings(
-  observed: CodexObservedExecutionSettings,
-  reasoningEffort: string | undefined,
-  retainedServiceTier?: CodexServiceTierSelection,
-): CodexExecutionSettingsTuple | undefined {
-  if (
-    reasoningEffort === undefined ||
-    observed.policyObservation !== "complete" ||
-    observed.sandboxClassification !== "recognized" ||
-    observed.sandboxMode === null ||
-    observed.networkClassification !== "recognized" ||
-    observed.networkAccess === null ||
-    observed.approvalPolicyClassification !== "recognized" ||
-    observed.approvalPolicy === null ||
-    observed.approvalReviewerClassification !== "recognized" ||
-    observed.approvalReviewer === null ||
-    observed.serviceTierClassification !== "recognized" ||
-    observed.serviceTier === null
-  ) {
-    return undefined;
-  }
-  return {
-    model: observed.model,
-    reasoningEffort,
-    serviceTier: retainedServiceTier ?? observed.serviceTier,
-    sandboxMode: observed.sandboxMode,
-    networkAccess: observed.networkAccess,
-    approvalPolicy: observed.approvalPolicy,
-    approvalReviewer: observed.approvalReviewer,
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function sameSettingsObservation(
-  left: CodexSettingsObservationReceipt,
-  right: CodexSettingsObservationReceipt,
-): boolean {
-  return (
-    left.modelProvider === right.modelProvider &&
-    left.settings.model === right.settings.model &&
-    left.settings.reasoningEffort === right.settings.reasoningEffort &&
-    left.settings.serviceTier === right.settings.serviceTier &&
-    left.settings.serviceTierClassification ===
-      right.settings.serviceTierClassification &&
-    left.settings.sandboxMode === right.settings.sandboxMode &&
-    left.settings.sandboxClassification ===
-      right.settings.sandboxClassification &&
-    left.settings.networkAccess === right.settings.networkAccess &&
-    left.settings.networkClassification ===
-      right.settings.networkClassification &&
-    left.settings.approvalPolicy === right.settings.approvalPolicy &&
-    left.settings.approvalPolicyClassification ===
-      right.settings.approvalPolicyClassification &&
-    left.settings.approvalReviewer === right.settings.approvalReviewer &&
-    left.settings.approvalReviewerClassification ===
-      right.settings.approvalReviewerClassification &&
-    left.settings.policyObservation === right.settings.policyObservation
-  );
-}
-
-function sameDesiredSettings(
-  left: CodexExecutionSettingsTuple,
-  right: CodexExecutionSettingsTuple,
-): boolean {
-  return (
-    left.model === right.model &&
-    left.reasoningEffort === right.reasoningEffort &&
-    left.serviceTier === right.serviceTier &&
-    left.sandboxMode === right.sandboxMode &&
-    left.networkAccess === right.networkAccess &&
-    left.approvalPolicy === right.approvalPolicy &&
-    left.approvalReviewer === right.approvalReviewer
-  );
-}
-
-function sameProjection(
-  left: CodexFastModeProjection | undefined,
-  right: CodexFastModeProjection | undefined,
-): boolean {
-  return (
-    left?.revision === right?.revision &&
-    left?.fastEnabled === right?.fastEnabled &&
-    left?.ultrafastEnabled === right?.ultrafastEnabled &&
-    left?.availability === right?.availability &&
-    left?.unavailableReason === right?.unavailableReason
-  );
-}
-
-/** A desired tuple and whether its tier may be written natively now. */
-type CodexServiceTierResolution = {
-  readonly desired: CodexExecutionSettingsTuple | null;
-  readonly writable: boolean;
-};
-
-function sameExecutionSettingsTuple(
-  left: CodexExecutionSettingsTuple,
-  right: CodexExecutionSettingsTuple,
-): boolean {
-  return (
-    left.model === right.model &&
-    left.reasoningEffort === right.reasoningEffort &&
-    left.serviceTier === right.serviceTier &&
-    left.sandboxMode === right.sandboxMode &&
-    left.networkAccess === right.networkAccess &&
-    left.approvalPolicy === right.approvalPolicy &&
-    left.approvalReviewer === right.approvalReviewer
-  );
-}
-
-function sameSpeedPolicyProjection(
-  current: CodexFastModeProjection | undefined,
-  recovered: CodexFastModeProjection,
-): boolean {
-  return (
-    sameProjection(current, recovered) &&
-    (current?.availability === "available" || current?.unavailableReason === "feature_disabled")
-  );
-}
-
-function mapCodexReadError(error: unknown): BackendError {
-  if (error instanceof BackendError) return error;
-  if (error instanceof CodexRpcDeliveryError) {
-    return codexError(
-      "unavailable",
-      "The Codex daemon is unavailable.",
-      error.message,
-      true,
-      error,
-    );
-  }
-  if (error instanceof CodexRpcRemoteError) {
-    if (error.code === -32001) {
-      return codexError(
-        "overloaded",
-        "The Codex daemon is overloaded.",
-        "codex_remote_overloaded",
-        true,
-        error,
-      );
-    }
-    if (error.code === -32601 || error.code === -32602) {
-      return codexError(
-        "incompatible_protocol",
-        "The Codex daemon rejected a required released operation.",
-        `codex_remote_${error.code}`,
-        false,
-        error,
-      );
-    }
-    return codexError(
-      "unavailable",
-      "Codex could not read the thread.",
-      `codex_remote_${error.code}`,
-      false,
-      error,
-    );
-  }
-  if (error instanceof CodexRpcProtocolError) {
-    return codexError(
-      "incompatible_protocol",
-      "Codex returned an invalid protocol response.",
-      error.message,
-      false,
-      error,
-    );
-  }
-  if (
-    (error instanceof CodexAppServerBindingError &&
-      error.direction === "client_request_result") ||
-    (error instanceof Error && error.name === "ZodError")
-  ) {
-    return codexError(
-      "incompatible_protocol",
-      "Codex returned an invalid protocol response.",
-      "codex_c1_protocol_invalid",
-      false,
-      error,
-    );
-  }
-  return codexError(
-    "internal",
-    "Codex could not complete the read safely.",
-    "codex_read_internal",
-    false,
-    error,
-  );
-}
-
-function assertCodexHistoryMode(thread: CodexThread): "legacy" | "paginated" {
-  switch (thread.historyMode) {
-    case "legacy":
-    case "paginated":
-      return thread.historyMode;
-    default:
-      throw codexError(
-        "incompatible_protocol",
-        "Codex returned an unknown history mode.",
-        "codex_history_mode_invalid",
-      );
-  }
 }
 
 /**
@@ -7577,17 +7020,6 @@ function settledCodexSteer(
   );
 }
 
-function mutationOutcomeUnknown(operation: string): BackendError {
-  return codexError(
-    "submission_unknown",
-    "Codex may have accepted the mutation; reconcile authoritative thread state before retrying.",
-    `codex_${operation}_outcome_unknown`,
-    true,
-    undefined,
-    true,
-  );
-}
-
 function sameSubmissionSource(
   left: SubmitTurnInput["source"],
   right: SubmitTurnInput["source"],
@@ -7598,226 +7030,5 @@ function sameSubmissionSource(
       (right.kind === "automation" &&
         left.automationId === right.automationId &&
         left.automationRunId === right.automationRunId))
-  );
-}
-
-function codexContextExcerptMutationFingerprint(
-  contextExcerpts: readonly ContextExcerpt[],
-  operation: "submit" | "steer",
-): string {
-  try {
-    return codexContextExcerptFingerprint(contextExcerpts);
-  } catch (error) {
-    throw mapCodexMutationError(error, operation);
-  }
-}
-
-function codexTaskContextMutationFingerprint(
-  taskContexts: SubmitTurnInput["taskContexts"],
-  operation: "submit" | "steer",
-): string {
-  try {
-    return codexTaskContextFingerprint(taskContexts);
-  } catch (error) {
-    throw mapCodexMutationError(error, operation);
-  }
-}
-
-function mapCodexInteractionError(error: unknown): BackendError {
-  if (error instanceof BackendError) return error;
-  if (error instanceof CodexInteractionBridgeError) {
-    return codexError(
-      error.outcomeUnknown ? "unavailable" : "rejected",
-      error.outcomeUnknown
-        ? "The Codex interaction response outcome cannot be determined."
-        : "The Codex interaction response is invalid or no longer pending.",
-      error.code,
-      error.outcomeUnknown,
-      error,
-      error.outcomeUnknown,
-      error.lateMutationReconciliation,
-    );
-  }
-  return codexError(
-    "internal",
-    "Codex could not complete the interaction response safely.",
-    "codex_interaction_internal",
-    false,
-    error,
-  );
-}
-
-function mapCodexMutationError(
-  error: unknown,
-  operation: string,
-  dispatched = false,
-): BackendError {
-  if (error instanceof BackendError) return error;
-  if (!dispatched && error instanceof Error && error.message === "codex_skill_unavailable") {
-    return codexError(
-      "rejected",
-      "The selected Codex skill is no longer available in this workspace.",
-      "codex_skill_unavailable",
-    );
-  }
-  if (error instanceof CodexAppServerBindingError) {
-    const expectedMethod = {
-      submit: codexTurnStartMethod.method,
-      steer: codexTurnSteerMethod.method,
-      interrupt: codexTurnInterruptMethod.method,
-      rename: codexThreadSetNameMethod.method,
-      compact: codexThreadCompactStartMethod.method,
-    }[operation];
-    if (
-      error.method === expectedMethod &&
-      error.direction === "client_request_params"
-    ) {
-      return codexError(
-        "rejected",
-        "The Codex mutation input is invalid or too large.",
-        "codex_mutation_input_invalid",
-        false,
-        error,
-      );
-    }
-    if (
-      error.method === expectedMethod &&
-      error.direction === "client_request_result"
-    ) {
-      return codexError(
-        "submission_unknown",
-        "Codex returned an invalid mutation response; its outcome is unknown.",
-        "codex_mutation_response_invalid",
-        true,
-        error,
-        true,
-      );
-    }
-    if (dispatched) return mutationOutcomeUnknown(operation);
-    return codexError(
-      "internal",
-      "Codex could not complete the mutation safely.",
-      "codex_mutation_internal",
-      false,
-      error,
-    );
-  }
-  if (error instanceof CodexRpcDeliveryError) {
-    if (error.delivery === "sent_outcome_unknown") {
-      return mutationOutcomeUnknown(operation);
-    }
-    return codexError(
-      "unavailable",
-      "The Codex daemon was unavailable before the mutation was sent.",
-      error.message,
-      true,
-      error,
-    );
-  }
-  if (error instanceof CodexRpcRemoteError) {
-    if (operation === "interrupt" && error.disposition !== "rejected_not_accepted") {
-      return codexError("submission_unknown", "Codex did not confirm whether Stop was applied.",
-        "codex_interrupt_outcome_unknown", false, error, true);
-    }
-    const staleSteerCode = codexStaleSteerRejectionCode(error, operation);
-    if (staleSteerCode) {
-      return codexSteerTargetUnavailable(
-        "The active Codex turn changed before steering.",
-        staleSteerCode,
-        error,
-      );
-    }
-    return codexError(
-      error.code === -32001 ? "overloaded" : "rejected",
-      error.code === -32001
-        ? "The Codex daemon is overloaded."
-        : "Codex rejected the mutation.",
-      `codex_remote_${error.code}`,
-      error.code === -32001,
-      error,
-    );
-  }
-  if (error instanceof CodexRpcProtocolError) {
-    return codexError(
-      "submission_unknown",
-      "Codex returned an invalid mutation response; its outcome is unknown.",
-      "codex_mutation_response_invalid",
-      true,
-      error,
-      true,
-    );
-  }
-  if (!dispatched && error instanceof Error && error.name === "ZodError") {
-    return codexError(
-      "rejected",
-      "The Codex mutation input is invalid or too large.",
-      "codex_mutation_input_invalid",
-      false,
-      error,
-    );
-  }
-  if (dispatched) return mutationOutcomeUnknown(operation);
-  return codexError(
-    "internal",
-    "Codex could not complete the mutation safely.",
-    "codex_mutation_internal",
-    false,
-    error,
-  );
-}
-
-function codexStaleSteerRejectionCode(
-  error: CodexRpcRemoteError,
-  operation: string,
-): string | undefined {
-  if (
-    operation !== "steer" ||
-    error.method !== codexTurnSteerMethod.method ||
-    error.code !== -32600
-  ) {
-    return undefined;
-  }
-  return error.rejectionReason === "no_active_turn" ? "codex_steer_no_active_turn"
-    : error.rejectionReason === "expected_turn_mismatch" ? "codex_steer_expected_turn_mismatch" : undefined;
-}
-
-function codexSteerTargetUnavailable(
-  safeMessage: string,
-  backendCode: string,
-  cause?: unknown,
-): BackendError {
-  return new BackendError(
-    {
-      category: "invalid_state",
-      retryable: false,
-      crossedSubmissionBoundary: false,
-      safeMessage,
-      backendCode,
-      steerRejectionReason: "target_no_longer_active",
-    },
-    cause === undefined ? undefined : { cause },
-  );
-}
-
-function codexError(
-  category: BackendError["category"],
-  safeMessage: string,
-  backendCode: string,
-  retryable = false,
-  cause?: unknown,
-  crossedSubmissionBoundary = false,
-  lateMutationReconciliation?: Promise<BackendMutationReconciliation>,
-): BackendError {
-  return new BackendError(
-    {
-      category,
-      retryable,
-      crossedSubmissionBoundary,
-      safeMessage,
-      backendCode,
-    },
-    cause === undefined && lateMutationReconciliation === undefined
-      ? undefined
-      : { cause, lateMutationReconciliation },
   );
 }
