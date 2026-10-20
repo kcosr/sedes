@@ -217,7 +217,7 @@ export async function assertManagedSidecarSshConfiguration(input: {
     input.host,
   ]);
   if (!child.stdout || !child.stderr) {
-    await terminateExactSshChild(child, stopTimeout);
+    await terminateConfigurationChild(child, stopTimeout);
     throw new Error("ssh_sidecar_effective_configuration_unavailable");
   }
   let stdout = Buffer.alloc(0);
@@ -276,8 +276,22 @@ export async function assertManagedSidecarSshConfiguration(input: {
   } finally {
     if (abort) input.signal.removeEventListener("abort", abort);
     if (child.exitCode === null && child.signalCode === null) {
-      await terminateExactSshChild(child, stopTimeout);
+      await terminateConfigurationChild(child, stopTimeout);
     }
+  }
+}
+
+/** A configuration probe that survives termination is an unproven cleanup,
+ * fenced like every other owned SSH child rather than reported as an
+ * ordinary unavailable host. */
+async function terminateConfigurationChild(
+  child: ChildProcess,
+  stopTimeoutMilliseconds: number,
+): Promise<void> {
+  try {
+    await terminateExactSshChild(child, stopTimeoutMilliseconds);
+  } catch (error) {
+    throw new SshOwnedStdioCleanupError({ cause: error });
   }
 }
 

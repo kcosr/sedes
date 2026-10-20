@@ -519,9 +519,7 @@ export class SshSidecarArtifactInstaller implements SidecarProvisioner {
         installation: servingInstallation(this.#installation, serviceStatus),
       });
     } catch (error) {
-      await stream
-        .close("sidecar_management_attach_failed")
-        .catch(() => undefined);
+      await closeManagementStream(stream, "sidecar_management_attach_failed");
       // The remote bootstrap reports why it could not reach or start the
       // service as its final stderr line. That is the actionable outcome.
       const diagnostic = (await Promise.race([channel.closed, new Promise<undefined>((resolve) => { setTimeout(() => resolve(undefined), 250).unref(); })]))?.diagnostic;
@@ -573,9 +571,7 @@ export class SshSidecarArtifactInstaller implements SidecarProvisioner {
         installation: servingInstallation(this.#installation, serviceStatus),
       });
     } catch (error) {
-      await stream
-        .close("sidecar_recovery_attach_failed")
-        .catch(() => undefined);
+      await closeManagementStream(stream, "sidecar_recovery_attach_failed");
       throw await classifyConnectionFailure(error, channel, signal);
     }
   }
@@ -596,51 +592,58 @@ export class SshSidecarArtifactInstaller implements SidecarProvisioner {
   ): Promise<SidecarManagementResponse> {
     const channel = await this.#openManagement(request, signal);
     const stream = sidecarByteStream(channel);
+    let value: SidecarManagementResponse;
     try {
       if (request.operation !== "receipt")
         await writeSidecarManagementRecord(stream, request, signal);
-      const { value } = await readSidecarManagementRecord(
+      ({ value } = await readSidecarManagementRecord(
         stream,
         sidecarManagementResponseSchema,
         signal,
-      );
+      ));
       if (value.requestId !== request.requestId)
         throw new Error("sidecar_management_response_identity_invalid");
-      return value;
     } catch (error) {
-      await stream.close("sidecar_management_failed");
+      await closeManagementStream(stream, "sidecar_management_failed");
       throw await classifyConnectionFailure(error, channel, signal);
-    } finally {
-      await stream.close("sidecar_management_complete");
     }
+    await closeManagementStream(stream, "sidecar_management_complete");
+    return value;
   }
 
   async #openManagement(
     request: SidecarManagementRequest,
     signal: AbortSignal,
   ): Promise<SshOwnedStdioChannel> {
-    await assertManagedSidecarSshConfiguration({
-      host: this.#host,
-      signal,
-      ...(this.#sshExecutable ? { sshExecutable: this.#sshExecutable } : {}),
-      ...(this.#spawnProcess ? { spawnProcess: this.#spawnProcess } : {}),
-    });
-    return await openOwnedSshStdio({
-      host: this.#host,
-      remoteCommand: sidecarManagementProxyCommand({
-        scope: this.#serviceScope,
-        requestId: request.requestId,
-        ...(request.operation === "receipt"
-          ? { receipt: request.mutationId }
-          : {}),
-        ...(this.#testOnlyAccountHome
-          ? { testOnlyAccountHome: this.#testOnlyAccountHome }
-          : {}),
-      }),
-      signal,
-      ...(this.#sshExecutable ? { sshExecutable: this.#sshExecutable } : {}),
-      ...(this.#spawnProcess ? { spawnProcess: this.#spawnProcess } : {}),
-    });
+    try {
+      await assertManagedSidecarSshConfiguration({
+        host: this.#host,
+        signal,
+        ...(this.#sshExecutable ? { sshExecutable: this.#sshExecutable } : {}),
+        ...(this.#spawnProcess ? { spawnProcess: this.#spawnProcess } : {}),
+      });
+      return await openOwnedSshStdio({
+        host: this.#host,
+        remoteCommand: sidecarManagementProxyCommand({
+          scope: this.#serviceScope,
+          requestId: request.requestId,
+          ...(request.operation === "receipt"
+            ? { receipt: request.mutationId }
+            : {}),
+          ...(this.#testOnlyAccountHome
+            ? { testOnlyAccountHome: this.#testOnlyAccountHome }
+            : {}),
+        }),
+        signal,
+        ...(this.#sshExecutable ? { sshExecutable: this.#sshExecutable } : {}),
+        ...(this.#spawnProcess ? { spawnProcess: this.#spawnProcess } : {}),
+      });
+    } catch (error) {
+      if (error instanceof SshOwnedStdioCleanupError) {
+        throw new SshSidecarArtifactCleanupError({ cause: error });
+      }
+      throw error;
+    }
   }
 }
 
@@ -663,6 +666,19 @@ async function classifyConnectionFailure(
     closure.signal === null && !closure.diagnostic?.startsWith("sidecar_")
     ? new SshSidecarConnectionError({ cause: error })
     : error;
+}
+
+/** An unproven management-channel exit fences the runtime like any other
+ * carrier cleanup failure instead of looking like ordinary unavailability. */
+async function closeManagementStream(
+  stream: SidecarByteStream,
+  reason: string,
+): Promise<void> {
+  try {
+    await stream.close(reason);
+  } catch (error) {
+    throw new SshSidecarArtifactCleanupError({ cause: error });
+  }
 }
 
 function sidecarByteStream(channel: SshOwnedStdioChannel): SidecarByteStream {

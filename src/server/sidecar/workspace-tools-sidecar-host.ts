@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { realpath, stat } from "node:fs/promises";
-import path from "node:path";
 import {
   SidecarOperationError,
   workspaceToolsMutationInspectOperation,
   type WorkspaceToolsV2Handlers,
 } from "../../internal/sidecar-protocol/index.js";
+import { pathIsWithin } from "../path-containment.js";
 import { CanonicalMutationSerializer } from "../workspace-files/canonical-mutation-serializer.js";
 import { WorkspaceToolError } from "../workspace-tools/contracts.js";
 import { WorkspaceToolEngine } from "../workspace-tools/workspace-tool-engine.js";
@@ -206,7 +206,7 @@ export class WorkspaceToolsSidecarHost {
     if (
       policy !== request.policyRootPath ||
       workspace !== request.declaredPath ||
-      !isWithin(policy, workspace)
+      !pathIsWithin(policy, workspace)
     )
       throw new SidecarOperationError(
         "workspace_tools_workspace_outside_policy",
@@ -322,8 +322,4 @@ async function canonicalDirectory(value: string): Promise<string> {
   if (!metadata.isDirectory())
     throw new SidecarOperationError("workspace_tools_workspace_invalid");
   return canonical;
-}
-
-function isWithin(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
 }

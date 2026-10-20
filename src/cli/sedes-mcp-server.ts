@@ -7,6 +7,7 @@ import {
 import { AGENT_TOOL_MAXIMUM_DESCRIPTION_IDS } from "../server/agent-tools/contracts/agent-tool-transport-limits.js";
 import { compileCanonicalAgentToolSchema } from "../server/agent-tools/schema/canonical-json-schema.js";
 import { deterministicJson } from "../server/canonical-json.js";
+import { agentToolCliToolIdSchema } from "../internal/agent-tool-cli-protocol/contracts.js";
 import { workpadInputContentError } from "../internal/agent-tool-cli-protocol/workpad-content.js";
 import { SedesToolApiError, type SedesToolClient } from "./sedes-tool-client.js";
 import {
@@ -411,10 +412,7 @@ export class SedesMcpServer {
       toolIds.length < 1 ||
       toolIds.length > AGENT_TOOL_MAXIMUM_DESCRIPTION_IDS ||
       new Set(toolIds).size !== toolIds.length ||
-      !toolIds.every(
-        (toolId) =>
-          typeof toolId === "string" && toolId.length >= 1 && toolId.length <= 128,
-      )
+      !toolIds.every(isToolId)
     ) {
       return invalidGatewayInput(
         "Use {\"action\":\"list\"} or {\"action\":\"describe\",\"toolIds\":[...]} with 1-16 unique IDs.",
@@ -437,9 +435,7 @@ export class SedesMcpServer {
     const { toolId, schemaVersion, input: toolInput } = input;
     if (
       Object.keys(input).sort().join(",") !== "input,schemaVersion,toolId" ||
-      typeof toolId !== "string" ||
-      toolId.length < 1 ||
-      toolId.length > 128 ||
+      !isToolId(toolId) ||
       !Number.isSafeInteger(schemaVersion) ||
       typeof toolInput !== "object" ||
       toolInput === null ||
@@ -524,4 +520,8 @@ function unknownTool(): SedesMcpProtocolError {
 
 function invalidGatewayInput(message: string): SedesMcpCallToolResult {
   return sedesMcpToolError({ code: "invalid_input", message, retryable: false });
+}
+
+function isToolId(value: unknown): value is string {
+  return agentToolCliToolIdSchema.safeParse(value).success;
 }

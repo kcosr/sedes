@@ -14,6 +14,7 @@ import type { CreateAgentToolInvocationRequest } from "../server/agent-tools/htt
 import {
   DEFAULT_REQUEST_TIMEOUT_MILLISECONDS,
   SedesToolApiError,
+  parseSedesToolRequest,
   type SedesToolClient,
 } from "./sedes-tool-client.js";
 
@@ -85,7 +86,7 @@ export class SedesToolLocalClient implements SedesToolClient {
       );
     }
     const requestId = this.requestId();
-    const request = agentToolCliRequestSchema.parse({
+    const request = parseSedesToolRequest(agentToolCliRequestSchema, {
       protocolVersion: AGENT_TOOL_CLI_PROTOCOL_VERSION,
       requestId,
       sourceCapability: this.sourceCapability,

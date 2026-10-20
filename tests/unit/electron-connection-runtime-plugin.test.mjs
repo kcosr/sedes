@@ -17,6 +17,24 @@ class FakeWindow extends EventEmitter {
   webContents = new EventEmitter();
 }
 
+class FakeSshChild extends EventEmitter {
+  exitCode = null;
+  signalCode = null;
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  kills = [];
+
+  kill(signal) {
+    this.kills.push(signal);
+    return true;
+  }
+
+  exit(signal) {
+    this.signalCode = signal;
+    this.emit("exit", null, signal);
+  }
+}
+
 describe("Electron connection runtime", () => {
   it("preserves hardened SSH arguments and exact-id disconnect semantics", async () => {
     const child = new EventEmitter();
@@ -126,6 +144,65 @@ describe("Electron connection runtime", () => {
     await vi.waitFor(() => expect(application.quit).toHaveBeenCalledOnce());
     expect(manager.disconnectAll).toHaveBeenCalledOnce();
     expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("defers quit while a cancelled SSH attempt is still stopping", async () => {
+    const child = new FakeSshChild();
+    const ssh = new SshTunnelManager({
+      reservePort: vi.fn(async () => 31023),
+      spawnProcess: vi.fn(() => child),
+      waitForPort: ({ failure }) =>
+        new Promise((_resolve, reject) => {
+          const poll = () => {
+            if (failure()) {
+              reject(new Error("ssh_exited"));
+              return;
+            }
+            setTimeout(poll, 0);
+          };
+          poll();
+        }),
+      terminateProcess: vi.fn(async () => undefined),
+    });
+    new ElectronConnectionRuntime(
+      { notifyListeners: vi.fn() },
+      { app: application, manager: new ConnectionRuntimeManager({ local: null, ssh }) },
+    );
+    const connecting = ssh.connect({
+      connectionId: "10000000-0000-4000-8000-000000000001",
+      profileId: "10000000-0000-4000-8000-000000000002",
+      hostAlias: "build-host",
+      remotePort: 4784,
+    });
+    void connecting.catch(() => undefined);
+    await vi.waitFor(() => expect(ssh.getStatus().status).toBe("connecting"));
+    const window = new FakeWindow();
+    application.emit("browser-window-created", {}, window);
+    window.emit("closed");
+
+    const event = { preventDefault: vi.fn() };
+    expect(() => application.emit("before-quit", event)).not.toThrow();
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(application.quit).not.toHaveBeenCalled();
+
+    child.exit("SIGTERM");
+    await expect(connecting).rejects.toMatchObject({ code: "ssh_tunnel_cancelled" });
+    await vi.waitFor(() => expect(application.quit).toHaveBeenCalledOnce());
+  });
+
+  it("runs owned cleanup before quitting when connection state cannot be read", async () => {
+    manager.getStatus.mockImplementation(() => {
+      throw new TypeError("status_unavailable");
+    });
+    new ElectronConnectionRuntime(
+      { notifyListeners: vi.fn() },
+      { app: application, manager },
+    );
+    const event = { preventDefault: vi.fn() };
+    expect(() => application.emit("before-quit", event)).not.toThrow();
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(application.quit).toHaveBeenCalledOnce());
+    expect(manager.disconnectAll).toHaveBeenCalledOnce();
   });
 });
 
