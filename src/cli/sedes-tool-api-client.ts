@@ -18,6 +18,7 @@ import {
 import {
   DEFAULT_REQUEST_TIMEOUT_MILLISECONDS,
   SedesToolApiError,
+  parseSedesToolRequest,
   type SedesAgentToolCallerCredential,
   type SedesToolClient,
 } from "./sedes-tool-client.js";
@@ -101,7 +102,10 @@ export class SedesToolHttpClient implements SedesToolClient {
   }
 
   async describeTools(toolIds: readonly string[], signal?: AbortSignal) {
-    const body = createAgentToolDescriptionsRequestSchema.parse({ toolIds });
+    const body = parseSedesToolRequest(
+      createAgentToolDescriptionsRequestSchema,
+      { toolIds },
+    );
     const response = await this.#request(
       "/api/agent-tool-descriptions",
       {
@@ -130,7 +134,10 @@ export class SedesToolHttpClient implements SedesToolClient {
     request: CreateAgentToolInvocationRequest,
     signal?: AbortSignal,
   ) {
-    const body = createAgentToolInvocationRequestSchema.parse(request);
+    const body = parseSedesToolRequest(
+      createAgentToolInvocationRequestSchema,
+      request,
+    );
     if (!this.#csrfToken) await this.#acquireCsrfToken(signal);
     try {
       return await this.#invokeRequest(
@@ -419,9 +426,10 @@ function requestViaNodeHttp(url: URL, init: RequestInit): Promise<Response> {
           chunks.push(chunk);
         });
         incoming.once("error", failTransport);
-        incoming.once("end", () =>
-          resolve(
-            new Response(Buffer.concat(chunks), {
+        incoming.once("end", () => {
+          let response: Response;
+          try {
+            response = new Response(Buffer.concat(chunks), {
               status: incoming.statusCode ?? 500,
               headers: new Headers(
                 Object.entries(incoming.headers).flatMap(([name, value]) =>
@@ -432,9 +440,23 @@ function requestViaNodeHttp(url: URL, init: RequestInit): Promise<Response> {
                       : [[name, value] as const],
                 ),
               ),
-            }),
-          ),
-        );
+            });
+          } catch {
+            // Bodyless (204/205/304) and out-of-range statuses cannot carry
+            // the JSON contract; this runs in an event handler, so it must
+            // reject rather than throw.
+            failTransport(
+              new SedesToolApiError(
+                "invalid_response",
+                "Sedes returned an unsupported HTTP response.",
+                false,
+                incoming.statusCode,
+              ),
+            );
+            return;
+          }
+          resolve(response);
+        });
       },
     );
     request.once("socket", (socket) => {

@@ -3,6 +3,7 @@ import type {
   ConversationTurn,
   NormalizedThreadEvent,
 } from "../../shared/protocol/conversation.js";
+import { serializedUtf8Bytes } from "../../shared/protocol/payload.js";
 
 export interface ProjectionEventClock {
   now(): number;
@@ -93,7 +94,6 @@ export class ProjectionEventCoalescer {
   readonly #emitOutput: (output: ProjectionCoalescerOutput) => void;
   readonly #clock: ProjectionEventClock;
   readonly #scheduler: ProjectionEventScheduler;
-  readonly #encoder = new TextEncoder();
   readonly #pending = new Map<string, PendingItem>();
   readonly #lastEmittedAt = new Map<string, number>();
   readonly #seenItems = new Map<string, SeenItem>();
@@ -363,7 +363,7 @@ export class ProjectionEventCoalescer {
   }
 
   #serializedBytes(event: NormalizedThreadEvent): number {
-    return this.#encoder.encode(JSON.stringify(event)).byteLength;
+    return serializedUtf8Bytes(event);
   }
 
   #emit(event: NormalizedThreadEvent): void {

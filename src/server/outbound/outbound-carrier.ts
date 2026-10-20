@@ -1,4 +1,4 @@
-import type { IncomingMessage, Server } from "node:http";
+import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import {
@@ -9,6 +9,7 @@ import {
 import { rawBytes } from "../../internal/websocket-byte-stream.js";
 import type { AppConfig } from "../config/config.js";
 import { DomainError } from "../domain/errors.js";
+import { rejectWebSocketUpgrade, type WebSocketUpgradeRouter } from "../http/websocket-upgrade-router.js";
 import type { IdentityProvider, RequestScope } from "../identity/identity-provider.js";
 import type { ApplicationDrainController, LongLivedHttpConnectionRegistry } from "../runtime/application-shutdown.js";
 import { validateNativeWebSocketHost } from "../security/http-security.js";
@@ -21,7 +22,7 @@ export interface OutboundAuthenticationAdmission {
 }
 
 /** Exact agent paths intentionally do not participate in browser WS admission. */
-export function attachOutboundCarrier(server: Server, input: {
+export function attachOutboundCarrier(upgrades: WebSocketUpgradeRouter, input: {
   config: AppConfig;
   authentication?: OutboundAuthenticationAdmission;
   identity: IdentityProvider<IncomingMessage>;
@@ -90,17 +91,16 @@ export function attachOutboundCarrier(server: Server, input: {
     });
   };
   const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
-    if (request.url !== OUTBOUND_CONTROL_PATH && request.url !== OUTBOUND_RUNTIME_PATH) return;
-    if (closing || input.drain?.isDraining || pending.size >= 64 || control.clients.size >= 256 || validateNativeWebSocketHost(request, input.config)) { reject(socket); return; }
+    if (closing || input.drain?.isDraining || pending.size >= 64 || control.clients.size >= 256 || validateNativeWebSocketHost(request, input.config)) { rejectWebSocketUpgrade(socket, 403); return; }
     const isControl = request.url === OUTBOUND_CONTROL_PATH;
     const protocols = (request.headers["sec-websocket-protocol"] ?? "").split(",").map((part) => part.trim());
-    if (isControl ? protocols.length !== 1 || protocols[0] !== OUTBOUND_CONTROL_PROTOCOL : protocols.length !== 2 || protocols[0] !== OUTBOUND_RUNTIME_PROTOCOL || !/^[A-Za-z0-9_-]{43}$/u.test(protocols[1] ?? "")) { reject(socket); return; }
+    if (isControl ? protocols.length !== 1 || protocols[0] !== OUTBOUND_CONTROL_PROTOCOL : protocols.length !== 2 || protocols[0] !== OUTBOUND_RUNTIME_PROTOCOL || !/^[A-Za-z0-9_-]{43}$/u.test(protocols[1] ?? "")) { rejectWebSocketUpgrade(socket, 403); return; }
     let actor: { id: string; connectorId?: string } | undefined;
     try {
       actor = input.authentication?.required ? input.authentication.authenticateSidecar(request) : undefined;
       if (input.authentication?.required && !actor?.connectorId) throw new Error("outbound_authentication_required_repair");
     }
-    catch { reject(socket, 401); return; }
+    catch { rejectWebSocketUpgrade(socket, 401); return; }
     pending.add(socket);
     socket.pause();
     const timer = setTimeout(() => { pending.delete(socket); socket.destroy(); }, 10_000);
@@ -123,15 +123,15 @@ export function attachOutboundCarrier(server: Server, input: {
         });
       }
       socket.resume();
-    }).catch(() => reject(socket)).finally(() => { clearTimeout(timer); pending.delete(socket); });
+    }).catch(() => rejectWebSocketUpgrade(socket, 403)).finally(() => { clearTimeout(timer); pending.delete(socket); });
   };
-  server.on("upgrade", onUpgrade);
+  const unroute = [OUTBOUND_CONTROL_PATH, OUTBOUND_RUNTIME_PATH].map((path) => upgrades.route(path, onUpgrade));
   let closePromise: Promise<void> | undefined;
   return {
     close() {
       if (closePromise) return closePromise;
       closing = true;
-      server.off("upgrade", onUpgrade);
+      for (const release of unroute) release();
       for (const socket of pending) socket.destroy();
       pending.clear();
       input.registry.close();
@@ -140,11 +140,4 @@ export function attachOutboundCarrier(server: Server, input: {
       return closePromise;
     },
   };
-}
-
-function reject(socket: Duplex, status = 403): void {
-  if (socket.destroyed) return;
-  socket.end(`HTTP/1.1 ${status} ${status === 401 ? "Unauthorized" : "Forbidden"}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
-  const timer = setTimeout(() => socket.destroy(), 250);
-  timer.unref();
 }

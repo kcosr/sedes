@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import { windowsSidecarPlatform } from "./sidecar-windows-platform.js";
 import { sidecarManagementReceiptSchema, sidecarManagementRequestSchema,
@@ -21,7 +21,7 @@ export class PersistentSidecarManagementReceipts {
     const filename = this.#filename(mutationId);
     try {
       await this.#assertFile(filename);
-      const value = sidecarManagementReceiptSchema.parse(JSON.parse(await readFile(filename, "utf8")));
+      const value = parseReceipt(await readFile(filename, "utf8"));
       if (value.mutationId !== mutationId) throw new Error("sidecar_management_receipt_identity_invalid");
       return value;
     } catch (error) { if (hasCode(error, "ENOENT")) return undefined; throw error; }
@@ -70,17 +70,26 @@ export class PersistentSidecarManagementReceipts {
   /** Reclaims capacity, then creates the receipt; false means it already exists. */
   async #create(receipt: SidecarManagementReceipt): Promise<boolean> {
     const entries = await readdir(this.#directory);
-    if (entries.length >= this.#maximumReceipts) {
+    const receiptEntries = entries.filter(entry => RECEIPT_ENTRY.test(entry));
+    if (receiptEntries.length >= this.#maximumReceipts) {
+      await this.#removeStaleTemporaries(entries);
       // A settled control from an older incarnation cannot execute again:
       // every effect also compares the expected live incarnation. Keep current
       // and unresolved receipts; reclaim only terminal old-service metadata.
       let removed = 0;
-      for (const entry of entries) {
-        if (!/^[0-9a-f]{64}\.json$/u.test(entry)) continue;
+      for (const entry of receiptEntries) {
         const filename = path.join(this.#directory, entry);
-        await this.#assertFile(filename);
-        const previous = sidecarManagementReceiptSchema.parse(JSON.parse(await readFile(filename, "utf8")));
-        if (filename !== this.#filename(previous.mutationId)) throw new Error("sidecar_management_receipt_identity_invalid");
+        let previous: SidecarManagementReceipt;
+        try {
+          await this.#assertFile(filename);
+          previous = parseReceipt(await readFile(filename, "utf8"));
+          if (filename !== this.#filename(previous.mutationId)) throw new Error("sidecar_management_receipt_identity_invalid");
+        } catch (error) {
+          // An unreadable receipt keeps fencing its own id (read() refuses it)
+          // but must not block reclamation of other settled receipts.
+          if (isInvalidReceipt(error)) continue;
+          throw error;
+        }
         // This one refusal is permanently fenced by the confirmed resource
         // fingerprint: replay sees either the same blockers or a stale snapshot.
         // It is safe to reclaim even on a live service whose old probes filled
@@ -92,24 +101,42 @@ export class PersistentSidecarManagementReceipts {
         if (!blockedBeforeEffect && !retiredAndSettled) continue;
         await unlink(filename);
         removed += 1;
-        if (entries.length - removed < this.#maximumReceipts) break;
+        if (receiptEntries.length - removed < this.#maximumReceipts) break;
       }
       if (removed > 0) await this.#syncDirectory();
-      if (entries.length - removed >= this.#maximumReceipts) throw new Error("sidecar_management_receipt_capacity_exceeded");
+      if (receiptEntries.length - removed >= this.#maximumReceipts) throw new Error("sidecar_management_receipt_capacity_exceeded");
     }
+    // Publish a complete, flushed file under the final name in one step, so a
+    // crash or full disk never leaves a torn receipt; link keeps EEXIST.
+    const filename = this.#filename(receipt.mutationId);
+    const temporary = `${filename}.${randomUUID()}`;
     try {
-      const filename = this.#filename(receipt.mutationId);
-      const handle = await open(filename, "wx", 0o600);
+      const handle = await open(temporary, "wx", 0o600);
       try {
-        if (process.platform === "win32") await windowsSidecarPlatform.privacy(filename, "secure-file");
+        if (process.platform === "win32") await windowsSidecarPlatform.privacy(temporary, "secure-file");
         await handle.writeFile(JSON.stringify(receipt)); await handle.sync();
       }
       finally { await handle.close(); }
+      try { await link(temporary, filename); }
+      catch (error) {
+        if (!hasCode(error, "EEXIST")) throw error;
+        return false;
+      }
       await this.#syncDirectory();
       return true;
-    } catch (error) {
-      if (!hasCode(error, "EEXIST")) throw error;
-      return false;
+    } finally { await unlink(temporary).catch(() => undefined); }
+  }
+
+  /** Removes temporaries a crashed create or finish left behind. */
+  async #removeStaleTemporaries(entries: readonly string[]): Promise<void> {
+    const now = Date.now();
+    for (const entry of entries) {
+      if (!TEMPORARY_ENTRY.test(entry)) continue;
+      const filename = path.join(this.#directory, entry);
+      const metadata = await lstat(filename).catch(() => undefined);
+      // A live writer publishes within milliseconds; never race one.
+      if (!metadata?.isFile() || now - metadata.mtimeMs < STALE_TEMPORARY_MILLISECONDS) continue;
+      await unlink(filename).catch(error => { if (!hasCode(error, "ENOENT")) throw error; });
     }
   }
 
@@ -165,6 +192,16 @@ export class PersistentSidecarManagementReceipts {
     if (process.platform === "win32") return;
     const handle = await open(this.#directory, "r"); try { await handle.sync(); } finally { await handle.close(); }
   }
+}
+const RECEIPT_ENTRY = /^[0-9a-f]{64}\.json$/u;
+const TEMPORARY_ENTRY = /^[0-9a-f]{64}\.json\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const STALE_TEMPORARY_MILLISECONDS = 60_000;
+function parseReceipt(text: string): SidecarManagementReceipt {
+  try { return sidecarManagementReceiptSchema.parse(JSON.parse(text)); }
+  catch { throw new Error("sidecar_management_receipt_invalid"); }
+}
+function isInvalidReceipt(error: unknown): boolean {
+  return error instanceof Error && (error.message === "sidecar_management_receipt_invalid" || error.message === "sidecar_management_receipt_identity_invalid");
 }
 /** A withdrawn receipt matches no request fingerprint, so every replay of the id is refused. */
 function withdrawalFingerprint(mutationId: string): string { return createHash("sha256").update(JSON.stringify({ withdrawn: mutationId })).digest("hex"); }

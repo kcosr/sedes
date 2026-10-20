@@ -432,6 +432,46 @@ describe("WorkspaceCompareView", () => {
     expect(await mergeBaseOption()).toHaveAttribute("aria-disabled", "true");
   });
 
+  it("renders inline comment actions as buttons with Open before Delete", async () => {
+    const dataSource = createDataSource(1);
+    const onDeleteAnnotation = vi.fn();
+    const onSelectAnnotation = vi.fn();
+    render(
+      <WorkspaceCompareView
+        rootId="primary"
+        dataSource={dataSource}
+        onDeleteAnnotation={onDeleteAnnotation}
+        onSelectAnnotation={onSelectAnnotation}
+      />,
+    );
+    const compare = await configureComparison();
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    await waitFor(() =>
+      expect(capturedCodeViewProps?.renderAnnotation).toBeTypeOf("function"),
+    );
+    const metadata = {
+      annotationId: "comment-1",
+      side: "additions" as const,
+      lineNumber: 1,
+      body: "Check this",
+    };
+    const renderAnnotation = capturedCodeViewProps?.renderAnnotation as (
+      annotation: { metadata: typeof metadata },
+    ) => React.ReactNode;
+    const { container } = render(<>{renderAnnotation({ metadata })}</>);
+    const buttons = within(container as HTMLElement).getAllByRole("button");
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Open",
+      "Delete",
+    ]);
+    expect(buttons[0]).toHaveAttribute("data-variant", "ghost");
+    expect(buttons[1]).toHaveAttribute("data-variant", "destructive-outline");
+    fireEvent.click(buttons[1]!);
+    expect(onDeleteAnnotation).toHaveBeenCalledWith(metadata);
+    expect(onSelectAnnotation).not.toHaveBeenCalled();
+  });
+
   it("captures exact displayed diff lines for the shared selection action", async () => {
     const dataSource = createDataSource(1);
     const onAttachSelection = vi.fn(() => ({ ok: true as const }));

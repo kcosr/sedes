@@ -38,6 +38,29 @@ export class SedesToolApiError extends Error {
   }
 }
 
+/**
+ * Validates a request against its transport contract before any network
+ * access, reporting a violation as correctable caller input.
+ */
+export function parseSedesToolRequest<T>(
+  schema: z.ZodType<T>,
+  value: unknown,
+): T {
+  const parsed = schema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  const issue = parsed.error.issues[0];
+  const path = issue?.path ?? [];
+  throw new SedesToolApiError(
+    "invalid_input",
+    path.some((part) => part === "toolId" || part === "toolIds")
+      ? "A Sedes tool ID is malformed or repeated; use unique IDs from the current catalog."
+      : path.includes("input")
+        ? `The Sedes tool input is invalid: ${issue!.message}`
+        : "The Sedes tool request is invalid.",
+    false,
+  );
+}
+
 export function normalizeSedesAgentToolSourceCapability(
   value: string | undefined,
 ): string {

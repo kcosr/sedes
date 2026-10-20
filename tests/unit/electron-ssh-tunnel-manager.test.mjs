@@ -248,6 +248,50 @@ describe("Electron SSH tunnel native manager", () => {
     expect(manager.getStatus()).toEqual({ status: "disconnected" });
   });
 
+  it("reports a well-formed status while a cancelled attempt is still stopping", async () => {
+    const child = new FakeChild({ exitOnKill: false });
+    const spawnProcess = vi.fn(() => child);
+    const manager = new SshTunnelManager({
+      reservePort: vi.fn(async () => 31022),
+      spawnProcess,
+      waitForPort: vi.fn(
+        ({ failure }) =>
+          new Promise((_resolve, reject) => {
+            const poll = () => {
+              const current = failure();
+              if (current) {
+                reject(classifySshFailure(current));
+                return;
+              }
+              setTimeout(poll, 0);
+            };
+            poll();
+          }),
+      ),
+      terminateProcess: vi.fn(async () => undefined),
+    });
+    const connecting = manager.connect(validInput);
+    await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledOnce());
+    expect(manager.getStatus()).toEqual({
+      status: "connecting",
+      connectionId: validInput.connectionId,
+    });
+
+    const quitting = manager.disconnectAll();
+    expect(manager.getStatus()).toEqual({
+      status: "connecting",
+      connectionId: validInput.connectionId,
+    });
+    expect(child.kills).toContain("SIGTERM");
+
+    child.unexpectedExit(null, "SIGTERM");
+    await expect(connecting).rejects.toMatchObject({
+      code: "ssh_tunnel_cancelled",
+    });
+    await expect(quitting).resolves.toBeUndefined();
+    expect(manager.getStatus()).toEqual({ status: "disconnected" });
+  });
+
   it("emits one actionable event for unexpected active loss and ignores stale exits", async () => {
     const notifications = [];
     const children = [new FakeChild(), new FakeChild()];

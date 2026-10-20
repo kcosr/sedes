@@ -13,6 +13,7 @@ import { PrincipalAgentToolClientRepository } from "../../src/server/db/reposito
 import { createPrincipalAgentToolClientEligibility } from "../../src/server/conversations/thread-agent-tool-policy-dependencies.js";
 import { ConversationCreationRepository } from "../../src/server/db/repositories/conversation-creation-repository.js";
 import { ConversationDraftRepository } from "../../src/server/db/repositories/conversation-draft-repository.js";
+import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import { ThreadCompletionCallbackRepository } from "../../src/server/db/repositories/thread-completion-callback-repository.js";
 import { OverlayRepository } from "../support/schema9/overlay-repository.js";
@@ -1618,7 +1619,7 @@ describe("ConversationLifecycleService", () => {
         name: "review",
         reference: "/skill:review",
       });
-      const draft = current.drafts.save(
+      const draft = new InventoryRepository(current.database).saveDraft(
         current.scope,
         created.applicationThreadId,
         {
@@ -1691,7 +1692,7 @@ describe("ConversationLifecycleService", () => {
           suffix: ".",
         },
       };
-      const draft = current.drafts.save(
+      const draft = new InventoryRepository(current.database).saveDraft(
         current.scope,
         created.applicationThreadId,
         {
@@ -2919,7 +2920,7 @@ describe("ConversationLifecycleService", () => {
         now: 200,
       });
       expect(
-        current.drafts.save(current.scope, created.applicationThreadId, {
+        new InventoryRepository(current.database).saveDraft(current.scope, created.applicationThreadId, {
           text: "changed",
           contextExcerpts: [],
           attachmentIds: [],
@@ -2967,7 +2968,7 @@ describe("ConversationLifecycleService", () => {
       expect(
         current.drafts.get(current.scope, created.applicationThreadId),
       ).toMatchObject({ text: "", revision: 1 });
-      current.drafts.save(current.scope, created.applicationThreadId, {
+      new InventoryRepository(current.database).saveDraft(current.scope, created.applicationThreadId, {
         text: "a later thought",
         contextExcerpts: [],
         attachmentIds: [],
@@ -3019,7 +3020,7 @@ describe("ConversationLifecycleService", () => {
       await vi.waitFor(() => {
         expect(current.driver.create).toHaveBeenCalledTimes(1);
       });
-      current.drafts.save(current.scope, created.applicationThreadId, {
+      new InventoryRepository(current.database).saveDraft(current.scope, created.applicationThreadId, {
         text: "",
         contextExcerpts: [],
         attachmentIds: [],

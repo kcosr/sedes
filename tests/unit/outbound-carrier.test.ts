@@ -4,11 +4,14 @@ import { once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { attachOutboundCarrier } from "../../src/server/outbound/outbound-carrier.js";
+import { WebSocketUpgradeRouter } from "../../src/server/http/websocket-upgrade-router.js";
 import type { OutboundConnectionRegistry } from "../../src/server/outbound/outbound-connection-registry.js";
 import { OUTBOUND_CONTROL_PATH, OUTBOUND_CONTROL_PROTOCOL, OUTBOUND_RUNTIME_PATH, OUTBOUND_RUNTIME_PROTOCOL } from "../../src/internal/outbound-protocol.js";
 import { validateNativeWebSocketHost, validateWebSocketHostOrigin } from "../../src/server/security/http-security.js";
 import type { AppConfig } from "../../src/server/config/config.js";
 import { DomainError } from "../../src/server/domain/errors.js";
+import { captureProcessCrashes } from "../helpers/process-crashes.js";
+import { sendUpgradeAndReset, upgradeUntilServerCloses } from "../helpers/raw-websocket-upgrade.js";
 
 const config: AppConfig = { authenticationRequired: true, experimentalUsageEnabled: false, host: "127.0.0.1", port: 4784, stateDirectory: "/tmp/sedes", allowedTailscaleHosts: ["sedes.example.ts.net"], packagedClientOrigins: [], conversationRetentionMilliseconds: 600_000, conversationRuntimeBudget: 8 };
 const cleanups: (() => Promise<void>)[] = [];
@@ -20,7 +23,7 @@ async function serverFixture(authentication?: Parameters<typeof attachOutboundCa
   const server = createServer();
   const registry = { register: vi.fn(), receive: vi.fn(), close: vi.fn(), consumeRuntimeTicket: vi.fn(() => { throw new Error("invalid"); }) };
   const identity = { resolve: vi.fn(async () => ({ tenantId: "tenant", principalId: "principal" })) };
-  const carrier = attachOutboundCarrier(server, { config, authentication, registry: registry as unknown as OutboundConnectionRegistry, identity, helloTimeoutMs: 50, heartbeatMs: 5000 });
+  const carrier = attachOutboundCarrier(new WebSocketUpgradeRouter(server), { config, authentication, registry: registry as unknown as OutboundConnectionRegistry, identity, helloTimeoutMs: 50, heartbeatMs: 5000 });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("missing address");
@@ -112,6 +115,33 @@ describe("native outbound HTTP/WebSocket boundary", () => {
     response.resume();
     socket.terminate();
     expect(f.registry.consumeRuntimeTicket).toHaveBeenCalledWith({ tenantId: "tenant", principalId: "principal" }, "a".repeat(43), undefined);
+  });
+
+  it("survives sidecars that reset rejected upgrades and keeps admitting hosts", async () => {
+    const f = await serverFixture();
+    const port = Number(new URL(f.base).port);
+    const crashes = captureProcessCrashes();
+    try {
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        await sendUpgradeAndReset({ port, path: OUTBOUND_RUNTIME_PATH, protocols: [OUTBOUND_RUNTIME_PROTOCOL, "a".repeat(43)] });
+        await sendUpgradeAndReset({ port, path: OUTBOUND_CONTROL_PATH, host: "attacker.test", protocols: [OUTBOUND_CONTROL_PROTOCOL] });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const socket = new WebSocket(`${f.base}${OUTBOUND_CONTROL_PATH}`, OUTBOUND_CONTROL_PROTOCOL);
+      await once(socket, "open");
+      socket.close();
+      await once(socket, "close");
+      expect(crashes.errors).toEqual([]);
+    } finally {
+      crashes.dispose();
+    }
+  });
+
+  it("answers and closes upgrade requests for unrouted paths", async () => {
+    const f = await serverFixture();
+    const { response } = await upgradeUntilServerCloses({ port: Number(new URL(f.base).port), path: `${OUTBOUND_CONTROL_PATH}/x`, protocols: [OUTBOUND_CONTROL_PROTOCOL], timeoutMilliseconds: 2_000 });
+    expect(response).toMatch(/^HTTP\/1\.1 404 Not Found\r\n/);
+    expect(f.identity.resolve).not.toHaveBeenCalled();
   });
 
   it("rejects missing credentials before identity resolution", async () => {

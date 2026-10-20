@@ -469,7 +469,7 @@ describe("ThreadTerminalMenu", () => {
     );
     expect(rename).toHaveAccessibleName("Rename Build shell");
     expect(rename).toHaveAttribute("title", "Rename Build shell");
-    expect(teardown).toHaveAccessibleName("Tear down and remove Build shell");
+    expect(teardown).toHaveAccessibleName("End Build shell");
     // Not a destructive row: the X is muted until the row is highlighted.
     expect(teardown).toHaveAttribute("data-variant", "default");
     expect(teardown!.querySelector(".lucide-x")).toHaveClass("text-muted-foreground");
@@ -498,7 +498,7 @@ describe("ThreadTerminalMenu", () => {
     fireEvent.pointerDown(screen.getByRole("button", { name: "Open terminal tab" }), { button: 0, ctrlKey: false });
     const record = await screen.findByRole("menuitem", { name: /Build shell.*Interrupted/u });
     expect(record).toHaveAttribute("data-disabled");
-    expect(screen.getByRole("menuitem", { name: "Tear down and remove Build shell" })).not.toHaveAttribute("data-disabled");
+    expect(screen.getByRole("menuitem", { name: "Remove Build shell" })).not.toHaveAttribute("data-disabled");
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Build shell" }));
     const input = screen.getByRole("textbox", { name: "Terminal name" });
     fireEvent.change(input, { target: { value: "Retained shell" } });
@@ -532,7 +532,7 @@ describe("ThreadTerminalMenu", () => {
     fireEvent.pointerDown(screen.getByRole("button", { name: "Open terminal tab" }), { button: 0, ctrlKey: false });
     expect(screen.queryByRole("menuitem", { name: "Manage terminals…" })).toBeNull();
     expect(screen.queryByText("New from this")).toBeNull();
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Tear down and remove Build shell" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "End Build shell" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(client.endTerminal).not.toHaveBeenCalled();
@@ -556,7 +556,7 @@ describe("ThreadTerminalMenu", () => {
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     fireEvent.click(
       await screen.findByRole("menuitem", {
-        name: "Tear down and remove Build shell",
+        name: "End Build shell",
       }),
     );
 
@@ -572,7 +572,7 @@ describe("ThreadTerminalMenu", () => {
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     fireEvent.click(
       await screen.findByRole("menuitem", {
-        name: "Tear down and remove Build shell",
+        name: "End Build shell",
       }),
     );
     fireEvent.click(
@@ -613,9 +613,10 @@ describe("ThreadTerminalMenu", () => {
       screen.getByRole("button", { name: "Open terminal tab" }),
       { button: 0, ctrlKey: false },
     );
+    // An exited terminal's ✕ is named as its confirmation names it.
     fireEvent.click(
       await screen.findByRole("menuitem", {
-        name: "Tear down and remove Build shell",
+        name: "Remove Build shell",
       }),
     );
     const confirmation = await screen.findByRole("dialog", {
@@ -668,7 +669,7 @@ describe("ThreadTerminalMenu", () => {
     );
     fireEvent.click(
       await screen.findByRole("menuitem", {
-        name: "Tear down and remove Build shell",
+        name: "End Build shell",
       }),
     );
     fireEvent.click(
@@ -715,7 +716,7 @@ describe("ThreadTerminalMenu", () => {
     );
     fireEvent.click(
       await screen.findByRole("menuitem", {
-        name: "Tear down and remove Build shell",
+        name: "End Build shell",
       }),
     );
     fireEvent.click(
@@ -757,7 +758,7 @@ describe("ThreadTerminalMenu", () => {
       ctrlKey: false,
     });
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Tear down and remove Build shell" }),
+      await screen.findByRole("menuitem", { name: "End Build shell" }),
     );
     expect(
       screen.getByRole("dialog", { name: "End terminal?" }),

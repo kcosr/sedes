@@ -4,7 +4,6 @@ import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/
 import { AutomationRepository } from "../../src/server/db/repositories/automation-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { ConversationCreationRepository } from "../../src/server/db/repositories/conversation-creation-repository.js";
-import { ConversationDraftRepository } from "../../src/server/db/repositories/conversation-draft-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
 import { PrincipalAgentToolClientRepository } from "../../src/server/db/repositories/principal-agent-tool-client-repository.js";
@@ -45,7 +44,7 @@ describe("user input admission revision", () => {
     const f = fixture();
     try {
       const text = "A new message";
-      const draft = new ConversationDraftRepository(f.database).save(f.scope, f.threadId, {
+      const draft = new InventoryRepository(f.database).saveDraft(f.scope, f.threadId, {
         text, contextExcerpts: [], attachmentIds: [], taskReferenceIds: [], expectedRevision: 0, now: 202,
       });
       const source = kind === "composer" ? {
@@ -92,8 +91,7 @@ describe("user input admission revision", () => {
     const f = fixture();
     try {
       const id = f.createThread(false);
-      const drafts = new ConversationDraftRepository(f.database);
-      const draft = drafts.save(f.scope, id, { text: "First composer input", contextExcerpts: [],
+      const draft = new InventoryRepository(f.database).saveDraft(f.scope, id, { text: "First composer input", contextExcerpts: [],
         attachmentIds: [], taskReferenceIds: [], expectedRevision: 0, now: 202 });
       const creations = new ConversationCreationRepository(f.database);
       const input = { attemptId: randomUUID(), mutationId: randomUUID(), expectedThreadRevision: 0,

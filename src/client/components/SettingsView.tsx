@@ -1,39 +1,27 @@
-import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
-import { AuthenticationSettings, useAuthenticationControls } from "../authentication/AuthenticationSettings.js";
+import { AuthenticationSettings } from "../authentication/AuthenticationSettings.js";
 import { NotificationSettingsPage } from "./NotificationSettingsPage.js";
-import type { NotificationSettingsStore } from "../stores/NotificationSettingsStore.js";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowLeft, ChevronLeft } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import { navigate, navigateUp, settingsPath, useRoute } from "../app/router.js";
 import { isSettingsResourcePage, type SettingsPage } from "../app/settings-route.js";
 import { SidebarNavTrigger } from "./SidebarNavTrigger.js";
-import type { ServerSettingsControls } from "./ServerSettingsForm.js";
-import {
-  ToolClientsSettingsPage,
-  type ToolClientSettingsControls,
-} from "./tool-clients/ToolClientsSettingsPage.js";
+import { ToolClientsSettingsPage } from "./tool-clients/ToolClientsSettingsPage.js";
 import { CannedPromptsSettingsPage } from "./CannedPromptsSettingsPage.js";
-import type { CannedPromptClientStore } from "../stores/CannedPromptClientStore.js";
-import {
-  ElectronConnectionSettings,
-  type ElectronConnectionSettingsControls,
-} from "./ElectronConnectionSettings.js";
+import { ElectronConnectionSettings } from "./ElectronConnectionSettings.js";
 import { ExecutionSettings, isExecutionPage } from "./execution-settings/ExecutionSettings.js";
 import { ToolPoliciesSettingsPage } from "./tool-policies/ToolPoliciesSettingsPage.js";
 import { AgentsSettingsPage } from "./agents/AgentsView.js";
 import { ProjectsSettingsPage } from "./execution-settings/ProjectsSettingsPage.js";
-import type { HostPairingControls } from "./execution-settings/useHostPairings.js";
-import type { ConfigurationControls } from "./execution-settings/useConfiguration.js";
 import { EntityList, EntityRow } from "./settings/EntityList.js";
 import { SettingsBackSlotContext, SettingsPage as SettingsPageLayout } from "./settings/SettingsPage.js";
 import { SettingsSection } from "./settings/SettingsSection.js";
 import { isPlainClick, openSettingsEntry } from "./settings/SettingsNav.js";
 import {
-  availableSettingsPages,
   groupSettingsEntries,
   type SettingsPageEntry,
 } from "./settings/settings-pages.js";
+import { useSettingsPages, type SettingsSources } from "./settings/use-settings-pages.js";
 import {
   installSettingsPageReselectListener,
   readLastSettingsPage,
@@ -44,47 +32,12 @@ import {
 import { useSettingsEscape } from "./settings/settings-escape.js";
 import { AppearanceSettingsPage } from "./settings/pages/AppearanceSettingsPage.js";
 import { DiagnosticsSettingsPage } from "./settings/pages/DiagnosticsSettingsPage.js";
-import {
-  GeneralSettingsPage,
-  type ApplicationPreferenceControls,
-} from "./settings/pages/GeneralSettingsPage.js";
+import { GeneralSettingsPage } from "./settings/pages/GeneralSettingsPage.js";
 import { MobileSettingsPage } from "./settings/pages/MobileSettingsPage.js";
 import { ServerSettingsPage } from "./settings/pages/ServerSettingsPage.js";
 import { TerminalSettingsPage } from "./settings/pages/TerminalSettingsPage.js";
 import { useNativeVoice } from "../voice/VoiceProvider.js";
 import { VoiceSettingsPage } from "../voice/VoiceSettingsPage.js";
-
-/** The controls a client holds; each page needs some of them. */
-export interface SettingsSources {
-  readonly applicationStore?: ApplicationClientStore;
-  readonly serverSettings?: ServerSettingsControls;
-  readonly applicationPreferences?: ApplicationPreferenceControls;
-  readonly cannedPrompts?: CannedPromptClientStore;
-  readonly notifications?: NotificationSettingsStore;
-  readonly toolClients?: ToolClientSettingsControls;
-  readonly electronConnectionSettings?: ElectronConnectionSettingsControls;
-  readonly configuration?: ConfigurationControls & HostPairingControls;
-}
-
-/** The settings pages this client can show, in nav order. */
-export function useSettingsPages(sources: SettingsSources): SettingsPageEntry[] {
-  const pairedClients = Boolean(useAuthenticationControls());
-  const prompts = Boolean(sources.cannedPrompts);
-  const notifications = Boolean(sources.notifications);
-  const voice = Boolean(useNativeVoice());
-  const execution = Boolean(sources.configuration);
-  const projects = Boolean(sources.applicationStore);
-  const agents = Boolean(sources.applicationStore);
-  const toolClients = Boolean(sources.toolClients);
-  const electronConnection = Boolean(sources.electronConnectionSettings);
-  const serverProfiles = Boolean(sources.serverSettings);
-  return useMemo(
-    () => availableSettingsPages({
-      prompts, notifications, voice, execution, projects, agents, toolClients, pairedClients, electronConnection, serverProfiles,
-    }),
-    [prompts, notifications, voice, execution, projects, agents, toolClients, pairedClients, electronConnection, serverProfiles],
-  );
-}
 
 /**
  * Routed settings surface. Preference ownership remains with each existing

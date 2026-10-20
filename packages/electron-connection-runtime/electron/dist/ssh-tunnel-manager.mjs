@@ -198,7 +198,9 @@ export function classifySshFailure(input = {}) {
 
 export class SshTunnelManager {
   #active;
-  #connectingChild;
+  // The spawned child of the attempt in progress and the connection it serves;
+  // a cancelled attempt keeps both until its child is stopped.
+  #connecting;
   #generation = 0;
   #notify;
   #operation = Promise.resolve();
@@ -229,10 +231,11 @@ export class SshTunnelManager {
         remotePort: this.#active.input.remotePort,
       });
     }
-    if (this.#connectingChild || this.#pendingConnect) {
+    const connecting = this.#pendingConnect ?? this.#connecting;
+    if (connecting) {
       return Object.freeze({
         status: "connecting",
-        connectionId: this.#requestedInput.connectionId,
+        connectionId: connecting.connectionId,
       });
     }
     return Object.freeze({ status: "disconnected" });
@@ -254,13 +257,17 @@ export class SshTunnelManager {
     if (!sameRequest) {
       this.#requestGeneration += 1;
       this.#requestedInput = input;
-      this.#connectingChild?.kill("SIGTERM");
+      this.#connecting?.child.kill("SIGTERM");
     }
     const requestGeneration = this.#requestGeneration;
     const promise = this.#serialize(() =>
       this.#connect(input, requestGeneration),
     );
-    this.#pendingConnect = { generation: requestGeneration, promise };
+    this.#pendingConnect = {
+      generation: requestGeneration,
+      promise,
+      connectionId: input.connectionId,
+    };
     void promise.then(
       () => this.#clearPendingConnect(promise),
       () => this.#clearPendingConnect(promise),
@@ -278,14 +285,14 @@ export class SshTunnelManager {
     }
     this.#requestGeneration += 1;
     this.#requestedInput = undefined;
-    this.#connectingChild?.kill("SIGTERM");
+    this.#connecting?.child.kill("SIGTERM");
     return this.#serialize(() => this.#disconnect(connectionId));
   }
 
   disconnectAll() {
     this.#requestGeneration += 1;
     this.#requestedInput = undefined;
-    this.#connectingChild?.kill("SIGTERM");
+    this.#connecting?.child.kill("SIGTERM");
     return this.#serialize(() => this.#disconnect());
   }
 
@@ -318,7 +325,7 @@ export class SshTunnelManager {
         }
         throw failure;
       }
-      this.#connectingChild = child;
+      this.#connecting = { child, connectionId: input.connectionId };
       const diagnostics = observeChild(child);
       try {
         await this.#waitForPort({
@@ -340,7 +347,7 @@ export class SshTunnelManager {
           diagnostics,
         };
         this.#active = active;
-        this.#connectingChild = undefined;
+        this.#connecting = undefined;
         child.once("exit", (code, signal) =>
           this.#handleUnexpectedExit(active, code, signal),
         );
@@ -349,7 +356,7 @@ export class SshTunnelManager {
           baseUrl: active.baseUrl,
         });
       } catch (error) {
-        this.#connectingChild = undefined;
+        this.#connecting = undefined;
         await this.#terminateProcess(child, STOP_TIMEOUT_MILLISECONDS).catch(
           () => undefined,
         );

@@ -1,5 +1,6 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import { captureProcessCrashes } from "../helpers/process-crashes.js";
 import {
   CodexManagedTuiRegistry,
   codexManagedTuiBindingFingerprint,
@@ -432,6 +433,37 @@ describe("CodexManagedTuiRegistry", () => {
         "codex_tui_launch_deadline_exceeded",
       ),
     );
+    await registry.close();
+  });
+
+  it("contains a failed close of a process returned after the startup deadline", async () => {
+    const registry = new CodexManagedTuiRegistry({
+      startupTimeoutMilliseconds: 1,
+    });
+    const launch = deferred<CodexManagedTuiProcess>();
+    const fake = fakeProcess();
+    fake.close.mockImplementationOnce(async () => {
+      throw new Error("environment_owned_pty_process_group_survived");
+    });
+    const crashes = captureProcessCrashes();
+    try {
+      const started = await registry.start(authority, {
+        launch: async () => await launch.promise,
+      });
+      expect(started).toMatchObject({ lifecycle: "failed", streamAvailable: false });
+      launch.resolve(fake.process);
+      await vi.waitFor(() =>
+        expect(fake.close).toHaveBeenCalledWith("codex_tui_launch_deadline_exceeded"),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(crashes.errors).toEqual([]);
+      expect(registry.state(authority)).toMatchObject({
+        lifecycle: "failed",
+      });
+    } finally {
+      crashes.dispose();
+    }
     await registry.close();
   });
 

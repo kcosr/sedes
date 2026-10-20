@@ -2050,6 +2050,78 @@ describe("InventorySidebar view modes", () => {
     expect(window.location.pathname).toBe("/threads/thread-2");
   });
 
+  it("leaves thread shortcuts to an open dialog above the sidebar", () => {
+    seedViewPreferences({ groupBy: "none" });
+    const onSelectThread = vi.fn();
+    window.history.replaceState({}, "", "/threads/thread-1");
+    renderSidebar(
+      [
+        makeThread("thread-1", "First thread", {
+          lastActivityAt: isoAtNoon(0),
+        }),
+        makeThread("thread-2", "Second thread", {
+          lastActivityAt: isoAtNoon(-1),
+        }),
+      ],
+      { selectedThreadId: "thread-1" },
+      true,
+      onSelectThread,
+    );
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    const choice = document.createElement("button");
+    const field = document.createElement("input");
+    dialog.append(choice, field);
+    document.body.append(dialog);
+    try {
+      choice.focus();
+      expect(
+        fireEvent.keyDown(choice, { key: "ArrowDown", ctrlKey: true, shiftKey: true }),
+      ).toBe(true);
+      expect(fireEvent.keyDown(choice, { key: "2", ctrlKey: true })).toBe(true);
+      field.focus();
+      expect(fireEvent.keyDown(field, { key: "2", ctrlKey: true })).toBe(true);
+      dialog.setAttribute("role", "alertdialog");
+      expect(fireEvent.keyDown(choice, { key: "1", metaKey: true })).toBe(true);
+
+      expect(onSelectThread).not.toHaveBeenCalled();
+      expect(window.location.pathname).toBe("/threads/thread-1");
+    } finally {
+      dialog.remove();
+    }
+  });
+
+  it("keeps thread shortcuts inside the navigation drawer that hosts the sidebar", () => {
+    seedViewPreferences({ groupBy: "none" });
+    const onSelectThread = vi.fn();
+    window.history.replaceState({}, "", "/threads/thread-1");
+    const view = renderSidebar(
+      [
+        makeThread("thread-1", "First thread", {
+          lastActivityAt: isoAtNoon(0),
+        }),
+        makeThread("thread-2", "Second thread", {
+          lastActivityAt: isoAtNoon(-1),
+        }),
+      ],
+      { selectedThreadId: "thread-1" },
+      true,
+      onSelectThread,
+    );
+    view.container.setAttribute("role", "dialog");
+    const row = view.container.querySelector<HTMLElement>(
+      '[data-thread-id="thread-1"] a, [data-thread-id="thread-1"] button',
+    )!;
+    row.focus();
+
+    expect(
+      fireEvent.keyDown(row, { key: "ArrowDown", ctrlKey: true, shiftKey: true }),
+    ).toBe(false);
+    expect(onSelectThread).toHaveBeenLastCalledWith("thread-2");
+    expect(fireEvent.keyDown(row, { key: "1", ctrlKey: true })).toBe(false);
+    expect(onSelectThread).toHaveBeenLastCalledWith("thread-1");
+  });
+
   it("preserves an existing focused-surface shortcut that prevents default", () => {
     seedViewPreferences({ groupBy: "none" });
     const onSelectThread = vi.fn();

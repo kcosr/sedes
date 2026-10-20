@@ -71,11 +71,12 @@ export function useComposerAttachmentUploads({
 
   // Upload one file at a time. Besides bounding memory/network pressure, this
   // preserves the user's selection order in the durable draft regardless of
-  // server latency.
+  // server latency. A failed file waits for Retry or removal without holding
+  // back the files queued after it.
   useEffect(() => {
     if (uploads.some(({ phase }) => phase === "uploading")) return;
-    const next = uploads[0];
-    if (!next || next.phase !== "queued") return;
+    const next = uploads.find(({ phase }) => phase === "queued");
+    if (!next) return;
     const controller = new AbortController();
     controllers.current.set(next.id, controller);
     setUploads((current) =>

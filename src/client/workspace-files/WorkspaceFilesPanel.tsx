@@ -75,6 +75,7 @@ import {
   DialogTitle,
 } from "../components/ui/dialog.js";
 import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
+import { EmptyState } from "../components/ui/empty-state.js";
 import { Field } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { NativeSelect } from "../components/ui/native-select.js";
@@ -366,6 +367,12 @@ export function WorkspaceFilesPanel({
   const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
   const [pendingDownload, setPendingDownload] =
     useState<WorkspaceFileDownloadTarget>();
+  const [pendingCommentDelete, setPendingCommentDelete] = useState<{
+    readonly reviewId: string;
+    readonly commentId: string;
+    /** Opened from the review inspector, which is a sheet on phones. */
+    readonly fromInspector: boolean;
+  }>();
   const [downloadState, setDownloadState] =
     useState<WorkspaceFileDownloadState>();
   const [attachDialogOpen, setAttachDialogOpen] = useState(false);
@@ -415,6 +422,9 @@ export function WorkspaceFilesPanel({
   const [compareCurrentReviewedFiles, setCompareCurrentReviewedFiles] =
     useState<readonly WorkspaceDiffReviewedFile[]>([]);
   const [compareReviewLoading, setCompareReviewLoading] = useState(false);
+  // The active review's comments load separately from the review list, so
+  // neither effect can clear or strand the other's loading state.
+  const [compareReviewCommentsLoading, setCompareReviewCommentsLoading] = useState(false);
   const [compareReviewMutating, setCompareReviewMutating] = useState(false);
   const [compareReviewError, setCompareReviewError] = useState<string>();
   const [compareCommentDraft, setCompareCommentDraft] =
@@ -454,6 +464,7 @@ export function WorkspaceFilesPanel({
     undefined,
   );
   const downloadControllerRef = useRef<AbortController | undefined>(undefined);
+  const reviewInspectorRef = useRef<HTMLDivElement>(null);
   const downloadFeedbackTimerRef = useRef<number | undefined>(undefined);
   const refreshingFileKeyRef = useRef<string | undefined>(undefined);
   const documentGenerationRef = useRef(0);
@@ -2148,8 +2159,15 @@ export function WorkspaceFilesPanel({
     };
   }, [activeComparison, activeRootId, api, workspaceId, navigationScope]);
 
+  // Persist only a selection loaded for the current comparison. Switching
+  // roots clears both context keys while the previous root's selection is
+  // still in state; it must not be written into the next root's entry.
   useEffect(() => {
-    if (!activeCompareReviewId || loadedReviewContextRef.current !== compareReviewContextKeyRef.current) return;
+    if (
+      !activeCompareReviewId ||
+      loadedReviewContextRef.current === undefined ||
+      loadedReviewContextRef.current !== compareReviewContextKeyRef.current
+    ) return;
     const saved = workspaceCompareStorage.get(navigationScope, workspaceId, activeRootId);
     workspaceCompareStorage.set(navigationScope, workspaceId, activeRootId, { ...saved, mode: modeRef.current, selectedReviewId: activeCompareReviewId });
   }, [activeCompareReviewId, navigationScope, workspaceId, activeRootId]);
@@ -2158,12 +2176,13 @@ export function WorkspaceFilesPanel({
     if (!activeCompareReviewId) {
       setCompareComments([]);
       setCompareReviewedFiles([]);
+      setCompareReviewCommentsLoading(false);
       return;
     }
     let cancelled = false;
     setCompareComments([]);
     setCompareReviewedFiles([]);
-    setCompareReviewLoading(true);
+    setCompareReviewCommentsLoading(true);
     setCompareReviewError(undefined);
     void Promise.all([
       api.listWorkspaceDiffReviewComments(activeCompareReviewId),
@@ -2181,7 +2200,7 @@ export function WorkspaceFilesPanel({
         setCompareReviewError(messageFor(error));
       })
       .finally(() => {
-        if (!cancelled) setCompareReviewLoading(false);
+        if (!cancelled) setCompareReviewCommentsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -2606,52 +2625,6 @@ export function WorkspaceFilesPanel({
     workspaceId,
   ]);
 
-  const deleteCompareAnnotation = useCallback(
-    async (annotation: WorkspaceCompareReviewAnnotation) => {
-      const comment = compareCurrentAnnotationById.get(annotation.annotationId);
-      if (!comment || !currentCompareReview) return;
-      const requestContextKey = compareReviewContextKeyRef.current;
-      setCompareReviewMutating(true);
-      setCompareReviewError(undefined);
-      try {
-        const result = await api.deleteWorkspaceDiffReviewComment(
-          currentCompareReview.id,
-          comment.id,
-          {
-            expectedReviewRevision: currentCompareReview.revision,
-            expectedCommentRevision: comment.revision,
-            mutationId: crypto.randomUUID(),
-          },
-        );
-        if (compareReviewContextKeyRef.current !== requestContextKey) return;
-        setCompareReviews((current) =>
-          current.map((item) =>
-            item.id === result.review.id ? result.review : item,
-          ),
-        );
-        setCompareHistoryReviews((current) =>
-          current.map((item) =>
-            item.id === result.review.id ? result.review : item,
-          ),
-        );
-        setCompareComments((current) =>
-          activeCompareReviewIdRef.current === currentCompareReview.id
-            ? current.filter((item) => item.id !== comment.id)
-            : current,
-        );
-        setCompareCurrentComments((current) =>
-          current.filter((item) => item.id !== comment.id),
-        );
-      } catch (error) {
-        if (compareReviewContextKeyRef.current !== requestContextKey) return;
-        setCompareReviewError(messageFor(error));
-      } finally {
-        if (compareReviewContextKeyRef.current === requestContextKey) setCompareReviewMutating(false);
-      }
-    },
-    [api, compareCurrentAnnotationById, currentCompareReview],
-  );
-
   const deleteCompareComment = useCallback(
     async (
       review: WorkspaceDiffReview,
@@ -2693,13 +2666,30 @@ export function WorkspaceFilesPanel({
         }
       } catch (error) {
         if (compareReviewContextKeyRef.current !== requestContextKey) return;
-        setCompareReviewError(messageFor(error));
+        // The confirmation shows the failure inline and stays open.
+        throw new Error(messageFor(error));
       } finally {
         if (compareReviewContextKeyRef.current === requestContextKey) setCompareReviewMutating(false);
       }
     },
     [api, currentCompareReview],
   );
+
+  // Resolved at render so the confirmation deletes the latest revision.
+  const pendingCommentDeleteTarget = (() => {
+    if (!pendingCommentDelete) return undefined;
+    const review = [currentCompareReview, activeCompareReview].find(
+      (candidate) => candidate?.id === pendingCommentDelete.reviewId,
+    );
+    const comments =
+      review && review.id === currentCompareReview?.id
+        ? compareCurrentComments
+        : compareComments;
+    const comment = comments.find(
+      (candidate) => candidate.id === pendingCommentDelete.commentId,
+    );
+    return review && comment ? { review, comment } : undefined;
+  })();
 
   const setCompareReviewed = useCallback(
     async (fileId: WorkspaceDiffFileId, reviewed: boolean) => {
@@ -2960,7 +2950,7 @@ export function WorkspaceFilesPanel({
       (compareHistoryReviews.find((review) => review.id === activeCompareReviewId && review.id !== currentCompareReview?.id)?.id ?? compareHistoryReviews.find((review) => review.id !== currentCompareReview?.id)?.id));
     setCompareDetailsOpen(true);
   };
-  const startReviewBlocked = compareReviewLoading
+  const startReviewBlocked = compareReviewLoading || compareReviewCommentsLoading
     ? "Loading…"
     : compareReviewMutating || compareCommentSaving
       ? "Saving…"
@@ -3371,6 +3361,26 @@ export function WorkspaceFilesPanel({
             </p>
           )}
         </aside>
+        {mode === "browse" && !fileTabPanelVisible && !treeOpen && (
+          <EmptyState
+            className="m-3 flex-1"
+            icon={<FolderTree />}
+            title="No file open"
+            description="Browse the workspace to open a file."
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setTreeOpen(true);
+                  requestAnimationFrame(() => treeToggleRef.current?.focus());
+                }}
+              >
+                Browse files
+              </Button>
+            }
+          />
+        )}
         {fileTabPanelVisible && (
           <main
             className="workspace-files-viewer"
@@ -3676,9 +3686,17 @@ export function WorkspaceFilesPanel({
                   range,
                 });
               }}
-              onDeleteAnnotation={(annotation) =>
-                void deleteCompareAnnotation(annotation)
-              }
+              onDeleteAnnotation={(annotation) => {
+                const comment = compareCurrentAnnotationById.get(
+                  annotation.annotationId,
+                );
+                if (!comment || !currentCompareReview) return;
+                setPendingCommentDelete({
+                  reviewId: currentCompareReview.id,
+                  commentId: comment.id,
+                  fromInspector: false,
+                });
+              }}
               onReviewedChange={(fileId, reviewed) =>
                 void setCompareReviewed(fileId, reviewed)
               }
@@ -3817,6 +3835,7 @@ export function WorkspaceFilesPanel({
         }}
       >
         <DialogContent
+          ref={reviewInspectorRef}
           layout="side"
           size="md"
           dismissible={!compareReviewMutating}
@@ -3959,14 +3978,15 @@ export function WorkspaceFilesPanel({
                             </Button>
                           )}
                           <Button
-                            variant="ghost"
+                            variant="destructive-outline"
                             size="xs"
                             onClick={() =>
                               activeCompareReview
-                                ? void deleteCompareComment(
-                                    activeCompareReview,
-                                    comment,
-                                  )
+                                ? setPendingCommentDelete({
+                                    reviewId: activeCompareReview.id,
+                                    commentId: comment.id,
+                                    fromInspector: true,
+                                  })
                                 : undefined
                             }
                           >
@@ -4081,6 +4101,27 @@ export function WorkspaceFilesPanel({
           const next = pendingClose;
           setPendingClose(undefined);
           if (next) removeTab(next, true);
+        }}
+      />
+      <ConfirmDialog
+        open={context.visible && pendingCommentDeleteTarget !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setPendingCommentDelete(undefined);
+        }}
+        layer={pendingCommentDelete?.fromInspector ? "over-dialog" : "dialog"}
+        fallbackFocus={() => reviewInspectorRef.current}
+        title="Delete comment?"
+        description={
+          pendingCommentDeleteTarget
+            ? `The comment on ${commentLocation(pendingCommentDeleteTarget.comment)} will be permanently deleted.`
+            : undefined
+        }
+        confirmLabel="Delete comment"
+        pendingLabel="Deleting…"
+        tone="danger"
+        onConfirm={async () => {
+          const target = pendingCommentDeleteTarget;
+          if (target) await deleteCompareComment(target.review, target.comment);
         }}
       />
       <ConfirmDialog
@@ -4682,6 +4723,13 @@ function diagnosticFor(code: string): string {
       return `Folder unavailable (${code}).`;
   }
 }
+function commentLocation(comment: WorkspaceDiffReviewComment): string {
+  const path = comment.newPath ?? comment.oldPath ?? "this file";
+  return comment.startLine === comment.endLine
+    ? `${path}, line ${comment.startLine}`
+    : `${path}, lines ${comment.startLine}–${comment.endLine}`;
+}
+
 function messageFor(error: unknown): string {
   return error instanceof Error
     ? error.message

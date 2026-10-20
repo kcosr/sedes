@@ -23,10 +23,14 @@ import {
   navigate,
 } from "../../app/router.js";
 import type { ConnectionState } from "../../api/EventStreamTransport.js";
-import {
-  useApplicationStore,
-  type ApplicationClientStore,
+import type {
+  ApplicationClientState,
+  ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
+import {
+  sameSelectedFields,
+  useApplicationStoreSelector,
+} from "../../stores/use-application-store-selector.js";
 import type {
   ThreadClientStore,
   ThreadClientState,
@@ -136,6 +140,15 @@ const noProjects: NormalizedApplicationSnapshot["projects"] = [];
 const noWorkspaces: NormalizedApplicationSnapshot["workspaces"] = [];
 const noEnvironments: NormalizedApplicationSnapshot["environments"] = [];
 
+/** The application state the header renders; sidebar search is not part of it. */
+function selectHeaderApplication(state: ApplicationClientState) {
+  return {
+    snapshot: state.snapshot,
+    pendingThreadConfigurationCopySourceIds:
+      state.pendingThreadConfigurationCopySourceIds,
+  };
+}
+
 /** A disabled row's short reason; the row's title carries the full one. */
 function ReasonShortcut({ reason }: { readonly reason: string }) {
   return (
@@ -197,7 +210,11 @@ export const ThreadHeader = memo(function ThreadHeader({
   pendingBookmarkTurnIds: ThreadClientState["pendingBookmarkTurnIds"];
   onSelectBookmarkTurn: (turnId: string) => boolean;
 }): React.JSX.Element {
-  const application = useApplicationStore(applicationStore);
+  const application = useApplicationStoreSelector(
+    applicationStore,
+    selectHeaderApplication,
+    sameSelectedFields,
+  );
   // Under the density switch Thread actions is a bottom sheet with 44px
   // rows, and it also carries the thread settings the composer hides.
   const sheet = useTouchDensity();

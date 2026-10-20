@@ -1009,6 +1009,34 @@ describe("WorkspaceFilesPanel", () => {
     expect(treeToggle).toHaveAttribute("aria-expanded", "true");
   });
 
+  it("offers Browse files when no file is open and the tree is closed", async () => {
+    const api = setupApi();
+    const { context } = setupContext();
+    render(<WorkspaceFilesPanel context={context} api={api} />);
+    await waitForListing(api);
+
+    const treeToggle = screen.getByRole("button", {
+      name: "Toggle file browser",
+    });
+    expect(treeToggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("No file open")).not.toBeInTheDocument();
+    fireEvent.click(treeToggle);
+    expect(screen.getByText("No file open")).toBeVisible();
+    expect(
+      screen.getByText("Browse the workspace to open a file."),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    expect(screen.queryByText("No file open")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+    fireEvent.click(treeToggle);
+    expect(treeToggle).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "Browse files" }));
+    expect(treeToggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("No file open")).not.toBeInTheDocument();
+  });
+
   it("discloses that dirty Browse drafts are excluded without saving them", async () => {
     const api = setupApi();
     const { context } = setupContext();
@@ -1495,6 +1523,175 @@ describe("WorkspaceFilesPanel", () => {
     expect(api.openWorkspaceDiffReview).not.toHaveBeenCalled();
   });
 
+  it("enables Start review when the review whose comments are loading is cleared", async () => {
+    const comparison = {
+      comparisonId: "comparison_1234567890abcdef",
+      repositoryId: "repository_1234567890abcdef",
+      mode: "direct",
+      base: {
+        kind: "revision",
+        revisionId: "revision_1234567890abcdef",
+        commitHash: "a".repeat(40),
+        label: "main",
+      },
+      head: { kind: "working_tree" },
+      fingerprint: "fingerprint_1234567890abcdef",
+    } as const;
+    const historyReview = {
+      id: "00000000-0000-4000-8000-000000000021",
+      workspaceId: "workspace-1",
+      rootId: "primary" as const,
+      title: "Earlier review",
+      summary: "",
+      state: "archived" as const,
+      revision: 2,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const api = setupApi({
+      listWorkspaceDiffReviews: vi.fn(async () => ({ reviews: [] })),
+      listWorkspaceDiffReviewHistory: vi.fn(async () => ({
+        reviews: [historyReview],
+      })),
+      listWorkspaceDiffReviewComments: vi.fn(() => new Promise<never>(() => undefined)),
+      listWorkspaceDiffReviewedFiles: vi.fn(() => new Promise<never>(() => undefined)),
+    });
+    const { context } = setupContext();
+    render(<WorkspaceFilesPanel context={context} api={api} />);
+    await waitForListing(api);
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    act(() => {
+      (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
+        comparison,
+      );
+    });
+    // The history review is selected automatically and its comments stay loading.
+    await waitFor(() =>
+      expect(api.listWorkspaceDiffReviewComments).toHaveBeenCalledWith(historyReview.id),
+    );
+    await openReviewMenu();
+    expect(startReviewItem()).toHaveAttribute("aria-disabled", "true");
+    expect(startReviewItem()).toHaveTextContent("Loading…");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "History" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review" });
+    fireEvent.change(
+      within(dialog).getByRole("combobox", { name: "Historical workspace diff review" }),
+      { target: { value: "" } },
+    );
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull());
+
+    await openReviewMenu();
+    await waitFor(() => expect(startReviewItem()).not.toHaveAttribute("aria-disabled"));
+    expect(startReviewItem()).not.toHaveTextContent("Loading…");
+  });
+
+  it("keeps each root's selected review when switching roots", async () => {
+    const scope = "selected-review-per-root";
+    const supplementalRootId = "context-root" as never;
+    const review = (id: string, title: string) => ({
+      id,
+      workspaceId: "workspace-1",
+      rootId: "primary" as const,
+      title,
+      summary: "",
+      state: "archived" as const,
+      revision: 2,
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    const primaryChoice = review("00000000-0000-4000-8000-000000000031", "Primary choice");
+    const supplementalChoice = review("00000000-0000-4000-8000-000000000032", "Supplemental choice");
+    const supplementalOther = review("00000000-0000-4000-8000-000000000033", "Supplemental other");
+    workspaceCompareStorage.set(scope, "workspace-1", supplementalRootId, {
+      mode: "compare",
+      selectedReviewId: supplementalChoice.id,
+    });
+    const api = setupApi({
+      listWorkspaceFileRoots: vi.fn(async () => ({
+        roots: [
+          {
+            kind: "primary" as const,
+            rootId: "primary" as const,
+            displayLabel: "Workspace",
+            displayPath: { text: "/workspace" },
+            sortOrder: 0,
+            revision: 0,
+            availability: "available" as const,
+            watchable: true,
+          },
+          {
+            kind: "supplemental" as const,
+            rootId: supplementalRootId,
+            displayLabel: "Agent context",
+            displayPath: { text: "/agent-context" },
+            sortOrder: 1,
+            revision: 3,
+            availability: "available" as const,
+            watchable: true,
+          },
+        ],
+      })),
+      listWorkspaceDiffReviews: vi.fn(async () => ({ reviews: [] })),
+      listWorkspaceDiffReviewHistory: vi.fn(async (_workspaceId, rootId) => ({
+        reviews:
+          rootId === "primary"
+            ? [primaryChoice]
+            : [supplementalOther, supplementalChoice],
+      })),
+    });
+    const { context } = setupContext();
+    render(
+      <NavigationScopeContext.Provider value={scope}>
+        <WorkspaceFilesPanel context={context} api={api} />
+      </NavigationScopeContext.Provider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Agent context" })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    const comparison = {
+      comparisonId: "comparison_1234567890abcdef",
+      repositoryId: "repository_1234567890abcdef",
+      mode: "direct",
+      base: {
+        kind: "revision",
+        revisionId: "revision_1234567890abcdef",
+        commitHash: "a".repeat(40),
+        label: "main",
+      },
+      head: { kind: "working_tree" },
+      fingerprint: "fingerprint_1234567890abcdef",
+    } as const;
+    act(() => {
+      (latestCompareProps?.onComparisonChange as (value: unknown) => void)(comparison);
+    });
+    await waitFor(() =>
+      expect(
+        workspaceCompareStorage.get(scope, "workspace-1", "primary")?.selectedReviewId,
+      ).toBe(primaryChoice.id),
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Agent context" }));
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Agent context" })).toHaveAttribute("aria-selected", "true"),
+    );
+    expect(
+      workspaceCompareStorage.get(scope, "workspace-1", supplementalRootId)?.selectedReviewId,
+    ).toBe(supplementalChoice.id);
+
+    act(() => {
+      (latestCompareProps?.onComparisonChange as (value: unknown) => void)(comparison);
+    });
+    await waitFor(() =>
+      expect(api.listWorkspaceDiffReviewComments).toHaveBeenLastCalledWith(supplementalChoice.id),
+    );
+    expect(
+      workspaceCompareStorage.get(scope, "workspace-1", supplementalRootId)?.selectedReviewId,
+    ).toBe(supplementalChoice.id);
+  });
+
   it("keeps inline annotation actions bound to the current review while viewing history details", async () => {
     const comparison = {
       comparisonId: "comparison_1234567890abcdef",
@@ -1554,6 +1751,8 @@ describe("WorkspaceFilesPanel", () => {
       body: "History body",
       revision: 2,
     };
+    // The server's latest copy, so a refetch after the edit stays current.
+    let latestCurrentComment: typeof currentComment = currentComment;
     const api = setupApi({
       listWorkspaceDiffReviews: vi.fn(async () => ({
         reviews: [currentReview],
@@ -1563,20 +1762,14 @@ describe("WorkspaceFilesPanel", () => {
       })),
       listWorkspaceDiffReviewComments: vi.fn(async (reviewId: string) => ({
         comments:
-          reviewId === currentReview.id ? [currentComment] : [historyComment],
+          reviewId === currentReview.id
+            ? [latestCurrentComment]
+            : [historyComment],
       })),
       listWorkspaceDiffReviewedFiles: vi.fn(async () => ({ files: [] })),
       updateWorkspaceDiffReviewComment: vi.fn(
-        async (reviewId: string, commentId: string, request) => ({
-          review: {
-            ...(reviewId === currentReview.id ? currentReview : historyReview),
-            revision:
-              (reviewId === currentReview.id
-                ? currentReview.revision
-                : historyReview.revision) + 1,
-            updatedAt: 9,
-          },
-          comment: {
+        async (reviewId: string, commentId: string, request) => {
+          const comment = {
             ...(commentId === currentComment.id
               ? currentComment
               : historyComment),
@@ -1588,8 +1781,20 @@ describe("WorkspaceFilesPanel", () => {
                 ? currentComment.revision
                 : historyComment.revision) + 1,
             updatedAt: 9,
-          },
-        }),
+          };
+          if (commentId === currentComment.id) latestCurrentComment = comment;
+          return {
+            review: {
+              ...(reviewId === currentReview.id ? currentReview : historyReview),
+              revision:
+                (reviewId === currentReview.id
+                  ? currentReview.revision
+                  : historyReview.revision) + 1,
+              updatedAt: 9,
+            },
+            comment,
+          };
+        },
       ),
       deleteWorkspaceDiffReviewComment: vi.fn(
         async (reviewId: string, commentId: string) => ({
@@ -1689,21 +1894,31 @@ describe("WorkspaceFilesPanel", () => {
       ),
     );
 
-    await act(async () => {
-      await (
+    act(() => {
+      (
         latestCompareProps?.onDeleteAnnotation as (value: {
           annotationId: string;
-        }) => Promise<void>
+        }) => void
       )({ annotationId: currentComment.id });
     });
 
-    expect(api.deleteWorkspaceDiffReviewComment).toHaveBeenCalledWith(
-      currentReview.id,
-      currentComment.id,
-      expect.objectContaining({
-        expectedReviewRevision: currentReview.revision + 1,
-        expectedCommentRevision: currentComment.revision + 1,
-      }),
+    const confirm = await screen.findByRole("dialog", {
+      name: "Delete comment?",
+    });
+    expect(api.deleteWorkspaceDiffReviewComment).not.toHaveBeenCalled();
+    fireEvent.click(
+      within(confirm).getByRole("button", { name: "Delete comment" }),
+    );
+
+    await waitFor(() =>
+      expect(api.deleteWorkspaceDiffReviewComment).toHaveBeenCalledWith(
+        currentReview.id,
+        currentComment.id,
+        expect.objectContaining({
+          expectedReviewRevision: currentReview.revision + 1,
+          expectedCommentRevision: currentComment.revision + 1,
+        }),
+      ),
     );
   });
 
@@ -1983,10 +2198,34 @@ describe("WorkspaceFilesPanel", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("History body")).toBeVisible();
+    vi.mocked(api.deleteWorkspaceDiffReviewComment).mockRejectedValueOnce(
+      new Error("The review changed. Refresh and try again."),
+    );
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
 
+    const confirm = await screen.findByRole("dialog", {
+      name: "Delete comment?",
+    });
+    expect(confirm).toHaveTextContent(
+      "The comment on src/file.ts, line 4 will be permanently deleted.",
+    );
+    expect(api.deleteWorkspaceDiffReviewComment).not.toHaveBeenCalled();
+    fireEvent.click(
+      within(confirm).getByRole("button", { name: "Delete comment" }),
+    );
+    // A failure stays inline and keeps the confirmation open.
+    expect(
+      await within(confirm).findByText(
+        "The review changed. Refresh and try again.",
+      ),
+    ).toBeVisible();
+    expect(within(dialog).getByText("History body")).toBeInTheDocument();
+    fireEvent.click(
+      within(confirm).getByRole("button", { name: "Delete comment" }),
+    );
+
     await waitFor(() =>
-      expect(api.deleteWorkspaceDiffReviewComment).toHaveBeenCalledWith(
+      expect(api.deleteWorkspaceDiffReviewComment).toHaveBeenLastCalledWith(
         historyReview.id,
         historyComment.id,
         expect.objectContaining({

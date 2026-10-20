@@ -1,5 +1,5 @@
 import { chmod, mkdtemp, rm } from "node:fs/promises";
-import { connect } from "node:net";
+import { Server, connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -39,6 +39,17 @@ async function setup(options: { readonly onStopped?: () => Promise<void>; readon
 }
 
 describe("persistent sidecar management service", () => {
+  it("keeps serving after the listening endpoint reports an accept failure", async () => {
+    const listen = vi.spyOn(Server.prototype, "listen");
+    const { request } = await setup();
+    const endpoint = listen.mock.contexts[0] as Server;
+    listen.mockRestore();
+    expect(() => endpoint.emit("error", Object.assign(new Error("accept EMFILE"), { code: "EMFILE" }))).not.toThrow();
+    expect(endpoint.listening).toBe(true);
+    const status = await request({ managementVersion: 1, requestId: randomUUID(), scope, operation: "status" });
+    expect(status.outcome).toBe("ok");
+  });
+
   it("keeps management usable when the runtime version is incompatible", async () => {
     const { request } = await setup();
     const response = await request({ managementVersion: 1, requestId: randomUUID(), scope, operation: "attach", expectedBuildId: "new-build", expectedArtifactSha256: "b".repeat(64), runtimeWireVersion: 999, sessionNonce: "n".repeat(32), carrierGeneration: 1, configuration, mode: "normal" });

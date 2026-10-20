@@ -2366,21 +2366,27 @@ export function WorkspaceCompareView({
                     )}
                   </div>
                   <p>{annotation.metadata.body}</p>
-                  {onDeleteAnnotation && (
-                    <button
-                      type="button"
-                      onClick={() => onDeleteAnnotation(annotation.metadata)}
-                    >
-                      Delete
-                    </button>
-                  )}
-                  {onSelectAnnotation && (
-                    <button
-                      type="button"
-                      onClick={() => onSelectAnnotation(annotation.metadata)}
-                    >
-                      Open
-                    </button>
+                  {(onSelectAnnotation || onDeleteAnnotation) && (
+                    <div className="workspace-compare-annotation-actions">
+                      {onSelectAnnotation && (
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => onSelectAnnotation(annotation.metadata)}
+                        >
+                          Open
+                        </Button>
+                      )}
+                      {onDeleteAnnotation && (
+                        <Button
+                          variant="destructive-outline"
+                          size="xs"
+                          onClick={() => onDeleteAnnotation(annotation.metadata)}
+                        >
+                          Delete
+                        </Button>
+                      )}
+                    </div>
                   )}
                 </div>
               )}

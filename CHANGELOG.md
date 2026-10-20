@@ -116,6 +116,35 @@ User-facing changes are collected here before release. See the
   **Refresh**); and empty panels offer **New terminal** or **Configure
   comparison**.
 
+- The Workpads list has the Tasks keyboard model (one tab stop, arrow keys,
+  **Delete**, **F2**); its row actions are announced, name the workpad when
+  they fail, and keep focus in the list, and a search with no match offers
+  **Clear search**. Workpad autosave no longer repeats its sync state to
+  screen readers, panel headers' unsaved and busy markers are read, and a
+  terminal menu ✕ names what it does (**End** or **Remove**). See
+  [workpads](docs/user/workpads.md).
+  ([#104](https://github.com/kcosr/sedes/pull/104))
+
+- Streaming replies, sidebar search and inventory updates do less work in the
+  browser: a flush re-renders only the turn that changed, and search or other
+  threads' updates no longer re-render the open thread.
+  ([#100](https://github.com/kcosr/sedes/pull/100))
+
+- Settings, Usage and Archived load on first use, which shrinks the initial
+  bundle. If their code cannot be fetched, the view offers Try again and Reload.
+  ([#100](https://github.com/kcosr/sedes/pull/100))
+
+- Thread actions and recovery checks no longer slow down as mutation history
+  grows: database migration **153** indexes mutation receipts by thread. Live
+  thread streams validate and encode each update once for every viewer and keep
+  less unusable reconnect history in memory.
+  ([#99](https://github.com/kcosr/sedes/pull/99))
+
+- The server sends the web client compressed (Brotli or gzip) and lets browsers
+  cache content-hashed assets for a year; `index.html` is still revalidated on
+  every load. The initial download drops from about 3.0 MB to 0.7 MB.
+  ([#99](https://github.com/kcosr/sedes/pull/99))
+
 - Parking threads keeps open Tasks attached without prompting for task handling,
   including stack parking. Archive task choices remain available. See
   [parking](docs/user/organize-work.md#park-quiet-work).
@@ -174,6 +203,76 @@ User-facing changes are collected here before release. See the
   and its readout is announced to screen readers. With usage turned off, the
   Usage page explains how the operator enables it; the empty state now names
   OpenCode among the recorded backends.
+
+- Deleting a Files review comment or discarding a saved voice dictation asks
+  for confirmation, and leaving **Settings → Notifications** with unsaved
+  edits asks before discarding them. See
+  [saved dictation](docs/operator/clients/voice.md).
+  ([#104](https://github.com/kcosr/sedes/pull/104))
+
+- A rendering failure no longer blanks the app: a transcript message shows
+  **Try again** in its place, a failing panel offers **Reload panel** while
+  Chat keeps working, and the app offers **Try again**, **Reload** and **Copy
+  details**. A failed Workpads, **Tool clients** or **Paired clients** load
+  offers **Try again** in place instead of a false empty state or an app
+  reload, and Files Browse with no open file offers **Browse files**.
+  ([#104](https://github.com/kcosr/sedes/pull/104))
+
+- Execution sidecar sessions stay open through bursts of small frames, late
+  Files watch events, aborted writes, and slow runtime bodies. Agent tools and
+  the shell accept a filesystem-root workspace root (`/`, `C:\`). Service
+  receipts and Windows IPC keys are written atomically.
+  ([#103](https://github.com/kcosr/sedes/pull/103))
+
+- `sedes` and `sedes mcp` no longer crash on a bodyless HTTP reply. Malformed
+  tool IDs or input over a transport limit report `invalid_input`, and only
+  one option per command may read stdin (`-`).
+  ([#103](https://github.com/kcosr/sedes/pull/103))
+
+- Electron no longer raises a main-process error when it quits during an SSH
+  connect, and still waits for connection cleanup. Managed Local keeps one
+  saved credential and reports keyring guidance when secure storage is
+  unavailable. See [Electron](docs/operator/clients/electron.md#connection-credentials).
+  ([#103](https://github.com/kcosr/sedes/pull/103))
+
+- Composer drafts are saved when you close, reload, or leave the page or
+  background the Android app, except edits made while an earlier save is still
+  in progress. A failed draft save retries without another keystroke. A failed
+  attachment upload no longer holds back later files,
+  pasting a copied file no longer inserts its name or path, and Safari's
+  IME-confirming Enter no longer sends. See
+  [Build a prompt](docs/user/conversations.md#build-a-prompt).
+  ([#102](https://github.com/kcosr/sedes/pull/102))
+
+- Tasks: quick actions in a row on one task, such as Pin then Backlog, no
+  longer fail as "changed elsewhere"; retrying an add or paste whose response
+  was lost no longer creates the Task twice; and Escape restores a maximized
+  layout from Tasks.
+  ([#102](https://github.com/kcosr/sedes/pull/102))
+
+- Find in thread stays on its match while a reply streams. Files compare keeps
+  each root's selected review and no longer leaves **Start review** stuck on
+  "Loading…". Sidebar thread shortcuts (Mod+1–9, Mod+Shift+↑/↓) no longer
+  switch threads behind an open dialog.
+  ([#102](https://github.com/kcosr/sedes/pull/102))
+
+- The server no longer exits or hangs after rare failures: a client resetting
+  a refused terminal or outbound-host WebSocket upgrade, storage failing while
+  a terminal records history (only that terminal fails), a late Codex TUI
+  launch that cannot be closed, or a provider runtime closing while a thread
+  opens. Upgrade requests for unknown paths now get a 404 and are closed.
+  ([#101](https://github.com/kcosr/sedes/pull/101))
+
+- Threads with very large snapshots no longer reload and disconnect when a
+  small update follows a replacement on a slow connection. Exiting a terminal
+  shell while a mobile keyboard closes no longer drops the viewer with a
+  protocol error. Files change watching runs at most one Git metadata check
+  per short interval during installs and builds.
+  ([#101](https://github.com/kcosr/sedes/pull/101))
+
+- Deleting a Task that a force reset promoted now reports a conflict instead
+  of an internal server error. See [Tasks](docs/user/tasks-and-automations.md).
+  ([#101](https://github.com/kcosr/sedes/pull/101))
 
 - Android voice holds queued playback while foreground dictation is saved and
   submitted through the composer, so a newly accepted message suppresses the
