@@ -48,6 +48,10 @@ const UsageView = lazyView(
   "usage",
   async () => (await import("../usage/UsageView")).UsageView,
 );
+const UsageDisabledView = lazyView(
+  "usage",
+  async () => (await import("../usage/UsageView")).UsageDisabledView,
+);
 
 // Memoized with field-level application subscriptions: sidebar search and
 // other inventory-only changes re-render the shell, not the workbench.
@@ -177,7 +181,7 @@ export const Workbench = memo(function Workbench({
           <div className="pane-nav-header">
             <SidebarNavTrigger />
           </div>
-          {application.experimentalUsageEnabled ? <UsageView store={applicationStore} /> : <p>Experimental usage accounting is disabled on this server.</p>}
+          {application.experimentalUsageEnabled ? <UsageView store={applicationStore} /> : <UsageDisabledView />}
         </div>
       </main>
     );

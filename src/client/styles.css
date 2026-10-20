@@ -1057,7 +1057,7 @@ textarea:disabled {
   outline: none;
   background: transparent;
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--text-input);
 }
 
 .search-box input::placeholder {
@@ -1263,7 +1263,7 @@ textarea:disabled {
   border-radius: var(--radius-ctl);
   background: var(--secondary);
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--text-input);
   font-weight: 500;
 }
 
@@ -2913,6 +2913,38 @@ textarea:disabled {
   box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--ring) 45%, transparent);
 }
 
+/* Touch density: open-file and root tabs are 44px tall, and a file tab's
+   close button and the folder's Remove fill that height. */
+@media (max-width: 819px), (pointer: coarse) {
+  /* Tabs keep their width and the strip scrolls, so a squeezed tab never
+     leaves only its close button to tap. */
+  .workspace-files-tab {
+    flex: none;
+    min-height: var(--control-touch);
+    padding-block: 0;
+    padding-right: 0;
+  }
+
+  .workspace-files-tab-close {
+    width: var(--control-touch);
+    height: var(--control-touch);
+  }
+
+  .workspace-files-root-tab {
+    min-height: var(--control-touch);
+  }
+
+  .workspace-files-root-switcher > button {
+    width: var(--control-touch);
+    height: var(--control-touch);
+  }
+
+  .workspace-files-editor-toolbar > div > button {
+    width: var(--bar-control-width);
+    height: var(--bar-control);
+  }
+}
+
 .workspace-files-root {
   display: flex;
   min-width: 0;
@@ -2954,12 +2986,6 @@ textarea:disabled {
   border-bottom: 1px solid var(--border-soft);
   color: var(--muted-foreground);
   font-size: 12px;
-}
-
-.workspace-files-editor-toolbar > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .workspace-files-editor-toolbar > div {
@@ -3114,7 +3140,42 @@ textarea:disabled {
 
 /* The retained terminal body fills its panel below the header. */
 .terminal-panel-body {
+  display: flex;
+  flex-direction: column;
   height: 100%;
+}
+
+/* No terminal, or one that is loading or can't be found: a centred
+   EmptyState in the body. */
+.terminal-panel-empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 0;
+  padding: var(--space-4);
+  overflow: auto;
+}
+
+.terminal-panel-loading {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+  text-align: center;
+}
+
+/* Terminal notices: one Callout each, recovery buttons in its action. */
+.terminal-panel-callout {
+  flex: none;
+  margin: var(--space-2) var(--space-2) 0;
+}
+
+/* Up to three recovery buttons share the action: in a narrow panel they wrap
+   instead of running past the panel's clipped edge. */
+.terminal-panel-callout [data-slot="callout-action"] {
+  flex-wrap: wrap;
+  max-width: 100%;
 }
 
 .terminal-transcript > header {
@@ -3327,14 +3388,6 @@ textarea:disabled {
   color: var(--terminal-foreground);
 }
 
-.terminal-panel-notice {
-  margin: 0;
-  padding: 5px 8px;
-  background: var(--warning-soft);
-  color: var(--warning);
-  font-size: 0.74rem;
-}
-
 .terminal-panel-emulator {
   position: relative;
   flex: 1;
@@ -3406,7 +3459,7 @@ textarea:disabled {
   background: var(--terminal-background);
   color: var(--terminal-foreground);
   font:
-    13px/18px ui-monospace,
+    var(--text-input) / 18px ui-monospace,
     SFMono-Regular,
     Menlo,
     Monaco,
@@ -3455,6 +3508,31 @@ textarea:disabled {
   border-bottom: 1px solid var(--terminal-border);
 }
 
+/* A search row on the terminal's surface: the shared Input and Button. */
+.terminal-transcript-search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--terminal-border);
+}
+
+.terminal-transcript-search [data-slot="input"] {
+  flex: 1 1 auto;
+  border-color: var(--terminal-border);
+  background: var(--terminal-background);
+  color: var(--terminal-foreground);
+}
+
+.terminal-transcript > p {
+  flex: none;
+  margin: 0;
+  padding: var(--space-1) var(--space-2-5);
+  color: var(--terminal-muted);
+  font-size: var(--text-meta);
+}
+
 .terminal-transcript pre {
   flex: 1;
   margin: 0;
@@ -3497,8 +3575,25 @@ textarea:disabled {
     min-height: 44px;
   }
 
-  .terminal-transcript input {
-    min-height: 44px;
+  .terminal-tab-rename-input {
+    font-size: var(--text-input);
+  }
+
+  /* Recovery buttons keep the notice compact with a 44px-tall hit area;
+     wrapped rows are spaced so their areas never overlap. */
+  .terminal-panel-callout [data-slot="callout-action"] {
+    row-gap: calc(var(--control-touch) - var(--control-xs));
+  }
+
+  .terminal-panel-callout [data-slot="callout-action"] button {
+    position: relative;
+  }
+
+  .terminal-panel-callout [data-slot="callout-action"] button::before {
+    content: "";
+    position: absolute;
+    inset-block: calc((100% - var(--control-touch)) / 2);
+    inset-inline: 0;
   }
 
   .terminal-panel-bottom-controls {
@@ -4297,7 +4392,8 @@ textarea:disabled {
   border: 1px solid var(--ring);
   border-radius: var(--radius-ctl);
   background: var(--secondary);
-  font-size: 15px;
+  /* The title size, or the 16px input size under the density switch. */
+  font-size: max(var(--text-title), var(--text-input));
   font-weight: 650;
 }
 
@@ -4588,7 +4684,7 @@ textarea:disabled {
   outline: 0;
   background: transparent;
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--text-input);
 }
 
 .thread-find-control input::placeholder {
@@ -6087,6 +6183,12 @@ textarea:disabled {
   background: var(--background);
   color: var(--foreground);
   font: inherit;
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  .context-excerpt-note-editor textarea {
+    font-size: var(--text-input);
+  }
 }
 
 .context-excerpt-note-editor > div {
@@ -9073,7 +9175,7 @@ tr.diff-hunk td {
   background: var(--code);
   color: var(--foreground);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-input);
   resize: vertical;
   transition: border-color var(--motion-fast);
 }
@@ -9299,7 +9401,7 @@ tr.diff-hunk td {
   background: var(--code);
   color: var(--foreground);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-input);
   resize: vertical;
 }
 
@@ -11204,6 +11306,7 @@ tr.diff-hunk td {
     width: 100%;
     min-height: 120px;
     max-height: min(36dvh, 240px);
+    font-size: var(--text-input);
   }
 }
 .notification-silence-control {

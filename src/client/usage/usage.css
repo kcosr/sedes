@@ -141,37 +141,6 @@
   min-width: 11rem;
 }
 
-.usage-segmented {
-  display: inline-flex;
-  padding: 2px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-  background: var(--usage-track);
-}
-
-.usage-segmented button {
-  display: inline-grid;
-  min-width: 28px;
-  height: 24px;
-  place-items: center;
-  padding: 0 8px;
-  border-radius: var(--radius-inline);
-  color: var(--muted-foreground-2);
-  font-size: var(--text-meta);
-  font-weight: 550;
-  transition: background var(--motion-fast), color var(--motion-fast);
-}
-
-.usage-segmented button:hover {
-  color: var(--foreground);
-}
-
-.usage-segmented button[aria-checked="true"] {
-  background: var(--card);
-  box-shadow: 0 1px 2px oklch(0 0 0 / 0.12);
-  color: var(--foreground);
-}
-
 .usage-filter-count {
   display: inline-grid;
   min-width: 18px;
@@ -419,23 +388,9 @@
   border-top: 1px solid var(--border-soft);
 }
 
-.usage-banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in oklch, var(--warning) 45%, transparent);
-  border-radius: var(--radius-card);
-  background: color-mix(in oklch, var(--warning) 10%, var(--card));
-  font-size: var(--text-ui);
-}
-
-.usage-banner > span {
-  flex: 1;
-}
-
-.usage-banner small {
+.usage-error-detail {
   color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
 }
 
 /* ── Summary tiles ─────────────────────────────────────────────────────── */
@@ -553,32 +508,6 @@
 }
 
 /* ── Tabs ──────────────────────────────────────────────────────────────── */
-.usage-tabs {
-  display: flex;
-  gap: 2px;
-  overflow-x: auto;
-  border-bottom: 1px solid var(--border-soft);
-  scrollbar-width: none;
-}
-
-.usage-tabs button {
-  flex: none;
-  padding: 9px 12px 10px;
-  color: var(--muted-foreground-2);
-  font-size: var(--text-ui);
-  font-weight: 550;
-  transition: color var(--motion-fast), box-shadow var(--motion-fast);
-}
-
-.usage-tabs button:hover {
-  color: var(--foreground);
-}
-
-.usage-tabs button[aria-selected="true"] {
-  box-shadow: inset 0 -2px 0 var(--foreground);
-  color: var(--foreground);
-}
-
 .usage-tab-panel,
 .usage-overview,
 .usage-explore,
@@ -1003,6 +932,15 @@ button.usage-bar-row[aria-pressed="true"] {
   display: grid;
   min-width: 0;
   gap: 10px;
+  border-radius: var(--radius-inline);
+  outline: none;
+  /* Quick taps on neighbouring cells never double-tap zoom, and a pinch can
+     still enlarge the small cells. */
+  touch-action: manipulation;
+}
+
+.usage-heatmap:focus-visible {
+  box-shadow: var(--focus-ring);
 }
 
 .usage-heatmap-grid {
@@ -1544,31 +1482,6 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
 }
 
 /* Empty and loading. */
-.usage-empty {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  padding: 64px 24px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-card);
-  color: var(--muted-foreground-2);
-  text-align: center;
-}
-
-.usage-empty h2 {
-  margin: 4px 0 0;
-  color: var(--foreground);
-  font-size: 16px;
-  font-weight: 620;
-}
-
-.usage-empty p {
-  max-width: 480px;
-  margin: 0;
-  font-size: var(--text-ui);
-  line-height: 1.5;
-}
-
 .usage-skeleton {
   display: grid;
   gap: 16px;
@@ -1695,6 +1608,48 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
 
   .usage-heatmap-hour {
     font-size: 9px;
+  }
+}
+
+/* Touch density, at any width with a coarse pointer. */
+@media (max-width: 819px), (pointer: coarse) {
+  .usage-inline-search input,
+  .usage-filter-search input {
+    font-size: var(--text-input);
+  }
+
+  /* A card's actions sit beside a touch-sized segmented control. */
+  .usage-card-actions > button {
+    min-width: var(--control-default);
+    height: var(--control-default);
+  }
+
+  /* Retry keeps the notice compact with a 44px-tall hit area. */
+  .usage-callout [data-slot="callout-action"] button {
+    position: relative;
+  }
+
+  .usage-callout [data-slot="callout-action"] button::before {
+    content: "";
+    position: absolute;
+    inset-block: calc((100% - var(--control-touch)) / 2);
+    inset-inline: 0;
+  }
+
+  /* A chip's remove button keeps its size with a 44px hit area; wrapped
+     rows are spaced so it never covers the next row's chips. */
+  .usage-filter-chips {
+    row-gap: var(--space-4);
+  }
+
+  .usage-filter-chips li:not(.usage-chip-clear) button {
+    position: relative;
+  }
+
+  .usage-filter-chips li:not(.usage-chip-clear) button::before {
+    content: "";
+    position: absolute;
+    inset: calc((100% - var(--control-touch)) / 2);
   }
 }
 

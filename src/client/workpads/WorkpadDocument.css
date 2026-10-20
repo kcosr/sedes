@@ -3,6 +3,7 @@
 /* A checklist is a compact list, including GFM's paragraph-wrapped items. */
 .workpad-document .task-list-item > p:first-child { margin-bottom: 0; }
 .workpad-document .markdown-checklist-control {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -10,6 +11,23 @@
   min-height: var(--control-xs);
   vertical-align: middle;
   cursor: pointer;
+}
+/* The box keeps its size in the line; touch widens its hit area to 44px.
+   Only sideways: checklist lines sit closer than 44px, and a taller area
+   would cover the neighbouring line's box. The area sits under the box
+   itself, which keeps its own pointer events. */
+@media (max-width: 819px), (pointer: coarse) {
+  .workpad-document .markdown-checklist-control {
+    isolation: isolate;
+  }
+
+  .workpad-document .markdown-checklist-control::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset-block: 0;
+    inset-inline: calc((100% - var(--control-touch)) / 2);
+  }
 }
 .workpad-document .markdown-checklist-control:has(input:disabled),
 .workpad-document .markdown-checklist-control:has(input[aria-disabled="true"]) { cursor: default; }

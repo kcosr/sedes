@@ -5,22 +5,19 @@
 .thread-questions-trigger svg {
   color: var(--warning);
 }
-.thread-questions-count {
-  font-variant-numeric: tabular-nums;
-  border-radius: 999px;
-  padding: 0.05rem 0.4rem;
-  background: var(--muted);
-  font-size: 0.75rem;
-}
+/* A floating surface opened from the composer, on the shared tokens. */
 .question-inbox-panel {
+  display: grid;
+  gap: var(--space-2);
   width: 100%;
   max-height: min(52dvh, 560px);
   overflow-y: auto;
-  padding: 0.75rem;
+  padding: var(--space-3);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   background: var(--popover);
   color: var(--foreground);
+  font-size: var(--text-ui);
 }
 .question-inbox-navigation,
 .question-inbox-navigation nav {
@@ -30,13 +27,15 @@
 }
 .question-inbox-navigation {
   justify-content: space-between;
-  margin-bottom: 0.6rem;
 }
 .question-inbox-navigation strong {
-  font-size: 0.85rem;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
 }
 .question-inbox-navigation nav {
-  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
 }
 .composer-prompt-rail:empty {
   display: none;
@@ -53,29 +52,29 @@
   overflow-wrap: anywhere;
 }
 .question-response-answers dt {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 .question-response-answers dd {
   margin-top: 4px;
 }
 .question-inbox-hint {
   color: var(--muted-foreground);
-  font-size: 0.8rem;
-  line-height: 1.5;
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
 }
 .question-inbox-card {
   display: grid;
-  gap: 0.65rem;
-  padding: 0.85rem;
+  gap: var(--space-2-5);
+  padding: var(--space-3);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
 }
 .question-inbox-card[data-selected] {
   border-color: var(--primary);
 }
 .question-inbox-question {
   display: grid;
-  gap: 0.55rem;
+  gap: var(--space-2);
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -83,16 +82,16 @@
 }
 .question-inbox-question legend {
   width: 100%;
-  margin-bottom: 0.5rem;
-  font-size: 0.85rem;
-  line-height: 1.5;
-  font-weight: 600;
+  margin-bottom: var(--space-2);
+  font-size: var(--text-ui);
+  line-height: var(--leading-normal);
+  font-weight: var(--weight-semibold);
   overflow-wrap: anywhere;
 }
 .question-inbox-options {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: var(--space-1-5);
 }
 .question-inbox-options button {
   white-space: normal;
@@ -105,31 +104,16 @@
   border-color: var(--primary);
   background: var(--muted);
 }
-.question-inbox-question textarea {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 4rem;
-  resize: vertical;
-  padding: 0.5rem;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--muted);
-  color: var(--foreground);
-  font: inherit;
-  font-size: 0.85rem;
-}
-.question-inbox-question textarea:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
 .question-inbox-card-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  gap: 0.4rem;
+  gap: var(--space-1-5);
 }
-.question-inbox-error {
-  font-size: 0.8rem;
-  color: var(--destructive);
+/* "Saving…" is quiet; Dismiss keeps the button's own colour. */
+.question-inbox-card-actions > [role="status"] {
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
 }
 .question-inbox-hint {
   margin: 0;
@@ -165,12 +149,21 @@
 .question-transcript-disclosure[open] .question-disclosure-preview {
   display: block;
 }
-@media (max-width: 819px) {
-  .question-inbox-question textarea {
-    font-size: 16px;
-  }
+@media (max-width: 819px), (pointer: coarse) {
   .question-inbox-card-actions button,
   .question-inbox-options button {
-    min-height: 44px;
+    min-height: var(--control-touch);
+  }
+
+  /* Try again keeps the notice compact with a 44px-tall hit area. */
+  .question-inbox-panel [data-slot="callout-action"] button {
+    position: relative;
+  }
+
+  .question-inbox-panel [data-slot="callout-action"] button::before {
+    content: "";
+    position: absolute;
+    inset-block: calc((100% - var(--control-touch)) / 2);
+    inset-inline: 0;
   }
 }

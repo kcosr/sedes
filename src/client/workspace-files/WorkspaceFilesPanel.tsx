@@ -79,6 +79,7 @@ import { EmptyState } from "../components/ui/empty-state.js";
 import { Field } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { NativeSelect } from "../components/ui/native-select.js";
+import { PathLabel } from "../components/ui/path-label.js";
 import {
   SegmentedControl,
   SegmentedControlItem,
@@ -3057,30 +3058,16 @@ export function WorkspaceFilesPanel({
         )}
       {createPortal(
         <div className="workspace-files-toolbar-actions">
-          <div
+          <SegmentedControl
+            size="sm"
             className="workspace-files-mode-switcher"
-            role="tablist"
             aria-label="Files view"
+            value={mode}
+            onValueChange={(next) => selectMode(next as WorkspaceFilesMode)}
           >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === "browse"}
-              className={mode === "browse" ? "is-active" : undefined}
-              onClick={() => selectMode("browse")}
-            >
-              Browse
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === "compare"}
-              className={mode === "compare" ? "is-active" : undefined}
-              onClick={() => selectMode("compare")}
-            >
-              Changes
-            </button>
-          </div>
+            <SegmentedControlItem value="browse">Browse</SegmentedControlItem>
+            <SegmentedControlItem value="compare">Changes</SegmentedControlItem>
+          </SegmentedControl>
           <Button
             ref={treeToggleRef}
             variant={treeOpen ? "secondary" : "ghost"}
@@ -3423,7 +3410,7 @@ export function WorkspaceFilesPanel({
               activeFile.contentKind === "binary" ? (
               <div className="workspace-files-editor-shell">
                 <header className="workspace-files-editor-toolbar">
-                  <span title={activeFile.path}>{activeFile.path}</span>
+                  <PathLabel path={activeFile.path} />
                   <div>{activeDownloadAction}</div>
                 </header>
                 {activeDownloadError && (
@@ -3466,7 +3453,7 @@ export function WorkspaceFilesPanel({
               ) : (
                 <div className="workspace-files-editor-shell">
                   <header className="workspace-files-editor-toolbar">
-                    <span title={activeFile.path}>{activeFile.path}</span>
+                    <PathLabel path={activeFile.path} />
                     <div>{activeDownloadAction}</div>
                   </header>
                   {activeDownloadError && (
@@ -3484,7 +3471,7 @@ export function WorkspaceFilesPanel({
             ) : activeFile?.availability === "available" && activeDocument ? (
               <div className="workspace-files-editor-shell">
                 <header className="workspace-files-editor-toolbar">
-                  <span title={activeDocument.path}>{activeDocument.path}</span>
+                  <PathLabel path={activeDocument.path} />
                   <div>
                     {activeDownloadAction}
                     <Button

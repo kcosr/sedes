@@ -148,8 +148,10 @@ export function TimeSeriesChart({
             {bucketAxisLabel(bucket.start, granularity, index >= labelEvery ? buckets[index - labelEvery]?.start : undefined)}
           </text>
         ))}
+        {/* Touch browsers fire pointerleave as the finger lifts; a tapped
+            readout stays until the next tap, Escape, or blur. */}
         <rect x={left} y={TOP} width={plotWidth} height={height} fill="transparent" onPointerMove={pick} onPointerDown={pick}
-          onPointerLeave={() => setActive(null)} />
+          onPointerLeave={(event) => { if (event.pointerType === "mouse") setActive(null); }} />
       </svg>
       {empty ? <p className="usage-chart-empty">No placed usage in this range</p> : null}
       {tooltip}

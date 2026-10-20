@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChartColumnBig, RefreshCw, TriangleAlert } from "lucide-react";
+import { ChartColumnBig, RefreshCw } from "lucide-react";
 import { Button } from "@client/components/ui/button";
+import { Callout } from "@client/components/ui/callout";
+import { EmptyState } from "@client/components/ui/empty-state";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@client/components/ui/tabs";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import type { UsageAnalyticsDimension, UsageAnalyticsRequest, UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import { useUsageAnalytics } from "./use-usage-analytics.js";
@@ -28,6 +31,24 @@ function tabQuery(tab: UsageTab, settings: UsageViewSettings): Pick<UsageAnalyti
   if (tab === "explore") return { groupBy: settings.exploreRows, crossBy: settings.exploreColumns, breakdownLimit: 100 };
   if (tab === "threads") return { groupBy: null, crossBy: null, breakdownLimit: 100 };
   return { groupBy: null, crossBy: null, breakdownLimit: 8 };
+}
+
+/** The Usage page when the server has not enabled usage accounting. */
+export function UsageDisabledView() {
+  return (
+    <section className="usage-view" aria-labelledby="usage-view-title">
+      <div className="usage-page">
+        <header className="usage-header">
+          <div>
+            <p className="eyebrow">Recorded usage · Experimental</p>
+            <h1 id="usage-view-title">Usage</h1>
+          </div>
+        </header>
+        <EmptyState icon={<ChartColumnBig />} title="Usage is turned off"
+          description={<>The server operator enables it by setting <code>SEDES_EXPERIMENTAL_USAGE=1</code> and restarting the server.</>} />
+      </div>
+    </section>
+  );
 }
 
 /** Principal-wide recorded usage analytics page. */
@@ -86,35 +107,32 @@ export function UsageView({ store }: { store: ApplicationClientStore }) {
         </div>
 
         {analytics.error ? (
-          <div className="usage-banner" role="alert">
-            <TriangleAlert aria-hidden="true" size={16} />
-            <span>{data ? "Usage could not be refreshed. Showing the last successful read." : "Usage is unavailable right now."} <small>{analytics.error}</small></span>
-            <Button variant="outline" size="sm" onClick={analytics.refresh}>Retry</Button>
-          </div>
+          // Stale numbers stay on screen after a failed refresh: a warning.
+          <Callout className="usage-callout" tone={data ? "warning" : "danger"} role="alert"
+            action={<Button variant="outline" size="sm" onClick={analytics.refresh}>Retry</Button>}>
+            {data ? "Usage could not be refreshed. Showing the last successful read." : "Usage is unavailable right now."}{" "}
+            <span className="usage-error-detail">{analytics.error}</span>
+          </Callout>
         ) : null}
 
         {!data ? (analytics.error ? null : <UsageSkeleton />) : neverRecorded ? (
-          <div className="usage-empty">
-            <ChartColumnBig aria-hidden="true" size={24} />
-            <h2>No recorded usage yet</h2>
-            <p>Sedes records tokens and estimated cost on the server as Pi, Codex, and Claude threads run. Charts appear here after the first recorded turn. Grok does not report usage.</p>
-          </div>
+          <EmptyState icon={<ChartColumnBig />} title="No recorded usage yet"
+            description="Sedes records tokens and estimated cost on the server as Pi, Codex, Claude, and OpenCode threads run. Charts appear here after the first recorded turn. Grok does not report usage." />
         ) : (
           <div className="usage-content" data-stale={analytics.stale ? "true" : undefined} aria-busy={analytics.loading}>
             <SummaryTiles data={data} rangeLabel={rangeLabel} comparable={settings.preset !== "all"} />
-            <nav className="usage-tabs" role="tablist" aria-label="Usage views">
-              {USAGE_TABS.map((tab) => (
-                <button key={tab.id} type="button" role="tab" id={`usage-tab-${tab.id}`} aria-selected={settings.tab === tab.id}
-                  aria-controls="usage-tab-panel" onClick={() => update({ tab: tab.id })}>{tab.label}</button>
-              ))}
-            </nav>
-            <div id="usage-tab-panel" role="tabpanel" aria-labelledby={`usage-tab-${settings.tab}`} className="usage-tab-panel">
-              {settings.tab === "overview" ? <UsageOverview data={data} settings={settings} onSettings={update} filters={filters} onFilters={setFilters} onExplore={explore} />
-                : settings.tab === "explore" ? <UsageExplore data={data} settings={settings} onSettings={update} filters={filters} onFilters={setFilters} />
-                : settings.tab === "threads" ? <UsageThreads data={data} filters={filters} onFilters={setFilters} />
-                : settings.tab === "patterns" ? <UsagePatterns data={data} />
-                : <UsageCoverage data={data} />}
-            </div>
+            <Tabs value={settings.tab} onValueChange={(tab) => update({ tab: tab as UsageTab })}>
+              <TabsList aria-label="Usage views">
+                {USAGE_TABS.map((tab) => <TabsTrigger key={tab.id} value={tab.id}>{tab.label}</TabsTrigger>)}
+              </TabsList>
+              <TabsContent value={settings.tab} className="usage-tab-panel">
+                {settings.tab === "overview" ? <UsageOverview data={data} settings={settings} onSettings={update} filters={filters} onFilters={setFilters} onExplore={explore} />
+                  : settings.tab === "explore" ? <UsageExplore data={data} settings={settings} onSettings={update} filters={filters} onFilters={setFilters} />
+                  : settings.tab === "threads" ? <UsageThreads data={data} filters={filters} onFilters={setFilters} />
+                  : settings.tab === "patterns" ? <UsagePatterns data={data} />
+                  : <UsageCoverage data={data} />}
+              </TabsContent>
+            </Tabs>
           </div>
         )}
       </div>

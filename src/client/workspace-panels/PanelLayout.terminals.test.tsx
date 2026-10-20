@@ -143,6 +143,10 @@ describe("PanelLayout Terminals panel", () => {
     act(() => store.closeTerminalTab(first.terminalId));
     expect(store.terminalPanel()).toMatchObject({ tabs: [], activeTerminalId: null });
     expect(screen.getByText("No terminals open")).toBeVisible();
+    // A centred empty state with its action, not a notice band.
+    const empty = screen.getByText("No terminals open").closest("[data-slot=empty-state]")!;
+    expect(empty).toHaveAttribute("data-variant", "panel");
+    expect(within(empty as HTMLElement).getByRole("button", { name: "New terminal" })).toBeVisible();
     expect(within(screen.getByRole("tablist", { name: "Terminal tabs" })).queryAllByRole("tab")).toEqual([]);
     expect(createTerminal).not.toHaveBeenCalled();
     act(() => store.toggle("terminals"));
@@ -224,6 +228,9 @@ describe("PanelLayout Terminals panel", () => {
     expect(
       await screen.findByText(/Couldn’t load this terminal/),
     ).toHaveTextContent("Network unavailable");
+    expect(
+      screen.getByText(/Couldn’t load this terminal/).closest("[data-slot=empty-state]"),
+    ).toContainElement(screen.getByRole("button", { name: "Retry" }));
     expect(screen.queryByText(/retained history was deleted/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(readTerminal).toHaveBeenCalledTimes(2));
