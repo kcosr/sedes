@@ -51,6 +51,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
     let lastViewedThread = sessionStorage.getItem(viewedKey);
     const listeners = new Map<string, { plugin: string; event: string; callback: (value: unknown) => void }>();
     let listenerId = 0;
+    let diagnosticsEnabled = false;
     let composerHandoff: { event: NativeVoiceComposerHandoff; claimed: boolean } | undefined;
     let retargetGate: { promise: Promise<void>; resolve(): void; reject(error: Error): void } | undefined;
     let composerClaimGate: { promise: Promise<void>; resolve(): void } | undefined;
@@ -176,7 +177,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
         PluginHeaders: [
           header("Preferences", ["get", "set", "remove"]), header("ClientCredentials", ["getCredential", "setCredential", "removeCredential", "removeProfileCredentials"]),
           header("App", ["exitApp"], true),
-          header("NativeVoice", ["setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget", "releaseRetainedVoiceTarget",
+          header("NativeVoice", ["setDiagnosticsEnabled", "readDiagnostics", "clearDiagnostics", "setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget", "releaseRetainedVoiceTarget",
             "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "stopPlayback", "skipCurrentPlayback", "recordDuringPlayback", "retryRecordingRecognition",
             "sendRecoveredRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
             "refreshSpeechCatalog", "openSpeechCredentialDialog", "speakReply", "claimComposerHandoff", "completeComposerHandoff", "settleComposerSubmission"], true),
@@ -196,6 +197,10 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           }
           if (plugin === "ClientCredentials") return method === "getCredential" ? { credential: null } : undefined;
           if (plugin !== "NativeVoice") return;
+          if (method === "setDiagnosticsEnabled") { diagnosticsEnabled = args.enabled === true; return; }
+          // Native diagnostic event production is covered by the Android tests.
+          if (method === "readDiagnostics") return { enabled: diagnosticsEnabled, maximumEntries: 512, entries: [] };
+          if (method === "clearDiagnostics") return;
           if (!["getState", "setForegroundContext", "refreshSpeechCatalog"].includes(method)) fixture.calls.push({ method, args });
           const current = fixture.state;
           if (method === "setConnection") {

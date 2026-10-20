@@ -4,6 +4,7 @@ import { useComposerReasoningFit } from "./use-composer-reasoning-fit.js";
 import { useNativeVoice } from "../../voice/VoiceProvider.js";
 import type { VoiceComposerAdoption } from "../../voice/NativeVoiceStore.js";
 import { prependVoiceToDraft } from "../../voice/voice-composer-draft.js";
+import { recordVoiceSendDiagnostic, voiceDraftCounts } from "../../voice/voice-send-diagnostics.js";
 import { QuestionInboxButton, QuestionInboxPanel } from "./QuestionInbox.js";
 import {
   useCallback,
@@ -403,6 +404,8 @@ const resizeComposerTextarea = (element: HTMLTextAreaElement): void => {
   element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
 };
 
+let nextVoiceComposerInstance = 0;
+
 export function Composer({
   active = true,
   store,
@@ -426,9 +429,12 @@ export function Composer({
 }): React.JSX.Element | null {
   const state = useThreadStore(store);
   const voice = useNativeVoice();
+  const [voiceComposerInstance] = useState(() => ++nextVoiceComposerInstance);
   const { footerRef: composerFooterRef, onReasoningPickerOpenChange } =
     useComposerReasoningFit();
   const chatViewVisible = useContext(ChatViewVisibilityContext);
+  const voiceDiagnosticPresentation = useRef({ active, chatVisible: chatViewVisible });
+  voiceDiagnosticPresentation.current = { active, chatVisible: chatViewVisible };
   const resolvedApplicationStore = applicationStore ?? EMPTY_APPLICATION_STORE;
   const application = useApplicationStoreSelector(
     resolvedApplicationStore,
@@ -811,9 +817,13 @@ export function Composer({
           taskReferences: [...taskReferencesToSave],
           revision: base.revision,
         };
+        recordVoiceSendDiagnostic("draft_save_started", { composerInstance: voiceComposerInstance,
+          ...voiceDraftCounts(draft), draftRevision: base.revision });
         const saved = await (keepalive
           ? store.saveDraft(draft, { keepalive: true })
           : store.saveDraft(draft));
+        recordVoiceSendDiagnostic("draft_save_finished", { composerInstance: voiceComposerInstance,
+          ...voiceDraftCounts(saved), draftRevision: saved.revision });
         if (
           !syncedDraft.current ||
           syncedDraft.current.revision <= saved.revision
@@ -854,6 +864,7 @@ export function Composer({
         }
         return saved;
       } catch (error) {
+        recordVoiceSendDiagnostic("draft_save_failed", { composerInstance: voiceComposerInstance });
         if (
           error instanceof ApiError &&
           error.code === "task_reference_unresolved"
@@ -1694,6 +1705,8 @@ export function Composer({
       taskReferencesRef.current = parsed.data.taskReferences;
       setTaskReferences(parsed.data.taskReferences);
       setDirty(true);
+      recordVoiceSendDiagnostic("task_staged", { composerInstance: voiceComposerInstance,
+        taskCount: parsed.data.taskReferences.length, ...voiceDiagnosticPresentation.current });
       requestAnimationFrame(() => textarea.current?.focus());
       return { ok: true as const };
     },
@@ -1978,6 +1991,14 @@ export function Composer({
   // use the previous render's eligibility or submission function.
   acceptVoiceHandoff.current = () => { throw new Error("The message composer is unavailable."); };
   const voiceSubmissionVisible = active && chatViewVisible && optimisticTranscriptPresentationVisible && !tuiActive;
+  useLayoutEffect(() => {
+    recordVoiceSendDiagnostic("composer_state", { composerInstance: voiceComposerInstance,
+      active, chatVisible: chatViewVisible, live: optimisticTranscriptPresentationVisible, tuiActive,
+      ready: voiceComposerReady, composerAvailable: voiceSubmissionVisible, dirty,
+      taskCount: taskReferences.length, attachmentCount: attachments.length,
+      pendingUploadCount: attachmentUploads.uploads.length });
+  }, [voiceComposerInstance, active, chatViewVisible, optimisticTranscriptPresentationVisible, tuiActive,
+    voiceComposerReady, voiceSubmissionVisible, dirty, taskReferences.length, attachments.length, attachmentUploads.uploads.length]);
   // Readiness can change without replacing this composer's draft operation queue.
   const voiceComposerOwner = useRef<object>({});
   const flushVoiceDeparture = useRef<() => Promise<unknown>>(() => Promise.resolve());
@@ -2002,7 +2023,14 @@ export function Composer({
     if (!voice || !voiceSubmissionVisible) return;
     const unregister = voice.registerSubmissionComposer(store.threadId, event => acceptVoiceHandoff.current(event), voiceComposerReady, voiceComposerOwner.current);
     return () => {
-      voice.publishComposerDraftFlush(store.threadId, flushVoiceDeparture.current(), voiceComposerOwner.current);
+      recordVoiceSendDiagnostic("departure_flush_started", { composerInstance: voiceComposerInstance,
+        ...voiceDraftCounts(currentDraftValue()) });
+      const flush = flushVoiceDeparture.current();
+      void flush.then(
+        () => recordVoiceSendDiagnostic("departure_flush_finished", { composerInstance: voiceComposerInstance }),
+        () => recordVoiceSendDiagnostic("departure_flush_failed", { composerInstance: voiceComposerInstance }),
+      );
+      voice.publishComposerDraftFlush(store.threadId, flush, voiceComposerOwner.current);
       unregister();
     };
   }, [voice, store, voiceSubmissionVisible, voiceComposerReady]);
@@ -2318,7 +2346,7 @@ export function Composer({
   const send = (
     candidate?: DraftValue,
     requestedMode?: "submit" | "steer" | "queue",
-    options?: { refocus?: boolean },
+    options?: { refocus?: boolean; voiceRecordingId?: string },
   ): false | { submission?: Promise<void> } => {
     if (tuiActive) {
       if (requestedMode) return false;
@@ -2403,6 +2431,9 @@ export function Composer({
         let authoritative: NormalizedDraft | undefined;
         try {
           deliveryStarted = true;
+          if (options?.voiceRecordingId) recordVoiceSendDiagnostic("delivery_started", {
+            recordingId: options.voiceRecordingId, composerInstance: voiceComposerInstance, source: "live", mode,
+            ...voiceDraftCounts(persisted), draftRevision: persisted.revision });
           authoritative = await store.deliver(mode, persisted, operationId);
         } catch (error) {
           if (
@@ -2515,9 +2546,13 @@ export function Composer({
           store.acknowledgeComposerTransferRollback(operationId);
         }
         if (recoveryError) throw recoveryError;
+        if (options?.voiceRecordingId) recordVoiceSendDiagnostic("delivery_finished", {
+          recordingId: options.voiceRecordingId, composerInstance: voiceComposerInstance, source: "live" });
       });
     })()
       .catch(() => {
+        if (options?.voiceRecordingId) recordVoiceSendDiagnostic("delivery_failed", {
+          recordingId: options.voiceRecordingId, composerInstance: voiceComposerInstance, source: "live" });
         if (!deliveryStarted) {
           store.abandonComposerTransfer(operationId);
           rollbackHandled = restoreComposerContribution(
@@ -2547,6 +2582,9 @@ export function Composer({
       throw new Error("Wait for the current composer action to finish.");
     const current = currentDraftValue();
     const candidate = prependVoiceToDraft(current, event.text);
+    recordVoiceSendDiagnostic("draft_captured", { recordingId: event.recordingId,
+      composerInstance: voiceComposerInstance, source: "live", ...voiceDraftCounts(candidate),
+      draftRevision: syncedDraft.current.revision, pendingUploadCount: attachmentUploadsRef.current.length });
     const next = candidate.text;
     const parsed = normalizedDraftSchema.safeParse({ ...candidate, revision: syncedDraft.current.revision });
     const selectedTasks = candidate.taskReferences.flatMap(({ taskId }) => {
@@ -2562,7 +2600,7 @@ export function Composer({
       : event.mode === "steer" && supportedBusyDeliveryModes.some(({ id, available }) => id === "steer" && available)
         ? "steer"
         : "queue";
-    const attempt = send(candidate, mode, { refocus: false });
+    const attempt = send(candidate, mode, { refocus: false, voiceRecordingId: event.recordingId });
     if (attempt) return attempt;
     // An upload or capability fence must keep the entire draft, including its
     // outstanding uploads, rather than send speech with only part of its context.

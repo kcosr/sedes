@@ -47,6 +47,10 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
+- Voice diagnostics trace composer availability, recording routes, task and
+  attachment counts, and draft save/delivery outcomes in the existing Copy log.
+  See [voice send diagnostics](docs/developer/diagnostics.md#voice-send-and-composer-handoff).
+
 - Dismiss runtime warning banners, including Codex MCP failures and Claude
   usage warnings. Repeated notices with identical text and severity retain one
   copy per thread; a new occurrence after dismissal can appear again. See

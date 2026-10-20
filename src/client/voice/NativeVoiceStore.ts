@@ -1,4 +1,5 @@
 import type { PluginListenerHandle } from "@capacitor/core";
+import { recordVoiceSendDiagnostic } from "./voice-send-diagnostics.js";
 import { nativeRecordingTextSchema, nativeVoiceComposerHandoffSchema, nativeVoiceInputSubmittedSchema, nativeVoiceStateSchema, type NativeRecordingRecoveryCommandContext, type NativeReplySpeech, type NativeVoiceCommandContext, type NativeVoiceComposerHandoff, type NativeVoiceInputSubmitted, type NativeVoiceInteractionCommandContext, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
 
 type NativeVoiceError = NativeVoiceState["errors"][number];
@@ -255,12 +256,16 @@ export class NativeVoiceStore {
     });
   }
   async #handoff(event: NativeVoiceComposerHandoff): Promise<void> {
+    const diagnostic = { recordingId: event.recordingId, connectionGeneration: event.connectionGeneration };
+    recordVoiceSendDiagnostic("handoff_received", diagnostic);
     const context = { expectedConnectionGeneration: event.connectionGeneration, handoffId: event.handoffId };
     let claimed: NativeVoiceState;
     try {
       claimed = nativeVoiceStateSchema.parse(await this.plugin.claimComposerHandoff(context));
       this.#accept(claimed);
+      recordVoiceSendDiagnostic("handoff_claimed", diagnostic);
     } catch (error) {
+      recordVoiceSendDiagnostic("handoff_claim_failed", diagnostic);
       if (this.#matchesHandoff(event)) this.#error(error);
       // A failed bridge response can still follow a successful native claim.
       // No composer adopted it, so release the original reservation even if
@@ -279,6 +284,7 @@ export class NativeVoiceStore {
       // Layout registration is the current view's authority. Native foreground
       // thread/composer snapshots may still describe the preceding navigation.
       const accept = this.#readySubmissionComposer(event.threadId);
+      recordVoiceSendDiagnostic("handoff_route_selected", { ...diagnostic, source: accept ? "live" : "saved" });
       // No await between checking the latest view and capturing its live draft.
       // A ready composer's refusal is final. An absent or resuming view uses the saved draft.
       const adopted = accept ? accept(event) : await this.#adoptDetached(event, claimed.active?.id);
@@ -286,18 +292,24 @@ export class NativeVoiceStore {
       // is pending. Delivery failure cannot return already adopted speech to recovery.
       submission = adopted?.submission?.then(() => ({ failed: false as const }), error => ({ failed: true as const, error }));
       outcome = "accepted";
+      recordVoiceSendDiagnostic("handoff_adopted", { ...diagnostic, submissionPending: submission !== undefined });
     } catch (error) {
+      recordVoiceSendDiagnostic("handoff_declined", diagnostic);
       message = (error instanceof Error ? error.message : "The composer could not accept this dictation.").slice(0, 1024);
     }
     let ownershipUnconfirmed = false;
     try {
       this.#acceptHandoffCompletion(event, await this.plugin.completeComposerHandoff({ ...context, outcome, submissionPending: submission !== undefined, ...(message ? { message } : {}) }));
+      recordVoiceSendDiagnostic("handoff_completed", { ...diagnostic, outcome, submissionPending: submission !== undefined });
     } catch (error) {
+      recordVoiceSendDiagnostic("handoff_completion_failed", diagnostic);
       ownershipUnconfirmed = outcome === "accepted";
       if (this.#matchesHandoff(event)) this.#error(error);
     }
     if (submission || ownershipUnconfirmed) {
       const result = await submission;
+      if (result) recordVoiceSendDiagnostic("submission_settled", diagnostic);
+      if (result?.failed) recordVoiceSendDiagnostic("submission_failed", diagnostic);
       if (result?.failed && this.#matchesHandoff(event)) this.#error(result.error);
       // Settle the original reservation even after navigation, disposal, or a lost
       // ownership acknowledgement, including draft-only adoption. Never bind this

@@ -7,6 +7,9 @@ import {
 type DiagnosticValue = string | number | boolean | null;
 
 const allowedDetailKeys = [
+  "recordingId", "connectionGeneration", "composerInstance", "active", "chatVisible", "live", "tuiActive",
+  "ready", "documentVisible", "composerAvailable", "targetMatchesForeground", "dirty", "taskCount",
+  "attachmentCount", "excerptCount", "pendingUploadCount", "hasSkill", "draftRevision", "submissionPending",
   "action",
   "animationActive",
   "animatedGraphemes",
@@ -274,6 +277,11 @@ export function recordComposerInputDiagnostic(
 export function clearDiagnostics(): void {
   entries.length = 0;
   sequence = 0;
+}
+
+/** Call through voice-send-diagnostics so all voice fields are validated before reaching the shared buffer. */
+export function recordVoiceDiagnosticEntry(event: string, details: DiagnosticDetails): void {
+  recordDiagnostic("voice", event, details);
 }
 
 export function readDiagnostics(): readonly DiagnosticEntry[] {

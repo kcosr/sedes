@@ -30,7 +30,7 @@ const CATEGORIES: ReadonlyArray<{
     category: "voice",
     id: "voice-diagnostics",
     label: "Voice diagnostics",
-    description: "Record native notification receipt, queue decisions, playback timing, and connection changes without speech text or thread titles. Copy log includes up to 512 native entries, including after disconnect.",
+    description: "Trace voice sends, composer availability, task and attachment counts, draft saves, and playback without message content. Copy log includes browser events and up to 512 native entries, including after disconnect.",
   },
   {
     category: "composer_input",

@@ -6242,6 +6242,7 @@ describe("foreground voice composer ownership", () => {
   }
 
   it("captures unsaved code with all draft fields, preserves references and does not open the keyboard", async () => {
+    localStorage.setItem("sedes-diagnostics-voice", "true");
     const { fake } = await native();
     const store = new FakeComposerStore(snapshot(), "old saved text");
     const task = { taskId: "84f9a3b0-9c14-456d-b08d-58d325d869d0", titleSnapshot: "Review task" };
@@ -6255,12 +6256,20 @@ describe("foreground voice composer ownership", () => {
     const snippet = "```ts\n  const café = '你好';\n```\n";
     fireEvent.change(input, { target: { value: snippet } });
     screen.getByRole("button", { name: "Voice Send" }).focus();
-    offer(fake);
+    const recordingId = crypto.randomUUID();
+    offer(fake, { recordingId });
     await accepted(fake);
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
     const draft = store.deliver.mock.calls[0]![1];
     expect(splitThreadReferenceText(draft.text)).toEqual({ text: `Explain this\n\n${snippet}`, references: [selectedThreadReference] });
     expect(draft).toMatchObject({ selectedSkillId: "skill-review", contextExcerpts: [contextExcerpt], attachments: [attachment], taskReferences: [task] });
+    expect(readDiagnostics()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: "draft_captured", details: expect.objectContaining({ recordingId, source: "live", taskCount: 1, attachmentCount: 1, excerptCount: 1 }) }),
+      expect.objectContaining({ event: "draft_save_finished", details: expect.objectContaining({ taskCount: 1, attachmentCount: 1 }) }),
+      expect.objectContaining({ event: "delivery_started", details: expect.objectContaining({ recordingId, taskCount: 1 }) }),
+    ]));
+    expect(JSON.stringify(readDiagnostics())).not.toContain("Review task");
+    expect(JSON.stringify(readDiagnostics())).not.toContain(snippet);
     expect(input).toHaveValue("");
     expect(screen.getByRole("button", { name: "Voice Send" })).toHaveFocus();
     expect(fake.plugin.sendRecording).not.toHaveBeenCalled();
@@ -6630,6 +6639,7 @@ describe("foreground voice composer ownership", () => {
   });
 
   it.each(["inactive", "history", "tui", "hidden-chat"])("does not register the %s composer for foreground submission", async view => {
+    localStorage.setItem("sedes-diagnostics-voice", "true");
     const { fake, voice } = await native();
     const store = new FakeComposerStore(snapshot(), "keep draft");
     render(<ChatViewVisibilityContext.Provider value={view !== "hidden-chat"}>
@@ -6639,6 +6649,11 @@ describe("foreground voice composer ownership", () => {
       </CodexTuiTerminalControlContext.Provider>
     </ChatViewVisibilityContext.Provider>);
     expect(voice.hasSubmissionComposer("thread-1")).toBe(false);
+    expect(readDiagnostics()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: "composer_state", details: expect.objectContaining({
+        active: view !== "inactive", chatVisible: view !== "hidden-chat", composerAvailable: false,
+      }) }),
+    ]));
     offer(fake);
     await waitFor(() => expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "declined" })));
     expect(screen.getByRole("textbox")).toHaveValue("keep draft");

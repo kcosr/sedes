@@ -6,7 +6,8 @@ import { normalizedThreadSnapshotSchema } from "../../src/shared/index.js";
 import { formatThreadReferenceText } from "../../src/shared/thread-references.js";
 import type { NativeVoiceComposerHandoff } from "../../src/client/voice/native-voice-plugin.js";
 import { expect, test } from "./fixtures.js";
-import { capture, createDraftThread, fillAndPersistDraft, openWorkspaceDirectory, selectCustomNewThreadTarget, sendCurrentDraft } from "./helpers.js";
+import { capture, createDraftThread, fillAndPersistDraft, openWorkspaceDirectory, selectCustomNewThreadTarget, sendCurrentDraft,
+  openPanelFromMenu, openSettingsPage, returnFromSettings } from "./helpers.js";
 import { loadE2ERunContext } from "./run-context.js";
 import { installVoiceFixture, publishVoiceState, voiceFixtureState } from "./voice-controls-fixture.js";
 
@@ -75,6 +76,72 @@ function deliveredTo(page: Page, threadId: string) {
     new URL(response.url()).pathname === `/api/threads/${threadId}/operations` &&
     response.request().postDataJSON().kind === "deliver" && response.ok());
 }
+
+test("mobile Voice diagnostics copies task staging, panel eligibility and combined submission", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await openVoiceWorkspace(page, "voice-diagnostic-mobile");
+  const threadPath = await createDraftThread(page, "Voice diagnostic task");
+  const threadId = threadPath.split("/").at(-1)!;
+  await expectVoiceComposer(page, threadId);
+  await page.setViewportSize({ width: 412, height: 915 });
+  const settings = await openSettingsPage(page, "diagnostics");
+  await settings.getByTestId("voice-diagnostics-toggle").click();
+  await settings.getByRole("button", { name: "Clear copy buffer", exact: true }).click();
+  await expect(settings.getByText("Copy buffer cleared.")).toBeVisible();
+  await returnFromSettings(page);
+  const session = await (await page.request.get("/api/application/session")).json();
+  const created = await page.request.post("/api/tasks", { headers: { "X-CSRF-Token": session.csrfToken }, data: {
+    mutationId: randomUUID(), title: "Private diagnostic task", details: "Private task details",
+    scope: { kind: "thread", threadId },
+  } });
+  expect(created.status()).toBe(201);
+  const taskId = (await created.json()).task.id;
+  const composer = page.getByTestId("composer");
+  const originalComposer = await composer.elementHandle();
+  await openPanelFromMenu(page, "Tasks");
+  const tasks = page.locator('[data-slot="tasks-panel"]');
+  await tasks.getByRole("button", { name: "Private diagnostic task", exact: true }).click();
+  await tasks.getByRole("button", { name: "Add to prompt", exact: true }).click();
+  await expect(composer.getByLabel("Attached tasks")).toContainText("Private diagnostic task");
+  expect(await originalComposer!.evaluate(element => element.isConnected)).toBe(true);
+  await expect(composer).toBeHidden();
+  await expect.poll(() => page.evaluate(() => window.__voiceFixture.state.foreground.composerAvailable)).toBe(false);
+  await capture(page, testInfo, "voice-diagnostics-mobile-tasks.png");
+  await page.getByTestId("chat-panel-toggle").click();
+  await expectVoiceComposer(page, threadId);
+  const sent = deliveredTo(page, threadId);
+  const event = await offerSpeech(page, threadId, "Private diagnostic speech");
+  await expectHandoff(page, event, "accepted");
+  await sent;
+  await expectSubmissionSettled(page, event);
+  await expect(composer.getByLabel("Attached tasks")).toHaveCount(0);
+  const snapshot = normalizedThreadSnapshotSchema.parse(await (await page.request.get(`/api/threads/${threadId}?activityDetail=full`)).json());
+  expect(snapshot.draft.taskReferences).toEqual([]);
+  const copy = await page.evaluateHandle(() => {
+    const output = { text: "" };
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      writeText: async (text: string) => { output.text = text; },
+    } });
+    return output;
+  });
+  await openSettingsPage(page, "diagnostics");
+  await page.getByRole("button", { name: "Copy log", exact: true }).click();
+  await expect(page.getByText("Log copied.")).toBeVisible();
+  const text = await copy.evaluate(output => output.text);
+  const log = JSON.parse(text);
+  expect(log.entries).toEqual(expect.arrayContaining([
+    expect.objectContaining({ event: "task_staged", details: expect.objectContaining({ taskCount: 1, active: false, chatVisible: false }) }),
+    expect.objectContaining({ event: "foreground_context_applied", details: expect.objectContaining({ composerAvailable: false }) }),
+    expect.objectContaining({ event: "draft_captured", details: expect.objectContaining({ recordingId: event.recordingId, taskCount: 1 }) }),
+    expect.objectContaining({ event: "delivery_started", details: expect.objectContaining({ recordingId: event.recordingId, taskCount: 1 }) }),
+  ]));
+  expect(text).not.toMatch(/Private diagnostic|Private task details/);
+  expect(text).not.toContain(threadId);
+  expect(text).not.toContain(taskId);
+  expect(log.nativeVoice).toMatchObject({ enabled: true, maximumEntries: 512 });
+  await testInfo.attach("voice-send-diagnostics.json", { body: text, contentType: "application/json" });
+  await capture(page, testInfo, "voice-diagnostics-mobile-copy.png");
+});
 
 async function uploadNotes(page: Page, fileName: string): Promise<void> {
   const linked = page.waitForResponse(response => response.request().method() === "PUT" &&

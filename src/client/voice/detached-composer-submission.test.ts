@@ -4,6 +4,7 @@ import { ApiError, type ApiClient } from "../api/ApiClient.js";
 import type { VoiceDetachedComposerContext } from "./NativeVoiceStore.js";
 import { prepareDetachedVoiceSubmission as prepareSubmission } from "./detached-composer-submission.js";
 import { VOICE_CONNECTION } from "./native-voice-test-fixture.js";
+import { clearDiagnostics, readDiagnostics } from "../app/diagnostics.js";
 
 const event = { ...VOICE_CONNECTION, connectionGeneration: 1, handoffId: "handoff-1", recordingId: "recording-1",
   threadId: "original-thread", text: "Please explain this", mode: "queue" as const };
@@ -49,6 +50,28 @@ function fixture(patch: Partial<NormalizedThreadSnapshot> = {}) {
 }
 
 describe("detached composer voice submission", () => {
+  it("traces the saved draft counts and save-before-delivery order without content", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "true" });
+    clearDiagnostics();
+    try {
+      const { api, context } = fixture();
+      const recordingId = "9ff27a42-814a-466b-acef-c8aeb7d017f5";
+      const adopted = await prepareDetachedVoiceSubmission(api, { ...event, recordingId }, context);
+      await adopted?.submission;
+      const entries = readDiagnostics();
+      expect(entries.map(entry => entry.event)).toEqual([
+        "saved_draft_read_started", "saved_draft_read_finished", "draft_captured",
+        "saved_draft_save_started", "saved_draft_save_finished", "delivery_started", "delivery_finished",
+      ]);
+      expect(entries.find(entry => entry.event === "draft_captured")?.details).toMatchObject({
+        recordingId, source: "saved", taskCount: 1, attachmentCount: 1, excerptCount: 1, hasSkill: true,
+      });
+      expect(JSON.stringify(entries)).not.toMatch(/Example task|Existing composer text|original-thread|example.txt/);
+    } finally {
+      clearDiagnostics();
+      vi.unstubAllGlobals();
+    }
+  });
   it("sends the original thread's entire saved draft with its fresh draft and thread revisions", async () => {
     const { api, draft, context } = fixture();
     const adopted = await prepareDetachedVoiceSubmission(api, event, context);

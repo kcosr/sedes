@@ -55,7 +55,7 @@ describe("native voice diagnostics", () => {
       threadId: "private thread", text: "private speech", title: "private title", error: "private error" }] });
     expect(JSON.stringify(await readNativeVoiceDiagnostics())).not.toContain("private");
     expect(nativeVoiceDiagnosticsSchema.parse({ ...snapshot(), entries: [{ ...entry, eventKind: "turn.partial" }] })
-      .entries[0]?.eventKind).toBe("turn.partial");
+      .entries[0]).toMatchObject({ eventKind: "turn.partial" });
     for (const patch of [{ sourceEventId: "private identifier" }, { eventKind: "private speech" }, { reason: "private error" },
       { event: "private title" }, { queueCount: 65 }, { queueBytes: 256 * 1024 + 1 }, { elapsedMilliseconds: Infinity }]) {
       expect(nativeVoiceDiagnosticsSchema.safeParse({ ...snapshot(), entries: [{ ...entry, ...patch }] }).success).toBe(false);
@@ -81,5 +81,16 @@ describe("native voice diagnostics", () => {
     expect(bridge.setDiagnosticsEnabled).not.toHaveBeenCalled();
     expect(bridge.readDiagnostics).not.toHaveBeenCalled();
     expect(bridge.clearDiagnostics).not.toHaveBeenCalled();
+  });
+  it("exports native composer route decisions and rejects content in their fixed fields", async () => {
+    const route = { sequence: 2, wallTimeMilliseconds: 123457, elapsedMilliseconds: 301,
+      event: "recording_route_selected", connectionGeneration: 1,
+      recordingId: "9ff27a42-814a-466b-acef-c8aeb7d017f5", nativeVisible: true, foregroundVisible: true,
+      composerAvailable: false, targetMatchesForeground: true, composerSelected: false };
+    bridge.readDiagnostics.mockResolvedValue({ ...snapshot(), entries: [entry, { ...route, text: "private speech", threadId: "private thread" }] });
+    const output = await readNativeVoiceDiagnostics();
+    expect(output).toEqual({ ...snapshot(), entries: [entry, route] });
+    expect(JSON.stringify(output)).not.toContain("private");
+    expect(nativeVoiceDiagnosticsSchema.safeParse({ ...snapshot(), entries: [{ ...route, recordingId: "private id" }] }).success).toBe(false);
   });
 });
