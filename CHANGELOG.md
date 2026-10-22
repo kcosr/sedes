@@ -14,7 +14,7 @@ User-facing changes are collected here before release. See the
   outside requests are denied. Legacy thread-only policies are disabled for
   review rather than broadened. Saved Agent and thread-create tool contracts
   advance to version 6. See [tool policy sets](docs/user/tool-policies.md).
-  ([#96](https://github.com/kcosr/sedes/pull/96))
+  ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112))
 
 - Upgrade OpenCode execution sidecars with the server for private OpenCode
   runtime protocol **3**, which reports the observed native version. See
@@ -31,8 +31,9 @@ User-facing changes are collected here before release. See the
 - Upgrade Codex execution sidecars with the server for Codex runtime protocol
   **5**, which adds exact-target Speed publication and retains archive invalidation.
   Managed-TUI capability **3** adds ordered settings handoffs.
-  See [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
-  ([#85](https://github.com/kcosr/sedes/pull/85))
+  See [Persistent Speed](docs/operator/backends/codex.md#persistent-speed) and
+  [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
+  ([#85](https://github.com/kcosr/sedes/pull/85), [#112](https://github.com/kcosr/sedes/pull/112))
 
 - Client protocol **169** also includes explicit skill-catalog refresh intent,
   dismissible runtime notices, Page
@@ -54,6 +55,7 @@ User-facing changes are collected here before release. See the
   to the next eligible model step during a Sedes-started turn. The composer
   icon and menu checkmark show the saved preference.
   See [Speed](docs/user/provider-features.md#speed) for Goal and subagent limits.
+  ([#112](https://github.com/kcosr/sedes/pull/112))
 
 - Voice diagnostics trace composer availability, recording routes, task and
   attachment counts, and draft save/delivery outcomes in the existing Copy log.
