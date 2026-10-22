@@ -356,9 +356,10 @@ two available choices. With Ultrafast available, it opens the Speed menu.
 During an eligible active turn, both modes open the menu, including on mobile
 as a bottom sheet, so you can select the saved Speed again. Standard uses an
 outline lightning bolt, Fast a filled lightning bolt, and Ultrafast a rocket.
-The composer icon and menu checkmark show the saved preference. The tooltip
-reads “Applies from the next model step. Saved for future turns.” The control
-does not report which speed an individual step is using.
+The composer icon and menu checkmark show the saved preference. On desktop,
+the tooltip reads “Applies from the next model step. Saved for future turns.”
+Mobile does not show a tooltip. The control does not report which speed an
+individual step is using.
 
 Externally started, recovering, native continuation, and managed terminal
 turns have read-only active Speed.

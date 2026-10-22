@@ -96,13 +96,13 @@ function CodexSpeedComposerControl({ store, capability, featureState, disabled, 
     onKeyDown={event => { if (unavailable && event.key !== "Tab") event.preventDefault(); }}
     onClick={event => { if (unavailable) event.preventDefault(); }}>{icon}</button>;
   return <>
-    {acceleratedChoices.length === 1 && !state.currentRun?.target ? <SpeedTooltip text={tooltip}>
+    {acceleratedChoices.length === 1 && !state.currentRun?.target ? <SpeedTooltip text={tooltip} disabled={mobile}>
       <button type="button" className="codex-fast-mode-toggle" data-accelerated={accelerated}
         aria-label={`Speed, ${LABELS[selection]} saved`} aria-pressed={accelerated}
         aria-disabled={unavailable}
         onClick={() => { if (!unavailable) choose(accelerated ? "standard" : acceleratedChoices[0]!.selection); }}>{icon}</button>
     </SpeedTooltip> : <DropdownMenu open={menuOpen && !unavailable} onOpenChange={setMenuOpen} presentation={mobile ? "sheet" : "menu"}>
-      <SpeedTooltip text={tooltip}><DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger></SpeedTooltip>
+      <SpeedTooltip text={tooltip} disabled={mobile}><DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger></SpeedTooltip>
       <DropdownMenuContent side="top" align="end" aria-label="Speed" sheetTitle="Speed">
         <DropdownMenuRadioGroup aria-label="Speed" value={selection}>
           {state.offered.map(choice => <DropdownMenuRadioItem key={choice.selection} value={choice.selection}
@@ -119,7 +119,8 @@ function CodexSpeedComposerControl({ store, capability, featureState, disabled, 
 function canReapply(state: SpeedState): boolean {
   return !!state.currentRun?.target && (state.currentRun.requestedSelection !== state.saved.selection || state.currentRun.publicationState === "unknown");
 }
-function SpeedTooltip({ text, children }: { text: string; children: React.ReactNode }) {
+function SpeedTooltip({ text, children, disabled }: { text: string; children: React.ReactNode; disabled: boolean }) {
+  if (disabled) return children;
   return <Tooltip.Provider delayDuration={300}><Tooltip.Root><Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
     <Tooltip.Portal><Tooltip.Content className="codex-fast-mode-tooltip" side="top" align="end" sideOffset={6}>
       {text}<Tooltip.Arrow className="codex-fast-mode-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal>

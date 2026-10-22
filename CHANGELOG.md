@@ -53,7 +53,8 @@ User-facing changes are collected here before release. See the
 
 - Codex Speed now saves the preference for future Sedes turns and can apply it
   to the next eligible model step during a Sedes-started turn. The composer
-  icon and menu checkmark show the saved preference.
+  icon and menu checkmark show the saved preference. Mobile controls do not
+  show tooltips after tapping or dismissing the menu.
   See [Speed](docs/user/provider-features.md#speed) for Goal and subagent limits.
   ([#112](https://github.com/kcosr/sedes/pull/112))
 

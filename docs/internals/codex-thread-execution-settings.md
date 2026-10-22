@@ -273,9 +273,10 @@ The composer toggles directly between Standard and Fast while idle when those
 are the two choices. Three choices always use a menu; an eligible active turn
 also uses the menu with two choices, allowing same-value reapplication. Mobile
 uses the corresponding bottom sheet. The icon and menu checkmark represent
-the saved preference, with the tooltip “Applies from the next model step. Saved
-for future turns.” There is no persistent result text, explanatory help,
-receipt-check action, or pending/uncertain visual indicator. Exact receipt
+the saved preference, with the desktop tooltip “Applies from the next model step.
+Saved for future turns.” Touch layouts omit the tooltip, including on focus
+restoration after closing the menu. There is no persistent result text,
+explanatory help, receipt-check action, or pending/uncertain visual indicator. Exact receipt
 reconciliation remains internal; the control does not track individual steps
 or claim actual inference use. Pi, Claude, Grok, and OpenCode intentionally do
 not expose Speed; they explicitly retain their own mutation authorities.
