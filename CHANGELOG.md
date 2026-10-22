@@ -118,6 +118,7 @@ User-facing changes are collected here before release. See the
   are removed. This update resets saved device panel arrangements and sizes
   once and removes obsolete layout records; thread terminal tabs remain.
   See [HTML previews](docs/user/html-previews.md).
+  ([#110](https://github.com/kcosr/sedes/pull/110))
 
 - Files, Changes, Usage, Terminals, and the question inbox use the shared
   controls and notices. Long paths keep the file name visible (the tooltip
