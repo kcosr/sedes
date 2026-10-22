@@ -744,7 +744,7 @@ function createSharedState(
     // What storage holds, or would hold: only a real change is written.
     // A layout narrowed to the registered tenants is written on its next change.
     persistedLayout:
-      source !== "migrated" && layout === loaded
+      source !== "invalid" && layout === loaded
         ? serializeRegionLayout(layout)
         : undefined,
     storage,
@@ -756,8 +756,8 @@ function createSharedState(
     dirtyListeners: new Set(),
     workspaceDirty: new Map(),
   };
-  // Migration happens once: its result is saved under the new key.
-  if (source === "migrated") {
+  // An outdated or malformed device layout is replaced immediately in place.
+  if (source === "invalid") {
     const serialized = serializeRegionLayout(layout);
     try {
       storage?.setItem(PANEL_REGIONS_STORAGE_KEY, serialized);

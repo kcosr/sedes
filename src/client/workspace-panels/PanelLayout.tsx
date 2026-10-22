@@ -190,6 +190,7 @@ function PanelLayoutReady({
     chat: createPortalTarget("chat", PANEL_TITLES.chat),
     files: createPortalTarget("files", PANEL_TITLES.files),
     workpads: createPortalTarget("workpads", PANEL_TITLES.workpads),
+    pages: createPortalTarget("pages", PANEL_TITLES.pages),
     tasks: createPortalTarget("tasks", PANEL_TITLES.tasks),
     terminals: createPortalTarget("terminals", PANEL_TITLES.terminals),
   }));
@@ -197,6 +198,7 @@ function PanelLayoutReady({
     () => ({
       files: createChromeActionsTarget(),
       workpads: createChromeActionsTarget(),
+      pages: createChromeActionsTarget(),
       tasks: createChromeActionsTarget(),
     }),
   );

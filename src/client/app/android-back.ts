@@ -8,18 +8,20 @@ import { App as CapacitorApp } from "@capacitor/app";
  *    a phone closes back to its list, as its ‹ Back to tasks does.
  * 2. With no overlay open, a workpad open in the shown Workpads panel closes
  *    back to its list, as the panel's ‹ Workpads does.
- * 3. With no overlay open, a phone thread whose panel in front is not Chat
+ * 3. With no overlay open, a page open in the shown Pages panel closes back
+ *    to its list, as the panel's ‹ Pages does.
+ * 4. With no overlay open, a phone thread whose panel in front is not Chat
  *    shows Chat, its home; the other panel stays loaded.
- * 4. Thread find or any overlay above the mobile navigation drawer closes via
+ * 5. Thread find or any overlay above the mobile navigation drawer closes via
  *    a synthetic Escape, the same dismissal path a physical keyboard takes
  *    through Radix dismissable layers. The phone Terminals viewer is such an
  *    overlay: its Escape returns to Chat through its history entry.
- * 5. In the drawer, Back clears search, then all active sidebar filters, then
+ * 6. In the drawer, Back clears search, then all active sidebar filters, then
  *    closes the drawer to reveal the last thread.
- * 6. Otherwise, on a thread or home route the mobile navigation drawer
+ * 7. Otherwise, on a thread or home route the mobile navigation drawer
  *    opens — back from the landing page must not fall into WebView history
  *    (which resurfaces the previously viewed session).
- * 7. Otherwise the WebView history default is preserved. Without history (a
+ * 8. Otherwise the WebView history default is preserved. Without history (a
  *    cold deep link), a page with a "‹" link goes up where it leads.
  */
 export const OPEN_OVERLAY_SELECTORS = [
@@ -54,6 +56,8 @@ export const CLOSE_TASK_DETAIL_EVENT = "sedes:close-task-detail";
  * the event when it has one open, which is how Back knows it was handled.
  */
 export const CLOSE_WORKPAD_EVENT = "sedes:close-workpad";
+/** Asks the shown Pages panel to return from its selected page to the list. */
+export const CLOSE_PAGE_EVENT = "sedes:close-page";
 /**
  * Asks a phone thread's layout to show Chat, its home panel. The layout
  * cancels the event when another panel was in front, which is how Back knows
@@ -91,6 +95,11 @@ export function closeExposedWorkpad(): boolean {
   return claimBack(CLOSE_WORKPAD_EVENT);
 }
 
+/** Closes the selected page before leaving the Pages panel. */
+export function closeExposedPage(): boolean {
+  return claimBack(CLOSE_PAGE_EVENT);
+}
+
 /**
  * Shows Chat on a phone when another panel is in front and nothing is open
  * above the page: an overlay (the Terminals viewer included), a menu, or the
@@ -102,11 +111,11 @@ export function showChatInFront(): boolean {
 
 /**
  * Back's steps inside the page, before overlays and the drawer: an exposed
- * task detail, then an open workpad, then the panel in front of Chat. True
+ * task detail, then an open workpad or page, then the panel in front of Chat. True
  * when one of them took Back.
  */
 export function handleExposedBack(): boolean {
-  return closeExposedTaskDetail() || closeExposedWorkpad() || showChatInFront();
+  return closeExposedTaskDetail() || closeExposedWorkpad() || closeExposedPage() || showChatInFront();
 }
 
 export type AndroidBackAction =

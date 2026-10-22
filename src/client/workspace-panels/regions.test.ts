@@ -62,6 +62,7 @@ describe("region defaults", () => {
       chat: "middle",
       files: "right",
       workpads: "right",
+      pages: "right",
       tasks: "right",
       terminals: "bottom",
     });
@@ -127,8 +128,8 @@ describe("openPanel", () => {
   });
 
   it("keeps loaded kinds in their fixed order", () => {
-    const view = open(defaultRegionView(), "tasks", "files", "workpads");
-    expect(view.layout.loaded).toEqual(["files", "workpads", "tasks"]);
+    const view = open(defaultRegionView(), "tasks", "pages", "files", "workpads");
+    expect(view.layout.loaded).toEqual(["files", "workpads", "pages", "tasks"]);
   });
 
   it("opens in a given region, which becomes the placement, and empties the old region", () => {

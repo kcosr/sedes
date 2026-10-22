@@ -303,10 +303,10 @@ and diagrams support pinch zoom and pan directly in chat. At normal size, a
 one-finger gesture scrolls the conversation; when zoomed, dragging pans the
 media. Use the explicit **Expand** control to open the larger viewer.
 
-Expanded images, Mermaid diagrams, and HTML previews share a floating bottom
-zoom bar with minus, percentage, plus, **Fit**, and **1:1**. The image and
-diagram viewer also supports pinch, Control/Command-scroll, keyboard controls,
-and panning.
+The [Pages document](html-previews.md) and expanded image/Mermaid viewers share
+a floating bottom zoom bar with minus, percentage, plus, **Fit**, and **1:1**.
+The image and diagram viewer also supports pinch, Control/Command-scroll,
+keyboard controls, and panning.
 
 Supported provider-generated images appear as their own transcript items and
 are loaded on demand. When an agent views a local image, a collapsed **Viewed

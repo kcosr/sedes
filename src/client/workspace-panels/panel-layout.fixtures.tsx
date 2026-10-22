@@ -390,8 +390,11 @@ export function Chat({
 }
 
 export const noStorage: RegionStorage = {
+  length: 0,
+  key: () => null,
   getItem: () => null,
   setItem: () => undefined,
+  removeItem: () => undefined,
 };
 
 export function navigationControls(): React.ContextType<typeof NavigationControlsContext> {

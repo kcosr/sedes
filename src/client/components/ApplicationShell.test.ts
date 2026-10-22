@@ -291,7 +291,7 @@ describe("workspace panel navigation policy", () => {
 describe("workspace panel beforeunload policy", () => {
   it("installs only while dirty and removes the listener when cleaned or unmounted", () => {
     const store = new PanelRegionStore(new WorkspacePanelTenantRegistry([]), {
-      storage: { getItem: () => null, setItem: () => undefined },
+      storage: { length: 0, key: () => null, getItem: () => null, setItem: () => undefined, removeItem: () => undefined },
     });
     const remove = installWorkspacePanelBeforeUnloadGuard(store, window);
     const dispatchBeforeUnload = () => {

@@ -2,13 +2,14 @@ import type { Locator, Page } from "@playwright/test";
 import { expect } from "./fixtures.js";
 
 /** A panel kind as the workbench names it. */
-export type PanelTitle = "Chat" | "Files" | "Workpads" | "Tasks" | "Terminals";
+export type PanelTitle = "Chat" | "Files" | "Workpads" | "Pages" | "Tasks" | "Terminals";
 export type RegionTitle = "Middle" | "Left" | "Right" | "Top" | "Bottom";
 
 const PANEL_KINDS: Readonly<Record<PanelTitle, string>> = {
   Chat: "chat",
   Files: "files",
   Workpads: "workpads",
+  Pages: "pages",
   Tasks: "tasks",
   Terminals: "terminals",
 };

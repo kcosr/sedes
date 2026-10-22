@@ -30,15 +30,18 @@ function tenant(id: string, minWidth = 320): WorkspacePanelTenant {
   };
 }
 
-const ALL_TENANTS = [tenant("workspace-files"), tenant("workpads"), tenant("tasks", 300)];
+const ALL_TENANTS = [tenant("workspace-files"), tenant("workpads"), tenant("pages", 360), tenant("tasks", 300)];
 
 function memoryStorage(initial: Readonly<Record<string, string>> = {}) {
   const values = new Map(Object.entries(initial));
   return {
     values,
     storage: {
+      get length() { return values.size; },
+      key: vi.fn((index: number) => [...values.keys()][index] ?? null),
       getItem: vi.fn((key: string) => values.get(key) ?? null),
       setItem: vi.fn((key: string, value: string) => void values.set(key, value)),
+      removeItem: vi.fn((key: string) => void values.delete(key)),
     },
   };
 }
@@ -460,8 +463,46 @@ describe("PanelRegionStore make-room", () => {
 });
 
 describe("PanelRegionStore persistence", () => {
-  it("migrates the old keys once and saves the result", () => {
+  it("resets an outdated device envelope in the same key before any interaction and keeps terminal tabs", () => {
+    const oldLayout = JSON.parse(serializeRegionLayout(defaultRegionLayout()));
+    oldLayout.version = 1;
+    delete oldLayout.placement.pages;
+    oldLayout.sizes = { files: { width: 0.6 } };
+    const terminalKey = threadPanelRegionsStorageKey("thread-1");
+    const terminals = serializeThreadTerminals("thread-1", {
+      tabs: [{ terminalId: "terminal-1", producerId: "00000000-0000-4000-8000-000000000001" }],
+      activeTerminalId: "terminal-1",
+    });
     const { storage, values } = memoryStorage({
+      [PANEL_REGIONS_STORAGE_KEY]: JSON.stringify(oldLayout),
+      [terminalKey]: terminals,
+    });
+    const store = createStore(storage);
+    expect(store.getSnapshot().view.layout).toEqual(defaultRegionLayout());
+    expect(store.terminalPanel()?.activeTerminalId).toBe("terminal-1");
+    expect(values.get(terminalKey)).toBe(terminals);
+    expect(values.get(PANEL_REGIONS_STORAGE_KEY)).toBe(serializeRegionLayout(defaultRegionLayout()));
+    expect([...values.keys()]).toEqual([PANEL_REGIONS_STORAGE_KEY, terminalKey]);
+    storage.setItem.mockClear();
+    createStore(storage);
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  it("cleans obsolete device and all thread collapse keys before opening a thread while retaining terminal migration", () => {
+    const collapsedKeys = [
+      "sedes-thread-panel-instance-collapsed@4:thread-1",
+      "sedes-thread-panel-instance-collapsed@4:unopened%20thread",
+    ];
+    const terminalKey = threadPanelRegionsStorageKey("thread-2");
+    const terminals = serializeThreadTerminals("thread-2", {
+      tabs: [{ terminalId: "t-2", producerId: "00000000-0000-4000-8000-000000000002" }],
+      activeTerminalId: "t-2",
+    });
+    const { storage, values } = memoryStorage({
+      ...Object.fromEntries(collapsedKeys.map((key) => [key, "old"])),
+      "sedes-panel-instance-sizes@4": "old sizes",
+      "unknown.preference": "keep",
+      [terminalKey]: terminals,
       [LEGACY_PANEL_STORAGE_KEYS.tasks]: JSON.stringify({ version: 1, open: true, collapsed: false }),
       [LEGACY_PANEL_STORAGE_KEYS.companions]: JSON.stringify({
         version: 1,
@@ -486,21 +527,29 @@ describe("PanelRegionStore persistence", () => {
         },
       }),
     });
-    const store = createStore(storage);
-    expect(store.getSnapshot().visible).toEqual(["chat", "tasks", "terminals"]);
-    expect(store.placementOf("tasks")).toBe("left");
-    expect(savedLayout(values)).toMatchObject({ shown: { left: "tasks" } });
+    const root = createStore(storage, { threadId: null });
+    for (const key of collapsedKeys) expect(values.has(key)).toBe(false);
+    expect(values.has("sedes-panel-instance-sizes@4")).toBe(false);
+    expect(values.get("unknown.preference")).toBe("keep");
+    expect(values.get(terminalKey)).toBe(terminals);
+    expect(values.has(legacyThreadLayoutStorageKey("thread-1"))).toBe(true);
+    const store = root.forThread("thread-1");
+    expect(store.getSnapshot().visible).toEqual(["chat", "terminals"]);
+    expect(store.placementOf("tasks")).toBe("right");
+    expect(savedLayout(values)).toMatchObject({ version: 2, loaded: [], shown: { left: null } });
     expect(JSON.parse(values.get(threadPanelRegionsStorageKey("thread-1"))!)).toMatchObject({
       terminals: { activeTerminalId: "t-1" },
     });
-    // The old keys are only read.
-    expect(values.has(LEGACY_PANEL_STORAGE_KEYS.tasks)).toBe(true);
+    expect(root.forThread("thread-2").terminalPanel()?.activeTerminalId).toBe("t-2");
+    expect(values.get(terminalKey)).toBe(terminals);
+    // Obsolete device keys cannot restore a pre-reset arrangement.
+    expect(values.has(LEGACY_PANEL_STORAGE_KEYS.tasks)).toBe(false);
     // A later change to the old keys no longer applies.
     values.set(
       LEGACY_PANEL_STORAGE_KEYS.tasks,
       JSON.stringify({ version: 1, open: false, collapsed: false }),
     );
-    expect(createStore(storage).isLoaded("tasks")).toBe(true);
+    expect(createStore(storage).isLoaded("tasks")).toBe(false);
   });
 
   it("does not write a stored layout back on load", () => {
@@ -513,7 +562,7 @@ describe("PanelRegionStore persistence", () => {
     expect(storage.setItem).not.toHaveBeenCalled();
   });
 
-  it("starts from defaults for invalid saved values and overwrites them on change", () => {
+  it("immediately replaces invalid device layouts without altering invalid terminal records", () => {
     const { storage, values } = memoryStorage({
       [PANEL_REGIONS_STORAGE_KEY]: "{",
       [threadPanelRegionsStorageKey("thread-1")]: "{",
@@ -521,7 +570,8 @@ describe("PanelRegionStore persistence", () => {
     const store = createStore(storage);
     expect(store.getSnapshot().view.layout).toEqual(defaultRegionLayout());
     expect(store.terminalPanel()).toBeUndefined();
-    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(savedLayout(values)).toMatchObject({ version: 2, loaded: [] });
+    expect(values.get(threadPanelRegionsStorageKey("thread-1"))).toBe("{");
     store.open("files");
     store.openTerminalTab("a");
     expect(savedLayout(values)).toMatchObject({ loaded: ["files"] });
@@ -532,10 +582,19 @@ describe("PanelRegionStore persistence", () => {
 
   it("keeps working when storage throws", () => {
     const storage = {
+      get length(): number {
+        throw new Error("denied");
+      },
+      key: () => {
+        throw new Error("denied");
+      },
       getItem: () => {
         throw new Error("denied");
       },
       setItem: () => {
+        throw new Error("denied");
+      },
+      removeItem: () => {
         throw new Error("denied");
       },
     };

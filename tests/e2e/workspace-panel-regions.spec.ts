@@ -130,10 +130,11 @@ test("opening a panel replaces its region's panel, leaving Chat and the bottom t
   await expect(quickButton(page, "Tasks")).toHaveAttribute("data-state", "visible");
   await expect(quickButton(page, "Terminals")).toHaveAttribute("data-state", "visible");
   const menu = await openPanelsMenu(page);
-  expect(await rowNames(menu, ["Chat", "Files", "Workpads", "Tasks", "Terminals"])).toEqual([
+  expect(await rowNames(menu, ["Chat", "Files", "Workpads", "Pages", "Tasks", "Terminals"])).toEqual([
     "Chat, In the middle",
     "Files",
     "Workpads, Loaded, hidden",
+    "Pages",
     "Tasks, On the right",
     "Terminals, At the bottom",
   ]);
@@ -330,7 +331,7 @@ test("Move to and ▾'s place menu set where a panel opens, on this device and i
   await expect(
     page.getByRole("group", { name: "Loaded panels" }).getByRole("button"),
   ).toHaveCount(1);
-  for (const kind of ["files", "workpads", "tasks"]) expect(await savedPlacement(page, kind)).toBe("right");
+  for (const kind of ["files", "workpads", "pages", "tasks"]) expect(await savedPlacement(page, kind)).toBe("right");
   await openPanel(page, "Workpads");
   await expect(workpads).toHaveAttribute("data-region", "right");
 });

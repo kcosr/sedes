@@ -72,11 +72,61 @@ test.describe("panel workbench", () => {
       }
     });
     await openSedesWorkspace(page);
-    await createDraftThread(page);
-    // The pre-region keys are only read, once, to migrate a device.
-    await page.evaluate(() => {
-      localStorage.setItem("sedes-panel-companions@1", "legacy-companions-marker");
+    const threadId = await createDraftThread(page);
+    // An older device layout resets in place, and retired keys cannot revive it.
+    const terminalThreadId = "unopened terminal thread";
+    const obsoleteLayoutKeys = [
+      "sedes-workspace-files-panel-state@1",
+      "sedes-workpads-panel-state@1",
+      "sedes-tasks-panel-state@1",
+      "sedes-panel-instance-sizes@4",
+      "sedes-panel-instance-sizes@5",
+      "sedes-panel-companions@1",
+      `sedes-thread-panel-instance-collapsed@4:${encodeURIComponent(threadId)}`,
+      `sedes-thread-panel-instance-collapsed@4:${encodeURIComponent(terminalThreadId)}`,
+    ];
+    const terminals = {
+      tabs: [{ terminalId: "retained-terminal", producerId: randomUUID() }],
+      activeTerminalId: "retained-terminal",
+    };
+    const preservedTerminalRecords = {
+      [`sedes-thread-panel-regions@1:${encodeURIComponent(terminalThreadId)}`]:
+        JSON.stringify({ version: 1, threadId: terminalThreadId, terminals }),
+      [`sedes-thread-panel-instance-layout@4:${encodeURIComponent(terminalThreadId)}`]:
+        JSON.stringify({
+          version: 4,
+          threadId: terminalThreadId,
+          tree: {
+            kind: "tabs", id: "stack", activePanelInstanceId: "terminals",
+            tabs: [{ panelInstanceId: "terminals", kind: "terminals", threadId: terminalThreadId, ...terminals }],
+          },
+        }),
+    };
+    await page.evaluate(({ obsoleteLayoutKeys, preservedTerminalRecords }) => {
+      localStorage.setItem("sedes-panel-regions@1", JSON.stringify({
+        version: 1,
+        placement: { chat: "middle", files: "left", workpads: "right", tasks: "right", terminals: "bottom" },
+        shown: { middle: "chat", left: "files", right: null, top: null, bottom: null },
+        loaded: ["files"], extendOrder: ["left", "right", "top", "bottom"], sizes: { files: { width: 0.4 } },
+      }));
+      for (const key of obsoleteLayoutKeys)
+        localStorage.setItem(key, "obsolete-layout-marker");
+      for (const [key, value] of Object.entries(preservedTerminalRecords))
+        localStorage.setItem(key, value);
+    }, { obsoleteLayoutKeys, preservedTerminalRecords });
+    await page.reload();
+    await expect(stagePanel(page, "Chat")).toBeVisible();
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("sedes-panel-regions@1")!))).toMatchObject({
+      version: 2, placement: { files: "right", pages: "right" }, loaded: [], sizes: {},
     });
+    expect(await page.evaluate(
+      keys => Object.keys(localStorage).filter(key => keys.includes(key)),
+      obsoleteLayoutKeys,
+    )).toEqual([]);
+    expect(await page.evaluate(
+      keys => Object.fromEntries(keys.map(key => [key, localStorage.getItem(key)])),
+      Object.keys(preservedTerminalRecords),
+    )).toEqual(preservedTerminalRecords);
 
     const chat = page.getByTestId("thread-view");
     await expect(chat).toBeVisible();
@@ -100,7 +150,7 @@ test.describe("panel workbench", () => {
           .locator("[data-panel-row]")
           .evaluateAll((rows) => rows.map((row) => row.getAttribute("aria-label"))),
       )
-      .toEqual(["Chat, In the middle", "Files", "Workpads", "Tasks", "Terminals"]);
+      .toEqual(["Chat, In the middle", "Files", "Workpads", "Pages", "Tasks", "Terminals"]);
     await expect(menu.getByRole("menuitem", { name: "Reset layout" })).toBeVisible();
     await expect(menu.getByRole("menuitem", { name: "Show all" })).toHaveCount(0);
     await capture(page, testInfo, "panels-menu-states.png");
@@ -208,7 +258,7 @@ test.describe("panel workbench", () => {
     await expect.poll(() => width(page, "Files")).toBeCloseTo(resizedWidth, 0);
     expect(
       await page.evaluate(() => localStorage.getItem("sedes-panel-companions@1")),
-    ).toBe("legacy-companions-marker");
+    ).toBeNull();
     await retain(files, "__files");
 
     // ✕ closes Files: it unloads, its quick button goes, and reopening it
@@ -488,7 +538,7 @@ test.describe("panel workbench", () => {
         })
       ).ok(),
     ).toBe(true);
-    for (const title of ["Files", "Workpads", "Tasks"] as const) {
+    for (const title of ["Files", "Workpads", "Pages", "Tasks"] as const) {
       await openPanel(page, title);
       await expect(stagePanel(page, title)).toBeVisible();
     }
@@ -505,7 +555,7 @@ test.describe("panel workbench", () => {
     await expect(chat).toBeVisible();
     const bar = page.getByTestId("workspace-workbench-bar");
     const group = bar.getByRole("group", { name: "Loaded panels" });
-    await expect(group.getByRole("button")).toHaveCount(5);
+    await expect(group.getByRole("button")).toHaveCount(6);
     for (const title of ["Workpads", "Tasks"] as const) {
       await expect(quickButton(page, title).locator('[data-slot="count-badge"]')).toHaveText("1");
     }
@@ -517,12 +567,12 @@ test.describe("panel workbench", () => {
       expect(inner.x).toBeGreaterThanOrEqual(outer.x - 0.5);
       expect(inner.x + inner.width).toBeLessThanOrEqual(outer.x + outer.width + 0.5);
     };
-    // A 390px phone fits it all at the touch spacing.
+    // Six loaded panels overflow at touch spacing; the group scrolls without clipping the bar.
     await expect(group).toHaveCSS("column-gap", "8px");
-    expect(await scrolls()).toBe(false);
+    expect(await scrolls()).toBe(true);
     // Narrower, the spacing tightens; at 320px the quick buttons scroll.
     for (const [width, scrolling] of [
-      [360, false],
+      [360, true],
       [320, true],
     ] as const) {
       await page.setViewportSize({ width, height: 844 });
@@ -542,7 +592,7 @@ test.describe("panel workbench", () => {
         await control.click({ trial: true });
       }
       // Every quick button is in view, or scrolls into it, and takes a tap.
-      for (const title of ["Chat", "Files", "Workpads", "Tasks", "Terminals"] as const) {
+      for (const title of ["Chat", "Files", "Workpads", "Pages", "Tasks", "Terminals"] as const) {
         const button = quickButton(page, title);
         await button.scrollIntoViewIfNeeded();
         await expectInGroup(button);
@@ -558,7 +608,7 @@ test.describe("panel workbench", () => {
     const groupBox = (await group.boundingBox())!;
     expect(clipped.x + clipped.width).toBeGreaterThan(groupBox.x + groupBox.width);
     await quickButton(page, "Chat").focus();
-    for (let step = 0; step < 4; step += 1) await page.keyboard.press("Tab");
+    for (let step = 0; step < 5; step += 1) await page.keyboard.press("Tab");
     await expect(last).toBeFocused();
     await expectInGroup(last);
     await capture(page, testInfo, "panels-phone-bar-320-focused.png");

@@ -5,6 +5,6 @@ import type { ConversationItemRenderer } from "../types.js";
 export const pageRenderer: ConversationItemRenderer<PageItem> = {
   kind: "page",
   render(item, context) {
-    return <PagePreview page={item.page} services={context} />;
+    return <PagePreview page={item.page} services={context} onOpenPage={context.openPage} />;
   },
 };

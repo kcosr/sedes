@@ -3,6 +3,9 @@ import { connectionScopeKey, type ConnectionScope } from "../../app/connection-s
 
 const STORAGE_KEY = "sedes-page-preview-pending";
 const MAX_ENTRIES = 256;
+// Concurrent inline and panel views may load the same revision. Their live
+// attempts are not interrupted renders; a process restart clears this set.
+const activeOwners = new Set<string>();
 
 /** Persist identities only: capability URLs and document content stay in memory. */
 export function pageFrameRecoveryKey(
@@ -49,7 +52,7 @@ function readEntries(): RecoveryEntry[] | undefined {
 export function pageFrameNeedsActivation(key: string): boolean {
   const entries = readEntries();
   // Without durable recovery state, running authored code requires a click.
-  return entries === undefined || entries.some((entry) => entry.key === key);
+  return entries === undefined || entries.some((entry) => entry.key === key && !activeOwners.has(entry.owner));
 }
 
 function writeEntries(entries: readonly RecoveryEntry[]): boolean {
@@ -79,16 +82,18 @@ export class PageFrameRecoveryAttempt {
   constructor(readonly key: string) {
     const entries = readEntries();
     this.#previousOwners = new Set(
-      entries?.filter((entry) => entry.key === key).map((entry) => entry.owner),
+      entries?.filter((entry) => entry.key === key && !activeOwners.has(entry.owner)).map((entry) => entry.owner),
     );
     this.recorded =
       entries !== undefined &&
       writeEntries([...entries, { key, owner: this.#owner }]);
+    if (this.recorded) activeOwners.add(this.#owner);
   }
 
   complete(): void {
     if (this.#state !== "pending") return;
     this.#state = "complete";
+    activeOwners.delete(this.#owner);
     const entries = readEntries();
     if (entries)
       writeEntries(
@@ -103,6 +108,7 @@ export class PageFrameRecoveryAttempt {
   fail(): void {
     if (this.#state === "cancelled" || this.#state === "failed") return;
     this.#state = "failed";
+    activeOwners.delete(this.#owner);
     const entries = readEntries();
     if (entries && !entries.some((entry) => entry.owner === this.#owner))
       writeEntries([...entries, { key: this.key, owner: this.#owner }]);
@@ -111,6 +117,7 @@ export class PageFrameRecoveryAttempt {
   cancel(): void {
     if (this.#state !== "pending") return;
     this.#state = "cancelled";
+    activeOwners.delete(this.#owner);
     const entries = readEntries();
     if (entries)
       writeEntries(entries.filter((entry) => entry.owner !== this.#owner));

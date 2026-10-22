@@ -49,6 +49,7 @@ describe("WorkspacePanelTenantRegistry", () => {
     expect(workspacePanelTenants.entries.map(({ id }) => id)).toEqual([
       "workspace-files",
       "workpads",
+      "pages",
       "tasks",
     ]);
     expect(workspacePanelTenants.tenant("workpads")).toMatchObject({ scope: "global", title: "Workpads" });
@@ -97,5 +98,15 @@ describe("WorkspacePanelTenantRegistry", () => {
     });
     expect(tasks?.availability({})).toEqual({ available: true });
     expect(workspacePanelTenants.tenant("workspace-files")?.header).toBeUndefined();
+  });
+
+  it("ships Pages as a thread-following tenant with room for a document", () => {
+    expect(workspacePanelTenants.tenant("pages")).toMatchObject({
+      id: "pages",
+      title: "Pages",
+      scope: "thread",
+      size: { minWidth: 360, minHeight: 240, preferredWidth: 800, preferredHeight: 560, preferredShare: 0.5 },
+    });
+    expect(workspacePanelTenants.tenant("pages")?.header).toBeUndefined();
   });
 });

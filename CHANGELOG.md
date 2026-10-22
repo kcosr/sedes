@@ -69,8 +69,8 @@ User-facing changes are collected here before release. See the
   forks and same-settings copies retain independent policy snapshots.
   ([#96](https://github.com/kcosr/sedes/pull/96))
 
-- Download the selected saved HTML page revision from the expanded viewer or
-  Pages library on web, desktop, and Android. Images are embedded in one UTF-8
+- Download the selected saved HTML page revision from the Pages panel on web,
+  desktop, and Android. Images are embedded in one UTF-8
   HTML file; unsaved interaction state and Sedes host controls are excluded.
   See [page downloads](docs/user/html-previews.md#download-a-page).
   ([#92](https://github.com/kcosr/sedes/pull/92))
@@ -111,6 +111,13 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Changed
+
+- Published HTML documents now open in a thread-scoped **Pages** panel with
+  move, resize, maximize, revision browsing, zoom, and downloads. Chat opens
+  its exact saved revision; the page list opens the latest. The old dialogs
+  are removed. This update resets saved device panel arrangements and sizes
+  once and removes obsolete layout records; thread terminal tabs remain.
+  See [HTML previews](docs/user/html-previews.md).
 
 - Files, Changes, Usage, Terminals, and the question inbox use the shared
   controls and notices. Long paths keep the file name visible (the tooltip
