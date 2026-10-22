@@ -221,6 +221,11 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Codex Speed no longer repeats metadata requests for unchanged Goal snapshots,
+  while genuine Goal changes retain a pending defaults check. Opt-in delivery
+  diagnostics explain Speed availability changes and distinguish handle replacement
+  from connection changes; see [diagnostics](docs/developer/diagnostics.md).
+
 - The Codex skill picker refreshes available skills through the app-server
   without reloading the model catalog. Fork indicators use a consistent
   orientation, and desktop task indicators align with the title on rows that

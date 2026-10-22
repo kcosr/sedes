@@ -1148,6 +1148,160 @@ describe("Codex Goal Speed preflight", () => {
   });
 });
 
+describe("Codex handle Goal notifications and Speed defaults", () => {
+  async function fixture(initialStatus: "unset" | "paused" | "active") {
+    const harness = new RpcHarness();
+    const goals = new CodexGoalSessionRegistry();
+    const speeds = new CodexFastModeSessionRegistry();
+    const errors: unknown[] = [];
+    let goal = initialStatus === "unset" ? null : {
+      threadId: "thread-1", objective: "Keep working", status: initialStatus,
+      tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1,
+    };
+    const handle = await attachIdle(harness, driver(harness, connection,
+      new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), goals,
+      undefined, unavailableCodexAgentToolCliEnvironmentProvider, speeds, undefined, error => errors.push(error)));
+    harness.enqueue("thread/goal/get", { goal });
+    harness.enqueue("experimentalFeature/list", fastModeFeatures(true));
+    await establish(harness, handle);
+    harness.calls.length = 0;
+
+    // Keep every metadata resume capable of producing another delayed native
+    // snapshot. A feedback loop must fail the RPC-count assertions rather than
+    // stop merely because the fixture has exhausted its responses.
+    const respondContinuously = (method: string, response: () => unknown) => {
+      const next = () => {
+        harness.enqueue(method, next);
+        return response();
+      };
+      harness.enqueue(method, next);
+    };
+    const notifyGoal = () => {
+      if (goal) harness.notify("thread/goal/updated", { threadId: "thread-1", turnId: null, goal });
+      else harness.notify("thread/goal/cleared", { threadId: "thread-1" });
+    };
+    let settingsAfterNextResume = false;
+    let nativeEffort = "low";
+    respondContinuously("thread/goal/get", () => ({ goal }));
+    respondContinuously("thread/read", () => ({ thread: nativeThread({ turns: [] }) }));
+    respondContinuously("thread/resume", () => {
+      const notifySettings = settingsAfterNextResume;
+      settingsAfterNextResume = false;
+      setTimeout(() => {
+        notifyGoal();
+        if (notifySettings) {
+          nativeEffort = "high";
+          harness.notify("thread/settings/updated", {
+            threadId: "thread-1",
+            threadSettings: {
+              cwd: workspace.canonicalPath, approvalPolicy: "never", approvalsReviewer: "user",
+              sandboxPolicy: { type: "readOnly", networkAccess: false }, activePermissionProfile: null,
+              model: "gpt-5.6", modelProvider: "openai", serviceTier: "default", effort: nativeEffort, summary: null,
+              collaborationMode: { mode: "default", settings: {
+                model: "gpt-5.6", reasoning_effort: nativeEffort, developer_instructions: null,
+              } },
+              multiAgentMode: "explicitRequestOnly", personality: null,
+            },
+          });
+        }
+      }, 1);
+      return { ...resumeResult(nativeThread({ turns: [] })), reasoningEffort: nativeEffort };
+    });
+    const events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    return {
+      harness, handle, goals, errors, events, notifyGoal,
+      speed: speeds.controller(scope, binding().applicationThreadId)!,
+      notifySettingsAfterNextResume: () => { settingsAfterNextResume = true; },
+      pause: async () => {
+        harness.enqueue("thread/goal/set", () => {
+          goal = { ...goal!, status: "paused", updatedAt: 2 };
+          return { goal };
+        });
+        return await handle.mutateProviderFeature({ ...CODEX_GOAL_FEATURE_REF, actionId: "pause", arguments: {} });
+      },
+      close: async () => {
+        harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+        await handle.close();
+      },
+    };
+  }
+
+  it.each(["unset", "paused"] as const)("settles delayed unchanged %s Goal snapshots after a settings notification", async status => {
+    vi.useFakeTimers();
+    const f = await fixture(status);
+    try {
+      f.notifySettingsAfterNextResume();
+      f.handle.setProviderFeatureCoordinator({ run: operation => operation(), isIdle: () => true, subscribeIdle: () => () => {} });
+      // Each fake native snapshot is delayed by one millisecond, beyond its
+      // resume's completion. Ten milliseconds permits several loop cycles.
+      await vi.advanceTimersByTimeAsync(10);
+      expect(f.speed.defaultState).toBe("confirmed");
+      expect(f.harness.calls.filter(call => call.method === "thread/resume")).toHaveLength(2);
+      expect(f.harness.calls.filter(call => call.method === "thread/read")).toHaveLength(2);
+      expect(f.harness.calls.filter(call => call.method === "thread/goal/get")).toHaveLength(4);
+      expect(f.events.filter(event => event.type === "capabilities_changed").length).toBeGreaterThanOrEqual(2);
+      expect(f.errors).toEqual([]);
+      const settledCalls = [...f.harness.calls];
+      await vi.advanceTimersByTimeAsync(10);
+      expect(f.harness.calls).toEqual(settledCalls);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await f.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])("retains a Goal pause already published before its notification (prior check settling: %s)", async holdCompletion => {
+    vi.useFakeTimers();
+    const f = await fixture("active");
+    let markChecked!: () => void;
+    let release!: () => void;
+    const checked = new Promise<void>(resolve => { markChecked = resolve; });
+    const released = new Promise<void>(resolve => { release = resolve; });
+    let checks = 0;
+    try {
+      f.handle.setProviderFeatureCoordinator({
+        run: async operation => {
+          const check = ++checks;
+          const result = await operation();
+          if (check === 1) {
+            markChecked();
+            if (holdCompletion) await released;
+          }
+          return result;
+        },
+        isIdle: () => true,
+        subscribeIdle: () => () => {},
+      });
+      await checked;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.speed.defaultState).toBe("deferred");
+      expect(f.harness.calls.some(call => call.method === "thread/resume")).toBe(false);
+
+      // The actual Goal action publishes its accepted response before the
+      // delayed native notification. Comparing store revisions only across
+      // the invalidation reread would miss this active-to-paused transition.
+      expect(await f.pause()).toMatchObject({ outcome: "accepted" });
+      expect(f.goals.projection(scope, binding().applicationThreadId)?.state).toMatchObject({ state: "set", status: "paused" });
+      f.notifyGoal();
+      await vi.advanceTimersByTimeAsync(0);
+      release();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(checks).toBe(2);
+      expect(f.speed.defaultState).toBe("confirmed");
+      expect(f.harness.calls.filter(call => call.method === "thread/resume")).toHaveLength(1);
+      expect(f.harness.calls.filter(call => call.method === "thread/read")).toHaveLength(1);
+      expect(f.errors).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      release();
+      await f.close();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("CodexConversationBackendDriver", () => {
   it.each([
     { model: "gpt-5.6", reasoningEffort: "low", suffix: "" },

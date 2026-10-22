@@ -249,6 +249,16 @@ readback. Failure, uncertainty, or mismatch consumes the budget. A same-policy
 refresh cannot trigger a retry loop. Observed external drift schedules a later
 admitted check; it does not replay a captured settings object.
 
+Metadata resumes emit Goal snapshots even when the Goal is unchanged. Each
+Speed handle remembers its own Goal eligibility observation (native identity,
+generation, availability, disabled flag, and lifecycle status), independently of
+the shared projection's revision. Identical snapshots and progress-only changes
+do not schedule another defaults read. A relevant change during a scheduled
+check retains one trailing check, including when another path has already
+published the new Goal state. Speed's own Goal read establishes the echo
+baseline without consuming pending changes. Explicit action-time confirmation
+still rereads authoritative native defaults.
+
 A frozen queued start retains its original tuple; input not frozen yet sees
 the newest saved choice. Every Sedes start sends its frozen tier explicitly,
 so an older delayed thread-default write cannot change that root turn's tier.

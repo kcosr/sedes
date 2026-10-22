@@ -19,6 +19,7 @@ import {
 } from "./codex-fast-mode-feature.js";
 import type { SpeedState } from "../../../shared/provider-features/codex-speed.js";
 import type { CodexSpeedSession } from "./codex-speed-session.js";
+import { codexSpeedPresentationDiagnostic } from "./codex-speed-diagnostics.js";
 import { CodexSpeedPublicationRepository } from "./codex-speed-publication-repository.js";
 import {
   CODEX_ACCELERATED_SERVICE_TIERS,
@@ -595,13 +596,23 @@ function fastModeFeaturePresentation(input: {
   readonly desiredModel: BackendModelDescriptor | undefined;
 }) {
   const desired = input.settings.desired;
-  if (!desired || !["unbound", "bound"].includes(input.backingState)) return undefined;
+  if (!desired || !["unbound", "bound"].includes(input.backingState)) {
+    codexSpeedPresentationDiagnostic(input.scope, { applicationThreadId: input.applicationThreadId,
+      availability: "hidden", reason: !desired ? "settings_missing" : "backing_unavailable" });
+    return undefined;
+  }
   const projection = input.runtime?.projection(input.scope, input.applicationThreadId);
   const controller = input.runtime?.controller(input.scope, input.applicationThreadId);
   const offered = input.desiredModel?.serviceTiers?.offered.filter(({ selection }) =>
     input.backingState === "unbound" || (selection === "fast" ? projection?.fastEnabled : projection?.ultrafastEnabled)) ?? [];
   // Retain Standard as an escape from a previously selected unavailable tier.
-  if (!offered.length && desired.serviceTier === "standard") return undefined;
+  if (!offered.length && desired.serviceTier === "standard") {
+    codexSpeedPresentationDiagnostic(input.scope, { applicationThreadId: input.applicationThreadId,
+      handleId: controller?.diagnosticHandleId, controllerPresent: controller !== undefined,
+      availability: "hidden", reason: "no_offered_tiers", policyAvailability: projection?.availability ?? "missing",
+      fastEnabled: projection?.fastEnabled === true, ultrafastEnabled: projection?.ultrafastEnabled === true });
+    return undefined;
+  }
   const currentRun = input.backingState === "unbound" ? null : controller ? controller.currentRun() :
     { target: null, startingSelection: null, requestedSelection: null, publicationState: "unknown" as const };
   const state: SpeedState = {
@@ -614,6 +625,14 @@ function fastModeFeaturePresentation(input: {
   const availability = input.backingState === "unbound" ||
     (projection?.availability === "available" && (currentRun === null || currentRun.target !== null))
     ? "available" as const : "read_only" as const;
+  codexSpeedPresentationDiagnostic(input.scope, { applicationThreadId: input.applicationThreadId,
+    handleId: controller?.diagnosticHandleId, controllerPresent: controller !== undefined,
+    availability, reason: input.backingState === "unbound" ? "draft" :
+      !controller ? "controller_missing" : projection?.availability !== "available" ? "policy_unavailable" :
+      availability === "read_only" ? "current_run_unavailable" : "eligible",
+    policyAvailability: projection?.availability ?? "missing",
+    applicationTurnId: currentRun?.target?.turnId ?? null,
+    fastEnabled: projection?.fastEnabled === true, ultrafastEnabled: projection?.ultrafastEnabled === true });
   const authority = {
     mutationRevision: input.settings.desiredRevision, availability,
     ...(availability === "read_only" ? { unavailableReason: boundDisplayText(

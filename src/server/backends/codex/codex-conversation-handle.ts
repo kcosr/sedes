@@ -2764,7 +2764,7 @@ export class CodexConversationHandle implements ConversationHandle {
       connectionGeneration: this.#establishedGeneration,
       client: this.#client,
       onSettled: () => {
-        this.#speedSession.scheduleDefaults();
+        this.#speedSession.goalProjectionSettled();
         // Republish through the actor so clients receive a fresh presentation
         // snapshot with updated provider feature state.
         this.#emit({

@@ -1999,6 +1999,14 @@ from the provider's durable turn terminal when the two rails are equivalent.
 Live projection, replay, paging, and reopen must converge on the same normalized
 item without introducing a provider-specific browser shape.
 
+Metadata reads may themselves emit unchanged provider snapshots. A background
+reconciliation consumer must compare the relevant semantic state against its
+own last observation, rather than a shared store revision captured after another
+publisher may already have updated it. Coalesce genuine changes arriving during
+an in-flight check into a retained trailing check; do not let duplicate snapshots
+create a read/notification feedback loop. Codex applies this to Goal-triggered
+Speed defaults. Pi, Claude, Grok, and OpenCode do not implement this Codex feature.
+
 A provider turn-terminal record establishes final turn status; it is not, by
 itself, proof that the provider's event journal or notification queues cannot
 later deliver another record for that same native turn. Group delayed records

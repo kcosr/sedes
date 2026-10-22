@@ -4,13 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import { CodexSpeedSession } from "../../src/server/backends/codex/codex-speed-session.js";
 import type { CodexSharedClientFacade } from "../../src/server/backends/codex/codex-client-facade.js";
 import type { CodexFastModeSessionRegistry } from "../../src/server/backends/codex/codex-fast-mode-session.js";
-import type { CodexGoalSessionRegistry } from "../../src/server/backends/codex/codex-goal-session.js";
+import { CodexGoalSessionRegistry } from "../../src/server/backends/codex/codex-goal-session.js";
 import type { ConversationBinding } from "../../src/server/backends/contracts.js";
 import type { CodexExecutionSettingsTuple } from "../../src/server/backends/codex/codex-thread-execution-settings-repository.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
 import { CodexRpcDeliveryError, CodexRpcRemoteError } from "../../src/server/backends/codex/rpc/errors.js";
 
-function fixture() {
+function fixture(options?: { goals: CodexGoalSessionRegistry; readGoal(): unknown | Promise<unknown> }) {
   let now = 0;
   let life = { state: "ready", generation: 1 };
   let control: { generation: number; turnId: string | null } | undefined = { generation: 1, turnId: null };
@@ -37,12 +37,14 @@ function fixture() {
     if (method.method === "thread/resume") return { result: { model: "gpt-5", reasoningEffort: "low", serviceTier: nativeTier }, generation, inboundSequence: 2 };
     throw new Error(`Unexpected ${method.method}`);
   });
-  const client = { subscribeNotifications: (listener: (value: unknown) => void) => { notifications.add(listener); return () => notifications.delete(listener); }, lifecycleSnapshot: () => life, dispatchContinuity: () => continuity, requestWithReceipt: requests } as unknown as CodexSharedClientFacade;
+  const client = { subscribeNotifications: (listener: (value: unknown) => void) => { notifications.add(listener); return () => notifications.delete(listener); }, lifecycleSnapshot: () => life, dispatchContinuity: () => continuity, requestWithReceipt: requests,
+    request: async (method: { decodeResult(value: unknown): unknown }) => method.decodeResult(await options!.readGoal()),
+  } as unknown as CodexSharedClientFacade;
   const goal = () => ({ connectionGeneration: life.generation, availability: "available", state: goalActive ? { state: "set", status: "active", objective: "task" } : { state: "unset" } });
   const session = new CodexSpeedSession({
     binding: { tenantId: "tenant", ownerPrincipalId: "principal", applicationThreadId: "app", backendInstanceId: "backend", backendConversationId: "native" } as ConversationBinding,
     client, policy: { projection: () => policy } as unknown as CodexFastModeSessionRegistry,
-    goals: { refresh: async () => goal(), projection: goal } as unknown as CodexGoalSessionRegistry,
+    goals: options?.goals ?? { refresh: async () => goal(), projection: goal } as unknown as CodexGoalSessionRegistry,
     desired: () => ({ settings, revision }), nativeControl: () => control, managedTui: () => managedTui,
     validateSelection: validation, assertPolicy: () => {}, confirmDefaults: confirm, verifyManagedTui: verify,
     withManagedTuiLock: hold, changed: () => {}, now: () => now,
@@ -52,7 +54,7 @@ function fixture() {
   const complete = (id = "turn") => { session.completed(id); control = { generation: life.generation, turnId: null }; actorIdle = true; };
   const publish = (target: ReturnType<typeof start>, selection = "fast" as "fast" | "standard" | "ultrafast") => session.publish({ arguments: { selection, currentRunTarget: target }, backendTurnId: codexBackendTurnId("native", "turn"), operationId: "operation", dispatching: dispatch });
   const dispatch = vi.fn();
-  return { session, requests, policy, start, complete, publish, dispatch, validation, verify, confirm, hold,
+  return { session, client, requests, policy, start, complete, publish, dispatch, validation, verify, confirm, hold,
     desired: (value: Partial<CodexExecutionSettingsTuple>) => { settings = { ...settings, ...value }; revision++; },
     update: (value: typeof update) => { update = value; },
     disconnect: () => { life = { state: "reconciling", generation: life.generation }; session.lifecycle(); control = undefined; },
@@ -354,5 +356,178 @@ describe("Codex Speed default confirmation and ordering", () => {
     const f = fixture(); const target = f.start(); f.goalActive(true);
     expect(f.session.admit({ selection: "fast", currentRunTarget: target }, codexBackendTurnId("native", "turn"), false)).toBe("active");
     expect(await f.publish(target)).toMatchObject({ status: "published" }); f.session.close();
+  });
+});
+
+
+describe("Codex Speed Goal-driven scheduling", () => {
+  const scope = { tenantId: "tenant", principalId: "principal" };
+  const nextTick = () => new Promise<void>(resolve => setImmediate(resolve));
+  function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve };
+  }
+  function goalFixture(initial: "active" | "paused" | null = null) {
+    const goals = new CodexGoalSessionRegistry();
+    let status = initial;
+    let objective = "fixture";
+    let unavailable = false;
+    let beforeRead: (() => Promise<void>) | undefined;
+    const f = fixture({ goals, readGoal: async () => {
+      await beforeRead?.();
+      if (unavailable) throw new Error("unavailable");
+      return { goal: status === null ? null : { threadId: "native", objective, status,
+        tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 } };
+    } });
+    const refreshInput = { scope, applicationThreadId: "app", nativeThreadId: "native", connectionGeneration: 1, client: f.client };
+    const settle = async () => {
+      await new Promise<void>(resolve => goals.scheduleInvalidation({ ...refreshInput,
+        onSettled: () => { f.session.goalProjectionSettled(); resolve(); } }));
+      // Let the registry release its coalesced invalidation before the next hint.
+      await nextTick();
+    };
+    let runs = 0;
+    let idle = true;
+    let notifyIdle: () => void;
+    let afterRun: (() => Promise<void>) | undefined;
+    const coordinator = {
+      isIdle: () => idle,
+      subscribeIdle: (listener: () => void) => { notifyIdle = listener; return () => {}; },
+      run: async <T,>(operation: () => Promise<T>): Promise<T> => {
+        runs++;
+        const value = await operation();
+        await afterRun?.();
+        return value;
+      },
+    };
+    return { ...f, goals, settle, refreshInput, runs: () => runs,
+      status: (value: typeof status) => { status = value; },
+      objective: (value: string) => { objective = value; },
+      unavailable: (value: boolean) => { unavailable = value; },
+      beforeRead: (value?: () => Promise<void>) => { beforeRead = value; },
+      afterRun: (value?: () => Promise<void>) => { afterRun = value; },
+      begin: async () => { await nextTick(); f.session.setCoordinator(coordinator); await nextTick(); },
+      idle: (value: boolean) => { idle = value; notifyIdle?.(); },
+      resumes: () => f.requests.mock.calls.filter(([method]) => method.method === "thread/resume").length,
+    };
+  }
+
+  it.each([null, "paused"] as const)("ignores repeated resume echoes for an unchanged %s Goal", async initial => {
+    const f = goalFixture(initial);
+    try {
+      await f.begin();
+      expect(f.session.defaultState).toBe("confirmed");
+      for (let i = 0; i < 4; i++) { await f.settle(); await nextTick(); }
+      expect(f.resumes()).toBe(1);
+      expect(f.runs()).toBe(1);
+      // Explicit action-time reads are still fresh, even with a confirmed default.
+      await f.session.syncDefaults();
+      expect(f.resumes()).toBe(2);
+    } finally { f.session.close(); }
+  });
+
+  it.each([false, true])("retains a prepublished Goal pause (previous pass still settling: %s)", async held => {
+    const f = goalFixture("active");
+    const gate = deferred();
+    if (held) f.afterRun(() => gate.promise);
+    try {
+      await f.begin();
+      expect(f.session.defaultState).toBe("deferred");
+      f.status("paused");
+      f.goals.publishObserved({ ...f.refreshInput, state: { state: "set", status: "paused", objective: "fixture" } });
+      await f.settle();
+      gate.resolve(); await nextTick();
+      expect(f.session.defaultState).toBe("confirmed");
+      expect(f.resumes()).toBe(1);
+      expect(f.runs()).toBe(2);
+    } finally { gate.resolve(); f.session.close(); }
+  });
+
+  it("coalesces changed Goals during settlement without dropping their trailing check", async () => {
+    const f = goalFixture("active");
+    const gate = deferred();
+    f.afterRun(() => gate.promise);
+    try {
+      await f.begin();
+      for (const status of ["paused", null, "paused"] as const) { f.status(status); await f.settle(); }
+      expect(f.runs()).toBe(1);
+      gate.resolve(); await nextTick();
+      expect(f.session.defaultState).toBe("confirmed");
+      expect(f.runs()).toBe(2);
+      expect(f.resumes()).toBe(1);
+    } finally { gate.resolve(); f.session.close(); }
+  });
+
+  it("does not erase a pending Goal wakeup when its own refresh adopts the latest state", async () => {
+    const f = goalFixture("active");
+    const gate = deferred();
+    const entered = deferred();
+    try {
+      await f.begin();
+      f.beforeRead(async () => { entered.resolve(); await gate.promise; });
+      f.session.scheduleDefaults();
+      await entered.promise;
+      f.status("paused");
+      f.goals.publishObserved({ ...f.refreshInput, state: { state: "set", status: "paused", objective: "fixture" } });
+      f.session.goalProjectionSettled();
+      gate.resolve(); await nextTick();
+      expect(f.session.defaultState).toBe("confirmed");
+      expect(f.runs()).toBe(3);
+      expect(f.resumes()).toBe(2);
+      await f.settle(); await nextTick();
+      expect(f.runs()).toBe(3);
+    } finally { gate.resolve(); f.session.close(); }
+  });
+
+  it("ignores progress and repeated unavailable revisions, but observes availability recovery", async () => {
+    const f = goalFixture("active");
+    try {
+      await f.begin();
+      const revision = f.goals.projection(scope, "app")!.revision;
+      f.objective("updated objective"); await f.settle(); await nextTick();
+      expect(f.goals.projection(scope, "app")!.revision).toBeGreaterThan(revision);
+      expect(f.runs()).toBe(1);
+      f.unavailable(true); await f.settle(); await nextTick();
+      expect(f.runs()).toBe(2);
+      const withdrawn = f.goals.projection(scope, "app")!.revision;
+      for (let i = 0; i < 3; i++) { await f.settle(); await nextTick(); }
+      expect(f.goals.projection(scope, "app")!.revision).toBeGreaterThan(withdrawn);
+      expect(f.runs()).toBe(2);
+      f.unavailable(false); f.status(null); await f.settle(); await nextTick();
+      expect(f.runs()).toBe(3);
+      expect(f.resumes()).toBe(1);
+      expect(f.session.defaultState).toBe("confirmed");
+    } finally { f.session.close(); }
+  });
+
+  it("retains idle and reconnect triggers after suppressing identical Goal observations", async () => {
+    const f = goalFixture();
+    try {
+      f.idle(false); await f.begin();
+      await f.settle(); await nextTick();
+      expect(f.session.defaultState).toBe("deferred");
+      f.idle(true); await nextTick();
+      expect(f.session.defaultState).toBe("confirmed");
+      const runs = f.runs();
+      await f.settle(); await nextTick(); expect(f.runs()).toBe(runs);
+      f.disconnect(); f.reconnect(); await nextTick();
+      expect(f.runs()).toBeGreaterThan(runs);
+      expect(f.session.defaultState).toBe("confirmed");
+    } finally { f.session.close(); }
+  });
+
+  it("observes current shared state rather than a superseded invalidation result", async () => {
+    const f = goalFixture("active");
+    try {
+      await f.begin();
+      const obsolete = f.goals.projection(scope, "app")!;
+      f.status(null);
+      await f.goals.refresh(f.refreshInput);
+      expect(obsolete.state).toMatchObject({ state: "set", status: "active" });
+      f.session.goalProjectionSettled(); await nextTick();
+      expect(f.session.defaultState).toBe("confirmed");
+      expect(f.runs()).toBe(2);
+    } finally { f.session.close(); }
   });
 });

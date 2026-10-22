@@ -14,6 +14,8 @@ import type { CodexSharedClientFacade } from "./codex-client-facade.js";
 import type { CodexExecutionSettingsTuple } from "./codex-thread-execution-settings-repository.js";
 import { encodeCodexServiceTier } from "./codex-service-tier.js";
 import { CodexRpcDeliveryError, CodexRpcProtocolError, CodexRpcRemoteError } from "./rpc/errors.js";
+import { deliveryDiagnosticsEnabled } from "../../diagnostics/delivery-diagnostic-output.js";
+import { CodexSpeedDiagnostic, type CodexSpeedActivationLoss, type CodexSpeedEligibilityReason } from "./codex-speed-diagnostics.js";
 
 const TIMEOUT = 10_000;
 const FINISHED_TTL = 120_000;
@@ -27,6 +29,9 @@ type Activation = { target: SpeedRunTarget; nativeTurnId: string; generation: nu
 /** One continuously owned handle. No inference counter or deferred turn-update queue. */
 export class CodexSpeedSession {
   readonly #scope;
+  readonly diagnosticHandleId = randomUUID();
+  readonly #diagnostic = new CodexSpeedDiagnostic();
+  #activationLoss: CodexSpeedActivationLoss = "new_handle";
   #activation: Activation | undefined;
   // Native idle may arrive before turn/completed. Retain its exact identity
   // for the completion proof without retaining active publication authority.
@@ -37,6 +42,8 @@ export class CodexSpeedSession {
   #coordinator: ProviderFeatureCoordinator | undefined;
   #unsubscribeIdle: (() => void) | undefined;
   #idleChanged = false;
+  #goalChanged = false;
+  #observedGoalKey: string | undefined;
   #scheduled = false;
   #closed = false;
   #publishedRun: string;
@@ -90,16 +97,57 @@ export class CodexSpeedSession {
     return !this.#closed && current.state === "ready" && current.generation === generation;
   }
   #eligible(activation: Activation): boolean {
+    return this.#ineligibleReason(activation) === undefined;
+  }
+  #ineligibleReason(activation: Activation): CodexSpeedEligibilityReason | undefined {
+    const lifecycle = this.input.client.lifecycleSnapshot();
     const desired = this.input.desired().settings;
     const control = this.input.nativeControl();
     const policy = this.input.policy.projection(this.#scope, this.input.binding.applicationThreadId);
-    return this.#ready(activation.generation) && control?.generation === activation.generation &&
-      control.turnId === activation.nativeTurnId && desired?.model === activation.model &&
-      !this.input.managedTui() && policy?.stepSwitchingEnabled === true &&
-      this.#negativeGeneration !== activation.generation &&
-      (this.#uncertainContinuity === undefined || this.#uncertainContinuity === this.input.client.dispatchContinuity());
+    if (this.#closed) return "closed";
+    if (lifecycle.state !== "ready") return "connection_not_ready";
+    if (lifecycle.generation !== activation.generation) return "activation_generation_changed";
+    if (!control) return "native_control_missing";
+    if (control.generation !== activation.generation) return "native_generation_changed";
+    if (control.turnId !== activation.nativeTurnId) return "native_turn_changed";
+    if (desired?.model !== activation.model) return "desired_model_changed";
+    if (this.input.managedTui()) return "managed_tui";
+    if (policy?.stepSwitchingEnabled !== true) return "step_switching_disabled";
+    if (this.#negativeGeneration === activation.generation) return "step_switching_rejected";
+    if (this.#uncertainContinuity !== undefined && this.#uncertainContinuity !== this.input.client.dispatchContinuity()) return "uncertain_connection_changed";
+    return undefined;
+  }
+  #diagnose(): void {
+    if (!deliveryDiagnosticsEnabled()) return;
+    try {
+      const lifecycle = this.input.client.lifecycleSnapshot();
+      const activation = this.#activation;
+      const control = this.input.nativeControl();
+      const policy = this.input.policy.projection(this.#scope, this.input.binding.applicationThreadId);
+      const reason: CodexSpeedEligibilityReason = this.#closed ? "closed" :
+        lifecycle.state !== "ready" ? "connection_not_ready" :
+        control?.turnId === null && control.generation === lifecycle.generation ? "native_idle" :
+        activation ? this.#ineligibleReason(activation) ?? "eligible" : "no_activation";
+      this.#diagnostic.record("codex_speed_eligibility", {
+        applicationThreadId: this.input.binding.applicationThreadId, backendInstanceId: this.input.binding.backendInstanceId,
+        handleId: this.diagnosticHandleId, generation: lifecycle.generation, lifecycle: lifecycle.state, reason,
+        applicationTurnId: activation?.target.turnId ?? null, activationId: activation?.target.activationId ?? null,
+        activationGeneration: activation?.generation ?? null, activationPresent: activation !== undefined,
+        activationLoss: activation ? null : this.#activationLoss,
+        nativeControlGeneration: control?.generation ?? null,
+        nativeControlApplicationTurnId: control?.turnId ? applicationTurnIdForBackendTurn({
+          backendInstanceId: this.input.binding.backendInstanceId, sourceApplicationThreadId: this.input.binding.applicationThreadId,
+          backendTurnId: codexBackendTurnId(this.input.binding.backendConversationId, control.turnId) }) : null,
+        nativeTurnMatches: activation !== undefined && control?.turnId === activation.nativeTurnId,
+        desiredModelMatches: activation !== undefined && this.input.desired().settings?.model === activation.model,
+        managedTui: this.input.managedTui(), policyAvailability: policy?.availability ?? "missing",
+        stepSwitchingEnabled: policy?.stepSwitchingEnabled === true,
+        uncertainContinuityMatches: this.#uncertainContinuity === undefined || this.#uncertainContinuity === this.input.client.dispatchContinuity(),
+      });
+    } catch { /* Optional logging cannot affect current-run authority. */ }
   }
   currentRun(): SpeedState["currentRun"] {
+    this.#diagnose();
     const activation = this.#activation;
     const currentControl = this.input.nativeControl();
     if (currentControl?.turnId === null && this.#ready(currentControl.generation)) return null;
@@ -127,10 +175,11 @@ export class CodexSpeedSession {
   observedStart(nativeTurnId: string): void {
     const owned = !!this.#activation;
     this.#awaitingCompletion = undefined;
-    if (this.#activation?.nativeTurnId !== nativeTurnId) this.#activation = undefined;
+    if (this.#activation?.nativeTurnId !== nativeTurnId) { this.#activation = undefined; this.#activationLoss = "other_turn"; }
     this.#finished = undefined;
     if (this.#interruptedTurn === nativeTurnId) this.#clearGrace();
     if (owned) this.#changed();
+    this.#diagnose();
   }
   completed(nativeTurnId: string): void {
     const owned = !!this.#activation;
@@ -139,22 +188,26 @@ export class CodexSpeedSession {
     if (completed) {
       this.#finished = { activation: completed, expiresAt: this.#now() + FINISHED_TTL };
       if (completed === this.#activation) this.#activation = undefined;
+      this.#activationLoss = "completed";
       this.#awaitingCompletion = undefined;
     }
     if (this.#interruptedTurn === nativeTurnId) this.#clearGrace();
     if (owned) this.#changed();
+    this.#diagnose();
     this.scheduleDefaults();
   }
   observedIdle(): void {
     const owned = !!this.#activation;
     if (this.#activation) this.#awaitingCompletion = this.#activation;
     this.#activation = undefined;
+    this.#activationLoss = "native_idle";
     if (owned) this.#changed();
+    this.#diagnose();
     this.scheduleDefaults();
   }
-  invalidate(): void { const owned = !!this.#activation; this.#activation = undefined; this.#awaitingCompletion = undefined; this.#finished = undefined; if (owned) this.#changed(); }
+  invalidate(): void { const owned = !!this.#activation; this.#activation = undefined; this.#activationLoss = "invalidated"; this.#awaitingCompletion = undefined; this.#finished = undefined; if (owned) this.#changed(); this.#diagnose(); }
   rerouted(nativeTurnId: string): void {
-    if (this.#activation?.nativeTurnId === nativeTurnId) { this.#activation = undefined; this.#changed(); }
+    if (this.#activation?.nativeTurnId === nativeTurnId) { this.#activation = undefined; this.#activationLoss = "rerouted"; this.#changed(); }
   }
   lifecycle(): void {
     const lifecycle = this.input.client.lifecycleSnapshot();
@@ -165,6 +218,7 @@ export class CodexSpeedSession {
     if (this.#activation && !this.#ready(this.#activation.generation)) {
       this.#interruptedTurn = this.#activation.nativeTurnId;
       this.#activation = undefined;
+      this.#activationLoss = "connection_changed";
     }
     if (lifecycle.state !== "ready" || lifecycle.generation !== this.#observedGeneration) {
       this.#finished = undefined;
@@ -180,6 +234,7 @@ export class CodexSpeedSession {
         this.#graceTimer.unref?.();
       }
     }
+    this.#diagnose();
     this.scheduleDefaults();
   }
   #clearGrace(): void { this.#interruptedTurn = undefined; this.#recoveryGraceUntil = 0; clearTimeout(this.#graceTimer); }
@@ -276,15 +331,34 @@ export class CodexSpeedSession {
     return result;
   }
 
+  /** Goal snapshots also follow our own metadata resumes. Only a change in
+   * synchronization eligibility can request another pass, even if a different
+   * reader already published it to the shared Goal store. */
+  goalProjectionSettled(): void {
+    if (this.#closed) return;
+    const key = this.#goalObservationKey();
+    if (key === this.#observedGoalKey) return;
+    this.#observedGoalKey = key;
+    this.#goalChanged = true;
+    this.scheduleDefaults();
+  }
+  #goalObservationKey(): string {
+    const goal = this.input.goals?.projection(this.#scope, this.input.binding.applicationThreadId);
+    return JSON.stringify([goal?.nativeThreadId, goal?.connectionGeneration,
+      goal?.availability, goal?.disabled === true, goal?.state.state,
+      goal?.state.state === "set" ? goal.state.status : null]);
+  }
+
   scheduleDefaults(): void {
     if (this.#closed || this.#scheduled || !this.#coordinator) return;
     this.#scheduled = true;
     this.#idleChanged = false;
+    this.#goalChanged = false;
     const before = this.#defaultAuthorityKey();
     void this.#coordinator.run(async () => { await this.syncDefaults(); }).catch(() => undefined).finally(() => {
       this.#scheduled = false;
       // Coalesce our own notifications, but never lose a newer desired choice.
-      if (!this.#closed && (this.#idleChanged || this.#defaultAuthorityKey() !== before)) this.scheduleDefaults();
+      if (!this.#closed && (this.#idleChanged || this.#goalChanged || this.#defaultAuthorityKey() !== before)) this.scheduleDefaults();
     });
   }
   #defaultAuthorityKey(): string {
@@ -313,6 +387,9 @@ export class CodexSpeedSession {
     if (!codexSpeedPolicyAllows(policy, desired.settings.serviceTier)) return "deferred";
     const goals = await this.input.goals?.refresh({ scope: this.#scope, applicationThreadId: this.input.binding.applicationThreadId,
       nativeThreadId: this.input.binding.backendConversationId, connectionGeneration: lifecycle.generation, client: this.input.client });
+    // Seed the resume-echo baseline from the current shared observation, without
+    // consuming any external change that arrived while this pass was running.
+    this.#observedGoalKey = this.#goalObservationKey();
     const goalIdle = () => {
       const current = this.input.goals?.projection(this.#scope, this.input.binding.applicationThreadId);
       return current?.connectionGeneration === lifecycle.generation &&
@@ -432,7 +509,7 @@ export class CodexSpeedSession {
     this.#changed();
     return outcome;
   }
-  close(): void { this.#closed = true; this.#unsubscribeIdle?.(); this.#activation = undefined; this.#awaitingCompletion = undefined; this.#finished = undefined; clearTimeout(this.#graceTimer); }
+  close(): void { this.#closed = true; this.#diagnose(); this.#unsubscribeIdle?.(); this.#activation = undefined; this.#awaitingCompletion = undefined; this.#finished = undefined; clearTimeout(this.#graceTimer); }
 }
 function stale(): DomainError { return new DomainError("conflict", "The turn changed before Speed could be saved. Refresh and choose again."); }
 function unavailable(): DomainError { return new DomainError("invalid_transition", "The selected Speed is unavailable for this Codex model or session."); }
