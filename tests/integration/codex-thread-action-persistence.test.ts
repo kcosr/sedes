@@ -1,3 +1,6 @@
+import { CODEX_SPEED_REF, speedArgumentsValue, speedResultWireSchema, type SpeedCurrentRunResult, type SpeedSelection } from "../../src/shared/provider-features/codex-speed.js";
+import type { CodexSpeedSession } from "../../src/server/backends/codex/codex-speed-session.js";
+import { CodexSpeedPublicationRepository } from "../../src/server/backends/codex/codex-speed-publication-repository.js";
 import { importLegacyDatabaseConfigurationFixture } from "../support/database-configuration-fixture.js";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -122,6 +125,7 @@ function fixture(
     readonly managedTui?: CodexManagedTuiController;
     readonly desiredSettingsChanged?: (scope: RequestScope, applicationThreadId: string) => void;
     readonly fastModeRuntime?: {
+      controller(scope: RequestScope, applicationThreadId: string): CodexSpeedSession | undefined;
       syncServiceTier(
         scope: RequestScope,
         applicationThreadId: string,
@@ -259,6 +263,7 @@ describe("Codex interactive action persistence", () => {
       executionPolicy,
       modelPolicy: catalogModelPolicy,
       fastModeRuntime: {
+        controller: () => ({ currentRun: () => null }) as unknown as CodexSpeedSession,
         projection: () => ({ revision: 1, fastEnabled: true, ultrafastEnabled: true, availability: "available" }),
       },
     });
@@ -300,7 +305,7 @@ describe("Codex interactive action persistence", () => {
     ]));
     expect(presentation.providerFeatureCapabilities).toEqual(expect.arrayContaining([
       expect.objectContaining({ ref: { featureId: "codex.execution", schemaVersion: 1 }, availability: "available" }),
-      expect.objectContaining({ ref: { featureId: "codex.fast_mode", schemaVersion: 2 }, availability: "available" }),
+      expect.objectContaining({ ref: { featureId: "codex.fast_mode", schemaVersion: 3 }, availability: "available" }),
     ]));
     expect(presentation.automationAllowed).toBe(true);
     expect(current.automations.getDefinition(current.scope, current.automation!.id).enabled).toBe(true);
@@ -339,7 +344,6 @@ describe("Codex interactive action persistence", () => {
   });
 
   it.each([
-    { featureId: "codex.fast_mode", schemaVersion: 2, actionId: "set_fast", desired: { serviceTier: "fast" } },
     { featureId: "codex.execution", schemaVersion: 1, actionId: "set_sandbox_workspace", desired: { sandboxMode: "workspace-write" } },
     { featureId: "codex.execution", schemaVersion: 1, actionId: "set_network_enabled", desired: { networkAccess: "enabled" } },
     { featureId: "codex.execution", schemaVersion: 1, actionId: "set_approval_on_request", desired: { approvalPolicy: "on-request" } },
@@ -358,7 +362,7 @@ describe("Codex interactive action persistence", () => {
         feature: { featureId, schemaVersion },
         actionId,
         arguments: null,
-        expectedFeatureRevision: settings.revision,
+        expectedMutationRevision: settings.revision,
       },
       now: 400,
     })).resolves.toEqual({ applicationOperationId: mutationId });
@@ -502,7 +506,7 @@ describe("Codex interactive action persistence", () => {
         expect(
           current.persistence.providerFeatureConcurrency(ref, action.actionId),
         ).toEqual(
-          ref.featureId === "codex.goal" || ref.featureId === "codex.tui"
+          ref.featureId === "codex.goal" || ref.featureId === "codex.tui" || ref.featureId === "codex.fast_mode"
             ? {
                 kind: "concurrent",
                 activeTurn: true,
@@ -526,220 +530,119 @@ describe("Codex interactive action persistence", () => {
     ).toEqual({ kind: "quiet_thread" });
   });
 
-  it("persists Fast speed atomically and synchronizes only after acceptance", async () => {
-    const syncServiceTier = vi.fn().mockResolvedValue(undefined);
-    const current = fixture({ fastModeRuntime: { syncServiceTier } });
-    const thread = current.inventory.getThread(
-      current.scope,
-      current.codexThreadId,
-    ).thread;
-    const settings = current.settings.find(
-      current.scope,
-      current.codexThreadId,
-    )!;
-    const operation = {
-      action: "perform_provider_feature" as const,
-      feature: { featureId: "codex.fast_mode", schemaVersion: 2 },
-      actionId: "set_fast",
-      arguments: null,
-      expectedFeatureRevision: settings.revision,
-    };
-
-    await expect(
-      current.persistence.performProviderFeature(
-        current.scope,
-        current.codexThreadId,
-        {
-          mutationId: "fast-enable",
-          expectedThreadRevision: thread.revision,
-          operation,
-          now: 400,
-        },
-      ),
-    ).resolves.toEqual({ applicationOperationId: "fast-enable" });
-    expect(
-      current.settings.find(current.scope, current.codexThreadId)?.desired
-        ?.serviceTier,
-    ).toBe("fast");
-    expect(syncServiceTier).toHaveBeenCalledWith(
-      current.scope,
-      current.codexThreadId,
-      "fast",
-    );
-    expect(
-      current.featureMutations.find(current.scope, "fast-enable"),
-    ).toMatchObject({
-      state: "accepted",
-      result: { serviceTier: "fast" },
+  const speedTarget = { turnId: "application-turn", activationId: "activation" };
+  function speedFixture(active = false) {
+    const publish = vi.fn(async (input: { arguments: { selection: SpeedSelection }; dispatching(continuity: string): void }): Promise<SpeedCurrentRunResult> => {
+      input.dispatching("native-stream-1");
+      return { status: "published", target: speedTarget, selection: input.arguments.selection };
     });
-
-    syncServiceTier.mockClear();
-    await expect(
-      current.persistence.performProviderFeature(
-        current.scope,
-        current.codexThreadId,
-        {
-          mutationId: "fast-enable",
-          expectedThreadRevision: thread.revision,
-          operation,
-          now: 401,
-        },
-      ),
-    ).resolves.toEqual({ applicationOperationId: "fast-enable" });
-    expect(syncServiceTier).not.toHaveBeenCalled();
+    const controller = { currentRun: () => null, prepare: vi.fn(async () => {}), admit: () => active ? "active" : "idle",
+      publish, syncDefaults: vi.fn(async () => {}) } as unknown as CodexSpeedSession;
+    const current = fixture({ fastModeRuntime: { controller: () => controller, syncServiceTier: vi.fn(async () => {}) } });
+    const request = (id: string, selection: SpeedSelection, expectedMutationRevision = current.settings.find(current.scope, current.codexThreadId)!.desiredRevision) => ({
+      mutationId: id, expectedThreadRevision: current.inventory.getThread(current.scope, current.codexThreadId).thread.revision,
+      operation: { action: "perform_provider_feature" as const, feature: CODEX_SPEED_REF, actionId: "set_speed",
+        arguments: speedArgumentsValue({ selection, currentRunTarget: active ? speedTarget : null }), expectedMutationRevision },
+      now: 400, actor: { isIdle: () => !active, resolveTurnId: () => "native-turn", mutateExternal: async () => ({ outcome: "rejected" as const }) },
+      featureState: boundValue({ saved: { selection: "standard", desiredRevision: 0 }, offered: ["standard", "fast", "ultrafast"].map(selection => ({ selection })), currentRun: null, lastChange: null }),
+    });
+    const perform = (input: ReturnType<typeof request>) => current.persistence.performProviderFeature(current.scope, current.codexThreadId, input);
+    return { ...current, publish, controller, request, perform };
+  }
+  it("saves idle Speed once and replays the exact original result after newer intent", async () => {
+    const f = speedFixture(); const first = f.request("first", "fast");
+    const response = await f.perform(first);
+    expect(response).toMatchObject({ status: "provider_feature_result", operationId: "first" });
+    expect("result" in response && speedResultWireSchema.parse(response.result)).toMatchObject({ saved: { selection: "fast", desiredRevision: 1 }, currentRun: { status: "not_requested" } });
+    expect(f.controller.syncDefaults).toHaveBeenCalledOnce(); expect(f.publish).not.toHaveBeenCalled();
+    await f.perform(f.request("newer", "ultrafast"));
+    expect(await f.perform(first)).toEqual(response);
+    expect(f.settings.find(f.scope, f.codexThreadId)!.desired!.serviceTier).toBe("ultrafast");
+    await expect(f.perform({ ...first, operation: { ...first.operation, arguments: speedArgumentsValue({ selection: "standard", currentRunTarget: null }) } })).rejects.toThrow();
+  });
+  it("persists the parent and dispatch phase before the native leg", async () => {
+    const f = speedFixture(true);
+    f.publish.mockImplementation(async input => {
+      expect(f.featureMutations.find(f.scope, "active")!.state).toBe("accepted");
+      expect(new CodexSpeedPublicationRepository(f.database).find(f.scope, "active")!.phase).toBe("ready");
+      input.dispatching("native-stream-1");
+      expect(new CodexSpeedPublicationRepository(f.database).find(f.scope, "active")!.phase).toBe("dispatching");
+      return { status: "published", target: speedTarget, selection: "fast" };
+    });
+    const response = await f.perform(f.request("active", "fast"));
+    expect("result" in response && speedResultWireSchema.parse(response.result)).toMatchObject({ saved: { selection: "fast" }, currentRun: { status: "published" }, receiptRevision: 3 });
+    expect(f.publish).toHaveBeenCalledOnce();
+  });
+  it.each(["rejected", "uncertain"] as const)("retains saved intent and an immutable accepted parent after %s", async status => {
+    const f = speedFixture(true);
+    f.publish.mockImplementation(async input => { input.dispatching("native-stream-1"); return status === "rejected"
+      ? { status, target: speedTarget, selection: "fast", reason: "provider_rejected", message: { text: "Rejected" } }
+      : { status, target: speedTarget, selection: "fast", reason: "response_lost" }; });
+    const request = f.request("partial", "fast"); const response = await f.perform(request);
+    expect("result" in response && speedResultWireSchema.parse(response.result).currentRun.status).toBe(status);
+    expect(f.featureMutations.find(f.scope, "partial")!.state).toBe("accepted");
+    expect(f.settings.find(f.scope, f.codexThreadId)!.desired!.serviceTier).toBe("fast");
+    await f.perform(request); expect(f.publish).toHaveBeenCalledOnce();
+  });
+  it("rejects competing saved CAS while allowing same-value reapplication without revision bumps", async () => {
+    const f = speedFixture(true); const loser = f.request("loser", "ultrafast");
+    await f.perform(f.request("winner", "fast"));
+    await expect(f.perform(loser)).rejects.toThrow();
+    const before = f.settings.find(f.scope, f.codexThreadId)!;
+    const threadBefore = f.inventory.getThread(f.scope, f.codexThreadId).thread.revision;
+    await f.perform(f.request("reapply", "fast"));
+    expect(f.settings.find(f.scope, f.codexThreadId)!.desiredRevision).toBe(before.desiredRevision);
+    expect(f.inventory.getThread(f.scope, f.codexThreadId).thread.revision).toBe(threadBefore);
+    expect(f.publish).toHaveBeenCalledTimes(2);
+  });
+  it("never dispatches a publication when its transaction rolls back", async () => {
+    const f = speedFixture(true);
+    f.database.exec("CREATE TRIGGER fail_speed BEFORE INSERT ON codex_speed_publications BEGIN SELECT RAISE(ABORT, 'injected rollback'); END;");
+    await expect(f.perform(f.request("rollback", "fast"))).rejects.toThrow("injected rollback");
+    expect(f.settings.find(f.scope, f.codexThreadId)!.desired!.serviceTier).toBe("standard");
+    expect(f.featureMutations.find(f.scope, "rollback")).toBeUndefined(); expect(f.publish).not.toHaveBeenCalled();
+  });
+  it("preserves a frozen queued start while later unfrozen work takes the saved Speed", async () => {
+    const f = speedFixture(); const queue = new QueuedInputRepository(f.database);
+    const enqueue = (id: string) => queue.enqueue(f.scope, f.codexThreadId, { mutationId: id,
+      text: `Payload ${id}`, contextExcerpts: [], attachmentIds: [], taskReferences: [],
+      source: { kind: "direct_input", resolvedDeliveryMode: "queue", expectedThreadRevision: f.inventory.getThread(f.scope, f.codexThreadId).thread.revision }, now: 390 });
+    const frozenItem = enqueue("frozen").item, pendingItem = enqueue("unfrozen").item;
+    const frozen = f.settings.freezeOperationSnapshot(f.scope, { applicationThreadId: f.codexThreadId, applicationOperationId: "frozen", now: 391 });
+    await f.perform(f.request("save-fast", "fast"));
+    expect(f.settings.freezeOperationSnapshot(f.scope, { applicationThreadId: f.codexThreadId, applicationOperationId: "frozen", now: 410 })).toEqual(frozen);
+    expect(f.settings.freezeOperationSnapshot(f.scope, { applicationThreadId: f.codexThreadId, applicationOperationId: "unfrozen", now: 410 }).settings.serviceTier).toBe("fast");
+    expect(queue.get(f.scope, f.codexThreadId, frozenItem.id)).toEqual(frozenItem);
+    expect(queue.get(f.scope, f.codexThreadId, pendingItem.id)).toEqual(pendingItem);
+    expect(f.publish).not.toHaveBeenCalled();
+  });
+  it.each(["queue", "steer"] as const)("preserves the asymmetric thread CAS policy around %s admission", async mode => {
+    const f = speedFixture(true); const queue = new QueuedInputRepository(f.database);
+    const originalSpeed = f.request("speed-after-input", "fast");
+    const originalThreadRevision = originalSpeed.expectedThreadRevision;
+    const enqueue = (id: string, expectedThreadRevision: number) => queue.enqueue(f.scope, f.codexThreadId, {
+      mutationId: id, text: `Preserve ${mode} payload`, contextExcerpts: [], attachmentIds: [], taskReferences: [],
+      source: { kind: "direct_input", resolvedDeliveryMode: mode, ...(mode === "steer" ? { resolvedSteerTarget: { kind: "turn" as const, turnId: "target-turn" } } : {}), expectedThreadRevision }, now: 392,
+    });
+    const input = enqueue("input-first", originalThreadRevision).item;
+    await f.perform(originalSpeed);
+    expect(queue.get(f.scope, f.codexThreadId, input.id)).toEqual(input);
+    const beforeSpeed = f.inventory.getThread(f.scope, f.codexThreadId).thread.revision;
+    await f.perform(f.request("speed-first", "ultrafast"));
+    expect(() => enqueue("stale-input", beforeSpeed)).toThrow(expect.objectContaining({ code: "conflict" }));
+    expect(queue.get(f.scope, f.codexThreadId, input.id)).toEqual(input);
+    expect(f.settings.find(f.scope, f.codexThreadId)?.desired?.serviceTier).toBe("ultrafast");
   });
 
-  it("persists Fast speed on an unbound draft without native synchronization", async () => {
-    const syncServiceTier = vi.fn().mockResolvedValue(undefined);
-    const current = fixture({
-      unbound: true,
-      fastModeRuntime: { syncServiceTier },
-    });
-    const thread = current.inventory.getThread(
-      current.scope,
-      current.codexThreadId,
-    ).thread;
-    const settings = current.settings.find(
-      current.scope,
-      current.codexThreadId,
-    )!;
-
-    await expect(
-      current.persistence.performProviderFeature(
-        current.scope,
-        current.codexThreadId,
-        {
-          mutationId: "draft-fast-enable",
-          expectedThreadRevision: thread.revision,
-          operation: {
-            action: "perform_provider_feature",
-            feature: { featureId: "codex.fast_mode", schemaVersion: 2 },
-            actionId: "set_fast",
-            arguments: null,
-            expectedFeatureRevision: settings.revision,
-          },
-          now: 402,
-        },
-      ),
-    ).resolves.toEqual({ applicationOperationId: "draft-fast-enable" });
-    expect(
-      current.settings.find(current.scope, current.codexThreadId)?.desired
-        ?.serviceTier,
-    ).toBe("fast");
-    expect(syncServiceTier).not.toHaveBeenCalled();
-    expect(
-      current.featureMutations.find(current.scope, "draft-fast-enable"),
-    ).toMatchObject({
-      state: "accepted",
-      result: { serviceTier: "fast" },
-    });
-  });
-
-  it("keeps an accepted Fast selection pending when post-commit native sync races", async () => {
-    const current = fixture({
-      fastModeRuntime: {
-        syncServiceTier: vi
-          .fn()
-          .mockRejectedValue(new Error("generation changed")),
-      },
-    });
-    const thread = current.inventory.getThread(
-      current.scope,
-      current.codexThreadId,
-    ).thread;
-    const settings = current.settings.find(
-      current.scope,
-      current.codexThreadId,
-    )!;
-
-    await expect(
-      current.persistence.performProviderFeature(
-        current.scope,
-        current.codexThreadId,
-        {
-          mutationId: "fast-enable-raced-sync",
-          expectedThreadRevision: thread.revision,
-          operation: {
-            action: "perform_provider_feature",
-            feature: { featureId: "codex.fast_mode", schemaVersion: 2 },
-            actionId: "set_fast",
-            arguments: null,
-            expectedFeatureRevision: settings.revision,
-          },
-          now: 402,
-        },
-      ),
-    ).resolves.toEqual({ applicationOperationId: "fast-enable-raced-sync" });
-    expect(
-      current.settings.find(current.scope, current.codexThreadId)?.desired
-        ?.serviceTier,
-    ).toBe("fast");
-  });
-
-  it("persists Ultrafast and Standard speeds and rejects retired Fast mode actions", async () => {
-    const syncServiceTier = vi.fn().mockResolvedValue(undefined);
-    const current = fixture({ fastModeRuntime: { syncServiceTier } });
-    const perform = async (mutationId: string, actionId: string, now: number) => {
-      const thread = current.inventory.getThread(
-        current.scope,
-        current.codexThreadId,
-      ).thread;
-      const settings = current.settings.find(
-        current.scope,
-        current.codexThreadId,
-      )!;
-      return current.persistence.performProviderFeature(
-        current.scope,
-        current.codexThreadId,
-        {
-          mutationId,
-          expectedThreadRevision: thread.revision,
-          operation: {
-            action: "perform_provider_feature",
-            feature: { featureId: "codex.fast_mode", schemaVersion: 2 },
-            actionId,
-            arguments: null,
-            expectedFeatureRevision: settings.revision,
-          },
-          now,
-        },
-      );
-    };
-
-    await expect(perform("speed-ultrafast", "set_ultrafast", 410)).resolves.toEqual({
-      applicationOperationId: "speed-ultrafast",
-    });
-    expect(
-      current.settings.find(current.scope, current.codexThreadId)?.desired
-        ?.serviceTier,
-    ).toBe("ultrafast");
-    expect(syncServiceTier).toHaveBeenLastCalledWith(
-      current.scope,
-      current.codexThreadId,
-      "ultrafast",
-    );
-    expect(
-      current.featureMutations.find(current.scope, "speed-ultrafast"),
-    ).toMatchObject({ state: "accepted", result: { serviceTier: "ultrafast" } });
-
-    await expect(perform("speed-standard", "set_standard", 411)).resolves.toEqual({
-      applicationOperationId: "speed-standard",
-    });
-    expect(
-      current.settings.find(current.scope, current.codexThreadId)?.desired
-        ?.serviceTier,
-    ).toBe("standard");
-    expect(syncServiceTier).toHaveBeenLastCalledWith(
-      current.scope,
-      current.codexThreadId,
-      "standard",
-    );
-
-    await expect(perform("speed-retired", "enable", 412)).rejects.toThrow();
-    expect(
-      current.settings.find(current.scope, current.codexThreadId)?.desired
-        ?.serviceTier,
-    ).toBe("standard");
+  it("saves drafts without acquiring a runtime and rejects retired action shapes", async () => {
+    const f = fixture({ unbound: true, enabledAutomation: true });
+    const base = speedFixture().request("draft", "fast");
+    const response = await f.persistence.performProviderFeature(f.scope, f.codexThreadId, { ...base, actor: undefined,
+      expectedThreadRevision: f.inventory.getThread(f.scope, f.codexThreadId).thread.revision,
+      operation: { ...base.operation, expectedMutationRevision: f.settings.find(f.scope, f.codexThreadId)!.desiredRevision } });
+    expect(response).toMatchObject({ status: "provider_feature_result" });
+    expect(f.automations.getDefinition(f.scope, f.automation!.id).enabled).toBe(true);
+    await expect(f.persistence.performProviderFeature(f.scope, f.codexThreadId, { ...base, mutationId: "retired", operation: { ...base.operation, actionId: "set_fast", arguments: null } })).rejects.toThrow();
   });
 
   it("notifies a committed execution-policy edit before failed native synchronization", async () => {
@@ -761,7 +664,7 @@ describe("Codex interactive action persistence", () => {
     const mutation = { mutationId: "policy-edit", expectedThreadRevision: thread.revision, now: 400,
       operation: { action: "perform_provider_feature" as const,
         feature: { featureId: "codex.execution", schemaVersion: 1 }, actionId: "set_sandbox_workspace",
-        arguments: null, expectedFeatureRevision: settings.revision },
+        arguments: null, expectedMutationRevision: settings.revision },
     };
     await expect(current.persistence.performProviderFeature(current.scope, current.codexThreadId, mutation))
       .rejects.toThrow("tui_sync_failed");
@@ -796,7 +699,7 @@ describe("Codex interactive action persistence", () => {
         feature: { featureId: "codex.tui", schemaVersion: 1 },
         actionId: "start",
         arguments: null,
-        expectedFeatureRevision: 1,
+        expectedMutationRevision: 1,
       },
       now: 330,
     };
@@ -845,7 +748,7 @@ describe("Codex interactive action persistence", () => {
       operation: {
         ...startMutation.operation,
         actionId: "stop",
-        expectedFeatureRevision: 2,
+        expectedMutationRevision: 2,
       },
       now: 350,
     };
@@ -1122,7 +1025,7 @@ describe("Codex interactive action persistence", () => {
       feature: { featureId: "codex.execution", schemaVersion: 1 },
       actionId: "set_sandbox_workspace",
       arguments: null,
-      expectedFeatureRevision: settings.revision,
+      expectedMutationRevision: settings.revision,
     };
     const result = await current.persistence.performProviderFeature(
       current.scope,
@@ -1364,7 +1267,7 @@ describe("Codex interactive action persistence", () => {
       feature: { featureId: "codex.goal", schemaVersion: 1 },
       actionId: "create",
       arguments: boundValue({ objective: "Ship Goal recovery" }),
-      expectedFeatureRevision: goalRevision,
+      expectedMutationRevision: goalRevision,
     };
 
     const accepted = await persistence.performProviderFeature(
@@ -1441,7 +1344,7 @@ describe("Codex interactive action persistence", () => {
       feature: { featureId: "codex.goal", schemaVersion: 1 },
       actionId: "pause",
       arguments: boundValue({}),
-      expectedFeatureRevision: activeRevision,
+      expectedMutationRevision: activeRevision,
     };
     const uncertain = await persistence.performProviderFeature(
       scope,
@@ -1488,7 +1391,7 @@ describe("Codex interactive action persistence", () => {
           feature: { featureId: "codex.goal", schemaVersion: 1 },
           actionId: "pause",
           arguments: boundValue({}),
-          expectedFeatureRevision: stillActive.revision,
+          expectedMutationRevision: stillActive.revision,
         },
         now: 940,
         mutateExternal: async () => ({
@@ -1567,7 +1470,7 @@ describe("Codex interactive action persistence", () => {
             feature: { featureId: "codex.execution", schemaVersion: 1 },
             actionId,
             arguments: null,
-            expectedFeatureRevision: settings.revision,
+            expectedMutationRevision: settings.revision,
           },
           now,
         },
@@ -1624,7 +1527,7 @@ describe("Codex interactive action persistence", () => {
             feature: { featureId: "codex.execution", schemaVersion: 1 },
             actionId: "set_sandbox_workspace",
             arguments: null,
-            expectedFeatureRevision: settings.revision,
+            expectedMutationRevision: settings.revision,
           },
           now: 800,
         },

@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { test, expect } from "./fixtures";
+import { boundValue } from "../../src/server/conversations/payload-policy.js";
+import { speedArgumentsValue, speedResultWireSchema, type SpeedCurrentRunResult } from "../../src/shared/provider-features/codex-speed.js";
 import { normalizedThreadSnapshotSchema } from "../../src/shared/protocol/conversation.js";
 import {
   capture,
@@ -418,7 +420,7 @@ test.describe.serial("normalized Codex thread state", () => {
 
     // The default fixture model offers only Fast, so Speed is one toggle.
     const standardToggle = page.getByRole("button", {
-      name: "Fast speed, off",
+      name: "Speed, Standard saved",
     });
     await expect(standardToggle).toBeVisible();
     await expect(standardToggle).toHaveAttribute("aria-pressed", "false");
@@ -430,10 +432,11 @@ test.describe.serial("normalized Codex thread state", () => {
     await standardToggle.hover();
     await expect(
       page.getByRole("tooltip", {
-        name: "Fast: About 1.5x speed with higher usage",
+        name: "Applies from the next model step. Saved for future turns.",
       }),
     ).toBeVisible();
-    await page.getByRole("textbox", { name: /Message/ }).hover();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
 
     const enabled = page.waitForResponse(
       (response) =>
@@ -442,24 +445,21 @@ test.describe.serial("normalized Codex thread state", () => {
         response.ok() &&
         response.request().postDataJSON().operation?.feature?.featureId ===
           "codex.fast_mode" &&
-        response.request().postDataJSON().operation?.actionId === "set_fast",
+        response.request().postDataJSON().operation?.actionId === "set_speed",
     );
     await standardToggle.click();
     expect((await enabled).request().postDataJSON().operation).toMatchObject({
-      feature: { featureId: "codex.fast_mode", schemaVersion: 2 },
-      actionId: "set_fast",
-      arguments: null,
-      expectedFeatureRevision: expect.any(Number),
+      feature: { featureId: "codex.fast_mode", schemaVersion: 3 },
+      actionId: "set_speed",
+      arguments: speedArgumentsValue({ selection: "fast", currentRunTarget: null }),
+      expectedMutationRevision: expect.any(Number),
     });
 
-    const fastToggle = page.getByRole("button", { name: "Fast speed, on" });
+    const fastToggle = page.getByRole("button", { name: "Speed, Fast saved" });
     await expect(fastToggle).toBeVisible();
     await expect(fastToggle).toHaveAttribute("aria-pressed", "true");
     await expect(fastToggle).toHaveAttribute("data-accelerated", "true");
-    await expect(fastToggle).toHaveAttribute(
-      "data-application-state",
-      "applied",
-    );
+    await expect(fastToggle).not.toHaveAttribute("data-application-state");
     await expect(fastToggle.locator("svg")).toHaveAttribute(
       "fill",
       "currentColor",
@@ -470,12 +470,12 @@ test.describe.serial("normalized Codex thread state", () => {
 
     await page.reload();
     await expect(
-      page.getByRole("button", { name: "Fast speed, on" }),
-    ).toHaveAttribute("data-application-state", "applied");
+      page.getByRole("button", { name: "Speed, Fast saved" }),
+    ).toBeVisible();
 
     await page.setViewportSize({ width: 390, height: 844 });
     const mobileFastToggle = page.getByRole("button", {
-      name: "Fast speed, on",
+      name: "Speed, Fast saved",
     });
     await expect(mobileFastToggle).toBeVisible();
     await expect(mobileFastToggle).toHaveAttribute("aria-pressed", "true");
@@ -509,7 +509,7 @@ test.describe.serial("normalized Codex thread state", () => {
       await selected;
       await expect(modelSetting).toContainText(label);
     };
-    // Radix names the floating menu by its trigger, e.g. "Speed, Fast".
+    // Radix names the floating menu by its trigger, e.g. "Speed, Fast saved".
     const speedMenu = page.getByRole("menu", { name: /^Speed\b/ });
     const speedChoice = (name: string) =>
       speedMenu
@@ -519,14 +519,14 @@ test.describe.serial("normalized Codex thread state", () => {
       "The fastest available responses for latency-sensitive work.";
 
     await expect(
-      page.getByRole("button", { name: "Fast speed, on" }),
-    ).toHaveAttribute("data-application-state", "applied");
+      page.getByRole("button", { name: "Speed, Fast saved" }),
+    ).toBeVisible();
 
     // A model offering Fast and Ultrafast turns the toggle into a menu; the
     // retained Fast selection survives because the new model offers it.
     await chooseModel("GPT-5.6 Spark");
     const fastTrigger = page.getByRole("button", {
-      name: "Speed, Fast",
+      name: "Speed, Fast saved",
       exact: true,
     });
     await expect(fastTrigger).toBeVisible();
@@ -568,26 +568,23 @@ test.describe.serial("normalized Codex thread state", () => {
         response.request().postDataJSON().operation?.feature?.featureId ===
           "codex.fast_mode" &&
         response.request().postDataJSON().operation?.actionId ===
-          "set_ultrafast",
+          "set_speed",
     );
     await speedChoice("Ultrafast").click();
     expect(
       (await ultrafastSelected).request().postDataJSON().operation,
     ).toMatchObject({
-      feature: { featureId: "codex.fast_mode", schemaVersion: 2 },
-      actionId: "set_ultrafast",
-      arguments: null,
-      expectedFeatureRevision: expect.any(Number),
+      feature: { featureId: "codex.fast_mode", schemaVersion: 3 },
+      actionId: "set_speed",
+      arguments: speedArgumentsValue({ selection: "ultrafast", currentRunTarget: null }),
+      expectedMutationRevision: expect.any(Number),
     });
     // The live thread applies the tier at once and the menu stays closed.
     const ultrafastTrigger = page.getByRole("button", {
-      name: "Speed, Ultrafast",
+      name: "Speed, Ultrafast saved",
       exact: true,
     });
-    await expect(ultrafastTrigger).toHaveAttribute(
-      "data-application-state",
-      "applied",
-    );
+    await expect(ultrafastTrigger).not.toHaveAttribute("data-application-state");
     await expect(ultrafastTrigger).toHaveAttribute("data-accelerated", "true");
     await expect(
       ultrafastTrigger.locator('svg[data-speed-icon="ultrafast"]'),
@@ -599,8 +596,8 @@ test.describe.serial("normalized Codex thread state", () => {
 
     await page.reload();
     await expect(
-      page.getByRole("button", { name: "Speed, Ultrafast", exact: true }),
-    ).toHaveAttribute("data-application-state", "applied");
+      page.getByRole("button", { name: "Speed, Ultrafast saved", exact: true }),
+    ).toBeVisible();
 
     const prompt = "Answer this Codex turn at Ultrafast speed";
     await fillAndPersistDraft(page, prompt, "Message Codex");
@@ -630,7 +627,7 @@ test.describe.serial("normalized Codex thread state", () => {
     // Under the touch density the same choices open as a bottom sheet.
     await page.setViewportSize({ width: 390, height: 844 });
     const mobileTrigger = page.getByRole("button", {
-      name: "Speed, Ultrafast",
+      name: "Speed, Ultrafast saved",
       exact: true,
     });
     await expect(mobileTrigger).toBeVisible();
@@ -655,11 +652,9 @@ test.describe.serial("normalized Codex thread state", () => {
     await page.setViewportSize(desktopViewport);
 
     // A model without Ultrafast falls back to Standard for the next turn.
-    // Codex may confirm the Standard tier before the first assertion, so
-    // accept the label with or without its pending suffix.
     await chooseModel("GPT-5.6 Codex");
     const fallbackToggle = page.getByRole("button", {
-      name: /^Fast speed, off(?:, pending)?$/,
+      name: "Speed, Standard saved",
     });
     await expect(fallbackToggle).toBeVisible();
     await expect(fallbackToggle).toHaveAttribute("aria-pressed", "false");
@@ -667,8 +662,96 @@ test.describe.serial("normalized Codex thread state", () => {
     await expect(
       fallbackToggle.locator('svg[data-speed-icon="fast"]'),
     ).toHaveAttribute("fill", "none");
-    await expect(page.getByRole("button", { name: /^Speed,/ })).toHaveCount(0);
+    await expect(fallbackToggle).not.toHaveAttribute("aria-haspopup");
     await capture(page, testInfo, "codex-speed-model-fallback.png");
+  });
+
+  test("active Speed preserves its exact receipt through a lost reply and updates another client", async ({ page, browser, browserDiagnostics }, testInfo) => {
+    await page.goto(codexThreadPath);
+    const observerContext = await browser.newContext({ baseURL: new URL(page.url()).origin });
+    const second = await observerContext.newPage();
+    await second.goto(codexThreadPath);
+    const state = async () => (await (await page.request.get("/__e2e/codex/backends/codex-import-e2e/state")).json()) as { requests: Array<{ method: string }> };
+    const updateCount = async () => (await state()).requests.filter(request => request.method === "turn/settings/update").length;
+    const before = await updateCount();
+    expect((await page.request.post("/__e2e/codex/turn-completion/arm")).status()).toBe(204);
+    const requests: unknown[] = [];
+    let loseReply = true;
+    let visualOutcome: Omit<SpeedCurrentRunResult, "target" | "selection"> | undefined;
+    await page.route("**/operations", async route => {
+      const request = route.request().postDataJSON();
+      if (request.operation?.feature?.featureId !== "codex.fast_mode") return route.continue();
+      requests.push(request);
+      if (loseReply) { loseReply = false; await route.fetch(); browserDiagnostics.allowNetworkFailures = true; return route.abort("failed"); }
+      if (visualOutcome) {
+        // Partial receipts must leave the saved-choice UI quiet; native and
+        // persistence tests qualify the corresponding server outcomes.
+        const response = await route.fetch(); const body = await response.json();
+        const result = speedResultWireSchema.parse(body.result);
+        body.result = boundValue({ ...result, currentRun: { ...result.currentRun, ...visualOutcome } });
+        return route.fulfill({ response, json: body });
+      }
+      await route.continue();
+    });
+    try {
+      await fillAndPersistDraft(page, "Keep working while I change Speed", "Message Codex");
+      await sendCurrentDraft(page);
+      await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+      const trigger = page.getByRole("button", { name: "Speed, Standard saved", exact: true });
+      await expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+      await trigger.click();
+      await page.getByRole("menuitemradio", { name: /^Fast/ }).click();
+      await expect.poll(() => requests.length).toBe(2);
+      browserDiagnostics.allowNetworkFailures = false;
+      await expect(second.getByRole("button", { name: "Speed, Fast saved", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Speed, Fast saved", exact: true })).toHaveAttribute("aria-disabled", "false");
+      await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeEnabled();
+      await expect(page.getByRole("button", { name: "Check Speed result" })).toHaveCount(0);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toEqual(requests[0]);
+      const original = requests[0] as { operation: { arguments: { entries: Array<{ key: { text: string }; value: unknown }> } } };
+      expect(original.operation.arguments.entries.find(entry => entry.key.text === "currentRunTarget")?.value).toMatchObject({ kind: "object" });
+      expect(await updateCount()).toBe(before + 1);
+      await capture(page, testInfo, "codex-speed-active-desktop.png");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.getByRole("button", { name: "Speed, Fast saved", exact: true }).click();
+      const sheet = page.getByRole("dialog", { name: "Speed", exact: true });
+      await expect(sheet).toBeVisible();
+      await capture(page, testInfo, "codex-speed-active-mobile.png");
+      await sheet.getByRole("menuitemradio", { name: /^Standard/ }).click();
+      await expect(second.getByRole("button", { name: "Speed, Standard saved", exact: true })).toBeVisible();
+      expect(await updateCount()).toBe(before + 2);
+      const outcomes = [
+        { status: "uncertain", reason: "response_lost" },
+        { status: "rejected", reason: "provider_rejected", message: { text: "Rejected" } },
+        { status: "not_attempted", reason: "ownership_changed" },
+        { status: "target_finished" },
+      ] as const;
+      for (const [index, outcome] of outcomes.entries()) {
+        visualOutcome = outcome;
+        const selection = index % 2 === 0 ? "Fast" : "Standard";
+        await page.getByRole("button", { name: /^Speed, .* saved$/ }).click();
+        await sheet.getByRole("menuitemradio", { name: new RegExp(`^${selection}`) }).click();
+        await expect(second.getByRole("button", { name: `Speed, ${selection} saved`, exact: true })).toBeVisible();
+        await expect(page.getByRole("button", { name: `Speed, ${selection} saved`, exact: true })).toHaveAttribute("aria-disabled", "false");
+        await expect(page.locator(".codex-speed-result, .codex-speed-recheck")).toHaveCount(0);
+        await page.getByRole("button", { name: `Speed, ${selection} saved`, exact: true }).click();
+        await expect(sheet.getByRole("menuitemradio", { name: new RegExp(`^${selection}`) })).toHaveAttribute("aria-checked", "true");
+        await expect(sheet.locator(".codex-speed-sheet-status, details")).toHaveCount(0);
+        await page.keyboard.press("Escape");
+      }
+      visualOutcome = undefined;
+      await expectNoPageOverflow(page);
+    } finally {
+      await page.unroute("**/operations");
+      await page.request.post("/__e2e/codex/turn-completion/release");
+      browserDiagnostics.allowNetworkFailures = false;
+      await observerContext.close();
+    }
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Speed, Standard saved", exact: true })).not.toHaveAttribute("aria-haspopup");
+    expect(await updateCount()).toBe(before + 6);
   });
 
   test("mobile Codex thread actions expose all execution controls", async ({

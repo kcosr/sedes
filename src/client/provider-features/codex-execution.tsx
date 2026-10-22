@@ -167,7 +167,7 @@ function CodexExecutionControls({
       feature: ref,
       actionId,
       arguments: null,
-      expectedFeatureRevision: featureState.revision,
+      expectedMutationRevision: capability.mutationRevision,
     });
   };
 

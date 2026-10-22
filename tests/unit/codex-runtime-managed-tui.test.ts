@@ -213,6 +213,40 @@ describe("persistent Codex managed TUI", () => {
     expect(host.processes[0]!.process.close).not.toHaveBeenCalled();
   });
 
+  it("holds remote viewer input through the Speed settings handoff", async () => {
+    const host = fixture(); const remote = await host.attach();
+    const state = await remote.registry.start(authority, host.launcher);
+    const viewer = remote.registry.attachScopedViewer(scope, "thread", state.resourceGeneration!, {
+      viewerId: "speed-viewer", output: vi.fn(), stateChanged: vi.fn(),
+    });
+    await viewer.resize(100, 30);
+    await remote.registry.holdSettings(authority, "speed-lease");
+    const queued = viewer.input(Buffer.from("prompt\r"));
+    await Promise.resolve(); await Promise.resolve();
+    expect(host.processes[0]!.process.write).not.toHaveBeenCalled();
+    await remote.registry.releaseSettings("speed-lease");
+    await queued;
+    expect(host.processes[0]!.process.write).toHaveBeenCalledWith(Uint8Array.from(Buffer.from("prompt\r")));
+    viewer.detach();
+  });
+
+  it("fails the remote TUI before releasing a Speed handoff lost with its carrier", async () => {
+    const host = fixture(); const remote = await host.attach();
+    const state = await remote.registry.start(authority, host.launcher);
+    const viewer = remote.registry.attachScopedViewer(scope, "thread", state.resourceGeneration!, {
+      viewerId: "speed-viewer", output: vi.fn(), stateChanged: vi.fn(),
+    });
+    await viewer.resize(100, 30);
+    await remote.registry.holdSettings(authority, "lost-speed-lease");
+    const queued = viewer.input(Buffer.from("must-not-run\r"));
+    const rejected = expect(queued).rejects.toThrow();
+    remote.lose();
+    await rejected;
+    await vi.waitFor(() => expect(host.processes[0]!.process.close).toHaveBeenCalledOnce());
+    expect(host.processes[0]!.process.write).not.toHaveBeenCalled();
+    expect(host.hosts.snapshot("incarnation").resources[0]?.state.lifecycle).toBe("failed");
+  });
+
   it.each(["tenantId", "principalId"] as const)("denies a wrong %s binding", async axis => {
     const host = fixture();
     const remote = await host.attach();

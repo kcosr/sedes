@@ -646,13 +646,26 @@ rules. Unproven desired settings are not presented as provider-effective. Fork
 eligibility requires a complete allowed tuple for the child. See
 [Codex execution settings](../codex-thread-execution-settings.md).
 
-Speed is the closed service-tier feature: Standard, Fast (native `priority`),
+Speed (`codex.fast_mode@3`) is the closed persistent service-tier feature: Standard, Fast (native `priority`),
 and Ultrafast (native `ultrafast`). Each model offers only the tiers its
 account-scoped catalog advertises, and any other native tier ID fails the
 catalog closed. Goal stores one bounded objective and projects
 provider-observed lifecycle status. Create, pause, resume, and clear are
 capability- and revision-checked. Neither feature is inferred from model names
 or provider text.
+
+Sedes-created native threads receive the per-session experimental
+`step_model_switching` flag on start/fork and provenance-qualified cold resume.
+A known Sedes start owns an exact activation token; `model/rerouted` withdraws
+its model authority. The adopted `turn/settings/update` accepts only thread ID,
+turn ID, and explicit service tier. Codex runtime protocol 5 enforces that
+subset at the execution host and durably correlates publication outcomes.
+Saved state and native publication have separate receipts and revisions. These
+support internal recovery; the composer icon and menu checkmark show only the
+saved preference. A published change applies from the next model step whose
+settings have not already been captured. See
+[Speed](../codex-thread-execution-settings.md#speed) for admission, idle defaults,
+Goal/subagent limits, and recovery.
 
 The thread menu's **New with same settings** action snapshots all seven
 desired axes—model, reasoning effort, service tier, sandbox, network, approval

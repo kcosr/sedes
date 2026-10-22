@@ -215,6 +215,7 @@ export class ClaudeThreadPresentationProvider implements ThreadBackendPresentati
       "claude_agent_sdk",
       {
         revision: settings.revision,
+        mutationRevision: settings.revision,
         availability: "available",
         allowedOperationIds: claudePermissionActionIds(
           this.permissionPolicy.allowedModes,

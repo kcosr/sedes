@@ -29,7 +29,7 @@ and execution environment can prove all launch requirements:
   namespace as that endpoint. For a local target this is main Sedes through its
   execution-environment channel. For an SSH or outbound target it is the
   persistent sidecar, whose runtime channel must have negotiated the
-  `codex_managed_tui@2` `tui.control` and `tui.execute` operations; the sidecar
+  `codex_managed_tui@3` `tui.control` and `tui.execute` operations; the sidecar
   advertises that capability only when its optional native PTY binding loaded;
 - the command reports a stable release at or above the supported `0.162.1`
   floor; and
@@ -305,16 +305,26 @@ The desired tuple is documented in [Codex execution settings, Speed, and
 Goal](codex-thread-execution-settings.md). The durable binding supplies the
 workspace; neither the browser nor terminal selects an alternate root.
 
-An accepted settings mutation commits desired state before Sedes sends the
-strictly decoded experimental `thread/settings/update` request. No SQLite
-transaction spans that RPC. The reviewed experimental allowlist contains the
-single settings-update shape needed here; enabling experimental protocol
-bindings is not permission to accept arbitrary methods or payloads.
+An accepted settings mutation commits desired state before native I/O. Ordinary
+model and permission edits synchronize those settings. Speed uses
+the shared Codex idle coordinator: its write contains only the native thread ID
+and service tier, so delayed publication cannot replay old security settings.
+The coordinator rechecks actor/native idle and inactive Goal authority before
+sending, then verifies native readback and the terminal's complete desired
+tuple. Active or launching managed terminals cannot receive an active-turn
+Speed publication.
 
-If a running resource cannot converge after the durable change, the desired
-tuple remains accepted and the TUI is failed with bounded guidance to start a
-new generation. Sedes never leaves a terminal running with known-stale
-authority or invents an alternate request shape.
+New viewer input waits behind the settings handoff through the resource I/O
+queue. Remote terminals acquire the equivalent host-side hold; loss or expiry
+of that hold fails the resource. Previously submitted PTY bytes and independent
+native clients are outside this ordering guarantee. This contract requires
+managed-TUI sidecar capability version 3.
+
+If the running resource cannot confirm the required settings, Sedes fails it
+with bounded guidance to start a new terminal while retaining the accepted
+preference. Default synchronization makes at most one write attempt per
+saved revision, native generation, and meaningful tier-support state; it cannot
+leave a known-stale terminal running through an automatic retry loop.
 
 ## Security and ownership summary
 

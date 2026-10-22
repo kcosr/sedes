@@ -35,6 +35,9 @@ function setup(limits?: { maximumRecords: number; maximumRecordsPerRuntime: numb
 }
 function initialize(database: Database.Database) {
   database.exec(codexRuntimeReceiptsMigration.sql);
+  database.exec(`ALTER TABLE codex_runtime_receipts ADD COLUMN native_generation INTEGER;
+    CREATE TABLE codex_speed_publications (tenant_id TEXT, owner_principal_id TEXT, application_thread_id TEXT,
+      mutation_id TEXT, codex_runtime_receipts_json TEXT NOT NULL DEFAULT '{}');`);
   database.exec(`CREATE TABLE application_threads (
     tenant_id TEXT, owner_principal_id TEXT, id TEXT, backing_state TEXT,
     backend_instance_id TEXT, environment_id TEXT);

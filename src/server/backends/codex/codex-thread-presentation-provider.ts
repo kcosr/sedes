@@ -16,9 +16,10 @@ import {
 } from "./codex-execution-feature.js";
 import {
   CODEX_FAST_MODE_FEATURE_REF,
-  CODEX_SPEED_ACTION_BY_SELECTION,
-  type CodexFastModeStateV2,
 } from "./codex-fast-mode-feature.js";
+import type { SpeedState } from "../../../shared/provider-features/codex-speed.js";
+import type { CodexSpeedSession } from "./codex-speed-session.js";
+import { CodexSpeedPublicationRepository } from "./codex-speed-publication-repository.js";
 import {
   CODEX_ACCELERATED_SERVICE_TIERS,
   codexModelOffersServiceTier,
@@ -60,6 +61,7 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
       readonly goalSessions?: CodexGoalSessionRegistry;
       readonly managedTui?: CodexManagedTuiController;
       readonly fastModeRuntime?: {
+        controller(scope: Parameters<ThreadBackendPresentationProvider["read"]>[0]["scope"], applicationThreadId: string): CodexSpeedSession | undefined;
         projection(
           scope: Parameters<
             ThreadBackendPresentationProvider["read"]
@@ -307,6 +309,7 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
       "codex_app_server",
       {
         revision: settings.revision,
+        mutationRevision: settings.revision,
         availability: featureAvailability,
         ...(featureAvailability === "available"
           ? {}
@@ -336,6 +339,7 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
       thread.backingState,
     );
     const fastModePresentation = fastModeFeaturePresentation({
+      publications: new CodexSpeedPublicationRepository(this.input.settings.database),
       runtime: this.input.fastModeRuntime,
       scope: input.scope,
       applicationThreadId: input.applicationThreadId,
@@ -414,6 +418,7 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
           goal: goalPresentation
             ? {
                 revision: goalPresentation.revision,
+        mutationRevision: goalPresentation.revision,
                 availability: goalPresentation.availability,
                 state: goalPresentation.state,
               }
@@ -421,6 +426,7 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
           fastMode: fastModePresentation
             ? {
                 revision: fastModePresentation.revision,
+        mutationRevision: fastModePresentation.revision,
                 availability: fastModePresentation.availability,
                 state: fastModePresentation.state,
               }
@@ -428,6 +434,7 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
           tui: tuiPresentation
             ? {
                 revision: tuiPresentation.revision,
+        mutationRevision: tuiPresentation.revision,
                 availability: tuiPresentation.availability,
                 state: tuiPresentation.state,
               }
@@ -464,6 +471,7 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
           "codex_app_server",
           {
             revision: tuiPresentation.revision,
+        mutationRevision: tuiPresentation.revision,
             availability,
             ...(availability === "available"
               ? {}
@@ -574,108 +582,55 @@ function applicationState(
     : "pending_next_turn";
 }
 
+// Presentation revisions survive handle replacement and change only with content.
+let nextSpeedPresentationRevision = 1;
+const speedPresentationRevisions = new Map<string, { fingerprint: string; revision: number }>();
 function fastModeFeaturePresentation(input: {
   readonly runtime: CodexThreadPresentationProvider["input"]["fastModeRuntime"];
-  readonly scope: Parameters<
-    ThreadBackendPresentationProvider["read"]
-  >[0]["scope"];
+  readonly publications: CodexSpeedPublicationRepository;
+  readonly scope: Parameters<ThreadBackendPresentationProvider["read"]>[0]["scope"];
   readonly applicationThreadId: string;
   readonly backingState: ThreadState["backingState"];
   readonly settings: CodexThreadExecutionSettingsRecord;
   readonly desiredModel: BackendModelDescriptor | undefined;
-}):
-  | {
-      readonly revision: number;
-      readonly availability: "available" | "read_only";
-      readonly state: CodexFastModeStateV2;
-      readonly capability: ReturnType<
-        typeof compiledProviderFeatureRegistry.capability
-      >;
-      readonly stateEnvelope: ReturnType<
-        typeof compiledProviderFeatureRegistry.stateEnvelope
-      >;
-    }
-  | undefined {
-  const projection = input.backingState === "bound"
-    ? input.runtime?.projection(input.scope, input.applicationThreadId)
-    : undefined;
+}) {
+  const desired = input.settings.desired;
+  if (!desired || !["unbound", "bound"].includes(input.backingState)) return undefined;
+  const projection = input.runtime?.projection(input.scope, input.applicationThreadId);
+  const controller = input.runtime?.controller(input.scope, input.applicationThreadId);
   const offered = input.desiredModel?.serviceTiers?.offered.filter(({ selection }) =>
-    input.backingState === "unbound" ||
-    (selection === "fast" ? projection?.fastEnabled : projection?.ultrafastEnabled),
-  );
-  if (!input.settings.desired || !offered?.length) {
-    return undefined;
-  }
-  const desired = input.settings.desired.serviceTier;
-  const revision = input.settings.revision;
-  const offeredState: CodexFastModeStateV2["offered"] = offered.map(
-    ({ selection, description }) => ({
-      selection,
-      ...(description ? { description } : {}),
-    }),
-  );
-  // Every offered speed other than the current one; Standard is always
-  // offered. The mutation gateway admits only these operations.
-  const selectableOperationIds = (
-    ["standard", ...offered.map(({ selection }) => selection)] as const
-  )
-    .filter((selection) => selection !== desired)
-    .map((selection) => CODEX_SPEED_ACTION_BY_SELECTION[selection]);
-  let availability: "available" | "read_only";
-  let state: CodexFastModeStateV2;
-  let unavailableReason: string | undefined;
-  if (input.backingState === "unbound") {
-    availability = "available";
-    state = {
-      desired,
-      effective: null,
-      applicationState: "pending",
-      offered: offeredState,
-    };
-  } else {
-    if (input.backingState !== "bound") return undefined;
-    if (!projection) return undefined;
-    availability = projection.availability === "available" ? "available" : "read_only";
-    unavailableReason = "Speed is temporarily unavailable while Codex reconnects.";
-    const effective = input.settings.effective?.serviceTier ?? null;
-    state = {
-      desired,
-      effective,
-      applicationState:
-        projection.availability !== "available" ||
-        input.settings.effectiveConfirmationState !== "confirmed" ||
-        input.settings.effective?.serviceTierClassification !== "recognized"
-          ? "unknown"
-          : desired === effective
-            ? "applied"
-            : "pending",
-      offered: offeredState,
-    };
-  }
-  const capability = compiledProviderFeatureRegistry.capability(
-    CODEX_FAST_MODE_FEATURE_REF,
-    "codex_app_server",
-    {
-      revision,
-      availability,
-      ...(availability === "available"
-        ? {}
-        : { unavailableReason: boundDisplayText(unavailableReason) }),
-      allowedOperationIds:
-        availability === "available" ? selectableOperationIds : [],
-    },
-  );
-  return {
-    revision,
-    availability,
-    state,
-    capability,
-    stateEnvelope: compiledProviderFeatureRegistry.stateEnvelope({
-      ref: CODEX_FAST_MODE_FEATURE_REF,
-      backendKind: "codex_app_server",
-      revision,
-      providerState: state,
-    }),
+    input.backingState === "unbound" || (selection === "fast" ? projection?.fastEnabled : projection?.ultrafastEnabled)) ?? [];
+  // Retain Standard as an escape from a previously selected unavailable tier.
+  if (!offered.length && desired.serviceTier === "standard") return undefined;
+  const currentRun = input.backingState === "unbound" ? null : controller ? controller.currentRun() :
+    { target: null, startingSelection: null, requestedSelection: null, publicationState: "unknown" as const };
+  const state: SpeedState = {
+    saved: { selection: desired.serviceTier, desiredRevision: input.settings.desiredRevision },
+    offered: [{ selection: "standard" }, ...offered.map(({ selection, description }) =>
+      ({ selection, ...(description ? { description } : {}) }))],
+    currentRun,
+    lastChange: input.publications.latest(input.scope, input.applicationThreadId),
+  };
+  const availability = input.backingState === "unbound" ||
+    (projection?.availability === "available" && (currentRun === null || currentRun.target !== null))
+    ? "available" as const : "read_only" as const;
+  const authority = {
+    mutationRevision: input.settings.desiredRevision, availability,
+    ...(availability === "read_only" ? { unavailableReason: boundDisplayText(
+      controller?.hasActiveNativeTurn() ? "Speed cannot be changed for this turn because Sedes does not control it." : "Speed is unavailable while Codex reconnects.") } : {}),
+    allowedOperationIds: availability === "available" ? ["set_speed"] : [],
+  };
+  const key = JSON.stringify([input.scope.tenantId, input.scope.principalId, input.applicationThreadId]);
+  const fingerprint = JSON.stringify({ state, authority });
+  const previous = speedPresentationRevisions.get(key);
+  const revision = previous?.fingerprint === fingerprint ? previous.revision : nextSpeedPresentationRevision++;
+  speedPresentationRevisions.delete(key);
+  speedPresentationRevisions.set(key, { fingerprint, revision });
+  if (speedPresentationRevisions.size > 4096) speedPresentationRevisions.delete(speedPresentationRevisions.keys().next().value!);
+  return { revision, availability, state,
+    capability: compiledProviderFeatureRegistry.capability(CODEX_FAST_MODE_FEATURE_REF, "codex_app_server", { revision, ...authority }),
+    stateEnvelope: compiledProviderFeatureRegistry.stateEnvelope({ ref: CODEX_FAST_MODE_FEATURE_REF,
+      backendKind: "codex_app_server", revision, providerState: state }),
   };
 }
 
@@ -810,6 +765,7 @@ function goalFeaturePresentation(
       "codex_app_server",
       {
         revision: 0,
+        mutationRevision: 0,
         availability: "unavailable",
         unavailableReason: boundDisplayText(
           "Codex Goal is reconciling with the provider.",
@@ -837,6 +793,7 @@ function goalFeaturePresentation(
       "codex_app_server",
       {
         revision: record.revision,
+        mutationRevision: record.revision,
         availability: "unavailable",
         unavailableReason: boundDisplayText(
           record.unavailableReason ?? "Codex Goal is temporarily unavailable.",
@@ -863,6 +820,7 @@ function goalFeaturePresentation(
     "codex_app_server",
     {
       revision: record.revision,
+        mutationRevision: record.revision,
       availability: "available",
       allowedOperationIds,
     },

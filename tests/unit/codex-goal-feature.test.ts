@@ -22,7 +22,7 @@ describe("codex.goal@1 feature contract", () => {
     const capability = compiledProviderFeatureRegistry.capability(
       CODEX_GOAL_FEATURE_REF,
       "codex_app_server",
-      { revision: 1, availability: "available" },
+      { revision: 1, mutationRevision: 1, availability: "available" },
     );
     expect(capability.ref).toEqual(CODEX_GOAL_FEATURE_REF);
     expect(capability.presentationSlots).toEqual(["composer_action"]);

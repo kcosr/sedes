@@ -1404,6 +1404,7 @@ describe("ThreadEventHub", () => {
           {
             ref: { featureId: "codex.goal", schemaVersion: 1 },
             revision,
+            mutationRevision: revision,
             label: { text: "Goal" },
             availability: "available" as const,
             operations: [],

@@ -305,6 +305,8 @@ export class ConversationActor {
   #snapshotState?: ConversationActorSnapshotState;
 
   readonly #nativeEffects: ConversationNativeEffectFence;
+  readonly #providerIdleObservers = new Set<() => void>();
+  #providerWasIdle = false;
 
   constructor(input: {
     readonly nativeEffects?: ConversationNativeEffectFence;
@@ -340,6 +342,14 @@ export class ConversationActor {
     this.#persistDeliveryInputSnapshot = input.persistDeliveryInputSnapshot;
     this.#removeDeliveryInputSnapshot = input.removeDeliveryInputSnapshot;
     this.#projector = input.projector;
+    this.#handle.setProviderFeatureCoordinator?.({
+      run: operation => this.#enqueue(operation),
+      isIdle: () => this.authoritativelySettled && !this.readOnly,
+      subscribeIdle: listener => {
+        this.#providerIdleObservers.add(listener);
+        return () => this.#providerIdleObservers.delete(listener);
+      },
+    });
     this.#resolveBranchCheckpoint = input.resolveBranchCheckpoint;
     this.#coalescer = new ProjectionEventCoalescer({
       intervalMilliseconds:
@@ -1157,6 +1167,19 @@ export class ConversationActor {
     return input.action === "compact"
       ? this.#runStartingMutation(() => this.#handle.perform(input))
       : this.#enqueue(() => this.#handle.perform(input));
+  }
+
+  runProviderFeatureMutation<T>(operation: (context: {
+    isIdle(): boolean;
+    resolveTurnId(turnId: string): string | undefined;
+    mutateExternal: NonNullable<ConversationHandle["mutateProviderFeature"]>;
+  }) => Promise<T>): Promise<T> {
+    return this.#enqueue(() => operation({
+      isIdle: () => this.authoritativelySettled && !this.readOnly,
+      resolveTurnId: turnId => this.#projector.backendTurnId(turnId),
+      mutateExternal: input => this.#handle.mutateProviderFeature?.(input) ??
+        Promise.resolve({ outcome: "rejected", safeMessage: "This conversation does not support this provider feature." }),
+    }));
   }
 
   mutateProviderFeature(input: {
@@ -2065,6 +2088,13 @@ export class ConversationActor {
   }
 
   #notifyInputStateChanged(): void {
+    const idle = this.authoritativelySettled && !this.readOnly;
+    const becameIdle = idle && !this.#providerWasIdle;
+    this.#providerWasIdle = idle;
+    if (becameIdle) for (const listener of this.#providerIdleObservers) {
+      try { listener(); }
+      catch { /* A provider observer cannot invalidate the actor's projection. */ }
+    }
     try { this.#onInputStateChanged?.(); }
     catch { /* A passive input observer cannot affect provider work. */ }
   }

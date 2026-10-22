@@ -254,7 +254,7 @@ export function CodexTuiThreadPresentation({
         feature: CODEX_TUI_FEATURE_REF,
         actionId,
         arguments: null,
-        expectedFeatureRevision: resolved.capability.revision,
+        expectedMutationRevision: resolved.capability.mutationRevision,
         ...(operation.confirmation === "explicit" ? { confirmed: true } : {}),
       });
     } catch (error: unknown) {

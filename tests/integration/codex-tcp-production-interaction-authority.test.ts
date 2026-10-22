@@ -652,6 +652,8 @@ class InitializedObserver {
 
 const executionSettings: CodexExecutionSettingsProvider = {
   assertExecutionPolicyAllowed: () => undefined,
+    desiredRevision: () => 0,
+    isSedesCreated: () => true,
   subscribeDesiredSettingsChanged: () => () => undefined,
   desiredSettings: () => ({
     model: "gpt-5.6",

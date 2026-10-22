@@ -1,0 +1,61 @@
+{
+  "slug": "sedes-speed-fixture",
+  "display_name": "Sedes Speed Fixture",
+  "description": "Offline qualification",
+  "default_reasoning_level": "low",
+  "supported_reasoning_levels": [
+    {
+      "effort": "low",
+      "description": "Low"
+    }
+  ],
+  "shell_type": "shell_command",
+  "visibility": "list",
+  "supported_in_api": true,
+  "priority": 0,
+  "base_instructions": "Follow the deterministic offline fixture.",
+  "model_messages": null,
+  "supports_reasoning_summaries": true,
+  "supports_reasoning_summary_parameter": true,
+  "support_verbosity": true,
+  "default_verbosity": "low",
+  "apply_patch_tool_type": "freeform",
+  "web_search_tool_type": "text_and_image",
+  "truncation_policy": {
+    "mode": "tokens",
+    "limit": 10000
+  },
+  "supports_parallel_tool_calls": true,
+  "input_modalities": [
+    "text"
+  ],
+  "supports_image_detail_original": false,
+  "context_window": 272000,
+  "max_context_window": 272000,
+  "auto_compact_token_limit": null,
+  "compaction_prompt": null,
+  "experimental_supported_tools": [],
+  "available_in_plans": [],
+  "minimal_client_version": "0.124.0",
+  "upgrade": null,
+  "prefer_websockets": false,
+  "supports_search_tool": false,
+  "supports_experimental_context": false,
+  "service_tiers": [
+    {
+      "id": "priority",
+      "name": "Fast",
+      "description": "Offline Fast"
+    },
+    {
+      "id": "ultrafast",
+      "name": "Ultrafast",
+      "description": "Offline Ultrafast"
+    }
+  ],
+  "default_service_tier": null,
+  "additional_speed_tiers": [
+    "fast"
+  ],
+  "default_reasoning_summary": "none"
+}

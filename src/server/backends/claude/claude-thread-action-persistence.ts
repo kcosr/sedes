@@ -229,7 +229,7 @@ export class ClaudeThreadActionPersistence implements ThreadActionPersistencePro
         (thread.backingState !== "bound" &&
           thread.backingState !== "unbound") ||
         thread.revision !== input.expectedThreadRevision ||
-        current.revision !== input.operation.expectedFeatureRevision
+        current.revision !== input.operation.expectedMutationRevision
       ) {
         throw threadChanged();
       }
@@ -241,7 +241,7 @@ export class ClaudeThreadActionPersistence implements ThreadActionPersistencePro
         actionId: input.operation.actionId,
         requestFingerprint,
         expectedThreadRevision: input.expectedThreadRevision,
-        expectedFeatureRevision: input.operation.expectedFeatureRevision,
+        expectedMutationRevision: input.operation.expectedMutationRevision,
         desiredPostcondition: { permissionMode },
         now: input.now,
       });
@@ -317,8 +317,8 @@ export class ClaudeThreadActionPersistence implements ThreadActionPersistencePro
       existing.schemaVersion !== input.operation.feature.schemaVersion ||
       existing.actionId !== input.operation.actionId ||
       existing.expectedThreadRevision !== input.expectedThreadRevision ||
-      existing.expectedFeatureRevision !==
-        input.operation.expectedFeatureRevision
+      existing.expectedMutationRevision !==
+        input.operation.expectedMutationRevision
     ) {
       throw threadChanged();
     }

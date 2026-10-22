@@ -838,6 +838,8 @@ function executionSettingsProvider(
     });
   return {
     assertExecutionPolicyAllowed: () => undefined,
+    desiredRevision: () => 0,
+    isSedesCreated: () => true,
     subscribeDesiredSettingsChanged: () => () => undefined,
     forkSettingsEligibility: () => ({
       availability: "available",
@@ -888,10 +890,10 @@ function executionSettingsPersistenceFixture(desired: CodexExecutionSettingsTupl
       effective_sandbox_mode TEXT, effective_sandbox_classification TEXT, effective_network_access TEXT, effective_network_classification TEXT,
       effective_approval_policy TEXT, effective_approval_policy_classification TEXT, effective_approval_reviewer TEXT,
       effective_approval_reviewer_classification TEXT, effective_daemon_generation INTEGER, effective_confirmation_state TEXT,
-      revision INTEGER, created_at INTEGER, updated_at INTEGER, PRIMARY KEY(tenant_id,owner_principal_id,application_thread_id));
+      revision INTEGER, desired_revision INTEGER NOT NULL DEFAULT 0, created_at INTEGER, updated_at INTEGER, PRIMARY KEY(tenant_id,owner_principal_id,application_thread_id));
     CREATE TABLE provider_feature_mutation_receipts(
       tenant_id TEXT, owner_principal_id TEXT, application_thread_id TEXT, mutation_id TEXT, feature_id TEXT, schema_version INTEGER,
-      action_id TEXT, request_fingerprint TEXT, expected_thread_revision INTEGER, expected_feature_revision INTEGER,
+      action_id TEXT, request_fingerprint TEXT, expected_thread_revision INTEGER, expected_mutation_revision INTEGER,
       state TEXT, desired_postcondition_json TEXT, result_json TEXT, created_at INTEGER, updated_at INTEGER, force_reset_at INTEGER);
     INSERT INTO application_threads VALUES('tenant-1','principal-1','application-profile-1','codex-1','profile-1','bound',0,0);
     INSERT INTO agent_backend_instances VALUES('tenant-1','codex-1','codex_app_server');
@@ -902,6 +904,7 @@ function executionSettingsPersistenceFixture(desired: CodexExecutionSettingsTupl
   const executionPolicy = { allowedSandboxModes: ["read-only"], allowedNetworkAccess: ["disabled", "enabled"],
     allowedApprovalPolicies: ["never"], allowedApprovalReviewers: ["user"] } as const;
   const adapter = new CodexExecutionSettingsRepositoryAdapter(repository, executionPolicy, catalogModelPolicy);
+  vi.spyOn(adapter, "isSedesCreated").mockReturnValue(true);
   const persistence = new CodexThreadActionPersistence({ database, scope, backendInstanceId: "codex-1", settings: repository,
     desiredSettingsChanged: (changedScope, applicationThreadId) => adapter.notifyDesiredSettingsChanged(changedScope, applicationThreadId),
     featureMutations: new ProviderFeatureMutationRepository(database), executionPolicy, modelPolicy: catalogModelPolicy,
@@ -1070,6 +1073,80 @@ async function startSubagentParentTurn(harness: RpcHarness, handle: Conversation
     mutationId: "subagent-parent-start", reconciliationToken: "subagent-parent-start-token",
     taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
 }
+
+describe("Codex Goal Speed preflight", () => {
+  it.each(["create", "resume"] as const)("preserves Goal %s during an active Sedes run", async actionId => {
+    const harness = new RpcHarness();
+    const goals = new CodexGoalSessionRegistry();
+    const speeds = new CodexFastModeSessionRegistry();
+    const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(),
+      catalogModelPolicy, executionSettingsProvider(), goals, undefined, unavailableCodexAgentToolCliEnvironmentProvider, speeds));
+    const goal = { threadId: "thread-1", objective: "Keep working", status: "paused", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    harness.enqueue("thread/goal/get", { goal: actionId === "create" ? null : goal });
+    await establish(harness, handle);
+    handle.setProviderFeatureCoordinator({ run: async () => undefined as never, isIdle: () => false, subscribeIdle: () => () => {} });
+    await startSubagentParentTurn(harness, handle);
+    const sync = vi.spyOn(speeds.controller(scope, binding().applicationThreadId)!, "syncDefaults");
+    harness.enqueue("thread/goal/set", { goal: { ...goal, status: "active", updatedAt: 2 } });
+    await expect(handle.mutateProviderFeature({ ...CODEX_GOAL_FEATURE_REF, actionId,
+      arguments: actionId === "create" ? { objective: "Keep working" } : {} })).resolves.toMatchObject({ outcome: "accepted" });
+    expect(sync).not.toHaveBeenCalled();
+    expect(harness.calls.filter(call => call.method === "thread/goal/set")).toHaveLength(1);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close();
+  });
+  it("returns a clean rejection if idle default convergence throws before Goal starts", async () => {
+    const harness = new RpcHarness();
+    const goals = new CodexGoalSessionRegistry();
+    const speeds = new CodexFastModeSessionRegistry();
+    const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(),
+      catalogModelPolicy, executionSettingsProvider(), goals, undefined, unavailableCodexAgentToolCliEnvironmentProvider, speeds));
+    harness.enqueue("thread/goal/get", { goal: null }); await establish(harness, handle);
+    handle.setProviderFeatureCoordinator({ run: async () => undefined as never, isIdle: () => true, subscribeIdle: () => () => {} });
+    vi.spyOn(speeds.controller(scope, binding().applicationThreadId)!, "syncDefaults").mockRejectedValueOnce(new Error("native readback failed"));
+    await expect(handle.mutateProviderFeature({ ...CODEX_GOAL_FEATURE_REF, actionId: "create", arguments: { objective: "Keep working" } }))
+      .resolves.toMatchObject({ outcome: "rejected", safeMessage: expect.stringContaining("Saved Speed could not be confirmed") });
+    expect(harness.calls.some(call => call.method === "thread/goal/set")).toBe(false);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close();
+  });
+  it("gives Goal Resume actionable recovery after the default-write budget is exhausted", async () => {
+    const harness = new RpcHarness();
+    const goals = new CodexGoalSessionRegistry();
+    const speeds = new CodexFastModeSessionRegistry();
+    const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(),
+      catalogModelPolicy, executionSettingsProvider(), goals, undefined, unavailableCodexAgentToolCliEnvironmentProvider, speeds));
+    const goal = { threadId: "thread-1", objective: "Keep working", status: "paused", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    harness.enqueue("thread/goal/get", { goal }); await establish(harness, handle);
+    handle.setProviderFeatureCoordinator({ run: async () => undefined as never, isIdle: () => true, subscribeIdle: () => () => {} });
+    const idleThread = nativeThread({ status: { type: "idle" }, turns: [] });
+    harness.enqueue("thread/goal/get", { goal }, { goal });
+    harness.enqueue("thread/read", { thread: idleThread }, { thread: idleThread });
+    harness.enqueue("thread/resume", { ...resumeResult(idleThread), serviceTier: "priority" }, { ...resumeResult(idleThread), serviceTier: "priority" });
+    harness.enqueue("thread/settings/update", new Error("write rejected"));
+    expect(await speeds.controller(scope, binding().applicationThreadId)!.syncDefaults()).toBe("not_convergent");
+    await expect(handle.mutateProviderFeature({ ...CODEX_GOAL_FEATURE_REF, actionId: "resume", arguments: {} }))
+      .resolves.toMatchObject({ outcome: "rejected", safeMessage: "Codex did not accept saved Speed as the thread default. Select a different Speed or reconnect before starting Goal." });
+    expect(harness.calls.filter(call => call.method === "thread/settings/update")).toHaveLength(1);
+    expect(harness.calls.some(call => call.method === "thread/goal/set")).toBe(false);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close();
+  });
+  it("asks for an available Speed when policy defers Goal Resume", async () => {
+    const harness = new RpcHarness();
+    const goals = new CodexGoalSessionRegistry();
+    const speeds = new CodexFastModeSessionRegistry();
+    let settings = executionSettingsTuple();
+    const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(),
+      catalogModelPolicy, executionSettingsProvider({ desiredSettings: () => settings }), goals, undefined, unavailableCodexAgentToolCliEnvironmentProvider, speeds));
+    const goal = { threadId: "thread-1", objective: "Keep working", status: "paused", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    harness.enqueue("thread/goal/get", { goal }); await establish(harness, handle);
+    handle.setProviderFeatureCoordinator({ run: async () => undefined as never, isIdle: () => true, subscribeIdle: () => () => {} });
+    settings = { ...settings, serviceTier: "fast" };
+    vi.spyOn(speeds, "projection").mockReturnValue({ revision: 1, availability: "available", fastEnabled: false, ultrafastEnabled: false, stepSwitchingEnabled: true });
+    await expect(handle.mutateProviderFeature({ ...CODEX_GOAL_FEATURE_REF, actionId: "resume", arguments: {} }))
+      .resolves.toMatchObject({ outcome: "rejected", safeMessage: "Saved Speed is unavailable for this Codex session. Select an available Speed before starting Goal." });
+    expect(harness.calls.some(call => call.method === "thread/settings/update" || call.method === "thread/goal/set")).toBe(false);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close();
+  });
+});
 
 describe("CodexConversationBackendDriver", () => {
   it.each([
@@ -5875,11 +5952,11 @@ describe("CodexConversationHandle", () => {
         method: "thread/resume",
         params: {
           threadId: "thread-1",
-          serviceTier: "default",
-          sandbox: "read-only",
+                    sandbox: "read-only",
           approvalPolicy: "never",
           approvalsReviewer: "user",
           config: {
+            "features.step_model_switching": true,
             shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
           },
         },
@@ -5976,11 +6053,11 @@ describe("CodexConversationHandle", () => {
         method: "thread/resume",
         params: {
           threadId: "thread-1",
-          serviceTier: "default",
-          sandbox: "read-only",
+                    sandbox: "read-only",
           approvalPolicy: "never",
           approvalsReviewer: "user",
           config: {
+            "features.step_model_switching": true,
             shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
           },
           excludeTurns: true,
@@ -9696,7 +9773,7 @@ describe("CodexConversationHandle", () => {
       await persisted.persistence.performProviderFeature(scope, "application-profile-1", {
         mutationId: "repair-policy", expectedThreadRevision: 0, now: 2,
         operation: { action: "perform_provider_feature", feature: { featureId: "codex.execution", schemaVersion: 1 },
-          actionId: "set_sandbox_read_only", arguments: null, expectedFeatureRevision: 0 },
+          actionId: "set_sandbox_read_only", arguments: null, expectedMutationRevision: 0 },
       });
       expect(events).toContainEqual({ type: "resnapshot_required", reason: "contradictory_state" });
       await vi.waitFor(async () => {
@@ -9726,7 +9803,7 @@ describe("CodexConversationHandle", () => {
       await persisted.persistence.performProviderFeature(scope, "application-profile-1", {
         mutationId: "repair-during-install", expectedThreadRevision: 0, now: 2,
         operation: { action: "perform_provider_feature", feature: { featureId: "codex.execution", schemaVersion: 1 },
-          actionId: "set_sandbox_read_only", arguments: null, expectedFeatureRevision: 0 },
+          actionId: "set_sandbox_read_only", arguments: null, expectedMutationRevision: 0 },
       });
       return await capabilities.call(this);
     });
@@ -10034,7 +10111,7 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("replays a durable Fast tier after resume when the loaded thread enables fast_mode", async () => {
+  it("keeps resume read-only for Speed and submits the durable Fast tier explicitly", async () => {
     const harness = new RpcHarness();
     harness.defaultModelOverrides = {
       serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
@@ -10091,11 +10168,10 @@ describe("CodexConversationHandle", () => {
     ).toEqual({ threadId: "thread-1", limit: 1_000 });
     expect(
       harness.calls.find(({ method }) => method === "thread/resume")?.params,
-    ).toMatchObject({ serviceTier: "priority" });
+    ).not.toHaveProperty("serviceTier");
     expect(
-      harness.calls.find(({ method }) => method === "thread/settings/update")
-        ?.params,
-    ).toEqual({ threadId: "thread-1", serviceTier: "priority" });
+      harness.calls.find(({ method }) => method === "thread/settings/update"),
+    ).toBeUndefined();
     expect(observeEffective).toHaveBeenLastCalledWith(
       scope,
       expect.objectContaining({
@@ -10227,8 +10303,7 @@ describe("CodexConversationHandle", () => {
     });
     await offered.handle.submit(submitInput("ultrafast"));
     expect(nativeTiers(offered.harness)).toEqual([
-      ["thread/resume", "ultrafast"],
-      ["thread/settings/update", "ultrafast"],
+      ["thread/resume", undefined],
       ["turn/start", "ultrafast"],
     ]);
     expect(offered.resolveUnavailableServiceTier).not.toHaveBeenCalled();
@@ -10240,7 +10315,7 @@ describe("CodexConversationHandle", () => {
     const withdrawn = await establishUltrafast(["priority"]);
     expect(withdrawn.resolveUnavailableServiceTier).toHaveBeenCalled();
     expect(nativeTiers(withdrawn.harness)).toEqual([
-      ["thread/resume", "default"],
+      ["thread/resume", undefined],
     ]);
     await expect(
       withdrawn.handle.submit(submitInput("withdrawn")),
@@ -10279,7 +10354,7 @@ describe("CodexConversationHandle", () => {
       expect(desired.serviceTier).toBe(allowed ? selection : "standard");
       expect(resolveUnavailableServiceTier).toHaveBeenCalledTimes(allowed ? 0 : 1);
       const replay = harness.calls.filter(({ method }) => method === "thread/settings/update");
-      expect(replay).toEqual(allowed ? [{ method: "thread/settings/update", params: { threadId: "thread-1", serviceTier: selection === "fast" ? "priority" : "ultrafast" } }] : []);
+      expect(replay).toEqual([]); // Only the actor-owned default coordinator may write idle defaults.
       harness.enqueue("turn/start", { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null } });
       await handle.submit({ applicationOperationId: "speed-policy-submit", source: { kind: "user" }, mutationId: "speed-policy-submit", reconciliationToken: "speed-policy-token", taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
       expect(harness.calls.find(({ method }) => method === "turn/start")?.params).toMatchObject({ serviceTier: allowed ? selection === "fast" ? "priority" : "ultrafast" : "default" });
@@ -10347,16 +10422,12 @@ describe("CodexConversationHandle", () => {
     expect(
       harness.calls.some(({ method }) => method === "thread/settings/update"),
     ).toBe(false);
-    expect(syncSettings).toHaveBeenCalledWith(
-      scope,
-      "application-profile-1",
-      expect.objectContaining({ serviceTier: "standard" }),
-    );
+    expect(syncSettings).not.toHaveBeenCalled();
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });
 
-  it("converges app-server and managed-TUI tiers when recovery discovers fast_mode disabled", async () => {
+  it("resolves disabled Fast intent during recovery without writing outside the default coordinator", async () => {
     const harness = new RpcHarness();
     harness.defaultModelOverrides = {
       serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
@@ -10428,29 +10499,10 @@ describe("CodexConversationHandle", () => {
     });
     harness.enqueue("thread/settings/update", {});
 
-    await vi.waitFor(
-      () =>
-        expect(
-          harness.calls.find(
-            ({ method }) => method === "thread/settings/update",
-          )?.params,
-        ).toEqual({ threadId: "thread-1", serviceTier: "default" }),
-      { timeout: 1_000 },
-    );
-    expect(syncSettings).toHaveBeenCalledWith(
-      scope,
-      "application-profile-1",
-      expect.objectContaining({ serviceTier: "standard" }),
-    );
-    expect(resolveUnavailableServiceTier).toHaveBeenCalledTimes(2);
-    expect(syncSettings).toHaveBeenLastCalledWith(
-      scope,
-      "application-profile-1",
-      expect.objectContaining({
-        serviceTier: "standard",
-        reasoningEffort: "high",
-      }),
-    );
+    await vi.waitFor(() => expect(resolveUnavailableServiceTier).toHaveBeenCalledTimes(2));
+    expect(desired.serviceTier).toBe("standard");
+    expect(harness.calls.filter(({ method }) => method === "thread/settings/update")).toEqual([]);
+    expect(syncSettings).not.toHaveBeenCalled();
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });
@@ -10561,7 +10613,7 @@ describe("CodexConversationHandle", () => {
         harness.enqueue("model/list", catalog, catalog, catalog);
       },
     });
-    expect(otherModel.writes).toEqual([["thread/resume", "ultrafast"]]);
+    expect(otherModel.writes).toEqual([["thread/resume", undefined]]);
     expect(otherModel.resolveUnavailableServiceTier).not.toHaveBeenCalled();
     // Importing the resumed model is a model change: its missing tier is
     // retained as Standard, never kept as Ultrafast.
@@ -10584,8 +10636,7 @@ describe("CodexConversationHandle", () => {
     });
     expect(superseded.resolveUnavailableServiceTier).not.toHaveBeenCalled();
     expect(superseded.writes).toEqual([
-      ["thread/resume", "priority"],
-      ["thread/settings/update", "priority"],
+      ["thread/resume", undefined],
     ]);
   });
 
@@ -10661,21 +10712,9 @@ describe("CodexConversationHandle", () => {
     });
     harness.enqueue("thread/settings/update", {});
 
-    await vi.waitFor(
-      () =>
-        expect(
-          harness.calls.find(
-            ({ method }) => method === "thread/settings/update",
-          )?.params,
-        ).toEqual({ threadId: "thread-1", serviceTier: "default" }),
-      { timeout: 1_000 },
-    );
-    expect(resolveUnavailableServiceTier).toHaveBeenCalledOnce();
-    expect(syncSettings).toHaveBeenCalledWith(
-      scope,
-      "application-profile-1",
-      expect.objectContaining({ serviceTier: "standard" }),
-    );
+    await vi.waitFor(() => expect(resolveUnavailableServiceTier).toHaveBeenCalledOnce());
+    expect(desired.serviceTier).toBe("standard");
+    expect(syncSettings).not.toHaveBeenCalled();
     expect(
       harness.calls.some(
         ({ method, params }) =>
@@ -10687,359 +10726,30 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("abandons fast_mode recovery writes superseded during catalog reads", async () => {
-    const tiers = (...ids: string[]) =>
-      ids.map((id) => ({ id, name: id, description: id }));
-    const enabledFeature = {
-      data: [
-        {
-          name: "fast_mode",
-          stage: "stable",
-          displayName: "Fast mode",
-          description: null,
-          announcement: null,
-          enabled: true,
-          defaultEnabled: true,
-        }, {
-          name: "ultrafast_mode",
-          stage: "stable",
-          displayName: "Ultrafast mode",
-          description: null,
-          announcement: null,
-          enabled: true,
-          defaultEnabled: true,
-        },
-      ],
-      nextCursor: null,
-    };
-    const establishPendingRecovery = async (resumedModel: string) => {
-      const harness = new RpcHarness();
-      harness.defaultModelOverrides = {
-        serviceTiers: tiers("priority", "ultrafast"),
-      };
-      let desired = executionSettingsTuple({ serviceTier: "ultrafast" });
-      const handle = await attachIdle(
-        harness,
-        driver(
-          harness,
-          connection,
-          new CodexConversationOwnershipRegistry(),
-          { type: "catalog" },
-          executionSettingsProvider({ desiredSettings: () => desired }),
-        ),
-      );
-      harness.enqueue("thread/read", { thread: nativeThread() });
-      harness.enqueue("thread/resume", {
-        ...resumeResult(),
-        model: resumedModel,
-        serviceTier: "ultrafast",
-      });
-      // Feature discovery fails during establishment, leaving recovery pending.
-      await handle.establishProjection({
-        signal: new AbortController().signal,
-      });
-      const ultrafastWrites = () =>
-        harness.calls.filter(
-          ({ method, params }) =>
-            method === "thread/settings/update" &&
-            (params as { serviceTier?: string }).serviceTier === "ultrafast",
-        );
-      return {
-        harness,
-        handle,
-        ultrafastWrites,
-        select: (tuple: CodexExecutionSettingsTuple) => {
-          desired = tuple;
-        },
-      };
-    };
-
-    // The handle closes while recovery's catalog read is pending.
-    const closing = await establishPendingRecovery("gpt-5.6");
-    const settingsUpdatesBefore = closing.harness.calls.filter(
-      ({ method }) => method === "thread/settings/update",
-    ).length;
-    let closed!: Promise<void>;
-    closing.harness.after("model/list", () => {
-      closing.harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
-      closed = closing.handle.close();
-    });
-    closing.harness.enqueue("experimentalFeature/list", enabledFeature);
-    await vi.waitFor(() => expect(closed).toBeDefined(), { timeout: 1_000 });
-    await closed;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(
-      closing.harness.calls.filter(
-        ({ method }) => method === "thread/settings/update",
-      ),
-    ).toHaveLength(settingsUpdatesBefore);
-
-    // Codex resumed another model, and the selection changes to Standard
-    // during the native-model lookup: the stale Ultrafast is never written.
-    const superseded = await establishPendingRecovery("gpt-5.6-mini");
-    const bothModels = {
-      data: [
-        nativeModel({ serviceTiers: tiers("priority", "ultrafast") }),
-        nativeModel({
-          id: "gpt-5.6-mini",
-          model: "gpt-5.6-mini",
-          displayName: "GPT-5.6 Mini",
-          isDefault: false,
-          serviceTiers: tiers("priority", "ultrafast"),
-        }),
-      ],
-      nextCursor: null,
-    };
-    // Recovery reads the desired model's catalog, then the native model's.
-    superseded.harness.enqueue("model/list", bothModels, bothModels);
-    superseded.harness.after("model/list", () => undefined);
-    superseded.harness.after("model/list", () =>
-      superseded.select(executionSettingsTuple({ serviceTier: "standard" })),
-    );
-    superseded.harness.enqueue("experimentalFeature/list", enabledFeature);
-    superseded.harness.enqueue("thread/settings/update", {});
-    await vi.waitFor(
-      () =>
-        expect(
-          superseded.harness.calls.filter(
-            ({ method, params }) =>
-              method === "thread/settings/update" &&
-              (params as { serviceTier?: string }).serviceTier === "default",
-          ),
-        ).toHaveLength(1),
-      { timeout: 1_000 },
-    );
-    expect(superseded.ultrafastWrites()).toEqual([]);
-    superseded.harness.enqueue("thread/unsubscribe", {
-      status: "unsubscribed",
-    });
-    await superseded.handle.close();
-  });
-
-  it("does not write Standard after disabled recovery is superseded by a newer Fast selection", async () => {
+  it.each(["desired_changed", "closed"] as const)("keeps recovered Speed defaults deferred when %s", async transition => {
     const harness = new RpcHarness();
-    harness.defaultModelOverrides = {
-      serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
-    };
+    harness.defaultModelOverrides = { serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }] };
     let desired = executionSettingsTuple({ serviceTier: "fast" });
-    let resolveStandardSync!: () => void;
-    const standardSync = new Promise<void>((resolve) => {
-      resolveStandardSync = resolve;
-    });
-    const syncSettings = vi
-      .fn()
-      .mockImplementationOnce(async () => await standardSync)
-      .mockResolvedValue(undefined);
-    const managedTui = {
-      registry: { subscribeState: () => () => undefined },
-      syncSettings,
-      releaseRuntime: vi.fn(async () => undefined),
-    } as unknown as CodexManagedTuiController;
-    const fastModeSessions = new CodexFastModeSessionRegistry({
-      recoveryDelaysMilliseconds: [0],
-    });
-    const handle = await attachIdle(
-      harness,
-      driver(
-        harness,
-        connection,
-        new CodexConversationOwnershipRegistry(),
-        { type: "catalog" },
-        executionSettingsProvider({
-          desiredSettings: () => desired,
-          resolveUnavailableServiceTier: () => {
-            desired = { ...desired, serviceTier: "standard" };
-            return desired;
-          },
-        }),
-        undefined,
-        managedTui,
-        unavailableCodexAgentToolCliEnvironmentProvider,
-        fastModeSessions,
-      ),
-    );
+    const sessions = new CodexFastModeSessionRegistry({ recoveryDelaysMilliseconds: [0] });
+    const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(),
+      { type: "catalog" }, executionSettingsProvider({ desiredSettings: () => desired }), undefined, undefined,
+      unavailableCodexAgentToolCliEnvironmentProvider, sessions));
     harness.enqueue("thread/read", { thread: nativeThread() });
-    harness.enqueue("thread/resume", {
-      ...resumeResult(),
-      serviceTier: "priority",
-    });
-    harness.enqueue(
-      "experimentalFeature/list",
-      () => {
-        throw new Error("temporary feature discovery failure");
-      },
-      {
-        data: [
-          {
-            name: "fast_mode",
-            stage: "stable",
-            displayName: "Fast mode",
-            description: null,
-            announcement: null,
-            enabled: false,
-            defaultEnabled: true,
-          }, {
-            name: "ultrafast_mode",
-            stage: "stable",
-            displayName: "Ultrafast mode",
-            description: null,
-            announcement: null,
-            enabled: false,
-            defaultEnabled: true,
-          },
-        ],
-        nextCursor: null,
-      },
-    );
-
-    await handle.establishProjection({
-      signal: new AbortController().signal,
-    });
-    await vi.waitFor(() => expect(syncSettings).toHaveBeenCalledTimes(1));
-
-    desired = { ...desired, serviceTier: "fast" };
-    harness.enqueue("experimentalFeature/list", {
-      data: [
-        {
-          name: "fast_mode",
-          stage: "stable",
-          displayName: "Fast mode",
-          description: null,
-          announcement: null,
-          enabled: true,
-          defaultEnabled: false,
-        }, {
-          name: "ultrafast_mode",
-          stage: "stable",
-          displayName: "Ultrafast mode",
-          description: null,
-          announcement: null,
-          enabled: true,
-          defaultEnabled: false,
-        },
-      ],
-      nextCursor: null,
-    });
-    await fastModeSessions.refresh({
-      scope,
-      applicationThreadId: "application-profile-1",
-      nativeThreadId: "thread-1",
-      connectionGeneration: 1,
-      client: harness.facade,
-    });
-    harness.enqueue("thread/settings/update", {});
-    resolveStandardSync();
-
-    await vi.waitFor(() =>
-      expect(
-        harness.calls.find(
-          ({ method, params }) =>
-            method === "thread/settings/update" &&
-            (params as { serviceTier?: string }).serviceTier === "priority",
-        )?.params,
-      ).toEqual({ threadId: "thread-1", serviceTier: "priority" }),
-    );
-    expect(
-      harness.calls.some(
-        ({ method, params }) =>
-          method === "thread/settings/update" &&
-          (params as { serviceTier?: string }).serviceTier === "default",
-      ),
-    ).toBe(false);
-    expect(syncSettings).toHaveBeenLastCalledWith(
-      scope,
-      "application-profile-1",
-      expect.objectContaining({ serviceTier: "fast" }),
-    );
-    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
-    await handle.close();
-  });
-
-  it("does not write Standard when the handle closes during disabled recovery", async () => {
-    const harness = new RpcHarness();
-    harness.defaultModelOverrides = {
-      serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
-    };
-    let desired = executionSettingsTuple({ serviceTier: "fast" });
-    let resolveSync!: () => void;
-    const sync = new Promise<void>((resolve) => {
-      resolveSync = resolve;
-    });
-    const syncSettings = vi.fn(async () => await sync);
-    const managedTui = {
-      registry: { subscribeState: () => () => undefined },
-      syncSettings,
-      releaseRuntime: vi.fn(async () => undefined),
-    } as unknown as CodexManagedTuiController;
-    const handle = await attachIdle(
-      harness,
-      driver(
-        harness,
-        connection,
-        new CodexConversationOwnershipRegistry(),
-        { type: "catalog" },
-        executionSettingsProvider({
-          desiredSettings: () => desired,
-          resolveUnavailableServiceTier: () => {
-            desired = { ...desired, serviceTier: "standard" };
-            return desired;
-          },
-        }),
-        undefined,
-        managedTui,
-        unavailableCodexAgentToolCliEnvironmentProvider,
-        new CodexFastModeSessionRegistry({
-          recoveryDelaysMilliseconds: [0],
-        }),
-      ),
-    );
-    harness.enqueue("thread/read", { thread: nativeThread() });
-    harness.enqueue("thread/resume", {
-      ...resumeResult(),
-      serviceTier: "priority",
-    });
-    harness.enqueue(
-      "experimentalFeature/list",
-      () => {
-        throw new Error("temporary feature discovery failure");
-      },
-      {
-        data: [
-          {
-            name: "fast_mode",
-            stage: "stable",
-            displayName: "Fast mode",
-            description: null,
-            announcement: null,
-            enabled: false,
-            defaultEnabled: true,
-          }, {
-            name: "ultrafast_mode",
-            stage: "stable",
-            displayName: "Ultrafast mode",
-            description: null,
-            announcement: null,
-            enabled: false,
-            defaultEnabled: true,
-          },
-        ],
-        nextCursor: null,
-      },
-    );
-
-    await handle.establishProjection({
-      signal: new AbortController().signal,
-    });
-    await vi.waitFor(() => expect(syncSettings).toHaveBeenCalledTimes(1));
-    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
-    const close = handle.close();
-    resolveSync();
-    await close;
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-    expect(
-      harness.calls.some(({ method }) => method === "thread/settings/update"),
-    ).toBe(false);
+    harness.enqueue("thread/resume", { ...resumeResult(), serviceTier: "priority" });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    desired = { ...desired, serviceTier: "standard" };
+    if (transition === "closed") {
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    } else {
+      harness.enqueue("experimentalFeature/list", fastModeFeatures(true, true));
+      await sessions.refresh({ scope, applicationThreadId: "application-profile-1", nativeThreadId: "thread-1", connectionGeneration: 1, client: harness.facade });
+      sessions.syncServiceTier(scope, "application-profile-1", "standard");
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    }
+    expect(harness.calls.filter(({ method }) => method === "thread/settings/update")).toEqual([]);
+    expect(harness.calls.filter(({ method }) => method === "turn/settings/update")).toEqual([]);
   });
 
   it("does not import an unset native service tier as Standard", async () => {
@@ -16201,17 +15911,16 @@ describe("CodexConversationHandle", () => {
       text: "work",
     });
 
-    expect(
-      events.filter(({ type }) => type === "capabilities_changed"),
-    ).toEqual([
-      expect.objectContaining({
+    // Execution confirmation and exact Speed activation each publish authority.
+    const changes = events.filter(({ type }) => type === "capabilities_changed");
+    expect(changes).toHaveLength(2);
+    for (const change of changes) expect(change).toEqual(expect.objectContaining({
         type: "capabilities_changed",
         capabilities: expect.objectContaining({
           revision: expect.stringContaining(":available:2"),
           branching: expect.objectContaining({ availability: "available" }),
         }),
-      }),
-    ]);
+      }));
 
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
@@ -17609,6 +17318,7 @@ describe("CodexConversationHandle", () => {
       approvalsReviewer: "user",
       sandbox: "read-only",
       config: {
+        "features.step_model_switching": true,
         model_reasoning_effort: "low",
         shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
       },
@@ -17944,6 +17654,7 @@ describe("CodexConversationHandle", () => {
       harness.calls.find(({ method }) => method === "thread/start")?.params,
     ).toMatchObject({
       config: {
+        "features.step_model_switching": true,
         model_reasoning_effort: "low",
         shell_environment_policy: {
           exclude: [
@@ -17970,11 +17681,11 @@ describe("CodexConversationHandle", () => {
       harness.calls.find(({ method }) => method === "thread/resume")?.params,
     ).toEqual({
       threadId: "thread-1",
-      serviceTier: "default",
-      sandbox: "read-only",
+            sandbox: "read-only",
       approvalPolicy: "never",
       approvalsReviewer: "user",
       config: {
+        "features.step_model_switching": true,
         shell_environment_policy: {
           exclude: [
             "SEDES_AGENT_TOOL_ENDPOINT",
@@ -18028,6 +17739,7 @@ describe("CodexConversationHandle", () => {
       harness.calls.find(({ method }) => method === "thread/resume")?.params,
     ).toMatchObject({
       config: {
+        "features.step_model_switching": true,
         shell_environment_policy: {
           set: {
             SEDES_AGENT_TOOL_ENDPOINT:
@@ -18072,6 +17784,7 @@ describe("CodexConversationHandle", () => {
     const resume = harness.calls.find(({ method }) => method === "thread/resume")
       ?.params as { config: Record<string, unknown> };
     expect(resume.config).toEqual({
+      "features.step_model_switching": true,
       shell_environment_policy: {
         exclude: [
           "SEDES_AGENT_TOOL_ENDPOINT",
@@ -18148,6 +17861,7 @@ describe("CodexConversationHandle", () => {
         ?.params,
     ).toMatchObject({
       config: {
+        "features.step_model_switching": true,
         shell_environment_policy: {
           set: {
             SEDES_AGENT_TOOL_ENDPOINT:
@@ -18199,6 +17913,7 @@ describe("CodexConversationHandle", () => {
       harness.calls.find(({ method }) => method === "thread/start")?.params,
     ).toMatchObject({
       config: {
+        "features.step_model_switching": true,
         model_reasoning_effort: "low",
       },
     });
@@ -18253,6 +17968,7 @@ describe("CodexConversationHandle", () => {
       harness.calls.find(({ method }) => method === "thread/resume")?.params,
     ).toMatchObject({
       config: {
+        "features.step_model_switching": true,
         shell_environment_policy: {
           set: {
             SEDES_AGENT_TOOL_SOURCE_CAPABILITY: agentToolSourceCapability,
@@ -18275,11 +17991,11 @@ describe("CodexConversationHandle", () => {
       harness.calls.find(({ method }) => method === "thread/resume")?.params,
     ).toEqual({
       threadId: "thread-1",
-      serviceTier: "default",
-      sandbox: "read-only",
+            sandbox: "read-only",
       approvalPolicy: "never",
       approvalsReviewer: "user",
       config: {
+        "features.step_model_switching": true,
         shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
       },
     });
@@ -18327,11 +18043,11 @@ describe("CodexConversationHandle", () => {
         method: "thread/resume",
         params: {
           threadId: "thread-1",
-          serviceTier: "default",
-          sandbox: "read-only",
+                    sandbox: "read-only",
           approvalPolicy: "never",
           approvalsReviewer: "user",
           config: {
+            "features.step_model_switching": true,
             shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
           },
         },
@@ -19032,6 +18748,7 @@ describe("CodexConversationHandle", () => {
     ).toMatchObject({
       threadId: empty.id,
       config: {
+        "features.step_model_switching": true,
         shell_environment_policy: {
           set: {
             SEDES_AGENT_TOOL_SOURCE_CAPABILITY: agentToolSourceCapability,

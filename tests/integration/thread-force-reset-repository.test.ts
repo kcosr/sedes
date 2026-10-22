@@ -276,7 +276,7 @@ function prepareRootBlockers(current: Fixture): {
       actionId: "apply",
       requestFingerprint: "a".repeat(64),
       expectedThreadRevision: revision(current, current.rootId),
-      expectedFeatureRevision: 1,
+      expectedMutationRevision: 1,
       desiredPostcondition: { enabled: true },
       now: 560,
     },

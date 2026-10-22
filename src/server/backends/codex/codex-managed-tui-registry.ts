@@ -113,6 +113,41 @@ export class CodexManagedTuiRegistry {
     }
   }
 
+  readonly #settingsHolds = new Map<string, { release(): void; timer: ReturnType<typeof setTimeout> }>();
+
+  /** Hold newly submitted viewer input behind an admitted settings handoff. */
+  async holdSettings(authority: CodexManagedTuiBindingAuthority, leaseId: string): Promise<void> {
+    this.#assertOpen();
+    if (this.#settingsHolds.has(leaseId)) throw new Error("codex_tui_settings_hold_exists");
+    const resource = this.#resource(authority, false);
+    if (!resource || resource.state.lifecycle !== "running") throw new Error("codex_tui_settings_not_running");
+    let release!: () => void;
+    let granted!: () => void;
+    let denied!: (error: unknown) => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const ready = new Promise<void>((resolve, reject) => { granted = resolve; denied = reject; });
+    const timer = setTimeout(() => {
+      void this.fail(authority, "The managed TUI settings handoff timed out.");
+      denied(new Error("codex_tui_settings_hold_timeout"));
+      void this.releaseSettings(leaseId);
+    }, 60_000);
+    timer.unref?.();
+    this.#settingsHolds.set(leaseId, { release, timer });
+    void serializeResourceIo(resource, async () => {
+      if (resource.state.lifecycle !== "running") throw new Error("codex_tui_settings_not_running");
+      granted();
+      await held;
+    }).catch(error => { denied(error); void this.releaseSettings(leaseId); });
+    await ready;
+  }
+  async releaseSettings(leaseId: string): Promise<void> {
+    const hold = this.#settingsHolds.get(leaseId);
+    if (!hold) return;
+    clearTimeout(hold.timer);
+    this.#settingsHolds.delete(leaseId);
+    hold.release();
+  }
+
   snapshot(): readonly CodexManagedTuiResourceSnapshot[] {
     return [...this.#resources.values()].map(resource => ({ authority: resource.authority, state: resource.state, revision: resource.revision }));
   }
@@ -473,6 +508,7 @@ export class CodexManagedTuiRegistry {
   }
 
   async close(): Promise<void> {
+    for (const leaseId of this.#settingsHolds.keys()) await this.releaseSettings(leaseId);
     if (this.#closed) return;
     this.#closed = true;
     await Promise.all(

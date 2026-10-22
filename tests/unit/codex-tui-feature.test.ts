@@ -301,7 +301,7 @@ describe("codex.tui@1 feature contract", () => {
     const capability = compiledProviderFeatureRegistry.capability(
       CODEX_TUI_FEATURE_REF,
       "codex_app_server",
-      { revision: 2, availability: "available" },
+      { revision: 2, mutationRevision: 2, availability: "available" },
     );
     expect(capability.presentationSlots).toEqual([]);
     expect(capability.operations).toEqual([
@@ -928,7 +928,6 @@ describe("CodexManagedTuiRegistry", () => {
         excludeSlashTmp: true,
       },
       model: "gpt-5.6-luna",
-      serviceTier: "priority",
       effort: "high",
     });
     expect(

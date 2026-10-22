@@ -1048,6 +1048,7 @@ describe("ConversationEventBridge", () => {
     const goalCapability = (revision: number) => ({
       ref: goalRef,
       revision,
+      mutationRevision: revision,
       label: { text: "Goal" },
       availability: "available" as const,
       operations: [],
@@ -1133,6 +1134,7 @@ describe("ConversationEventBridge", () => {
     const goalCapability = {
       ref: goalRef,
       revision: 3,
+      mutationRevision: 3,
       label: { text: "Goal" },
       availability: "available" as const,
       operations: [],

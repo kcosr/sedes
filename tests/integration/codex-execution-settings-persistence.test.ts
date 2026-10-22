@@ -147,7 +147,9 @@ function fixture(
     | 40
     | 41
     | 42
-    | 43 = 43,
+    | 43
+    | 128
+    | 154 = 154,
   filename = ":memory:",
 ): {
   readonly database: Database.Database;
@@ -175,7 +177,7 @@ function fixture(
   applyDatabaseMigrations(
     database,
     backendNormalizedMigrations.filter(
-      (migration) => migration.version <= schemaVersion,
+      (migration) => migration.version <= Math.min(schemaVersion, 43),
     ),
   );
   database
@@ -223,6 +225,7 @@ function fixture(
     title: "Codex settings",
     now: 220,
   });
+  if (schemaVersion > 43) applyDatabaseMigrations(database, backendNormalizedMigrations.filter(({ version }) => version <= schemaVersion));
   return { database, scope, threadId, connectionProfileId };
 }
 
@@ -466,7 +469,7 @@ describe("Codex execution settings persistence", () => {
   });
 
   it("upgrades persisted Fast settings and snapshots through migration 129 and admits Ultrafast", () => {
-    const target = fixture();
+    const target = fixture(128);
     const repository = new CodexThreadExecutionSettingsRepository(target.database);
     const fast = {
       model: "gpt-5.6-codex",
@@ -474,22 +477,24 @@ describe("Codex execution settings persistence", () => {
       serviceTier: "fast",
       ...workspacePolicy,
     } as const;
-    let settings = repository.initialize(target.scope, {
-      applicationThreadId: target.threadId,
-      desired: fast,
-      now: 300,
-    });
-    const snapshot = repository.freezeOperationSnapshot(target.scope, {
-      applicationThreadId: target.threadId,
-      applicationOperationId: "pre-129-operation",
-      now: 301,
-    });
-    settings = repository.confirmEffective(target.scope, target.threadId, {
-      expectedRevision: settings.revision,
-      effective: recognizedEffective(fast),
-      daemonGeneration: 4,
-      now: 302,
-    });
+    // Seed the historical contract directly; the current repository requires migration 154.
+    target.database.prepare(`INSERT INTO codex_thread_execution_settings(
+      tenant_id,owner_principal_id,application_thread_id,desired_model,desired_reasoning_effort,desired_service_tier,
+      desired_sandbox_mode,desired_network_access,desired_approval_policy,desired_approval_reviewer,
+      effective_model,effective_reasoning_effort,effective_service_tier,effective_service_tier_classification,
+      effective_sandbox_mode,effective_sandbox_classification,effective_network_access,effective_network_classification,
+      effective_approval_policy,effective_approval_policy_classification,effective_approval_reviewer,effective_approval_reviewer_classification,
+      effective_daemon_generation,effective_confirmation_state,revision,created_at,updated_at)
+      VALUES (?,?,?,'gpt-5.6-codex','medium','fast','workspace-write','disabled','on-request','user',
+        'gpt-5.6-codex','medium','fast','recognized','workspace-write','recognized','disabled','recognized',
+        'on-request','recognized','user','recognized',4,'confirmed',2,300,302)`)
+      .run(target.scope.tenantId,target.scope.principalId,target.threadId);
+    target.database.prepare(`INSERT INTO codex_execution_settings_snapshots(
+      tenant_id,owner_principal_id,application_thread_id,application_operation_id,settings_revision,model,reasoning_effort,
+      service_tier,sandbox_mode,network_access,approval_policy,approval_reviewer,created_at)
+      VALUES (?,?,?,'pre-129-operation',1,'gpt-5.6-codex','medium','fast','workspace-write','disabled','on-request','user',301)`)
+      .run(target.scope.tenantId,target.scope.principalId,target.threadId);
+    const snapshot = target.database.prepare("SELECT * FROM codex_execution_settings_snapshots").get();
     expect(() => target.database.prepare(`
       UPDATE codex_thread_execution_settings
       SET desired_service_tier = 'ultrafast'
@@ -497,14 +502,9 @@ describe("Codex execution settings persistence", () => {
 
     applyDatabaseMigrations(target.database, backendNormalizedMigrations);
 
-    expect(repository.find(target.scope, target.threadId)).toEqual(settings);
-    expect(
-      repository.findOperationSnapshot(
-        target.scope,
-        target.threadId,
-        "pre-129-operation",
-      ),
-    ).toEqual(snapshot);
+    const settings = repository.find(target.scope, target.threadId)!;
+    expect(settings).toMatchObject({ desired: fast, effective: { ...fast }, revision: 2, desiredRevision: 2 });
+    expect(target.database.prepare("SELECT * FROM codex_execution_settings_snapshots").get()).toEqual(snapshot);
     const ultrafast = repository.updateDesired(target.scope, target.threadId, {
       expectedRevision: settings.revision,
       desired: { ...fast, serviceTier: "ultrafast" },
@@ -536,7 +536,7 @@ describe("Codex execution settings persistence", () => {
   });
 
   it("rolls the migration 129 tier rebuild back atomically when verification fails", () => {
-    const target = fixture();
+    const target = fixture(43);
     applyDatabaseMigrations(
       target.database,
       backendNormalizedMigrations.filter(({ version }) => version < 129),
@@ -669,7 +669,7 @@ describe("Codex execution settings persistence", () => {
     );
     temporaryDirectories.push(directory);
     const filename = path.join(directory, "overlay.sqlite");
-    const target = fixture(39, filename);
+    const target = fixture(154, filename);
     const repository = new CodexThreadExecutionSettingsRepository(target.database);
     let settings = repository.initialize(target.scope, {
       applicationThreadId: target.threadId,
@@ -1571,7 +1571,7 @@ describe("Codex execution settings persistence", () => {
       actionId: "set_sandbox_unrestricted",
       requestFingerprint: "a".repeat(64),
       expectedThreadRevision: 4,
-      expectedFeatureRevision: 2,
+      expectedMutationRevision: 2,
       desiredPostcondition: { sandboxMode: "danger-full-access" },
       now: 400,
     });
@@ -1584,7 +1584,7 @@ describe("Codex execution settings persistence", () => {
       actionId: "set_sandbox_unrestricted",
       requestFingerprint: "a".repeat(64),
       expectedThreadRevision: 4,
-      expectedFeatureRevision: 2,
+      expectedMutationRevision: 2,
       desiredPostcondition: { sandboxMode: "danger-full-access" },
       now: 401,
     })).toEqual(prepared);
@@ -1609,7 +1609,7 @@ describe("Codex execution settings persistence", () => {
       actionId: "set_sandbox_workspace",
       requestFingerprint: "b".repeat(64),
       expectedThreadRevision: 4,
-      expectedFeatureRevision: 2,
+      expectedMutationRevision: 2,
       desiredPostcondition: { sandboxMode: "workspace-write" },
       now: 403,
     })).toThrow(/already used/i);

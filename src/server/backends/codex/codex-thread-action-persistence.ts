@@ -1,3 +1,8 @@
+import { speedArgumentsWireSchema, speedStateWireSchema, type SpeedResult, type SpeedCurrentRunResult } from "../../../shared/provider-features/codex-speed.js";
+import { CodexSpeedPublicationRepository } from "./codex-speed-publication-repository.js";
+import type { CodexFastModeSessionRegistry } from "./codex-fast-mode-session.js";
+import type { ProviderFeatureMutationResult } from "../../conversations/thread-mutation-gateway.js";
+import { boundValue } from "../../conversations/payload-policy.js";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { ThreadApplicationOperation } from "../../../shared/protocol/api.js";
@@ -17,7 +22,6 @@ import {
 import { CODEX_EXECUTION_FEATURE_REF } from "./codex-execution-feature.js";
 import {
   CODEX_FAST_MODE_FEATURE_REF,
-  codexSpeedSelectionForAction,
 } from "./codex-fast-mode-feature.js";
 import type { CodexServiceTierSelection } from "./codex-service-tier.js";
 import {
@@ -54,6 +58,8 @@ type PerformOperation = Extract<
   { readonly kind: "perform" }
 >["operation"];
 
+type FeatureInput = Parameters<NonNullable<ThreadActionPersistenceProvider["performProviderFeature"]>>[2];
+
 type ThreadTarget = {
   readonly backendInstanceId: string;
   readonly connectionProfileId: string;
@@ -84,15 +90,8 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
   >;
   readonly #goalSessions: CodexGoalSessionRegistry | undefined;
   readonly #managedTui: CodexManagedTuiController | undefined;
-  readonly #fastModeRuntime:
-    | {
-        syncServiceTier(
-          scope: RequestScope,
-          applicationThreadId: string,
-          serviceTier: CodexServiceTierSelection,
-        ): Promise<void>;
-      }
-    | undefined;
+  readonly #fastModeRuntime: Pick<CodexFastModeSessionRegistry, "syncServiceTier" | "controller"> | undefined;
+  readonly #speedPublications: CodexSpeedPublicationRepository;
 
   async afterInterruptAccepted(
     actor: ProviderFeatureMutationActor,
@@ -125,13 +124,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
     >;
     readonly goalSessions?: CodexGoalSessionRegistry;
     readonly managedTui?: CodexManagedTuiController;
-    readonly fastModeRuntime?: {
-      syncServiceTier(
-        scope: RequestScope,
-        applicationThreadId: string,
-        serviceTier: CodexServiceTierSelection,
-      ): Promise<void>;
-    };
+    readonly fastModeRuntime?: Pick<CodexFastModeSessionRegistry, "syncServiceTier" | "controller">;
   }) {
     if (
       !input.scope.tenantId ||
@@ -148,6 +141,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
     this.#settings = input.settings;
     this.#desiredSettingsChanged = input.desiredSettingsChanged;
     this.#featureMutations = input.featureMutations;
+    this.#speedPublications = new CodexSpeedPublicationRepository(input.database);
     this.#executionPolicy = input.executionPolicy;
     this.#modelPolicy = input.modelPolicy;
     this.#defaultExecutionPolicyByConnectionId =
@@ -185,6 +179,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
       return QUIET_THREAD_PROVIDER_FEATURE_CONCURRENCY;
     }
     if (
+      (module.ref.featureId === CODEX_FAST_MODE_FEATURE_REF.featureId && module.ref.schemaVersion === CODEX_FAST_MODE_FEATURE_REF.schemaVersion) ||
       (module.ref.featureId === CODEX_GOAL_FEATURE_REF.featureId &&
         module.ref.schemaVersion === CODEX_GOAL_FEATURE_REF.schemaVersion) ||
       (module.ref.featureId === CODEX_TUI_FEATURE_REF.featureId &&
@@ -195,19 +190,11 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
     return QUIET_THREAD_PROVIDER_FEATURE_CONCURRENCY;
   }
 
-  requiresRuntimeProviderFeature(
-    operation: Extract<
-      PerformOperation,
-      { readonly action: "perform_provider_feature" }
-    >,
-  ): boolean {
-    return (
-      (operation.feature.featureId === CODEX_GOAL_FEATURE_REF.featureId &&
-        operation.feature.schemaVersion ===
-          CODEX_GOAL_FEATURE_REF.schemaVersion) ||
-      (operation.feature.featureId === CODEX_TUI_FEATURE_REF.featureId &&
-        operation.feature.schemaVersion === CODEX_TUI_FEATURE_REF.schemaVersion)
-    );
+  requiresRuntimeProviderFeature(operation: FeatureInput["operation"], backingState: ThreadTarget["backingState"]): boolean {
+    return (operation.feature.featureId === CODEX_FAST_MODE_FEATURE_REF.featureId &&
+      operation.feature.schemaVersion === CODEX_FAST_MODE_FEATURE_REF.schemaVersion && backingState === "bound") ||
+      (operation.feature.featureId === CODEX_GOAL_FEATURE_REF.featureId && operation.feature.schemaVersion === CODEX_GOAL_FEATURE_REF.schemaVersion) ||
+      (operation.feature.featureId === CODEX_TUI_FEATURE_REF.featureId && operation.feature.schemaVersion === CODEX_TUI_FEATURE_REF.schemaVersion);
   }
 
   isLocalOperation(operation: PerformOperation): boolean {
@@ -310,29 +297,8 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
   async performProviderFeature(
     scope: RequestScope,
     applicationThreadId: string,
-    input: {
-      readonly mutationId: string;
-      readonly expectedThreadRevision: number;
-      readonly operation: Extract<
-        PerformOperation,
-        { readonly action: "perform_provider_feature" }
-      >;
-      readonly now: number;
-      readonly mutateExternal?: (input: {
-        readonly featureId: string;
-        readonly schemaVersion: number;
-        readonly actionId: string;
-        readonly arguments: unknown;
-      }) => Promise<{
-        readonly outcome: "accepted" | "uncertain" | "rejected";
-        readonly projectedState?: unknown;
-        readonly safeMessage?: string;
-      }>;
-    },
-  ): Promise<
-    | { readonly applicationOperationId: string }
-    | { readonly status: "recovery_required"; readonly retryable: boolean }
-  > {
+    input: FeatureInput,
+  ): Promise<ProviderFeatureMutationResult> {
     this.#assertScope(scope);
     const replay = this.replayProviderFeature(
       scope,
@@ -395,7 +361,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
         target.backendInstanceId !== this.#backendInstanceId ||
         target.revision !== input.expectedThreadRevision ||
         !current?.desired ||
-        current.revision !== input.operation.expectedFeatureRevision
+        current.revision !== input.operation.expectedMutationRevision
       ) {
         throw new DomainError(
           "conflict",
@@ -415,7 +381,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
         actionId: input.operation.actionId,
         requestFingerprint,
         expectedThreadRevision: input.expectedThreadRevision,
-        expectedFeatureRevision: input.operation.expectedFeatureRevision,
+        expectedMutationRevision: input.operation.expectedMutationRevision,
         desiredPostcondition: { executionPolicy },
         now: input.now,
       });
@@ -454,103 +420,88 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
     return result;
   }
 
-  async #performFastModeFeature(
-    scope: RequestScope,
-    applicationThreadId: string,
-    input: {
-      readonly mutationId: string;
-      readonly expectedThreadRevision: number;
-      readonly operation: Extract<
-        PerformOperation,
-        { readonly action: "perform_provider_feature" }
-      >;
-      readonly now: number;
-    },
-  ): Promise<{ readonly applicationOperationId: string }> {
-    // The gateway admits only operations the current capability allows, and
-    // the presentation allows only speeds the desired model's catalog offers.
-    const desiredServiceTier = codexSpeedSelectionForAction(
-      input.operation.actionId,
-    );
-    if (!desiredServiceTier || input.operation.arguments !== null) {
-      throw new DomainError(
-        "invalid_transition",
-        "The Codex Speed action is invalid.",
-      );
+  async #performFastModeFeature(scope: RequestScope, applicationThreadId: string, input: FeatureInput): Promise<ProviderFeatureMutationResult> {
+    const argumentsValue = speedArgumentsWireSchema.parse(input.operation.arguments);
+    const projected = speedStateWireSchema.safeParse(input.featureState);
+    if (!projected.success || !projected.data.offered.some(({ selection }) => selection === argumentsValue.selection)) {
+      throw new DomainError("invalid_transition", "The selected Speed is not offered for this model.");
     }
-    const requestFingerprint = fingerprint([
-      applicationThreadId,
-      input.expectedThreadRevision,
-      input.operation,
-    ]);
-    let shouldSyncDesired = false;
-    const result = this.database.transaction(() => {
+    const controller = this.#fastModeRuntime?.controller(scope, applicationThreadId);
+    const before = this.#threadTarget(scope, applicationThreadId);
+    if (before.backingState === "bound") {
+      if (!controller || !input.actor) throw new DomainError("invalid_transition", "The Codex Speed runtime is unavailable.");
+      await controller.prepare(argumentsValue.selection);
+    }
+    const replay = this.replayProviderFeature(scope, applicationThreadId, input);
+    if (replay) return replay;
+    const requestFingerprint = fingerprint([applicationThreadId, input.expectedThreadRevision, input.operation]);
+    const backendTurnId = argumentsValue.currentRunTarget ? input.actor?.resolveTurnId(argumentsValue.currentRunTarget.turnId) : undefined;
+    let desiredChanged = false;
+    // Nothing can yield between the final native authority check and local commit.
+    const saved = this.database.transaction(() => {
+      const replay = this.replayProviderFeature(scope, applicationThreadId, input);
+      if (replay) return replay;
+      input.assertAdmission?.();
       const target = this.#threadTarget(scope, applicationThreadId);
       const current = this.#settings.find(scope, applicationThreadId);
-      if (
-        target.backendInstanceId !== this.#backendInstanceId ||
-        target.revision !== input.expectedThreadRevision ||
-        !current?.desired ||
-        current.revision !== input.operation.expectedFeatureRevision
-      ) {
-        throw new DomainError(
-          "conflict",
-          "The Codex thread or Speed selection changed in another client.",
-        );
+      if (target.backendInstanceId !== this.#backendInstanceId || !current?.desired ||
+          current.desiredRevision !== input.operation.expectedMutationRevision ||
+          target.backingState !== before.backingState ||
+          !this.#modelPolicy.isSelectionAllowed({ modelId: current.desired.model, reasoningEffort: current.desired.reasoningEffort })) {
+        throw new DomainError("conflict", "The Codex thread or saved Speed changed. Refresh and choose again.");
       }
-      const receipt = this.#featureMutations.prepare(scope, {
-        applicationThreadId,
-        mutationId: input.mutationId,
-        featureId: input.operation.feature.featureId,
-        schemaVersion: input.operation.feature.schemaVersion,
-        actionId: input.operation.actionId,
-        requestFingerprint,
-        expectedThreadRevision: input.expectedThreadRevision,
-        expectedFeatureRevision: input.operation.expectedFeatureRevision,
-        desiredPostcondition: { serviceTier: desiredServiceTier },
-        now: input.now,
-      });
-      if (receipt.state === "accepted") {
-        return { applicationOperationId: receipt.mutationId };
-      }
-      if (receipt.state !== "prepared") {
-        throw new DomainError(
-          "conflict",
-          "The Speed mutation requires recovery.",
-        );
-      }
-      this.#settings.updateDesired(scope, applicationThreadId, {
-        expectedRevision: current.revision,
-        desired: { ...current.desired, serviceTier: desiredServiceTier },
-        now: input.now,
-      });
-      shouldSyncDesired =
-        target.backingState === "bound" &&
-        current.desired.serviceTier !== desiredServiceTier;
-      this.#advanceThread(scope, applicationThreadId, {
-        expectedRevision: input.expectedThreadRevision,
-        now: input.now,
-      });
-      this.#featureMutations.accept(scope, input.mutationId, {
-        requestFingerprint,
-        result: { serviceTier: desiredServiceTier },
-        now: input.now,
-      });
-      return { applicationOperationId: input.mutationId };
+      const admission = target.backingState === "bound"
+        ? controller!.admit(argumentsValue, backendTurnId, input.actor!.isIdle())
+        : target.backingState === "unbound" && argumentsValue.currentRunTarget === null ? "idle" : undefined;
+      if (!admission) throw new DomainError("conflict", "The Speed target is no longer available.");
+      this.#featureMutations.prepare(scope, { applicationThreadId, mutationId: input.mutationId,
+        featureId: input.operation.feature.featureId, schemaVersion: input.operation.feature.schemaVersion,
+        actionId: input.operation.actionId, requestFingerprint, expectedThreadRevision: input.expectedThreadRevision,
+        expectedMutationRevision: input.operation.expectedMutationRevision,
+        desiredPostcondition: { serviceTier: argumentsValue.selection }, now: input.now });
+      desiredChanged = current.desired.serviceTier !== argumentsValue.selection;
+      const updated = desiredChanged ? this.#settings.updateDesired(scope, applicationThreadId, {
+        expectedRevision: current.revision, desired: { ...current.desired, serviceTier: argumentsValue.selection }, now: input.now,
+      }) : current;
+      if (desiredChanged) this.#advanceThread(scope, applicationThreadId, { expectedRevision: target.revision, now: input.now });
+      this.#featureMutations.accept(scope, input.mutationId, { requestFingerprint,
+        result: { serviceTier: argumentsValue.selection, desiredRevision: updated.desiredRevision }, now: input.now });
+      const result: SpeedResult = { operationId: input.mutationId, receiptRevision: 1,
+        saved: { status: "saved", selection: argumentsValue.selection, desiredRevision: updated.desiredRevision },
+        currentRun: admission === "idle" ? { status: "not_requested" } : {
+          status: admission === "finished" ? "target_finished" : "pending", target: argumentsValue.currentRunTarget!, selection: argumentsValue.selection,
+        } };
+      this.#speedPublications.create(scope, applicationThreadId, result, input.now);
+      return speedResponse(result);
     })();
-    if (shouldSyncDesired) {
-      const desired = this.#settings.find(scope, applicationThreadId)?.desired;
-      if (desired) {
-        // The durable desired selection and accepted receipt are authoritative.
-        // A raced daemon/TUI boundary leaves presentation pending and is
-        // retried on the next attach; it must not turn an accepted local
-        // mutation into an apparent rejection.
-        await this.#syncDesired(scope, applicationThreadId, desired).catch(
-          () => undefined,
-        );
+    if (!("status" in saved) || saved.status !== "provider_feature_result") return saved;
+    try {
+      if (desiredChanged) this.#desiredSettingsChanged(scope, applicationThreadId);
+      const publication = this.#speedPublications.find(scope, input.mutationId)!;
+      if (publication.phase === "ready") {
+        const outcome = await controller!.publish({ arguments: argumentsValue, backendTurnId: backendTurnId!, operationId: input.mutationId,
+          dispatching: continuity => this.#speedPublications.dispatching(scope, input.mutationId, continuity) });
+        return speedResponse(this.#speedPublications.finish(scope, input.mutationId, outcome));
       }
-    }
-    return result;
+      if (argumentsValue.currentRunTarget === null && controller) {
+        await controller.syncDefaults().catch(() => undefined);
+      }
+      return saved;
+    } catch {
+      try {
+      const publication = this.#speedPublications.find(scope, input.mutationId)!;
+      if (publication.phase === "ready" || publication.phase === "dispatching") {
+        const attempt = publication.result.currentRun;
+        if (attempt.status !== "not_requested") {
+          const outcome: SpeedCurrentRunResult = publication.phase === "ready"
+            ? { status: "not_attempted", reason: "publication_aborted", target: attempt.target, selection: attempt.selection }
+            : { status: "uncertain", reason: "result_not_persisted", target: attempt.target, selection: attempt.selection };
+          return speedResponse(this.#speedPublications.finish(scope, input.mutationId, outcome));
+        }
+      }
+      return speedResponse(publication.result);
+      } catch { return saved; }
+    } finally { this.#speedPublications.release(scope, input.mutationId); }
   }
 
   async #syncDesired(
@@ -643,7 +594,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
       actionId,
       requestFingerprint,
       expectedThreadRevision: input.expectedThreadRevision,
-      expectedFeatureRevision: input.operation.expectedFeatureRevision,
+      expectedMutationRevision: input.operation.expectedMutationRevision,
       desiredPostcondition: {
         lifecycle: actionId === "start" ? "running" : "stopped",
       },
@@ -754,7 +705,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
       target.revision !== input.expectedThreadRevision ||
       !projection ||
       projection.availability !== "available" ||
-      projection.revision !== input.operation.expectedFeatureRevision
+      projection.revision !== input.operation.expectedMutationRevision
     ) {
       throw new DomainError(
         "conflict",
@@ -787,7 +738,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
       actionId: input.operation.actionId,
       requestFingerprint,
       expectedThreadRevision: input.expectedThreadRevision,
-      expectedFeatureRevision: input.operation.expectedFeatureRevision,
+      expectedMutationRevision: input.operation.expectedMutationRevision,
       desiredPostcondition: desired as unknown as Record<string, unknown>,
       now: input.now,
     });
@@ -864,7 +815,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
         { readonly action: "perform_provider_feature" }
       >;
     },
-  ): { readonly applicationOperationId: string } | undefined {
+  ): ProviderFeatureMutationResult | undefined {
     this.#assertScope(scope);
     const existing = this.#featureMutations.find(scope, input.mutationId);
     if (!existing) return undefined;
@@ -880,8 +831,8 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
       existing.schemaVersion !== input.operation.feature.schemaVersion ||
       existing.actionId !== input.operation.actionId ||
       existing.expectedThreadRevision !== input.expectedThreadRevision ||
-      existing.expectedFeatureRevision !==
-        input.operation.expectedFeatureRevision
+      existing.expectedMutationRevision !==
+        input.operation.expectedMutationRevision
     ) {
       throw new DomainError(
         "conflict",
@@ -893,6 +844,11 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
         "conflict",
         "The provider feature mutation requires recovery.",
       );
+    }
+    if (existing.featureId === CODEX_FAST_MODE_FEATURE_REF.featureId && existing.schemaVersion === CODEX_FAST_MODE_FEATURE_REF.schemaVersion) {
+      const publication = this.#speedPublications.find(scope, existing.mutationId);
+      if (!publication || publication.threadId !== applicationThreadId) throw new Error("codex_speed_publication_missing");
+      return speedResponse(publication.result);
     }
     return { applicationOperationId: existing.mutationId };
   }
@@ -1169,4 +1125,8 @@ function targetMismatch(): DomainError {
     "not_found",
     "The Codex thread action target was not found.",
   );
+}
+
+function speedResponse(result: SpeedResult): Extract<ProviderFeatureMutationResult, { status: "provider_feature_result" }> {
+  return { status: "provider_feature_result", operationId: result.operationId, feature: CODEX_FAST_MODE_FEATURE_REF, result: boundValue(result) };
 }

@@ -20,7 +20,7 @@ defaults, see the [Codex operator guide](../operator/backends/codex.md) and
 | Concern | Authority | Durable state | Mutation boundary |
 | --- | --- | --- | --- |
 | Model and reasoning | Installation policy plus thread selection | Desired tuple and operation snapshot | Quiet thread |
-| Speed | Live catalog, installation policy, and thread selection | `serviceTier` in the desired tuple | Quiet thread |
+| Speed | Live catalog, installation policy, and thread selection | `serviceTier` in the desired tuple and a separate publication receipt | Idle or an exact eligible active turn |
 | Sandbox, network, approvals | Installation execution-policy ceiling plus thread selection | Desired tuple and operation snapshot | Quiet thread |
 | Effective settings | Complete, generation-fenced Codex observation | Latest classified observation | Provider attach or notification |
 | Goal | Bound native Codex thread | Provider state; Sedes mutation receipt | May run with active or queued work |
@@ -89,8 +89,9 @@ tier; otherwise the service tier is durably clamped to Standard in the same
 change. Sedes never steps Ultrafast down to Fast, because that would change
 usage without a choice.
 
-Settings and Speed controls are read-only while a turn or queued input is
-active, or while mutation recovery is unresolved. Enabled automations do not
+Model, reasoning, and permission controls are read-only while a turn or queued
+input is active, or while mutation recovery is unresolved. Speed has the
+separate exact-target admission below. Enabled automations do not
 own or lock the thread configuration. This quiet-thread gate is separate from the
 immutable-snapshot rule: even if desired state changes after an operation has
 been accepted, that operation continues with its frozen tuple.
@@ -180,77 +181,104 @@ TUI](codex-managed-tui.md#settings-convergence).
 
 ## Speed
 
-Speed is the provider feature `codex.fast_mode@2`. The normalized contract has
-Standard, Fast, and Ultrafast; the native identifiers (`default`, `priority`,
-and `ultrafast`) remain private to the Codex backend. Standard is always sent
-explicitly as `default`, so a catalog default never overrides it.
+Speed is the provider feature `codex.fast_mode@3`. Its one `set_speed` action
+accepts a normalized selection (`standard`, `fast`, or `ultrafast`) and either
+an exact `{ turnId, activationId }` target or explicit `null`. Native thread and
+turn IDs stay in the backend. Standard sends native `serviceTier: "default"`;
+Fast sends `priority`, and Ultrafast sends `ultrafast`.
 
-The account-scoped live catalog and native thread policy jointly determine availability. Codex
-fetches `model/list` for the signed-in provider and auth identity, and each
-model lists its tiers in `serviceTiers`. Sedes projects `priority` as Fast and
-`ultrafast` as Ultrafast, in that order, with each tier's bounded catalog
-description. Any other native tier ID, or a duplicate, fails the catalog
-closed. Codex gates Fast with `fast_mode` and Ultrafast independently with
-`ultrafast_mode`; a disabled or absent flag never enables the other tier.
-Sedes caches the catalog for each daemon generation, so a
-tier newly granted to the account appears after the next Codex daemon restart.
+Every accepted choice saves the thread preference. For an eligible active turn,
+it also publishes the choice with `turn/settings/update` for the next model
+step whose settings have not already been captured. A running inference keeps
+its settings. The response `applied` proves publication, not actual inference
+use, latency, or provider billing. Idle selections synchronize native defaults
+and never call the active-turn method.
 
-The feature state carries `desired`, `effective`, `applicationState`, and
-`offered`, the non-empty list of accelerated speeds the desired model
-advertises and, for bound threads, native policy enables. Its three operations are `set_standard`, `set_fast`, and
-`set_ultrafast`. The capability allows every offered speed except the current
-one, and the mutation gateway admits only those operations, so the handler
-never needs its own catalog lookup.
+Sedes supplies `config["features.step_model_switching"] = true` on native
+thread creation and fork, and normal cold resume of a thread whose Sedes
+creation provenance still matches its binding. It does not edit global TOML
+or hot-enable a loaded session. Experimental API negotiation remains separate.
+Native under-development warnings remain visible. Discovery uses the native
+thread ID and recognizes this exact under-development flag; Fast and Ultrafast
+also require their independent stable feature flags and advertised model tiers.
+A loaded-session gate rejection latches active Speed unavailable until native
+generation changes, even if discovery rereads enabled configuration.
 
-An unbound Codex draft advertises Speed only when:
+An activation records the exact successful Sedes start's model and starting
+tier, normalized application turn, and random token. It must still own that
+native turn and generation, and its model must equal the desired model.
+Reroutes, ownership replacement, recovery without a retained start, externally
+started turns, native continuations, and active managed TUI work withdraw active
+mutation authority. External UDS/TCP daemons and sidecar routes can still carry
+eligible Sedes-started turns. A bounded positive-completion tombstone permits an
+exact just-finished target to save with `target_finished`; missing authority is
+never completion proof. A null target while work is active conflicts before
+saving.
 
-- its selected live-catalog model advertises at least one accelerated tier;
-- installation policy admits the model and effort; and
-- the desired seven-axis tuple is complete.
+The actor mailbox owns asynchronous preparation, synchronous final admission
+and the SQLite transaction, then one bounded publication. It resolves the
+application turn using the same projector mapping as Steer. It does not hold
+the native-effect fence, so Stop can proceed during an outstanding publication.
+The immutable parent receipt means the local save succeeded. Its scoped child
+tracks `ready`, `dispatching`, `settled`, or `uncertain` and distinguishes
+`published`, `target_finished`, `rejected`, `not_attempted`, and `not_requested`.
+The dispatch phase is durable before native I/O. Replacement executors close
+abandoned ready work as unsent and dispatching work as uncertain; neither is
+resent. Remote operation identity and native generation are reserved before
+sidecar submission. Only that exact retained outcome can refine uncertainty.
 
-The draft choice is durable intent. There is no native provider mutation before
-first submission; the frozen create snapshot carries the tier through
-`thread/start`.
+`desiredRevision` advances only when the seven-axis desired tuple changes.
+Speed's required capability `mutationRevision` equals it. Presentation revision
+is a separate process-wide increasing sequence keyed by scope/thread/content;
+activation and receipt changes advance it, ordinary token streaming does not.
+Same-value reapplication has a new receipt but does not advance desired or
+application-thread revision. The browser retains the original request envelope
+in memory for exact receipt checks, bypassing fresh-action capability guards;
+reloading discards that memory and reads authoritative state. An old result
+never replaces a newer saved projection.
 
-After binding, Speed additionally requires authoritative thread-scoped
-per-tier speed support for the current runtime generation. A transient discovery
-failure may leave a known control visible but read-only. A definitive disabled
-observation removes only that tier and reconciles a saved selection of that tier
-in both app-server and managed-TUI state to Standard. The control is withdrawn
-when no accelerated tier remains available. Null, unknown, or custom native tiers fail
-closed. Every create and turn rechecks that the frozen tier is still offered
-for the model; a tier the catalog no longer advertises is rejected before
-submission rather than silently omitted by Codex. Resume, reattachment, and
-speed-policy recovery check the live catalog before writing a retained Fast or
-Ultrafast tier:
+Native defaults converge only inside the actor mailbox with current-generation
+positive native idle evidence, settled actor work, and Goal positively
+inactive or disabled. The actor's projected-idle transition schedules another
+check when native idle arrived before transcript settlement. Known interrupted
+work receives a maximum 30-second
+monotonic grace after generation replacement. A completion notification alone
+is not idle proof. Each desired revision, native generation, and meaningful
+support state permits at most one tier-only write attempt, followed by ordered
+readback. Failure, uncertainty, or mismatch consumes the budget. A same-policy
+refresh cannot trigger a retry loop. Observed external drift schedules a later
+admitted check; it does not replay a captured settings object.
 
-- A tier the desired model no longer offers resolves to Standard, as a
-  disabled flag for that tier does. The clamp applies only while the checked
-  selection is still current; a selection changed during the catalog read is
-  checked again.
-- A catalog read failure keeps the selection but writes no accelerated tier
-  natively until a check succeeds; the turn check still applies.
-- The replay writes only the tier, onto whichever model Codex resumed. A tier
-  that model does not offer is withheld. If establishment then imports that
-  resumed model as the selection, the import is a model change and keeps the
-  tier only when the model offers it; otherwise it imports Standard.
-- Recovery writes the tier only if the selection, the native model, and the
-  handle are all unchanged after its catalog reads; otherwise it checks again
-  or stops.
+A frozen queued start retains its original tuple; input not frozen yet sees
+the newest saved choice. Every Sedes start sends its frozen tier explicitly,
+so an older delayed thread-default write cannot change that root turn's tier.
+Across replacement native streams, delayed defaults can still affect native
+continuations and subagent inheritance. Native Goal/recovery work can race
+point-in-time idle evidence; it is not a native idle lease. Sedes does not block
+explicit starts indefinitely or restart an external daemon to hide this limit.
+On the qualified 0.162.1 and 0.163.0 binaries, an active default write preserves
+the interrupted-turn snapshot; a managed daemon restart resumes that turn at
+its original tier. A changed thread default is not proof that recovery adopted
+it. Sedes does not intentionally issue an active default write.
 
-A fork admits the child's tier against the catalog before creation and
-discovers its per-tier speed policy afterwards, as described under forks below.
+Goal continuations and subagents use native root defaults, not the parent's
+per-turn publication. Active Goal alone does not disqualify a known Sedes turn,
+but continuous Goal execution can defer default convergence indefinitely.
+Sedes Goal Create/Resume from stable idle with no active Goal first requires
+confirmed idle defaults. Create/Resume during existing active work preserves
+its native lifecycle behavior. For ongoing Goal work, pause, wait for settlement
+and convergence, then resume.
 
-Speed changes use revision-fenced, durable provider-feature receipts. Desired
-state is updated atomically before any runtime synchronization, accepted
-replays do not repeat the mutation, and a request fingerprint prevents reuse
-of a mutation ID for different input.
-
-The composer shows a one-click toggle when the model offers one accelerated
-speed, and a Standard, Fast, and Ultrafast menu when it offers two or more.
-
-Pi, Claude, and Grok do not consume this feature contract. Their model,
-reasoning, and permission behavior remains backend-private.
+The composer toggles directly between Standard and Fast while idle when those
+are the two choices. Three choices always use a menu; an eligible active turn
+also uses the menu with two choices, allowing same-value reapplication. Mobile
+uses the corresponding bottom sheet. The icon and menu checkmark represent
+the saved preference, with the tooltip “Applies from the next model step. Saved
+for future turns.” There is no persistent result text, explanatory help,
+receipt-check action, or pending/uncertain visual indicator. Exact receipt
+reconciliation remains internal; the control does not track individual steps
+or claim actual inference use. Pi, Claude, Grok, and OpenCode intentionally do
+not expose Speed; they explicitly retain their own mutation authorities.
 
 ## Goal
 
@@ -285,8 +313,8 @@ withdraw the feature rather than projecting partial state.
 
 The in-memory projection is scoped by tenant, principal, application thread,
 native binding, and daemon generation, with a monotonic feature revision. Each
-Create, Pause, Resume, or Clear request must match the thread revision and that
-feature revision. Goal actions are deliberately allowed while provider work or
+Create, Pause, Resume, or Clear request must match the thread revision and its
+explicit capability mutation revision. Goal actions are deliberately allowed while provider work or
 Sedes queued input exists; the native Goal lifecycle, rather than the generic
 quiet-thread gate, decides the valid transition.
 

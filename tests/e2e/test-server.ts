@@ -54,6 +54,7 @@ import type {
 } from "../../src/server/backends/codex/codex-execution-policy.js";
 import { CodexThreadExecutionSettingsRepository } from "../../src/server/backends/codex/codex-thread-execution-settings-repository.js";
 import { codexForkSettingsEligibility } from "../../src/server/backends/codex/codex-fork-settings-eligibility.js";
+import { CodexGoalSessionRegistry } from "../../src/server/backends/codex/codex-goal-session.js";
 import { CodexFastModeSessionRegistry } from "../../src/server/backends/codex/codex-fast-mode-session.js";
 import { ProviderFeatureMutationRepository } from "../../src/server/db/repositories/provider-feature-mutation-repository.js";
 import {
@@ -1968,6 +1969,7 @@ class CodexE2eRpcFixture {
       threadId: nativeThreadId,
       turn: completed,
     });
+    this.#notify(this.#generation, "thread/status/changed", { threadId: nativeThreadId, status: { type: "idle" } });
   }
 
   async seedReadableAbandonedHistory(nativeThreadId: string): Promise<void> {
@@ -2954,6 +2956,8 @@ class CodexE2eRpcFixture {
             enabled: true,
             defaultEnabled: false,
           },
+          { name: "step_model_switching", stage: "underDevelopment", displayName: null,
+            description: null, announcement: null, enabled: true, defaultEnabled: false },
           {
             name: "ultrafast_mode",
             stage: "stable",
@@ -3121,12 +3125,12 @@ class CodexE2eRpcFixture {
         if (
           paginated &&
           (encoded.excludeTurns !== true ||
-            typeof initialTurnsPageInput !== "object" ||
-            initialTurnsPageInput === null)
+            (initialTurnsPageInput !== undefined &&
+              (typeof initialTurnsPageInput !== "object" || initialTurnsPageInput === null)))
         ) {
           throw new Error("e2e_codex_paginated_resume_input_invalid");
         }
-        const initialTurnsPage = paginated
+        const initialTurnsPage = paginated && initialTurnsPageInput !== undefined
           ? this.#paginatedTurnsPage(
               thread,
               initialTurnsPageInput as Readonly<Record<string, unknown>>,
@@ -3164,8 +3168,9 @@ class CodexE2eRpcFixture {
       } else if (specification.method === "thread/items/list") {
         result = this.#paginatedItemsPage(thread, encoded);
       } else if (specification.method === "thread/settings/update") {
-        const serviceTier =
-          typeof encoded.serviceTier === "string" ? encoded.serviceTier : null;
+        const serviceTier = Object.hasOwn(encoded, "serviceTier")
+          ? typeof encoded.serviceTier === "string" ? encoded.serviceTier : null
+          : this.#serviceTierByThread.get(thread.id) ?? null;
         this.#serviceTierByThread.set(thread.id, serviceTier);
         if (typeof encoded.model === "string") {
           this.#modelByThread.set(thread.id, encoded.model);
@@ -3200,6 +3205,8 @@ class CodexE2eRpcFixture {
           }),
         );
         result = {};
+      } else if (specification.method === "turn/settings/update") {
+        result = { status: thread.turns.some(turn => turn.id === encoded.turnId && turn.status === "inProgress") ? "applied" : "targetUnavailable" };
       } else if (specification.method === "thread/goal/get") {
         result = { goal: null };
       } else if (specification.method === "thread/unsubscribe") {
@@ -3464,6 +3471,7 @@ class CodexE2eRpcFixture {
             threadId: thread.id,
             turn: completedTurn,
           });
+          this.#notify(generation, "thread/status/changed", { threadId: thread.id, status: { type: "idle" } });
         };
         this.#schedule(2_600, completeFixtureTurn);
       } else if (specification.method === "turn/steer") {
@@ -3551,6 +3559,7 @@ class CodexE2eRpcFixture {
           threadId: thread.id,
           turn: completedTurn,
         });
+        this.#notify(generation, "thread/status/changed", { threadId: thread.id, status: { type: "idle" } });
         result = {};
       } else if (specification.method === "thread/name/set") {
         const name = encoded.name;
@@ -4075,8 +4084,11 @@ async function main(): Promise<void> {
   const codexUdsRpc = new CodexE2eRpcFixture();
   const codexStdioRpc = new CodexE2eRpcFixture();
   const codexFastModeSessions = new CodexFastModeSessionRegistry();
+  const codexGoalSessions = new CodexGoalSessionRegistry();
   const codexUdsFastModeSessions = new CodexFastModeSessionRegistry();
+  const codexUdsGoalSessions = new CodexGoalSessionRegistry();
   const codexStdioFastModeSessions = new CodexFastModeSessionRegistry();
+  const codexStdioGoalSessions = new CodexGoalSessionRegistry();
   const codexTuiFixture = new CodexTuiE2eFixture();
   let codexTuiAvailable = true;
   const codexManagedTui = new CodexManagedTuiController({
@@ -4094,9 +4106,12 @@ async function main(): Promise<void> {
   const codexExecutionSettings = new CodexThreadExecutionSettingsRepository(
     database,
   );
+  const codexDesiredListeners = new Set<{ scope: Parameters<CodexExecutionSettingsProvider["subscribeDesiredSettingsChanged"]>[0]; threadId: string; listener: () => void }>();
   const codexExecutionSettingsProvider: CodexExecutionSettingsProvider = {
     assertExecutionPolicyAllowed: () => undefined,
-    subscribeDesiredSettingsChanged: () => () => undefined,
+    desiredRevision: (scope, threadId) => codexExecutionSettings.find(scope, threadId)?.desiredRevision ?? 0,
+    isSedesCreated: () => true,
+    subscribeDesiredSettingsChanged: (scope, threadId, listener) => { const entry = { scope, threadId, listener }; codexDesiredListeners.add(entry); return () => { codexDesiredListeners.delete(entry); }; },
     desiredSettings: (providerScope, applicationThreadId) =>
       codexExecutionSettings.find(providerScope, applicationThreadId)
         ?.desired ?? null,
@@ -4201,6 +4216,7 @@ async function main(): Promise<void> {
     executionSettings: codexExecutionSettingsProvider,
     composerSkillPreferences,
     fastModeSessions: codexFastModeSessions,
+    goalSessions: codexGoalSessions,
     agentToolCliEnvironment: unavailableCodexAgentToolCliEnvironmentProvider,
     managedTui: codexManagedTui,
     materializedConnections: [codexConnection],
@@ -4233,6 +4249,7 @@ async function main(): Promise<void> {
     executionSettings: codexExecutionSettingsProvider,
     composerSkillPreferences,
     fastModeSessions: codexUdsFastModeSessions,
+    goalSessions: codexUdsGoalSessions,
     agentToolCliEnvironment: unavailableCodexAgentToolCliEnvironmentProvider,
     managedTui: codexUdsManagedTui,
     materializedConnections: [codexUdsConnection],
@@ -4265,6 +4282,7 @@ async function main(): Promise<void> {
     executionSettings: codexExecutionSettingsProvider,
     composerSkillPreferences,
     fastModeSessions: codexStdioFastModeSessions,
+    goalSessions: codexStdioGoalSessions,
     agentToolCliEnvironment: unavailableCodexAgentToolCliEnvironmentProvider,
     managedTui: codexStdioManagedTui,
     materializedConnections: [codexStdioConnection],
@@ -4510,7 +4528,7 @@ async function main(): Promise<void> {
     [
       codexBackend.id,
       new CodexThreadActionPersistence({
-        desiredSettingsChanged: () => undefined,
+        desiredSettingsChanged: (scope, threadId) => { for (const entry of codexDesiredListeners) if (entry.scope.tenantId === scope.tenantId && entry.scope.principalId === scope.principalId && entry.threadId === threadId) entry.listener(); },
         database,
         scope,
         backendInstanceId: codexBackend.id,
@@ -4527,7 +4545,7 @@ async function main(): Promise<void> {
     [
       codexUdsBackend.id,
       new CodexThreadActionPersistence({
-        desiredSettingsChanged: () => undefined,
+        desiredSettingsChanged: (scope, threadId) => { for (const entry of codexDesiredListeners) if (entry.scope.tenantId === scope.tenantId && entry.scope.principalId === scope.principalId && entry.threadId === threadId) entry.listener(); },
         database,
         scope,
         backendInstanceId: codexUdsBackend.id,
@@ -4544,7 +4562,7 @@ async function main(): Promise<void> {
     [
       codexStdioBackend.id,
       new CodexThreadActionPersistence({
-        desiredSettingsChanged: () => undefined,
+        desiredSettingsChanged: (scope, threadId) => { for (const entry of codexDesiredListeners) if (entry.scope.tenantId === scope.tenantId && entry.scope.principalId === scope.principalId && entry.threadId === threadId) entry.listener(); },
         database,
         scope,
         backendInstanceId: codexStdioBackend.id,

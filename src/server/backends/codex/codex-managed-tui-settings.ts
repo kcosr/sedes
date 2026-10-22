@@ -20,12 +20,25 @@ const SETTINGS_CONFIRMATION_TIMEOUT_MILLISECONDS = 10_000;
  * update does not publish a settings notification.
  * This changes future-turn settings without interrupting an active turn.
  */
-export async function prepareCodexManagedTuiThreadSettings(input: {
+type SettingsInput = {
   readonly client: CodexSharedClientFacade;
   readonly authority: CodexManagedTuiBindingAuthority;
   readonly settings: CodexManagedTuiLaunchSettings;
   readonly signal: AbortSignal;
-}): Promise<CodexLiveModelSelection> {
+};
+export async function prepareCodexManagedTuiThreadSettings(input: SettingsInput): Promise<CodexLiveModelSelection> {
+  return synchronizeSettings(input, true);
+}
+/** Verify the complete required tuple without replaying any settings. */
+export async function verifyCodexManagedTuiThreadSettings(input: SettingsInput): Promise<void> {
+  await synchronizeSettings(input, false);
+}
+async function synchronizeSettings(input: {
+  readonly client: CodexSharedClientFacade;
+  readonly authority: CodexManagedTuiBindingAuthority;
+  readonly settings: CodexManagedTuiLaunchSettings;
+  readonly signal: AbortSignal;
+}, apply: boolean): Promise<CodexLiveModelSelection> {
   const { client, authority, settings, signal } = input;
   const assertCurrent = () => {
     if (signal.aborted) throw signal.reason;
@@ -109,12 +122,14 @@ export async function prepareCodexManagedTuiThreadSettings(input: {
   timeout.unref?.();
   try {
     assertCurrent();
+    if (apply) {
     const receipt = await client.requestWithReceipt(codexThreadSettingsUpdateMethod, params, {
       timeoutMilliseconds: SETTINGS_CONFIRMATION_TIMEOUT_MILLISECONDS,
       signal,
     });
     if (receipt.generation !== authority.appServerGeneration) {
       throw new Error("codex_tui_settings_generation_changed");
+    }
     }
     const readSettings = async () => {
       assertCurrent();

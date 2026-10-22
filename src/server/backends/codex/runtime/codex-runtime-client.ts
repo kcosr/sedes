@@ -196,7 +196,7 @@ export class CodexRuntimeClient {
         this.#diagnostic("provider_lifecycle", { outcome: event.lifecycle.state, reason: event.lifecycle.unavailableReason });
         if (event.lifecycle.state === "ready") {
           this.serverRequests.activateGeneration(this.#generation);
-          this.#current = { generation: this.#generation, request: (method, params, options) => this.#request(method, params, options).then(receipt => receipt.result), requestWithReceipt: (method, params, options) => this.#request(method, params, options) };
+          this.#current = { generation: this.#generation, dispatchContinuity: JSON.stringify([this.#authority.runtimeId, this.#providerGeneration, this.#authority.controllerId]), request: (method, params, options) => this.#request(method, params, options).then(receipt => receipt.result), requestWithReceipt: (method, params, options) => this.#request(method, params, options) };
         } else this.#current = undefined;
         this.client.updateLifecycle({ ...event.lifecycle, generation: this.#generation });
         return;
@@ -328,12 +328,17 @@ export class CodexRuntimeClient {
     const encoded = specification.encodeParams(params);
     let operationId = randomUUID() as string;
     if (options.runtimeCorrelation) {
-      this.#receipts.reconcileRecordedApplicationState(this.#authority);
-      const reserved = this.#receipts.reserve(this.#authority, {
+      const reserved = (() => { try {
+        this.#receipts.reconcileRecordedApplicationState(this.#authority);
+        return this.#receipts.reserve(this.#authority, {
         operationId, method: specification.method,
         requestFingerprint: createHash("sha256").update(JSON.stringify([specification.method, codexEnvironmentFingerprintInput(specification.method, encoded, options.environmentVariablesFingerprint)])).digest("hex"),
         correlation: options.runtimeCorrelation,
-      });
+        nativeGeneration: this.#providerGeneration,
+        });
+      } catch (cause) {
+        throw new CodexRpcDeliveryError({ code: "codex_runtime_receipt_reservation_failed", delivery: "not_sent", generation, method: specification.method, cause });
+      } })();
       operationId = reserved.operationId;
       if (reserved.state !== "reserved") {
         const prior = reserved.outcome;
@@ -369,7 +374,7 @@ export class CodexRuntimeClient {
       });
       if (outcome.status === "pending") throw new Error("codex_runtime_pending_result");
       if (outcome.status === "failed") {
-        if (options.runtimeCorrelation) this.#releaseHandledRejection(receiptObservation(outcome));
+        if (options.runtimeCorrelation && options.runtimeCorrelation.kind !== "speed") this.#releaseHandledRejection(receiptObservation(outcome));
         if (outcome.failure.kind === "remote") throw new CodexRpcRemoteError({ ...outcome.failure, generation: outcome.failure.generation + this.#generationOffset });
         throw new CodexRpcDeliveryError({ ...outcome.failure, generation: outcome.failure.generation + this.#generationOffset });
       }
@@ -399,7 +404,7 @@ export class CodexRuntimeClient {
 function receiptObservation(outcome: Exclude<CodexRuntimeOutcome, { status: "pending" }>): CodexRuntimeReceiptObservation {
   if (outcome.status !== "failed" || outcome.failure.kind !== "remote") return outcome;
   const rejectionReason = codexSteerRejectionReason(outcome.failure);
-  return { ...outcome, failure: { ...outcome.failure, ...(rejectionReason ? { rejectionReason } : {}) } };
+  return { ...outcome, failure: { ...outcome.failure, ...(rejectionReason ? { rejectionReason } : {}), ...(outcome.method === "turn/settings/update" && outcome.failure.code === -32600 && outcome.failure.message === "turn settings updates require the step_model_switching feature" ? { speedNotEnabled: true as const } : {}) } };
 }
 
 function rejectedFingerprint(observation: CodexRuntimeReceiptObservation): string | undefined {

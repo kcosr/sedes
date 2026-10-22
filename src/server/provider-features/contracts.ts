@@ -79,6 +79,7 @@ export type ProviderFeatureModule<State = unknown, ItemPayload = unknown> =
 
 export interface ProviderFeatureCapabilityInput {
   readonly revision: number;
+  readonly mutationRevision: number;
   readonly availability: ProviderFeatureAvailability;
   readonly unavailableReason?: BoundedDisplayText;
   /** Deployment-policy subset. Unknown operation IDs fail closed. */

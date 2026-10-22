@@ -340,22 +340,40 @@ confirmation and preserves them for when you unarchive. Sent answers appear as
 
 ### Speed
 
-Speed is a service-tier choice: Standard, Fast, or Ultrafast. Faster speeds
-respond sooner and use more of your plan's usage. Availability comes from the
-Codex model catalog for your account, the active runtime, and installation
-policy; Sedes does not infer it from a model name. Change it with the other
-desired next-turn settings.
+Speed selects Standard, Fast, or Ultrafast. Availability comes from your Codex
+account's model catalog, runtime support, and installation policy. Faster
+speeds use more of your plan's usage.
 
-Enabled automations do not lock the thread's model, reasoning, Speed, or
-permissions. Change them between runs; the next **This thread** automation run
-uses the current thread settings. Active turns, queued input, and unresolved
-recovery still prevent settings changes.
+One selection saves the preference for future turns and, during an eligible
+Sedes-started turn, requests it for the next model step that has not already
+captured its settings. A turn is the work through completion or Stop; a model
+step is one model invocation within that turn. The step already in progress
+keeps its settings. If the active update is rejected or cannot be confirmed,
+the saved preference remains intact.
 
-When the model offers one faster speed, the composer's lightning button turns
-it on and off. When it offers both Fast and Ultrafast, the button opens a Speed
-menu; the button shows a filled lightning bolt for Fast and a rocket for
-Ultrafast. Switching to a model that doesn't offer the selected speed returns
-the thread to Standard.
+While idle, the lightning button toggles Standard and Fast when those are the
+two available choices. With Ultrafast available, it opens the Speed menu.
+During an eligible active turn, both modes open the menu, including on mobile
+as a bottom sheet, so you can select the saved Speed again. Standard uses an
+outline lightning bolt, Fast a filled lightning bolt, and Ultrafast a rocket.
+The composer icon and menu checkmark show the saved preference. The tooltip
+reads “Applies from the next model step. Saved for future turns.” The control
+does not report which speed an individual step is using.
+
+Externally started, recovering, native continuation, and managed terminal
+turns have read-only active Speed.
+
+Queued input uses the saved preference when its execution settings are frozen;
+an already frozen start or retry keeps its original choice. Enabled automations
+do not lock Speed. Model, reasoning, and permission changes still require a
+quiet thread. Switching to a model that does not offer the selected tier
+returns the saved preference to Standard.
+
+The active update applies to this root turn. Native subagents and Goal
+continuations follow native thread defaults, which synchronize when safely
+idle. Continuous Goal execution may defer that synchronization. To move
+ongoing Goal work to the saved Speed, pause Goal, wait for settlement, and
+resume after synchronization.
 
 ### Goal
 

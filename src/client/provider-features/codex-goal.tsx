@@ -123,7 +123,7 @@ function CodexGoalComposerControl({
         feature: ref,
         actionId,
         arguments: argumentsValue,
-        expectedFeatureRevision: featureState.revision,
+        expectedMutationRevision: capability.mutationRevision,
       });
       if (result.status === "recovery_required") {
         // Keep the popover open with an explicit uncertain state — Goal

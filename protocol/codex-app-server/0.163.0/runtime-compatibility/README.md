@@ -53,6 +53,67 @@ Use `0.162.1` and `0.163.0` separately for `RELEASE`. Recorded hashes attest
 the qualification artifacts; operator-installed runtimes remain version-based
 admissions and are never digest-pinned.
 
+## Active Speed
+
+The opt-in `tests/integration/codex-active-speed-native.test.ts` uses the real
+Sedes driver, actor, execution-settings repositories, and native executable.
+The [0.162.1 results](0.162.1-active-speed-linux-x64.json) and
+[0.163.0 results](0.163.0-active-speed-linux-x64.json) record all 11 test cases
+per release. They cover isolated homes
+and loopback Responses providers, over owned
+stdio, an external private Unix socket, and the bundled persistent sidecar.
+The sidecar test replaces the outer SSH carrier with a private Unix carrier;
+it exercises the actual host runtime and receipt protocol.
+
+The fixture checks captured model requests, explicit future `turn/start`
+tiers, completed-target receipts, publication followed by Stop without another
+inference, per-thread feature isolation, actual native subagent inheritance, fork, and cold
+resume after idle eviction and runtime wake. It also covers imported threads, already-loaded
+resume, paused-Goal convergence and Resume, and a model-created Goal's current
+turn versus later native continuation. Subagent evidence records the first
+child's initial and subsequent step tiers, a later child's tier after a confirmed
+thread-default update, and the parent's independently published tiers. Replaying
+a completed operation or addressing a completed turn sends no native update.
+The fixture verifies the executable against the
+hashes in the release metadata.
+
+Additional cases gate Fast and Ultrafast independently, reject unsupported and
+fallback-only model advertisements, and latch a stale loaded session's native
+feature rejection. The sidecar records complete frames immediately before the
+native process to verify dispatch order, then rejects the retired controller
+through a replacement carrier without sending another native frame. A managed
+daemon restart during an accepted but unanswered publication verifies an
+uncertain receipt, no redispatch, native recovery, explicit successor tiers,
+and the bounded 30-second default-convergence grace.
+
+A separate deliberate active-default write is confirmed by its native settings
+notification before restart. Both pinned versions retain the interrupted-turn
+snapshot and resume with that turn's original tier. The earlier source-based
+assumption that this write destroys daemon recovery was incorrect: the native
+in-memory continuation fence and the persisted interrupted-turn snapshot are
+different state. Sedes still never intentionally writes defaults while active.
+
+The separate fault-relay probe records
+[0.162.1 ordering](0.162.1-active-speed-ordering-linux-x64.json) and
+[0.163.0 ordering](0.163.0-active-speed-ordering-linux-x64.json). Same-stream
+requests retain their native arrival order after a caller timeout. Replaced
+streams do not preserve issue order across connections. A delayed default
+write does not change an explicitly tiered root turn. These controlled relay
+faults establish native behavior, not an observed production reconnect bug.
+
+Run each command with each pinned release binary:
+
+```sh
+env -u NODE_ENV SEDES_SPEED_NATIVE_EXECUTABLE=/absolute/path/to/codex \
+  npx vitest run tests/integration/codex-active-speed-native.test.ts
+env -u NODE_ENV SEDES_SPEED_NATIVE_EXECUTABLE=/absolute/path/to/codex \
+  node scripts/codex-probes/verify-active-speed-ordering.mjs
+```
+
+Neither command uses an authenticated model provider. The relay probe declines
+all command approvals; the application fixture stops its approval-bound turn.
+No tool command is executed.
+
 ## Validation limits
 
 Only Linux x64 execution is established by these results. macOS artifacts

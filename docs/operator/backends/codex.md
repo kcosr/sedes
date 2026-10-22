@@ -136,6 +136,30 @@ integrity; it is not a request to install or launch that Codex release. See
 [protocol and release admission](../../internals/backends/codex.md#protocol-and-release-admission)
 for the parser and generation contract.
 
+## Persistent Speed
+
+Upgrade Codex execution sidecars together with the server: active Speed requires
+Codex runtime protocol 5, and managed-terminal settings handoffs require
+managed-TUI capability 3. Upgrade browser and packaged clients for application
+protocol 169 and the strict `codex.fast_mode@3` contract.
+
+Sedes automatically adds the native experimental `step_model_switching` flag
+to sessions it creates, including fork and later provenance-qualified cold
+resume. It leaves global `config.toml` and daemon startup flags alone and keeps
+Codex's under-development warnings. An already loaded session may retain its
+old flag configuration until it naturally reloads; Sedes does not force an
+unload or restart. Independently created sessions do not receive the override.
+
+A selection persists for future Sedes turns and can publish to the next eligible
+model step of the exact Sedes-started active turn. The current step keeps its
+captured settings. External daemons support this when Sedes owns the turn.
+Provider publication is separate from inference use.
+Native subagents and Goal continuations inherit native defaults, which converge
+only while safely idle. Continuous Goal work can defer convergence. Independent
+native writers and delayed frames from replaced connections can change those
+defaults; Sedes's explicit root-turn tier protects its newly started root turn.
+See [Speed authority and recovery](../../internals/codex-thread-execution-settings.md#speed).
+
 ## Supported topologies
 
 | Topology                    | Ownership                                                                    | Environment | Route assurance                                                                             | Managed TUI | Files                        |
@@ -145,8 +169,8 @@ for the parser and generation contract.
 | Authenticated WS/WSS        | Operator owns daemon/store; Sedes owns client                                | Local       | Loopback-only plaintext or platform-verified TLS plus per-generation bearer                 | Yes         | Local                        |
 | Persistent sidecar runtime | Sidecar owns its runtime/client; an external daemon remains operator-owned | SSH or outbound | Exact environment/service identity and provider transport admission on the execution host | Yes, for an external daemon when the sidecar negotiated managed-TUI operations | Separately granted operations |
 
-Sedes does not start, stop, restart, or configure an external Codex
-daemon. It establishes availability through the normal connection and
+Sedes does not start, stop, restart, or edit the global configuration of an external
+Codex daemon. It establishes availability through the normal connection and
 initialization handshake. Disconnecting a client does not prove that a
 provider turn was cancelled. External connections do not claim a Codex
 native-store lock.
@@ -290,7 +314,8 @@ assistant text remains visible.
 
 Speed is the closed service-tier feature: Standard, Fast, and Ultrafast. A
 model offers Fast or Ultrafast only when the Codex catalog for the signed-in
-account advertises that tier, and Codex's `fast_mode` feature gates both.
+account advertises that tier, with independent native `fast_mode` and
+`ultrafast_mode` feature gates.
 Sedes reads the catalog once per Codex daemon generation, so restart the
 daemon (or let the next Codex upgrade restart it) to pick up a tier newly
 granted to the account. Goal stores one bounded objective and

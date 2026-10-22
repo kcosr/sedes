@@ -38,6 +38,7 @@ function capability(actionIds: readonly string[], revision = 3) {
   return {
     ref,
     revision,
+    mutationRevision: revision,
     label: { text: "Goal" },
     availability: "available" as const,
     operations: actionIds.map((actionId) => ({
@@ -168,7 +169,7 @@ describe("codex.goal@1 client feature", () => {
         arguments: objectValue({
           objective: { text: "Finish the migration" },
         }),
-        expectedFeatureRevision: 3,
+        expectedMutationRevision: 3,
       }),
     );
   });
@@ -195,7 +196,7 @@ describe("codex.goal@1 client feature", () => {
         arguments: objectValue({
           objective: { text: "Finish the migration" },
         }),
-        expectedFeatureRevision: 3,
+        expectedMutationRevision: 3,
       }),
     );
 
@@ -526,6 +527,7 @@ describe("codex.goal@1 client feature", () => {
           {
             ref: { featureId: "codex.unknown", schemaVersion: 1 },
             revision: 1,
+            mutationRevision: 1,
             label: { text: "Unknown feature" },
             availability: "available",
             operations: [],

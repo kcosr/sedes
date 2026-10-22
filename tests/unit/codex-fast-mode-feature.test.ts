@@ -1,114 +1,52 @@
 import { describe, expect, it } from "vitest";
-import {
-  codexFastModeStateV2Schema,
-  codexSpeedSelectionForAction,
-  CODEX_FAST_MODE_FEATURE_REF,
-} from "../../src/server/backends/codex/codex-fast-mode-feature.js";
+import { CODEX_SPEED_REF, speedArgumentsValue, speedArgumentsWireSchema, speedStateSchema, speedStateWireSchema, speedResultWireSchema } from "../../src/shared/provider-features/codex-speed.js";
 import { compiledProviderFeatureRegistry } from "../../src/server/provider-features/compiled-provider-feature-registry.js";
-import { ProviderFeatureRegistryError } from "../../src/server/provider-features/provider-feature-registry.js";
+import { boundValue } from "../../src/server/conversations/payload-policy.js";
+import { codexTurnSettingsUpdateMethod } from "../../src/server/backends/codex/codex-active-speed-protocol.js";
+import { codexRuntimeMethod } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
 
-describe("codex.fast_mode@2 feature contract", () => {
-  it("registers only for Codex as a quiet composer action contract", () => {
-    expect(CODEX_FAST_MODE_FEATURE_REF).toEqual({
-      featureId: "codex.fast_mode",
-      schemaVersion: 2,
-    });
-    const capability = compiledProviderFeatureRegistry.capability(
-      CODEX_FAST_MODE_FEATURE_REF,
-      "codex_app_server",
-      { revision: 4, availability: "available" },
-    );
-
-    expect(capability.label).toEqual({ text: "Speed" });
-    expect(capability.presentationSlots).toEqual(["composer_action"]);
-    expect(capability.operations.map(({ actionId }) => actionId)).toEqual([
-      "set_standard",
-      "set_fast",
-      "set_ultrafast",
-    ]);
-    for (const operation of capability.operations) {
-      expect(operation).toMatchObject({
-        confirmation: "none",
-        execution: "inline",
-        effects: { application: "write", modelUsage: "none", external: "none" },
-      });
+describe("codex.fast_mode@3", () => {
+  const state = { saved: { selection: "fast", desiredRevision: 4 }, offered: [{ selection: "standard" }, { selection: "fast" }], currentRun: null, lastChange: null };
+  it("has one action, separate revision authority, and no support on other backends", () => {
+    const capability = compiledProviderFeatureRegistry.capability(CODEX_SPEED_REF, "codex_app_server", { revision: 9, mutationRevision: 4, availability: "available" });
+    expect(capability).toMatchObject({ revision: 9, mutationRevision: 4 });
+    expect(capability.operations.map(action => action.actionId)).toEqual(["set_speed"]);
+    for (const backend of ["pi", "claude_agent_sdk", "grok_build", "opencode"] as const) {
+      expect(compiledProviderFeatureRegistry.refs(backend).some(ref => ref.featureId === CODEX_SPEED_REF.featureId)).toBe(false);
     }
-    expect(
-      compiledProviderFeatureRegistry
-        .refs("pi")
-        .some(({ featureId }) => featureId === "codex.fast_mode"),
-    ).toBe(false);
-    expect(() =>
-      compiledProviderFeatureRegistry.capability(
-        { featureId: "codex.fast_mode", schemaVersion: 1 },
-        "codex_app_server",
-        { revision: 4, availability: "available" },
-      ),
-    ).toThrow(ProviderFeatureRegistryError);
+    expect(() => compiledProviderFeatureRegistry.capability({ ...CODEX_SPEED_REF, schemaVersion: 2 }, "codex_app_server", { revision: 1, mutationRevision: 1, availability: "available" })).toThrow();
   });
-
-  it("maps each action to exactly one speed", () => {
-    expect(codexSpeedSelectionForAction("set_standard")).toBe("standard");
-    expect(codexSpeedSelectionForAction("set_fast")).toBe("fast");
-    expect(codexSpeedSelectionForAction("set_ultrafast")).toBe("ultrafast");
-    expect(codexSpeedSelectionForAction("enable")).toBeUndefined();
-    expect(codexSpeedSelectionForAction("disable")).toBeUndefined();
+  it("requires a complete normalized target and one strict bounded shape", () => {
+    const args = { selection: "ultrafast" as const, currentRunTarget: { turnId: "application-turn", activationId: "activation" } };
+    expect(speedArgumentsWireSchema.parse(speedArgumentsValue(args))).toEqual(args);
+    expect(speedArgumentsWireSchema.safeParse(args).success).toBe(false);
+    for (const bad of [null, { selection: "fast" }, { selection: "priority", currentRunTarget: null }, { ...args, turnId: "native" }, { ...args, currentRunTarget: { turnId: "t" } }]) {
+      expect(speedArgumentsWireSchema.safeParse(boundValue(bad)).success).toBe(false);
+    }
+    expect(speedStateWireSchema.parse(boundValue(state))).toEqual(state);
+    expect(speedStateWireSchema.safeParse({ kind: "object", entries: [], truncation: { truncated: true, retainedBytes: 0, reason: "byte_limit" } }).success).toBe(false);
+    expect(speedArgumentsWireSchema.safeParse({ kind: "object", entries: [
+      { key: { text: "selection" }, value: { text: "fast" } }, { key: { text: "selection" }, value: { text: "standard" } },
+      { key: { text: "currentRunTarget" }, value: null },
+    ] }).success).toBe(false);
   });
-
-  it("accepts only null arguments and the closed state shape", () => {
-    expect(
-      compiledProviderFeatureRegistry.validateAction({
-        ref: CODEX_FAST_MODE_FEATURE_REF,
-        backendKind: "codex_app_server",
-        actionId: "set_ultrafast",
-        arguments: null,
-      }).arguments,
-    ).toBeNull();
-    expect(() =>
-      compiledProviderFeatureRegistry.validateAction({
-        ref: CODEX_FAST_MODE_FEATURE_REF,
-        backendKind: "codex_app_server",
-        actionId: "set_fast",
-        arguments: { kind: "object", entries: [] },
-      }),
-    ).toThrow(ProviderFeatureRegistryError);
-    expect(() =>
-      compiledProviderFeatureRegistry.validateAction({
-        ref: CODEX_FAST_MODE_FEATURE_REF,
-        backendKind: "codex_app_server",
-        actionId: "enable",
-        arguments: null,
-      }),
-    ).toThrow(ProviderFeatureRegistryError);
-
-    const state = {
-      desired: "ultrafast",
-      effective: "fast",
-      applicationState: "pending",
-      offered: [
-        { selection: "fast", description: "1.5x speed, increased usage" },
-        { selection: "ultrafast" },
-      ],
-    };
-    expect(codexFastModeStateV2Schema.parse(state)).toEqual(state);
-    for (const invalid of [
-      { ...state, desired: "priority" },
-      { ...state, effective: "default" },
-      { ...state, offered: [] },
-      { ...state, offered: [{ selection: "standard" }] },
-      {
-        ...state,
-        offered: [{ selection: "ultrafast" }, { selection: "fast" }],
-      },
-      { ...state, offered: [{ selection: "fast" }, { selection: "fast" }] },
-      { ...state, offered: [{ selection: "fast", description: "" }] },
-      {
-        ...state,
-        offered: [{ selection: "fast", description: "d".repeat(241) }],
-      },
-      { desired: "fast", effective: "fast", applicationState: "applied" },
-    ]) {
-      expect(() => codexFastModeStateV2Schema.parse(invalid)).toThrow();
+  it("rejects partial, duplicated, and out-of-order offered speeds", () => {
+    for (const offered of [[], [{ selection: "fast" }], [{ selection: "standard" }, { selection: "fast" }, { selection: "fast" }],
+      [{ selection: "standard" }, { selection: "ultrafast" }, { selection: "fast" }]]) {
+      expect(speedStateSchema.safeParse({ ...state, offered }).success).toBe(false);
+    }
+    const result = { operationId: "op", receiptRevision: 3, saved: { status: "saved", ...state.saved }, currentRun: { status: "not_requested" } };
+    expect(speedResultWireSchema.parse(boundValue(result))).toEqual(result);
+    expect(speedResultWireSchema.safeParse(boundValue({ ...result, currentRun: { status: "published" } })).success).toBe(false);
+  });
+  it("enforces the same three-key native subset locally and on the execution host", () => {
+    for (const method of [codexTurnSettingsUpdateMethod, codexRuntimeMethod("turn/settings/update")]) {
+      expect(method.encodeParams({ threadId: "t", turnId: "r", serviceTier: "priority" })).toEqual({ threadId: "t", turnId: "r", serviceTier: "priority" });
+      for (const bad of [{ threadId: "t", turnId: "r" }, { threadId: "t", turnId: "r", serviceTier: null },
+        { threadId: "t", turnId: "r", serviceTier: "priority", model: "other" },
+        { threadId: "t", turnId: "r", serviceTier: "priority", effort: "high" }]) expect(() => method.encodeParams(bad as never)).toThrow();
+      expect(method.decodeResult({ status: "applied" })).toEqual({ status: "applied" });
+      expect(() => method.decodeResult({ status: "applied", extra: true })).toThrow();
     }
   });
 });

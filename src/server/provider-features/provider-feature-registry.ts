@@ -84,6 +84,7 @@ export class ProviderFeatureRegistry {
     providerFeatureCapabilitySchema.parse({
       ref,
       revision: 0,
+      mutationRevision: 0,
       label: module.label,
       ...(module.description === undefined
         ? {}
@@ -181,6 +182,7 @@ export class ProviderFeatureRegistry {
     return providerFeatureCapabilitySchema.parse({
       ref: module.ref,
       revision: input.revision,
+      mutationRevision: input.mutationRevision,
       label: module.label,
       ...(module.description === undefined
         ? {}

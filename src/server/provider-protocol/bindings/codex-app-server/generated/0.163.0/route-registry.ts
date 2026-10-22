@@ -20,6 +20,8 @@ import type { ThreadStartResponse as ExperimentalThreadStartResponse } from "./e
 import type { ThreadStartedNotification as ExperimentalThreadStartedNotification } from "./experimental/v2/ThreadStartedNotification.js";
 import type { ThreadUnarchiveParams as ExperimentalThreadUnarchiveParams } from "./experimental/v2/ThreadUnarchiveParams.js";
 import type { ThreadUnarchiveResponse as ExperimentalThreadUnarchiveResponse } from "./experimental/v2/ThreadUnarchiveResponse.js";
+import type { TurnSettingsUpdateParams as ExperimentalTurnSettingsUpdateParams } from "./experimental/v2/TurnSettingsUpdateParams.js";
+import type { TurnSettingsUpdateResponse as ExperimentalTurnSettingsUpdateResponse } from "./experimental/v2/TurnSettingsUpdateResponse.js";
 import type { AccountUpdatedNotification as StableAccountUpdatedNotification } from "./stable/v2/AccountUpdatedNotification.js";
 import type { AgentMessageDeltaNotification as StableAgentMessageDeltaNotification } from "./stable/v2/AgentMessageDeltaNotification.js";
 import type { ApplyPatchApprovalParams as StableApplyPatchApprovalParams } from "./stable/ApplyPatchApprovalParams.js";
@@ -51,6 +53,7 @@ import type { McpServerStatusUpdatedNotification as StableMcpServerStatusUpdated
 import type { McpToolCallProgressNotification as StableMcpToolCallProgressNotification } from "./stable/v2/McpToolCallProgressNotification.js";
 import type { ModelListParams as StableModelListParams } from "./stable/v2/ModelListParams.js";
 import type { ModelListResponse as StableModelListResponse } from "./stable/v2/ModelListResponse.js";
+import type { ModelReroutedNotification as StableModelReroutedNotification } from "./stable/v2/ModelReroutedNotification.js";
 import type { ModelSafetyBufferingUpdatedNotification as StableModelSafetyBufferingUpdatedNotification } from "./stable/v2/ModelSafetyBufferingUpdatedNotification.js";
 import type { ModelVerificationNotification as StableModelVerificationNotification } from "./stable/v2/ModelVerificationNotification.js";
 import type { PermissionProfileListParams as StablePermissionProfileListParams } from "./stable/v2/PermissionProfileListParams.js";
@@ -132,6 +135,8 @@ import {
   validateExperimentalThreadStartedNotification,
   validateExperimentalThreadUnarchiveParams,
   validateExperimentalThreadUnarchiveResponse,
+  validateExperimentalTurnSettingsUpdateParams,
+  validateExperimentalTurnSettingsUpdateResponse,
   validateStableAccountLoginCompletedNotification,
   validateStableAccountRateLimitsUpdatedNotification,
   validateStableAccountUpdatedNotification,
@@ -289,6 +294,7 @@ export interface CodexClientRequestMap {
   readonly "thread/unarchive": { readonly params: ExperimentalThreadUnarchiveParams; readonly result: ExperimentalThreadUnarchiveResponse; readonly stability: "stable" };
   readonly "thread/start": { readonly params: ExperimentalThreadStartParams; readonly result: ExperimentalThreadStartResponse; readonly stability: "stable" };
   readonly "turn/start": { readonly params: StableTurnStartParams; readonly result: StableTurnStartResponse; readonly stability: "stable" };
+  readonly "turn/settings/update": { readonly params: ExperimentalTurnSettingsUpdateParams; readonly result: ExperimentalTurnSettingsUpdateResponse; readonly stability: "experimental" };
   readonly "turn/steer": { readonly params: StableTurnSteerParams; readonly result: StableTurnSteerResponse; readonly stability: "stable" };
   readonly "turn/interrupt": { readonly params: StableTurnInterruptParams; readonly result: StableTurnInterruptResponse; readonly stability: "stable" };
   readonly "thread/name/set": { readonly params: StableThreadSetNameParams; readonly result: StableThreadSetNameResponse; readonly stability: "stable" };
@@ -332,6 +338,7 @@ export interface CodexServerNotificationMap {
   readonly "turn/moderationMetadata": { readonly params: StableTurnModerationMetadataNotification; readonly domain: "live_turns"; readonly use: "ignored_informational" };
   readonly "model/verification": { readonly params: StableModelVerificationNotification; readonly domain: "live_turns"; readonly use: "ignored_informational" };
   readonly "model/safetyBuffering/updated": { readonly params: StableModelSafetyBufferingUpdatedNotification; readonly domain: "live_turns"; readonly use: "ignored_informational" };
+  readonly "model/rerouted": { readonly params: StableModelReroutedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "thread/settings/updated": { readonly params: ExperimentalThreadSettingsUpdatedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "thread/readState/changed": { readonly params: ExperimentalThreadReadStateChangedNotification; readonly domain: "live_turns"; readonly use: "ignored_informational" };
   readonly "thread/tokenUsage/updated": { readonly params: StableThreadTokenUsageUpdatedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
@@ -478,6 +485,7 @@ export const codexClientRequestRegistry = Object.freeze({
   "thread/unarchive": Object.freeze({ params: validateExperimentalThreadUnarchiveParams, result: validateExperimentalThreadUnarchiveResponse, stability: "stable" }),
   "thread/start": Object.freeze({ params: validateExperimentalThreadStartParams, result: validateExperimentalThreadStartResponse, stability: "stable" }),
   "turn/start": Object.freeze({ params: validateStableTurnStartParams, result: validateStableTurnStartResponse, stability: "stable" }),
+  "turn/settings/update": Object.freeze({ params: validateExperimentalTurnSettingsUpdateParams, result: validateExperimentalTurnSettingsUpdateResponse, stability: "experimental" }),
   "turn/steer": Object.freeze({ params: validateStableTurnSteerParams, result: validateStableTurnSteerResponse, stability: "stable" }),
   "turn/interrupt": Object.freeze({ params: validateStableTurnInterruptParams, result: validateStableTurnInterruptResponse, stability: "stable" }),
   "thread/name/set": Object.freeze({ params: validateStableThreadSetNameParams, result: validateStableThreadSetNameResponse, stability: "stable" }),
@@ -521,6 +529,7 @@ export const codexServerNotificationRegistry = Object.freeze({
   "turn/moderationMetadata": Object.freeze({ params: validateStableTurnModerationMetadataNotification, domain: "live_turns", use: "ignored_informational" }),
   "model/verification": Object.freeze({ params: validateStableModelVerificationNotification, domain: "live_turns", use: "ignored_informational" }),
   "model/safetyBuffering/updated": Object.freeze({ params: validateStableModelSafetyBufferingUpdatedNotification, domain: "live_turns", use: "ignored_informational" }),
+  "model/rerouted": Object.freeze({ params: validateStableModelReroutedNotification, domain: "live_turns", use: "decoded" }),
   "thread/settings/updated": Object.freeze({ params: validateExperimentalThreadSettingsUpdatedNotification, domain: "live_turns", use: "decoded" }),
   "thread/readState/changed": Object.freeze({ params: validateExperimentalThreadReadStateChangedNotification, domain: "live_turns", use: "ignored_informational" }),
   "thread/tokenUsage/updated": Object.freeze({ params: validateStableThreadTokenUsageUpdatedNotification, domain: "live_turns", use: "decoded" }),

@@ -57,6 +57,7 @@ const actionIds = [
 const capability = {
   ref,
   revision: 7,
+  mutationRevision: 7,
   label: { text: "Codex execution" },
   availability: "available",
   operations: actionIds.map((actionId) => ({
@@ -246,7 +247,7 @@ describe("codex.execution@1 client feature", () => {
       feature: ref,
       actionId: "set_network_enabled",
       arguments: null,
-      expectedFeatureRevision: 7,
+      expectedMutationRevision: 7,
     });
   });
 
@@ -328,7 +329,7 @@ describe("codex.execution@1 client feature", () => {
     ] as const) {
       const choice = within(screen.getByRole("group", { name: group })).getByRole("menuitemradio", { name: label });
       await userEvent.click(choice);
-      expect(perform).toHaveBeenLastCalledWith(expect.objectContaining({ actionId, expectedFeatureRevision: 7 }));
+      expect(perform).toHaveBeenLastCalledWith(expect.objectContaining({ actionId, expectedMutationRevision: 7 }));
       desired = { ...desired, ...patch };
       view.rerender(featureElement(snapshot({ desired }), perform, false, "sheet", true));
       expect(choice).toHaveAttribute("aria-checked", "true");

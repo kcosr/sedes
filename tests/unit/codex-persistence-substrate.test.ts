@@ -1,3 +1,4 @@
+import type { CodexSpeedSession } from "../../src/server/backends/codex/codex-speed-session.js";
 import type Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import type {
@@ -380,7 +381,7 @@ describe("Codex interactive presentation collaborators", () => {
 
   it("advertises Speed only for an enabled loaded thread and supported model", async () => {
     const provider = presentationProvider({
-      fastModeRuntime: {
+      fastModeRuntime: { controller: () => ({ currentRun: () => null, hasActiveNativeTurn: () => false }) as unknown as CodexSpeedSession,
         projection: () => ({
           revision: 1,
           fastEnabled: true,
@@ -441,18 +442,18 @@ describe("Codex interactive presentation collaborators", () => {
       presentation.providerFeatureCapabilities.map(({ ref }) => ref.featureId),
     ).toEqual(["codex.execution", "codex.fast_mode"]);
     expect(presentation.providerFeatureCapabilities[1]).toMatchObject({
-      revision: 0,
+      revision: expect.any(Number),
+      mutationRevision: 0,
       availability: "available",
-      operations: [expect.objectContaining({ actionId: "set_fast" })],
+      operations: [expect.objectContaining({ actionId: "set_speed" })],
     });
     expect(presentation.providerFeatureStates[1]).toMatchObject({
-      ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
-      revision: 0,
-      state: boundValue({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-        offered: [
+      ref: { featureId: "codex.fast_mode", schemaVersion: 3 },
+      revision: expect.any(Number),
+      state: speedValue({
+        saved: { selection: "standard", desiredRevision: 0 },
+        currentRun: null, lastChange: null,
+        offered: [{ selection: "standard" },
           {
             selection: "fast",
             description: "About 1.5x faster with higher usage.",
@@ -465,7 +466,7 @@ describe("Codex interactive presentation collaborators", () => {
   it.each([[false, false], [false, true], [true, false], [true, true]])(
     "intersects model offerings with Fast=%s and Ultrafast=%s policy",
     async (fastEnabled, ultrafastEnabled) => {
-      const provider = presentationProvider({ fastModeRuntime: { projection: () => ({
+      const provider = presentationProvider({ fastModeRuntime: { controller: () => ({ currentRun: () => null, hasActiveNativeTurn: () => false }) as unknown as CodexSpeedSession, projection: () => ({
         revision: 1, fastEnabled, ultrafastEnabled,
         availability: fastEnabled || ultrafastEnabled ? "available" : "unavailable",
         ...(!fastEnabled && !ultrafastEnabled ? { unavailableReason: "feature_disabled" } : {}),
@@ -487,9 +488,9 @@ describe("Codex interactive presentation collaborators", () => {
       const capability = presentation.providerFeatureCapabilities.find(({ ref }) => ref.featureId === "codex.fast_mode");
       if (offered.length === 0) expect(capability).toBeUndefined();
       else {
-        expect(capability?.operations.map(({ actionId }) => actionId)).toEqual(offered.map(tier => `set_${tier}`));
+        expect(capability?.operations.map(({ actionId }) => actionId)).toEqual(["set_speed"]);
         expect(presentation.providerFeatureStates.find(({ ref }) => ref.featureId === "codex.fast_mode")).toMatchObject({
-          state: boundValue({ desired: "standard", effective: "standard", applicationState: "applied", offered: offered.map(selection => ({ selection })) }),
+          state: speedValue({ saved: { selection: "standard", desiredRevision: 0 }, currentRun: null, lastChange: null, offered: [{ selection: "standard" }, ...offered.map(selection => ({ selection }))] }),
         });
       }
     },
@@ -549,18 +550,18 @@ describe("Codex interactive presentation collaborators", () => {
       presentation.providerFeatureCapabilities.map(({ ref }) => ref.featureId),
     ).toEqual(["codex.execution", "codex.fast_mode"]);
     expect(presentation.providerFeatureCapabilities[1]).toMatchObject({
-      revision: 0,
+      revision: expect.any(Number),
+      mutationRevision: 0,
       availability: "available",
-      operations: [expect.objectContaining({ actionId: "set_fast" })],
+      operations: [expect.objectContaining({ actionId: "set_speed" })],
     });
     expect(presentation.providerFeatureStates[1]).toMatchObject({
-      ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
-      revision: 0,
-      state: boundValue({
-        desired: "standard",
-        effective: null,
-        applicationState: "pending",
-        offered: [
+      ref: { featureId: "codex.fast_mode", schemaVersion: 3 },
+      revision: expect.any(Number),
+      state: speedValue({
+        saved: { selection: "standard", desiredRevision: 0 },
+        currentRun: null, lastChange: null,
+        offered: [{ selection: "standard" },
           {
             selection: "fast",
             description: "About 1.5x faster with higher usage.",
@@ -573,7 +574,7 @@ describe("Codex interactive presentation collaborators", () => {
   it("offers every catalog speed except the current one and encodes them in model values", async () => {
     const provider = presentationProvider({
       desiredServiceTier: "ultrafast",
-      fastModeRuntime: {
+      fastModeRuntime: { controller: () => ({ currentRun: () => null, hasActiveNativeTurn: () => false }) as unknown as CodexSpeedSession,
         projection: () => ({
           revision: 1,
           fastEnabled: true,
@@ -632,20 +633,19 @@ describe("Codex interactive presentation collaborators", () => {
     });
 
     expect(presentation.providerFeatureCapabilities[1]).toMatchObject({
-      ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
+      ref: { featureId: "codex.fast_mode", schemaVersion: 3 },
       availability: "available",
     });
     expect(
       presentation.providerFeatureCapabilities[1]!.operations.map(
         ({ actionId }) => actionId,
       ),
-    ).toEqual(["set_standard", "set_fast"]);
+    ).toEqual(["set_speed"]);
     expect(presentation.providerFeatureStates[1]).toMatchObject({
-      state: boundValue({
-        desired: "ultrafast",
-        effective: "ultrafast",
-        applicationState: "applied",
-        offered: [
+      state: speedValue({
+        saved: { selection: "ultrafast", desiredRevision: 0 },
+        currentRun: null, lastChange: null,
+        offered: [{ selection: "standard" },
           { selection: "fast" },
           {
             selection: "ultrafast",
@@ -667,14 +667,22 @@ describe("Codex interactive presentation collaborators", () => {
     });
   });
 
-  it("keeps an authoritatively enabled Fast control visible but read-only during provider loss", async () => {
+  it.each([
+    { context: "provider loss", active: false, availability: "unavailable" as const,
+      reason: "Speed is unavailable while Codex reconnects." },
+    { context: "an unowned active turn", active: true, availability: "available" as const,
+      reason: "Speed cannot be changed for this turn because Sedes does not control it." },
+  ])("keeps Speed read-only with an accurate reason during $context", async ({ active, availability, reason }) => {
+    const currentRun = active
+      ? { target: null, startingSelection: null, requestedSelection: null, publicationState: "unknown" as const }
+      : null;
     const provider = presentationProvider({
-      fastModeRuntime: {
+      fastModeRuntime: { controller: () => ({ currentRun: () => currentRun, hasActiveNativeTurn: () => active }) as unknown as CodexSpeedSession,
         projection: () => ({
           revision: 2,
           fastEnabled: true,
           ultrafastEnabled: true,
-          availability: "unavailable" as const,
+          availability,
           unavailableReason: "generation_changed",
         }),
       },
@@ -723,16 +731,16 @@ describe("Codex interactive presentation collaborators", () => {
     });
 
     expect(presentation.providerFeatureCapabilities[1]).toMatchObject({
-      ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
+      ref: { featureId: "codex.fast_mode", schemaVersion: 3 },
       availability: "read_only",
+      unavailableReason: { text: reason },
       operations: [],
     });
     expect(presentation.providerFeatureStates[1]).toMatchObject({
-      state: boundValue({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "unknown",
-        offered: [{ selection: "fast" }],
+      state: speedValue({
+        saved: { selection: "standard", desiredRevision: 0 },
+        currentRun, lastChange: null,
+        offered: [{ selection: "standard" },{ selection: "fast" }],
       }),
     });
   });
@@ -811,8 +819,8 @@ function presentationProvider(
 ): CodexThreadPresentationProvider {
   const backingState = input.backingState ?? "bound";
   const database = {
-    prepare: () => ({
-      get: () => ({ backingState }),
+    prepare: (sql: string) => ({
+      get: () => sql.includes("codex_speed_publications") ? undefined : ({ backingState }),
     }),
   } as unknown as Database.Database;
   const settings = {
@@ -848,6 +856,7 @@ function presentationProvider(
       effectiveConfirmationState:
         backingState === "bound" ? "confirmed" : "unconfirmed",
       revision: 0,
+      desiredRevision: 0,
       createdAt: 1,
       updatedAt: 1,
     }),
@@ -862,4 +871,8 @@ function presentationProvider(
       ? { fastModeRuntime: input.fastModeRuntime }
       : {}),
   });
+}
+
+function speedValue(state: import("../../src/shared/provider-features/codex-speed.js").SpeedState) {
+  return boundValue({ saved: state.saved, offered: state.offered, currentRun: state.currentRun, lastChange: state.lastChange });
 }

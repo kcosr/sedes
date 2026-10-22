@@ -54,9 +54,14 @@ function fixture(migrateLatest = true, filename = ":memory:") {
   const bindings = new ConversationBindingRepository(database);
   const thread = bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: profile.id, title: "Proof", now: 30 });
   const threadId = thread.id;
-  new CodexThreadExecutionSettingsRepository(database).initialize(scope, { applicationThreadId: threadId,
-    desired: { model: "test-model", reasoningEffort: "low", serviceTier: "standard", sandboxMode: "read-only",
-      networkAccess: "enabled", approvalPolicy: "never", approvalReviewer: "user" }, now: 30 });
+  // This fixture intentionally retains schema 141 for the provenance migration.
+  // Seed its historical columns directly; the current repository requires 154.
+  database.prepare(`INSERT INTO codex_thread_execution_settings
+    (tenant_id, owner_principal_id, application_thread_id, desired_model, desired_reasoning_effort,
+     desired_service_tier, desired_sandbox_mode, desired_network_access, desired_approval_policy,
+     desired_approval_reviewer, effective_confirmation_state, revision, created_at, updated_at)
+    VALUES (?, ?, ?, 'test-model', 'low', 'standard', 'read-only', 'enabled', 'never', 'user', 'unconfirmed', 0, 30, 30)`)
+    .run(scope.tenantId, scope.principalId, threadId);
   const creation = new ConversationCreationRepository(database);
   const nativeId = "01a128fe-18dd-7692-9de2-eaba461aa90c";
   const detail = serializeCodexBindingDetail({ threadId: nativeId, sessionId: "native-session-proof", correlationAncestorThreadIds: [], nativeAncestry: null });

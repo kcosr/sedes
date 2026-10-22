@@ -1,3 +1,4 @@
+import { codexActiveSpeedMigration } from "./migrations/154-codex-active-speed.js";
 import { mutationReceiptThreadIndexMigration } from "./migrations/153-mutation-receipt-thread-index.js";
 import { threadAppliedToolPolicySetsMigration } from "./migrations/152-thread-applied-tool-policy-sets.js";
 import { threadToolPolicyOriginsMigration } from "./migrations/151-thread-tool-policy-origins.js";
@@ -320,6 +321,7 @@ export const backendNormalizedMigrations = [
   threadToolPolicyOriginsMigration,
   threadAppliedToolPolicySetsMigration,
   mutationReceiptThreadIndexMigration,
+  codexActiveSpeedMigration,
 ] as const;
 
 export type DatabaseMigration = {

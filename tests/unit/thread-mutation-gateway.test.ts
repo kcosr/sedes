@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { CODEX_SPEED_REF, speedArgumentsValue } from "../../src/shared/provider-features/codex-speed.js";
+import { boundValue } from "../../src/server/conversations/payload-policy.js";
 import type { AppliedToolPolicySet } from "../../src/shared/protocol/conversation.js";
 import { BackendError } from "../../src/server/backends/contracts.js";
 import type { AcquiredConversationControl } from "../../src/server/conversations/conversation-actor-manager.js";
@@ -5150,6 +5152,9 @@ function providerFeatureMutationFixture(input: {
         ...(input.runState === "running" ? { activeTurnId: "turn-1" } : {}),
       },
       mutateProviderFeature,
+      runProviderFeatureMutation: async (work: (context: unknown) => Promise<unknown>) => work({
+        isIdle: () => input.runState === "idle", resolveTurnId: () => undefined, mutateExternal: mutateProviderFeature,
+      }),
     },
     release,
   }));
@@ -5212,10 +5217,12 @@ function providerFeatureMutationFixture(input: {
     interactions: {} as never,
     presentation: {
       read: vi.fn(async () => ({
+        providerFeatureStates: [],
         providerFeatureCapabilities: [
           {
             ref: { featureId: "codex.tui", schemaVersion: 1 },
             revision: 7,
+            mutationRevision: 7,
             availability: "available",
             operations: [
               {
@@ -5250,7 +5257,7 @@ function providerFeatureMutationFixture(input: {
       feature: { featureId: "codex.tui", schemaVersion: 1 },
       actionId: "start",
       arguments: null,
-      expectedFeatureRevision: 7,
+      expectedMutationRevision: 7,
     },
   };
   return {
@@ -5263,6 +5270,58 @@ function providerFeatureMutationFixture(input: {
     mutateProviderFeature,
   };
 }
+
+function speedGatewayFixture() {
+  const f = providerFeatureMutationFixture({ concurrency: CONCURRENT_PROVIDER_FEATURE_CONCURRENCY, runState: "running", queuedInput: false });
+  const receipt = { status: "provider_feature_result" as const, operationId: "speed-op", feature: CODEX_SPEED_REF,
+    result: boundValue({ operationId: "speed-op", receiptRevision: 3, saved: { status: "saved", selection: "fast", desiredRevision: 8 },
+      currentRun: { status: "published", target: { turnId: "turn-1", activationId: "activation" }, selection: "fast" } }) };
+  const operation = { ...f.operation, mutationId: "speed-op", operation: { ...f.operation.operation,
+    feature: CODEX_SPEED_REF, actionId: "set_speed", arguments: speedArgumentsValue({ selection: "fast", currentRunTarget: { turnId: "turn-1", activationId: "activation" } }) } };
+  let committed = false;
+  const provider = f.gateway.input.actionPersistence.get("backend-1")!;
+  const replay = vi.spyOn(provider, "replayProviderFeature").mockImplementation((requestScope, threadId, input) =>
+    committed && requestScope.tenantId === scope.tenantId && requestScope.principalId === scope.principalId &&
+      threadId === "thread-1" && input.mutationId === operation.mutationId ? receipt : undefined);
+  const perform = vi.spyOn(provider, "performProviderFeature").mockImplementation(async () => { committed = true; return receipt; });
+  vi.spyOn(f.gateway.input.presentation, "read").mockResolvedValue({ providerFeatureStates: [], providerFeatureCapabilities: [{
+    ref: CODEX_SPEED_REF, revision: 40, mutationRevision: 7, availability: "available", operations: [{ actionId: "set_speed", confirmation: "none" }],
+  }] } as never);
+  return { ...f, receipt, operation, replay, perform, commit: () => { committed = true; } };
+}
+
+describe("ThreadMutationGateway Speed receipt replay", () => {
+  it.each(["workspace archive", "capability withdrawal", "unrelated uncertainty"])("replays the original result before %s guards", async guard => {
+    const f = speedGatewayFixture();
+    expect(await f.gateway.mutate(scope, "thread-1", f.operation)).toEqual(f.receipt);
+    if (guard === "workspace archive") vi.spyOn(f.gateway.input.inventory, "assertWorkspaceActive").mockImplementation(() => { throw new DomainError("invalid_transition", "Archived"); });
+    if (guard === "capability withdrawal") vi.spyOn(f.gateway.input.presentation, "read").mockRejectedValue(new Error("capability unavailable"));
+    if (guard === "unrelated uncertainty") vi.spyOn(f.gateway.input.operations, "findUncertainThreadOperation").mockReturnValue({} as never);
+    expect(await f.gateway.mutate(scope, "thread-1", f.operation)).toEqual(f.receipt);
+    expect(f.perform).toHaveBeenCalledOnce(); await f.gateway.close();
+  });
+  it("checks the receipt again when a duplicate commits after the early lookup", async () => {
+    const f = speedGatewayFixture(); const acquire = f.acquire.getMockImplementation()!;
+    f.acquire.mockImplementationOnce(async () => { const lease = await acquire(); f.commit(); return lease; });
+    expect(await f.gateway.mutate(scope, "thread-1", f.operation)).toEqual(f.receipt);
+    expect(f.acquire).toHaveBeenCalledOnce(); expect(f.perform).not.toHaveBeenCalled();
+    expect(f.replay).toHaveBeenCalledTimes(3); await f.gateway.close();
+  });
+  it.each(["tenantId", "principalId"] as const)("does not look up a Speed receipt through another %s", async axis => {
+    const f = speedGatewayFixture(); f.commit();
+    vi.spyOn(f.gateway.input.inventory, "getThread").mockImplementation(() => { throw new DomainError("not_found", "Thread not found"); });
+    await expect(f.gateway.mutate({ ...scope, [axis]: "other" }, "thread-1", f.operation)).rejects.toMatchObject({ code: "not_found" });
+    expect(f.replay).not.toHaveBeenCalled(); expect(f.perform).not.toHaveBeenCalled(); await f.gateway.close();
+  });
+  it("returns and replays the committed receipt despite detached snapshot failure", async () => {
+    const f = speedGatewayFixture();
+    const publish = vi.spyOn(f.gateway.input, "publishThreadSnapshot").mockRejectedValue(new Error("snapshot unavailable"));
+    expect(await f.gateway.mutate(scope, "thread-1", f.operation)).toEqual(f.receipt);
+    await vi.waitFor(() => expect(publish).toHaveBeenCalled());
+    expect(await f.gateway.mutate(scope, "thread-1", f.operation)).toEqual(f.receipt);
+    expect(f.perform).toHaveBeenCalledOnce(); await f.gateway.close();
+  });
+});
 
 describe("ThreadMutationGateway provider-feature concurrency", () => {
   it.each([

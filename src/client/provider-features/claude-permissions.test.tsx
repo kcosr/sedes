@@ -64,6 +64,7 @@ function snapshot(
         {
           ref,
           revision,
+          mutationRevision: revision,
           label: { text: "Claude permissions" },
           availability,
           ...(availability === "available"
@@ -140,7 +141,7 @@ describe("claude.permissions@1 client feature", () => {
       feature: ref,
       actionId: "set_permission_accept_edits",
       arguments: null,
-      expectedFeatureRevision: 7,
+      expectedMutationRevision: 7,
     });
   });
 

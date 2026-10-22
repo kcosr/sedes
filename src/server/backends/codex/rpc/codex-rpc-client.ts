@@ -133,7 +133,7 @@ export interface CodexRpcRequestOptions {
   readonly environmentVariablesFingerprint?: string;
   /** Application correlation for durable remote outcome delivery; never native wire. */
   readonly runtimeCorrelation?: {
-    readonly kind: "create" | "fork" | "start" | "steer";
+    readonly kind: "create" | "fork" | "start" | "steer" | "speed";
     readonly applicationOperationId: string;
     readonly applicationThreadId: string;
   };

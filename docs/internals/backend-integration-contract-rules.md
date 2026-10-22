@@ -2100,6 +2100,30 @@ proved-unsent delivery is also releasable. Arbitrary provider errors are not
 proof of no effect. This transport handoff is Codex-private; Pi, Claude, and
 Grok retain their existing application recovery paths.
 
+Provider features declare an explicit `mutationRevision`; requests use
+`expectedMutationRevision`, independently of presentation revision. A feature
+may retain its existing revision as mutation authority, but must supply that
+choice explicitly. Codex Speed uses desired-tuple revision while activation,
+discovery and receipt results change presentation only. Pi, Claude, Grok and
+OpenCode do not expose active Speed. Claude permissions and the other Codex
+features retain their existing mutation authorities.
+
+A saved preference plus a fallible native publication is two effects under one
+request identity. Keep the accepted save receipt immutable and use a scoped
+child for the native attempt. Replay exact receipts before current capability,
+workspace and unrelated-uncertainty write guards, including after asynchronous
+preparation. A negative pre-await lookup is provisional. Feature transactions
+and bounded dispatch run through the actor mailbox with direct handle access
+and application-turn resolution, avoiding recursive enqueue. Do not borrow the
+native-effect fence when Stop must remain independent.
+
+Persist remote correlation before sending. Uncertain publication is never
+resent; only exact retained outcome evidence may refine it. Keep unresolved
+deduplication proof, and move settled Speed transport proof onto its child
+receipt during compaction. Client receipt checks retain their original envelope
+and scope binding, never substitute fresh revisions, and do not overwrite newer
+saved projections with historical results.
+
 Native title synchronization uses the normal registered rename action. For a
 provider-assigned conversation, apply the initial application title only after
 the exact native identity is durably associated with the creating thread and

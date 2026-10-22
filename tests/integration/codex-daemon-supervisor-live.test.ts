@@ -84,6 +84,8 @@ function liveExecutionSettings(
 ): CodexExecutionSettingsProvider {
   return {
     assertExecutionPolicyAllowed: () => undefined,
+    desiredRevision: () => 0,
+    isSedesCreated: () => true,
     subscribeDesiredSettingsChanged: () => () => undefined,
     desiredSettings: () => selected(),
     resolveUnavailableServiceTier: () => selected(),
@@ -2059,6 +2061,20 @@ plugins = false
         supervisor.client.subscribeLifecycle(({ state, generation }) => {
           replacementLifecycle.push({ state, generation });
         });
+      // Rotate while the authenticated connection is still ready. Once the
+      // daemon stops, reconnect attempts must see only the replacement token:
+      // a read racing rotation can fail file-identity checks or retain the old
+      // token until the replacement listener rejects it with a permanent 401.
+      expect(supervisor.snapshot()).toMatchObject({ state: "ready", generation: 1 });
+      token = randomBytes(32).toString("base64url");
+      const replacementTokenPath = `${tokenPath}.next`;
+      await writeFile(replacementTokenPath, token, {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+      await rename(replacementTokenPath, tokenPath);
+      expect((await lstat(tokenPath)).mode & 0o777).toBe(0o600);
       await external.stop();
       external = undefined;
       await waitUntil(
@@ -2082,18 +2098,6 @@ plugins = false
       expect(processGroupExists(initialExternalPid)).toBe(false);
       observer = undefined;
 
-      token = randomBytes(32).toString("base64url");
-      // Reconnects keep reading this credential while the daemon is stopped.
-      // Never expose the empty/truncated intermediate state of writeFile:
-      // invalid credentials correctly put the supervisor in a permanent circuit.
-      const replacementTokenPath = `${tokenPath}.next`;
-      await writeFile(replacementTokenPath, token, {
-        encoding: "utf8",
-        mode: 0o600,
-        flag: "wx",
-      });
-      await rename(replacementTokenPath, tokenPath);
-      expect((await lstat(tokenPath)).mode & 0o777).toBe(0o600);
       external = await startExternalCodexTcp({
         executablePath: secureCodexBinary,
         codexHome,
@@ -2107,6 +2111,9 @@ plugins = false
       expect(replacementExternalPid).not.toBe(initialExternalPid);
       const replacement = await waitUntil(() => {
         const snapshot = supervisor?.snapshot();
+        if (snapshot?.state === "circuit_open") {
+          throw new Error(`live_test_tcp_reconnect_circuit_open:${snapshot.lastFailure ?? "unknown"}`);
+        }
         return snapshot?.state === "ready" && snapshot.generation > 1
           ? snapshot
           : undefined;

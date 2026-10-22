@@ -74,6 +74,7 @@ export const providerFeatureCapabilitySchema = z
   .strictObject({
     ref: providerFeatureRefSchema,
     revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    mutationRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     label: boundedDisplayTextSchema,
     description: boundedDisplayTextSchema.optional(),
     availability: providerFeatureAvailabilitySchema,

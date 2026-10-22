@@ -357,7 +357,7 @@ describe("thread family archive service", () => {
         applicationThreadId: current.grandchildId,
         mutationId: "missing-descendant-provider-work", featureId: "execution-settings",
         schemaVersion: 1, actionId: "set-model", requestFingerprint: "a".repeat(64),
-        expectedThreadRevision: 0, expectedFeatureRevision: 0,
+        expectedThreadRevision: 0, expectedMutationRevision: 0,
         desiredPostcondition: { model: "test-model" }, now: 450,
       });
       await expectDescendantReservationBlocks(current, "archive-missing-descendant-provider-work");
@@ -1323,7 +1323,7 @@ describe("thread family archive service", () => {
           actionId: "set-model",
           requestFingerprint: "a".repeat(64),
           expectedThreadRevision: 0,
-          expectedFeatureRevision: 0,
+          expectedMutationRevision: 0,
           desiredPostcondition: { model: "test-model" },
           now: 450,
         },
