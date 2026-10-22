@@ -54,7 +54,7 @@ import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { speedStateWireSchema } from "../../src/shared/provider-features/codex-speed.js";
 import { startMockResponsesServer, type MockResponseEvent } from "../../scripts/codex-probes/mock-responses-server.mjs";
 import { probeEnvironment } from "../../scripts/codex-probes/raw-app-server-client.mjs";
-import { codexThreadReadMethod, codexThreadResumeMethod } from "../../src/server/backends/codex/codex-c1-protocol.js";
+import { codexThreadReadMethod, codexThreadResumeMethod, codexThreadUnsubscribeMethod } from "../../src/server/backends/codex/codex-c1-protocol.js";
 import { codexExperimentalFeatureListMethod, codexThreadStartMethod, codexTurnStartMethod, codexThreadSettingsUpdateMethod } from "../../src/server/backends/codex/codex-c2-protocol.js";
 import { codexTurnSettingsUpdateMethod } from "../../src/server/backends/codex/codex-active-speed-protocol.js";
 import type { FramedTransportFactory } from "../../src/server/provider-protocol/transport/assured-framed-transport.js";
@@ -685,6 +685,10 @@ child.on('exit', code => process.exit(code ?? 1));
     expect(await featureEnabled(unrelated.thread.id)).toBe(false);
     // The application never supplies the override for imported provenance.
     bindings.bindDiscoveredConversation(f.scope, unrelatedAppId, { backendConversationId: unrelated.thread.id, now: Date.now() });
+    // Warm persistent-sidecar reattachment correctly reuses retained settings
+    // without resuming. Drop that subscription to exercise a real imported resume.
+    expect(await supervisor.client.request(codexThreadUnsubscribeMethod, { threadId: unrelated.thread.id }, options))
+      .toEqual({ status: "unsubscribed" });
     const beforeExternalAttach = requestSpy.mock.calls.length;
     const imported = await driver.attach({ scope: f.scope, workspace,
       opaqueBindingDetail: serializeCodexBindingDetail({ threadId: unrelated.thread.id, sessionId: unrelated.thread.sessionId,
@@ -692,7 +696,8 @@ child.on('exit', code => process.exit(code ?? 1));
       binding: { ...binding, applicationThreadId: unrelatedAppId, backendConversationId: unrelated.thread.id } });
     try {
       await imported.establishProjection({ signal: new AbortController().signal });
-      const importedResumes = requestSpy.mock.calls.slice(beforeExternalAttach).filter(([method]) => method.method === "thread/resume");
+      const importedResumes = requestSpy.mock.calls.slice(beforeExternalAttach)
+        .filter(([method, params]) => method.method === "thread/resume" && (params as { threadId?: string }).threadId === unrelated.thread.id);
       expect(importedResumes.length).toBeGreaterThan(0);
       expect(importedResumes
         .every(([, params]) => (params as { config?: Record<string, unknown> }).config?.["features.step_model_switching"] !== true)).toBe(true);
