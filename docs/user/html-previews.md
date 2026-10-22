@@ -7,12 +7,13 @@ locally. A page can also prepare a response for you to send through Sedes's
 own **Send** control; it has no access to your credentials or other Sedes tools.
 
 Inline content appears without a permanent header or dimensions footer. Use
-the maximize button at the top right to open the larger viewer. Its header
-contains the title, Download HTML, refresh, and previous/next arrows around a `1/3` revision
-indicator when the page has multiple revisions. Single-revision pages omit
-the revision controls.
+**Open in Pages** at the top right to open that exact revision in the thread's
+Pages panel. Move, resize, or maximize the panel using its standard header
+controls. The document header contains the title, **Download HTML**, refresh,
+and previous/next arrows around a `1/3` revision indicator when the page has
+multiple revisions. Single-revision pages omit the revision controls.
 Refresh reloads the selected saved revision and resets its local interaction
-state.
+state. **Back to Pages** returns to the thread's page list.
 
 Enable the **Pages** tools in the thread's Agent tools settings. Ask the agent
 to publish its result, for example: “Show a mobile mock-up of the settings
@@ -33,33 +34,38 @@ current or earlier revision. File publications return their original source
 path; inline publications return their saved HTML so the agent can revise
 and republish it without relying on its previous chat context.
 
-Maximize the preview to see its header, then use the previous and next arrows
-around the version indicator to browse that page's revisions. Browsing does not change
-the saved conversation or the revision originally published there. While
-browsing another revision, select the revision indicator to return to the revision
-published at that position in chat. Closing the viewer restores that original
-revision in the inline card. Open **Pages** in the thread header to find
-published documents even when their original chat turn is outside the loaded
-history or has been compacted by the provider.
-The library orders documents by their first publication, newest first; later
-revisions keep their document's position. Earlier chat previews remain available
-there even when a conversation reaches its display limits.
-If loaded history reaches its item or size limit, additional previews remain
-available through **Pages** without displacing conversation messages.
-The library lists page titles without revision labels. Its viewer stays the
-same size when switching pages, scrolls long content within that space, and
-accepts interaction immediately. It shares the fullscreen revision and zoom
-controls, while each chat occurrence keeps its own interaction toggle.
+Use the previous and next arrows in Pages to browse a document's revisions.
+Browsing does not change the saved conversation or an inline preview. Select
+the revision indicator while browsing to return to the revision you opened.
+Opening a document from the page list starts at its latest listed revision;
+opening from chat starts at that occurrence's exact revision. Later publications
+and list refreshes update the available revisions without switching the one
+you are viewing.
+
+Open **Pages** from the workbench bar or **Panels** menu to find documents
+even when their original chat turn is outside loaded history or has been
+compacted by the provider. The list belongs to the selected thread and orders
+documents by their first publication, newest first; later revisions keep their
+document's position. Use **Load more pages** for earlier documents and
+**Refresh pages** to update the list. It also refreshes when shown, when the
+window regains focus, and when new page publications arrive in loaded history.
+The list shows page titles without revision labels. Opening a document uses
+the panel's available space and accepts interaction immediately.
 
 Saved revisions preserve document content, images, and requested dimensions.
 They do not save transient interaction state such as selected filters or text
-typed into a mock form. Reopening, switching revisions, or moving between the
-inline and fullscreen views starts that page again. Pages belong to their
-original thread and are removed when that thread is deleted.
+typed into a mock form. Resizing, moving, and maximizing or restoring a visible
+desktop Pages panel preserve its live page. Hiding it, replacing it with another
+panel, leaving it on a phone, or crossing the phone/desktop boundary can release
+the frame. Showing it again restores the selected revision and zoom with a
+fresh page; unsent form values and JavaScript state are lost. Closing the panel,
+returning to its list, changing revisions, or switching threads also releases
+the document. Inline previews and the panel run separate copies. Pages belong
+to their original thread and are removed when that thread is deleted.
 
 ## Download a page
 
-Open the expanded viewer or the thread's **Pages** library and choose
+Open the document in the thread's **Pages** panel and choose
 **Download HTML** to save the revision currently displayed. Web browsers start
 a file download; desktop and Android clients open their save dialog or document
 picker. You can download a saved revision even if its preview cannot load.
@@ -104,9 +110,10 @@ in its inherited history, but cannot send through a page owned by the original
 thread.
 
 If delivery cannot be confirmed, **Retry** checks the same captured response
-without reading the page again. Hiding the app or expanding the page does not
-cancel a captured send. The local retry record lasts only while that preview
-remains open; refreshing it, changing revisions, or reloading the app can
+without reading the page again. Hiding the app or panel does not cancel a
+captured send. The local retry record lasts only while that document or preview
+remains mounted; returning to the list, closing the panel, refreshing the
+document, changing revisions, or reloading the app can
 discard that record. Responses already admitted by the server remain in the
 queue or conversation.
 
@@ -122,7 +129,7 @@ Inline HTML previews initially let gestures scroll the conversation on both desk
 and mobile. Tap or click the preview, or use its finger icon, to enable input.
 Dragging, scrolling, stopping a scroll, and long presses do not enable interaction. The activating
 tap only changes modes; tap again to use the page's controls. Use the checkmark
-to return to conversation scrolling. Expanded previews and the Pages library
+to return to conversation scrolling. Documents in the Pages panel
 accept input immediately and have no interaction toggle. The page still loads
 and runs while inline input is inactive.
 
@@ -147,13 +154,13 @@ its width and let its height fit the content. Explicit dimensions are saved
 with each revision and preserved across devices. A large desktop mock-up
 viewed on a phone keeps its desktop layout and is scaled to fit.
 
-Use the maximize icon to open the expanded viewer. HTML pages, images, and
-Mermaid diagrams share a floating zoom bar at the bottom: minus, percentage,
-plus, **Fit**, and **1:1**. Zoom changes the displayed scale, not the document's
-saved viewport. Very tall content and large canvases remain bounded by the
-viewer's size limits. In fullscreen, pages without an explicit height fit the
-viewer's width and scroll vertically; pages with an explicit height fit the
-complete canvas.
+The Pages document and expanded image/Mermaid viewers have a floating zoom
+bar at the bottom: minus, percentage, plus, **Fit**, and **1:1**. Zoom changes
+the displayed scale, not the document's saved viewport. Pages fit the available
+width without automatically enlarging beyond 100%; a tall document scrolls
+vertically instead of shrinking to fit its height. Maximizing the panel gives
+it the whole workbench stage. Explicit zoom stays selected while resizing,
+moving, hiding, or maximizing the panel.
 
 Images and Mermaid diagrams also support pinch zoom and pan inline. At normal
 size, a one-finger gesture scrolls the conversation; when zoomed, dragging pans
@@ -161,9 +168,10 @@ the media. Inline images and diagrams have no floating zoom toolbar. Use the
 explicit expand control for the larger viewer and its zoom controls. Unused
 space around expanded content matches the chat background.
 
-Recently visible HTML previews stay loaded for up to 30 seconds after scrolling
-away. At most four page frames remain active; visible previews take priority
-over recently viewed ones. Hiding the app or leaving the view releases them.
+Recently visible inline HTML previews stay loaded for up to 30 seconds after
+scrolling away. At most four page frames remain active across chat and Pages;
+visible frames take priority over recently viewed ones. Hiding the app or
+leaving the view releases them.
 
 ## Files and embedded images
 

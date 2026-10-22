@@ -1,13 +1,12 @@
 import type { ReactNode } from "react";
-import type { PageResponseServices } from "./page-response-services.js";
-import type { PageRevision, PageRevisionPage } from "../../../shared/protocol/pages.js";
-import type { PageListOptions, PageRenderAdmission, PreparedPageDownload } from "../../api/ApiClient.js";
+import type { PageRevision } from "../../../shared/protocol/pages.js";
+import type { PageFrameServices } from "../../lib/page-services.js";
 import type {
   ConversationItem,
   ProviderFeatureCapability,
 } from "../../../shared/index.js";
 
-export interface ItemRenderContext {
+export interface ItemRenderContext extends PageFrameServices {
   assistantLabel: string;
   loadAttachmentContent?: (
     attachmentId: string,
@@ -17,11 +16,7 @@ export interface ItemRenderContext {
     artifactId: string,
     signal: AbortSignal,
   ) => Promise<Blob>;
-  createPageRenderAdmission?: (pageId: string, revision: number, signal?: AbortSignal) => Promise<PageRenderAdmission>;
-  listPageRevisions?: (pageId: string, options?: PageListOptions) => Promise<PageRevisionPage>;
-  getPageRevision?: (pageId: string, revision: number, signal?: AbortSignal) => Promise<PageRevision>;
-  preparePageDownload?: (page: PageRevision, signal?: AbortSignal) => Promise<PreparedPageDownload>;
-  pageResponse?: PageResponseServices;
+  openPage?: (page: PageRevision) => void;
   providerFeatureCapabilities?: readonly ProviderFeatureCapability[];
   /** A disclosure already names the image, so the figure omits its caption. */
   omitImageCaption?: boolean;

@@ -7,6 +7,7 @@ import type {
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
 import { workpadsTenant } from "../workpads/workpads-tenant.js";
+import { pagesTenant } from "../pages/pages-tenant.js";
 import { tasksTenant } from "../tasks/tasks-tenant.js";
 import { workspaceFilesTenant } from "../workspace-files/workspace-files-tenant.js";
 import type { ComposerDraftStagingTarget } from "../context-excerpts/coordinator.js";
@@ -134,5 +135,6 @@ function freezeTenant(tenant: WorkspacePanelTenant): WorkspacePanelTenant {
 export const workspacePanelTenants = new WorkspacePanelTenantRegistry([
   workspaceFilesTenant,
   workpadsTenant,
+  pagesTenant,
   tasksTenant,
 ]);

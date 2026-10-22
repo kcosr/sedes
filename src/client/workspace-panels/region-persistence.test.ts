@@ -5,7 +5,6 @@ import {
   legacyThreadLayoutStorageKey,
   loadRegionLayout,
   loadThreadTerminals,
-  migrateLegacyRegionLayout,
   migrateLegacyThreadTerminals,
   parseRegionLayout,
   parseThreadTerminals,
@@ -31,8 +30,11 @@ const PRODUCER_2 = "00000000-0000-4000-8000-000000000002";
 function storageWith(values: Readonly<Record<string, string>> = {}): RegionStorage {
   const map = new Map(Object.entries(values));
   return {
+    get length() { return map.size; },
+    key: (index) => [...map.keys()][index] ?? null,
     getItem: (key) => map.get(key) ?? null,
     setItem: (key, value) => void map.set(key, value),
+    removeItem: (key) => void map.delete(key),
   };
 }
 
@@ -57,11 +59,12 @@ describe("device layout serialization", () => {
     const layout = customLayout();
     const serialized = serializeRegionLayout(layout);
     expect(JSON.parse(serialized)).toEqual({
-      version: 1,
+      version: 2,
       placement: {
         chat: "top",
         files: "right",
         workpads: "middle",
+        pages: "right",
         tasks: "left",
         terminals: "bottom",
       },
@@ -91,10 +94,21 @@ describe("device layout serialization", () => {
     });
   });
 
+  it("round-trips Pages placement, visibility and size with the other shared panels", () => {
+    const view = openPanel({ layout: customLayout(), terminals: null }, "pages", "bottom");
+    const layout = setPanelSize(view.layout, "pages", "height", 0.6);
+    expect(parseRegionLayout(serializeRegionLayout(layout))).toMatchObject({
+      placement: { pages: "bottom", workpads: "middle" },
+      shown: { bottom: "pages", middle: "workpads" },
+      loaded: ["files", "workpads", "pages", "tasks"],
+      sizes: { pages: { height: 0.6 }, files: { width: 0.3 } },
+    });
+  });
+
   it.each<[string, (json: Record<string, unknown>) => unknown]>([
     ["non-JSON", () => "{"],
     ["an array", () => []],
-    ["another version", (json) => ({ ...json, version: 2 })],
+    ["another version", (json) => ({ ...json, version: 1 })],
     ["an unknown key", (json) => ({ ...json, extra: true })],
     ["a missing key", ({ sizes: _sizes, ...json }) => json],
     ["a placement missing a kind", (json) => ({ ...json, placement: { chat: "middle" } })],
@@ -167,7 +181,7 @@ describe("loadRegionLayout", () => {
     expect(Object.isFrozen(layout)).toBe(true);
   });
 
-  it("falls back to defaults for an invalid saved layout without migrating", () => {
+  it("resets invalid layouts and removes obsolete device keys", () => {
     const storage = storageWith({
       [PANEL_REGIONS_STORAGE_KEY]: "{}",
       [LEGACY_PANEL_STORAGE_KEYS.tasks]: JSON.stringify({ version: 1, open: true, collapsed: false }),
@@ -176,15 +190,121 @@ describe("loadRegionLayout", () => {
       layout: defaultRegionLayout(),
       source: "invalid",
     });
+    expect(storage.getItem(LEGACY_PANEL_STORAGE_KEYS.tasks)).toBeNull();
   });
 
-  it("migrates when the saved layout is absent and old keys exist", () => {
+  it("resets when only obsolete device keys exist", () => {
     const storage = storageWith({
       [LEGACY_PANEL_STORAGE_KEYS.tasks]: JSON.stringify({ version: 1, open: true, collapsed: false }),
     });
     const { layout, source } = loadRegionLayout(storage);
-    expect(source).toBe("migrated");
-    expect(layout.loaded).toEqual(["tasks"]);
+    expect(source).toBe("invalid");
+    expect(layout).toEqual(defaultRegionLayout());
+    expect(storage.getItem(LEGACY_PANEL_STORAGE_KEYS.tasks)).toBeNull();
+  });
+
+  it("keeps a current layout while removing every obsolete device key and preserving other state", () => {
+    const saved = serializeRegionLayout(customLayout());
+    const terminalKey = threadPanelRegionsStorageKey("thread-1");
+    const terminals = serializeThreadTerminals("thread-1", {
+      tabs: [{ terminalId: "terminal-1", producerId: PRODUCER_1 }],
+      activeTerminalId: "terminal-1",
+    });
+    const storage = storageWith({
+      ...Object.fromEntries(Object.values(LEGACY_PANEL_STORAGE_KEYS).map((key) => [key, "old"])),
+      [PANEL_REGIONS_STORAGE_KEY]: saved,
+      [terminalKey]: terminals,
+      "sedes.workpads.panel": "preferences",
+    });
+    expect(loadRegionLayout(storage)).toMatchObject({ source: "stored", layout: { sizes: customLayout().sizes } });
+    for (const key of Object.values(LEGACY_PANEL_STORAGE_KEYS)) expect(storage.getItem(key)).toBeNull();
+    expect(storage.getItem(PANEL_REGIONS_STORAGE_KEY)).toBe(saved);
+    expect(storage.getItem(terminalKey)).toBe(terminals);
+    expect(storage.getItem("sedes.workpads.panel")).toBe("preferences");
+  });
+
+  it("removes retired opening, singleton and card-width keys while preserving content preferences", () => {
+    const obsolete = {
+      "sedes-panel-instance-sizes@4": "legacy sizes",
+      "sedes-panel-presentation": "single",
+      "sedes-singleton-panel-layout@1": JSON.stringify({ version: 1, tree: { kind: "panel", panelId: "workspace-files" } }),
+      "sedes-singleton-panel-sizes@1": "legacy sizes",
+      "sedes-singleton-panel-collapsed@1": "legacy collapsed state",
+      "sedes.tasks.panel.width": "488",
+    };
+    const contentPreferences = {
+      "sedes.workpads.panel": JSON.stringify({ version: 1, lastView: "global" }),
+      "sedes.tasks.panel": JSON.stringify({ version: 2, lastView: "project" }),
+    };
+    const storage = storageWith({ ...obsolete, ...contentPreferences });
+    expect(loadRegionLayout(storage)).toEqual({ source: "invalid", layout: defaultRegionLayout() });
+    for (const key of Object.keys(obsolete)) expect(storage.getItem(key)).toBeNull();
+    for (const [key, value] of Object.entries(contentPreferences)) expect(storage.getItem(key)).toBe(value);
+  });
+
+  it("removes all thread collapse records while preserving unknown keys and terminal storage", () => {
+    const collapsed = {
+      "sedes-thread-panel-instance-collapsed@4:thread-1": "old",
+      "sedes-thread-panel-instance-collapsed@4:thread-2": "old",
+      "sedes-thread-panel-instance-collapsed@4:unopened%20thread": "old",
+    };
+    const preserved = {
+      [PANEL_REGIONS_STORAGE_KEY]: serializeRegionLayout(customLayout()),
+      [threadPanelRegionsStorageKey("thread-1")]: serializeThreadTerminals("thread-1", null),
+      [legacyThreadLayoutStorageKey("thread-2")]: "terminal migration source",
+      [legacyThreadLayoutStorageKey("unopened thread")]: "another terminal migration source",
+      "sedes-thread-panel-instance-collapsed@40:thread-1": "unknown version",
+      "unknown.preference": "keep",
+    };
+    const storage = storageWith({ ...collapsed, ...preserved });
+    expect(loadRegionLayout(storage)).toMatchObject({ source: "stored", layout: { sizes: customLayout().sizes } });
+    for (const key of Object.keys(collapsed)) expect(storage.getItem(key)).toBeNull();
+    for (const [key, value] of Object.entries(preserved)) expect(storage.getItem(key)).toBe(value);
+  });
+
+  it.each(["length", "key"] as const)("keeps the saved layout and fixed-key cleanup when storage %s fails", (member) => {
+    const saved = serializeRegionLayout(customLayout());
+    const storage = storageWith({
+      [PANEL_REGIONS_STORAGE_KEY]: saved,
+      "sedes-panel-instance-sizes@4": "old",
+      "sedes-thread-panel-instance-collapsed@4:thread-1": "old",
+    });
+    Object.defineProperty(storage, member, member === "length"
+      ? { get: () => { throw new Error("denied"); } }
+      : { value: () => { throw new Error("denied"); } });
+    expect(loadRegionLayout(storage).source).toBe("stored");
+    expect(storage.getItem(PANEL_REGIONS_STORAGE_KEY)).toBe(saved);
+    expect(storage.getItem("sedes-panel-instance-sizes@4")).toBeNull();
+  });
+
+  it("continues cleanup after an individual key lookup or removal fails", () => {
+    const keys = ["unreadable", "remove-denied", "removable"].map(
+      (thread) => `sedes-thread-panel-instance-collapsed@4:${thread}`,
+    );
+    const storage = storageWith(Object.fromEntries(keys.map((key) => [key, "old"])));
+    const keyAt = storage.key;
+    storage.key = (index) => {
+      if (index === 0) throw new Error("unreadable");
+      return keyAt(index);
+    };
+    const remove = storage.removeItem;
+    storage.removeItem = (key) => {
+      if (key === keys[1]) throw new Error("denied");
+      remove(key);
+    };
+    expect(loadRegionLayout(storage)).toEqual({ source: "invalid", layout: defaultRegionLayout() });
+    expect(storage.getItem(keys[0]!)).toBe("old");
+    expect(storage.getItem(keys[1]!)).toBe("old");
+    expect(storage.getItem(keys[2]!)).toBeNull();
+  });
+
+  it("uses defaults without reviving old state when obsolete-key removal fails", () => {
+    const saved = storageWith({ [LEGACY_PANEL_STORAGE_KEYS.tasks]: "old" });
+    const storage: RegionStorage = {
+      ...saved,
+      removeItem: () => { throw new Error("denied"); },
+    };
+    expect(loadRegionLayout(storage)).toEqual({ source: "invalid", layout: defaultRegionLayout() });
   });
 
   it("uses defaults when nothing is saved", () => {
@@ -197,156 +317,16 @@ describe("loadRegionLayout", () => {
 
   it("treats storage that throws as empty", () => {
     const storage: RegionStorage = {
+      length: 0,
+      key: () => null,
       getItem: () => {
         throw new Error("denied");
       },
       setItem: () => undefined,
+      removeItem: () => undefined,
     };
     expect(loadRegionLayout(storage).source).toBe("default");
     expect(loadThreadTerminals(storage, "thread-1").source).toBe("default");
-  });
-});
-
-describe("migrateLegacyRegionLayout", () => {
-  const visibility = (open: boolean, collapsed = false) =>
-    JSON.stringify({ version: 1, open, collapsed });
-  const companions = (arrangement: readonly { kind: string; edge: string }[]) =>
-    JSON.stringify({ version: 1, arrangement });
-
-  it("returns undefined without any old key", () => {
-    expect(migrateLegacyRegionLayout(storageWith())).toBeUndefined();
-  });
-
-  it("loads open panels and shows the uncollapsed ones in their regions", () => {
-    const layout = migrateLegacyRegionLayout(
-      storageWith({
-        [LEGACY_PANEL_STORAGE_KEYS.files]: visibility(true),
-        [LEGACY_PANEL_STORAGE_KEYS.workpads]: visibility(true, true),
-        [LEGACY_PANEL_STORAGE_KEYS.tasks]: visibility(false, true),
-        [LEGACY_PANEL_STORAGE_KEYS.companions]: companions([{ kind: "workpads", edge: "left" }]),
-      }),
-    )!;
-    expect(layout.loaded).toEqual(["files", "workpads"]);
-    expect(layout.placement).toMatchObject({ workpads: "left", files: "right", tasks: "right" });
-    // Collapsed Workpads is loaded but hidden.
-    expect(layout.shown).toEqual({
-      middle: "chat",
-      left: null,
-      right: "files",
-      top: null,
-      bottom: "terminals",
-    });
-    expect(layout.extendOrder).toEqual(["left", "right", "top", "bottom"]);
-    expect(layout.maximized).toBeNull();
-  });
-
-  it("shows the companion opened most recently (outermost) when several share a region", () => {
-    const layout = migrateLegacyRegionLayout(
-      storageWith({
-        [LEGACY_PANEL_STORAGE_KEYS.files]: visibility(true),
-        [LEGACY_PANEL_STORAGE_KEYS.workpads]: visibility(true),
-        [LEGACY_PANEL_STORAGE_KEYS.tasks]: visibility(true),
-        [LEGACY_PANEL_STORAGE_KEYS.companions]: companions([
-          { kind: "workpads", edge: "right" },
-          { kind: "tasks", edge: "right" },
-        ]),
-      }),
-    )!;
-    expect(layout.shown.right).toBe("workpads");
-    expect(layout.loaded).toEqual(["files", "workpads", "tasks"]);
-    expect(layout.recency).toEqual(["workpads"]);
-  });
-
-  it("falls back to Tasks, Workpads, Files order without an arrangement", () => {
-    const all = {
-      [LEGACY_PANEL_STORAGE_KEYS.files]: visibility(true),
-      [LEGACY_PANEL_STORAGE_KEYS.workpads]: visibility(true),
-      [LEGACY_PANEL_STORAGE_KEYS.tasks]: visibility(true),
-    };
-    expect(migrateLegacyRegionLayout(storageWith(all))!.shown.right).toBe("tasks");
-    expect(
-      migrateLegacyRegionLayout(
-        storageWith({ ...all, [LEGACY_PANEL_STORAGE_KEYS.tasks]: visibility(false) }),
-      )!.shown.right,
-    ).toBe("workpads");
-  });
-
-  it("gives each region its own winner, most recent last in recency", () => {
-    const layout = migrateLegacyRegionLayout(
-      storageWith({
-        [LEGACY_PANEL_STORAGE_KEYS.files]: visibility(true),
-        [LEGACY_PANEL_STORAGE_KEYS.workpads]: visibility(true),
-        [LEGACY_PANEL_STORAGE_KEYS.tasks]: visibility(true),
-        [LEGACY_PANEL_STORAGE_KEYS.companions]: companions([
-          { kind: "tasks", edge: "bottom" },
-          { kind: "workpads", edge: "left" },
-        ]),
-      }),
-    )!;
-    // A companion docked at the Bottom replaces the Terminals pick there.
-    expect(layout.shown).toEqual({
-      middle: "chat",
-      left: "workpads",
-      right: "files",
-      top: null,
-      bottom: "tasks",
-    });
-    expect(layout.recency).toEqual(["files", "workpads", "tasks"]);
-  });
-
-  it("carries remembered sizes over, dropping invalid ones", () => {
-    const layout = migrateLegacyRegionLayout(
-      storageWith({
-        [LEGACY_PANEL_STORAGE_KEYS.sizes]: JSON.stringify({
-          version: 5,
-          sizes: {
-            files: { width: 0.3, height: 2 },
-            terminals: { height: 0.25 },
-            tasks: "wide",
-            chat: { width: 0.5 },
-          },
-        }),
-      }),
-    )!;
-    expect(layout.sizes).toEqual({ files: { width: 0.3 }, terminals: { height: 0.25 } });
-    expect(layout.loaded).toEqual([]);
-    expect(layout.shown).toEqual(DEFAULT_SHOWN);
-  });
-
-  it("treats unreadable old values as absent panels", () => {
-    const layout = migrateLegacyRegionLayout(
-      storageWith({
-        [LEGACY_PANEL_STORAGE_KEYS.files]: "{",
-        [LEGACY_PANEL_STORAGE_KEYS.tasks]: JSON.stringify({ version: 2, open: true, collapsed: false }),
-        [LEGACY_PANEL_STORAGE_KEYS.companions]: companions([{ kind: "tasks", edge: "middle" }]),
-        [LEGACY_PANEL_STORAGE_KEYS.sizes]: JSON.stringify({ version: 4, sizes: {} }),
-      }),
-    )!;
-    expect(layout).toEqual(defaultRegionLayout());
-  });
-
-  it("ignores an arrangement with a repeated companion", () => {
-    const layout = migrateLegacyRegionLayout(
-      storageWith({
-        [LEGACY_PANEL_STORAGE_KEYS.companions]: companions([
-          { kind: "tasks", edge: "left" },
-          { kind: "tasks", edge: "top" },
-        ]),
-      }),
-    )!;
-    expect(layout.placement.tasks).toBe("right");
-  });
-
-  it("produces a layout that serializes and parses back", () => {
-    const layout = migrateLegacyRegionLayout(
-      storageWith({
-        [LEGACY_PANEL_STORAGE_KEYS.workpads]: visibility(true),
-        [LEGACY_PANEL_STORAGE_KEYS.companions]: companions([{ kind: "workpads", edge: "top" }]),
-      }),
-    )!;
-    expect(parseRegionLayout(serializeRegionLayout(layout))).toMatchObject({
-      shown: { top: "workpads" },
-    });
   });
 });
 

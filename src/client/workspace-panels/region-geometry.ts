@@ -85,6 +85,13 @@ export const DEFAULT_PANEL_SIZE_HINTS: PanelSizeHints = Object.freeze({
     preferredHeight: 560,
     preferredShare: 0.4,
   }),
+  pages: Object.freeze({
+    minWidth: 360,
+    minHeight: 240,
+    preferredWidth: 800,
+    preferredHeight: 560,
+    preferredShare: 0.5,
+  }),
   tasks: Object.freeze({
     minWidth: 300,
     minHeight: 240,
@@ -98,7 +105,7 @@ export const DEFAULT_PANEL_SIZE_HINTS: PanelSizeHints = Object.freeze({
   }),
 });
 
-/** Size hints with Files, Workpads and Tasks from their tenants' `size`. */
+/** Size hints with the shared panels from their tenants' `size`. */
 export function panelSizeHints(
   registry: Pick<WorkspacePanelTenantRegistry, "tenant">,
 ): PanelSizeHints {

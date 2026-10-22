@@ -1,4 +1,5 @@
 import { usePageResponseServices } from "../conversation/page-response-services.js";
+import { useOpenPage } from "../../pages/page-opening.js";
 import {
   memo,
   useCallback,
@@ -166,6 +167,7 @@ export const Transcript = memo(function Transcript({
 }: TranscriptProps): React.JSX.Element {
   const state = useThreadStore(store);
   const pageResponse = usePageResponseServices(store, state);
+  const openPage = useOpenPage();
   const {
     snapshot,
     pendingComposerTransfers,
@@ -376,18 +378,6 @@ export const Transcript = memo(function Transcript({
     (pageId: string, revision: number, signal?: AbortSignal) => store.createPageRenderAdmission(pageId, revision, signal),
     [store],
   );
-  const listPageRevisions = useCallback(
-    (pageId: string, options?: import("../../api/ApiClient.js").PageListOptions) => store.listPageRevisions(pageId, options),
-    [store],
-  );
-  const getPageRevision = useCallback(
-    (pageId: string, revision: number, signal?: AbortSignal) => store.getPageRevision(pageId, revision, signal),
-    [store],
-  );
-  const preparePageDownload = useCallback(
-    (page: import("../../../shared/protocol/pages.js").PageRevision, signal?: AbortSignal) => store.preparePageDownload(page, signal),
-    [store],
-  );
   const itemRenderContext = useMemo(
     () =>
       assistantLabel && providerFeatureCapabilities
@@ -396,10 +386,8 @@ export const Transcript = memo(function Transcript({
             loadAttachmentContent,
             loadOutputArtifactContent,
             createPageRenderAdmission,
-            listPageRevisions,
-            getPageRevision,
-            preparePageDownload,
             pageResponse,
+            openPage,
             providerFeatureCapabilities,
           }
         : undefined,
@@ -408,10 +396,8 @@ export const Transcript = memo(function Transcript({
       loadAttachmentContent,
       loadOutputArtifactContent,
       createPageRenderAdmission,
-      listPageRevisions,
-      getPageRevision,
-      preparePageDownload,
       pageResponse,
+      openPage,
       providerFeatureCapabilities,
     ],
   );

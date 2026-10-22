@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { PageRevision } from "../../../shared/protocol/pages.js";
-import type { ItemRenderContext } from "./types.js";
+import type { PageDocumentServices } from "../../lib/page-services.js";
 import { startBrowserDownload } from "../../app/browser-download.js";
 import { downloadInPackagedClient, supportsPackagedDownloads } from "../../app/packaged-download.js";
 
@@ -16,7 +16,7 @@ export function usePageDownload(
   key: string,
   page: PageRevision,
   enabled: boolean,
-  prepare: ItemRenderContext["preparePageDownload"],
+  prepare: PageDocumentServices["preparePageDownload"],
   profileId: string,
 ) {
   const controller = useRef<AbortController | undefined>(undefined);

@@ -1,7 +1,5 @@
 import { terminalProducerIdSchema } from "../../shared/index.js";
 import {
-  DEFAULT_PLACEMENT,
-  DEFAULT_SHOWN,
   EDGE_REGIONS,
   MAX_PANEL_SHARE,
   MAX_TERMINAL_TABS,
@@ -25,7 +23,6 @@ import {
   type RegionId,
   type RegionLayout,
   type SharedPanelKind,
-  type SizeAxis,
   type TerminalTab,
   type TerminalsPanelState,
 } from "./regions.js";
@@ -35,7 +32,7 @@ import { isRecord } from "../../shared/json-guards.js";
  * Saved panel regions.
  *
  * - `sedes-panel-regions@1` holds the device layout: placements, each
- *   region's shown panel, the loaded Files/Workpads/Tasks, the extend order
+ *   region's shown panel, the loaded Files/Workpads/Pages/Tasks, the extend order
  *   and remembered sizes. Maximize and recency are never saved.
  * - `sedes-thread-panel-regions@1:<threadId>` holds one thread's Terminals
  *   panel (its tabs and active tab), or null while it is not loaded.
@@ -45,35 +42,47 @@ import { isRecord } from "../../shared/json-guards.js";
  * defaults. Only a remembered size outside the share bounds is dropped on
  * its own. Storage that throws is treated as empty.
  *
- * When the device key is absent, the layout is migrated once from the
- * pre-region keys; when a thread's key is absent, its Terminals are migrated
- * from that thread's old layout tree. The old keys are only read.
+ * Device layouts use envelope version 2 under the existing key. Earlier
+ * versions reset in place, and obsolete pre-region device and thread collapse
+ * keys are removed so they cannot restore an outdated arrangement. Thread
+ * Terminals retain their independent version 1 contract and pre-region migration.
  */
 
 export const PANEL_REGIONS_STORAGE_KEY = "sedes-panel-regions@1";
 export const THREAD_PANEL_REGIONS_STORAGE_PREFIX = "sedes-thread-panel-regions@1:";
-const STORAGE_VERSION = 1 as const;
+const LAYOUT_STORAGE_VERSION = 2 as const;
+const TERMINALS_STORAGE_VERSION = 1 as const;
 
 export function threadPanelRegionsStorageKey(threadId: string): string {
   return `${THREAD_PANEL_REGIONS_STORAGE_PREFIX}${encodeURIComponent(threadId)}`;
 }
 
-/** Pre-region keys, read once by migration. */
+/** Obsolete device layout keys, removed rather than migrated. */
 export const LEGACY_PANEL_STORAGE_KEYS = Object.freeze({
   files: "sedes-workspace-files-panel-state@1",
   workpads: "sedes-workpads-panel-state@1",
   tasks: "sedes-tasks-panel-state@1",
+  sizesV4: "sedes-panel-instance-sizes@4",
   sizes: "sedes-panel-instance-sizes@5",
   companions: "sedes-panel-companions@1",
+  presentation: "sedes-panel-presentation",
+  singletonLayout: "sedes-singleton-panel-layout@1",
+  singletonSizes: "sedes-singleton-panel-sizes@1",
+  singletonCollapsed: "sedes-singleton-panel-collapsed@1",
+  taskCardWidth: "sedes.tasks.panel.width",
 });
+const LEGACY_THREAD_COLLAPSED_STORAGE_PREFIX = "sedes-thread-panel-instance-collapsed@4:";
 
 export function legacyThreadLayoutStorageKey(threadId: string): string {
   return `sedes-thread-panel-instance-layout@4:${encodeURIComponent(threadId)}`;
 }
 
 export interface RegionStorage {
+  readonly length: number;
+  key(index: number): string | null;
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+  removeItem(key: string): void;
 }
 
 /** Where a loaded value came from. */
@@ -81,7 +90,7 @@ export type RegionLoadSource = "stored" | "invalid" | "migrated" | "default";
 
 export interface LoadedRegionLayout {
   readonly layout: RegionLayout;
-  readonly source: RegionLoadSource;
+  readonly source: Exclude<RegionLoadSource, "migrated">;
 }
 
 export interface LoadedThreadTerminals {
@@ -135,7 +144,7 @@ export function serializeRegionLayout(layout: PersistedRegionLayout): string {
       sizes[kind] = ordered;
   }
   return JSON.stringify({
-    version: STORAGE_VERSION,
+    version: LAYOUT_STORAGE_VERSION,
     placement: Object.fromEntries(
       PANEL_KINDS.map((kind) => [kind, layout.placement[kind]]),
     ),
@@ -165,7 +174,7 @@ export function parseRegionLayout(
   if (
     !isRecord(parsed) ||
     !hasExactKeys(parsed, LAYOUT_KEYS) ||
-    parsed.version !== STORAGE_VERSION
+    parsed.version !== LAYOUT_STORAGE_VERSION
   )
     return undefined;
   const placement = parsePlacement(parsed.placement);
@@ -265,13 +274,38 @@ function validShare(share: number): boolean {
 }
 
 /**
- * The device layout to start with: the saved one; defaults when it is
- * invalid; a migration from the pre-region keys when it is absent and any
- * of them exist; defaults otherwise.
+ * Read only the current device layout contract. Outdated or invalid layouts
+ * reset in place; obsolete device and thread collapse keys are removed even
+ * when the current layout is valid. Terminal records and content preferences
+ * are separate.
  */
 export function loadRegionLayout(
   storage: RegionStorage | undefined,
 ): LoadedRegionLayout {
+  const obsoleteKeys = new Set<string>(
+    Object.values(LEGACY_PANEL_STORAGE_KEYS).filter((key) => readItem(storage, key) !== null),
+  );
+  // Snapshot indexed keys before deleting anything: removal shifts later keys.
+  try {
+    const length = storage?.length ?? 0;
+    for (let index = 0; index < length; index += 1) {
+      try {
+        const key = storage?.key(index);
+        if (key?.startsWith(LEGACY_THREAD_COLLAPSED_STORAGE_PREFIX)) obsoleteKeys.add(key);
+      } catch {
+        // Other keys can still be inspected when one entry is unavailable.
+      }
+    }
+  } catch {
+    // Fixed device keys can still be removed when enumeration is unavailable.
+  }
+  for (const key of obsoleteKeys) {
+    try {
+      storage?.removeItem(key);
+    } catch {
+      // Layout still starts fresh if this browser denies storage writes.
+    }
+  }
   const serialized = readItem(storage, PANEL_REGIONS_STORAGE_KEY);
   if (serialized !== null) {
     const parsed = parseRegionLayout(serialized);
@@ -279,10 +313,7 @@ export function loadRegionLayout(
       ? { layout: regionLayoutFromPersisted(parsed), source: "stored" }
       : { layout: defaultRegionLayout(), source: "invalid" };
   }
-  const migrated = migrateLegacyRegionLayout(storage);
-  return migrated
-    ? { layout: migrated, source: "migrated" }
-    : { layout: defaultRegionLayout(), source: "default" };
+  return { layout: defaultRegionLayout(), source: obsoleteKeys.size > 0 ? "invalid" : "default" };
 }
 
 export function regionLayoutFromPersisted(
@@ -303,7 +334,7 @@ export function serializeThreadTerminals(
   terminals: TerminalsPanelState | null,
 ): string {
   return JSON.stringify({
-    version: STORAGE_VERSION,
+    version: TERMINALS_STORAGE_VERSION,
     threadId,
     terminals:
       terminals === null
@@ -330,7 +361,7 @@ export function parseThreadTerminals(
   if (
     !isRecord(parsed) ||
     !hasExactKeys(parsed, ["version", "threadId", "terminals"]) ||
-    parsed.version !== STORAGE_VERSION ||
+    parsed.version !== TERMINALS_STORAGE_VERSION ||
     parsed.threadId !== threadId
   )
     return undefined;
@@ -411,147 +442,7 @@ export function loadThreadTerminals(
 }
 
 // ---------------------------------------------------------------------------
-// Migration from the pre-region keys
-
-interface LegacyVisibility {
-  readonly open: boolean;
-  readonly collapsed: boolean;
-}
-
-interface LegacyCompanionPlacement {
-  readonly kind: "workpads" | "tasks";
-  readonly edge: EdgeRegion;
-}
-
-/** Most recently opened first, when the old keys cannot tell. */
-const LEGACY_SHOWN_PRIORITY: readonly SharedPanelKind[] = [
-  "tasks",
-  "workpads",
-  "files",
-];
-
-function readLegacyVisibility(
-  storage: RegionStorage | undefined,
-  key: string,
-): LegacyVisibility | undefined {
-  const serialized = readItem(storage, key);
-  if (serialized === null) return undefined;
-  const parsed = parseJson(serialized);
-  if (
-    !isRecord(parsed) ||
-    parsed.version !== 1 ||
-    typeof parsed.open !== "boolean" ||
-    typeof parsed.collapsed !== "boolean"
-  )
-    return undefined;
-  return { open: parsed.open, collapsed: parsed.open && parsed.collapsed };
-}
-
-/** Tasks and Workpads edges, outermost (most recently opened) first. */
-function readLegacyCompanions(
-  storage: RegionStorage | undefined,
-): readonly LegacyCompanionPlacement[] | undefined {
-  const serialized = readItem(storage, LEGACY_PANEL_STORAGE_KEYS.companions);
-  if (serialized === null) return undefined;
-  const parsed = parseJson(serialized);
-  if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.arrangement))
-    return undefined;
-  const arrangement: LegacyCompanionPlacement[] = [];
-  for (const entry of parsed.arrangement) {
-    if (!isRecord(entry)) return undefined;
-    const { kind, edge } = entry;
-    if (
-      (kind !== "workpads" && kind !== "tasks") ||
-      !isEdgeRegion(edge) ||
-      arrangement.some((placement) => placement.kind === kind)
-    )
-      return undefined;
-    arrangement.push({ kind, edge });
-  }
-  return arrangement;
-}
-
-function readLegacySizes(
-  storage: RegionStorage | undefined,
-): PanelSizes | undefined {
-  const serialized = readItem(storage, LEGACY_PANEL_STORAGE_KEYS.sizes);
-  if (serialized === null) return undefined;
-  const parsed = parseJson(serialized);
-  if (!isRecord(parsed) || parsed.version !== 5 || !isRecord(parsed.sizes))
-    return undefined;
-  const sizes: Partial<Record<PanelKind, PanelSize>> = {};
-  for (const kind of ["files", "workpads", "tasks", "terminals"] as const) {
-    const raw = parsed.sizes[kind];
-    if (!isRecord(raw)) continue;
-    const size: Partial<Record<SizeAxis, number>> = {};
-    for (const axis of ["width", "height"] as const) {
-      const share = raw[axis];
-      if (typeof share === "number" && validShare(share)) size[axis] = share;
-    }
-    if (size.width !== undefined || size.height !== undefined) sizes[kind] = size;
-  }
-  return sizes;
-}
-
-/**
- * The device layout from the pre-region keys, or undefined when none of
- * them exists:
- *
- * - Tasks and Workpads keep the edge their companion arrangement docked them
- *   at; every other kind takes its default placement (Chat, Files and
- *   Terminals placements were per thread and do not carry over).
- * - An open panel is loaded. An open, uncollapsed one is shown in its region;
- *   when several share a region, the most recently opened wins: the
- *   companion arrangement's outermost first, then Tasks, Workpads, Files.
- * - Remembered sizes carry over (Chat had none).
- * - Unreadable old values count as absent panels.
- */
-export function migrateLegacyRegionLayout(
-  storage: RegionStorage | undefined,
-): RegionLayout | undefined {
-  const visibility: Partial<Record<SharedPanelKind, LegacyVisibility>> = {};
-  let found = false;
-  for (const kind of SHARED_PANEL_KINDS) {
-    if (readItem(storage, LEGACY_PANEL_STORAGE_KEYS[kind]) !== null) found = true;
-    const state = readLegacyVisibility(storage, LEGACY_PANEL_STORAGE_KEYS[kind]);
-    if (state) visibility[kind] = state;
-  }
-  for (const key of [LEGACY_PANEL_STORAGE_KEYS.sizes, LEGACY_PANEL_STORAGE_KEYS.companions])
-    if (readItem(storage, key) !== null) found = true;
-  if (!found) return undefined;
-  const companions = readLegacyCompanions(storage) ?? [];
-  const sizes = readLegacySizes(storage) ?? {};
-  const placement: Record<PanelKind, RegionId> = { ...DEFAULT_PLACEMENT };
-  for (const { kind, edge } of companions) placement[kind] = edge;
-  const loaded = SHARED_PANEL_KINDS.filter((kind) => visibility[kind]?.open);
-  const priority: SharedPanelKind[] = [
-    ...companions.map(({ kind }) => kind),
-    ...LEGACY_SHOWN_PRIORITY.filter(
-      (kind) => !companions.some((placement) => placement.kind === kind),
-    ),
-  ];
-  const shown: Record<RegionId, PanelKind | null> = { ...DEFAULT_SHOWN };
-  const claimed = new Set<RegionId>();
-  const winners: SharedPanelKind[] = [];
-  for (const kind of priority) {
-    const state = visibility[kind];
-    const region = placement[kind];
-    if (!state?.open || state.collapsed || claimed.has(region)) continue;
-    claimed.add(region);
-    shown[region] = kind;
-    winners.push(kind);
-  }
-  return freezeLayout({
-    placement,
-    shown,
-    loaded,
-    extendOrder: EDGE_REGIONS,
-    sizes,
-    maximized: null,
-    // Least recently shown first.
-    recency: winners.reverse(),
-  });
-}
+// Thread Terminals migration from the pre-region tree
 
 const LEGACY_MAX_DEPTH = 4;
 const LEGACY_MAX_NODES = 31;

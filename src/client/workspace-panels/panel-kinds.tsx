@@ -3,6 +3,7 @@ import {
   ListChecks,
   MessageSquare,
   NotepadText,
+  PanelsTopLeft,
   Terminal as TerminalIcon,
 } from "lucide-react";
 import { BackendBrandIcon } from "../components/brand-icons.js";
@@ -13,6 +14,7 @@ export const PANEL_TITLES: Readonly<Record<PanelKind, string>> = Object.freeze({
   chat: "Chat",
   files: "Files",
   workpads: "Workpads",
+  pages: "Pages",
   tasks: "Tasks",
   terminals: "Terminals",
 });
@@ -52,6 +54,7 @@ export function PanelGlyph({
   const props = { size, strokeWidth, "aria-hidden": true } as const;
   if (kind === "files") return <Files {...props} />;
   if (kind === "workpads") return <NotepadText {...props} />;
+  if (kind === "pages") return <PanelsTopLeft {...props} />;
   if (kind === "tasks") return <ListChecks {...props} />;
   if (kind === "terminals") return <TerminalIcon {...props} />;
   if (brand !== undefined)

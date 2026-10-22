@@ -41,17 +41,24 @@
 .page-preview[data-interacting="true"] {
   border-color: var(--border);
 }
-/* Page metadata and revision controls belong only to the expanded viewer. */
-.page-preview-fullscreen-header {
-  --page-preview-control: var(--control-lg);
+/* Page metadata and revision controls belong to the Pages document view. */
+.page-document-header {
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) calc(var(--control-touch) + var(--space-3)) var(--space-2) var(--space-3);
+  gap: var(--space-1-5);
+  padding: var(--space-1) var(--space-3);
   border-bottom: 1px solid var(--border-soft);
   background: var(--background);
+}
+.page-document-heading {
+  display: flex;
+  flex: 1 1 14rem;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
 }
 .page-preview-name {
   flex: 1 1 auto;
@@ -60,30 +67,27 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-title);
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
 }
-.page-preview-dialog > .page-frame-expanded,
-.page-preview-library > .page-frame-expanded {
+.page-document > .page-frame-document-view {
   flex: 1;
   height: auto;
 }
-.page-preview-library {
+.page-document {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-card);
   background: var(--background);
-}
-.page-preview-library > .page-preview-fullscreen-header {
-  padding: var(--space-2) var(--space-3);
 }
 .page-preview-header-actions {
   margin-inline-start: auto;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: var(--space-1);
   max-width: 100%;
@@ -93,26 +97,15 @@
   flex-shrink: 0;
   align-items: center;
 }
-.page-preview-fullscreen-header > button,
-.page-preview-header-actions button {
-  width: var(--page-preview-control);
-  min-width: var(--page-preview-control);
-  height: var(--page-preview-control);
-  flex-shrink: 0;
-}
-.page-preview-fullscreen-header > button svg,
-.page-preview-header-actions button svg {
-  width: var(--icon-lg);
-  height: var(--icon-lg);
-}
 .page-revision-label {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: var(--page-preview-control);
-  height: var(--page-preview-control);
+  min-width: var(--control-sm);
+  height: var(--control-sm);
+  padding-inline: var(--space-1);
   white-space: nowrap;
-  font-size: var(--text-ui);
+  font-size: var(--text-meta);
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--muted-foreground);
@@ -196,13 +189,13 @@
   color: var(--muted-foreground);
   margin: var(--space-2);
 }
-.page-frame-expanded {
+.page-frame-document-view {
   display: flex;
   min-height: 0;
   height: 100%;
   flex-direction: column;
 }
-.page-frame-expanded .page-frame-viewport {
+.page-frame-document-view .page-frame-viewport {
   flex: 1;
   max-height: none;
   padding-bottom: 64px;
@@ -212,8 +205,24 @@
     width: 36px;
     height: 36px;
   }
-  .page-preview-fullscreen-header {
-    --page-preview-control: var(--control-touch);
+}
+
+/* Match the Workpads document toolbar's compact controls and touch sizing. */
+@media (max-width: 819px), (pointer: coarse) {
+  .page-preview-header-actions button[data-size="icon-sm"] {
+    width: var(--bar-control-width);
+    height: var(--bar-control);
+  }
+  .page-document-heading > button,
+  .page-revision-label {
+    height: var(--bar-control);
+  }
+  .page-revision-label {
+    min-width: var(--bar-control-width);
+  }
+  .page-preview-header-actions button[data-size="icon-sm"] svg {
+    width: var(--bar-icon);
+    height: var(--bar-icon);
   }
 }
 
@@ -236,6 +245,6 @@
 
 /* Letterboxed space belongs to the app, not the authored page or image. */
 .media-preview-dialog[data-slot="dialog-content"],
-.page-frame-expanded {
+.page-frame-document-view {
   background: var(--background);
 }

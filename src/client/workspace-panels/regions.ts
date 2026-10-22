@@ -8,7 +8,7 @@
  * hides, without unloading, whatever that region showed. Nothing returns on
  * its own: hiding, closing or moving a panel away leaves its region empty.
  *
- * Chat is always loaded (its ✕ only hides it). Files, Workpads and Tasks are
+ * Chat is always loaded (its ✕ only hides it). Files, Workpads, Pages and Tasks are
  * loaded for the whole device. Terminals belong to a thread, so a thread's
  * view combines the device layout with that thread's terminals; a region
  * whose shown panel is not loaded in the current thread renders empty.
@@ -18,9 +18,9 @@
  * the stage size, never stored.
  */
 
-export type PanelKind = "chat" | "files" | "workpads" | "tasks" | "terminals";
+export type PanelKind = "chat" | "files" | "workpads" | "pages" | "tasks" | "terminals";
 /** Kinds loaded for the whole device, in their fixed order. */
-export type SharedPanelKind = "files" | "workpads" | "tasks";
+export type SharedPanelKind = "files" | "workpads" | "pages" | "tasks";
 export type RegionId = "middle" | "left" | "right" | "top" | "bottom";
 export type EdgeRegion = Exclude<RegionId, "middle">;
 export type SizeAxis = "width" | "height";
@@ -30,12 +30,14 @@ export const PANEL_KINDS: readonly PanelKind[] = Object.freeze([
   "chat",
   "files",
   "workpads",
+  "pages",
   "tasks",
   "terminals",
 ]);
 export const SHARED_PANEL_KINDS: readonly SharedPanelKind[] = Object.freeze([
   "files",
   "workpads",
+  "pages",
   "tasks",
 ]);
 export const REGION_IDS: readonly RegionId[] = Object.freeze([
@@ -82,7 +84,7 @@ export interface PersistedRegionLayout {
   readonly placement: RegionPlacement;
   /**
    * The kind each region shows. A region only shows a kind placed there;
-   * Files, Workpads and Tasks only while loaded. Chat and Terminals may be
+   * Files, Workpads, Pages and Tasks only while loaded. Chat and Terminals may be
    * shown while not loaded in a thread: Chat is always loaded, and the
    * region then renders empty in a thread without Terminals.
    */
@@ -116,6 +118,7 @@ export const DEFAULT_PLACEMENT: RegionPlacement = Object.freeze({
   chat: "middle",
   files: "right",
   workpads: "right",
+  pages: "right",
   tasks: "right",
   terminals: "bottom",
 });

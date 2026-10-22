@@ -601,9 +601,9 @@ before trying again.
 Agents with the Pages tools enabled can publish interactive HTML previews in
 chat. Each changed publication adds a new saved revision. Previews load as
 they approach view. Use the hand icon or a stationary tap to interact with
-inline HTML, and the checkmark to return to scrolling chat. The maximize
-button opens a viewer with revision and refresh controls. Fullscreen previews
-and **Pages** in the thread header accept input immediately. See
+inline HTML, and the checkmark to return to scrolling chat. **Open in Pages**
+opens that saved revision in the Pages panel, which accepts input immediately
+and provides revision, refresh, zoom, and download controls. See
 [HTML previews](html-previews.md) for editing, sizing, images, and the optional
 screenshot tool.
 
@@ -758,10 +758,10 @@ attended, including during automations. For exact behavior, see
 
 ## Arrange panels
 
-A thread's workbench has five panels: Chat, Files, Workpads, Tasks, and
+A thread's workbench has six panels: Chat, Files, Workpads, Pages, Tasks, and
 Terminals. On desktop, the stage has five regions: the Middle, and Left,
 Right, Top, and Bottom around it. Each region shows one panel. By default Chat
-is in the Middle; Files, Workpads, and Tasks are on the Right; and Terminals is
+is in the Middle; Files, Workpads, Pages, and Tasks are on the Right; and Terminals is
 at the Bottom.
 
 Opening a panel shows it in its region. The panel that region showed is
@@ -771,7 +771,7 @@ its region empty, and the rest of the stage grows to fill the space. Selecting
 a thread shows its Chat wherever Chat is.
 
 The workbench bar above the panels has a button for each loaded panel, in the
-order Chat, Files, Workpads, Tasks, Terminals. A filled button means the panel
+order Chat, Files, Workpads, Pages, Tasks, Terminals. A filled button means the panel
 is visible; an outlined one means it is loaded but hidden. Select a button to
 hide a visible panel or show a hidden one in its region. The **Panels** menu
 (▾) lists every panel with its state, such as **On the right** or **Loaded,
@@ -803,15 +803,18 @@ Drag the divider beside a panel to resize it, or double-click the divider to
 return it to its default size. Chat keeps a 360px minimum width. Where each
 panel opens, which panels are loaded, the corner choices, and sizes are saved
 on this device and shared by every thread. The Terminals panel and its tabs
-belong to each thread; see [Terminal panes](terminals.md).
+belong to each thread; see [Terminal panes](terminals.md). Pages lists only the
+selected thread's published HTML documents; see [HTML previews](html-previews.md).
+The update adding Pages resets this device's saved panel arrangement and sizes
+once and removes obsolete device-layout records. Thread terminal tabs remain.
 
 When the window is too small for the visible panels' minimum sizes, Sedes
 hides the regions you used least recently and announces which. It never hides
 Chat or the Middle. Hidden panels stay loaded and come back when there is room.
 
 On phones and other narrow screens, the workbench shows one panel at a time:
-use the bar's buttons or the **Panels** menu to switch. Files, Workpads, and
-Tasks each take the whole stage while in front. Regions, Maximize, and Move to
+use the bar's buttons or the **Panels** menu to switch. Files, Workpads, Pages,
+and Tasks each take the whole stage while in front. Regions, Maximize, and Move to
 don't apply. Returning to Chat uses the same retained state rather than
 rebuilding the file view.
 
@@ -819,7 +822,9 @@ Chat is home on a phone. Closing or hiding another panel returns to Chat, and
 so does Android Back, or browser Back from Terminals. A panel you hide or go
 back from stays loaded, and its button brings it back as you left it. In Tasks
 and Workpads, Android Back first returns from an open task or workpad to the
-list. On Android, Back from Chat opens the navigation drawer.
+list. Pages follows the same sequence: document, page list, then Chat. Hiding
+Pages retains its selected revision but releases the live HTML frame; unsent
+form values are not saved. On Android, Back from Chat opens the navigation drawer.
 
 Previous: [Core concepts](concepts.md) · Next:
 [Organize and reuse work](organize-work.md)

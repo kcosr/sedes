@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 // @vitest-environment jsdom
 
 import {
+  CLOSE_PAGE_EVENT,
   CLOSE_TASK_DETAIL_EVENT,
   CLOSE_WORKPAD_EVENT,
   OPEN_OVERLAY_SELECTOR,
   SHOW_CHAT_EVENT,
+  closeExposedPage,
   closeExposedTaskDetail,
   closeExposedWorkpad,
   handleExposedBack,
@@ -126,6 +128,38 @@ describe("closeExposedWorkpad", () => {
   });
 });
 
+describe("closeExposedPage", () => {
+  it("lets the shown Pages panel return from its page to the list", () => {
+    const close = vi.fn((event: Event) => event.preventDefault());
+    withListener(CLOSE_PAGE_EVENT, close, () => {
+      expect(closeExposedPage()).toBe(true);
+      expect(close).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("leaves Back alone when no selected page claims it", () => {
+    const ignore = vi.fn();
+    withListener(CLOSE_PAGE_EVENT, ignore, () => {
+      expect(closeExposedPage()).toBe(false);
+      expect(ignore).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("leaves Back to an overlay above the page", () => {
+    const overlay = document.createElement("div");
+    overlay.setAttribute("role", "menu");
+    overlay.dataset.state = "open";
+    document.body.append(overlay);
+    const close = vi.fn((event: Event) => event.preventDefault());
+    try {
+      withListener(CLOSE_PAGE_EVENT, close, () => expect(closeExposedPage()).toBe(false));
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      overlay.remove();
+    }
+  });
+});
+
 describe("showChatInFront", () => {
   it("lets a phone layout with another panel in front show Chat", () => {
     const show = vi.fn((event: Event) => event.preventDefault());
@@ -161,6 +195,33 @@ describe("showChatInFront", () => {
 });
 
 describe("handleExposedBack", () => {
+  it("offers Back to Pages after Workpads and before Chat", () => {
+    const steps: string[] = [];
+    let pageOpen = true;
+    const workpads = () => steps.push("workpads");
+    const closePage = (event: Event) => {
+      steps.push("pages");
+      if (!pageOpen) return;
+      pageOpen = false;
+      event.preventDefault();
+    };
+    const showChat = (event: Event) => {
+      steps.push("chat");
+      event.preventDefault();
+    };
+    withListener(CLOSE_WORKPAD_EVENT, workpads, () =>
+      withListener(CLOSE_PAGE_EVENT, closePage, () =>
+        withListener(SHOW_CHAT_EVENT, showChat, () => {
+          expect(handleExposedBack()).toBe(true);
+          expect(steps).toEqual(["workpads", "pages"]);
+          steps.length = 0;
+          expect(handleExposedBack()).toBe(true);
+          expect(steps).toEqual(["workpads", "pages", "chat"]);
+        }),
+      ),
+    );
+  });
+
   it("closes an open task detail before showing Chat", () => {
     const steps: string[] = [];
     let detailOpen = true;

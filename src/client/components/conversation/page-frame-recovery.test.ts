@@ -20,7 +20,7 @@ describe("page preview recovery", () => {
     expect(pageFrameNeedsActivation(key)).toBe(false);
     const attempt = new PageFrameRecoveryAttempt(key);
     expect(attempt.recorded).toBe(true);
-    expect(pageFrameNeedsActivation(key)).toBe(true);
+    expect(pageFrameNeedsActivation(key)).toBe(false);
     const entries = JSON.parse(localStorage.getItem(localStorage.key(0)!)!);
     expect(entries).toEqual([{ key, owner: expect.any(String) }]);
     expect(JSON.parse(key)).toEqual([JSON.stringify(["browser", "https://sedes.example", "alice"]), "thread", "page", 1]);
@@ -29,20 +29,25 @@ describe("page preview recovery", () => {
     expect(pageFrameNeedsActivation(key)).toBe(false);
   });
 
-  it("retains unfinished Managed Local renders across transport port changes", () => {
+  it("retains interrupted Managed Local renders across transport port changes", async () => {
     const beforeRestart = connectionScope(ELECTRON_LOCAL_CONNECTION_PROFILE_ID, "http://127.0.0.1:31001", "alice");
     const afterRestart = connectionScope(ELECTRON_LOCAL_CONNECTION_PROFILE_ID, "http://127.0.0.1:31002", "alice");
     const originalKey = pageFrameRecoveryKey(beforeRestart, page);
-    new PageFrameRecoveryAttempt(originalKey);
+    const attempt = new PageFrameRecoveryAttempt(originalKey);
+    // A fresh runtime has no in-memory ownership for the persisted attempt.
+    vi.resetModules();
+    const restarted = await import("./page-frame-recovery.js");
     expect(pageFrameRecoveryKey(afterRestart, page)).toBe(originalKey);
-    expect(pageFrameNeedsActivation(pageFrameRecoveryKey(afterRestart, page))).toBe(true);
+    expect(restarted.pageFrameNeedsActivation(pageFrameRecoveryKey(afterRestart, page))).toBe(true);
     const anotherIdentity = connectionScope(ELECTRON_LOCAL_CONNECTION_PROFILE_ID, "http://127.0.0.1:31002", "bob");
     expect(pageFrameNeedsActivation(pageFrameRecoveryKey(anotherIdentity, page))).toBe(false);
+    attempt.cancel();
   });
 
   it("keeps direct origins, connection profiles, identities, threads and pages separate", () => {
     const direct = connectionScope("direct", "http://127.0.0.1:31001", "alice");
-    new PageFrameRecoveryAttempt(pageFrameRecoveryKey(direct, page));
+    const attempt = new PageFrameRecoveryAttempt(pageFrameRecoveryKey(direct, page));
+    attempt.fail();
     for (const other of [
       connectionScope("direct", "http://127.0.0.1:31002", "alice"),
       connectionScope("another-profile", "http://127.0.0.1:31001", "alice"),
@@ -56,9 +61,9 @@ describe("page preview recovery", () => {
   it("bounds remembered revisions and updates a repeated entry's recency", () => {
     const key = pageFrameRecoveryKey(scope, page);
     for (let revision = 1; revision <= 256; revision += 1)
-      new PageFrameRecoveryAttempt(pageFrameRecoveryKey(scope, { ...page, revision }));
-    new PageFrameRecoveryAttempt(key);
-    new PageFrameRecoveryAttempt(pageFrameRecoveryKey(scope, { ...page, revision: 257 }));
+      new PageFrameRecoveryAttempt(pageFrameRecoveryKey(scope, { ...page, revision })).fail();
+    new PageFrameRecoveryAttempt(key).fail();
+    new PageFrameRecoveryAttempt(pageFrameRecoveryKey(scope, { ...page, revision: 257 })).fail();
     expect(pageFrameNeedsActivation(key)).toBe(true);
     expect(pageFrameNeedsActivation(pageFrameRecoveryKey(scope, { ...page, revision: 2 }))).toBe(false);
     expect(JSON.parse(localStorage.getItem(localStorage.key(0)!)!)).toHaveLength(256);
@@ -89,17 +94,47 @@ describe("page preview recovery", () => {
     // A stale cleanup cannot delete a later run's marker.
     const newer = new PageFrameRecoveryAttempt(key);
     dialog.cancel();
-    expect(pageFrameNeedsActivation(key)).toBe(true);
+    expect(pageFrameNeedsActivation(key)).toBe(false);
+    expect(JSON.parse(localStorage.getItem(localStorage.key(0)!)!)).toHaveLength(1);
     newer.cancel();
     expect(pageFrameNeedsActivation(key)).toBe(false);
   });
 
-  it("keeps unanswered attempts if their process never performs cleanup", () => {
+  it("keeps unanswered attempts if their process never performs cleanup", async () => {
     const key = pageFrameRecoveryKey(scope, page);
-    new PageFrameRecoveryAttempt(key);
+    const interrupted = new PageFrameRecoveryAttempt(key);
+    vi.resetModules();
+    const restarted = await import("./page-frame-recovery.js");
+    expect(restarted.pageFrameNeedsActivation(key)).toBe(true);
+    const retry = new restarted.PageFrameRecoveryAttempt(key);
+    retry.cancel();
+    expect(restarted.pageFrameNeedsActivation(key)).toBe(true);
+    interrupted.cancel();
+  });
+
+  it("allows concurrent live frames without clearing another frame's recovery marker", async () => {
+    const key = pageFrameRecoveryKey(scope, page);
+    const inline = new PageFrameRecoveryAttempt(key);
+    expect(pageFrameNeedsActivation(key)).toBe(false);
+    const panel = new PageFrameRecoveryAttempt(key);
+    expect(pageFrameNeedsActivation(key)).toBe(false);
+    panel.complete();
+    expect(JSON.parse(localStorage.getItem(localStorage.key(0)!)!)).toHaveLength(1);
+    vi.resetModules();
+    const restarted = await import("./page-frame-recovery.js");
+    expect(restarted.pageFrameNeedsActivation(key)).toBe(true);
+    inline.cancel();
+  });
+
+  it("requires retry after a concurrent frame fails even when another frame finishes", () => {
+    const key = pageFrameRecoveryKey(scope, page);
+    const inline = new PageFrameRecoveryAttempt(key);
+    const panel = new PageFrameRecoveryAttempt(key);
+    inline.fail();
+    panel.complete();
     expect(pageFrameNeedsActivation(key)).toBe(true);
     const retry = new PageFrameRecoveryAttempt(key);
-    retry.cancel();
-    expect(pageFrameNeedsActivation(key)).toBe(true);
+    retry.complete();
+    expect(pageFrameNeedsActivation(key)).toBe(false);
   });
 });

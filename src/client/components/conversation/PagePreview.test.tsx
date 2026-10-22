@@ -8,10 +8,10 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PageRevision, PageRevisionPage } from "../../../shared/protocol/pages.js";
+import type { PageRevision } from "../../../shared/protocol/pages.js";
 import { PagePreview } from "./PagePreview.js";
+import { PageDocument } from "../../pages/PageDocument.js";
 import { startPreviewScrollMomentum } from "../preview/inline-touch-scroll.js";
 import { connectionScope, ConnectionScopeProvider } from "../../app/connection-scope.js";
 
@@ -97,31 +97,11 @@ afterEach(() => {
 });
 function services() {
   return {
-    preparePageDownload: vi.fn(async (page: PageRevision, _signal?: AbortSignal) => ({
-      url: `/api/threads/${page.threadId}/pages/${page.pageId}/revisions/${page.revision}/download`,
-      serverOrigin: window.location.origin,
-      suggestedFileName: `${page.title}-${page.revision}.html`,
-      contentDisposition: `attachment; filename="${page.title}-${page.revision}.html"`,
-      contentLength: page.byteSize + 3,
-      revision: page.sha256,
-    })),
     createPageRenderAdmission: vi.fn(
       async (_pageId: string, _revision: number, _signal?: AbortSignal) => ({
         url: "/page-render/token",
         expiresAt: "2026-10-11T10:10:00.000Z",
       }),
-    ),
-    listPageRevisions: vi.fn(
-      async (
-        _pageId: string,
-        _options?: { limit?: number; signal?: AbortSignal },
-      ): Promise<PageRevisionPage> => ({
-        items: [{ ...original, revision: 2, title: "Updated phone" }],
-      }),
-    ),
-    getPageRevision: vi.fn(
-      async (_pageId: string, _revision: number, _signal?: AbortSignal) =>
-        original,
     ),
   };
 }
@@ -144,13 +124,90 @@ async function waitForFrame(container: HTMLElement) {
   );
   return container.querySelector("iframe")!;
 }
-function expandPage(title = "Phone") {
-  fireEvent.click(
-    screen.getByRole("button", { name: `Expand page: ${title}` }),
-  );
-}
+  function responseServices() {
+    return {
+      ...services(),
+      pageResponse: {
+        threadId: original.threadId,
+        submit: vi.fn(async (request: import("./page-response-services.js").PageResponseRequest, _signal?: AbortSignal): Promise<import("../../../shared/protocol/thread-input.js").DirectInputReceipt> => ({
+          mutationId: request.mutationId, operationId: request.mutationId,
+          threadId: original.threadId, admittedMode: "queue" as const,
+          currentMode: "queue" as const, status: "queued" as const,
+          queuedInputId: "queue-response",
+        })),
+        readReceipt: vi.fn<import("./page-response-services.js").PageResponseServices["readReceipt"]>(async () => ({ status: "notObserved" })),
+      },
+    };
+  }
+  function pendingSubmission(api: ReturnType<typeof responseServices>) {
+    let resolve!: (receipt: import("../../../shared/protocol/thread-input.js").DirectInputReceipt) => void;
+    let reject!: (error: Error) => void;
+    api.pageResponse.submit.mockImplementationOnce(() => new Promise((accept, fail) => { resolve = accept; reject = fail; }));
+    return {
+      reject: (error: Error) => reject(error),
+      resolve: (overrides: Partial<import("../../../shared/protocol/thread-input.js").DirectInputReceipt> = {}) => {
+        const request = api.pageResponse.submit.mock.calls[0]![0];
+        resolve({ mutationId: request.mutationId, operationId: request.mutationId, threadId: original.threadId,
+          admittedMode: "queue", currentMode: "queue", status: "queued", queuedInputId: "queue-response", ...overrides });
+      },
+    };
+  }
+  function documentVisibility(visibility: DocumentVisibilityState) {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue(visibility);
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+  }
+  function producer(frame: HTMLIFrameElement, read: () => string) {
+    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((message: unknown) => {
+      const request = message as { type: string; requestId: string };
+      if (request.type !== "sedes:page-submit-request") return;
+      queueMicrotask(() => sendFrameMessage(frame, "sedes:page-submit-response", { requestId: request.requestId, text: read() }));
+    });
+    sendFrameMessage(frame, "sedes:page-submit-ready");
+    return post;
+  }
+
 
 describe("published page preview", () => {
+  it("opens the exact publication in Pages while keeping its inline frame and interaction separate", async () => {
+    const api = services(), open = vi.fn();
+    const { container } = render(<PagePreview page={original} services={api} onOpenPage={open} />);
+    const frame = await waitForFrame(container);
+    expect(container.querySelector(".page-preview-controls")?.children).toHaveLength(2);
+    expect(container.querySelector(".wb-media-frame-header")).toBeNull();
+    expect(screen.queryByRole("toolbar", { name: "Page actions" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Interact with preview" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open in Pages: Phone" }));
+    expect(open).toHaveBeenCalledWith(original);
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(frame).toHaveAttribute("inert");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("can open Pages during an inline load without unloading or replacing the inline revision", async () => {
+    const api = services(), open = vi.fn();
+    let admit!: (value: { url: string; expiresAt: string }) => void;
+    api.createPageRenderAdmission.mockImplementationOnce(() => new Promise(resolve => { admit = resolve; }));
+    const { container } = render(<PagePreview page={original} services={api} onOpenPage={open} />);
+    await waitFor(() => expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Open in Pages: Phone" }));
+    expect(open).toHaveBeenCalledWith(original);
+    expect(api.createPageRenderAdmission.mock.calls[0]![2]!.aborted).toBe(false);
+    await act(async () => admit({ url: "/page-render/inline", expiresAt: "2026-10-11T10:10:00Z" }));
+    expect(await waitForFrame(container)).toHaveAttribute("title", "Phone · Revision 1");
+  });
+
+  it("admits independent inline and panel frames while the same revision is still loading", async () => {
+    const api = services();
+    const view = render(<><PagePreview page={original} services={api} />
+      <PageDocument page={original} services={api} visible onBack={() => {}} /></>);
+    await waitFor(() => expect(view.container.querySelectorAll("iframe")).toHaveLength(2));
+    const [inline, document] = view.container.querySelectorAll("iframe");
+    expect(inline).toHaveAttribute("inert");
+    expect(document).not.toHaveAttribute("inert");
+    expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(2);
+    sendFrameMessage(inline!, "sedes:page-size", { height: 844 });
+    sendFrameMessage(document!, "sedes:page-size", { height: 844 });
+  });
   it("loads on visibility, preserves authored width, and accepts only its own sizing messages", async () => {
     const visible = makePreviewsVisible(false),
       api = services();
@@ -309,126 +366,6 @@ describe("published page preview", () => {
     stop();
   });
 
-  it.each([
-    { viewport: { width: 1440 }, percentage: "44%", canvasHeight: 1333 },
-    { viewport: {}, percentage: "100%", canvasHeight: 3000 },
-  ])("fits an auto-height fullscreen page to width ($percentage)", async ({ viewport, percentage, canvasHeight }) => {
-    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(640);
-    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
-    render(<PagePreview page={{ ...original, viewport }} services={services()} />);
-    expandPage();
-    const dialog = await screen.findByRole("dialog");
-    const frame = await waitForFrame(dialog);
-    sendFrameMessage(frame, "sedes:page-size", { height: 3000 });
-    expect(within(dialog).getByRole("button", { name: `Zoom percentage: ${percentage}` })).toBeInTheDocument();
-    const canvas = dialog.querySelector<HTMLElement>(".page-frame-canvas")!;
-    expect(Number.parseFloat(canvas.style.height)).toBeCloseTo(canvasHeight, -1);
-    expect(Number.parseFloat(canvas.style.height)).toBeGreaterThan(400);
-  });
-
-  it("fits an explicitly authored fullscreen height to the available viewport", async () => {
-    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(640);
-    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
-    render(<PagePreview page={{ ...original, viewport: { width: 1440, height: 1000 } }} services={services()} />);
-    expandPage();
-    const dialog = await screen.findByRole("dialog");
-    await waitForFrame(dialog);
-    expect(within(dialog).getByRole("button", { name: "Zoom percentage: 34%" })).toBeInTheDocument();
-    expect(dialog.querySelector<HTMLElement>(".page-frame-canvas")!.style.height).toBe("336px");
-  });
-
-  it("restores the pinned publication after closing an older fullscreen revision", async () => {
-    const published = { ...original, revision: 3, title: "Published third" };
-    const api = services();
-    api.listPageRevisions.mockResolvedValue({ items: [published] });
-    api.getPageRevision.mockImplementation(async (_id, revision) => ({ ...original, revision, title: `Version ${revision}` }));
-    const { container } = render(<PagePreview page={published} services={api} />);
-    await waitForFrame(container);
-    expandPage(published.title);
-    const dialog = await screen.findByRole("dialog");
-    fireEvent.click(await within(dialog).findByRole("button", { name: "Previous page revision" }));
-    await within(dialog).findByText("2/3");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Previous page revision" }));
-    await within(dialog).findByText("1/3");
-    await waitFor(() => expect(dialog.querySelector("iframe")).toHaveAttribute("title", "Version 1 · Revision 1"));
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    const frame = await waitForFrame(container);
-    expect(frame).toHaveAttribute("title", "Published third · Revision 3");
-    expect(api.createPageRenderAdmission).toHaveBeenLastCalledWith(published.pageId, 3, expect.any(AbortSignal));
-    expect(screen.getByRole("group", { name: /^Published third$/ })).toHaveAttribute("data-page-revision", "3");
-    expandPage(published.title);
-    await screen.findByLabelText("Revision 3 of 3");
-  });
-
-  it("shows only maximize and interaction inline and keeps revision controls in the fullscreen header", async () => {
-    const api = services();
-    const { container } = render(<PagePreview page={original} services={api} />);
-    await waitForFrame(container);
-    expect(container.querySelector(".wb-media-frame-header")).toBeNull();
-    expect(screen.queryByRole("toolbar", { name: "Page actions" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Page details|Hide page details/ })).toBeNull();
-    const expand = screen.getByRole("button", { name: "Expand page: Phone" });
-    expect(container.querySelector(".page-preview-controls")?.children).toHaveLength(2);
-    expandPage();
-    const dialog = await screen.findByRole("dialog");
-    const expandedFrame = await waitForFrame(dialog);
-    expect(expandedFrame).not.toHaveAttribute("inert");
-    expect(expandedFrame).toHaveAttribute("tabindex", "0");
-    expect(within(dialog).queryByRole("button", { name: /interact.*preview/i })).toBeNull();
-    const header = dialog.querySelector(".page-preview-fullscreen-header");
-    expect(header).toBeInTheDocument();
-    expect(within(header as HTMLElement).getByRole("toolbar", { name: "Page actions" })).toBeInTheDocument();
-    expect(within(header as HTMLElement).getByRole("button", { name: "Next page revision" })).toHaveAttribute("data-size", "icon-lg");
-    expect(within(header as HTMLElement).getByRole("button", { name: "Refresh page preview" })).toHaveAttribute("data-size", "icon-lg");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Next page revision" }));
-    const originalButton = await within(dialog).findByRole("button", { name: "Return to published revision 1" });
-    expect(originalButton).toHaveTextContent("2/2");
-    expect(api.listPageRevisions).toHaveBeenCalledWith(original.pageId, expect.objectContaining({ limit: 1 }));
-    fireEvent.click(originalButton);
-    expect(within(dialog).getByLabelText("Revision 1 of 2")).toHaveTextContent("1/2");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-    await waitFor(() => expect(expand).toHaveFocus());
-    expect(screen.queryByRole("toolbar", { name: "Page actions" })).toBeNull();
-  });
-
-  it("refreshes the fullscreen document without publishing a new revision", async () => {
-    const api = services();
-    const { container } = render(<PagePreview page={original} services={api} />);
-    await waitForFrame(container);
-    expandPage();
-    const dialog = await screen.findByRole("dialog");
-    const frame = await waitForFrame(dialog);
-    sendFrameMessage(frame, "sedes:page-size", { height: 100 });
-    const admissionsBeforeRefresh = api.createPageRenderAdmission.mock.calls.length;
-    fireEvent.click(within(dialog).getByRole("button", { name: "Refresh page preview" }));
-    await waitFor(() => expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(admissionsBeforeRefresh + 1));
-    await waitFor(() => expect(dialog.querySelector("iframe")).not.toBe(frame));
-    expect(container.querySelector(".page-preview")).toHaveAttribute("data-page-revision", "1");
-  });
-
-  it("closes zoom presets before the fullscreen Radix dialog and restores focus at each Escape", async () => {
-    const user = userEvent.setup();
-    const { container } = render(<PagePreview page={original} services={services()} />);
-    await waitForFrame(container);
-    const expand = screen.getByRole("button", { name: "Expand page: Phone" });
-    await user.click(expand);
-    const dialog = await screen.findByRole("dialog");
-    await waitForFrame(dialog);
-    const controls = within(dialog).getByRole("group", { name: "Page zoom controls" });
-    const percentage = within(controls).getByRole("button", { name: /Zoom percentage:/ });
-    await user.click(percentage);
-    const presets = within(dialog).getByRole("group", { name: "Zoom presets" });
-    act(() => within(presets).getByRole("button", { name: "100%" }).focus());
-    await user.keyboard("{Escape}");
-    expect(screen.getByRole("dialog")).toBe(dialog);
-    expect(within(dialog).queryByRole("group", { name: "Zoom presets" })).toBeNull();
-    expect(percentage).toHaveFocus();
-    await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    await waitFor(() => expect(expand).toHaveFocus());
-  });
-
   it("fails closed before minting on an unsafe native host", async () => {
     safety.supports.mockResolvedValue(false);
     const api = services();
@@ -440,207 +377,11 @@ describe("published page preview", () => {
     expect(container.querySelector("iframe")).toBeNull();
   });
 
-  it("checks the server again after reaching a previously latest revision", async () => {
-    const api = services();
-    api.listPageRevisions
-      .mockResolvedValueOnce({
-        items: [{ ...original, revision: 2, title: "Updated phone" }],
-      })
-      .mockResolvedValueOnce({
-        items: [{ ...original, revision: 2, title: "Updated phone" }],
-      })
-      .mockResolvedValueOnce({
-        items: [{ ...original, revision: 3, title: "Newest phone" }],
-      });
-    render(<PagePreview page={original} services={api} />);
-    expandPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Next page revision" }));
-    await screen.findByText("2/2");
-    fireEvent.click(
-      screen.getByRole("button", { name: "Check for a newer page revision" }),
-    );
-    await screen.findByText("3/3");
-    expect(api.listPageRevisions).toHaveBeenCalledTimes(3);
-  });
 
-  it("loads the total on viewer open without switching the published revision", async () => {
-    const api = services();
-    api.listPageRevisions.mockResolvedValue({
-      items: [{ ...original, revision: 4 }],
-    });
-    const { container } = render(
-      <PagePreview page={original} services={api} />,
-    );
-    await waitForFrame(container);
-    expect(api.listPageRevisions).not.toHaveBeenCalled();
-    expandPage();
-    const dialog = await screen.findByRole("dialog");
-    expect(
-      await within(dialog).findByLabelText("Revision 1 of 4"),
-    ).toHaveTextContent("1/4");
-    expect((await waitForFrame(dialog)).title).toBe("Phone · Revision 1");
-    expect(api.getPageRevision).not.toHaveBeenCalled();
-  });
 
-  it("hides revision controls and the separator for a single revision", async () => {
-    const api = services();
-    api.listPageRevisions.mockResolvedValue({ items: [original] });
-    render(
-      <PagePreview page={original} services={api} presentation="library" />,
-    );
-    await screen.findByRole("button", { name: "Refresh page preview" });
-    await waitFor(() => expect(api.listPageRevisions).toHaveBeenCalledOnce());
-    expect(
-      screen.queryByRole("group", { name: "Page revision controls" }),
-    ).toBeNull();
-    expect(document.querySelector(".page-preview-header-separator")).toBeNull();
-  });
 
-  it("renders library content interactively without chat controls or a nested dialog", async () => {
-    const api = services();
-    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(640);
-    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
-    const { container } = render(
-      <PagePreview
-        page={{ ...original, viewport: { width: 390, height: 2000 } }}
-        services={api}
-        presentation="library"
-      />,
-    );
-    const frame = await waitForFrame(container);
-    expect(frame).not.toHaveAttribute("inert");
-    expect(frame.style.height).toBe("2000px");
-    expect(frame.style.transform).toBe("scale(1)");
-    expect(
-      screen.queryByRole("button", { name: /interact.*preview|Expand page:/i }),
-    ).toBeNull();
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(
-      screen.getByRole("group", { name: "Page zoom controls" }),
-    ).toBeInTheDocument();
-  });
 
-  it("discovers additional revisions on refresh without changing the library selection", async () => {
-    const api = services();
-    api.listPageRevisions.mockResolvedValueOnce({ items: [original] });
-    const { container } = render(
-      <PagePreview page={original} services={api} presentation="library" />,
-    );
-    await waitForFrame(container);
-    expect(screen.queryByRole("group", { name: "Page revision controls" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh page preview" }));
-    expect(await screen.findByLabelText("Revision 1 of 2")).toHaveTextContent("1/2");
-    expect((await waitForFrame(container)).title).toBe("Phone · Revision 1");
-  });
 
-  it("preserves explicit retry protection in the immediate-interaction library", async () => {
-    const api = services();
-    let view = render(
-      <PagePreview page={original} services={api} presentation="library" />,
-    );
-    sendFrameMessage(await waitForFrame(view.container), "sedes:page-error");
-    view.unmount();
-    view = render(
-      <PagePreview page={original} services={api} presentation="library" />,
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Retry preview" }));
-    expect(await waitForFrame(view.container)).not.toHaveAttribute("inert");
-  });
-
-  it("ignores stale revision counts after switching library pages", async () => {
-    const api = services();
-    let resolveOld!: (value: PageRevisionPage) => void;
-    let resolveNew!: (value: PageRevisionPage) => void;
-    api.listPageRevisions
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveOld = resolve;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveNew = resolve;
-          }),
-      );
-    const view = render(
-      <PagePreview page={original} services={api} presentation="library" />,
-    );
-    const oldSignal = api.listPageRevisions.mock.calls[0]?.[1]?.signal;
-    const another = {
-      ...original,
-      pageId: "30000000-0000-4000-8000-000000000002",
-      title: "Another page",
-    };
-    view.rerender(
-      <PagePreview page={another} services={api} presentation="library" />,
-    );
-    expect(oldSignal?.aborted).toBe(true);
-    await act(async () => resolveNew({ items: [{ ...another, revision: 3 }] }));
-    expect(screen.getByLabelText("Revision 1 of 3")).toHaveTextContent("1/3");
-    await act(async () =>
-      resolveOld({ items: [{ ...original, revision: 9 }] }),
-    );
-    expect(screen.getByLabelText("Revision 1 of 3")).toHaveTextContent("1/3");
-    expect(screen.queryByText("1/9")).toBeNull();
-  });
-
-  it("aborts a viewer count request on close and reloads it on reopen", async () => {
-    const api = services();
-    let resolveOld!: (value: PageRevisionPage) => void;
-    api.listPageRevisions.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveOld = resolve;
-        }),
-    );
-    render(<PagePreview page={original} services={api} />);
-    expandPage();
-    const oldSignal = api.listPageRevisions.mock.calls[0]?.[1]?.signal;
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(oldSignal?.aborted).toBe(true);
-    expandPage();
-    await screen.findByLabelText("Revision 1 of 2");
-    await act(async () =>
-      resolveOld({ items: [{ ...original, revision: 8 }] }),
-    );
-    expect(screen.queryByText("1/8")).toBeNull();
-    expect(screen.getByLabelText("Revision 1 of 2")).toBeInTheDocument();
-  });
-
-  it("keeps a return to the published revision when a pending navigation resolves late", async () => {
-    const api = services();
-    const published = { ...original, revision: 3 };
-    api.listPageRevisions.mockResolvedValue({ items: [published] });
-    let resolvePending!: (value: PageRevision) => void;
-    api.getPageRevision
-      .mockResolvedValueOnce({ ...original, revision: 2 })
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolvePending = resolve;
-          }),
-      );
-    render(
-      <PagePreview page={published} services={api} presentation="library" />,
-    );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Previous page revision" }),
-    );
-    await screen.findByText("2/3");
-    fireEvent.click(
-      screen.getByRole("button", { name: "Previous page revision" }),
-    );
-    await waitFor(() => expect(api.getPageRevision).toHaveBeenCalledTimes(2));
-    const signal = api.getPageRevision.mock.calls[1]?.[2];
-    fireEvent.click(
-      screen.getByRole("button", { name: "Return to published revision 3" }),
-    );
-    expect(signal?.aborted).toBe(true);
-    await act(async () => resolvePending(original));
-    expect(screen.getByLabelText("Revision 3 of 3")).toHaveTextContent("3/3");
-  });
 
   it("disposes the page only for its authenticated frame error", async () => {
     const { container } = render(
@@ -703,7 +444,6 @@ describe("published page preview", () => {
     expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(2);
   });
 
-
   it("retains the same frame and measured dimensions during a brief scroll away", async () => {
     const visible = makePreviewsVisible(), api = services();
     const { container } = render(
@@ -759,37 +499,6 @@ describe("published page preview", () => {
     expect(frame).toHaveAttribute("inert");
   });
 
-  it("expands during loading and uses shared zoom controls with actual CSS-pixel sizing", async () => {
-    const api = services();
-    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(640);
-    render(
-      <PagePreview
-        page={{ ...original, viewport: { width: 1440, height: 1000 } }}
-        services={api}
-      />,
-    );
-    expandPage();
-    const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveClass("media-preview-dialog");
-    const frame = await waitForFrame(dialog);
-    expect(frame).not.toHaveAttribute("inert");
-    expect(within(dialog).queryByRole("button", { name: "Interact with preview" })).toBeNull();
-    expect(dialog.querySelector(".page-frame-toolbar")).toBeNull();
-    const controls = within(dialog).getByRole("group", {
-      name: "Page zoom controls",
-    });
-    expect(
-      within(controls).getByRole("button", { name: "Zoom percentage: 44%" }),
-    ).toBeInTheDocument();
-    fireEvent.click(
-      within(controls).getByRole("button", { name: "Actual size (100%)" }),
-    );
-    expect(
-      within(controls).getByRole("button", { name: "Zoom percentage: 100%" }),
-    ).toBeInTheDocument();
-    sendFrameMessage(frame, "sedes:page-size", { height: 1000 });
-  });
-
   it("retains manual recovery if durable browser recovery storage is unavailable", async () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("unavailable");
@@ -836,6 +545,7 @@ describe("published page preview", () => {
     act(() => vi.advanceTimersByTime(65_000));
     expect(container.querySelector("iframe")).toBe(frame);
   });
+
   it("expires a transfer that never acknowledges its wrapper", async () => {
     vi.useFakeTimers();
     const { container } = render(
@@ -875,48 +585,27 @@ describe("published page preview", () => {
 });
 
 describe("page responses", () => {
-  function responseServices() {
-    return {
-      ...services(),
-      pageResponse: {
-        threadId: original.threadId,
-        submit: vi.fn(async (request: import("./page-response-services.js").PageResponseRequest, _signal?: AbortSignal): Promise<import("../../../shared/protocol/thread-input.js").DirectInputReceipt> => ({
-          mutationId: request.mutationId, operationId: request.mutationId,
-          threadId: original.threadId, admittedMode: "queue" as const,
-          currentMode: "queue" as const, status: "queued" as const,
-          queuedInputId: "queue-response",
-        })),
-        readReceipt: vi.fn<import("./page-response-services.js").PageResponseServices["readReceipt"]>(async () => ({ status: "notObserved" })),
-      },
-    };
-  }
-  function pendingSubmission(api: ReturnType<typeof responseServices>) {
-    let resolve!: (receipt: import("../../../shared/protocol/thread-input.js").DirectInputReceipt) => void;
-    let reject!: (error: Error) => void;
-    api.pageResponse.submit.mockImplementationOnce(() => new Promise((accept, fail) => { resolve = accept; reject = fail; }));
-    return {
-      reject: (error: Error) => reject(error),
-      resolve: (overrides: Partial<import("../../../shared/protocol/thread-input.js").DirectInputReceipt> = {}) => {
-        const request = api.pageResponse.submit.mock.calls[0]![0];
-        resolve({ mutationId: request.mutationId, operationId: request.mutationId, threadId: original.threadId,
-          admittedMode: "queue", currentMode: "queue", status: "queued", queuedInputId: "queue-response", ...overrides });
-      },
-    };
-  }
-  function documentVisibility(visibility: DocumentVisibilityState) {
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue(visibility);
-    act(() => document.dispatchEvent(new Event("visibilitychange")));
-  }
-  function producer(frame: HTMLIFrameElement, read: () => string) {
-    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((message: unknown) => {
-      const request = message as { type: string; requestId: string };
-      if (request.type !== "sedes:page-submit-request") return;
-      queueMicrotask(() => sendFrameMessage(frame, "sedes:page-submit-response", { requestId: request.requestId, text: read() }));
-    });
-    sendFrameMessage(frame, "sedes:page-submit-ready");
-    return post;
-  }
-
+  it("keeps a captured inline admission independent from responses in Pages", async () => {
+    const inlineApi = responseServices(), panelApi = responseServices(), submission = pendingSubmission(inlineApi);
+    const view = render(<><PagePreview page={original} services={inlineApi} />
+      <PageDocument page={original} services={panelApi} visible onBack={() => {}} /></>);
+    const inline = view.container.querySelector<HTMLElement>(".page-preview")!;
+    const panel = view.container.querySelector<HTMLElement>(".page-document")!;
+    const inlineRead = vi.fn(() => "inline response"), panelRead = vi.fn(() => "panel response");
+    producer(await waitForFrame(inline), inlineRead);
+    producer(await waitForFrame(panel), panelRead);
+    fireEvent.click(within(inline).getByRole("button", { name: "Send page response" }));
+    await waitFor(() => expect(inlineApi.pageResponse.submit).toHaveBeenCalledTimes(1));
+    fireEvent.click(within(panel).getByRole("button", { name: "Send page response" }));
+    await within(panel).findByText("Response queued.");
+    expect(panelApi.pageResponse.submit.mock.calls[0]![0].text).toBe("panel response");
+    await act(async () => submission.reject(new TypeError("network lost")));
+    fireEvent.click(within(inline).getByRole("button", { name: "Retry page response" }));
+    await within(inline).findByText("Response queued.");
+    expect(inlineApi.pageResponse.submit.mock.calls[1]![0]).toBe(inlineApi.pageResponse.submit.mock.calls[0]![0]);
+    expect(inlineRead).toHaveBeenCalledTimes(1);
+    expect(panelRead).toHaveBeenCalledTimes(1);
+  });
   it("captures only from host Send, preserves exact text and captures anew for each deliberate send", async () => {
     const api = responseServices();
     const { container } = render(<PagePreview page={original} services={api} />);
@@ -1011,24 +700,6 @@ describe("page responses", () => {
     expect(api.pageResponse.submit).not.toHaveBeenCalled();
   });
 
-  it("drops a pending captured response when refreshing its document", async () => {
-    const api = responseServices();
-    api.pageResponse.submit.mockRejectedValueOnce(new TypeError("network lost"));
-    const { container } = render(<PagePreview page={original} services={api} presentation="library" />);
-    const oldFrame = await waitForFrame(container);
-    producer(oldFrame, () => "old response");
-    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
-    await screen.findByRole("button", { name: "Retry page response" });
-    fireEvent.click(screen.getByRole("button", { name: "Refresh page preview" }));
-    await waitFor(() => expect(container.querySelector("iframe")).not.toBe(oldFrame));
-    producer(await waitForFrame(container), () => "new response");
-    expect(screen.queryByRole("button", { name: "Retry page response" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
-    await screen.findByText("Response queued.");
-    expect(api.pageResponse.submit.mock.calls[1]![0].text).toBe("new response");
-    expect(api.pageResponse.readReceipt).not.toHaveBeenCalled();
-  });
-
   it("keeps recovery-required delivery bound to the existing receipt until explicitly reconciled", async () => {
     const api = responseServices();
     api.pageResponse.submit.mockImplementationOnce(async request => ({
@@ -1109,60 +780,6 @@ describe("page responses", () => {
     expect(container.querySelector("iframe")).toBeNull();
   });
 
-  it("shares admission and receipt retry across inline and expanded frames", async () => {
-    const api = responseServices(), submission = pendingSubmission(api);
-    api.pageResponse.readReceipt.mockImplementation(async mutationId => ({ status: "found", receipt: {
-      mutationId, operationId: mutationId, threadId: original.threadId,
-      admittedMode: "submit", currentMode: "submit", status: "accepted",
-    } }));
-    const { container } = render(<PagePreview page={original} services={api} />);
-    const firstRead = vi.fn(() => "inline response");
-    producer(await waitForFrame(container), firstRead);
-    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
-    await waitFor(() => expect(api.pageResponse.submit).toHaveBeenCalledTimes(1));
-    const [request, signal] = api.pageResponse.submit.mock.calls[0]!;
-    expandPage();
-    const dialog = screen.getByRole("dialog");
-    const expandedRead = vi.fn(() => "expanded response must not replace capture");
-    producer(await waitForFrame(dialog), expandedRead);
-    const send = within(dialog).getByRole("button", { name: "Send page response" });
-    expect(send).toBeDisabled();
-    fireEvent.click(send);
-    expect(signal!.aborted).toBe(false);
-    await act(async () => submission.reject(new TypeError("network lost")));
-    fireEvent.click(within(dialog).getByRole("button", { name: "Retry page response" }));
-    await within(dialog).findByText("Response sent.");
-    expect(api.pageResponse.readReceipt).toHaveBeenCalledWith(request.mutationId, expect.any(AbortSignal));
-    expect(api.pageResponse.submit).toHaveBeenCalledTimes(1);
-    expect(firstRead).toHaveBeenCalledTimes(1);
-    expect(expandedRead).not.toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-    expect(screen.getByText("Response sent.")).toBeInTheDocument();
-  });
-
-  it("invalidates only the unfinished capture when expanding into a new document", async () => {
-    const api = responseServices();
-    const { container } = render(<PagePreview page={original} services={api} />);
-    const frame = await waitForFrame(container);
-    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => {});
-    sendFrameMessage(frame, "sedes:page-submit-ready");
-    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
-    const request = post.mock.calls[0]![0] as { requestId: string };
-    expandPage();
-    const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByRole("button", { name: "Send page response" })).toBeDisabled();
-    sendFrameMessage(frame, "sedes:page-submit-response", { requestId: request.requestId, text: "old capture" });
-    await within(dialog).findByText("Page changed before its response was captured.");
-    expect(api.pageResponse.submit).not.toHaveBeenCalled();
-    const read = vi.fn(() => "expanded capture");
-    producer(await waitForFrame(dialog), read);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Send page response" }));
-    await within(dialog).findByText("Response queued.");
-    expect(api.pageResponse.submit).toHaveBeenCalledTimes(1);
-    expect(api.pageResponse.submit.mock.calls[0]![0].text).toBe("expanded capture");
-    expect(read).toHaveBeenCalledTimes(1);
-  });
-
   it("does not cancel a started admission when the entire preview unmounts", async () => {
     const api = responseServices(), submission = pendingSubmission(api);
     const view = render(<PagePreview page={original} services={api} />);
@@ -1206,121 +823,3 @@ describe("page responses", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Page preview unavailable.");
   });
 });
-
-describe("saved page HTML downloads", () => {
-  it("downloads the selected older revision even when safe rendering is unavailable", async () => {
-    safety.supports.mockResolvedValue(false);
-    const api = services();
-    const published = { ...original, revision: 2, title: "New phone" };
-    render(<PagePreview page={published} services={api} />);
-    expect(screen.queryByRole("button", { name: "Download HTML" })).toBeNull();
-    expandPage(published.title);
-    const dialog = await screen.findByRole("dialog");
-    await within(dialog).findByText("Page preview unavailable.");
-    await within(dialog).findByLabelText("Revision 2 of 2");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Previous page revision" }));
-    await within(dialog).findByText("1/2");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Download HTML" }));
-    await within(dialog).findByText("Download started.");
-    expect(api.preparePageDownload).toHaveBeenCalledWith(original, expect.any(AbortSignal));
-    expect(downloads.browser).toHaveBeenCalledWith(expect.objectContaining({ url: expect.stringContaining("/revisions/1/download"), signal: expect.any(AbortSignal) }));
-    expect(downloads.native).not.toHaveBeenCalled();
-  });
-
-  it("disables duplicates during preflight and displays browser GET failures independently of preview errors", async () => {
-    const api = services();
-    const prepared = await api.preparePageDownload(original);
-    api.preparePageDownload.mockClear();
-    const pending = deferredDownload<typeof prepared>();
-    api.preparePageDownload.mockReturnValue(pending.promise);
-    render(<PagePreview page={original} services={api} presentation="library" />);
-    fireEvent.click(screen.getByRole("button", { name: "Download HTML" }));
-    expect(screen.getByRole("button", { name: "Preparing HTML download" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Preparing HTML download" }));
-    expect(api.preparePageDownload).toHaveBeenCalledTimes(1);
-    await act(async () => pending.resolve(prepared));
-    expect(screen.getByRole("button", { name: "HTML download started" })).toBeDisabled();
-    act(() => downloads.browser.mock.calls[0]![0].onFailure("This page is no longer available."));
-    expect(screen.getByRole("alert")).toHaveTextContent("This page is no longer available.");
-    expect(screen.getByRole("button", { name: "Download HTML" })).toBeEnabled();
-  });
-
-  it.each(["saved", "cancelled"])("uses the native picker and handles %s without starting browser navigation", async (result) => {
-    downloads.packaged.mockReturnValue(true);
-    downloads.native.mockResolvedValue(result);
-    const api = services();
-    render(<PagePreview page={original} services={api} presentation="library" />);
-    fireEvent.click(screen.getByRole("button", { name: "Download HTML" }));
-    await waitFor(() => expect(downloads.native).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Download HTML" })).toBeEnabled());
-    expect(downloads.native).toHaveBeenCalledWith(expect.objectContaining({
-      suggestedFileName: "Phone-1.html", expectedRevision: original.sha256,
-      expectedContentLength: original.byteSize + 3, signal: expect.any(AbortSignal),
-    }));
-    expect(screen.queryByText("HTML saved.")).toBe(result === "saved" ? screen.getByText("HTML saved.") : null);
-    expect(downloads.browser).not.toHaveBeenCalled();
-    expect(screen.queryByText("Download started.")).toBeNull();
-  });
-
-  it("shows a preflight error and lets the user retry", async () => {
-    const api = services();
-    api.preparePageDownload.mockRejectedValueOnce(new Error("This page could not be prepared for download."));
-    render(<PagePreview page={original} services={api} presentation="library" />);
-    fireEvent.click(screen.getByRole("button", { name: "Download HTML" }));
-    await screen.findByText("This page could not be prepared for download.");
-    expect(screen.getByRole("button", { name: "Download HTML" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Download HTML" }));
-    await screen.findByText("Download started.");
-    expect(screen.queryByText("This page could not be prepared for download.")).toBeNull();
-  });
-
-  it.each(["close", "revision", "connection", "unmount"])("aborts pending downloads and suppresses stale completion after %s", async (change) => {
-    const api = services();
-    const prepared = await api.preparePageDownload(original);
-    api.preparePageDownload.mockClear();
-    const pending = deferredDownload<typeof prepared>();
-    api.preparePageDownload.mockReturnValue(pending.promise);
-    const ui = (nextScope = scope) => (
-      <ConnectionScopeProvider scope={nextScope}><PagePreview page={original} services={api} /></ConnectionScopeProvider>
-    );
-    const view = renderView(ui());
-    expandPage();
-    const dialog = await screen.findByRole("dialog");
-    await within(dialog).findByLabelText("Revision 1 of 2");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Download HTML" }));
-    const signal = api.preparePageDownload.mock.calls[0]![1]!;
-    if (change === "close") fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-    else if (change === "revision") {
-      fireEvent.click(within(dialog).getByRole("button", { name: "Next page revision" }));
-      await within(dialog).findByText("2/2");
-    } else if (change === "connection") view.rerender(ui(connectionScope("other", window.location.origin, "another-principal")));
-    else view.unmount();
-    expect(signal.aborted).toBe(true);
-    await act(async () => pending.resolve(prepared));
-    expect(downloads.browser).not.toHaveBeenCalled();
-    expect(downloads.native).not.toHaveBeenCalled();
-    expect(screen.queryByText("Download started.")).toBeNull();
-  });
-
-  it("cancels an open native picker when its viewer closes and ignores its late result", async () => {
-    downloads.packaged.mockReturnValue(true);
-    const pending = deferredDownload<string>();
-    downloads.native.mockReturnValue(pending.promise);
-    render(<PagePreview page={original} services={services()} />);
-    expandPage();
-    const dialog = await screen.findByRole("dialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Download HTML" }));
-    await waitFor(() => expect(downloads.native).toHaveBeenCalledTimes(1));
-    const signal = downloads.native.mock.calls[0]![0].signal as AbortSignal;
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-    expect(signal.aborted).toBe(true);
-    await act(async () => pending.resolve("saved"));
-    expect(screen.queryByText("HTML saved.")).toBeNull();
-  });
-});
-
-function deferredDownload<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
-}

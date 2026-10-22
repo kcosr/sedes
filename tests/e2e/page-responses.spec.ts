@@ -13,9 +13,9 @@ import {
   expectNoPageOverflow,
   fillAndPersistDraft,
   openWorkspaceDirectory,
-  overlaySettled,
   sendCurrentDraft,
 } from "./helpers.js";
+import { quickButton, stagePanel } from "./workspace-panel-helpers.js";
 import { loadE2ERunContext } from "./run-context.js";
 
 const title = "Release choices — rollout plan";
@@ -74,12 +74,11 @@ async function fillChoices(frame: FrameLocator): Promise<void> {
   await frame.getByRole("textbox", { name: "Release notes" }).fill(notes);
 }
 
-async function expandPage(page: Page, card: Locator): Promise<Locator> {
-  await card.getByRole("button", { name: /^Expand page:/ }).click();
-  const dialog = page.getByRole("dialog").filter({ has: page.locator(".page-preview-fullscreen-header") });
-  await expect(dialog).toBeVisible();
-  await overlaySettled(dialog);
-  return dialog;
+async function openPage(page: Page, card: Locator): Promise<Locator> {
+  await card.getByRole("button", { name: /^Open in Pages:/ }).click();
+  const panel = stagePanel(page, "Pages");
+  await expect(panel).toBeVisible();
+  return panel;
 }
 
 async function snapshot(page: Page, threadPath: string) {
@@ -88,7 +87,7 @@ async function snapshot(page: Page, threadPath: string) {
   return normalizedThreadSnapshotSchema.parse(await response.json());
 }
 
-test("page responses capture once, queue while busy, and retain exact text and source after reload and fork", async ({ page }, testInfo) => {
+test("page responses capture once, queue while busy, and retain exact text and source after reload and fork", async ({ page, browserDiagnostics }, testInfo) => {
   const workspace = path.join(loadE2ERunContext().workspacesDirectory, "page-responses");
   await mkdir(workspace, { recursive: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -216,22 +215,46 @@ test("page responses capture once, queue while busy, and retain exact text and s
     expect(Math.abs(summaryLines.labelTop - summaryLines.sourceTop)).toBeLessThan(1);
     await capture(page, testInfo, "page-response-compact-phone.png");
 
-    // The page remains usable at idle from the enlarged viewer on a phone.
+    // The page remains usable at idle from Pages on a phone. A lost reply
+    // must retain the captured response across hide/show without capturing again.
     await card.scrollIntoViewIfNeeded();
-    const viewer = await expandPage(page, card);
+    const viewer = await openPage(page, card);
     const viewerFrame = pageDocument(viewer);
     await fillChoices(viewerFrame);
     await expect(viewerFrame.locator("#captures")).toHaveText("Captures: 0");
     await capture(page, testInfo, "page-response-form-phone.png");
-    const idleAccepted = page.waitForResponse(candidate => candidate.request().method() === "POST"
+    let submittedBody: unknown;
+    let inputPosts = 0;
+    const inputUrl = `**/api/threads/${threadId}/inputs`;
+    browserDiagnostics.allowNetworkFailures = true;
+    await page.route(inputUrl, async route => {
+      inputPosts += 1;
+      submittedBody = route.request().postDataJSON();
+      const accepted = await route.fetch();
+      expect(accepted.ok(), await accepted.text()).toBe(true);
+      expect(directInputReceiptSchema.parse(await accepted.json()).admittedMode).toBe("submit");
+      await route.abort("failed");
+    });
+    const idleRequest = page.waitForRequest(candidate => candidate.method() === "POST"
       && candidate.url().endsWith(`/api/threads/${threadId}/inputs`));
     await viewer.getByRole("button", { name: "Send page response", exact: true }).click();
-    const idleSent = await idleAccepted;
-    expect(idleSent.ok(), await idleSent.text()).toBe(true);
-    expect(idleSent.request().postDataJSON()).toMatchObject({ text: expectedText });
-    expect(directInputReceiptSchema.parse(await idleSent.json()).admittedMode).toBe("submit");
+    const idleSent = await idleRequest;
+    await expect(viewer.getByRole("button", { name: "Retry page response", exact: true })).toBeVisible();
+    browserDiagnostics.allowNetworkFailures = false;
     await expect(viewerFrame.locator("#captures")).toHaveText("Captures: 1");
-    await viewer.getByRole("button", { name: "Close", exact: true }).click();
+    expect(submittedBody).toMatchObject({ text: expectedText, pageResponse: { pageId: source.pageId, revision: 1 } });
+    await quickButton(page, "Chat").click();
+    await expect(viewer).toHaveCount(0);
+    await expect(page.locator('.workspace-panel-parking iframe')).toHaveCount(0);
+    await quickButton(page, "Pages").click();
+    await expect(viewerFrame.locator("#captures")).toHaveText("Captures: 0");
+    await expect(viewerFrame.getByRole("textbox", { name: "Release notes" })).toHaveValue("");
+    await viewer.getByRole("button", { name: "Retry page response", exact: true }).click();
+    await expect(viewer.getByText("Response sent.", { exact: true })).toBeVisible();
+    expect(inputPosts).toBe(1);
+    await expect(viewerFrame.locator("#captures")).toHaveText("Captures: 0");
+    await page.unroute(inputUrl);
+    await viewer.getByRole("button", { name: "Close Pages panel", exact: true }).click();
     await expect(viewer).toHaveCount(0);
     await expect(responses).toHaveCount(2);
 
@@ -249,7 +272,7 @@ test("page responses capture once, queue while busy, and retain exact text and s
     await expect(disclosure.locator(".page-response-provenance")).toContainText("Revision 1");
     expect(await disclosure.locator(".page-response-text").textContent()).toBe(expectedText);
     const childPath = new URL(page.url()).pathname;
-    const inputHeaders = idleSent.request().headers();
+    const inputHeaders = idleSent.headers();
     expect(inputHeaders["x-sedes-client"]).toBeTruthy();
     expect(inputHeaders["x-csrf-token"]).toBeTruthy();
     const foreignResponse = await page.request.post(`/api${childPath}/inputs`, {

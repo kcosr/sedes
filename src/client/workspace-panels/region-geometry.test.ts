@@ -319,12 +319,12 @@ describe("make-room", () => {
       return seed % limit;
     };
     const regions = ["middle", "left", "right", "top", "bottom"] as const;
-    const kinds = ["files", "workpads", "tasks", "terminals"] as const;
+    const kinds = ["files", "workpads", "pages", "tasks", "terminals"] as const;
     let checked = 0;
     for (let index = 0; index < 400; index += 1) {
       let view = movePanel(defaultRegionView(), "chat", regions[random(5)]!);
       for (let step = 0; step < 6; step += 1) {
-        const kind = kinds[random(4)]!;
+        const kind = kinds[random(kinds.length)]!;
         view =
           kind === "terminals"
             ? withTerminal(movePanel(view, "terminals", regions[random(5)]!))
@@ -399,7 +399,7 @@ describe("geometry helpers", () => {
     });
   });
 
-  it("reads Files, Workpads and Tasks minimums from the tenant registry", () => {
+  it("reads shared panel minimums from the tenant registry", () => {
     const tenant = (id: string, minWidth: number): WorkspacePanelTenant => ({
       id,
       title: id,
@@ -410,7 +410,7 @@ describe("geometry helpers", () => {
       render: () => null,
     });
     const hints = panelSizeHints(
-      new WorkspacePanelTenantRegistry([tenant("workspace-files", 333), tenant("tasks", 310)]),
+      new WorkspacePanelTenantRegistry([tenant("workspace-files", 333), tenant("pages", 370), tenant("tasks", 310)]),
     );
     expect(hints.files).toEqual({
       minWidth: 333,
@@ -419,6 +419,7 @@ describe("geometry helpers", () => {
       preferredHeight: 300,
     });
     expect(hints.tasks.minWidth).toBe(310);
+    expect(hints.pages.minWidth).toBe(370);
     expect(hints.workpads).toBe(DEFAULT_PANEL_SIZE_HINTS.workpads);
     expect(hints.chat.minWidth).toBe(360);
     expect(hints.terminals.minHeight).toBe(160);

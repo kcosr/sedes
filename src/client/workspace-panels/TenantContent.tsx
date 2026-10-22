@@ -13,7 +13,7 @@ import type {
   WorkspacePanelTenant,
 } from "./registry.js";
 
-/** A Files, Workpads or Tasks tenant's content, with its host. */
+/** A shared panel tenant's content, with its host. */
 export function TenantContent({
   tenant,
   threadId,

@@ -22,8 +22,8 @@ interface ResponseView {
 
 const idleView: ResponseView = { phase: "idle", status: "", error: "" };
 
-/** One ephemeral submission owner for the inline and expanded frames. Once
- * captured, user input outlives the document that produced it. */
+/** One ephemeral submission owner per mounted inline preview or Pages document.
+ * Once captured, user input outlives the frame that produced it. */
 export function usePageResponseSubmission(
   scopeKey: string,
   page: PageRevision,

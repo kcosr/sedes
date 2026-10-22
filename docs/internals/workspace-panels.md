@@ -1,6 +1,6 @@
 # Workspace panels
 
-A thread's workbench arranges five panel kinds (Chat, Files, Workpads, Tasks,
+A thread's workbench arranges six panel kinds (Chat, Files, Workpads, Pages, Tasks,
 and Terminals) in regions on the desktop stage. The layout is client-only
 presentation state: no server or protocol state is involved. The code is under
 `src/client/workspace-panels/`; the user-facing behavior is in
@@ -10,7 +10,7 @@ presentation state: no server or protocol state is involved. The code is under
 | --- | --- |
 | `regions.ts` | The pure model: kinds, regions, state, queries, and every layout operation. |
 | `region-geometry.ts` | Size hints, region boxes and dividers, and make-room. |
-| `region-persistence.ts` | Storage keys, strict parsing, and the one-time migration from the previous layout keys. |
+| `region-persistence.ts` | Storage keys, strict parsing, device-layout reset and obsolete-key cleanup, and terminal-tab migration. |
 | `region-store.ts` | `PanelRegionStore`: the device layout plus each thread's Terminals, persistence, focus requests, intents, and the workspace dirty registry. |
 | `PanelLayout.tsx` | One thread's workbench: the bar, the stage, retained panel content, header controls, announcements, and the phone layout. |
 | `RegionStage.tsx` | Positions the visible panels and dividers from the geometry. |
@@ -20,7 +20,7 @@ presentation state: no server or protocol state is involved. The code is under
 
 ## Model
 
-The kinds are `chat`, `files`, `workpads`, `tasks`, and `terminals`, in that
+The kinds are `chat`, `files`, `workpads`, `pages`, `tasks`, and `terminals`, in that
 fixed order, which is also the toolbar's order. Each kind is a singleton. The
 regions are `middle` and the edge regions `left`, `right`, `top`, and
 `bottom`.
@@ -29,9 +29,9 @@ The device layout (`RegionLayout`) is shared by every thread on the device:
 
 | Field | Meaning | Default |
 | --- | --- | --- |
-| `placement` | The region each kind opens in. | Chat `middle`; Files, Workpads, Tasks `right`; Terminals `bottom` |
+| `placement` | The region each kind opens in. | Chat `middle`; Files, Workpads, Pages, Tasks `right`; Terminals `bottom` |
 | `shown` | The kind each region shows, or null. A region only shows a kind placed there. | Chat in `middle`, Terminals in `bottom`, the rest empty |
-| `loaded` | The loaded device-wide kinds: Files, Workpads, Tasks. | None |
+| `loaded` | The loaded device-wide kinds: Files, Workpads, Pages, Tasks. | None |
 | `extendOrder` | The edge regions, outermost first. | Left, Right, Top, Bottom |
 | `sizes` | Per kind, a share of the stage per axis: a width for Left and Right, a height for Top and Bottom, within 0.05–0.95. | None |
 | `maximized` | The panel filling the stage. Never saved. | None |
@@ -42,7 +42,9 @@ Terminals panel: its tabs (at most 24, each a terminal ID and a stable
 producer ID) and active tab, or null while it is not loaded.
 
 A panel is **loaded** when its content is mounted: Chat always, Files,
-Workpads, and Tasks for the device, and Terminals per thread. It is **shown**
+Workpads, Pages, and Tasks for the device, and Terminals per thread. Pages'
+loaded state and placement are device-wide, but its content belongs only to
+the selected thread. It is **shown**
 when it is loaded and its region shows it; a region whose pick is not loaded
 in this thread, such as the Bottom in a thread without Terminals, renders
 empty. It is **visible** when it is shown, make-room has not hidden it, and no
@@ -103,6 +105,7 @@ Tenants supply hints from their `size` (`panelSizeHints`):
 | Chat | 360 × 160px | 40% of the stage |
 | Files | 320 × 240px | 520px wide, 560px tall |
 | Workpads | 320 × 240px | 40%, up to 480px wide and 560px tall |
+| Pages | 360 × 240px | 50%, up to 800px wide and 560px tall |
 | Tasks | 300 × 240px | 35%, up to 380px wide and 480px tall |
 | Terminals | 160 × 160px | 30% of the stage |
 
@@ -137,7 +140,7 @@ is switched to.
 
 | Key | Value |
 | --- | --- |
-| `sedes-panel-regions@1` | `{ version: 1, placement, shown, loaded, extendOrder, sizes }` for the device. |
+| `sedes-panel-regions@1` | `{ version: 2, placement, shown, loaded, extendOrder, sizes }` for the device. |
 | `sedes-thread-panel-regions@1:<threadId>` | `{ version: 1, threadId, terminals }` for one thread, with the thread ID URI-encoded in the key; `terminals` is `{ tabs, activeTerminalId }` or null. |
 
 Parsing is strict. A value that is not exactly what the serializer writes is
@@ -145,35 +148,37 @@ rejected as a whole: the device layout falls back to the defaults and a
 thread's Terminals to not loaded. Only a size share outside its bounds is
 dropped on its own. Storage that throws reads as empty, writes are best
 effort, and a value is written only when it changes. On load, Files, Workpads,
-or Tasks without a registered tenant are closed.
+Pages, or Tasks without a registered tenant are closed.
 
 Each browser tab keeps its layout in memory and does not follow other tabs'
 writes, so the most recent write is what a reload or a new tab starts from.
 
-### Migration
+### Reset and obsolete keys
 
-When a new key is absent, the value is migrated once from the previous layout
-keys and saved under the new key. The old keys are only read, never removed.
+The device key stays the same. Adding Pages advances its strict payload to
+version 2; version 1 or invalid records reset to defaults and are overwritten
+immediately during store initialization, even without a later layout action.
+There is no device-layout migration or second active storage key.
 
-- **Device layout**, when any of `sedes-workspace-files-panel-state@1`,
-  `sedes-workpads-panel-state@1`, `sedes-tasks-panel-state@1`,
-  `sedes-panel-instance-sizes@5`, or `sedes-panel-companions@1` exists:
-  - Tasks and Workpads keep the edge their companion arrangement docked them
-    at. Every other kind takes its default placement, since Chat, Files, and
-    Terminals were placed per thread.
-  - An open panel is loaded, and an open panel that was not collapsed is
-    shown. When several share a region, the companion arrangement's outermost
-    wins, then Tasks, Workpads, and Files.
-  - Remembered sizes for Files, Workpads, Tasks, and Terminals carry over. The
-    extend order is the default.
-  - Unreadable old values count as absent panels.
-- **A thread's Terminals**, when `sedes-thread-panel-instance-layout@4:<threadId>`
-  exists: the Terminals panel's tabs and active tab carry over. A layout that
-  cannot be read, or has no valid Terminals panel, migrates as not loaded.
+Initialization removes `sedes-workspace-files-panel-state@1`,
+`sedes-workpads-panel-state@1`, `sedes-tasks-panel-state@1`,
+`sedes-panel-instance-sizes@4`, `sedes-panel-instance-sizes@5`,
+`sedes-panel-companions@1`,
+`sedes-panel-presentation`, `sedes-singleton-panel-layout@1`,
+`sedes-singleton-panel-sizes@1`, `sedes-singleton-panel-collapsed@1`, and
+`sedes.tasks.panel.width`. It also enumerates storage and removes every
+`sedes-thread-panel-instance-collapsed@4:<threadId>` record. These obsolete
+layout records are never read, so they cannot resurrect an old arrangement.
+Removal, like other storage writes, is best effort if storage is unavailable.
 
-Per-thread collapsed state, the rest of the old per-thread layout trees, and
-the removed Opening panels preference (`sedes-panel-presentation`) are not
-read.
+A thread's Terminals retains its independent version 1 contract. When its
+current key is absent and `sedes-thread-panel-instance-layout@4:<threadId>`
+exists, the Terminals panel's tabs and active tab carry over. A layout that
+cannot be read, or has no valid Terminals panel, migrates as not loaded.
+
+The old per-thread layout records remain for this terminal-tab migration;
+their non-terminal layout state is not read. Active Tasks and Workpads
+content preferences remain intact.
 
 ## Store
 
@@ -191,12 +196,14 @@ Phones set no stage, which turns geometry and make-room off.
 `open(kind, { region, intent, focus, focusScope })` returns false when the
 panel can't load here: a kind whose tenant isn't registered, or Terminals
 without a thread. Callers include the panels menu, the quick buttons, file
-links and Task file chips (Files with an open-file intent), terminal opens,
+links and Task file chips (Files with an open-file intent), inline page opens
+(Pages with an exact-revision intent), terminal opens,
 and thread selection, which opens Chat with focus.
 
 - **Intents** are delivered to a panel and consumed by it with
   `consumeIntent(kind, sequence)`. A Files intent for another workspace is
-  dropped.
+  dropped. Pages drops foreign-thread and stale intents; its selected page and
+  list reset when the selected thread changes.
 - **Focus requests** are made by opening, showing, and terminal-tab changes
   unless `focus` is false. Each has a sequence number, and optionally a
   terminal ID and a thread scope. `usePanelFocusRequests` focuses the panel's
@@ -219,6 +226,23 @@ content. `RegionStage` renders the visible panels as siblings keyed by kind
 and positioned by percentage boxes, so moving or maximizing a panel never
 remounts it. The terminal renderer attaches only while Terminals is visible.
 
+Pages is a lazy thread-scoped tenant under `src/client/pages/`. Its panel
+retains the selected anchor and browsed revision, zoom, and captured response
+retry while hidden, but its iframe is enabled only while the panel is visible.
+Moving, resizing, or maximizing/restoring a visible desktop panel keeps its DOM
+slot and live iframe. Hiding, make-room, replacement, maximizing another panel,
+phone foreground changes, and breakpoint transitions can release or reparent
+the frame; showing it again starts a fresh page at the same selected revision.
+Closing the panel, returning to the list, or changing threads unmounts the
+document. Inline and panel frames are independent and share the existing
+four-frame budget, render admissions, sandbox, recovery, and response rules.
+
+The Pages list uses the thread store's paginated page API, independently of
+loaded transcript history. Showing the panel, window focus, explicit refresh, and
+new page item IDs in the snapshot refresh it without changing the selected
+document. A list selection anchors the latest listed revision; an inline open
+anchors its exact saved revision. Newer revisions update navigation only.
+
 Tasks keeps its retained body in the Tasks host
 (`components/tasks/tasks-host.tsx`); the layout publishes whether Tasks is
 loaded and visible, its presentation (`panel`, or `sheet` on phones), its
@@ -235,7 +259,7 @@ panel is chosen among the shown panels: the panel a focus request names, else
 the one last selected, else the first in the fixed order, and Chat when none
 is shown, so a thread never shows an empty stage. Switching panels opens them
 in the device layout, so a panel that shares its placement with another
-replaces it there, as on desktop. Files, Workpads, and Tasks render their
+replaces it there, as on desktop. Files, Workpads, Pages, and Tasks render their
 `sheet` presentation; for Tasks that is the touch layout, with the add bar
 under the list and a task's detail in place of the list. Panel headers drop
 Maximize and Move to, and the **Panels** menu drops its place buttons. Opening
@@ -260,7 +284,8 @@ Android Back first runs `handleExposedBack` (`app/android-back.ts`), a chain
 of cancelable window events whose listener cancels one to say it took Back:
 `sedes:close-task-detail`, which the Tasks panel in front claims while a task
 detail is open, returning to its list; `sedes:close-workpad`, which a shown
-Workpads panel claims while a workpad is open; then `sedes:show-chat`, which
+Workpads panel claims while a workpad is open; `sedes:close-page`, which a
+visible Pages document claims to return to its list; then `sedes:show-chat`, which
 the active phone layout claims while a panel other than Chat is in front.
 Each step yields to an open overlay, menu, or the drawer. Only then does Back
 dismiss overlays and open the drawer, so the drawer opens once Chat is in
