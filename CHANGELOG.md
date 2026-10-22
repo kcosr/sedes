@@ -44,7 +44,7 @@ User-facing changes are collected here before release. See the
   [Page responses](docs/user/html-previews.md#send-a-page-response),
   [voice input](docs/operator/clients/voice.md), and
   [notification scripts](docs/operator/configuration.md#notification-scripts).
-  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95))
+  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
 
@@ -116,6 +116,7 @@ User-facing changes are collected here before release. See the
 - Packaged Sedes skills default task creation and review to the current thread.
   Individual native and CLI skills can be selected automatically for task
   requests; progressive skills remain explicit-only.
+  ([#111](https://github.com/kcosr/sedes/pull/111))
 
 - Published HTML documents now open in a thread-scoped **Pages** panel with
   move, resize, maximize, revision browsing, zoom, and downloads. Chat opens
@@ -214,6 +215,7 @@ User-facing changes are collected here before release. See the
   without reloading the model catalog. Fork indicators use a consistent
   orientation, and desktop task indicators align with the title on rows that
   include a scope or location.
+  ([#111](https://github.com/kcosr/sedes/pull/111))
 
 - Foreground voice Send continues in its original thread after switching threads,
   combining speech with that thread's saved draft and uploaded attachments. While
