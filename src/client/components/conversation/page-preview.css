@@ -43,13 +43,12 @@
 }
 /* Page metadata and revision controls belong to the Pages document view. */
 .page-document-header {
-  --page-preview-control: var(--control-lg);
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  gap: var(--space-1-5);
+  padding: var(--space-1) var(--space-3);
   border-bottom: 1px solid var(--border-soft);
   background: var(--background);
 }
@@ -68,7 +67,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-title);
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
 }
 .page-document > .page-frame-document-view {
   flex: 1;
@@ -96,24 +97,15 @@
   flex-shrink: 0;
   align-items: center;
 }
-.page-preview-header-actions button {
-  width: var(--page-preview-control);
-  min-width: var(--page-preview-control);
-  height: var(--page-preview-control);
-  flex-shrink: 0;
-}
-.page-preview-header-actions button svg {
-  width: var(--icon-lg);
-  height: var(--icon-lg);
-}
 .page-revision-label {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: var(--page-preview-control);
-  height: var(--page-preview-control);
+  min-width: var(--control-sm);
+  height: var(--control-sm);
+  padding-inline: var(--space-1);
   white-space: nowrap;
-  font-size: var(--text-ui);
+  font-size: var(--text-meta);
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--muted-foreground);
@@ -213,8 +205,24 @@
     width: 36px;
     height: 36px;
   }
-  .page-document-header {
-    --page-preview-control: var(--control-touch);
+}
+
+/* Match the Workpads document toolbar's compact controls and touch sizing. */
+@media (max-width: 819px), (pointer: coarse) {
+  .page-preview-header-actions button[data-size="icon-sm"] {
+    width: var(--bar-control-width);
+    height: var(--bar-control);
+  }
+  .page-document-heading > button,
+  .page-revision-label {
+    height: var(--bar-control);
+  }
+  .page-revision-label {
+    min-width: var(--bar-control-width);
+  }
+  .page-preview-header-actions button[data-size="icon-sm"] svg {
+    width: var(--bar-icon);
+    height: var(--bar-icon);
   }
 }
 

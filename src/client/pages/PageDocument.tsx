@@ -152,7 +152,7 @@ function PageDocumentView({ page, services, visible, onBack, latestRevision: kno
                 !services.getPageRevision
               }
               onClick={() => void navigateRevision(-1)}
-              size="icon-lg"
+              size="icon-sm"
               variant="ghost"
             >
               <ChevronLeft />
@@ -190,7 +190,7 @@ function PageDocumentView({ page, services, visible, onBack, latestRevision: kno
                 !services.getPageRevision
               }
               onClick={() => void navigateRevision(1)}
-              size="icon-lg"
+              size="icon-sm"
               variant="ghost"
             >
               <ChevronRight />
@@ -206,7 +206,7 @@ function PageDocumentView({ page, services, visible, onBack, latestRevision: kno
           response.reset();
           setRefreshVersion((value) => value + 1);
         }}
-        size="icon-lg"
+        size="icon-sm"
         variant="ghost"
       >
         <RotateCcw />
@@ -217,7 +217,7 @@ function PageDocumentView({ page, services, visible, onBack, latestRevision: kno
         aria-busy={download.phase !== "idle" || undefined}
         disabled={!visible || !services.preparePageDownload || download.phase !== "idle"}
         onClick={() => void download.download()}
-        size="icon-lg"
+        size="icon-sm"
         variant="ghost"
       >
         {download.phase === "preparing" ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : <Download aria-hidden="true" />}
