@@ -206,6 +206,7 @@ export interface ThreadApplicationPresentationReader {
     scope: RequestScope,
     applicationThreadId: string,
     effectiveSettings?: BackendEffectiveSettings,
+    options?: { readonly catalogPurpose?: "skill_picker" },
   ): Promise<ThreadApplicationPresentation>;
   /** Recompose durable presentation using only an already-loaded catalog. */
   readCached(
@@ -353,12 +354,11 @@ export class ThreadApplicationService {
     applicationThreadId: string,
   ): Promise<ComposerSkillCatalog> {
     const inventory = await this.#authorize(scope, applicationThreadId);
-    const presentation = await this.#presentation[
-      inventory.thread.inventoryState === "archived" ? "readCached" : "read"
-    ](
-      scope,
-      applicationThreadId,
-    );
+    const presentation = inventory.thread.inventoryState === "archived"
+      ? await this.#presentation.readCached(scope, applicationThreadId)
+      : await this.#presentation.read(scope, applicationThreadId, undefined, {
+          catalogPurpose: "skill_picker",
+        });
     return { skills: [...presentation.skills] };
   }
 

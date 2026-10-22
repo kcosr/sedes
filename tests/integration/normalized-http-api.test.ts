@@ -6734,6 +6734,7 @@ describe("normalized HTTP application contract", () => {
           request(current.app).get(`/api/threads/${created.body.id}/skills`),
         )
         .expect(200)
+        .expect("Cache-Control", "no-store")
         .expect({ skills: [] });
       const stashed = await current
         .mutate(

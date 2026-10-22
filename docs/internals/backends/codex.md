@@ -237,6 +237,18 @@ Transport implementations also own their generation boundaries:
   Provider connections use the admitted host-local transport. Optional workspace
   operations retain independent grants; external daemons remain operator-owned.
 
+Codex model catalogs are cached per ready daemon generation. Skill catalogs
+are cached separately for the exact workspace and principal preference
+revision. Opening or retrying the skill picker requests `skills/list` with
+`forceReload: true` through the existing Codex connection and preserves the
+model cache. Equivalent concurrent refreshes share one request; an older
+ordinary skill read joins its superseding refresh before publication. The
+`skills/changed` notification invalidates only skill entries. Generation
+changes invalidate both caches, and unavailable daemons are not started by a
+picker read. Explicit refresh failures reach the picker for retry, while
+ordinary presentation reads can still expose models with unavailable skills.
+Archived threads use their retained presentation catalog without a refresh.
+
 The operator-facing ownership and route requirements are in
 [Supported topologies](../../operator/backends/codex.md#supported-topologies).
 

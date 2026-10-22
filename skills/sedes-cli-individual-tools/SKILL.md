@@ -1,9 +1,10 @@
 ---
 name: sedes-cli-individual-tools
 description: >-
-  Discover and invoke Sedes operations through human-readable CLI help and
-  individually named typed commands. Use only in CLI-individual presentation
-  mode; never use generic JSON discovery or native Sedes tools from this skill.
+  Create, review, and manage Sedes tasks and invoke other Sedes operations
+  through live CLI help and named typed commands. Use only in CLI-individual
+  presentation mode when no native Sedes tools are visible; never use generic
+  JSON discovery or native tools from this skill.
 ---
 
 # Sedes CLI Individual Tools
@@ -50,7 +51,7 @@ commands.
    sedes task create \
      --title "Make agent-access CLI environment variables override config values" \
      --details-file /tmp/task-details.md \
-     --scope-kind project
+     --scope-kind thread
    ```
 
 Property names become kebab-case options, nested properties are flattened,
@@ -100,18 +101,23 @@ environment would, and Tool clients cannot reach it.
 
 ## Task workflow
 
-### Quick current-scope creation
+### Current-thread defaults
 
-Nearly every task created by a thread agent belongs to its current project
-or current thread. Unless the user explicitly names a different target, use
-one of these short forms directly and do not run help or try to discover an ID:
+When working in a thread, create and review tasks in the current thread by
+default. Use a project, global, or another thread scope only when the user
+requests it. For an unqualified task list or review, use the current thread
+with `scopeMode` set to `exact`. If the caller has no current thread, resolve
+the target from the user's request instead of choosing a broader scope.
+
+For basic creation, use the matching short form directly without running help
+or discovering an ID:
 
 ```sh
-# Current project (the usual choice)
-sedes task create --title "Investigate the reported issue" --scope-kind project
-
-# Current thread
+# Current thread (the default)
 sedes task create --title "Follow up in this thread" --scope-kind thread
+
+# Current project, only when project scope is requested
+sedes task create --title "Investigate the reported issue" --scope-kind project
 
 # Principal-global, only when global scope is actually intended
 sedes task create --title "Review shared maintenance" --scope-kind global

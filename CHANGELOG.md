@@ -112,6 +112,10 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Packaged Sedes skills default task creation and review to the current thread.
+  Individual native and CLI skills can be selected automatically for task
+  requests; progressive skills remain explicit-only.
+
 - Published HTML documents now open in a thread-scoped **Pages** panel with
   move, resize, maximize, revision browsing, zoom, and downloads. Chat opens
   its exact saved revision; the page list opens the latest. The old dialogs
@@ -204,6 +208,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- The Codex skill picker refreshes available skills through the app-server
+  without reloading the model catalog. Fork indicators use a consistent
+  orientation, and desktop task indicators align with the title on rows that
+  include a scope or location.
 
 - Foreground voice Send continues in its original thread after switching threads,
   combining speech with that thread's saved draft and uploaded attachments. While

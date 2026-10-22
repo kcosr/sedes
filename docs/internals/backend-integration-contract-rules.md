@@ -562,6 +562,23 @@ the canonical opaque skill ID, and backend submission revalidates that exact
 skill against its current catalog. A backend that does not qualify native
 aliases omits them.
 
+Active-thread skill-picker reads pass the internal catalog purpose
+`skill_picker`. This identifies an explicit user read, not a universal promise
+to rebuild a provider runtime. Archived threads continue using only the
+retained presentation catalog. A skill refresh must preserve unrelated model
+caches, validate the exact owner/workspace and connection generation, coalesce
+equivalent concurrent reads, and prevent an older response from replacing the
+newer result. Failed explicit reads remain retryable by the picker; a passive
+presentation may retain models while reporting unavailable skills.
+
+| Backend | Skill-picker read disposition |
+| --- | --- |
+| Codex | Uses native `skills/list` with `forceReload: true`; skills and models have separate generation-scoped caches. No direct filesystem discovery or daemon startup. |
+| Claude | Retains its native catalog probe, which already obtains skills on each read. |
+| OpenCode | Retains its native skill read on each request, independently of the model cache. |
+| Pi | Retains its bounded resource-catalog freshness policy. An isolated skill rescan is unsupported; the picker does not force an extra SDK session or executable-extension reload. |
+| Grok | Skills are unsupported and the catalog remains empty. |
+
 The shared application and browser may receive only:
 
 - normalized IDs, capabilities, messages, turns, interactions, and errors;

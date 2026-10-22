@@ -1,8 +1,9 @@
 ---
 name: sedes-native-individual-tools
 description: >-
-  Invoke individually exposed Sedes application tools through their native
-  schemas. Use only in native-individual presentation mode; never use native
+  Create, review, and manage Sedes tasks and invoke other Sedes operations
+  through individually exposed native tools. Use only when native Sedes
+  application tools are visible and sedes_catalog is absent; never use native
   progressive gateways, Bash, or the generated CLI.
 ---
 
@@ -58,19 +59,25 @@ environment would, and Tool clients cannot reach it.
 
 ## Task workflow
 
-### Quick current-scope creation
+### Current-thread defaults
 
-Nearly every task created by a thread agent belongs to its current project
-or current thread. Unless the user explicitly names a different target, invoke
-the visible `sedes_task_create` tool directly with its current schema and one
-of these basic inputs:
+When working in a thread, create and review tasks in the current thread by
+default. Use a project, global, or another thread scope only when the user
+requests it. For an unqualified task list or review, use the current thread
+with `scopeMode` set to `exact`. If the caller has no current thread, resolve
+the target from the user's request instead of choosing a broader scope.
 
-```json
-{"title":"Investigate the reported issue","scope":{"kind":"project"}}
-```
+For basic creation, invoke the visible `sedes_task_create` tool directly with
+its current schema and the matching input. Current thread is the default:
 
 ```json
 {"title":"Follow up in this thread","scope":{"kind":"thread"}}
+```
+
+Use current project or global scope only when requested:
+
+```json
+{"title":"Investigate the reported issue","scope":{"kind":"project"}}
 ```
 
 ```json

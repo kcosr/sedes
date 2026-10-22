@@ -733,6 +733,16 @@ describe("ThreadApplicationService", () => {
     expect(current.readCachedPresentation).toHaveBeenCalledTimes(6);
   });
 
+  it("marks active skill reads as picker reads without capturing or attaching an actor", async () => {
+    const current = createService({ runState: "idle", queue: [] });
+    await current.service.skills(scope, "thread-1");
+    expect(current.readPresentation).toHaveBeenCalledExactlyOnceWith(scope, "thread-1", undefined, {
+      catalogPurpose: "skill_picker",
+    });
+    expect(current.readCachedPresentation).not.toHaveBeenCalled();
+    expect(current.capture).not.toHaveBeenCalled();
+  });
+
   it("renders an archived SSE baseline using only cached presentation", async () => {
     const active = inventory();
     const current = createService({

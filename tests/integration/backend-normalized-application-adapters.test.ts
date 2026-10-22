@@ -3270,10 +3270,19 @@ describe("backend-normalized application adapters", () => {
           ],
         ]),
       });
+      const catalogRead = vi.spyOn(InMemoryConformanceDriver.prototype, "catalog");
       const freshPresentation = await presentation.read(
         current.scope,
         current.threadId,
+        undefined,
+        { catalogPurpose: "skill_picker" },
       );
+      expect(catalogRead).toHaveBeenCalledExactlyOnceWith({
+        scope: current.scope,
+        workspace: expect.objectContaining({ canonicalPath: "/tmp" }),
+        purpose: "skill_picker",
+      });
+      catalogRead.mockRestore();
       expect(freshPresentation).toMatchObject({
         backend: { label: { text: "Primary Pi" }, brand: "pi" },
         interactionMode: "interactive",

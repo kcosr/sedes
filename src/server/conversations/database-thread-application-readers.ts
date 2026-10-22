@@ -422,6 +422,7 @@ export class DatabaseThreadApplicationPresentationReader implements ThreadApplic
     scope: RequestScope,
     applicationThreadId: string,
     effectiveSettings?: BackendEffectiveSettings,
+    options?: { readonly catalogPurpose?: "skill_picker" },
   ): Promise<ThreadApplicationPresentation> {
     const target = await this.#targets.presentationForThread(
       scope,
@@ -429,7 +430,11 @@ export class DatabaseThreadApplicationPresentationReader implements ThreadApplic
     );
     const catalog =
       target.workspace && target.driver
-        ? await target.driver.catalog({ scope, workspace: target.workspace })
+        ? await target.driver.catalog({
+            scope,
+            workspace: target.workspace,
+            ...(options?.catalogPurpose ? { purpose: options.catalogPurpose } : {}),
+          })
         : undefined;
     if (catalog) {
       const key = this.#key(scope, applicationThreadId);

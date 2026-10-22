@@ -696,7 +696,7 @@ registration fails closed on invalid, reserved, or colliding paths. Examples:
 ```text
 sedes thread status --thread-id <thread-id> [--json]
 sedes thread messages --thread-id <thread-id> [--json]
-sedes task create --title <title> --scope-kind project [--json]
+sedes task create --title <title> --scope-kind thread [--json]
 sedes research web-search --query "What changed in Node.js today?" [--json]
 sedes thread worktree-list [--json]
 sedes thread worktree-set --expected-revision 3 --root-id <root-id> [--json]
@@ -870,6 +870,11 @@ the catalog:
 
 The native skills also cover Codex and Claude Native presentation, where the
 MCP client prefixes the same tool names with its server namespace.
+
+All four skills default task creation and review to the calling thread; a
+broader scope requires the user's request. Individual skills permit implicit
+selection for task requests and describe their required Native or CLI
+presentation. Progressive skills remain explicit-only.
 
 `npm run dev` does not build the provider CLI. Run
 `env -u NODE_ENV npm run build` in a fresh source checkout before expecting CLI

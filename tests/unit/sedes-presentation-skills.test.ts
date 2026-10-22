@@ -1,23 +1,28 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 const skillPackages = [
   {
     name: "sedes-cli-progressive-tools",
     displayName: "Sedes CLI Progressive Tools",
+    implicitInvocation: false,
   },
   {
     name: "sedes-cli-individual-tools",
     displayName: "Sedes CLI Individual Tools",
+    implicitInvocation: true,
   },
   {
     name: "sedes-native-progressive-tools",
     displayName: "Sedes Native Progressive Tools",
+    implicitInvocation: false,
   },
   {
     name: "sedes-native-individual-tools",
     displayName: "Sedes Native Individual Tools",
+    implicitInvocation: true,
   },
 ] as const;
 
@@ -47,7 +52,7 @@ function quotedYamlScalar(yaml: string, field: string): string | undefined {
 describe("Sedes presentation skill packages", () => {
   it.each(skillPackages)(
     "$name keeps package and OpenAI metadata aligned",
-    async ({ name, displayName }) => {
+    async ({ name, displayName, implicitInvocation }) => {
       const [skill, metadata] = await Promise.all([
         readSkill(name),
         readOpenAiMetadata(name),
@@ -57,7 +62,9 @@ describe("Sedes presentation skill packages", () => {
       expect(quotedYamlScalar(metadata, "default_prompt")).toContain(
         `$${name}`,
       );
-      expect(metadata).toMatch(/^\s*allow_implicit_invocation:\s*false\s*$/m);
+      expect(parse(metadata).policy?.allow_implicit_invocation ?? true).toBe(
+        implicitInvocation,
+      );
     },
   );
 

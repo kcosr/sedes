@@ -1792,7 +1792,7 @@ export class ApiClient {
   listSkills(threadId: string): Promise<ComposerSkillCatalog> {
     return this.#request(
       `/api/threads/${encodeURIComponent(threadId)}/skills`,
-      {},
+      { cache: "no-store" },
       composerSkillCatalogSchema,
     );
   }

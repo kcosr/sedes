@@ -531,6 +531,15 @@ span.tasks-row-title {
   font-variant-numeric: tabular-nums;
 }
 
+/* Desktop mixed-scope rows align indicators with the title's first line.
+   Touch indicators live inside the location line, and expanded rows use
+   their existing first-line alignment above. */
+.tasks-row:not([data-expanded]) > .tasks-row-main > .tasks-row-title[data-location] ~ .tasks-row-meta {
+  align-self: flex-start;
+  height: calc(var(--tasks-row-text) * var(--leading-snug));
+  margin-top: var(--tasks-row-two-line-padding);
+}
+
 .tasks-row-meta svg {
   width: var(--tasks-row-icon);
   height: var(--tasks-row-icon);

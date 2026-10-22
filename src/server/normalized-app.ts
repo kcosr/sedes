@@ -1682,6 +1682,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   routes.get("/api/threads/:threadId/skills", async (request, response) => {
     const requestScope = await scope(request);
     const { threadId } = threadRouteParametersSchema.parse(request.params);
+    response.setHeader("Cache-Control", "no-store");
     response.json(
       composerSkillCatalogSchema.parse(
         await dependencies.threads.skills(requestScope, threadId),

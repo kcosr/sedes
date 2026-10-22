@@ -561,6 +561,11 @@ function nativeModel(overrides: Readonly<Record<string, unknown>> = {}) {
   };
 }
 
+function nativeSkillCatalog(name: string, cwd = "/workspace") {
+  return { data: [{ cwd, skills: [{ name, description: `Run ${name}`,
+    path: `${cwd}/.agents/skills/${name}/SKILL.md`, scope: "repo", enabled: true }], errors: [] }] };
+}
+
 function fastModeFeatures(enabled: boolean, ultrafastEnabled = enabled) {
   return {
     data: [{
@@ -1783,9 +1788,10 @@ describe("CodexConversationBackendDriver", () => {
     expect(
       harness.calls.filter(({ method }) => method === "skills/list"),
     ).toHaveLength(2);
+    expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(1);
   });
 
-  it("invalidates the catalog cache when the principal enables OpenAI composer skills", async () => {
+  it("refreshes only skills when the principal enables OpenAI composer skills", async () => {
     const harness = new RpcHarness();
     let preferences = {
       showOpenAIComposerSkills: false,
@@ -1848,6 +1854,124 @@ describe("CodexConversationBackendDriver", () => {
     expect(
       harness.calls.filter(({ method }) => method === "skills/list"),
     ).toHaveLength(2);
+    expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(1);
+  });
+
+  it("rescans skills for each picker open while retaining the model catalog", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("skills/list", nativeSkillCatalog("before"), nativeSkillCatalog("after"),
+      { data: [{ cwd: "/workspace", skills: [], errors: [] }] });
+    const target = driver(harness);
+    expect((await target.catalog({ scope, workspace })).skills[0]?.name).toBe("before");
+    expect((await target.catalog({ scope, workspace, purpose: "skill_picker" })).skills[0]?.name).toBe("after");
+    expect((await target.catalog({ scope, workspace })).skills[0]?.name).toBe("after");
+    expect((await target.catalog({ scope, workspace, purpose: "skill_picker" })).skills).toEqual([]);
+    expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(1);
+    expect(harness.calls.filter(({ method }) => method === "skills/list").map(({ params }) => params)).toEqual([
+      { cwds: ["/workspace"] },
+      { cwds: ["/workspace"], forceReload: true },
+      { cwds: ["/workspace"], forceReload: true },
+    ]);
+  });
+
+  it("coalesces simultaneous picker refreshes and makes ordinary reads join them", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    await target.catalog({ scope, workspace });
+    let release!: () => void;
+    harness.enqueue("skills/list", async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return nativeSkillCatalog("refreshed");
+    });
+    const first = target.catalog({ scope, workspace, purpose: "skill_picker" });
+    const second = target.catalog({ scope, workspace, purpose: "skill_picker" });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    const ordinary = target.catalog({ scope, workspace });
+    release();
+    for (const catalog of await Promise.all([first, second, ordinary])) {
+      expect(catalog.skills[0]?.name).toBe("refreshed");
+    }
+    expect(harness.calls.filter(({ method }) => method === "skills/list")).toHaveLength(2);
+    expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(1);
+  });
+
+  it.each(["resolve", "reject"])("replaces a late ordinary skill read when it later %s", async (outcome) => {
+    const harness = new RpcHarness();
+    let release!: () => void;
+    harness.enqueue("skills/list", async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      if (outcome === "reject") throw new Error("obsolete read failed");
+      return nativeSkillCatalog("obsolete");
+    }, nativeSkillCatalog("fresh"));
+    const target = driver(harness);
+    const ordinary = target.catalog({ scope, workspace });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    expect((await target.catalog({ scope, workspace, purpose: "skill_picker" })).skills[0]?.name).toBe("fresh");
+    release();
+    expect((await ordinary).skills[0]?.name).toBe("fresh");
+    expect((await target.catalog({ scope, workspace })).skills[0]?.name).toBe("fresh");
+    expect(harness.calls.filter(({ method }) => method === "skills/list")).toHaveLength(2);
+  });
+
+  it("rejects failed picker refreshes and retries without refetching models", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    await target.catalog({ scope, workspace });
+    harness.enqueue("skills/list", new Error("read failed"), nativeSkillCatalog("recovered"));
+    await expect(target.catalog({ scope, workspace, purpose: "skill_picker" })).rejects.toMatchObject({
+      backendCode: "codex_read_internal",
+    });
+    expect((await target.catalog({ scope, workspace, purpose: "skill_picker" })).skills[0]?.name).toBe("recovered");
+    expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(1);
+  });
+
+  it("fences a picker read across daemon generations without replacing the new cache", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    await target.catalog({ scope, workspace });
+    let release!: () => void;
+    harness.enqueue("skills/list", async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return nativeSkillCatalog("old-generation");
+    }, nativeSkillCatalog("new-generation"));
+    const stale = target.catalog({ scope, workspace, purpose: "skill_picker" });
+    const rejection = expect(stale).rejects.toMatchObject({ backendCode: "codex_generation_changed" });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    harness.lifecycle("ready", 2);
+    expect((await target.catalog({ scope, workspace, purpose: "skill_picker" })).skills[0]?.name).toBe("new-generation");
+    release();
+    await rejection;
+    expect((await target.catalog({ scope, workspace })).skills[0]?.name).toBe("new-generation");
+    expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(2);
+  });
+
+  it("isolates picker refreshes between workspaces", async () => {
+    const harness = new RpcHarness();
+    const other = { ...workspace, canonicalPath: "/other-workspace" };
+    harness.enqueue("skills/list", nativeSkillCatalog("first"), nativeSkillCatalog("other", "/other-workspace"), nativeSkillCatalog("updated"));
+    const target = driver(harness);
+    await target.catalog({ scope, workspace });
+    await target.catalog({ scope, workspace: other });
+    await target.catalog({ scope, workspace, purpose: "skill_picker" });
+    expect((await target.catalog({ scope, workspace: other })).skills[0]?.name).toBe("other");
+    expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(1);
+    expect(harness.calls.filter(({ method }) => method === "skills/list")).toHaveLength(3);
+  });
+
+  it.each(["unavailable", "starting", "closed"] as const)("does not start a %s daemon for a picker refresh", async state => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    harness.lifecycle(state);
+    await expect(target.catalog({ scope, workspace, purpose: "skill_picker" })).rejects.toMatchObject({ backendCode: "codex_daemon_not_ready" });
+    expect(harness.calls).toEqual([]);
+  });
+
+  it("rejects a wrong-owner picker read before provider requests", async () => {
+    const harness = new RpcHarness();
+    await expect(driver(harness).catalog({
+      scope: { ...scope, principalId: "someone-else" }, workspace, purpose: "skill_picker",
+    })).rejects.toMatchObject({ category: "permission_denied" });
+    expect(harness.calls).toEqual([]);
   });
 
   it("keeps models available and retries when Codex skill discovery fails", async () => {
