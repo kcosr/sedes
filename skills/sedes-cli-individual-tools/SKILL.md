@@ -2,9 +2,9 @@
 name: sedes-cli-individual-tools
 description: >-
   Create, review, and manage Sedes tasks and invoke other Sedes operations
-  through live CLI help and named typed commands. Use only in CLI-individual
-  presentation mode when no native Sedes tools are visible; never use generic
-  JSON discovery or native tools from this skill.
+  through live CLI help and named typed commands. Use only when
+  SEDES_AGENT_TOOL_CLI_MODE=individual and no native Sedes tools are visible;
+  never use generic JSON discovery or native tools from this skill.
 ---
 
 # Sedes CLI Individual Tools
@@ -14,9 +14,8 @@ commands.
 
 ## Confirm the presentation
 
-- Continue only when Sedes has configured CLI-individual presentation, Bash
-  and the `sedes` executable are available, and no native Sedes tools are
-  visible.
+- Continue only when `SEDES_AGENT_TOOL_CLI_MODE=individual`, Bash and the
+  `sedes` executable are available, and no native Sedes tools are visible.
 - Require `SEDES_AGENT_TOOL_ENDPOINT` and exactly one already-configured caller
   credential: `SEDES_AGENT_TOOL_SOURCE_CAPABILITY` for a provider thread or
   `SEDES_AGENT_TOOL_CLIENT_TOKEN` for a principal Tool client.

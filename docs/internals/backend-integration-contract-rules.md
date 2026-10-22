@@ -562,7 +562,10 @@ the canonical opaque skill ID, and backend submission revalidates that exact
 skill against its current catalog. A backend that does not qualify native
 aliases omits them.
 
-Active-thread skill-picker reads pass the internal catalog purpose
+The normalized `/api/threads/:threadId/skills` read requires an explicit
+`refresh=true` or `refresh=false` query. Picker open and Retry request a
+refresh; selected-skill draft hydration uses an ordinary read. Active-thread
+skill-picker reads pass the internal catalog purpose
 `skill_picker`. This identifies an explicit user read, not a universal promise
 to rebuild a provider runtime. Archived threads continue using only the
 retained presentation catalog. A skill refresh must preserve unrelated model

@@ -91,6 +91,9 @@ describe("Sedes presentation skill packages", () => {
 
   it("keeps CLI individual strictly on live help and named commands", async () => {
     const skill = await readSkill("sedes-cli-individual-tools");
+    const frontmatter = parse(skill.split("---")[1]!);
+    expect(frontmatter.description).toContain("SEDES_AGENT_TOOL_CLI_MODE=individual");
+    expect(skill).toContain("Continue only when `SEDES_AGENT_TOOL_CLI_MODE=individual`");
     const rootHelp = skill.indexOf("sedes --help");
     const groupHelp = skill.indexOf("sedes task --help");
     const commandHelp = skill.indexOf("sedes task create --help");

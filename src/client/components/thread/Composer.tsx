@@ -753,11 +753,11 @@ export function Composer({
     })
     .slice(0, 40);
 
-  const loadSkills = useCallback(async () => {
+  const loadSkills = useCallback(async (refresh: boolean) => {
     setSkillsLoading(true);
     setSkillsError(undefined);
     try {
-      const catalog = await store.listSkills();
+      const catalog = await store.listSkills({ refresh });
       setSkills(catalog.skills);
     } catch (error) {
       setSkillsError(
@@ -1252,7 +1252,7 @@ export function Composer({
   );
 
   useEffect(() => {
-    if (skillPickerOpen || selectedSkillId) void loadSkills();
+    if (skillPickerOpen || selectedSkillId) void loadSkills(skillPickerOpen);
   }, [skillPickerOpen, selectedSkillId, loadSkills]);
 
   useEffect(() => {
@@ -3794,7 +3794,7 @@ export function Composer({
                                 <Button
                                   variant="outline"
                                   size="xs"
-                                  onClick={() => void loadSkills()}
+                                  onClick={() => void loadSkills(true)}
                                 >
                                   Retry
                                 </Button>

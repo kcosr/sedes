@@ -6729,13 +6729,18 @@ describe("normalized HTTP application contract", () => {
             revision: 1,
           });
         });
-      await current
-        .withHost(
-          request(current.app).get(`/api/threads/${created.body.id}/skills`),
-        )
-        .expect(200)
-        .expect("Cache-Control", "no-store")
-        .expect({ skills: [] });
+      for (const refresh of [false, true]) {
+        await current
+          .withHost(request(current.app).get(`/api/threads/${created.body.id}/skills?refresh=${refresh}`))
+          .expect(200)
+          .expect("Cache-Control", "no-store")
+          .expect({ skills: [] });
+      }
+      for (const query of ["", "?refresh=invalid", "?refresh=true&extra=true"]) {
+        await current
+          .withHost(request(current.app).get(`/api/threads/${created.body.id}/skills${query}`))
+          .expect(400);
+      }
       const stashed = await current
         .mutate(
           request(current.app).post(`/api/threads/${created.body.id}/stashes`),

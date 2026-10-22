@@ -16,6 +16,7 @@ import type {
   AppliedToolPolicySetReference,
   SteerTarget,
   ComposerSkillCatalog,
+  ListComposerSkillsQuery,
   ComposerAttachmentDescriptor,
   ConversationItem,
   NormalizedDraft,
@@ -794,8 +795,8 @@ export class ThreadClientStore {
     }
   }
 
-  listSkills(): Promise<ComposerSkillCatalog> {
-    return this.#api.listSkills(this.threadId);
+  listSkills(options: ListComposerSkillsQuery): Promise<ComposerSkillCatalog> {
+    return this.#api.listSkills(this.threadId, options);
   }
 
   readTurnReplySpeech(turnId: string, signal?: AbortSignal): Promise<TurnReplySpeech> {

@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
 import type { BackendEffectiveSettings } from "../../shared/protocol/backend.js";
 import type {
+  ListComposerSkillsQuery,
   QueuedInputPresentation,
   ThreadApplicationMutationResult,
   ThreadApplicationOperation,
@@ -352,13 +353,13 @@ export class ThreadApplicationService {
   async skills(
     scope: RequestScope,
     applicationThreadId: string,
+    options: ListComposerSkillsQuery,
   ): Promise<ComposerSkillCatalog> {
     const inventory = await this.#authorize(scope, applicationThreadId);
     const presentation = inventory.thread.inventoryState === "archived"
       ? await this.#presentation.readCached(scope, applicationThreadId)
-      : await this.#presentation.read(scope, applicationThreadId, undefined, {
-          catalogPurpose: "skill_picker",
-        });
+      : await this.#presentation.read(scope, applicationThreadId, undefined,
+          options.refresh ? { catalogPurpose: "skill_picker" } : undefined);
     return { skills: [...presentation.skills] };
   }
 

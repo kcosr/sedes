@@ -247,6 +247,8 @@ ordinary skill read joins its superseding refresh before publication. The
 changes invalidate both caches, and unavailable daemons are not started by a
 picker read. Explicit refresh failures reach the picker for retry, while
 ordinary presentation reads can still expose models with unavailable skills.
+Selected-skill draft hydration requests an ordinary read, including the read
+after choosing a picker entry; it does not force another native rescan.
 Archived threads use their retained presentation catalog without a refresh.
 
 The operator-facing ownership and route requirements are in
