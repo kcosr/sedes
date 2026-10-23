@@ -961,6 +961,11 @@ export const threadRouteParametersSchema = z.strictObject({
   threadId: threadIdSchema,
 });
 
+export const listComposerSkillsQuerySchema = z.strictObject({
+  refresh: z.enum(["true", "false"]).transform((value) => value === "true"),
+});
+export type ListComposerSkillsQuery = z.infer<typeof listComposerSkillsQuerySchema>;
+
 export const threadSnapshotQuerySchema = z.strictObject({
   activityDetail: activityDetailModeSchema,
 });

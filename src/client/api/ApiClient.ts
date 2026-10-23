@@ -47,6 +47,7 @@ import {
 import {
   queuedInputPresentationSchema,
   respondToQuestionResultSchema,
+  type ListComposerSkillsQuery,
   type QueuedInputPresentation,
   type RespondToQuestionResult,
 } from "../../shared/protocol/api.js";
@@ -1789,10 +1790,10 @@ export class ApiClient {
     );
   }
 
-  listSkills(threadId: string): Promise<ComposerSkillCatalog> {
+  listSkills(threadId: string, options: ListComposerSkillsQuery): Promise<ComposerSkillCatalog> {
     return this.#request(
-      `/api/threads/${encodeURIComponent(threadId)}/skills`,
-      {},
+      `/api/threads/${encodeURIComponent(threadId)}/skills?refresh=${options.refresh}`,
+      { cache: "no-store" },
       composerSkillCatalogSchema,
     );
   }

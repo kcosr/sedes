@@ -449,7 +449,7 @@ export function ThreadPeekCard({
         {lineage !== undefined && (
           <div className="thread-peek-row" data-row="lineage">
             <span className="thread-peek-row-icon">
-              <Split size={13} strokeWidth={1.8} aria-hidden="true" />
+              <Split className="fork-split-icon" size={13} strokeWidth={1.8} aria-hidden="true" />
             </span>
             <span className="thread-peek-row-text">{lineage}</span>
           </div>

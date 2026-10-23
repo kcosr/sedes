@@ -229,7 +229,7 @@ The current Codex driver supports:
 - submit, steer, interrupt, rename, and compact;
 - provider-assigned creation and restart reconciliation;
 - model, reasoning, service tier, and four-axis execution policy;
-- workspace skills;
+- workspace skills, refreshed through Codex when the picker opens or retries;
 - provider approvals and structured questionnaires;
 - context and token usage;
 - selected-turn and latest-provider-snapshot native forks;

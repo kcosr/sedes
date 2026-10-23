@@ -653,7 +653,7 @@ export function FlatThreadRow({
       aria-label={forkLabel}
       title={forkLabel}
     >
-      <Split size={14} strokeWidth={1.8} aria-hidden="true" />
+      <Split className="fork-split-icon" size={14} strokeWidth={1.8} aria-hidden="true" />
       {forkCount !== undefined && (
         <span className="flat-row-indicator-count" aria-hidden="true">
           {forkCount}

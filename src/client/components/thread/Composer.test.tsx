@@ -3860,6 +3860,28 @@ describe("Composer delivery guards", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("refreshes on picker open while selected-skill hydration uses ordinary reads", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    store.state = {
+      ...store.state,
+      snapshot: {
+        ...store.state.snapshot!,
+        draft: { ...store.state.snapshot!.draft, selectedSkillId: "skill-review" },
+      },
+    };
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    await waitFor(() => expect(store.listSkills).toHaveBeenCalledExactlyOnceWith({ refresh: false }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose skill" }));
+    const dialog = await screen.findByRole("dialog", { name: "Choose a skill" });
+    const tests = await within(dialog).findByRole("button", { name: /^tests/u });
+    expect(store.listSkills).toHaveBeenNthCalledWith(2, { refresh: true });
+
+    fireEvent.click(tests);
+    await waitFor(() => expect(store.listSkills).toHaveBeenCalledTimes(3));
+    expect(store.listSkills).toHaveBeenLastCalledWith({ refresh: false });
+  });
+
   it("lists skills as menu rows, checks the selected one and moves between rows by arrow keys", async () => {
     const store = new FakeComposerStore(snapshot(), "");
     store.state = {
@@ -3931,6 +3953,8 @@ describe("Composer delivery guards", () => {
       await within(dialog).findByRole("button", { name: /Review Changes/u }),
     ).toBeInTheDocument();
     expect(store.listSkills).toHaveBeenCalledTimes(2);
+    expect(store.listSkills).toHaveBeenNthCalledWith(1, { refresh: true });
+    expect(store.listSkills).toHaveBeenNthCalledWith(2, { refresh: true });
 
     fireEvent.change(within(dialog).getByRole("searchbox", { name: "Search skills" }), {
       target: { value: "nothing like this" },

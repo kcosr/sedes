@@ -796,7 +796,7 @@ export type ApplicationEventEnvelope = z.infer<
   typeof applicationEventEnvelopeSchema
 >;
 
-export const SEDES_CLIENT_PROTOCOL_VERSION = 167 as const;
+export const SEDES_CLIENT_PROTOCOL_VERSION = 168 as const;
 
 export const normalizedApplicationSessionSchema = z.strictObject({
   clientProtocolVersion: z.literal(SEDES_CLIENT_PROTOCOL_VERSION),

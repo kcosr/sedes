@@ -141,6 +141,7 @@ const REQUEST_TIMEOUT_MILLISECONDS = 10_000;
 const FORK_REQUEST_TIMEOUT_MILLISECONDS = 60_000;
 const MAXIMUM_CURSOR_BYTES = 4_096;
 const MAXIMUM_MODEL_CATALOG_PAGES = 32;
+const MAXIMUM_CACHED_SKILL_CATALOGS = 256;
 const CODEX_BRANCH_CHECKPOINT_PREFIX = "codex-branch-checkpoint:";
 
 const codexCompletedTurnBranchCheckpointSchema = z
@@ -174,10 +175,7 @@ type Ownership = {
   handle?: CodexConversationHandle;
 };
 
-interface CatalogFetchResult {
-  readonly catalog: BackendCatalog;
-  readonly cacheable: boolean;
-}
+type CodexSkillCatalog = Pick<BackendCatalog, "skills" | "notices">;
 
 /**
  * Runtime-wide logical ownership. All profile drivers for one principal and
@@ -287,20 +285,23 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
    * restart) invalidates, failures are never cached, and concurrent callers
    * share one in-flight fetch.
    */
-  #catalogCache?: {
+  #catalogGeneration?: number;
+  #modelCatalogCache?: {
     readonly generation: number;
-    readonly workspacePath: string;
-    readonly preferenceRevision: number;
-    readonly showOpenAIComposerSkills: boolean;
-    readonly catalog: BackendCatalog;
+    readonly models: BackendCatalog["models"];
   };
-  #catalogInflight?: {
+  #modelCatalogInflight?: {
     readonly generation: number;
-    readonly workspacePath: string;
-    readonly preferenceRevision: number;
-    readonly showOpenAIComposerSkills: boolean;
-    readonly promise: Promise<BackendCatalog>;
+    readonly promise: Promise<BackendCatalog["models"]>;
   };
+  readonly #skillCatalogCache = new Map<string, CodexSkillCatalog>();
+  readonly #skillCatalogInflight = new Map<
+    string,
+    {
+      readonly forceReload: boolean;
+      readonly promise: Promise<CodexSkillCatalog>;
+    }
+  >();
   readonly #newUsageCounters = new Map<string, number>();
   readonly #createInFlight = new Map<
     string,
@@ -354,8 +355,8 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       }
       try {
         refineCodexSkillsChangedNotification(notification.params);
-        this.#catalogCache = undefined;
-        this.#catalogInflight = undefined;
+        this.#skillCatalogCache.clear();
+        this.#skillCatalogInflight.clear();
       } catch (error) {
         this.#onError(error);
       }
@@ -394,64 +395,77 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     this.#assertWorkspace(context.workspace);
     const lifecycle = this.#client.lifecycleSnapshot();
     if (lifecycle.state !== "ready") throw daemonUnavailable();
+    if (this.#catalogGeneration !== lifecycle.generation) {
+      this.#catalogGeneration = lifecycle.generation;
+      this.#modelCatalogCache = undefined;
+      this.#modelCatalogInflight = undefined;
+      this.#skillCatalogCache.clear();
+      this.#skillCatalogInflight.clear();
+    }
     return lifecycle;
   }
 
   async catalog(context: BackendCatalogContext): Promise<BackendCatalog> {
     const lifecycle = this.#catalogLifecycle(context);
+    const models = await this.#cachedModels(lifecycle.generation);
     const preferences = this.#composerSkillPreferences.read(context.scope);
-    if (
-      this.#catalogCache?.generation === lifecycle.generation &&
-      this.#catalogCache.workspacePath === context.workspace.canonicalPath &&
-      this.#catalogCache.preferenceRevision === preferences.revision &&
-      this.#catalogCache.showOpenAIComposerSkills ===
-        preferences.showOpenAIComposerSkills
-    ) {
-      return this.#catalogCache.catalog;
+    try {
+      const skills = await this.#readSkillCatalog(
+        lifecycle.generation,
+        context.workspace.canonicalPath,
+        preferences,
+        context.purpose === "skill_picker",
+      );
+      const currentPreferences = this.#composerSkillPreferences.read(
+        context.scope,
+      );
+      if (
+        currentPreferences.revision !== preferences.revision ||
+        currentPreferences.showOpenAIComposerSkills !==
+          preferences.showOpenAIComposerSkills
+      ) {
+        return this.catalog(context);
+      }
+      return { models, commands: [], ...skills };
+    } catch (error) {
+      this.#assertCatalogGeneration(lifecycle.generation, lifecycle.generation);
+      // Explicit picker reads surface a failure for Retry. Passive reads keep
+      // settings available even when additive skill discovery is unavailable.
+      if (context.purpose === "skill_picker") throw mapCodexReadError(error);
+      this.#onError(error);
+      return {
+        models,
+        commands: [],
+        skills: [],
+        notices: [boundDisplayText("Codex skills are temporarily unavailable.")],
+      };
     }
-    if (
-      this.#catalogInflight?.generation === lifecycle.generation &&
-      this.#catalogInflight.workspacePath === context.workspace.canonicalPath &&
-      this.#catalogInflight.preferenceRevision === preferences.revision &&
-      this.#catalogInflight.showOpenAIComposerSkills ===
-        preferences.showOpenAIComposerSkills
-    ) {
-      return this.#catalogInflight.promise;
+  }
+
+  #cachedModels(generation: number): Promise<BackendCatalog["models"]> {
+    if (this.#modelCatalogCache?.generation === generation) {
+      return Promise.resolve(this.#modelCatalogCache.models);
+    }
+    if (this.#modelCatalogInflight?.generation === generation) {
+      return this.#modelCatalogInflight.promise;
     }
     const entry = {
-      generation: lifecycle.generation,
-      workspacePath: context.workspace.canonicalPath,
-      preferenceRevision: preferences.revision,
-      showOpenAIComposerSkills: preferences.showOpenAIComposerSkills,
-      promise: undefined as unknown as Promise<BackendCatalog>,
+      generation,
+      promise: undefined as unknown as Promise<BackendCatalog["models"]>,
     };
-    entry.promise = this.#fetchCatalog(
-      lifecycle.generation,
-      context.workspace.canonicalPath,
-      preferences.showOpenAIComposerSkills,
-    ).then(
-      ({ catalog, cacheable }) => {
-        if (this.#catalogInflight === entry) {
-          this.#catalogInflight = undefined;
-          if (cacheable) {
-            this.#catalogCache = {
-              generation: entry.generation,
-              workspacePath: entry.workspacePath,
-              preferenceRevision: entry.preferenceRevision,
-              showOpenAIComposerSkills: entry.showOpenAIComposerSkills,
-              catalog,
-            };
-          }
+    entry.promise = this.#fetchModels(generation)
+      .then((models) => {
+        if (this.#modelCatalogInflight === entry) {
+          this.#modelCatalogCache = { generation, models };
         }
-        return catalog;
-      },
-      (error: unknown) => {
-        // A failed fetch must not poison the cache — the next caller retries.
-        if (this.#catalogInflight === entry) this.#catalogInflight = undefined;
-        throw error;
-      },
-    );
-    this.#catalogInflight = entry;
+        return models;
+      })
+      .finally(() => {
+        if (this.#modelCatalogInflight === entry) {
+          this.#modelCatalogInflight = undefined;
+        }
+      });
+    this.#modelCatalogInflight = entry;
     return entry.promise;
   }
 
@@ -467,54 +481,72 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     return this.#fetchModels(lifecycle.generation);
   }
 
-  async #fetchCatalog(
+  #readSkillCatalog(
     generation: number,
     canonicalWorkspacePath: string,
-    showOpenAIComposerSkills: boolean,
-  ): Promise<CatalogFetchResult> {
-    const models = await this.#fetchModels(generation);
-    try {
-      const skillCatalog = await readCodexSkills(
-        this.#client,
-        canonicalWorkspacePath,
-        false,
-        showOpenAIComposerSkills,
-      );
+    preferences: ReturnType<CodexComposerSkillPreferenceReader["read"]>,
+    forceReload: boolean,
+  ): Promise<CodexSkillCatalog> {
+    this.#assertCatalogGeneration(generation, generation);
+    const key = JSON.stringify([
+      generation,
+      canonicalWorkspacePath,
+      preferences.revision,
+      preferences.showOpenAIComposerSkills,
+    ]);
+    const pending = this.#skillCatalogInflight.get(key);
+    if (pending && (!forceReload || pending.forceReload)) return pending.promise;
+    const cached = this.#skillCatalogCache.get(key);
+    if (cached && !forceReload) return Promise.resolve(cached);
+    // A force reload supersedes an older ordinary read for this exact scope.
+    // The older caller joins the replacement instead of publishing stale data.
+    this.#skillCatalogCache.delete(key);
+    const entry = {
+      forceReload,
+      promise: undefined as unknown as Promise<CodexSkillCatalog>,
+    };
+    entry.promise = readCodexSkills(
+      this.#client,
+      canonicalWorkspacePath,
+      forceReload,
+      preferences.showOpenAIComposerSkills,
+    ).then((skillCatalog) => {
       this.#assertCatalogGeneration(generation, skillCatalog.generation);
-      return {
-        cacheable: true,
-        catalog: {
-          models,
-          commands: [],
-          skills: skillCatalog.skills.map(({ path: _path, ...skill }) => skill),
-          notices:
-            skillCatalog.errorCount > 0
-              ? [
-                  boundDisplayText(
-                    `${skillCatalog.errorCount} Codex skill ${skillCatalog.errorCount === 1 ? "entry could" : "entries could"} not be loaded.`,
-                  ),
-                ]
-              : [],
-        },
+      if (this.#skillCatalogInflight.get(key) !== entry) {
+        return this.#readSkillCatalog(
+          generation, canonicalWorkspacePath, preferences, false,
+        );
+      }
+      const catalog: CodexSkillCatalog = {
+        skills: skillCatalog.skills.map(({ path: _path, ...skill }) => skill),
+        notices: skillCatalog.errorCount > 0
+          ? [boundDisplayText(
+              `${skillCatalog.errorCount} Codex skill ${skillCatalog.errorCount === 1 ? "entry could" : "entries could"} not be loaded.`,
+            )]
+          : [],
       };
-    } catch (error) {
-      // Skills are additive presentation data. Keep models and settings
-      // available when only skills/list fails, but never install a catalog
-      // captured across a daemon generation change.
+      this.#skillCatalogCache.set(key, catalog);
+      while (this.#skillCatalogCache.size > MAXIMUM_CACHED_SKILL_CATALOGS) {
+        const oldest = this.#skillCatalogCache.keys().next().value;
+        if (oldest === undefined) break;
+        this.#skillCatalogCache.delete(oldest);
+      }
+      return catalog;
+    }, (error: unknown) => {
       this.#assertCatalogGeneration(generation, generation);
-      this.#onError(error);
-      return {
-        cacheable: false,
-        catalog: {
-          models,
-          commands: [],
-          skills: [],
-          notices: [
-            boundDisplayText("Codex skills are temporarily unavailable."),
-          ],
-        },
-      };
-    }
+      if (this.#skillCatalogInflight.get(key) !== entry) {
+        return this.#readSkillCatalog(
+          generation, canonicalWorkspacePath, preferences, false,
+        );
+      }
+      throw error;
+    }).finally(() => {
+      if (this.#skillCatalogInflight.get(key) === entry) {
+        this.#skillCatalogInflight.delete(key);
+      }
+    });
+    this.#skillCatalogInflight.set(key, entry);
+    return entry.promise;
   }
 
   async #fetchModels(generation: number): Promise<BackendCatalog["models"]> {

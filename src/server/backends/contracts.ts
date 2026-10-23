@@ -202,6 +202,12 @@ export interface BackendCatalog {
 export interface BackendCatalogContext {
   readonly scope: ExecutionScope;
   readonly workspace: ValidatedWorkspace;
+  /**
+   * An explicit picker read. Backends may refresh their native skill listing
+   * without discarding unrelated catalog data; ordinary presentation reads
+   * retain the backend's normal freshness policy.
+   */
+  readonly purpose?: "skill_picker";
 }
 
 export interface DiscoveredConversation {

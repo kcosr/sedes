@@ -703,7 +703,7 @@ describe("ThreadApplicationService", () => {
     const actorSnapshot = await current.service.snapshotFromActorCapture(scope, "thread-1", captured.state);
     const targeted = await current.service.capabilitiesAndProviderFeaturesFromActorCapture(scope, "thread-1", captured.state);
     const fork = await current.service.forkSourceFromActorCapture(scope, "thread-1", captured.state);
-    await expect(current.service.skills(scope, "thread-1")).resolves.toEqual({ skills: [] });
+    await expect(current.service.skills(scope, "thread-1", { refresh: true })).resolves.toEqual({ skills: [] });
 
     expect(snapshot.thread.inventoryState).toBe("archived");
     expect(snapshot.orderedTurnIds).toEqual(["turn-1"]);
@@ -726,11 +726,20 @@ describe("ThreadApplicationService", () => {
     await current.service.snapshotFromActorCapture(scope, "thread-1", captured.state);
     await current.service.capabilitiesAndProviderFeaturesFromActorCapture(scope, "thread-1", captured.state);
     await current.service.forkSourceFromActorCapture(scope, "thread-1", captured.state);
-    await current.service.skills(scope, "thread-1");
+    await current.service.skills(scope, "thread-1", { refresh: false });
     expect(restored.thread.inventoryState).toBe("active");
     expect(restored.capabilities.deliveryModes).toContainEqual(expect.objectContaining({ id: "submit", available: true }));
     expect(current.readPresentation).toHaveBeenCalledTimes(5);
     expect(current.readCachedPresentation).toHaveBeenCalledTimes(6);
+  });
+
+  it.each([false, true])("refreshes active skill reads only for explicit picker intent %s", async (refresh) => {
+    const current = createService({ runState: "idle", queue: [] });
+    await current.service.skills(scope, "thread-1", { refresh });
+    expect(current.readPresentation).toHaveBeenCalledExactlyOnceWith(scope, "thread-1", undefined,
+      refresh ? { catalogPurpose: "skill_picker" } : undefined);
+    expect(current.readCachedPresentation).not.toHaveBeenCalled();
+    expect(current.capture).not.toHaveBeenCalled();
   });
 
   it("renders an archived SSE baseline using only cached presentation", async () => {

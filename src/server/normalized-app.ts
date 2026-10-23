@@ -83,6 +83,7 @@ import {
   loadThreadHistoryRequestSchema,
   listAutomationRunsQuerySchema,
   listAutomationsQuerySchema,
+  listComposerSkillsQuerySchema,
   listThreadDescendantsQuerySchema,
   previewAutomationScheduleRequestSchema,
   putComposerAttachmentQuerySchema,
@@ -1682,9 +1683,11 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   routes.get("/api/threads/:threadId/skills", async (request, response) => {
     const requestScope = await scope(request);
     const { threadId } = threadRouteParametersSchema.parse(request.params);
+    const query = listComposerSkillsQuerySchema.parse(request.query);
+    response.setHeader("Cache-Control", "no-store");
     response.json(
       composerSkillCatalogSchema.parse(
-        await dependencies.threads.skills(requestScope, threadId),
+        await dependencies.threads.skills(requestScope, threadId, query),
       ),
     );
   });
