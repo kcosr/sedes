@@ -30,6 +30,7 @@
     "check:workbench": "node src/client/workbench/verify-vendor.mjs",
     "pretypecheck": "npm run check:workbench && npm run check:version && npm run check:changelog && npm run check:docs && npm run check:agent-tool-contracts && npm run check:e2e-timing-baseline && npm run check:server-runtime",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
+    "pretest": "npm run build:sidecar && npm run build:pi-sandbox-worker && npm run build:claude-runtime-worker",
     "test": "vitest run",
     "test:windows-runtime": "node scripts/test-windows-runtime.mjs",
     "test:windows-installer": "node scripts/test-windows-installer.mjs",
