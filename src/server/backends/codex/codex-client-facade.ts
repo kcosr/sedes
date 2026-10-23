@@ -15,6 +15,7 @@ export interface CodexPersistentSessionAccess {
 
 export interface CodexReadyClientGeneration {
   readonly generation: number;
+  readonly dispatchContinuity?: string;
   request<Params, Result>(
     specification: CodexRpcMethod<Params, Result>,
     params: Params,
@@ -204,6 +205,11 @@ export class CodexSharedClientFacade {
     return () => {
       this.#lifecycleListeners.delete(listener);
     };
+  }
+
+  dispatchContinuity(): string {
+    const current = this.#current();
+    return current?.dispatchContinuity ?? `local:${this.#lifecycle.generation}`;
   }
 
   lifecycleSnapshot(): CodexClientLifecycleSnapshot {

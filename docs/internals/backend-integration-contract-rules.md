@@ -1999,6 +1999,14 @@ from the provider's durable turn terminal when the two rails are equivalent.
 Live projection, replay, paging, and reopen must converge on the same normalized
 item without introducing a provider-specific browser shape.
 
+Metadata reads may themselves emit unchanged provider snapshots. A background
+reconciliation consumer must compare the relevant semantic state against its
+own last observation, rather than a shared store revision captured after another
+publisher may already have updated it. Coalesce genuine changes arriving during
+an in-flight check into a retained trailing check; do not let duplicate snapshots
+create a read/notification feedback loop. Codex applies this to Goal-triggered
+Speed defaults. Pi, Claude, Grok, and OpenCode do not implement this Codex feature.
+
 A provider turn-terminal record establishes final turn status; it is not, by
 itself, proof that the provider's event journal or notification queues cannot
 later deliver another record for that same native turn. Group delayed records
@@ -2099,6 +2107,39 @@ only with a normalized no-active-turn or expected-turn-mismatch rejection;
 proved-unsent delivery is also releasable. Arbitrary provider errors are not
 proof of no effect. This transport handoff is Codex-private; Pi, Claude, and
 Grok retain their existing application recovery paths.
+
+Provider features declare an explicit `mutationRevision`; requests use
+`expectedMutationRevision`, independently of presentation revision. A feature
+may retain its existing revision as mutation authority, but must supply that
+choice explicitly. Codex Speed uses desired-tuple revision while activation,
+discovery and receipt results change presentation only. Pi, Claude, Grok and
+OpenCode do not expose active Speed. Claude permissions and the other Codex
+features retain their existing mutation authorities.
+
+When a start receipt grants per-turn controls, distinguish compatible status
+hints from intervening ownership loss. Retain bounded evidence for that pending
+request: its original lifetime, generation, and any observed turn identity.
+Completion, idle, conflicting identities, malformed control evidence, or a
+reroute must remain disqualifying even when a later notification matches the
+receipt. A valid active-status hint alone must not discard an exact successful
+start. Codex applies this to Speed; Pi, Claude, Grok, and OpenCode intentionally
+do not expose that control. History-read observation guards remain independent.
+
+A saved preference plus a fallible native publication is two effects under one
+request identity. Keep the accepted save receipt immutable and use a scoped
+child for the native attempt. Replay exact receipts before current capability,
+workspace and unrelated-uncertainty write guards, including after asynchronous
+preparation. A negative pre-await lookup is provisional. Feature transactions
+and bounded dispatch run through the actor mailbox with direct handle access
+and application-turn resolution, avoiding recursive enqueue. Do not borrow the
+native-effect fence when Stop must remain independent.
+
+Persist remote correlation before sending. Uncertain publication is never
+resent; only exact retained outcome evidence may refine it. Keep unresolved
+deduplication proof, and move settled Speed transport proof onto its child
+receipt during compaction. Client receipt checks retain their original envelope
+and scope binding, never substitute fresh revisions, and do not overwrite newer
+saved projections with historical results.
 
 Native title synchronization uses the normal registered rename action. For a
 provider-assigned conversation, apply the initial application title only after

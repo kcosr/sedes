@@ -1,897 +1,159 @@
 // @vitest-environment jsdom
-
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  BoundedValue,
-  NormalizedThreadSnapshot,
-} from "../../shared/index.js";
+import type { NormalizedThreadSnapshot, ProviderFeatureCapability } from "../../shared/index.js";
+import { CODEX_SPEED_REF as ref, speedArgumentsWireSchema, type SpeedState, type SpeedResult } from "../../shared/provider-features/codex-speed.js";
+import { boundValue } from "../../server/conversations/payload-policy.js";
 import type { ThreadClientStore } from "../stores/ThreadClientStore.js";
-import { ProviderFeatureComposerActions } from "./registry.js";
+import { codexFastModeClientFeature } from "./codex-fast-mode.js";
+import { ApiError } from "../api/ApiClient.js";
 
-const ref = { featureId: "codex.fast_mode", schemaVersion: 2 } as const;
-
-type Speed = "standard" | "fast" | "ultrafast";
-type OfferedInput = {
-  readonly selection: Exclude<Speed, "standard">;
-  readonly description?: string;
-};
-
-const ACTIONS: Readonly<Record<Speed, string>> = {
-  standard: "set_standard",
-  fast: "set_fast",
-  ultrafast: "set_ultrafast",
-};
-
-const FAST_DESCRIPTION = "Faster responses with higher plan usage.";
-const ULTRAFAST_DESCRIPTION =
-  "The fastest available responses for latency-sensitive work.";
-const FEATURE_DESCRIPTION =
-  "Faster speeds respond sooner and use more of your plan's usage";
-
-// jsdom lacks the pointer-capture and scroll APIs the Radix menu
-// primitives rely on.
 beforeEach(() => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe(): void {}
-      disconnect(): void {}
-      unobserve(): void {}
-    },
-  );
-  Object.assign(window.HTMLElement.prototype, {
-    scrollIntoView: vi.fn(),
-    hasPointerCapture: vi.fn(),
-    setPointerCapture: vi.fn(),
-    releasePointerCapture: vi.fn(),
-  });
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
+  Object.assign(window.HTMLElement.prototype, { scrollIntoView: vi.fn(), hasPointerCapture: vi.fn(), setPointerCapture: vi.fn(), releasePointerCapture: vi.fn() });
 });
-
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
-});
-
-function objectValue(
-  value: Readonly<Record<string, BoundedValue>>,
-): BoundedValue {
-  return {
-    kind: "object",
-    entries: Object.entries(value).map(([key, entry]) => ({
-      key: { text: key },
-      value: entry,
-    })),
-  };
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+const target = { turnId: "app-turn", activationId: "activation" };
+const initial: SpeedState = { saved: { selection: "standard", desiredRevision: 7 }, offered: [{ selection: "standard" }, { selection: "fast" }], currentRun: null, lastChange: null };
+function result(currentRun: SpeedResult["currentRun"], receiptRevision = 3): SpeedResult {
+  return { operationId: "op", receiptRevision, saved: { status: "saved", selection: "fast", desiredRevision: 8 }, currentRun };
 }
-
-function offeredValue(offered: readonly OfferedInput[]): BoundedValue {
-  return {
-    kind: "array",
-    values: offered.map(({ selection, description }) =>
-      objectValue({
-        selection: { text: selection },
-        ...(description === undefined
-          ? {}
-          : { description: { text: description } }),
-      }),
-    ),
-  };
+function receipt(value: SpeedResult) { return { status: "provider_feature_result", operationId: value.operationId, feature: ref, result: boundValue(value) }; }
+function fixture(state = initial, availability: ProviderFeatureCapability["availability"] = "available", mobile = false) {
+  const create = vi.fn((_operation: unknown) => "op");
+  const read = vi.fn(async () => receipt(result({ status: "not_requested" })));
+  const discard = vi.fn();
+  const store = { createProviderFeatureAttempt: create, readProviderFeatureAttempt: read, discardProviderFeatureAttempt: discard } as unknown as ThreadClientStore;
+  const capability: ProviderFeatureCapability = { ref, revision: 40, mutationRevision: 7, label: { text: "Speed" }, availability,
+    operations: [{ actionId: "set_speed", label: { text: "Set Speed" }, effects: { application: "write", modelUsage: "none", external: "durable_side_effect" }, confirmation: "none", execution: "inline" }], presentationSlots: ["composer_action"] };
+  const element = (next = state) => codexFastModeClientFeature.renderComposerAction!({ store, capability, featureState: { ref, revision: 40, state: boundValue(next) }, snapshot: {} as NormalizedThreadSnapshot, disabled: false, mobile });
+  const view = render(element());
+  return { create, read, discard, view, element, capability };
 }
-
-function speedState(input: {
-  readonly desired: Speed | null;
-  readonly effective: Speed | null;
-  readonly applicationState: "applied" | "pending" | "unknown";
-  readonly offered: BoundedValue;
-}): BoundedValue {
-  return objectValue({
-    desired: input.desired === null ? null : { text: input.desired },
-    effective: input.effective === null ? null : { text: input.effective },
-    applicationState: { text: input.applicationState },
-    offered: input.offered,
+describe("Codex Speed composer", () => {
+  it("saves from the one-speed toggle using mutation revision and an explicit null target", async () => {
+    const f = fixture(); fireEvent.click(screen.getByRole("button", { name: "Speed, Standard saved" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Speed, Standard saved" })).toHaveAttribute("aria-disabled", "false"));
+    const operation = f.create.mock.calls[0]![0] as unknown as { actionId: string; expectedMutationRevision: number; arguments: never };
+    expect(operation).toMatchObject({ actionId: "set_speed", expectedMutationRevision: 7 });
+    expect(speedArgumentsWireSchema.parse(operation.arguments)).toEqual({ selection: "fast", currentRunTarget: null });
+    expect(f.read).toHaveBeenCalledWith("op");
   });
-}
-
-/**
- * Mirrors the server projection: when available, every offered speed other
- * than the desired one (Standard is always offered); none when read-only.
- */
-function snapshot(input: {
-  readonly desired: Speed | null;
-  readonly effective: Speed | null;
-  readonly applicationState: "applied" | "pending" | "unknown";
-  readonly offered?: readonly OfferedInput[];
-  readonly availability?: "available" | "read_only" | "unavailable";
-  readonly operations?: readonly Speed[];
-  readonly description?: string | null;
-  readonly revision?: number;
-}): NormalizedThreadSnapshot {
-  const availability = input.availability ?? "available";
-  const offered = input.offered ?? [{ selection: "fast" }];
-  const revision = input.revision ?? 7;
-  const operations =
-    input.operations ??
-    (availability === "available"
-      ? (["standard", ...offered.map(({ selection }) => selection)] as const)
-          .filter((selection) => selection !== input.desired)
-      : []);
-  const description =
-    input.description === undefined ? FEATURE_DESCRIPTION : input.description;
-  return {
-    capabilities: {
-      providerFeatures: [
-        {
-          ref,
-          revision,
-          label: { text: "Speed" },
-          ...(description === null ? {} : { description: { text: description } }),
-          availability,
-          ...(availability === "available"
-            ? {}
-            : {
-                unavailableReason: { text: "Wait for the thread to settle." },
-              }),
-          operations: operations.map((selection) => ({
-            actionId: ACTIONS[selection],
-            label: { text: `Use ${selection} speed` },
-            effects: {
-              application: "write",
-              modelUsage: "none",
-              external: "none",
-            },
-            confirmation: "none",
-            execution: "inline",
-          })),
-          presentationSlots: ["composer_action"],
-        },
-      ],
-    },
-    providerFeatures: [
-      {
-        ref,
-        revision,
-        state: speedState({
-          desired: input.desired,
-          effective: input.effective,
-          applicationState: input.applicationState,
-          offered: offeredValue(offered),
-        }),
-      },
-    ],
-  } as unknown as NormalizedThreadSnapshot;
-}
-
-function withState(
-  value: NormalizedThreadSnapshot,
-  envelope: Record<string, unknown>,
-): NormalizedThreadSnapshot {
-  const mutable = value as unknown as {
-    providerFeatures: Array<Record<string, unknown>>;
-  };
-  Object.assign(mutable.providerFeatures[0]!, envelope);
-  return value;
-}
-
-function renderSpeed(
-  value: NormalizedThreadSnapshot,
-  perform = vi.fn().mockResolvedValue({
-    status: "accepted",
-    operationId: "operation-speed",
-  }),
-  mobile = false,
-) {
-  render(
-    <ProviderFeatureComposerActions
-      store={{ perform } as unknown as ThreadClientStore}
-      snapshot={value}
-      disabled={false}
-      mobile={mobile}
-    />,
-  );
-  return perform;
-}
-
-const BOTH_TIERS: readonly OfferedInput[] = [
-  { selection: "fast", description: FAST_DESCRIPTION },
-  { selection: "ultrafast", description: ULTRAFAST_DESCRIPTION },
-];
-
-function speedIcon(element: HTMLElement): Element | null {
-  return element.querySelector("svg[data-speed-icon]");
-}
-
-/** Radix names the floating menu by its trigger, e.g. "Speed, Fast". */
-async function openSpeedMenu(trigger: HTMLElement): Promise<HTMLElement> {
-  await userEvent.click(trigger);
-  return await screen.findByRole("menu", {
-    name: trigger.getAttribute("aria-label")!,
+  it.each([false, true])("offers all speeds and retains the exact active target (mobile=%s)", async mobile => {
+    const f = fixture({ ...initial, offered: [...initial.offered, { selection: "ultrafast" }], currentRun: { target, startingSelection: "standard", requestedSelection: "standard", publicationState: "initial" } }, "available", mobile);
+    await userEvent.click(screen.getByRole("button", { name: "Speed, Standard saved" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Ultrafast/ }));
+    await waitFor(() => expect(f.create).toHaveBeenCalled());
+    const operation = f.create.mock.calls[0]![0] as unknown as { arguments: never };
+    expect(speedArgumentsWireSchema.parse(operation.arguments)).toEqual({ selection: "ultrafast", currentRunTarget: target });
   });
-}
-
-function speedRows(menu: HTMLElement): HTMLElement[] {
-  return within(
-    within(menu).getByRole("group", { name: "Speed" }),
-  ).getAllByRole("menuitemradio");
-}
-
-function rowNamed(menu: HTMLElement, label: string): HTMLElement {
-  return within(menu).getByRole("menuitemradio", {
-    name: new RegExp(`^${label}\\b`),
+  it("offers same-value reapplication when the frozen start used a different choice", async () => {
+    const f = fixture({ ...initial, saved: { selection: "fast", desiredRevision: 7 }, currentRun: { target, startingSelection: "standard", requestedSelection: "standard", publicationState: "initial" } });
+    await userEvent.click(screen.getByRole("button", { name: "Speed, Fast saved" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /^Fast/ }));
+    expect(f.create).toHaveBeenCalledOnce();
   });
-}
-
-describe("codex.fast_mode@2 client feature: one offered speed", () => {
-  it("renders Standard as an accessible outline toggle and selects Fast", async () => {
-    const perform = renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-      }),
-    );
-
-    const toggle = screen.getByRole("button", { name: "Fast speed, off" });
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-    expect(toggle).toHaveAttribute("aria-disabled", "false");
-    expect(toggle).toHaveAttribute("data-accelerated", "false");
-    expect(toggle).not.toHaveAttribute("aria-haspopup");
-    expect(speedIcon(toggle)).toHaveAttribute("data-speed-icon", "fast");
-    expect(speedIcon(toggle)).toHaveAttribute("fill", "none");
-
-    fireEvent.click(toggle);
-    await waitFor(() =>
-      expect(perform).toHaveBeenCalledWith({
-        action: "perform_provider_feature",
-        feature: ref,
-        actionId: "set_fast",
-        arguments: null,
-        expectedFeatureRevision: 7,
-      }),
-    );
-    expect(screen.queryByRole("menu")).toBeNull();
-  });
-
-  it("renders Fast as a filled pressed toggle and returns to Standard", async () => {
-    const perform = renderSpeed(
-      snapshot({
-        desired: "fast",
-        effective: "fast",
-        applicationState: "applied",
-        revision: 11,
-      }),
-    );
-    const toggle = screen.getByRole("button", { name: "Fast speed, on" });
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
-    expect(toggle).toHaveAttribute("data-accelerated", "true");
-    expect(speedIcon(toggle)).toHaveAttribute("data-speed-icon", "fast");
-    expect(speedIcon(toggle)).toHaveAttribute("fill", "currentColor");
-
-    fireEvent.click(toggle);
-    await waitFor(() =>
-      expect(perform).toHaveBeenCalledWith({
-        action: "perform_provider_feature",
-        feature: ref,
-        actionId: "set_standard",
-        arguments: null,
-        expectedFeatureRevision: 11,
-      }),
-    );
-  });
-
-  it("toggles an Ultrafast-only model with the rocket and set_ultrafast", async () => {
-    const offered = [
-      { selection: "ultrafast", description: ULTRAFAST_DESCRIPTION },
-    ] as const;
-    const perform = renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-        offered,
-      }),
-    );
-    const off = screen.getByRole("button", { name: "Ultrafast speed, off" });
-    expect(off).toHaveAttribute("aria-pressed", "false");
-    expect(off).toHaveAttribute("data-accelerated", "false");
-    expect(speedIcon(off)).toHaveAttribute("data-speed-icon", "ultrafast");
-
-    fireEvent.click(off);
-    await waitFor(() =>
-      expect(perform).toHaveBeenCalledWith(
-        expect.objectContaining({
-          actionId: "set_ultrafast",
-          expectedFeatureRevision: 7,
-        }),
-      ),
-    );
-
-    cleanup();
-    const disable = renderSpeed(
-      snapshot({
-        desired: "ultrafast",
-        effective: "ultrafast",
-        applicationState: "applied",
-        offered,
-      }),
-    );
-    const on = screen.getByRole("button", { name: "Ultrafast speed, on" });
-    expect(on).toHaveAttribute("aria-pressed", "true");
-    expect(on).toHaveAttribute("data-accelerated", "true");
-    expect(speedIcon(on)).toHaveAttribute("data-speed-icon", "ultrafast");
-    fireEvent.click(on);
-    await waitFor(() =>
-      expect(disable).toHaveBeenCalledWith(
-        expect.objectContaining({ actionId: "set_standard" }),
-      ),
-    );
-  });
-
-  it("names the selected speed when the catalog no longer offers it", async () => {
-    const perform = renderSpeed(
-      snapshot({
-        desired: "ultrafast",
-        effective: "ultrafast",
-        applicationState: "applied",
-        offered: [{ selection: "fast" }],
-      }),
-    );
-    const toggle = screen.getByRole("button", { name: "Ultrafast speed, on" });
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
-    expect(speedIcon(toggle)).toHaveAttribute("data-speed-icon", "ultrafast");
-
-    fireEvent.click(toggle);
-    await waitFor(() =>
-      expect(perform).toHaveBeenCalledWith(
-        expect.objectContaining({ actionId: "set_standard" }),
-      ),
-    );
-  });
-
-  it("exposes pending and unknown application state without changing the desired selection", () => {
-    renderSpeed(
-      snapshot({
-        desired: "fast",
-        effective: "standard",
-        applicationState: "pending",
-      }),
-    );
-    const pending = screen.getByRole("button", {
-      name: "Fast speed, on, pending",
-    });
-    expect(pending).toHaveAttribute("aria-pressed", "true");
-    expect(pending).toHaveAttribute("data-application-state", "pending");
-
-    cleanup();
-    renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: null,
-        applicationState: "unknown",
-      }),
-    );
-    const unknown = screen.getByRole("button", {
-      name: "Fast speed, off, application unknown",
-    });
-    expect(unknown).toHaveAttribute("aria-pressed", "false");
-    expect(unknown).toHaveAttribute("data-application-state", "unknown");
-  });
-
-  it("labels the toggle pending while its own request is in flight", async () => {
-    let resolve!: (value: unknown) => void;
-    const perform = vi.fn(
-      () => new Promise((settle) => (resolve = settle)),
-    );
-    renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-      }),
-      perform,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Fast speed, off" }));
-    const busy = await screen.findByRole("button", {
-      name: "Fast speed, off, pending",
-    });
-    expect(busy).toHaveAttribute("aria-busy", "true");
-    expect(busy).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(busy);
-    expect(perform).toHaveBeenCalledTimes(1);
-
-    resolve({ status: "accepted", operationId: "operation-speed" });
-    expect(
-      await screen.findByRole("button", { name: "Fast speed, off" }),
-    ).not.toHaveAttribute("aria-busy");
-  });
-
-  it("keeps unavailable and unresolved controls inert with an exact accessible state", async () => {
-    const perform = renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-        availability: "read_only",
-      }),
-    );
-    const readOnly = screen.getByRole("button", { name: "Fast speed, off" });
-    expect(readOnly).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(readOnly);
-    expect(perform).not.toHaveBeenCalled();
-    fireEvent.focus(readOnly);
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      "Wait for the thread to settle.",
-    );
-
-    cleanup();
-    const missingOperation = renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-        operations: [],
-      }),
-    );
-    const noOperation = screen.getByRole("button", { name: "Fast speed, off" });
-    expect(noOperation).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(noOperation);
-    expect(missingOperation).not.toHaveBeenCalled();
-
-    cleanup();
-    renderSpeed(
-      snapshot({
-        desired: null,
-        effective: null,
-        applicationState: "unknown",
-      }),
-    );
-    expect(
-      screen.getByRole("button", { name: "Speed, unavailable" }),
-    ).toHaveAttribute("aria-disabled", "true");
-  });
-
-  it("uses only a passive hover/focus tooltip for usage information", async () => {
-    renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-      }),
-    );
-    expect(screen.queryByRole("tooltip")).toBeNull();
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.queryByRole("alert")).toBeNull();
-
-    fireEvent.focus(screen.getByRole("button", { name: "Fast speed, off" }));
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      FEATURE_DESCRIPTION,
-    );
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("prefers the catalog's tier description in the tooltip", async () => {
-    renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-        offered: [{ selection: "fast", description: FAST_DESCRIPTION }],
-      }),
-    );
-    fireEvent.focus(screen.getByRole("button", { name: "Fast speed, off" }));
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      `Fast: ${FAST_DESCRIPTION}`,
-    );
-
-    cleanup();
-    renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-        description: null,
-      }),
-    );
-    fireEvent.focus(screen.getByRole("button", { name: "Fast speed, off" }));
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(/^Fast$/);
-  });
-});
-
-describe("codex.fast_mode@2 client feature: several offered speeds", () => {
-  it("renders a Speed menu trigger instead of a toggle", async () => {
-    renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-        offered: BOTH_TIERS,
-      }),
-    );
-    const trigger = screen.getByRole("button", { name: "Speed, Standard" });
-    expect(trigger).not.toHaveAttribute("aria-pressed");
-    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
-    expect(trigger).toHaveAttribute("aria-disabled", "false");
-    expect(trigger).toHaveAttribute("data-accelerated", "false");
-    expect(speedIcon(trigger)).toHaveAttribute("data-speed-icon", "standard");
-    expect(speedIcon(trigger)).toHaveAttribute("fill", "none");
-
-    fireEvent.focus(trigger);
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      FEATURE_DESCRIPTION,
-    );
-  });
-
-  it("lists Standard, Fast and Ultrafast with the checked desired speed", async () => {
-    renderSpeed(
-      snapshot({
-        desired: "fast",
-        effective: "fast",
-        applicationState: "applied",
-        offered: BOTH_TIERS,
-      }),
-    );
-    const trigger = screen.getByRole("button", { name: "Speed, Fast" });
-    expect(trigger).toHaveAttribute("data-accelerated", "true");
-    expect(speedIcon(trigger)).toHaveAttribute("data-speed-icon", "fast");
-    expect(speedIcon(trigger)).toHaveAttribute("fill", "currentColor");
-
-    const menu = await openSpeedMenu(trigger);
-    const rows = speedRows(menu);
-    expect(
-      rows.map((row) => row.querySelector("svg")?.getAttribute("data-speed-icon")),
-    ).toEqual(["standard", "fast", "ultrafast"]);
-    expect(rows.map((row) => row.getAttribute("aria-checked"))).toEqual([
-      "false",
-      "true",
-      "false",
-    ]);
-    expect(rows[0]).toHaveTextContent(/^Standard$/);
-    expect(rows[1]).toHaveTextContent(`Fast ${FAST_DESCRIPTION}`);
-    expect(rows[2]).toHaveTextContent(`Ultrafast ${ULTRAFAST_DESCRIPTION}`);
-    expect(
-      rows[2]!.querySelector('[data-slot="dropdown-menu-item-description"]'),
-    ).toHaveTextContent(ULTRAFAST_DESCRIPTION);
-    for (const row of rows) expect(row).not.toHaveAttribute("data-disabled");
-  });
-
-  it("selecting Ultrafast performs set_ultrafast at the observed revision", async () => {
-    const perform = renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-        offered: BOTH_TIERS,
-        revision: 12,
-      }),
-    );
-    const menu = await openSpeedMenu(
-      screen.getByRole("button", { name: "Speed, Standard" }),
-    );
-    await userEvent.click(rowNamed(menu, "Ultrafast"));
-    await waitFor(() =>
-      expect(perform).toHaveBeenCalledWith({
-        action: "perform_provider_feature",
-        feature: ref,
-        actionId: "set_ultrafast",
-        arguments: null,
-        expectedFeatureRevision: 12,
-      }),
-    );
-    expect(perform).toHaveBeenCalledTimes(1);
-    // The menu stays closed once the request settles.
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Speed, Standard" }),
-      ).not.toHaveAttribute("aria-busy"),
-    );
-    expect(screen.queryByRole("menu")).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Speed, Standard" }),
-    ).toHaveAttribute("aria-expanded", "false");
-  });
-
-  it("re-selecting the current speed performs nothing", async () => {
-    const perform = renderSpeed(
-      snapshot({
-        desired: "fast",
-        effective: "fast",
-        applicationState: "applied",
-        offered: BOTH_TIERS,
-      }),
-    );
-    const menu = await openSpeedMenu(
-      screen.getByRole("button", { name: "Speed, Fast" }),
-    );
-    await userEvent.click(rowNamed(menu, "Fast"));
-    expect(perform).not.toHaveBeenCalled();
-
-    const reopened = await openSpeedMenu(
-      screen.getByRole("button", { name: "Speed, Fast" }),
-    );
-    await userEvent.click(rowNamed(reopened, "Standard"));
-    await waitFor(() =>
-      expect(perform).toHaveBeenCalledWith(
-        expect.objectContaining({ actionId: "set_standard" }),
-      ),
-    );
-  });
-
-  it("disables rows whose operation the capability does not offer", async () => {
-    const perform = renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-        offered: BOTH_TIERS,
-        operations: ["fast"],
-      }),
-    );
-    const menu = await openSpeedMenu(
-      screen.getByRole("button", { name: "Speed, Standard" }),
-    );
-    // The current row stays enabled; Ultrafast lacks its operation.
-    expect(rowNamed(menu, "Standard")).not.toHaveAttribute("data-disabled");
-    expect(rowNamed(menu, "Fast")).not.toHaveAttribute("data-disabled");
-    const ultrafast = rowNamed(menu, "Ultrafast");
-    expect(ultrafast).toHaveAttribute("data-disabled");
-    expect(ultrafast).toHaveAttribute("aria-disabled", "true");
-    await userEvent.click(ultrafast);
-    expect(perform).not.toHaveBeenCalled();
-  });
-
-  it("shows the rocket and Ultrafast state on the trigger", () => {
-    renderSpeed(
-      snapshot({
-        desired: "ultrafast",
-        effective: "fast",
-        applicationState: "pending",
-        offered: BOTH_TIERS,
-      }),
-    );
-    const trigger = screen.getByRole("button", {
-      name: "Speed, Ultrafast, pending",
-    });
-    expect(trigger).toHaveAttribute("data-accelerated", "true");
-    expect(trigger).toHaveAttribute("data-application-state", "pending");
-    expect(speedIcon(trigger)).toHaveAttribute("data-speed-icon", "ultrafast");
-
-    cleanup();
-    renderSpeed(
-      snapshot({
-        desired: "ultrafast",
-        effective: null,
-        applicationState: "unknown",
-        offered: BOTH_TIERS,
-      }),
-    );
-    expect(
-      screen.getByRole("button", {
-        name: "Speed, Ultrafast, application unknown",
-      }),
-    ).toHaveAttribute("data-application-state", "unknown");
-  });
-
-  it("keeps a read-only or unresolved trigger closed", async () => {
-    const perform = renderSpeed(
-      snapshot({
-        desired: "fast",
-        effective: "fast",
-        applicationState: "applied",
-        offered: BOTH_TIERS,
-        availability: "read_only",
-      }),
-    );
-    const readOnly = screen.getByRole("button", { name: "Speed, Fast" });
-    expect(readOnly).toHaveAttribute("aria-disabled", "true");
-    await userEvent.click(readOnly);
-    fireEvent.keyDown(readOnly, { key: "Enter" });
-    expect(screen.queryByRole("menu")).toBeNull();
-    expect(perform).not.toHaveBeenCalled();
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      "Wait for the thread to settle.",
-    );
-
-    cleanup();
-    renderSpeed(
-      snapshot({
-        desired: null,
-        effective: null,
-        applicationState: "unknown",
-        offered: BOTH_TIERS,
-      }),
-    );
-    const unresolved = screen.getByRole("button", {
-      name: "Speed, unavailable",
-    });
-    expect(unresolved).toHaveAttribute("aria-disabled", "true");
-    await userEvent.click(unresolved);
-    expect(screen.queryByRole("menu")).toBeNull();
-  });
-
-  it("opens the same choices as a sheet on mobile", async () => {
-    const perform = renderSpeed(
-      snapshot({
-        desired: "standard",
-        effective: "standard",
-        applicationState: "applied",
-        offered: BOTH_TIERS,
-      }),
-      undefined,
-      true,
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Speed, Standard" }),
-    );
-    const sheet = await screen.findByRole("dialog", { name: "Speed" });
-    expect(sheet).toHaveAttribute("data-menu-sheet");
-    const menu = within(sheet).getByRole("menu", { name: "Speed" });
-    expect(
-      speedRows(menu).map((row) => row.getAttribute("aria-checked")),
-    ).toEqual(["true", "false", "false"]);
-    await userEvent.click(rowNamed(menu, "Ultrafast"));
-    await waitFor(() =>
-      expect(perform).toHaveBeenCalledWith(
-        expect.objectContaining({ actionId: "set_ultrafast" }),
-      ),
-    );
-  });
-});
-
-describe("codex.fast_mode@2 client feature: decoding", () => {
-  const valid = () =>
-    snapshot({
-      desired: "standard",
-      effective: "standard",
-      applicationState: "applied",
-      offered: BOTH_TIERS,
-    });
-
-  it("fails closed for malformed selections and unknown keys", () => {
-    // The unmodified fixture renders, so each rejection below is the decoder's.
-    renderSpeed(valid());
-    expect(
-      screen.getByRole("button", { name: "Speed, Standard" }),
-    ).toBeInTheDocument();
-
-    cleanup();
-    renderSpeed(
-      withState(valid(), {
-        state: speedState({
-          desired: "priority" as Speed,
-          effective: "standard",
-          applicationState: "applied",
-          offered: offeredValue(BOTH_TIERS),
-        }),
-      }),
-    );
-    expect(screen.queryByRole("button")).toBeNull();
-
-    cleanup();
-    renderSpeed(
-      withState(valid(), {
-        state: objectValue({
-          desired: { text: "standard" },
-          effective: { text: "standard" },
-          applicationState: { text: "applied" },
-          offered: offeredValue(BOTH_TIERS),
-          extra: { text: "x" },
-        }),
-      }),
-    );
-    expect(screen.queryByRole("button")).toBeNull();
-
-    cleanup();
-    renderSpeed(
-      withState(valid(), {
-        state: speedState({
-          desired: "standard",
-          effective: "standard",
-          applicationState: "settled" as "applied",
-          offered: offeredValue(BOTH_TIERS),
-        }),
-      }),
-    );
-    expect(screen.queryByRole("button")).toBeNull();
-  });
-
-  it("ignores schemaVersion 1 envelopes, including the legacy state shape", () => {
-    const legacyRef = { featureId: "codex.fast_mode", schemaVersion: 1 };
-    renderSpeed(
-      withState(valid(), {
-        ref: legacyRef,
-        state: objectValue({
-          desired: { text: "fast" },
-          effective: { text: "fast" },
-          applicationState: { text: "applied" },
-        }),
-      }),
-    );
-    expect(screen.queryByRole("button")).toBeNull();
-
-    cleanup();
-    renderSpeed(withState(valid(), { ref: legacyRef }));
-    expect(screen.queryByRole("button")).toBeNull();
-
-    cleanup();
-    // The v1 state under the v2 reference is missing `offered`.
-    renderSpeed(
-      withState(valid(), {
-        state: objectValue({
-          desired: { text: "fast" },
-          effective: { text: "fast" },
-          applicationState: { text: "applied" },
-        }),
-      }),
-    );
-    expect(screen.queryByRole("button")).toBeNull();
-  });
-
   it.each([
-    ["empty", { kind: "array", values: [] }],
-    ["not an array", { text: "fast" }],
-    [
-      "truncated",
-      {
-        kind: "array",
-        values: [objectValue({ selection: { text: "fast" } })],
-        truncation: {
-          truncated: true,
-          retainedBytes: 32,
-          reason: "entry_limit",
-        },
-      },
-    ],
-    [
-      "out of order",
-      offeredValue([{ selection: "ultrafast" }, { selection: "fast" }]),
-    ],
-    ["duplicated", offeredValue([{ selection: "fast" }, { selection: "fast" }])],
-    ["standard offered", offeredValue([{ selection: "standard" as "fast" }])],
-    ["unknown speed", offeredValue([{ selection: "priority" as "fast" }])],
-    [
-      "unknown entry key",
-      {
-        kind: "array",
-        values: [
-          objectValue({ selection: { text: "fast" }, tier: { text: "x" } }),
-        ],
-      },
-    ],
-    [
-      "missing selection",
-      {
-        kind: "array",
-        values: [objectValue({ description: { text: "Fast" } })],
-      },
-    ],
-    [
-      "non-text description",
-      {
-        kind: "array",
-        values: [objectValue({ selection: { text: "fast" }, description: 3 })],
-      },
-    ],
-  ] as const)("fails closed when offered is %s", (_case, offered) => {
-    renderSpeed(
-      withState(valid(), {
-        state: speedState({
-          desired: "standard",
-          effective: "standard",
-          applicationState: "applied",
-          offered: offered as BoundedValue,
-        }),
-      }),
-    );
+    new Error("Connection lost"),
+    new ApiError(503, "unavailable", "Reply unavailable", true),
+  ])("quietly recovers a lost reply with the original operation: %s", async error => {
+    const f = fixture(); f.read.mockRejectedValueOnce(error);
+    fireEvent.click(screen.getByRole("button", { name: "Speed, Standard saved" }));
+    await waitFor(() => expect(f.read).toHaveBeenCalledTimes(2), { timeout: 2500 });
+    expect(f.create).toHaveBeenCalledOnce(); expect(f.read.mock.calls).toEqual([["op"], ["op"]]);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check Speed result" })).toBeNull();
+  });
+  it("discards a definitively rejected envelope without retrying or changing the selection", async () => {
+    const f = fixture(); f.read.mockRejectedValueOnce(new ApiError(409, "conflict", "The turn changed before Speed could be saved.", false));
+    fireEvent.click(screen.getByRole("button", { name: "Speed, Standard saved" }));
+    await waitFor(() => expect(f.discard).toHaveBeenCalledWith("op"));
+    expect(f.read).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Speed, Standard saved" })).toHaveAttribute("aria-pressed", "false");
+  });
+  it("bounds background recovery and leaves the control usable", async () => {
+    const f = fixture(); f.read.mockRejectedValue(new Error("Connection lost"));
+    fireEvent.click(screen.getByRole("button", { name: "Speed, Standard saved" }));
+    await waitFor(() => expect(f.read).toHaveBeenCalledTimes(4), { timeout: 4500 });
+    expect(f.create).toHaveBeenCalledOnce(); expect(f.discard).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Speed, Standard saved" })).toHaveAttribute("aria-disabled", "false");
+  });
+  it("polls a pending receipt but stops at a known uncertain result", async () => {
+    const f = fixture();
+    f.read.mockResolvedValueOnce(receipt(result({ status: "pending", target, selection: "fast" }, 1)))
+      .mockResolvedValue(receipt(result({ status: "uncertain", target, selection: "fast", reason: "response_lost" }, 2)));
+    fireEvent.click(screen.getByRole("button", { name: "Speed, Standard saved" }));
+    await waitFor(() => expect(f.discard).toHaveBeenCalledWith("op"), { timeout: 2500 });
+    // A known outcome stops the one-second polling timer, even when uncertain.
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    expect(f.read.mock.calls).toEqual([["op"], ["op"]]);
+    expect(f.create).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+  it("stops recovering when the control unmounts", async () => {
+    const f = fixture(); f.read.mockRejectedValue(new Error("Connection lost"));
+    fireEvent.click(screen.getByRole("button", { name: "Speed, Standard saved" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Speed, Standard saved" })).toHaveAttribute("aria-disabled", "false"));
+    f.view.unmount();
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    expect(f.read).toHaveBeenCalledOnce();
+  });
+  it("shows only the saved choice for a prior turn's durable receipt", () => {
+    fixture({ ...initial, saved: { selection: "fast", desiredRevision: 8 }, lastChange: result({ status: "published", target, selection: "fast" }) });
+    expect(screen.getByRole("button", { name: "Speed, Fast saved" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+  it.each(["initial", "pending", "published", "unknown"] as const)("keeps the active touch menu quiet with %s publication knowledge", async publicationState => {
+    fixture({ ...initial, saved: { selection: "fast", desiredRevision: 8 }, currentRun: { target: { ...target }, startingSelection: "standard", requestedSelection: "standard", publicationState },
+      lastChange: result({ status: "rejected", target, selection: "fast", reason: "provider_rejected", message: { text: "Rejected" } }) }, "available", true);
+    const trigger = screen.getByRole("button", { name: "Speed, Fast saved" });
+    expect(trigger).not.toHaveAttribute("data-application-state");
+    await userEvent.click(trigger);
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(2);
+    expect(screen.getByRole("menuitemradio", { name: /^Fast/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemradio", { name: /^Standard/ })).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("How Speed works")).toBeNull();
+    expect(screen.queryByText(/Rejected/)).toBeNull();
+  });
+  it.each([
+    { status: "published", target, selection: "fast" },
+    { status: "uncertain", target, selection: "fast", reason: "response_lost" },
+    { status: "target_finished", target, selection: "fast" },
+    { status: "not_attempted", target, selection: "fast", reason: "ownership_changed" },
+  ] as const)("uses the saved projection, without extra UI, after a $status receipt", async outcome => {
+    const f = fixture({ ...initial, currentRun: { target, startingSelection: "standard", requestedSelection: "standard", publicationState: "initial" } });
+    f.read.mockResolvedValue(receipt(result(outcome)));
+    await userEvent.click(screen.getByRole("button", { name: "Speed, Standard saved" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /^Fast/ }));
+    await waitFor(() => expect(f.read).toHaveBeenCalledOnce());
+    expect(screen.getByRole("button", { name: "Speed, Standard saved" })).toBeVisible();
+    f.view.rerender(f.element({ ...initial, saved: { selection: "fast", desiredRevision: 8 } }));
+    expect(screen.getByRole("button", { name: "Speed, Fast saved" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+  it("explains next-step application and persistence in one short tooltip", async () => {
+    fixture();
+    await userEvent.hover(screen.getByRole("button", { name: "Speed, Standard saved" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Applies from the next model step. Saved for future turns.");
+  });
+  it("keeps unknown active ownership read-only", () => {
+    const f = fixture({ ...initial, currentRun: { target: null, startingSelection: null, requestedSelection: null, publicationState: "unknown" } }, "read_only");
+    const button = screen.getByRole("button", { name: "Speed, Standard saved" });
+    expect(button).toHaveAttribute("aria-disabled", "true"); fireEvent.click(button); expect(f.create).not.toHaveBeenCalled();
+  });
+  it("does not replace a newer saved projection with an older operation result", async () => {
+    const f = fixture(); let finish!: (value: ReturnType<typeof receipt>) => void;
+    f.read.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    fireEvent.click(screen.getByRole("button", { name: "Speed, Standard saved" }));
+    f.view.rerender(f.element({ ...initial, saved: { selection: "ultrafast", desiredRevision: 9 } }));
+    finish(receipt(result({ status: "published", target, selection: "fast" })));
+    await screen.findByRole("button", { name: "Speed, Ultrafast saved" });
+  });
+  it("withdraws malformed offered authority instead of guessing", () => {
+    fixture({ ...initial, offered: [{ selection: "fast" }, { selection: "fast" }] });
     expect(screen.queryByRole("button")).toBeNull();
   });
 });

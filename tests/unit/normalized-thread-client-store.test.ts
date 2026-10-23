@@ -8,6 +8,7 @@ import type {
   ThreadLoadStreamDiagnostics,
 } from "../../src/client/api/EventStreamTransport.js";
 import { BrowserEventStreamTransport } from "../../src/client/api/EventStreamTransport.js";
+import { CODEX_SPEED_REF, speedArgumentsValue } from "../../src/shared/provider-features/codex-speed.js";
 import { largeDirectInputText } from "../support/large-direct-input.js";
 import {
   DeliveryRecoveryRequiredError,
@@ -5123,6 +5124,38 @@ describe("ThreadClientStore normalized operations", () => {
       kind: "interrupt",
       operationId: expect.any(String),
     });
+  });
+
+  it("retains the exact Speed envelope while leaving Stop and composer actions available", async () => {
+    let resolve!: (result: ThreadApplicationMutationResult) => void;
+    const pending = new Promise<ThreadApplicationMutationResult>(done => { resolve = done; });
+    const operateThread = vi.fn(async (_threadId: string, operation: ThreadApplicationOperation) =>
+      operation.kind === "perform" ? pending : { status: "accepted" as const, operationId: "stop" });
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { operateThread } as unknown as ApiClient, transport);
+    await store.start();
+    const initial = snapshot();
+    initial.capabilities.providerFeatures = [{ ref: CODEX_SPEED_REF, revision: 7, mutationRevision: 2,
+      label: { text: "Speed" }, availability: "available", presentationSlots: ["composer_action"],
+      operations: [{ actionId: "set_speed", label: { text: "Set Speed" }, confirmation: "none", execution: "inline",
+        effects: { application: "write", modelUsage: "none", external: "none" } }] }];
+    installSnapshot(transport, initial);
+    const id = store.createProviderFeatureAttempt({ action: "perform_provider_feature", feature: CODEX_SPEED_REF,
+      actionId: "set_speed", expectedMutationRevision: 2,
+      arguments: speedArgumentsValue({ selection: "fast", currentRunTarget: { turnId: "turn-1", activationId: "activation" } }) });
+    const first = store.readProviderFeatureAttempt(id);
+    const envelope = operateThread.mock.calls[0]![1];
+    expect(store.getSnapshot().actionPending).toBe(false);
+    await store.stopActiveTurn();
+    expect(operateThread.mock.calls[1]![1].kind).toBe("interrupt");
+    resolve({ status: "accepted", operationId: id });
+    await first;
+    transport.thread!.onConnection("disconnected");
+    await store.readProviderFeatureAttempt(id);
+    expect(operateThread.mock.calls[2]![1]).toEqual(envelope);
+    store.dispose();
+    await expect(store.readProviderFeatureAttempt(id)).rejects.toThrow("original feature request");
+    expect(operateThread).toHaveBeenCalledTimes(3);
   });
 
   it("shows the terminal Stop diagnostic and admits a new Stop with a fresh operation ID", async () => {

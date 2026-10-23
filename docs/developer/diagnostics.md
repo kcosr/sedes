@@ -82,6 +82,9 @@ are:
   `frame_byte_limit_exceeded`, `stream_error`, `overflow`, `client_closed`,
   `load_error`, or `unexpected_error`) plus live state and pending counts;
 - `[delivery-rpc]` — Codex RPC method, duration, and outcome;
+- `[delivery-attachment]` events `codex_speed_eligibility` and
+  `codex_speed_presentation` — Speed eligibility and visible availability
+  transitions; see [Codex Speed availability](#codex-speed-availability);
 - `[delivery-attachment]` event `claude_runtime_command_failed` — failed
   main-side Claude persistent-runtime commands, with backend/environment IDs,
   command name, attachment versus execution stage, elapsed time, and sanitized
@@ -139,13 +142,52 @@ main/sidecar build and the existing delivery diagnostics opt-in.
 Current sites are `thread-mutation-gateway.ts`,
 `queued-input-dispatcher.ts`, `thread-runtime-coordinator.ts`,
 `thread-sse.ts`,
-`codex-client-facade.ts` and `codex-daemon-supervisor.ts`, plus the bound-thread event route in
+`codex-client-facade.ts`, `codex-daemon-supervisor.ts`, `codex-speed-session.ts`,
+and `codex-thread-presentation-provider.ts`, plus the bound-thread event route in
 `normalized-app.ts`. Grok-specific sites are `grok-session-lifecycle.ts` and
 `grok-conversation-driver.ts`. A failed `[delivery-thread-load]` record contains only
 bounded error class, normalized backend category/code, and machine-like
 internal codes. It never records exception messages, provider content, paths,
 or native thread identifiers. There is no `SEDES_DEBUG_PROJECTION` flag in
 this source tree.
+
+### Codex Speed availability
+
+With `SEDES_DEBUG_DELIVERY` enabled on main, `codex_speed_eligibility` records
+the first observed state and subsequent changes for each Sedes thread handle.
+It uses the same eligibility checks as active Speed admission. The record
+includes Sedes thread/turn IDs, backend ID, an ephemeral `handleId`, activation
+ID, shared-client generation, activation/native-control generations, and a
+bounded reason such as `no_activation`, `native_turn_changed`,
+`step_switching_disabled`, `desired_model_changed`, `managed_tui`, or
+`uncertain_connection_changed`. Native control is represented by its derived
+Sedes turn ID, never a native session or turn identifier. Boolean checks retain
+policy, model-match and ownership evidence without logging model names,
+configuration, prompts, or provider payloads.
+
+`activationLoss` distinguishes a new handle from invalidation, rerouting,
+completion, native idle, or connection change. A `closed` record and a new
+`handleId` at the same generation show a Sedes handle replacement even when the
+shared Codex runtime did not reconnect. `no_activation` does not by itself
+establish why a handle was replaced. A `native_idle` record means there is no
+current run to update; it is not an unavailable reason for saved Speed.
+
+`codex_speed_presentation` records the actual `available`, `read_only`, or
+`hidden` projection and distinguishes missing controllers, unavailable policy,
+missing offered tiers, and current-run restrictions. Correlate its thread and
+handle IDs with eligibility records and existing RPC/lifecycle logs. Repeated
+unchanged reads emit nothing. Each handle retains one diagnostic fingerprint;
+presentation deduplication is scoped by principal/thread and capped at 4,096
+entries, so an evicted thread may emit its current state again. Both events use
+the existing bounded diagnostic file sink when configured; logging failures do
+not affect Speed or recovery. Only a main-server update is needed for these
+records, including sessions on remote sidecars.
+
+For a disabled Speed incident, record the Sedes thread ID and UTC time, then
+collect main's journal (or optional diagnostic file) covering the preceding
+available state, the first unavailable transition, and recovery. These events
+require no click on the disabled control and no active Speed mutation. Do not
+replay an uncertain mutation just to create diagnostic evidence.
 
 ### Persistent-sidecar capture and bounded files
 

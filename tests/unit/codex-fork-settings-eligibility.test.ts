@@ -33,6 +33,7 @@ function record(
     },
     effectiveDaemonGeneration: 3,
     effectiveConfirmationState: "confirmed",
+    desiredRevision: 0,
     revision: 7,
     createdAt: 1,
     updatedAt: 2,

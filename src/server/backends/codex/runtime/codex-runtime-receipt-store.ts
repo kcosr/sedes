@@ -1,17 +1,19 @@
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { z } from "zod";
+import { CodexSpeedPublicationRepository } from "../codex-speed-publication-repository.js";
+import { codexTurnSettingsUpdateMethod } from "../codex-active-speed-protocol.js";
 import type { ProviderTransportScope } from "../../../provider-protocol/transport/assured-framed-transport.js";
 
 const id = z.string().min(1).max(256);
 const sequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const methodSchema = z.enum(["thread/start", "thread/fork", "turn/start", "turn/steer"]);
+const methodSchema = z.enum(["thread/start", "thread/fork", "turn/start", "turn/steer", "turn/settings/update"]);
 const correlationSchema = z.strictObject({
-  kind: z.enum(["create", "fork", "start", "steer"]),
+  kind: z.enum(["create", "fork", "start", "steer", "speed"]),
   applicationOperationId: id,
   applicationThreadId: id,
 });
-const methodForKind = { create: "thread/start", fork: "thread/fork", start: "turn/start", steer: "turn/steer" } as const;
+const methodForKind = { create: "thread/start", fork: "thread/fork", start: "turn/start", steer: "turn/steer", speed: "turn/settings/update" } as const;
 export type CodexRuntimeReceiptCorrelation = z.infer<typeof correlationSchema>;
 export type CodexRuntimeReceiptAuthority = Readonly<{ scope: ProviderTransportScope; runtimeId: string }>;
 export type CodexRuntimeReceiptRetirementProof = Readonly<{
@@ -25,12 +27,12 @@ export type CodexRuntimeReceiptRetirementProof = Readonly<{
 // prompt inputs, remote error messages/data and tool output are never copied.
 const outcomeSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("completed"), generation: sequence, inboundSequence: sequence,
-    nativeThreadId: id.optional(), nativeTurnId: id.optional() }),
+    nativeThreadId: id.optional(), nativeTurnId: id.optional(), speedStatus: z.enum(["applied", "targetUnavailable"]).optional() }),
   z.strictObject({ status: z.literal("failed"), generation: sequence,
     failure: z.discriminatedUnion("kind", [
       z.strictObject({ kind: z.literal("delivery"), code: id, delivery: z.enum(["not_sent", "sent_outcome_unknown"]) }),
       z.strictObject({ kind: z.literal("remote"), code: z.number().int(),
-        rejectionReason: z.enum(["no_active_turn", "expected_turn_mismatch"]).optional() }),
+        rejectionReason: z.enum(["no_active_turn", "expected_turn_mismatch"]).optional(), speedNotEnabled: z.literal(true).optional() }),
     ]) }),
 ]);
 export type CodexCriticalReceiptOutcome = z.infer<typeof outcomeSchema>;
@@ -45,6 +47,7 @@ export type CodexRuntimeReceipt = Readonly<{
 export type CodexRuntimeReceiptReservation = Readonly<{
   operationId: string; method: string; requestFingerprint: string;
   correlation: CodexRuntimeReceiptCorrelation;
+  nativeGeneration?: number;
 }>;
 export type CodexRuntimeReceiptObservation = Readonly<{
   status: "pending" | "completed" | "failed";
@@ -52,7 +55,7 @@ export type CodexRuntimeReceiptObservation = Readonly<{
   receipt?: Readonly<{ result: unknown; generation: number; inboundSequence: number }>;
   failure?: Readonly<{ kind: "delivery" | "remote"; code: string | number; generation: number;
     delivery?: "not_sent" | "sent_outcome_unknown";
-    rejectionReason?: "no_active_turn" | "expected_turn_mismatch" }>;
+    rejectionReason?: "no_active_turn" | "expected_turn_mismatch"; speedNotEnabled?: true }>;
 }>;
 
 export interface CodexRuntimeReceiptSink {
@@ -76,8 +79,9 @@ const where = `tenant_id = ? AND principal_id = ? AND execution_environment_id =
   AND backend_instance_id = ? AND runtime_id = ?`;
 const columns = `operation_id AS operationId, method, request_fingerprint AS requestFingerprint,
   application_operation_id AS applicationOperationId, application_thread_id AS applicationThreadId,
-  kind, state, outcome_json AS outcomeJson, outcome_fingerprint AS outcomeFingerprint`;
+  kind, native_generation AS nativeGeneration, state, outcome_json AS outcomeJson, outcome_fingerprint AS outcomeFingerprint`;
 type Row = {
+  nativeGeneration: number | null;
   operationId: string; method: CodexRuntimeReceipt["method"]; requestFingerprint: string;
   applicationOperationId: string; applicationThreadId: string; kind: CodexRuntimeReceiptCorrelation["kind"];
   state: CodexRuntimeReceipt["state"]; outcomeJson: string | null; outcomeFingerprint: string | null;
@@ -96,7 +100,7 @@ function project(observation: CodexRuntimeReceiptObservation): CodexCriticalRece
     return outcomeSchema.parse({ status: "failed", generation: failure.generation,
       failure: failure.kind === "delivery"
         ? { kind: "delivery", code: failure.code, delivery: failure.delivery }
-        : { kind: "remote", code: failure.code, ...(failure.rejectionReason ? { rejectionReason: failure.rejectionReason } : {}) } });
+        : { kind: "remote", code: failure.code, ...(failure.rejectionReason ? { rejectionReason: failure.rejectionReason } : {}), ...(failure.speedNotEnabled ? { speedNotEnabled: true } : {}) } });
   }
   if (observation.status !== "completed" || !observation.receipt) {
     throw new Error("codex_runtime_receipt_outcome_unsettled");
@@ -111,6 +115,10 @@ function project(observation: CodexRuntimeReceiptObservation): CodexCriticalRece
     case "turn/start": {
       const parsed = z.object({ turn: z.object({ id }) }).parse(result);
       return outcomeSchema.parse({ status: "completed", generation, inboundSequence, nativeTurnId: parsed.turn.id });
+    }
+    case "turn/settings/update": {
+      const parsed = codexTurnSettingsUpdateMethod.decodeResult(result);
+      return outcomeSchema.parse({ status: "completed", generation, inboundSequence, speedStatus: parsed.status });
     }
     case "turn/steer": {
       const parsed = z.object({ turnId: id }).parse(result);
@@ -128,7 +136,7 @@ export class CodexRuntimeReceiptStore implements CodexRuntimeReceiptSink {
   constructor(readonly database: Database.Database,
     readonly limits: Readonly<{ maximumRecords: number; maximumRecordsPerRuntime: number; maximumRetiredRuntimes?: number }> = {
       maximumRecords: 65_536, maximumRecordsPerRuntime: 4_096,
-    }) {
+    }, readonly onSpeedChanged?: (scope: { tenantId: string; principalId: string }, threadId: string) => void) {
     for (const limit of Object.values(limits)) {
       if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("codex_runtime_receipt_limit_invalid");
     }
@@ -151,6 +159,7 @@ export class CodexRuntimeReceiptStore implements CodexRuntimeReceiptSink {
       if (row) {
         if (row.method !== method || row.requestFingerprint !== fingerprint || row.kind !== correlation.kind ||
           row.applicationOperationId !== correlation.applicationOperationId || row.applicationThreadId !== correlation.applicationThreadId ||
+          (correlation.kind === "speed" && row.nativeGeneration !== input.nativeGeneration) ||
           (byId && existing && byId.operationId !== existing.operationId)) {
           throw new Error("codex_runtime_receipt_identity_conflict");
         }
@@ -165,10 +174,20 @@ export class CodexRuntimeReceiptStore implements CodexRuntimeReceiptSink {
       }
       this.database.prepare(`INSERT INTO codex_runtime_receipts
         (tenant_id, principal_id, execution_environment_id, backend_instance_id, runtime_id,
-         operation_id, application_operation_id, application_thread_id, kind, method, request_fingerprint, state)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved')`)
+         operation_id, application_operation_id, application_thread_id, kind, method, request_fingerprint, native_generation, state)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved')`)
         .run(...scope, operationId, correlation.applicationOperationId, correlation.applicationThreadId,
-          correlation.kind, method, fingerprint);
+          correlation.kind, method, fingerprint, input.nativeGeneration ?? null);
+      if (correlation.kind === "speed") {
+        const generation = sequence.parse(input.nativeGeneration);
+        const linked = this.database.prepare(`UPDATE codex_speed_publications SET runtime_correlation_json = ?
+          WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND mutation_id = ?
+            AND phase = 'dispatching' AND runtime_correlation_json IS NULL`).run(JSON.stringify({
+              executionEnvironmentId: authority.scope.executionEnvironmentId, backendInstanceId: authority.scope.backendInstanceId,
+              runtimeId: authority.runtimeId, operationId, generation }), authority.scope.tenantId, authority.scope.principalId,
+              correlation.applicationThreadId, correlation.applicationOperationId);
+        if (linked.changes !== 1) throw new Error("codex_speed_runtime_owner_missing");
+      }
       return receipt(this.#row(scope, operationId)!);
     }).immediate();
   }
@@ -194,6 +213,7 @@ export class CodexRuntimeReceiptStore implements CodexRuntimeReceiptSink {
       }
       this.database.prepare(`UPDATE codex_runtime_receipts SET state = 'recorded', outcome_json = ?,
         outcome_fingerprint = ? WHERE ${where} AND operation_id = ?`).run(json, fingerprint, ...scope, operationId);
+      if (row.kind === "speed") this.#refineSpeed(authority, { ...row, state: "recorded", outcomeJson: json, outcomeFingerprint: fingerprint });
       return "recorded";
     }).immediate();
   }
@@ -211,6 +231,11 @@ export class CodexRuntimeReceiptStore implements CodexRuntimeReceiptSink {
     return this.database.transaction(() => {
       let reconciled = 0;
       for (const value of this.pending(authority)) {
+        if (value.correlation.kind === "speed") {
+          const row = this.#row(key(authority), value.operationId);
+          if (row && this.#refineSpeed(authority, row)) { this.reconcile(authority, value.operationId, () => {}); reconciled++; }
+          continue;
+        }
         if (value.outcome?.status !== "completed") continue;
         const { scope } = authority;
         const binding = this.database.prepare(`SELECT binding.backend_conversation_id AS nativeThreadId
@@ -311,10 +336,59 @@ export class CodexRuntimeReceiptStore implements CodexRuntimeReceiptSink {
     }).immediate();
   }
 
+  #refineSpeed(authority: CodexRuntimeReceiptAuthority, row: Row): boolean {
+    if (row.kind !== "speed" || !row.outcomeJson) return false;
+    const value = outcomeSchema.parse(JSON.parse(row.outcomeJson));
+    const stored = this.database.prepare(`SELECT runtime_correlation_json AS correlation FROM codex_speed_publications
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND mutation_id = ?`)
+      .get(authority.scope.tenantId, authority.scope.principalId, row.applicationThreadId, row.applicationOperationId) as { correlation: string | null } | undefined;
+    if (!stored?.correlation) return false;
+    const expected = JSON.stringify({ executionEnvironmentId: authority.scope.executionEnvironmentId,
+      backendInstanceId: authority.scope.backendInstanceId, runtimeId: authority.runtimeId,
+      operationId: row.operationId, generation: row.nativeGeneration });
+    if (stored.correlation !== expected || value.generation !== row.nativeGeneration) return false;
+    const publications = new CodexSpeedPublicationRepository(this.database);
+    const scope = { tenantId: authority.scope.tenantId, principalId: authority.scope.principalId };
+    const child = publications.find(scope, row.applicationOperationId);
+    if (!child) return false;
+    if (child.phase === "settled") return true;
+    const previous = child.result.currentRun;
+    if (!("target" in previous)) return false;
+    const attempt = { target: previous.target, selection: previous.selection };
+    const changed = () => queueMicrotask(() => { try { this.onSpeedChanged?.(scope, row.applicationThreadId); } catch { /* Durable receipt remains authoritative if publication fails. */ } });
+    if (value.status === "completed" && value.speedStatus) {
+      publications.refineRemote(scope, row.applicationOperationId, {
+        status: value.speedStatus === "applied" ? "published" : "target_finished", ...attempt });
+      changed();
+      return true;
+    }
+    if (value.status === "failed" && value.failure.kind === "remote") {
+      publications.refineRemote(scope, row.applicationOperationId, {
+        status: "rejected", reason: value.failure.speedNotEnabled ? "not_enabled" : "provider_rejected", message: { text: "Codex rejected the requested Speed change." }, ...attempt });
+      changed();
+      return true;
+    }
+    if (value.status === "failed" && value.failure.kind === "delivery" && value.failure.delivery === "not_sent") {
+      publications.refineRemote(scope, row.applicationOperationId, { status: "not_attempted", reason: "connection_changed", ...attempt });
+      changed();
+      return true;
+    }
+    if (value.status === "failed" && value.failure.kind === "delivery") {
+      // A host-native timeout is a final unknown outcome, distinct from loss of
+      // the carrier while the host still retains a pending/successful result.
+      if (child.phase !== "uncertain") {
+        publications.refineRemote(scope, row.applicationOperationId, { status: "uncertain", reason: "response_lost", ...attempt });
+        changed();
+      }
+      return true;
+    }
+    return false;
+  }
+
   #applicationProof(authority: CodexRuntimeReceiptAuthority, correlation: CodexRuntimeReceiptCorrelation): Row | undefined {
     const creation = correlation.kind === "create" || correlation.kind === "fork";
-    const table = creation ? "conversation_creation_attempts" : "submission_completion_observations";
-    const operation = creation ? "mutation_id" : "operation_id";
+    const table = correlation.kind === "speed" ? "codex_speed_publications" : creation ? "conversation_creation_attempts" : "submission_completion_observations";
+    const operation = creation || correlation.kind === "speed" ? "mutation_id" : "operation_id";
     const result = this.database.prepare(`SELECT json_extract(codex_runtime_receipts_json, ?) AS proof
       FROM ${table} WHERE tenant_id = ? AND owner_principal_id = ?
         AND application_thread_id = ? AND ${operation} = ?`)
@@ -324,8 +398,8 @@ export class CodexRuntimeReceiptStore implements CodexRuntimeReceiptSink {
   }
 
   #applicationProofByOperation(authority: CodexRuntimeReceiptAuthority, operationId: string): Row | undefined {
-    for (const kind of ["create", "fork", "start", "steer"] as const) {
-      const table = kind === "create" || kind === "fork" ? "conversation_creation_attempts" : "submission_completion_observations";
+    for (const kind of ["create", "fork", "start", "steer", "speed"] as const) {
+      const table = kind === "speed" ? "codex_speed_publications" : kind === "create" || kind === "fork" ? "conversation_creation_attempts" : "submission_completion_observations";
       const results = this.database.prepare(`SELECT json_extract(codex_runtime_receipts_json, '$.${kind}') AS proof
         FROM ${table} WHERE tenant_id = ? AND owner_principal_id = ?
           AND json_extract(codex_runtime_receipts_json, '$.${kind}.operationId') = ?`)
@@ -356,10 +430,10 @@ export class CodexRuntimeReceiptStore implements CodexRuntimeReceiptSink {
       (Row & { tenantId: string; principalId: string; executionEnvironmentId: string; backendInstanceId: string; runtimeId: string })[];
     for (const row of rows) {
       const creation = row.kind === "create" || row.kind === "fork";
-      const table = creation ? "conversation_creation_attempts" : "submission_completion_observations";
-      const operation = creation ? "mutation_id" : "operation_id";
-      const accepted = creation ? "phase = 'bound' AND execution_environment_id = ? AND backend_instance_id = ?" : "backend_correlation = ?";
-      const acceptance = creation ? [row.executionEnvironmentId, row.backendInstanceId] : [row.applicationOperationId];
+      const table = row.kind === "speed" ? "codex_speed_publications" : creation ? "conversation_creation_attempts" : "submission_completion_observations";
+      const operation = creation || row.kind === "speed" ? "mutation_id" : "operation_id";
+      const accepted = row.kind === "speed" ? "phase = 'settled'" : creation ? "phase = 'bound' AND execution_environment_id = ? AND backend_instance_id = ?" : "backend_correlation = ?";
+      const acceptance = row.kind === "speed" ? [] : creation ? [row.executionEnvironmentId, row.backendInstanceId] : [row.applicationOperationId];
       const predicate = `tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND ${operation} = ? AND ${accepted}`;
       const args = [row.tenantId, row.principalId, row.applicationThreadId, row.applicationOperationId, ...acceptance];
       const owner = this.database.prepare(`SELECT codex_runtime_receipts_json AS proofs FROM ${table} WHERE ${predicate}`)

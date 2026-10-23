@@ -4325,6 +4325,34 @@ describe("ConversationActorManager", () => {
     control.release(); acquired.release(); await manager.close();
   });
 
+  it("dispatches Stop while an ordered provider feature RPC is pending and keeps starts ordered", async () => {
+    const { driver, handle, manager } = fixture();
+    const lifetime = new AbortController();
+    vi.mocked(driver.attach).mockImplementation(async input => {
+      input.onControlReady?.({ generation: "speed-owner", lifetime: lifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      return handle as unknown as ConversationHandle;
+    });
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const control = manager.acquireExistingControl(scope, binding.applicationThreadId)!;
+    let finish!: () => void;
+    const entered = vi.fn();
+    const feature = acquired.actor.runProviderFeatureMutation(async () => {
+      entered(); await new Promise<void>(resolve => { finish = resolve; });
+    });
+    await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
+    const starting = acquired.actor.submit({ applicationOperationId: "after-speed", source: { kind: "user" },
+      mutationId: "after-speed", reconciliationToken: "after-speed", text: "next", contextExcerpts: [], attachments: [], taskContexts: [] });
+    try {
+      await control.control.interrupt({ applicationOperationId: "stop-during-speed", deadlineAt: Date.now() + 30_000 });
+      expect(handle.interrupt).toHaveBeenCalledOnce();
+      expect(handle.submit).not.toHaveBeenCalled();
+    } finally { finish(); }
+    await Promise.all([feature, starting]);
+    expect(handle.submit).toHaveBeenCalledOnce();
+    control.release(); acquired.release(); await manager.close();
+  });
+
   it("does not send an expired Stop after a blocked native submission finishes", async () => {
     vi.useFakeTimers();
     const { driver, handle, manager } = fixture();

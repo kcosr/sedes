@@ -14,7 +14,7 @@ describe("claude.permissions@1 feature contract", () => {
     const capability = compiledProviderFeatureRegistry.capability(
       CLAUDE_PERMISSIONS_FEATURE_REF,
       "claude_agent_sdk",
-      { revision: 3, availability: "available" },
+      { revision: 3, mutationRevision: 3, availability: "available" },
     );
 
     expect(capability.presentationSlots).toEqual(["thread_details"]);

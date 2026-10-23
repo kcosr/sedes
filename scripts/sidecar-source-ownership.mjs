@@ -107,6 +107,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/backends/codex/codex-goal-feature.ts",
   "src/server/backends/codex/codex-goal-protocol.ts",
   "src/server/backends/codex/codex-c2-protocol.ts",
+  "src/server/backends/codex/codex-active-speed-protocol.ts",
   "src/server/backends/codex/codex-server-request-router.ts",
   "src/server/backends/codex/codex-client-facade.ts",
   "src/server/backends/codex/codex-daemon-supervisor.ts",

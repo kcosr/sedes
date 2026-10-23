@@ -652,6 +652,16 @@ execution-policy ceiling, and a top-level model policy using model IDs and/or
 reasoning efforts, never `providerIds`. Sedes supplies its exact generated
 `0.163.0` protocol profile from the compiled backend module.
 
+Active Speed needs no global feature toggle or daemon restart. Sedes supplies
+`features.step_model_switching = true` through the native per-thread
+configuration when creating or forking a thread and when cold-resuming a
+thread with verified Sedes creation provenance. It does not edit native TOML
+or daemon arguments. Existing loaded sessions can retain their original
+configuration until they naturally reload. See
+[persistent Speed](backends/codex.md#persistent-speed) for upgrade requirements
+and the distinction between saved Speed, active-turn requests, and native
+defaults.
+
 The backend policy contains closed nonempty allowlists for:
 
 - sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`;

@@ -11,6 +11,7 @@ export interface CodexGoalProjectionRecord {
   readonly revision: number;
   readonly availability: CodexGoalProjectionAvailability;
   readonly unavailableReason?: string;
+  readonly disabled?: true;
   readonly state: CodexGoalStateV1;
   readonly connectionGeneration: number;
   readonly updatedAt: number;
@@ -81,6 +82,7 @@ export class CodexGoalProjectionStore {
       readonly nativeThreadId?: string;
       readonly connectionGeneration: number;
       readonly reason: string;
+      readonly disabled?: true;
       readonly now: number;
     },
   ): CodexGoalProjectionRecord {
@@ -93,6 +95,7 @@ export class CodexGoalProjectionStore {
       revision: (existing?.revision ?? 0) + 1,
       availability: "unavailable",
       unavailableReason: input.reason,
+      ...(input.disabled ? { disabled: true as const } : {}),
       state: { state: "unset" },
       connectionGeneration: input.connectionGeneration,
       updatedAt: input.now,

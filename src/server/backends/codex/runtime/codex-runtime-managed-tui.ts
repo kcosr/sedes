@@ -22,7 +22,7 @@ import { verifyCodexRuntimeVersion, type VerifiedCodexRuntimeVersion } from "../
 import { codexServiceTierSelectionSchema } from "../codex-service-tier.js";
 import { codexTuiStateV1Schema, type CodexTuiStateV1 } from "../codex-tui-feature.js";
 
-const capability = { capabilityId: "codex_managed_tui", majorVersion: 2 } as const;
+const capability = { capabilityId: "codex_managed_tui", majorVersion: 3 } as const;
 const id = z.string().min(1).max(256);
 const generation = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const scopeSchema = z.strictObject({ tenantId: id, principalId: id });
@@ -45,6 +45,8 @@ const commandSchema = z.discriminatedUnion("action", [
   z.strictObject({ ...base, action: z.literal("detach") }),
   z.strictObject({ ...base, action: z.literal("start"), authority: bindingSchema, settings: settingsSchema, configuredExecutablePath: z.string().min(1).max(4096).optional() }),
   z.strictObject({ ...base, action: z.literal("stop"), authority: bindingSchema }),
+  z.strictObject({ ...base, action: z.literal("settings.hold"), authority: bindingSchema, leaseId: id }),
+  z.strictObject({ ...base, action: z.literal("settings.release"), leaseId: id }),
   z.strictObject({ ...base, action: z.literal("fail"), authority: bindingSchema, diagnostic: z.string().min(1).max(400) }),
   z.strictObject({ ...viewerBase, action: z.literal("viewer.attach"), authority: bindingSchema, resourceGeneration: generation }),
   z.strictObject({ ...viewerBase, action: z.literal("viewer.detach") }),
@@ -281,6 +283,7 @@ export function registerCodexManagedTuiHost(input: {
   const viewers = new Map<string, { runtimeId: string; handle: CodexManagedTuiViewerHandle }>();
   let detached = false;
   let queuedBytes = 0;
+  const settingsHolds = new Map<string, { registry: CodexManagedTuiRegistry; authority: CodexManagedTuiBindingAuthority }>();
   let queuedEvents = 0;
   let events = Promise.resolve();
   const detach = () => {
@@ -289,6 +292,11 @@ export function registerCodexManagedTuiHost(input: {
     for (const remove of attached.values()) remove();
     for (const viewer of viewers.values()) viewer.handle.detach();
     attached.clear(); viewers.clear();
+    for (const [leaseId, hold] of settingsHolds) {
+      void hold.registry.fail(hold.authority, "The managed TUI settings connection was lost.");
+      void hold.registry.releaseSettings(leaseId);
+    }
+    settingsHolds.clear();
   };
   const emit = (runtimeId: string, event: TuiEvent) => {
     if (detached) return;
@@ -329,6 +337,16 @@ export function registerCodexManagedTuiHost(input: {
       case "start":
         input.services.assertAdmission(input.controllerEpoch);
         result = await input.hosts.start(command.runtimeId, command.authority, command.settings, command.configuredExecutablePath, input.controllerEpoch); break;
+      case "settings.hold":
+        input.hosts.assertControl(command.runtimeId, input.controllerEpoch);
+        if (settingsHolds.has(command.leaseId)) throw new Error("codex_tui_settings_hold_exists");
+        settingsHolds.set(command.leaseId, { registry, authority: command.authority });
+        await registry.holdSettings(command.authority, command.leaseId); break;
+      case "settings.release": {
+        const hold = settingsHolds.get(command.leaseId);
+        if (!hold || hold.registry !== registry) throw new Error("codex_tui_settings_hold_missing");
+        await registry.releaseSettings(command.leaseId); settingsHolds.delete(command.leaseId); break;
+      }
       case "stop": result = await input.hosts.stopBinding(command.runtimeId, command.authority); break;
       case "fail": result = await input.hosts.stopBinding(command.runtimeId, command.authority, command.diagnostic); break;
       case "viewer.attach": {
@@ -492,6 +510,13 @@ export class CodexRuntimeManagedTuiRegistry implements CodexManagedTuiRegistryAu
     await this.connect();
     const state = codexTuiStateV1Schema.parse(await this.#execute({ action: "fail", authority: this.#remote(authority), diagnostic }));
     await this.#refresh(); return state;
+  }
+  async holdSettings(authority: CodexManagedTuiBindingAuthority, leaseId: string): Promise<void> {
+    await this.connect();
+    okSchema.parse(await this.#execute({ action: "settings.hold", authority: this.#remote(authority), leaseId }));
+  }
+  async releaseSettings(leaseId: string): Promise<void> {
+    okSchema.parse(await this.#execute({ action: "settings.release", leaseId }));
   }
   async releaseRuntime(_authority: CodexManagedTuiBindingAuthority): Promise<void> {
     // Main actor residency is not enduring provider-process ownership.

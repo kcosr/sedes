@@ -1,3 +1,4 @@
+import { CODEX_STEP_MODEL_SWITCHING_CONFIG } from "./codex-active-speed-protocol.js";
 import type { ConversationBinding } from "../contracts.js";
 import { CodexViewedImageCaptureCoordinator } from "./codex-viewed-image-capture.js";
 import { CodexSubagentUsageCoordinator } from "./codex-subagent-usage.js";
@@ -2801,7 +2802,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     resolution: CodexAgentToolCliEnvironmentResolution,
   ): Promise<Readonly<Record<string, import("./codex-c2-protocol.js").CodexJsonValue>>> {
     const executionEnvironment = await this.#resolveThreadEnvironment(applicationThreadId);
-    return withCodexAgentToolCliEnvironment(withCodexExecutionEnvironment(config, executionEnvironment), {
+    return withCodexAgentToolCliEnvironment(withCodexExecutionEnvironment({ ...config, ...CODEX_STEP_MODEL_SWITCHING_CONFIG }, executionEnvironment), {
       executionEnvironment,
       resolution,
       applicationThreadId,

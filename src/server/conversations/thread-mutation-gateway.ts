@@ -147,6 +147,14 @@ export interface ProviderFeatureMutationActor {
   }>;
 }
 
+export type ProviderFeatureMutationResult =
+  | { readonly applicationOperationId: string }
+  | Extract<ThreadApplicationMutationResult, { readonly status: "provider_feature_result" | "recovery_required" }>;
+export interface ProviderFeatureMutationContext {
+  isIdle(): boolean;
+  resolveTurnId(turnId: string): string | undefined;
+}
+
 export interface ThreadActionPersistenceProvider {
   /** Backend-owned best-effort feature lifecycle work after accepted Stop. */
   afterInterruptAccepted(actor: ProviderFeatureMutationActor): Promise<boolean>;
@@ -187,6 +195,7 @@ export interface ThreadActionPersistenceProvider {
       PerformOperation["operation"],
       { readonly action: "perform_provider_feature" }
     >,
+    backingState: "unbound" | "creating" | "bound" | "creation_unknown",
   ): boolean;
   performProviderFeature?(
     scope: RequestScope,
@@ -199,6 +208,9 @@ export interface ThreadActionPersistenceProvider {
         { readonly action: "perform_provider_feature" }
       >;
       readonly now: number;
+      readonly actor?: ProviderFeatureMutationContext;
+      readonly assertAdmission?: () => void;
+      readonly featureState?: import("../../shared/protocol/payload.js").BoundedValue;
       /**
        * Present when requiresRuntimeProviderFeature is true. Invokes the
        * attached handle's durable provider-feature mutation path.
@@ -214,15 +226,7 @@ export interface ThreadActionPersistenceProvider {
         readonly safeMessage?: string;
       }>;
     },
-  ):
-    | { readonly applicationOperationId: string }
-    | Promise<
-        | { readonly applicationOperationId: string }
-        | {
-            readonly status: "recovery_required";
-            readonly retryable: boolean;
-          }
-      >;
+  ): ProviderFeatureMutationResult | Promise<ProviderFeatureMutationResult>;
   replayProviderFeature?(
     scope: RequestScope,
     applicationThreadId: string,
@@ -234,7 +238,7 @@ export interface ThreadActionPersistenceProvider {
         { readonly action: "perform_provider_feature" }
       >;
     },
-  ): { readonly applicationOperationId: string } | undefined;
+  ): ProviderFeatureMutationResult | undefined;
 }
 
 function operationKey(
@@ -857,6 +861,13 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
   ): Promise<ThreadApplicationMutationResult> {
     if (operation.kind === "recover_uncertain") {
       return this.#recoverCurrent(scope, applicationThreadId);
+    }
+    if (operation.kind === "perform" && operation.operation.action === "perform_provider_feature") {
+      const thread = this.input.inventory.getThread(scope, applicationThreadId).thread;
+      const replay = this.input.actionPersistence.get(thread.backendInstanceId)?.replayProviderFeature?.(scope, applicationThreadId, {
+        mutationId: operation.mutationId, expectedThreadRevision: operation.expectedThreadRevision, operation: operation.operation,
+      });
+      if (replay) return "status" in replay ? replay : { status: "accepted", operationId: replay.applicationOperationId };
     }
     if (operation.kind === "discard_fork") {
       const discarded = await this.input.forks.discardActive(scope, applicationThreadId);
@@ -3249,11 +3260,9 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       },
     );
     if (replay) {
-      return {
-        status: "accepted",
-        operationId: replay.applicationOperationId,
-      };
+      return "status" in replay ? replay : { status: "accepted", operationId: replay.applicationOperationId };
     }
+    try {
     const concurrency = provider?.providerFeatureConcurrency(
       operation.operation.feature,
       operation.operation.actionId,
@@ -3263,7 +3272,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     const allowsQueuedInput =
       concurrency?.kind === "concurrent" && concurrency.queuedInput;
     const requiresRuntime =
-      provider?.requiresRuntimeProviderFeature?.(operation.operation) === true;
+      provider?.requiresRuntimeProviderFeature?.(operation.operation, aggregate.thread.backingState) === true;
     if (
       aggregate.thread.availability !== "available" ||
       aggregate.inventory.inventoryState === "archived" ||
@@ -3306,6 +3315,18 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         "The provider feature requires a bound thread.",
       );
     }
+    const assertAdmission = () => {
+      const latest = this.input.inventory.getThread(scope, applicationThreadId);
+      this.input.inventory.assertWorkspaceActive(scope, latest.thread.workspaceId);
+      if (latest.thread.backendInstanceId !== aggregate.thread.backendInstanceId ||
+          latest.thread.connectionProfileId !== aggregate.thread.connectionProfileId ||
+          latest.thread.backingState !== aggregate.thread.backingState ||
+          latest.thread.availability !== "available" || latest.inventory.inventoryState === "archived" ||
+          this.input.operations.findUncertainThreadOperation(scope, applicationThreadId) !== undefined ||
+          (!allowsQueuedInput && this.#hasActiveQueuedInput(scope, applicationThreadId))) {
+        throw new DomainError("invalid_transition", "The provider feature authority changed.");
+      }
+    };
     const presentation = await this.input.presentation.read(
       scope,
       applicationThreadId,
@@ -3320,7 +3341,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     );
     if (
       capability?.availability !== "available" ||
-      capability.revision !== operation.operation.expectedFeatureRevision ||
+      capability.mutationRevision !== operation.operation.expectedMutationRevision ||
       !action ||
       (action.confirmation === "explicit" &&
         operation.operation.confirmed !== true)
@@ -3342,34 +3363,27 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         applicationThreadId,
       );
       try {
-        const result = await provider.performProviderFeature(
-          scope,
-          applicationThreadId,
-          {
-            mutationId: operation.mutationId,
-            expectedThreadRevision: operation.expectedThreadRevision,
-            operation: operation.operation,
-            now: this.#now(),
-            mutateExternal: (external) =>
-              runtime.actor.mutateProviderFeature(external),
-          },
-        );
-        if ("status" in result) {
-          return {
-            status: "recovery_required",
-            retryable: result.retryable,
-          };
-        }
-        await this.#publishThreadSnapshot(scope, applicationThreadId);
-        await this.#changed(scope, applicationThreadId);
-        return {
-          status: "accepted",
-          operationId: result.applicationOperationId,
-        };
+        const result = await runtime.actor.runProviderFeatureMutation(async actor => {
+          // The first lookup preceded awaits. A duplicate may have committed meanwhile.
+          const replay = provider.replayProviderFeature?.(scope, applicationThreadId, {
+            mutationId: operation.mutationId, expectedThreadRevision: operation.expectedThreadRevision, operation: operation.operation,
+          });
+          if (replay) return replay;
+          assertAdmission();
+          return await provider.performProviderFeature!(scope, applicationThreadId, {
+            mutationId: operation.mutationId, expectedThreadRevision: operation.expectedThreadRevision,
+            operation: operation.operation, now: this.#now(), actor, assertAdmission,
+            featureState: presentation.providerFeatureStates.find(({ ref }) => ref.featureId === operation.operation.feature.featureId && ref.schemaVersion === operation.operation.feature.schemaVersion)?.state,
+            mutateExternal: actor.mutateExternal,
+          });
+        });
+        this.#scheduleSubmissionPublication(scope, applicationThreadId);
+        return "status" in result ? result : { status: "accepted", operationId: result.applicationOperationId };
       } finally {
         runtime.release();
       }
     }
+    assertAdmission();
     const result = await provider.performProviderFeature(
       scope,
       applicationThreadId,
@@ -3378,20 +3392,19 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         expectedThreadRevision: operation.expectedThreadRevision,
         operation: operation.operation,
         now: this.#now(),
+        assertAdmission,
+        featureState: presentation.providerFeatureStates.find(({ ref }) => ref.featureId === operation.operation.feature.featureId && ref.schemaVersion === operation.operation.feature.schemaVersion)?.state,
       },
     );
-    if ("status" in result) {
-      return {
-        status: "recovery_required",
-        retryable: result.retryable,
-      };
+    this.#scheduleSubmissionPublication(scope, applicationThreadId);
+    return "status" in result ? result : { status: "accepted", operationId: result.applicationOperationId };
+    } catch (error) {
+      const replay = provider?.replayProviderFeature?.(scope, applicationThreadId, {
+        mutationId: operation.mutationId, expectedThreadRevision: operation.expectedThreadRevision, operation: operation.operation,
+      });
+      if (replay) return "status" in replay ? replay : { status: "accepted", operationId: replay.applicationOperationId };
+      throw error;
     }
-    await this.#publishThreadSnapshot(scope, applicationThreadId);
-    await this.#changed(scope, applicationThreadId);
-    return {
-      status: "accepted",
-      operationId: result.applicationOperationId,
-    };
   }
 
   async #changed(

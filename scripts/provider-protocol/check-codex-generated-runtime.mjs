@@ -9,13 +9,13 @@ const binding = await import(pathToFileURL(modulePath).href);
 if (binding.CODEX_APP_SERVER_RELEASE !== "0.163.0") {
   throw new Error("Built Codex binding selected the wrong release.");
 }
-if (binding.CODEX_CLIENT_REQUEST_METHODS.length !== 26) {
+if (binding.CODEX_CLIENT_REQUEST_METHODS.length !== 27) {
   throw new Error("Built Codex client-request registry is incomplete.");
 }
 if (binding.CODEX_SERVER_REQUEST_METHODS.length !== 10) {
   throw new Error("Built Codex server-request registry is incomplete.");
 }
-if (binding.CODEX_ADOPTED_SERVER_NOTIFICATION_METHODS.length !== 38) {
+if (binding.CODEX_ADOPTED_SERVER_NOTIFICATION_METHODS.length !== 39) {
   throw new Error("Built Codex adopted notification registry is incomplete.");
 }
 if (binding.CODEX_SERVER_NOTIFICATION_METHODS.length !== 87) {

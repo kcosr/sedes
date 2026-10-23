@@ -586,6 +586,7 @@ export class ThreadClientStore {
 
   dispose(): void {
     this.#disposed = true;
+    this.#providerFeatureAttempts.clear();
     this.#serverSubmissions.dispose();
     this.usage.dispose();
     this.#subscriptionEpoch += 1;
@@ -2089,6 +2090,31 @@ export class ThreadClientStore {
     this.#forkRequests.delete(sourceTurnId);
   }
 
+  readonly #providerFeatureAttempts = new Map<string, Extract<ThreadApplicationOperation, { kind: "perform" }>>();
+
+  /** Captures the exact original envelope before a request can lose its reply. */
+  createProviderFeatureAttempt(operation: Extract<PerformOperation, { action: "perform_provider_feature" }>): string {
+    const snapshot = this.#requireSnapshot();
+    this.#requirePerformCapability(operation);
+    const mutationId = crypto.randomUUID();
+    this.#providerFeatureAttempts.set(mutationId, { kind: "perform", mutationId,
+      expectedThreadRevision: snapshot.thread.threadRevision, operation });
+    return mutationId;
+  }
+
+  /** Replays only an envelope created by this scoped store; never rebases it. */
+  readProviderFeatureAttempt(mutationId: string) {
+    const envelope = this.#providerFeatureAttempts.get(mutationId);
+    if (!envelope || this.#disposed) return Promise.reject(new Error("The original feature request is unavailable."));
+    // The feature owns its request lifecycle. This must not occupy the
+    // composer's mutation chain or disable Stop while native publication waits.
+    return this.#api.operateThread(this.threadId, envelope);
+  }
+
+  discardProviderFeatureAttempt(mutationId: string): void {
+    this.#providerFeatureAttempts.delete(mutationId);
+  }
+
   perform(
     operation: PerformOperation,
   ): Promise<
@@ -2359,7 +2385,7 @@ export class ThreadClientStore {
       if (
         capability?.availability !== "available" ||
         !descriptor ||
-        capability.revision !== operation.expectedFeatureRevision
+        capability.mutationRevision !== operation.expectedMutationRevision
       ) {
         throw new Error(
           capability?.unavailableReason?.text ??

@@ -59,6 +59,7 @@ export interface CodexThreadExecutionSettingsRecord {
   readonly effectiveDaemonGeneration: number | null;
   readonly effectiveConfirmationState: CodexEffectiveConfirmationState;
   readonly revision: number;
+  readonly desiredRevision: number;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -101,6 +102,7 @@ type SettingsRow = {
   readonly effectiveDaemonGeneration: number | null;
   readonly effectiveConfirmationState: CodexEffectiveConfirmationState;
   readonly revision: number;
+  readonly desiredRevision: number;
   readonly createdAt: number;
   readonly updatedAt: number;
 };
@@ -147,6 +149,7 @@ const settingsColumns = `
   effective_daemon_generation AS effectiveDaemonGeneration,
   effective_confirmation_state AS effectiveConfirmationState,
   revision,
+  desired_revision AS desiredRevision,
   created_at AS createdAt,
   updated_at AS updatedAt
 `;
@@ -582,6 +585,7 @@ function parseSettings(row: SettingsRow): CodexThreadExecutionSettingsRecord {
     effectiveDaemonGeneration: row.effectiveDaemonGeneration,
     effectiveConfirmationState: row.effectiveConfirmationState,
     revision: row.revision,
+    desiredRevision: row.desiredRevision,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

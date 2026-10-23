@@ -91,6 +91,7 @@ describe("ProviderFeatureRegistry", () => {
       providerFeatureCapabilitySchema.parse(
         registry.capability(ref, "codex_app_server", {
           revision: 4,
+          mutationRevision: 4,
           availability: "available",
         }),
       ),
@@ -226,7 +227,7 @@ describe("provider feature protocol", () => {
           feature: ref,
           actionId: "use_read_only",
           arguments: null,
-          expectedFeatureRevision: 3,
+          expectedMutationRevision: 3,
         },
       }),
     ).toMatchObject({ kind: "perform" });
@@ -240,7 +241,7 @@ describe("provider feature protocol", () => {
           feature: ref,
           actionId: "thread/permissions/set",
           arguments: { rawProviderPayload: true },
-          expectedFeatureRevision: 3,
+          expectedMutationRevision: 3,
         },
       }).success,
     ).toBe(false);
@@ -250,6 +251,7 @@ describe("provider feature protocol", () => {
     const registry = new ProviderFeatureRegistry([module()]);
     const capability = registry.capability(ref, "codex_app_server", {
       revision: 3,
+      mutationRevision: 3,
       availability: "available",
     });
     expect(

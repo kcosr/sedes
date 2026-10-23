@@ -633,6 +633,14 @@ export interface InterruptConversationInput {
   readonly signal?: AbortSignal;
 }
 
+/** Actor serialization for bounded provider-feature work. Stop uses independent control. */
+export interface ProviderFeatureCoordinator {
+  run<T>(operation: () => Promise<T>): Promise<T>;
+  isIdle(): boolean;
+  /** Fires after the actor has projected a transition to authoritative idle. */
+  subscribeIdle(listener: () => void): Unsubscribe;
+}
+
 /** Existing native control authority; contains no transcript dependency. */
 export interface ConversationControl {
   readonly generation: string;
@@ -732,6 +740,9 @@ export interface ConversationHandle {
   reconcileInteractionResponse(
     input: InteractionResponseInput,
   ): Promise<BackendMutationReconciliation>;
+
+  /** Installs actor ordering and authoritative-idle observation for provider work. */
+  setProviderFeatureCoordinator?(coordinator: ProviderFeatureCoordinator): void;
 
   /**
    * Optional durable external provider-feature mutation. Local features

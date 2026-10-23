@@ -1,7 +1,9 @@
+import { codexTurnSettingsUpdateMethod } from "../codex-active-speed-protocol.js";
 import {
   defineCodexAppServerMethod,
   isCodexClientRequestMethod,
   type CodexClientRequestMethod,
+  type OfficialCodexClientRequestResult,
 } from "../../../provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import type { ProviderTransportScope } from "../../../provider-protocol/transport/assured-framed-transport.js";
 import type { CodexClientLifecycleSnapshot } from "../codex-client-facade.js";
@@ -11,9 +13,8 @@ import type {
 } from "../rpc/codex-rpc-client.js";
 
 /** Provider-private payload; the sidecar carrier never interprets native methods. */
-// Version 4 requires native archive/unarchive effects and notifications to
-// invalidate retained session metadata before main may reattach.
-export const CODEX_RUNTIME_PROTOCOL_VERSION = 4;
+// Version 5 requires the narrow Speed-only turn/settings/update contract.
+export const CODEX_RUNTIME_PROTOCOL_VERSION = 5;
 export type CodexRuntimeAuthority = Readonly<{
   scope: ProviderTransportScope;
   runtimeId: string;
@@ -69,10 +70,13 @@ export interface CodexRuntimeConnection {
   retire(authority: CodexRuntimeAuthority, generation: number, reason: string): Promise<void>;
 }
 
-export function codexRuntimeMethod(method: string) {
+export function codexRuntimeMethod<M extends CodexClientRequestMethod>(method: M): import("../rpc/codex-rpc-client.js").CodexRpcMethod<unknown, OfficialCodexClientRequestResult<M>>;
+export function codexRuntimeMethod(method: string): import("../rpc/codex-rpc-client.js").CodexRpcMethod<unknown, unknown>;
+export function codexRuntimeMethod(method: string): import("../rpc/codex-rpc-client.js").CodexRpcMethod<unknown, unknown> {
   if (!isCodexClientRequestMethod(method) || method === "initialize") {
     throw new Error("codex_runtime_method_not_admitted");
   }
+  if (method === "turn/settings/update") return codexTurnSettingsUpdateMethod;
   return defineCodexAppServerMethod({ method, refineParams: value => value, refineResult: value => value });
 }
 

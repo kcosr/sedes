@@ -1,3 +1,6 @@
+import { CodexSpeedSession, type CodexSpeedDefaultState } from "./codex-speed-session.js";
+import { CODEX_STEP_MODEL_SWITCHING_CONFIG } from "./codex-active-speed-protocol.js";
+import type { ProviderFeatureCoordinator } from "../contracts.js";
 import type { ViewedImageCapture } from "../../output-artifacts/viewed-image-capture.js";
 import { CodexViewedImageCaptureCoordinator } from "./codex-viewed-image-capture.js";
 import { parseCodexBindingDetail } from "./codex-binding-codec.js";
@@ -222,6 +225,8 @@ export interface CodexExecutionSettingsProvider {
     applicationThreadId: string,
     listener: () => void,
   ): Unsubscribe;
+  desiredRevision(scope: ExecutionScope, applicationThreadId: string): number;
+  isSedesCreated(scope: ExecutionScope, applicationThreadId: string, nativeThreadId: string): boolean;
   desiredSettings(
     scope: ExecutionScope,
     applicationThreadId: string,
@@ -408,6 +413,8 @@ export class CodexConversationHandle implements ConversationHandle {
   readonly #correlationScope: CodexSubmissionCorrelationScope;
   readonly #interactions: CodexInteractionBridge;
   readonly #releaseOwnership: () => void;
+  readonly #speedSession: CodexSpeedSession;
+  readonly #releaseSpeedSession: () => void;
   readonly #runtimeLease: { release(evicted?: boolean): Promise<void> } | undefined;
   readonly #onError: (error: unknown) => void;
   readonly #projectionWorkQueue: CodexProjectionWorkQueue;
@@ -516,6 +523,14 @@ export class CodexConversationHandle implements ConversationHandle {
   #controlGeneration = 0;
   #controlObservationRevision = 0;
   #controlTurn: { generation: number; turnId: string | null } | undefined;
+  // Status can become active before turn/start names the accepted turn. Keep
+  // that compatible hint separate from evidence that withdraws start authority.
+  #pendingControlStart: {
+    readonly generation: number;
+    readonly lifetime: AbortSignal;
+    blocked: boolean;
+    observedTurnId: string | undefined;
+  } | undefined;
   #acceptedStop: InterruptConversationInput | undefined;
   readonly #submitOperations = new Map<
     string,
@@ -640,6 +655,27 @@ export class CodexConversationHandle implements ConversationHandle {
       ownsRoute: (route) => this.#ownsServerRequestRoute(route),
       emit: (event) => this.#emit(event),
     });
+    this.#speedSession = new CodexSpeedSession({
+      binding: this.binding, client: this.#client, policy: this.#fastModeSessions,
+      goals: this.#goalSessions,
+      desired: () => ({ settings: this.#executionSettings.desiredSettings(this.#scope(), this.binding.applicationThreadId),
+        revision: this.#executionSettings.desiredRevision(this.#scope(), this.binding.applicationThreadId) }),
+      nativeControl: () => this.#closing || this.#closed ? undefined : this.#controlTurn,
+      managedTui: () => {
+        const state = this.#managedTui?.presentation(this.#scope(), this.binding.applicationThreadId).state.lifecycle;
+        return state === "running" || state === "starting";
+      },
+      validateSelection: async settings => { await this.#validateExecutionSettingsForTurn(settings); },
+      assertPolicy: settings => { this.#assertModelPolicyAllowed(settings.model, settings.reasoningEffort); this.#executionSettings.assertExecutionPolicyAllowed(settings); },
+      confirmDefaults: (result, generation) => this.#confirmEffective(codexObservedThreadExecutionSettings(result.model,
+        result.reasoningEffort, result.serviceTier, result.approvalPolicy, result.approvalsReviewer, result.sandbox), generation),
+      withManagedTuiLock: operation => this.#managedTui ? this.#managedTui.withSpeedSettingsLock(this.#scope(), this.binding.applicationThreadId, operation) : operation(),
+      verifyManagedTui: async settings => { await this.#managedTui?.verifySpeedSettings(this.#scope(), this.binding.applicationThreadId, settings); },
+      changed: () => {
+        if (this.#establishedGeneration !== 0 && !this.#closing && !this.#closed) this.#emit({ type: "capabilities_changed", capabilities: this.#capabilities() });
+      },
+    });
+    this.#releaseSpeedSession = this.#fastModeSessions.installController(this.#scope(), this.binding.applicationThreadId, this.#speedSession);
     this.#unsubscribeNotifications = this.#client.subscribeNotifications(
       this.#consumeNotification,
     );
@@ -672,8 +708,12 @@ export class CodexConversationHandle implements ConversationHandle {
         })
       : () => undefined;
     this.#unsubscribeDesiredSettings = this.#executionSettings.subscribeDesiredSettingsChanged(
-      this.#scope(), this.binding.applicationThreadId, this.#recoverAllowedExecutionPolicy,
+      this.#scope(), this.binding.applicationThreadId, () => { this.#recoverAllowedExecutionPolicy(); this.#speedSession.scheduleDefaults(); },
     );
+  }
+
+  setProviderFeatureCoordinator(coordinator: ProviderFeatureCoordinator): void {
+    this.#speedSession.setCoordinator(coordinator);
   }
 
   async establishProjection(
@@ -1473,7 +1513,13 @@ export class CodexConversationHandle implements ConversationHandle {
             ? this.#lastSettingsObservationInboundSequence
             : 0;
         this.#pendingUsageTuple = { model: executionSettings.model, reasoningEffort: executionSettings.reasoningEffort ?? null };
-        const controlObservationBeforeStart = this.#controlObservationRevision;
+        const controlStart = {
+          generation: this.#controlGeneration,
+          lifetime: this.#controlLifetime.signal,
+          blocked: false,
+          observedTurnId: undefined as string | undefined,
+        };
+        this.#pendingControlStart = controlStart;
         const response = await this.#client.requestWithReceipt(
           codexTurnStartMethod,
           {
@@ -1612,10 +1658,14 @@ export class CodexConversationHandle implements ConversationHandle {
               (latestSettings.settings.reasoningEffort ?? null) === spawningSettings.reasoningEffort))
           ? { generation: response.generation, turnId: acceptedTurn.id, settings: spawningSettings }
           : undefined;
-        if (this.#controlGeneration === response.generation && !this.#controlLifetime.signal.aborted &&
-            controlObservationBeforeStart === this.#controlObservationRevision &&
-            !this.#nativeThread?.turns.some(turn => turn.id === acceptedTurn.id && turn.status !== "inProgress")) {
+        if (acceptedTurn.status === "inProgress" && (!observedTurn || observedTurn.status === "inProgress") &&
+            !this.#nativeThread?.turns.some(turn => turn.id === acceptedTurn.id && turn.status !== "inProgress") &&
+            this.#controlGeneration === response.generation && controlStart.generation === response.generation &&
+            this.#controlLifetime.signal === controlStart.lifetime && !controlStart.lifetime.aborted &&
+            !controlStart.blocked &&
+            (controlStart.observedTurnId === undefined || controlStart.observedTurnId === acceptedTurn.id)) {
           this.#controlTurn = { generation: response.generation, turnId: acceptedTurn.id };
+          this.#speedSession.started(response.generation, acceptedTurn.id, executionSettings);
         }
         // turn/start notifications are delivered on the same app-server
         // connection and may precede the request receipt. In particular, the
@@ -1709,6 +1759,8 @@ export class CodexConversationHandle implements ConversationHandle {
               : {}),
           },
         );
+      } finally {
+        this.#pendingControlStart = undefined;
       }
     });
   }
@@ -2052,6 +2104,7 @@ export class CodexConversationHandle implements ConversationHandle {
       if (observationBeforeRead === this.#controlObservationRevision) {
         this.#controlTurn = thread.status.type === "idle" ? { generation, turnId: null }
           : active ? { generation, turnId: active } : undefined;
+        if (this.#controlTurn?.turnId === null) this.#speedSession.observedIdle();
       }
       return;
     }
@@ -2062,6 +2115,7 @@ export class CodexConversationHandle implements ConversationHandle {
     if (observationBeforeRead === this.#controlObservationRevision) {
       this.#controlTurn = thread.status.type === "idle" ? { generation, turnId: null }
         : active ? { generation, turnId: active } : undefined;
+      if (this.#controlTurn?.turnId === null) this.#speedSession.observedIdle();
     }
     this.#acceptedStop = undefined;
     const lifetime = this.#controlLifetime.signal;
@@ -2084,27 +2138,50 @@ export class CodexConversationHandle implements ConversationHandle {
     if (this.#closing || this.#closed || notification.generation !== this.#client.lifecycleSnapshot().generation) return;
     if (isCodexRpcUndecodableNotification(notification)) {
       if (notification.method === "mcpServer/startupStatus/updated") return;
-      if (notification.nativeThreadId === this.binding.backendConversationId) { this.#controlObservationRevision++; this.#controlTurn = undefined; }
+      if (notification.nativeThreadId === this.binding.backendConversationId) {
+        if (this.#pendingControlStart) this.#pendingControlStart.blocked = true;
+        this.#controlObservationRevision++; this.#controlTurn = undefined; this.#speedSession.invalidate();
+      }
       return;
     }
     if (notificationThreadId(notification.params) !== this.binding.backendConversationId) return;
+    if (notification.method === "model/rerouted") {
+      if (this.#pendingControlStart) this.#pendingControlStart.blocked = true;
+      try { this.#speedSession.rerouted(codexC2NotificationSchemas["model/rerouted"].parse(notification.params).turnId); }
+      catch { this.#speedSession.invalidate(); }
+      return;
+    }
     if (!["turn/started", "turn/completed", "thread/status/changed"].includes(notification.method)) return;
     this.#controlObservationRevision++;
     try {
       if (notification.method === "turn/started") {
         const parsed = codexC2NotificationSchemas["turn/started"].parse(notification.params);
+        const pending = this.#pendingControlStart;
+        if (pending) {
+          if (parsed.turn.status !== "inProgress" ||
+              (pending.observedTurnId !== undefined && pending.observedTurnId !== parsed.turn.id)) pending.blocked = true;
+          pending.observedTurnId = parsed.turn.id;
+        }
         if (this.#subagentSpawningTurn?.turnId !== parsed.turn.id) this.#subagentSpawningTurn = undefined;
         this.#controlTurn = { generation: notification.generation, turnId: parsed.turn.id };
+        this.#speedSession.observedStart(parsed.turn.id);
       } else if (notification.method === "turn/completed") {
+        if (this.#pendingControlStart) this.#pendingControlStart.blocked = true;
         const parsed = codexC2NotificationSchemas["turn/completed"].parse(notification.params);
         if (this.#subagentSpawningTurn?.turnId === parsed.turn.id) this.#subagentSpawningTurn = undefined;
         if (this.#controlTurn?.turnId === parsed.turn.id) this.#controlTurn = undefined;
+        this.#speedSession.completed(parsed.turn.id);
       } else if (notification.method === "thread/status/changed") {
         const parsed = codexC2NotificationSchemas["thread/status/changed"].parse(notification.params);
-        if (parsed.status.type === "idle") this.#controlTurn = { generation: notification.generation, turnId: null };
+        if (parsed.status.type !== "active" && this.#pendingControlStart) this.#pendingControlStart.blocked = true;
+        if (parsed.status.type === "idle") { this.#controlTurn = { generation: notification.generation, turnId: null }; this.#speedSession.observedIdle(); }
         else if (this.#controlTurn?.turnId === null) this.#controlTurn = undefined;
       }
-    } catch { this.#controlTurn = undefined; this.#subagentSpawningTurn = undefined; }
+      this.#speedSession.scheduleDefaults();
+    } catch {
+      if (this.#pendingControlStart) this.#pendingControlStart.blocked = true;
+      this.#controlTurn = undefined; this.#subagentSpawningTurn = undefined; this.#speedSession.invalidate();
+    }
   }
 
   async perform(
@@ -2426,6 +2503,28 @@ export class CodexConversationHandle implements ConversationHandle {
       };
     }
     checkBudget();
+    if ((actionId === "create" || actionId === "resume") &&
+        this.#speedSession.isIdleForGoalStart() &&
+        (current.state.state === "unset" || current.state.status !== "active")) {
+      let defaultState: CodexSpeedDefaultState = "unknown";
+      try { defaultState = await this.#speedSession.syncDefaults(); } catch { /* No native Goal effect before verified convergence. */ }
+      if (defaultState !== "confirmed") {
+        const saved = this.#executionSettings.desiredSettings(scope, this.binding.applicationThreadId);
+        const speedAllowed = saved && codexSpeedPolicyAllows(
+          this.#fastModeSessions.projection(scope, this.binding.applicationThreadId), saved.serviceTier,
+        );
+        return {
+          outcome: "rejected",
+          safeMessage: !speedAllowed
+            ? "Saved Speed is unavailable for this Codex session. Select an available Speed before starting Goal."
+            : defaultState === "not_convergent"
+              ? "Codex did not accept saved Speed as the thread default. Select a different Speed or reconnect before starting Goal."
+              : defaultState === "deferred"
+                ? "Codex is not ready to confirm saved Speed. Reconnect after current work finishes, then try starting Goal again."
+                : "Saved Speed could not be confirmed before starting Goal. Reconnect and try again.",
+        };
+      }
+    }
     const outcome = await this.#goalSessions.mutateNative({
       client: this.#client,
       nativeThreadId: this.binding.backendConversationId,
@@ -2591,11 +2690,7 @@ export class CodexConversationHandle implements ConversationHandle {
           now: this.#now(),
         },
       );
-      if (resolved && this.#managedTui) {
-        await this.#managedTui
-          .syncSettings(this.#scope(), this.binding.applicationThreadId, resolved)
-          .catch((error: unknown) => this.#reportError(error));
-      }
+      if (resolved) this.#speedSession.scheduleDefaults();
       return { desired: resolved, writable: true };
     }
     return { desired: current(), writable: false };
@@ -2625,32 +2720,9 @@ export class CodexConversationHandle implements ConversationHandle {
     speedPolicy: CodexFastModeProjection,
     signal: AbortSignal,
   ): Promise<CodexSettingsObservationReceipt> {
-    if (
-      desired === undefined ||
-      !codexSpeedPolicyAllows(speedPolicy, desired) ||
-      (observation.settings.serviceTierClassification === "recognized" &&
-        observation.settings.serviceTier === desired)
-    ) {
-      return observation;
-    }
-    const response = await this.#client.requestWithReceipt(
-      codexThreadSettingsUpdateMethod,
-      {
-        threadId: this.binding.backendConversationId,
-        serviceTier: encodeCodexServiceTier(desired),
-      },
-      {
-        timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS,
-        signal,
-      },
-    );
-    this.#assertEstablishmentMayContinue(signal);
-    this.#assertCurrentReceipt(response.generation);
-    // The empty settings/update receipt proves request acceptance, not the
-    // resulting full thread settings. Only a validated settings notification
-    // may advance effective tier; absent that observation, keep the resume
-    // value so presentation remains pending.
-    return this.#newerSettingsObservation(observation) ?? observation;
+    void desired; void speedPolicy; void signal;
+    this.#speedSession.scheduleDefaults();
+    return observation;
   }
 
   #desiredSpeedDisabled(projection: CodexFastModeProjection): boolean {
@@ -2701,230 +2773,16 @@ export class CodexConversationHandle implements ConversationHandle {
       }
     }
     if (lastError !== undefined) throw lastError;
-    if (resolved && this.#managedTui && syncManagedTui) {
-      try {
-        await this.#managedTui.syncSettings(
-          this.#scope(),
-          this.binding.applicationThreadId,
-          resolved,
-        );
-      } catch (error) {
-        this.#reportError(error);
-      }
-    }
+    if (resolved && syncManagedTui) this.#speedSession.scheduleDefaults();
     return resolved?.serviceTier;
   }
 
-  async #recoverFastModeProjection(
-    projection: CodexFastModeProjection,
-  ): Promise<void> {
+  async #recoverFastModeProjection(projection: CodexFastModeProjection): Promise<void> {
     if (this.#closing || this.#closed || this.#policyHistory) return;
-    if (this.#desiredSpeedDisabled(projection)) {
-      try {
-        if (await this.#restoreSupersedingFastModeSettings(projection)) {
-          return;
-        }
-        const retainedServiceTier = await this.#reconcileDisabledFastMode(
-          projection,
-          false,
-        );
-        if (retainedServiceTier) {
-          if (await this.#restoreSupersedingFastModeSettings(projection)) {
-            return;
-          }
-          let currentDesired = this.#executionSettings.desiredSettings(
-            this.#scope(),
-            this.binding.applicationThreadId,
-          );
-          if (!currentDesired || currentDesired.serviceTier !== "standard") {
-            return;
-          }
-          if (this.#managedTui) {
-            const synchronized = await this.#syncRecoveredDisabledManagedTui(
-              projection,
-              currentDesired,
-            );
-            if (!synchronized) return;
-            currentDesired = synchronized;
-          }
-          if (await this.#restoreSupersedingFastModeSettings(projection)) {
-            return;
-          }
-          const generation = this.#establishedGeneration;
-          const lifecycle = this.#client.lifecycleSnapshot();
-          const projectionBeforeWrite = this.#fastModeSessions.projection(
-            this.#scope(),
-            this.binding.applicationThreadId,
-          );
-          if (
-            !this.#closing &&
-            !this.#closed &&
-            !this.#policyHistory &&
-            generation !== 0 &&
-            lifecycle.state === "ready" &&
-            lifecycle.generation === generation &&
-            sameSpeedPolicyProjection(projectionBeforeWrite, projection)
-          ) {
-            const response = await this.#client.requestWithReceipt(
-              codexThreadSettingsUpdateMethod,
-              {
-                threadId: this.binding.backendConversationId,
-                serviceTier: encodeCodexServiceTier(currentDesired.serviceTier),
-              },
-              { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS },
-            );
-            if (response.generation !== generation) {
-              throw codexError(
-                "unavailable",
-                "The Codex daemon generation changed during Fast mode recovery.",
-                "codex_generation_changed",
-                true,
-              );
-            }
-            this.#assertCurrentReceipt(response.generation);
-            await this.#restoreSupersedingFastModeSettings(projection);
-          }
-        }
-      } catch (error) {
-        this.#reportError(error);
-      }
-    } else if (projection.availability === "available" || projection.unavailableReason === "feature_disabled") {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const resolution = await this.#resolveUnofferedServiceTier();
-        const desired = resolution.desired;
-        if (!desired || this.#closing || this.#closed) break;
-        const nativeModel = this.#model?.id ?? desired.model;
-        const writable =
-          nativeModel === desired.model
-            ? resolution.writable
-            : (await this.#serviceTierOfferedOn(
-                nativeModel,
-                desired.serviceTier,
-              )) === true;
-        // Act only on a selection, native model, and handle that are still
-        // current after every catalog read; otherwise check again.
-        if (this.#closing || this.#closed) break;
-        const current = this.#executionSettings.desiredSettings(
-          this.#scope(),
-          this.binding.applicationThreadId,
-        );
-        if (
-          !current ||
-          !sameExecutionSettingsTuple(current, desired) ||
-          (this.#model?.id ?? current.model) !== nativeModel
-        ) {
-          continue;
-        }
-        if (!writable) break;
-        try {
-          await this.#fastModeSessions.syncServiceTier(
-            this.#scope(),
-            this.binding.applicationThreadId,
-            desired.serviceTier,
-          );
-        } catch (error) {
-          this.#reportError(error);
-        }
-        break;
-      }
-    }
-    if (this.#establishedGeneration !== 0 && !this.#closing && !this.#closed) {
-      this.#emit({
-        type: "capabilities_changed",
-        capabilities: this.#capabilities(),
-      });
-    }
-  }
-
-  async #restoreSupersedingFastModeSettings(
-    recoveredProjection: CodexFastModeProjection,
-  ): Promise<boolean> {
-    if (this.#closing || this.#closed || this.#policyHistory) return true;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const currentProjection = this.#fastModeSessions.projection(
-        this.#scope(),
-        this.binding.applicationThreadId,
-      );
-      if (sameSpeedPolicyProjection(currentProjection, recoveredProjection)) {
-        return false;
-      }
-      const currentDesired = this.#executionSettings.desiredSettings(
-        this.#scope(),
-        this.binding.applicationThreadId,
-      );
-      if (!currentDesired) return true;
-      const updates: Promise<unknown>[] = [];
-      if ((currentProjection?.availability === "available" || currentProjection?.unavailableReason === "feature_disabled") &&
-        codexSpeedPolicyAllows(currentProjection, currentDesired.serviceTier)) {
-        updates.push(
-          this.#fastModeSessions.syncServiceTier(
-            this.#scope(),
-            this.binding.applicationThreadId,
-            currentDesired.serviceTier,
-          ),
-        );
-      }
-      if (this.#managedTui) {
-        updates.push(
-          this.#managedTui.syncSettings(
-            this.#scope(),
-            this.binding.applicationThreadId,
-            currentDesired,
-          ),
-        );
-      }
-      await Promise.all(updates);
-      if (this.#closing || this.#closed) return true;
-      const projectionAfterSync = this.#fastModeSessions.projection(
-        this.#scope(),
-        this.binding.applicationThreadId,
-      );
-      if (sameSpeedPolicyProjection(projectionAfterSync, recoveredProjection)) {
-        return false;
-      }
-      const desiredAfterSync = this.#executionSettings.desiredSettings(
-        this.#scope(),
-        this.binding.applicationThreadId,
-      );
-      if (
-        desiredAfterSync &&
-        sameProjection(currentProjection, projectionAfterSync) &&
-        sameDesiredSettings(currentDesired, desiredAfterSync)
-      ) {
-        return true;
-      }
-    }
-    throw new Error("codex_fast_mode_recovery_stabilization_failed");
-  }
-
-  async #syncRecoveredDisabledManagedTui(
-    recoveredProjection: CodexFastModeProjection,
-    initialDesired: CodexExecutionSettingsTuple,
-  ): Promise<CodexExecutionSettingsTuple | undefined> {
-    if (!this.#managedTui) return initialDesired;
-    let desired = initialDesired;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      await this.#managedTui.syncSettings(
-        this.#scope(),
-        this.binding.applicationThreadId,
-        desired,
-      );
-      if (await this.#restoreSupersedingFastModeSettings(recoveredProjection)) {
-        return undefined;
-      }
-      const desiredAfterSync = this.#executionSettings.desiredSettings(
-        this.#scope(),
-        this.binding.applicationThreadId,
-      );
-      if (!desiredAfterSync || desiredAfterSync.serviceTier !== "standard") {
-        return undefined;
-      }
-      if (sameDesiredSettings(desired, desiredAfterSync)) {
-        return desiredAfterSync;
-      }
-      desired = desiredAfterSync;
-    }
-    throw new Error("codex_fast_mode_tui_stabilization_failed");
+    if (this.#desiredSpeedDisabled(projection)) await this.#reconcileDisabledFastMode(projection, false);
+    else await this.#resolveUnofferedServiceTier();
+    this.#speedSession.scheduleDefaults();
+    if (this.#establishedGeneration !== 0) this.#emit({ type: "capabilities_changed", capabilities: this.#capabilities() });
   }
 
   #invalidateGoalProjection(): void {
@@ -2936,6 +2794,7 @@ export class CodexConversationHandle implements ConversationHandle {
       connectionGeneration: this.#establishedGeneration,
       client: this.#client,
       onSettled: () => {
+        this.#speedSession.goalProjectionSettled();
         // Republish through the actor so clients receive a fresh presentation
         // snapshot with updated provider feature state.
         this.#emit({
@@ -3126,7 +2985,10 @@ export class CodexConversationHandle implements ConversationHandle {
               ? codexExecutionPolicy(desiredBeforeResume).thread
               : undefined;
             const resumeConfig = withCodexAgentToolCliEnvironment(
-              withCodexExecutionEnvironment(resumePolicy?.configOverrides ?? {}, executionEnvironment),
+              withCodexExecutionEnvironment({ ...resumePolicy?.configOverrides,
+                ...(this.#executionSettings.isSedesCreated(this.#scope(), this.binding.applicationThreadId, this.binding.backendConversationId)
+                  ? CODEX_STEP_MODEL_SWITCHING_CONFIG : {}),
+              }, executionEnvironment),
               {
                 resolution: cliEnvironment,
                 executionEnvironment,
@@ -3143,13 +3005,6 @@ export class CodexConversationHandle implements ConversationHandle {
                       sandbox: resumePolicy.sandbox,
                       approvalPolicy: resumePolicy.approvalPolicy,
                       approvalsReviewer: resumePolicy.approvalsReviewer,
-                    }
-                  : {}),
-                ...(desiredBeforeResume && serviceTierResolution?.writable
-                  ? {
-                      serviceTier: encodeCodexServiceTier(
-                        desiredBeforeResume.serviceTier,
-                      ),
                     }
                   : {}),
                 ...(Object.keys(resumeConfig).length > 0
@@ -4769,6 +4624,7 @@ export class CodexConversationHandle implements ConversationHandle {
       }
       return;
     }
+    if (notification.method === "model/rerouted") { this.#invalidateProjection("sequence_gap"); return; }
     if (notification.method === "thread/settings/updated") {
       try {
         const observation = this.#rememberSettingsObservation(
@@ -4783,6 +4639,7 @@ export class CodexConversationHandle implements ConversationHandle {
         }
         this.#applySettingsObservation(observation);
         this.#scheduleDesiredInitialization(observation);
+        this.#speedSession.scheduleDefaults();
       } catch (error) {
         this.#subagentSpawningTurn = undefined;
         this.#recordMutation(notification.generation, notification.sequence);
@@ -5435,6 +5292,7 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#invalidateProjection("contradictory_state");
         return true;
       }
+      case "model/rerouted":
       case "thread/settings/updated":
         // Routed before history-mutation accounting by #consumeNotification.
         return false;
@@ -5494,6 +5352,7 @@ export class CodexConversationHandle implements ConversationHandle {
   }
 
   readonly #consumeLifecycle: CodexLifecycleListener = (lifecycle) => {
+    this.#speedSession.lifecycle();
     if (lifecycle.state !== "ready" || lifecycle.generation !== this.#controlGeneration) {
       this.#controlLifetime.abort();
       this.#controlTurn = undefined;
@@ -6150,6 +6009,7 @@ export class CodexConversationHandle implements ConversationHandle {
     }
     this.#usageCapture?.seal();
     this.#closing = true;
+    this.#speedSession.close();
     this.#unsubscribeDesiredSettings();
     this.#controlLifetime.abort();
     this.#viewedImageCapture.close();
@@ -6202,6 +6062,7 @@ export class CodexConversationHandle implements ConversationHandle {
       this.#projectedItemCount = 0;
       this.#projectionSerializedBytes = 0;
       if (release) {
+        this.#releaseSpeedSession();
         this.#releaseOwnership();
         await this.#runtimeLease?.release(evicted);
       }

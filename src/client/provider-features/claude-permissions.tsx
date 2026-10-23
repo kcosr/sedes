@@ -84,7 +84,7 @@ function ClaudePermissionControls({
       feature: ref,
       actionId: actions[mode],
       arguments: null,
-      expectedFeatureRevision: featureState.revision,
+      expectedMutationRevision: capability.mutationRevision,
     });
   };
 

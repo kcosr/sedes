@@ -1648,6 +1648,7 @@ describe("NormalizedThreadStore", () => {
                 {
                   ref,
                   revision: 2,
+                  mutationRevision: 2,
                   label: { text: "Goal" },
                   availability: "available",
                   operations: [],
@@ -1842,6 +1843,7 @@ describe("NormalizedThreadStore", () => {
     const goalCapability = (revision: number) => ({
       ref: goalRef,
       revision,
+      mutationRevision: revision,
       label: { text: "Goal" },
       availability: "available" as const,
       operations: [],
@@ -2039,6 +2041,7 @@ describe("NormalizedThreadStore", () => {
     const capability = (actionIds: readonly string[]) => ({
       ref,
       revision: 3,
+      mutationRevision: 3,
       label: { text: "Mixed feature" },
       availability: "available" as const,
       operations: actionIds.map(operation),
@@ -2123,6 +2126,7 @@ describe("NormalizedThreadStore", () => {
       {
         ref,
         revision: 2,
+        mutationRevision: 2,
         label: { text: "Goal" },
         availability: "available" as const,
         operations: [],

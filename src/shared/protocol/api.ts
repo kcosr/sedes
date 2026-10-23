@@ -1089,7 +1089,7 @@ const threadPerformOperationSchema = z.discriminatedUnion("action", [
     arguments: providerFeatureArgumentsSchema,
     /** Required evidence when the advertised action requires confirmation. */
     confirmed: z.literal(true).optional(),
-    expectedFeatureRevision: z.number().int().nonnegative(),
+    expectedMutationRevision: z.number().int().nonnegative(),
   }),
 ]);
 
@@ -1395,6 +1395,12 @@ const abortedMutationResultSchema = z.strictObject({
 export const threadApplicationMutationResultSchema = z.discriminatedUnion(
   "status",
   [
+    z.strictObject({
+      status: z.literal("provider_feature_result"),
+      operationId: z.string().min(1).max(160),
+      feature: providerFeatureRefSchema,
+      result: providerFeatureArgumentsSchema,
+    }),
     z.strictObject({
       status: z.literal("accepted"),
       operationId: z.string().min(1).max(160),

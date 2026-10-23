@@ -128,6 +128,8 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
         modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"), outputArtifacts: createInMemoryOutputArtifactPublisher(),
         agentToolCliEnvironment: unavailableCodexAgentToolCliEnvironmentProvider, onError: error => diagnostics.push(error), executionSettings: {
           assertExecutionPolicyAllowed: () => undefined,
+    desiredRevision: () => 0,
+    isSedesCreated: () => true,
           subscribeDesiredSettingsChanged: () => () => undefined,
           desiredSettings: () => settings, resolveUnavailableServiceTier: () => settings, forkSettingsEligibility: () => ({ availability: "available", settingsRevision: 1, settings }),
           freezeOperationSnapshot: () => ({ settings }), observeEffective: () => undefined, markEffectiveUnknown: () => undefined,

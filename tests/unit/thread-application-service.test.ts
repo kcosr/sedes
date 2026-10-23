@@ -143,6 +143,7 @@ function mutableProviderFeature(
   return {
     ref: { featureId, schemaVersion: 1 },
     revision: 1,
+    mutationRevision: 1,
     label: { text: featureId },
     availability: "available",
     operations: [
@@ -1274,6 +1275,7 @@ describe("ThreadApplicationService", () => {
           {
             ref: { featureId: "test.preference", schemaVersion: 1 },
             revision: 1,
+            mutationRevision: 1,
             label: { text: "Preference" },
             availability: "available",
             operations: [

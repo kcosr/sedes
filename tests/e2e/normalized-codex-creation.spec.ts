@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures";
+import { speedArgumentsValue } from "../../src/shared/provider-features/codex-speed.js";
 import { normalizedThreadSnapshotSchema } from "../../src/shared/protocol/conversation.js";
 import {
   openSettingsPage,
@@ -113,7 +114,7 @@ test.describe.serial("normalized Codex creation surfaces", () => {
     await expect(page).toHaveURL(/\/threads\/[0-9a-f-]+$/);
 
     const fastOff = page.getByRole("button", {
-      name: "Fast speed, off, pending",
+      name: "Speed, Standard saved",
     });
     await expect(fastOff).toBeVisible();
     const selected = page.waitForResponse(
@@ -124,17 +125,18 @@ test.describe.serial("normalized Codex creation surfaces", () => {
     );
     await fastOff.click();
     expect((await selected).request().postDataJSON().operation).toMatchObject({
-      feature: { featureId: "codex.fast_mode", schemaVersion: 2 },
-      actionId: "set_fast",
-      arguments: null,
+      feature: { featureId: "codex.fast_mode", schemaVersion: 3 },
+      actionId: "set_speed",
+      arguments: speedArgumentsValue({ selection: "fast", currentRunTarget: null }),
+      expectedMutationRevision: expect.any(Number),
     });
     await expect(
-      page.getByRole("button", { name: "Fast speed, on, pending" }),
+      page.getByRole("button", { name: "Speed, Fast saved" }),
     ).toBeVisible();
 
     await page.reload();
     await expect(
-      page.getByRole("button", { name: "Fast speed, on, pending" }),
+      page.getByRole("button", { name: "Speed, Fast saved" }),
     ).toBeVisible();
 
     const composer = page.getByRole("textbox", { name: /Message/ });

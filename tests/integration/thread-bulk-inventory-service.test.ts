@@ -272,7 +272,7 @@ describe("thread bulk inventory service", () => {
           applicationThreadId: unavailableId, mutationId: "bulk-unavailable-provider-work",
           featureId: "execution-settings", schemaVersion: 1, actionId: "set-model",
           requestFingerprint: "a".repeat(64), expectedThreadRevision: 0,
-          expectedFeatureRevision: 0, desiredPostcondition: { model: "test-model" }, now: 450,
+          expectedMutationRevision: 0, desiredPostcondition: { model: "test-model" }, now: 450,
         });
       } else current.runtimeStates.set(unavailableId, state);
       const impact = await current.service.impact(current.scope, { action: "archive", threadIds: ids });

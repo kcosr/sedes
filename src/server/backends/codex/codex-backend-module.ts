@@ -1,3 +1,4 @@
+import { ConversationCreationProvenanceRepository } from "../../db/repositories/conversation-creation-provenance-repository.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { attachmentDiagnostic } from "../../diagnostics/attachment-diagnostics.js";
 import { backendStartupEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
@@ -232,7 +233,8 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
           provider: input.context.sidecarRuntime,
           configuration: { startupEnvironmentVariables: this.#startupEnvironmentVariables, instance: input.context.instance, connections: input.context.connections, connection: input.prepared.configuration.connection },
           serverRequests: this.#serverRequests,
-          receipts: new CodexRuntimeReceiptStore(input.context.database),
+          receipts: new CodexRuntimeReceiptStore(input.context.database, undefined, (scope, threadId) =>
+            this.#fastModeSessions.controller(scope, threadId)?.publicationChanged()),
           onRuntimeVersionAssessment: assessment => this.installationAdvisories.observe(assessment),
         })
       : input.dependencies.createSupervisor({
@@ -788,6 +790,13 @@ export class CodexExecutionSettingsRepositoryAdapter implements CodexExecutionSe
   ) {
     this.#executionPolicy = executionPolicy;
     this.#modelPolicy = modelPolicy;
+  }
+
+  desiredRevision(scope: BackendModuleRuntimeContext["scope"], applicationThreadId: string): number {
+    return this.repository.find(scope, applicationThreadId)?.desiredRevision ?? 0;
+  }
+  isSedesCreated(scope: BackendModuleRuntimeContext["scope"], applicationThreadId: string, backendConversationId: string): boolean {
+    return new ConversationCreationProvenanceRepository(this.repository.database).matchesBinding(scope, applicationThreadId, { backendConversationId });
   }
 
   desiredSettings(

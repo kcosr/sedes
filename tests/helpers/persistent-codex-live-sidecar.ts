@@ -17,7 +17,9 @@ type UnscopedRequest = SidecarManagementRequest extends infer Request ? Request 
 
 /** Real bundled service in a private HOME; loopback Unix transport replaces only
  * the outer SSH byte carrier. Provider hosting and management are production code. */
-export async function createPersistentCodexLiveSidecar() {
+export async function createPersistentCodexLiveSidecar(fixtureScope?: {
+  tenantId: string; principalId: string; executionEnvironmentId: string;
+}) {
   const buildDirectory = await mkdtemp(path.join(tmpdir(), "sedes-codex-live-build-"));
   const cleanups: Array<() => Promise<void>> = [];
   try {
@@ -28,7 +30,7 @@ export async function createPersistentCodexLiveSidecar() {
     async function fixture() {
       const home = await mkdtemp(path.join(tmpdir(), "sedes-service-"));
       await chmod(home, 0o700);
-      const scope = { installationId: randomUUID(), tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote" };
+      const scope = { installationId: randomUUID(), ...(fixtureScope ?? { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote" }) };
       const paths = persistentSidecarPaths(home, process.getuid!(), scope);
       await mkdir(paths.stateRoot, { recursive: true, mode: 0o700 });
       const executable = path.join(home, "sedes");

@@ -792,6 +792,7 @@ describe("Codex C2 pinned protocol", () => {
       "thread/name/updated": { threadId: "thread-1", threadName: "name" },
       "thread/goal/updated": { threadId: "thread-1", turnId: null, goal: { threadId: "thread-1", objective: "ship", status: "active", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 } },
       "thread/goal/cleared": { threadId: "thread-1" },
+      "model/rerouted": { threadId: "thread-1", turnId: "turn-1", fromModel: "gpt-5.6", toModel: "gpt-5.6-other", reason: "highRiskCyberActivity" },
       "thread/settings/updated": { threadId: "thread-1", threadSettings: { cwd: "/workspace", approvalPolicy: "never", approvalsReviewer: "user", sandboxPolicy: { type: "readOnly", networkAccess: false }, activePermissionProfile: null, model: "gpt-5.6", modelProvider: "openai", serviceTier: null, effort: "low", summary: null, collaborationMode: { mode: "default", settings: { model: "gpt-5.6", reasoning_effort: "low", developer_instructions: null } }, multiAgentMode: "explicitRequestOnly", personality: null } },
       "thread/tokenUsage/updated": { threadId: "thread-1", turnId: "turn-1", tokenUsage: { total: usage, last: usage, modelContextWindow: 100 } },
       "thread/compacted": { threadId: "thread-1", turnId: "turn-1" },

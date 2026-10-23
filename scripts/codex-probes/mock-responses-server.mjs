@@ -5,6 +5,7 @@ export async function startMockResponsesServer() {
   let requestCount = 0;
   const requestBodies = [];
   const responseQueue = [];
+  let responder;
   const server = http.createServer((request, response) => {
     if (request.method !== "POST" || !request.url?.endsWith("/responses")) {
       response.writeHead(404).end();
@@ -12,7 +13,7 @@ export async function startMockResponsesServer() {
     }
     const chunks = [];
     request.on("data", (chunk) => chunks.push(chunk));
-    request.once("end", () => {
+    request.once("end", async () => {
       requestCount += 1;
       const encodedBody = Buffer.concat(chunks);
       const body =
@@ -21,7 +22,10 @@ export async function startMockResponsesServer() {
           : encodedBody;
       requestBodies.push(body.toString("utf8"));
       const responseId = `fixture-response-${requestCount}`;
-      const events = responseQueue.shift() ?? [
+      const queued = responder
+        ? await responder(body.toString("utf8"))
+        : responseQueue.shift();
+      const events = (queued?.events ?? queued) ?? [
         {
           type: "response.created",
           response: { id: responseId },
@@ -49,6 +53,7 @@ export async function startMockResponsesServer() {
           },
         },
       ];
+      if (queued?.ready) await queued.ready;
       response.writeHead(200, {
         "content-type": "text/event-stream",
         connection: "close",
@@ -74,8 +79,15 @@ export async function startMockResponsesServer() {
       return requestCount;
     },
     requestBodies,
+    setResponder(value) { responder = value; },
     enqueue(events) {
       responseQueue.push(events);
+    },
+    hold(events) {
+      let release;
+      const ready = new Promise(resolve => { release = resolve; });
+      responseQueue.push({ events, ready });
+      return release;
     },
     close: async () => {
       await new Promise((resolve, reject) =>

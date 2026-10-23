@@ -902,7 +902,7 @@ describe("Codex production application integration", () => {
             ref: { featureId: "codex.goal", schemaVersion: 1 },
           }),
           expect.objectContaining({
-            ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
+            ref: { featureId: "codex.fast_mode", schemaVersion: 3 },
           }),
         ]),
       });
@@ -934,7 +934,7 @@ describe("Codex production application integration", () => {
       ).toEqual([
         "codex.execution@1",
         "codex.goal@1",
-        "codex.fast_mode@2",
+        "codex.fast_mode@3",
         "codex.tui@1",
       ]);
       expect(threadSnapshot.composerCommands).toEqual([]);

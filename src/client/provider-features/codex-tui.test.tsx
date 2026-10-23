@@ -110,7 +110,7 @@ describe("CodexTuiThreadPresentation", () => {
         action: "perform_provider_feature",
         actionId: "start",
         arguments: null,
-        expectedFeatureRevision: 1,
+        expectedMutationRevision: 1,
       }),
     );
     expect(
@@ -824,6 +824,7 @@ function snapshot(
         {
           ref: { featureId: "codex.tui", schemaVersion: 1 },
           revision: 1,
+          mutationRevision: 1,
           label: { text: "TUI" },
           availability,
           ...(availability === "available"

@@ -18,7 +18,7 @@
   },
   "sourceTransformation": {
     "description": "copy adopted transitive TypeScript closures and append .js to relative NodeNext specifiers",
-    "treeSha256": "23f44fafc0a989531b61b83c572264cf2384e7cf611464b068e32450566ca0dd",
+    "treeSha256": "044f8800be6bc806012f046f080eaeab259bff0650a69a5d8b4a6a3baaa76ab1",
     "artifacts": [
       {
         "path": "experimental/AbsolutePathBuf.ts",
@@ -806,6 +806,21 @@
         "sha256": "df5e5fd79e6c28ff89e5e201c761535d7988fbaa9caa5fc6bf71f655f353668c"
       },
       {
+        "path": "experimental/v2/TurnSettingsUpdateParams.ts",
+        "bytes": 1291,
+        "sha256": "7d626f2d9f5ba65e369ac495f3a28b633a607c7f78ea82b1dd55b8777b19f781"
+      },
+      {
+        "path": "experimental/v2/TurnSettingsUpdateResponse.ts",
+        "bytes": 312,
+        "sha256": "5a69949e35df9434da676e1ff09b66c08c7cb43153228cb53a2c85d2b5543185"
+      },
+      {
+        "path": "experimental/v2/TurnSettingsUpdateStatus.ts",
+        "bytes": 225,
+        "sha256": "f44944d6142796b6fec02842b3e14dc3a1da0c7fff19ac1bae76d195bc7c4fc5"
+      },
+      {
         "path": "experimental/v2/TurnStatus.ts",
         "bytes": 233,
         "sha256": "c69049363f97e97844e9fc851f0cd4122da057ba1371de003a28c00ab7a6ef1a"
@@ -827,8 +842,8 @@
       },
       {
         "path": "route-registry.ts",
-        "bytes": 58215,
-        "sha256": "c1326f05468c924da0b7c188d1064ffe3948cb0ecdfea31a5917be973b9f132a"
+        "bytes": 59349,
+        "sha256": "df7ab2d306e05dcc641929ea7a4c38a231cbf5a3089b193a638580357ce23781"
       },
       {
         "path": "stable/AbsolutePathBuf.ts",
@@ -2532,8 +2547,8 @@
       },
       {
         "path": "validators.ts",
-        "bytes": 2152901,
-        "sha256": "ad1723a0f53be41039f9f29670b5803270f1235ad44105a98258fb03bfca534f"
+        "bytes": 2166679,
+        "sha256": "e92b46836c22ff96b82455e2b0f1ebc19b4885ff7788789b51845365a19aef86"
       }
     ]
   },
@@ -2834,6 +2849,29 @@
         "route_identity",
         "collection_bounds",
         "completion_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "turn/settings/update",
+      "use": "invoked",
+      "stability": "experimental",
+      "artifactProfile": "experimental",
+      "domain": "actions",
+      "paramsDefinition": "TurnSettingsUpdateParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnSettingsUpdateParams"
+      },
+      "resultDefinition": "TurnSettingsUpdateResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnSettingsUpdateResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
       ]
     },
     {
@@ -3618,6 +3656,22 @@
       "paramsSchema": {
         "bundle": "codex_app_server_protocol.v2.schemas.json",
         "pointer": "#/definitions/ModelSafetyBufferingUpdatedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "model/rerouted",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ModelReroutedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ModelReroutedNotification"
       },
       "sedesRefinements": [
         "route_identity"

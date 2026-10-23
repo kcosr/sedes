@@ -115,6 +115,7 @@ export class CodexGoalSessionRegistry {
         nativeThreadId: input.nativeThreadId,
         connectionGeneration: input.connectionGeneration,
         reason: withdrawReason(error),
+        ...(error instanceof CodexRpcRemoteError && error.code === -32600 && error.message === "goals feature is disabled" ? { disabled: true as const } : {}),
         now: this.#now(),
       });
     }

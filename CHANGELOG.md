@@ -8,12 +8,13 @@ User-facing changes are collected here before release. See the
 ### Breaking Changes
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **168**. Sedes tool policies replace cross-boundary approval modes with
+  **169**. Provider-feature mutations now require explicit mutation revisions;
+  Codex Speed uses its strict v3 action/result contract. Sedes tool policies replace cross-boundary approval modes with
   independent project/environment limits: queries filter to scope and direct
   outside requests are denied. Legacy thread-only policies are disabled for
   review rather than broadened. Saved Agent and thread-create tool contracts
   advance to version 6. See [tool policy sets](docs/user/tool-policies.md).
-  ([#96](https://github.com/kcosr/sedes/pull/96))
+  ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112))
 
 - Upgrade OpenCode execution sidecars with the server for private OpenCode
   runtime protocol **3**, which reports the observed native version. See
@@ -28,11 +29,13 @@ User-facing changes are collected here before release. See the
   ([#88](https://github.com/kcosr/sedes/pull/88))
 
 - Upgrade Codex execution sidecars with the server for Codex runtime protocol
-  **4**, which clears retained attach metadata after native archive changes.
-  See [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
-  ([#85](https://github.com/kcosr/sedes/pull/85))
+  **5**, which adds exact-target Speed publication and retains archive invalidation.
+  Managed-TUI capability **3** adds ordered settings handoffs.
+  See [Persistent Speed](docs/operator/backends/codex.md#persistent-speed) and
+  [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
+  ([#85](https://github.com/kcosr/sedes/pull/85), [#112](https://github.com/kcosr/sedes/pull/112))
 
-- Client protocol **168** also includes explicit skill-catalog refresh intent,
+- Client protocol **169** also includes explicit skill-catalog refresh intent,
   dismissible runtime notices, Page
   responses, HTML page downloads and shared download metadata,
   larger composer reference lists, the updated
@@ -47,6 +50,14 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
+
+- Codex Speed now saves the preference for future Sedes turns and can apply it
+  to the next eligible model step during a Sedes-started turn. The composer
+  icon and menu checkmark show the saved preference. Mobile controls do not
+  show tooltips after tapping or dismissing the menu. Opt-in
+  [diagnostics](docs/developer/diagnostics.md) explain Speed availability.
+  See [Speed](docs/user/provider-features.md#speed) for Goal and subagent limits.
+  ([#112](https://github.com/kcosr/sedes/pull/112))
 
 - Voice diagnostics trace composer availability, recording routes, task and
   attachment counts, and draft save/delivery outcomes in the existing Copy log.

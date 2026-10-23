@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type {
   ManagedTerminalResourceAuthority,
@@ -19,9 +20,10 @@ import {
   type CodexExecutionPolicySelection,
 } from "./codex-execution-policy.js";
 import {
-  encodeCodexServiceTier,
   type CodexServiceTierSelection,
 } from "./codex-service-tier.js";
+import { verifyCodexManagedTuiThreadSettings } from "./codex-managed-tui-settings.js";
+import type { CodexExecutionSettingsTuple } from "./codex-thread-execution-settings-repository.js";
 import { assertCodexLiveModelSelection } from "./codex-live-model-selection.js";
 
 export type CodexManagedTuiHandleAuthority = Omit<
@@ -387,6 +389,29 @@ export class CodexManagedTuiController implements ManagedTerminalResourceAuthori
     );
   }
 
+  async withSpeedSettingsLock(scope: RequestScope, applicationThreadId: string, operation: () => Promise<void>): Promise<void> {
+    const authority = this.registry.runningAuthority(scope, applicationThreadId);
+    if (!authority) return operation();
+    const leaseId = randomUUID();
+    try {
+      await this.registry.holdSettings(authority, leaseId);
+      await operation();
+    } catch (error) {
+      await this.registry.fail(authority, "Sedes could not confirm the managed TUI settings handoff. Start a new TUI.");
+      throw error;
+    } finally { await this.registry.releaseSettings(leaseId); }
+  }
+
+  async verifySpeedSettings(scope: RequestScope, applicationThreadId: string, settings: CodexExecutionSettingsTuple): Promise<void> {
+    const authority = this.registry.runningAuthority(scope, applicationThreadId);
+    if (!authority) return;
+    try {
+      await verifyCodexManagedTuiThreadSettings({ client: this.#client, authority, settings, signal: AbortSignal.timeout(10_000) });
+    } catch {
+      await this.registry.fail(authority, "Sedes saved the Speed choice, but could not confirm the running TUI settings. Start a new TUI.");
+    }
+  }
+
   async syncSettings(
     scope: RequestScope,
     applicationThreadId: string,
@@ -456,7 +481,8 @@ export class CodexManagedTuiController implements ManagedTerminalResourceAuthori
           approvalsReviewer: policy.approvalsReviewer,
           sandboxPolicy: policy.sandboxPolicy,
           model: settings.model,
-          serviceTier: encodeCodexServiceTier(settings.serviceTier),
+          // The per-thread Speed coordinator is the only default-tier writer.
+          // A permissions/model change must not replay an older saved tier.
           effort: settings.reasoningEffort,
         },
         { timeoutMilliseconds: 10_000 },

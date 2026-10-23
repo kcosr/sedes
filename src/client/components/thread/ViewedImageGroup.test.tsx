@@ -182,6 +182,7 @@ describe("ViewedImageGroup", () => {
             {
               ref,
               revision: 1,
+              mutationRevision: 1,
               label: { text: "Viewer" },
               availability: "available",
               operations: [],

@@ -1,3 +1,4 @@
+import { boundValue } from "../../../server/conversations/payload-policy.js";
 // @vitest-environment jsdom
 
 import {
@@ -5314,6 +5315,7 @@ describe("Composer delivery guards", () => {
           {
             ref: goalRef,
             revision: 3,
+            mutationRevision: 3,
             label: { text: "Goal" },
             availability: "available",
             operations: [
@@ -5334,14 +5336,16 @@ describe("Composer delivery guards", () => {
           {
             ref: { featureId: "codex.execution", schemaVersion: 1 },
             revision: 1,
+            mutationRevision: 1,
             label: { text: "Execution" },
             availability: "available",
             operations: [],
             presentationSlots: ["thread_details"],
           },
           {
-            ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
+            ref: { featureId: "codex.fast_mode", schemaVersion: 3 },
             revision: 5,
+            mutationRevision: 5,
             label: { text: "Speed" },
             description: {
               text: "Faster speeds respond sooner and use more of your plan's usage",
@@ -5349,7 +5353,7 @@ describe("Composer delivery guards", () => {
             availability: "available",
             operations: [
               {
-                actionId: "set_fast",
+                actionId: "set_speed",
                 label: { text: "Use Fast speed" },
                 effects: {
                   application: "write",
@@ -5368,43 +5372,12 @@ describe("Composer delivery guards", () => {
         {
           ref: goalRef,
           revision: 3,
-          state: {
-            kind: "object",
-            entries: [
-              { key: { text: "state" }, value: { text: "set" } },
-              { key: { text: "objective" }, value: { text: "Ship it" } },
-              { key: { text: "status" }, value: { text: "active" } },
-            ],
-          },
+          state: boundValue({ state: "set", objective: "Ship it", status: "active" }),
         },
         {
-          ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
+          ref: { featureId: "codex.fast_mode", schemaVersion: 3 },
           revision: 5,
-          state: {
-            kind: "object",
-            entries: [
-              { key: { text: "desired" }, value: { text: "standard" } },
-              { key: { text: "effective" }, value: { text: "standard" } },
-              {
-                key: { text: "applicationState" },
-                value: { text: "applied" },
-              },
-              {
-                key: { text: "offered" },
-                value: {
-                  kind: "array",
-                  values: [
-                    {
-                      kind: "object",
-                      entries: [
-                        { key: { text: "selection" }, value: { text: "fast" } },
-                      ],
-                    },
-                  ],
-                },
-              },
-            ],
-          },
+          state: boundValue({ saved: { selection: "standard", desiredRevision: 5 }, offered: [{ selection: "standard" }, { selection: "fast" }], currentRun: null, lastChange: null }),
         },
       ],
     } as unknown as NormalizedThreadSnapshot;
@@ -5429,7 +5402,7 @@ describe("Composer delivery guards", () => {
     const meter = sendGroup!.querySelector(".context-usage-meter");
     expect(meter).not.toBeNull();
     expect(sendGroup!.contains(indicator)).toBe(true);
-    const fastMode = screen.getByRole("button", { name: "Fast speed, off" });
+    const fastMode = screen.getByRole("button", { name: "Speed, Standard saved" });
     expect(sendGroup!.contains(fastMode)).toBe(true);
     expect(
       indicator.compareDocumentPosition(meter!) &

@@ -18,7 +18,7 @@ export interface ProviderFeatureMutationReceiptRecord {
   readonly actionId: string;
   readonly requestFingerprint: string;
   readonly expectedThreadRevision: number;
-  readonly expectedFeatureRevision: number;
+  readonly expectedMutationRevision: number;
   readonly state: ProviderFeatureMutationState;
   readonly desiredPostcondition: Readonly<Record<string, unknown>>;
   readonly result: Readonly<Record<string, unknown>> | null;
@@ -45,7 +45,7 @@ const columns = `
   action_id AS actionId,
   request_fingerprint AS requestFingerprint,
   expected_thread_revision AS expectedThreadRevision,
-  expected_feature_revision AS expectedFeatureRevision,
+  expected_mutation_revision AS expectedMutationRevision,
   state,
   desired_postcondition_json AS desiredPostconditionJson,
   result_json AS resultJson,
@@ -81,7 +81,7 @@ export class ProviderFeatureMutationRepository {
       readonly actionId: string;
       readonly requestFingerprint: string;
       readonly expectedThreadRevision: number;
-      readonly expectedFeatureRevision: number;
+      readonly expectedMutationRevision: number;
       readonly desiredPostcondition: Readonly<Record<string, unknown>>;
       readonly now: number;
     },
@@ -92,7 +92,7 @@ export class ProviderFeatureMutationRepository {
     assertIdentity(input.actionId, "action");
     assertPositive(input.schemaVersion, "schema_version");
     assertRevision(input.expectedThreadRevision, "thread_revision");
-    assertRevision(input.expectedFeatureRevision, "feature_revision");
+    assertRevision(input.expectedMutationRevision, "feature_revision");
     assertFingerprint(input.requestFingerprint);
     const desiredJson = encodeObject(input.desiredPostcondition);
     assertNow(input.now);
@@ -105,7 +105,7 @@ export class ProviderFeatureMutationRepository {
         existing.actionId !== input.actionId ||
         existing.requestFingerprint !== input.requestFingerprint ||
         existing.expectedThreadRevision !== input.expectedThreadRevision ||
-        existing.expectedFeatureRevision !== input.expectedFeatureRevision ||
+        existing.expectedMutationRevision !== input.expectedMutationRevision ||
         JSON.stringify(existing.desiredPostcondition) !== desiredJson
       ) {
         throw receiptConflict();
@@ -117,7 +117,7 @@ export class ProviderFeatureMutationRepository {
         INSERT INTO provider_feature_mutation_receipts(
           tenant_id, owner_principal_id, application_thread_id, mutation_id,
           feature_id, schema_version, action_id, request_fingerprint,
-          expected_thread_revision, expected_feature_revision, state,
+          expected_thread_revision, expected_mutation_revision, state,
           desired_postcondition_json, result_json, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, NULL, ?, ?)
       `).run(
@@ -130,7 +130,7 @@ export class ProviderFeatureMutationRepository {
         input.actionId,
         input.requestFingerprint,
         input.expectedThreadRevision,
-        input.expectedFeatureRevision,
+        input.expectedMutationRevision,
         desiredJson,
         input.now,
         input.now,
@@ -232,7 +232,7 @@ function parseReceipt(row: ReceiptRow): ProviderFeatureMutationReceiptRecord {
     actionId: row.actionId,
     requestFingerprint: row.requestFingerprint,
     expectedThreadRevision: row.expectedThreadRevision,
-    expectedFeatureRevision: row.expectedFeatureRevision,
+    expectedMutationRevision: row.expectedMutationRevision,
     state: row.forceResetAt === null ? row.state : "abandoned",
     desiredPostcondition: decodeObject(row.desiredPostconditionJson),
     result: row.resultJson === null ? null : decodeObject(row.resultJson),

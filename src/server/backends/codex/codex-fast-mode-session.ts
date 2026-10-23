@@ -1,3 +1,4 @@
+import type { CodexSpeedSession } from "./codex-speed-session.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type { CodexSharedClientFacade } from "./codex-client-facade.js";
 import { codexThreadSettingsUpdateMethod } from "./codex-c2-protocol.js";
@@ -16,6 +17,7 @@ export type CodexFastModeProjection = Readonly<{
   revision: number;
   fastEnabled: boolean;
   ultrafastEnabled: boolean;
+  stepSwitchingEnabled: boolean;
   availability: "available" | "unavailable";
   unavailableReason?: string;
 }>;
@@ -82,6 +84,17 @@ type RefreshAuthority = Readonly<{
  * session, and every native write is fenced to that daemon generation.
  */
 export class CodexFastModeSessionRegistry {
+  readonly #controllers = new Map<string, CodexSpeedSession>();
+  controller(scope: RequestScope, applicationThreadId: string): CodexSpeedSession | undefined {
+    return this.#controllers.get(key(scope, applicationThreadId));
+  }
+  installController(scope: RequestScope, applicationThreadId: string, controller: CodexSpeedSession): () => void {
+    const id = key(scope, applicationThreadId);
+    this.#controllers.get(id)?.close();
+    this.#controllers.set(id, controller);
+    return () => { if (this.#controllers.get(id) === controller) this.#controllers.delete(id); controller.close(); };
+  }
+
   readonly #records = new Map<string, SessionRecord>();
   readonly #refreshAuthorities = new Map<string, RefreshAuthority>();
   readonly #pendingRecoveries = new Map<string, PendingRecovery>();
@@ -118,6 +131,7 @@ export class CodexFastModeSessionRegistry {
           revision: record.projection.revision,
           fastEnabled: record.projection.fastEnabled,
           ultrafastEnabled: record.projection.ultrafastEnabled,
+          stepSwitchingEnabled: false,
           availability: "unavailable",
           unavailableReason: "generation_changed",
         };
@@ -138,6 +152,7 @@ export class CodexFastModeSessionRegistry {
         revision: prior?.projection.revision ?? 0,
         fastEnabled: prior?.projection.fastEnabled ?? false,
         ultrafastEnabled: prior?.projection.ultrafastEnabled ?? false,
+        stepSwitchingEnabled: false,
         availability: "unavailable",
         unavailableReason: "generation_changed",
       });
@@ -162,6 +177,7 @@ export class CodexFastModeSessionRegistry {
         revision: (prior?.projection.revision ?? 0) + 1,
         fastEnabled: prior?.projection.fastEnabled ?? false,
         ultrafastEnabled: prior?.projection.ultrafastEnabled ?? false,
+        stepSwitchingEnabled: false,
         availability: "unavailable",
         unavailableReason: "feature_unavailable",
       });
@@ -183,9 +199,14 @@ export class CodexFastModeSessionRegistry {
         ultrafastEnabled:
           latest?.projection.ultrafastEnabled ??
           prior?.projection.ultrafastEnabled ?? projection.ultrafastEnabled,
+        stepSwitchingEnabled: false,
         availability: "unavailable",
         unavailableReason: "generation_changed",
       });
+    }
+    if (prior && prior.connectionGeneration === input.connectionGeneration &&
+        JSON.stringify({ ...projection, revision: 0 }) === JSON.stringify({ ...prior.projection, revision: 0 })) {
+      projection = prior.projection;
     }
     this.#records.set(recordKey, {
       projection,
@@ -199,6 +220,7 @@ export class CodexFastModeSessionRegistry {
     ) {
       this.#scheduleRecovery(input);
     }
+    this.controller(input.scope, input.applicationThreadId)?.scheduleDefaults();
     return projection;
   }
 
@@ -207,38 +229,10 @@ export class CodexFastModeSessionRegistry {
     applicationThreadId: string,
     selection: CodexServiceTierSelection,
   ): Promise<void> {
-    const record = this.#records.get(key(scope, applicationThreadId));
-    if (
-      !record ||
-      (record.projection.availability !== "available" &&
-        record.projection.unavailableReason !== "feature_disabled") ||
-      !codexSpeedPolicyAllows(record.projection, selection)
-    ) {
-      throw new Error("codex_fast_mode_session_unavailable");
-    }
-    const lifecycle = record.client.lifecycleSnapshot();
-    if (
-      lifecycle.state !== "ready" ||
-      lifecycle.generation !== record.connectionGeneration
-    ) {
-      throw new Error("codex_fast_mode_generation_changed");
-    }
-    const response = await record.client.requestWithReceipt(
-      codexThreadSettingsUpdateMethod,
-      {
-        threadId: record.nativeThreadId,
-        serviceTier: encodeCodexServiceTier(selection),
-      },
-      { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS },
-    );
-    const current = record.client.lifecycleSnapshot();
-    if (
-      response.generation !== record.connectionGeneration ||
-      current.state !== "ready" ||
-      current.generation !== response.generation
-    ) {
-      throw new Error("codex_fast_mode_generation_changed");
-    }
+    // All Speed default writes share the handle's actor-ordered idle coordinator.
+    // The current durable selection is read there; never replay this captured argument.
+    void selection;
+    this.controller(scope, applicationThreadId)?.scheduleDefaults();
   }
 
   #scheduleRecovery(input: RefreshInput): void {

@@ -17,12 +17,13 @@ export async function readCodexSpeedEnablement(input: {
   readonly connectionGeneration: number;
   readonly client: CodexSharedClientFacade;
   readonly signal?: AbortSignal;
-}): Promise<{ fastEnabled: boolean; ultrafastEnabled: boolean }> {
+}): Promise<{ fastEnabled: boolean; ultrafastEnabled: boolean; stepSwitchingEnabled: boolean }> {
   let cursor: string | null = null;
   const names = new Set<string>();
   const cursors = new Set<string>();
   let fastModeEnabled: boolean | undefined;
   let ultrafastModeEnabled: boolean | undefined;
+  let stepSwitchingEnabled = false;
   for (let page = 0; page < MAXIMUM_FEATURE_PAGES; page += 1) {
     const response: {
       readonly generation: number;
@@ -52,6 +53,10 @@ export async function readCodexSpeedEnablement(input: {
         throw new Error("codex_feature_catalog_duplicate");
       }
       names.add(feature.name);
+      if (feature.name === "step_model_switching") {
+        // An unfamiliar active-step contract must not withdraw idle Speed.
+        stepSwitchingEnabled = feature.stage === "underDevelopment" && feature.enabled;
+      }
       if (
         feature.name === FAST_MODE_FEATURE_NAME ||
         feature.name === ULTRAFAST_MODE_FEATURE_NAME
@@ -69,6 +74,7 @@ export async function readCodexSpeedEnablement(input: {
     cursor = response.result.nextCursor;
     if (cursor === null) {
       return {
+        stepSwitchingEnabled,
         fastEnabled: fastModeEnabled ?? false,
         ultrafastEnabled: ultrafastModeEnabled ?? false,
       };

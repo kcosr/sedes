@@ -25,7 +25,7 @@ const threadMethods = new Set<CodexClientRequestMethod>([
   "thread/name/set", "thread/settings/update", "thread/goal/get",
   "thread/goal/set", "thread/goal/clear",
   "thread/unsubscribe", "thread/compact/start",
-  "turn/start", "turn/steer", "turn/interrupt",
+  "turn/start", "turn/steer", "turn/interrupt", "turn/settings/update",
 ]);
 
 /** Native threads are independent ordering domains within one Codex runtime.

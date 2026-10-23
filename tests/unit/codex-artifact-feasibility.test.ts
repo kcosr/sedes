@@ -227,7 +227,7 @@ describe("Codex D3 production app-server binding", () => {
     expect(adoptionManifest.productionRuntimeCompatibility.currentPolicy).toBe(
       "stable releases admitted by the runtime policy using exactly the 0.163.0 parser profile",
     );
-    expect(adoptionManifest.routes).toHaveLength(75);
+    expect(adoptionManifest.routes).toHaveLength(77);
 
     const byDirection = adoptionManifest.routes.reduce<
       Record<string, typeof adoptionManifest.routes>
@@ -235,10 +235,10 @@ describe("Codex D3 production app-server binding", () => {
       (groups[route.direction] ??= []).push(route);
       return groups;
     }, {});
-    expect(byDirection.client_request).toHaveLength(26);
+    expect(byDirection.client_request).toHaveLength(27);
     expect(byDirection.client_notification).toHaveLength(1);
     expect(byDirection.server_request).toHaveLength(10);
-    expect(byDirection.server_notification).toHaveLength(38);
+    expect(byDirection.server_notification).toHaveLength(39);
 
     expect(
       byDirection.client_request!
@@ -247,7 +247,7 @@ describe("Codex D3 production app-server binding", () => {
     ).toEqual([]);
     expect(
       byDirection.client_request!.filter((route) => route.use === "invoked"),
-    ).toHaveLength(26);
+    ).toHaveLength(27);
 
     expect(methods(byDirection.client_request)).toEqual(
       [...CODEX_CLIENT_REQUEST_METHODS].sort(),
@@ -283,14 +283,15 @@ describe("Codex D3 production app-server binding", () => {
     }
   });
 
-  it("separates method stability from the twelve selected experimental artifacts", () => {
-    expect(CODEX_EXPERIMENTAL_CLIENT_REQUEST_METHODS).toEqual([
+  it("separates method stability from the thirteen selected experimental artifacts", () => {
+    expect([...CODEX_EXPERIMENTAL_CLIENT_REQUEST_METHODS].sort()).toEqual([
       "thread/settings/update",
+      "turn/settings/update",
     ]);
     const experimentalArtifacts = adoptionManifest.routes.filter(
       (route) => route.artifactProfile === "experimental",
     );
-    expect(experimentalArtifacts).toHaveLength(12);
+    expect(experimentalArtifacts).toHaveLength(13);
     expect(
       experimentalArtifacts
         .map((route) => `${route.direction}:${route.method}`)
@@ -303,6 +304,7 @@ describe("Codex D3 production app-server binding", () => {
       "client_request:thread/settings/update",
       "client_request:thread/start",
       "client_request:thread/unarchive",
+      "client_request:turn/settings/update",
       "server_notification:thread/readState/changed",
       "server_notification:thread/settings/updated",
       "server_notification:thread/started",
@@ -312,8 +314,8 @@ describe("Codex D3 production app-server binding", () => {
     expect(
       adoptionManifest.routes
         .filter((route) => route.stability === "experimental")
-        .map((route) => route.method),
-    ).toEqual(["thread/settings/update"]);
+        .map((route) => route.method).sort(),
+    ).toEqual(["thread/settings/update", "turn/settings/update"]);
     expect(stableProtocolManifest.methods.serverNotifications).toContain(
       "thread/readState/changed",
     );
