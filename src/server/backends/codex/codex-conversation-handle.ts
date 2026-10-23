@@ -2097,26 +2097,32 @@ export class CodexConversationHandle implements ConversationHandle {
     }
   }
 
-  #publishControl(thread: CodexThread, generation: number, observationBeforeRead: number): void {
+  #publishControl(thread: CodexThread, generation: number, observationBeforeRead: number,
+    turns: "omitted" | "included"): void {
     if (thread.status.type !== "active" && thread.status.type !== "idle") return;
-    if (this.#controlGeneration === generation && !this.#controlLifetime.signal.aborted) {
-      const active = activeNativeTurnId(thread);
-      if (observationBeforeRead === this.#controlObservationRevision) {
-        this.#controlTurn = thread.status.type === "idle" ? { generation, turnId: null }
-          : active ? { generation, turnId: active } : undefined;
-        if (this.#controlTurn?.turnId === null) this.#speedSession.observedIdle();
-      }
-      return;
+    const sameLifetime = this.#controlGeneration === generation && !this.#controlLifetime.signal.aborted;
+    if (!sameLifetime) {
+      this.#controlLifetime.abort();
+      this.#controlLifetime = new AbortController();
+      this.#controlGeneration = generation;
     }
-    this.#controlLifetime.abort();
-    this.#controlLifetime = new AbortController();
-    this.#controlGeneration = generation;
-    const active = activeNativeTurnId(thread);
     if (observationBeforeRead === this.#controlObservationRevision) {
-      this.#controlTurn = thread.status.type === "idle" ? { generation, turnId: null }
-        : active ? { generation, turnId: active } : undefined;
-      if (this.#controlTurn?.turnId === null) this.#speedSession.observedIdle();
+      if (thread.status.type === "idle") {
+        this.#controlTurn = { generation, turnId: null };
+        this.#speedSession.observedIdle();
+      } else if (turns === "included") {
+        const active = activeNativeTurnId(thread);
+        if (this.#controlTurn?.generation === generation && this.#controlTurn.turnId !== null &&
+            this.#controlTurn.turnId !== active) this.#speedSession.invalidate();
+        this.#controlTurn = active ? { generation, turnId: active } : undefined;
+      } else if (!sameLifetime || this.#controlTurn?.generation !== generation || this.#controlTurn.turnId === null) {
+        // Metadata-only active replies omit turn identity. Preserve an exact
+        // active target only within its uninterrupted control lifetime; the
+        // hydrated history below will revalidate it without outranking events.
+        this.#controlTurn = undefined;
+      }
     }
+    if (sameLifetime) return;
     this.#acceptedStop = undefined;
     const lifetime = this.#controlLifetime.signal;
     this.#onControlReady?.({
@@ -2902,7 +2908,7 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#assertEstablishmentMayContinue(signal);
         this.#assertCurrentReceipt(inspected.generation);
         this.#validateThread(inspected.result.thread);
-        this.#publishControl(inspected.result.thread, inspected.generation, controlObservationBeforeRead);
+        this.#publishControl(inspected.result.thread, inspected.generation, controlObservationBeforeRead, "omitted");
         const historyMode = assertCodexHistoryMode(inspected.result.thread);
 
         let desiredBeforeResume = this.#executionSettings.desiredSettings(
@@ -3201,7 +3207,8 @@ export class CodexConversationHandle implements ConversationHandle {
             "codex_history_mode_changed",
           );
         }
-        this.#publishControl(resumed.result.thread, resumed.generation, controlObservationBeforeResume);
+        this.#publishControl(resumed.result.thread, resumed.generation, controlObservationBeforeResume,
+          historyMode === "legacy" ? "included" : "omitted");
         if (requestedNativeResume) this.#usageCapture?.resumed({ generation: resumed.generation, sequence: resumed.inboundSequence,
           idle: resumed.result.thread.status.type === "idle" });
         let projection: CodexWindowProjection;
@@ -3243,6 +3250,17 @@ export class CodexConversationHandle implements ConversationHandle {
           current.generation !== resumed.generation
         ) {
           continue;
+        }
+        if (historyMode === "paginated") {
+          // History can disprove retained control, but cannot grant it. Keep
+          // the pre-resume fence so newer live control observations win.
+          const control = this.#controlTurn;
+          if (control?.generation === resumed.generation && control.turnId !== null &&
+              controlObservationBeforeResume === this.#controlObservationRevision &&
+              activeNativeTurnId(projectionThread) !== control.turnId) {
+            this.#controlTurn = undefined;
+            this.#speedSession.invalidate();
+          }
         }
         let settingsReceipt: CodexSettingsObservationReceipt = {
           generation: resumed.generation,
