@@ -531,6 +531,16 @@ describe("Codex interactive action persistence", () => {
   });
 
   const speedTarget = { turnId: "application-turn", activationId: "activation" };
+  function speedRequest(current: ReturnType<typeof fixture>, id: string, selection: SpeedSelection, active = false,
+    expectedMutationRevision = current.settings.find(current.scope, current.codexThreadId)!.desiredRevision) {
+    return {
+      mutationId: id, expectedThreadRevision: current.inventory.getThread(current.scope, current.codexThreadId).thread.revision,
+      operation: { action: "perform_provider_feature" as const, feature: CODEX_SPEED_REF, actionId: "set_speed",
+        arguments: speedArgumentsValue({ selection, currentRunTarget: active ? speedTarget : null }), expectedMutationRevision },
+      now: 400, actor: { isIdle: () => !active, resolveTurnId: () => "native-turn", mutateExternal: async () => ({ outcome: "rejected" as const }) },
+      featureState: boundValue({ saved: { selection: "standard", desiredRevision: 0 }, offered: ["standard", "fast", "ultrafast"].map(selection => ({ selection })), currentRun: null, lastChange: null }),
+    };
+  }
   function speedFixture(active = false) {
     const publish = vi.fn(async (input: { arguments: { selection: SpeedSelection }; dispatching(continuity: string): void }): Promise<SpeedCurrentRunResult> => {
       input.dispatching("native-stream-1");
@@ -539,13 +549,8 @@ describe("Codex interactive action persistence", () => {
     const controller = { currentRun: () => null, prepare: vi.fn(async () => {}), admit: () => active ? "active" : "idle",
       publish, syncDefaults: vi.fn(async () => {}) } as unknown as CodexSpeedSession;
     const current = fixture({ fastModeRuntime: { controller: () => controller, syncServiceTier: vi.fn(async () => {}) } });
-    const request = (id: string, selection: SpeedSelection, expectedMutationRevision = current.settings.find(current.scope, current.codexThreadId)!.desiredRevision) => ({
-      mutationId: id, expectedThreadRevision: current.inventory.getThread(current.scope, current.codexThreadId).thread.revision,
-      operation: { action: "perform_provider_feature" as const, feature: CODEX_SPEED_REF, actionId: "set_speed",
-        arguments: speedArgumentsValue({ selection, currentRunTarget: active ? speedTarget : null }), expectedMutationRevision },
-      now: 400, actor: { isIdle: () => !active, resolveTurnId: () => "native-turn", mutateExternal: async () => ({ outcome: "rejected" as const }) },
-      featureState: boundValue({ saved: { selection: "standard", desiredRevision: 0 }, offered: ["standard", "fast", "ultrafast"].map(selection => ({ selection })), currentRun: null, lastChange: null }),
-    });
+    const request = (id: string, selection: SpeedSelection, expectedMutationRevision?: number) =>
+      speedRequest(current, id, selection, active, expectedMutationRevision);
     const perform = (input: ReturnType<typeof request>) => current.persistence.performProviderFeature(current.scope, current.codexThreadId, input);
     return { ...current, publish, controller, request, perform };
   }
@@ -636,7 +641,7 @@ describe("Codex interactive action persistence", () => {
 
   it("saves drafts without acquiring a runtime and rejects retired action shapes", async () => {
     const f = fixture({ unbound: true, enabledAutomation: true });
-    const base = speedFixture().request("draft", "fast");
+    const base = speedRequest(f, "draft", "fast");
     const response = await f.persistence.performProviderFeature(f.scope, f.codexThreadId, { ...base, actor: undefined,
       expectedThreadRevision: f.inventory.getThread(f.scope, f.codexThreadId).thread.revision,
       operation: { ...base.operation, expectedMutationRevision: f.settings.find(f.scope, f.codexThreadId)!.desiredRevision } });

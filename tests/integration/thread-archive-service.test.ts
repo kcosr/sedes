@@ -586,7 +586,7 @@ describe("thread family archive service", () => {
     }
   });
 
-  it("keeps isolated workspaces explicitly and executes only an exact delete disposition", async () => {
+  it("keeps isolated workspaces explicitly", async () => {
     const kept = fixture();
     try {
       expect(() =>
@@ -611,7 +611,9 @@ describe("thread family archive service", () => {
     } finally {
       kept.database.close();
     }
+  });
 
+  it("executes only an exact isolated workspace delete disposition", async () => {
     const deleted = fixture();
     try {
       const disposition = {
