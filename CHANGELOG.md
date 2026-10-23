@@ -18,12 +18,13 @@ User-facing changes are collected here before release. See the
   review rather than broadened. Saved Agent and thread-create tool contracts
   advance to version 6; thread-message transcripts advance to version 5 to
   identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
-  ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112))
+  ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112), [#116](https://github.com/kcosr/sedes/pull/116))
 
 - Upgrade execution sidecars with the server for runtime wire version **15**
   and negotiated traffic compression. Incompatible active services retain the
   existing interruption checks; see
   [persistent service upgrades](docs/operator/operations.md#persistent-remote-services).
+  ([#116](https://github.com/kcosr/sedes/pull/116))
 
 - Upgrade OpenCode execution sidecars with the server for private OpenCode
   runtime protocol **3**, which reports the observed native version. See
@@ -65,11 +66,13 @@ User-facing changes are collected here before release. See the
   reducing transfer size while flushing live events promptly. Operators can
   disable it with `SEDES_CLIENT_RESPONSE_COMPRESSION=false`; see
   [client response compression](docs/operator/configuration.md#client-response-compression).
+  ([#116](https://github.com/kcosr/sedes/pull/116))
 
 - SSH and outbound environments compress eligible traffic in both directions
   by default. **Compress connection traffic** applies to future connections
   without interrupting active work. See
   [execution environment settings](docs/operator/configuration.md#execution-environments).
+  ([#116](https://github.com/kcosr/sedes/pull/116))
 
 - Settings → General can retry failed model requests once by sending an
   automatic Continue message after ten seconds across all backends and servers.
