@@ -877,7 +877,7 @@ describe("SettingsView", () => {
     expect(screen.getByText(/across every Codex connection/)).toBeVisible();
     // The page's settings are this browser's; this one follows the account.
     expect(toggle).toHaveAccessibleName("Show OpenAI skills in composer Account");
-    expect(screen.getAllByText("Account", { selector: '[data-slot="tag"]' })).toHaveLength(2);
+    expect(screen.getAllByText("Account", { selector: '[data-slot="tag"]' })).toHaveLength(1);
     expect(
       screen.getByText(/Preferences for this browser, unless a setting names another scope\./),
     ).toBeVisible();
@@ -912,7 +912,7 @@ describe("SettingsView", () => {
     const skillsToggle = screen.getByTestId("show-openai-composer-skills-toggle");
     await waitFor(() => expect(retryToggle).not.toBeDisabled());
     expect(screen.getByRole("heading", { name: "Agent behavior" })).toBeVisible();
-    expect(retryToggle).toHaveAccessibleName("Automatically retry failed model requests Account");
+    expect(retryToggle).toHaveAccessibleName("Automatically retry failed model requests");
     expect(retryToggle).toHaveAccessibleDescription("Retry once after a short delay. Applies to all backends and servers.");
     expect(retryToggle).toHaveAttribute("data-state", "checked");
     expect(read).toHaveBeenCalledTimes(1);

@@ -84,9 +84,7 @@ export function GeneralSettingsPage({
         <SettingsSection title="Agent behavior" card>
           <SwitchField
             id="setting-auto-retry-model-failures"
-            label={
-              <>Automatically retry failed model requests <Tag>Account</Tag></>
-            }
+            label="Automatically retry failed model requests"
             description="Retry once after a short delay. Applies to all backends and servers."
             checked={account.preferences?.autoRetryModelFailures ?? false}
             disabled={!account.preferences || account.saving}
