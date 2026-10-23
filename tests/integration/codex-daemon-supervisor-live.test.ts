@@ -2347,11 +2347,28 @@ plugins = false
           requestOptions,
         );
         await Promise.all([streamed, completed]);
-        await supervisor.client.request(
-          codexThreadUnsubscribeMethod,
-          { threadId: started.thread.id },
-          requestOptions,
+        // Unsubscribe acknowledges subscription removal before native shutdown
+        // settles. Passive history needs the closed, flushed session rather
+        // than racing the thread's idle-to-notLoaded transition.
+        const closed = nextNotification(
+          supervisor.client,
+          "thread/closed",
+          (params) => isRecord(params) && params.threadId === started.thread.id,
+          30_000,
         );
+        await Promise.all([
+          closed,
+          supervisor.client.request(
+            codexThreadUnsubscribeMethod,
+            { threadId: started.thread.id },
+            requestOptions,
+          ),
+        ]);
+        await expect(supervisor.client.request(
+          codexThreadReadMethod,
+          { threadId: started.thread.id, includeTurns: false },
+          requestOptions,
+        )).resolves.toMatchObject({ thread: { status: { type: "notLoaded" } } });
 
         const instance: AgentBackendInstance = {
           id: runtimeScope.backendInstanceId, tenantId: scope.tenantId,
