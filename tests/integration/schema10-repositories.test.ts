@@ -2782,84 +2782,82 @@ describe("inactive schema-10 repositories", () => {
     } finally { fixture.database.close(); }
   });
 
-  it("uses canonical 16-task byte accounting at the exact acceptance boundary", () => {
-    for (const extraByte of [0, 1]) {
-      const fixture = createFixture();
-      try {
-        bindDiscovered(fixture);
-        const tasks = new TaskRepository(fixture.database);
-        const drafts = new ConversationDraftRepository(fixture.database);
-        const queue = new QueuedInputRepository(fixture.database);
-        const taskContexts = Array.from({ length: 16 }, (_, index) => `task-${index + 1}`).map(
-          (suffix, index) =>
-            materializeTaskContext(
-              presentTask(
-                tasks.create(fixture.scope, {
-                  title: `Boundary ${suffix}`,
-                  details: `${suffix}:`.padEnd(12_250, "d"),
-                  scope: { kind: "global" },
-                  mutationId: `task-context-boundary-create-${suffix}`,
-                  now: 590 + index,
-                }),
-              ),
+  it.each([0, 1])("uses canonical 16-task byte accounting at the exact acceptance boundary (extra bytes: %s)", (extraByte) => {
+    const fixture = createFixture();
+    try {
+      bindDiscovered(fixture);
+      const tasks = new TaskRepository(fixture.database);
+      const drafts = new ConversationDraftRepository(fixture.database);
+      const queue = new QueuedInputRepository(fixture.database);
+      const taskContexts = Array.from({ length: 16 }, (_, index) => `task-${index + 1}`).map(
+        (suffix, index) =>
+          materializeTaskContext(
+            presentTask(
+              tasks.create(fixture.scope, {
+                title: `Boundary ${suffix}`,
+                details: `${suffix}:`.padEnd(12_250, "d"),
+                scope: { kind: "global" },
+                mutationId: `task-context-boundary-create-${suffix}`,
+                now: 590 + index,
+              }),
             ),
-        );
-        const taskBytes = composerInputUtf8Bytes({
-          text: "",
-          contextExcerpts: [],
-          taskContexts,
-        });
-        const text = "x".repeat(
-          MAXIMUM_THREAD_INPUT_BYTES - taskBytes + extraByte,
-        );
-        expect(
-          composerInputUtf8Bytes({
-            text,
-            contextExcerpts: [],
-            taskContexts,
-          }),
-        ).toBe(MAXIMUM_THREAD_INPUT_BYTES + extraByte);
-        const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
+          ),
+      );
+      const taskBytes = composerInputUtf8Bytes({
+        text: "",
+        contextExcerpts: [],
+        taskContexts,
+      });
+      const text = "x".repeat(
+        MAXIMUM_THREAD_INPUT_BYTES - taskBytes + extraByte,
+      );
+      expect(
+        composerInputUtf8Bytes({
           text,
           contextExcerpts: [],
+          taskContexts,
+        }),
+      ).toBe(MAXIMUM_THREAD_INPUT_BYTES + extraByte);
+      const draft = new InventoryRepository(fixture.database).saveDraft(fixture.scope, fixture.threadId, {
+        text,
+        contextExcerpts: [],
+        attachmentIds: [],
+        taskReferenceIds: taskContexts.map(({ id }) => id),
+        expectedRevision: drafts.get(fixture.scope, fixture.threadId)
+          .revision,
+        now: 592,
+      });
+      const enqueue = () =>
+        queue.enqueue(fixture.scope, fixture.threadId, {
+          mutationId: `task-context-boundary-enqueue-${extraByte}`,
+          text: draft.text,
+          contextExcerpts: [],
           attachmentIds: [],
-          taskReferenceIds: taskContexts.map(({ id }) => id),
-          expectedRevision: drafts.get(fixture.scope, fixture.threadId)
-            .revision,
-          now: 592,
+          taskReferences: draft.taskReferences,
+          source: {
+            kind: "composer",
+            requestedDeliveryMode: "queue",
+            resolvedDeliveryMode: "queue",
+            expectedThreadRevision: threadRevision(fixture),
+            expectedDraftRevision: draft.revision,
+          },
+          now: 593,
         });
-        const enqueue = () =>
-          queue.enqueue(fixture.scope, fixture.threadId, {
-            mutationId: `task-context-boundary-enqueue-${extraByte}`,
-            text: draft.text,
-            contextExcerpts: [],
-            attachmentIds: [],
-            taskReferences: draft.taskReferences,
-            source: {
-              kind: "composer",
-              requestedDeliveryMode: "queue",
-              resolvedDeliveryMode: "queue",
-              expectedThreadRevision: threadRevision(fixture),
-              expectedDraftRevision: draft.revision,
-            },
-            now: 593,
-          });
-        if (extraByte === 0) {
-          expect(enqueue().item.taskContexts).toEqual(taskContexts);
-          expect(queue.list(fixture.scope, fixture.threadId)).toHaveLength(1);
-        } else {
-          expect(enqueue).toThrow(
-            new DomainError(
-              "task_context_too_large",
-              "The attached task content is too large to send. Remove a task or shorten its details.",
-            ),
-          );
-          expect(queue.list(fixture.scope, fixture.threadId)).toEqual([]);
-          expect(drafts.get(fixture.scope, fixture.threadId)).toEqual(draft);
-        }
-      } finally {
-        fixture.database.close();
+      if (extraByte === 0) {
+        expect(enqueue().item.taskContexts).toEqual(taskContexts);
+        expect(queue.list(fixture.scope, fixture.threadId)).toHaveLength(1);
+      } else {
+        expect(enqueue).toThrow(
+          new DomainError(
+            "task_context_too_large",
+            "The attached task content is too large to send. Remove a task or shorten its details.",
+          ),
+        );
+        expect(queue.list(fixture.scope, fixture.threadId)).toEqual([]);
+        expect(drafts.get(fixture.scope, fixture.threadId)).toEqual(draft);
       }
+    } finally {
+      fixture.database.close();
     }
   });
 

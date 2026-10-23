@@ -824,14 +824,16 @@ and clear include an integer revision and therefore use the generic typed
 `sedes tool invoke` form; the current ergonomic resolver supports string
 positionals only.
 
-`thread.messages@4` keeps settled-turn pagination unchanged. A request without
+`thread.messages@5` keeps settled-turn pagination unchanged. A request without
 a cursor also returns `activeTurn` from the same conversation snapshot: null
 when there is no active turn, or a bounded chronological tail of ordinary user
 and assistant messages whose normalized items are completed even though the
 turn remains in progress. Those messages have stable normalized item IDs and
 do not consume `pageSize`. User-role inter-agent input retains its optional
 authenticated `agent_message` or `agent_result` origin in both settled and
-active projections.
+active projections. Sedes automatic retry follow-ups carry
+`automaticRetry: true`, identifying application-generated input separately
+from human messages. Their transcript projection has no inter-agent origin.
 Streaming partials and non-message activity are not returned, and text-final
 completion does not imply turn success or idleness. Continuation pages omit
 `activeTurn` and remain fixed to their settled-history snapshot.

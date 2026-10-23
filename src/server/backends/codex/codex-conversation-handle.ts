@@ -47,6 +47,7 @@ import type {
   LocateTurnInput,
   LocateTurnResult,
   RegisteredBackendActionInput,
+  RecoverModelFailureInput,
   SteerTurnInput,
   SteerTurnResult,
   SubmitTurnInput,
@@ -169,9 +170,12 @@ import {
   type CodexGoalActionId,
 } from "./codex-goal-feature.js";
 import type { CodexGoalSessionRegistry } from "./codex-goal-session.js";
+import { CodexGoalRecoveryTracker, type CodexGoalRecoveryEvidence } from "./codex-goal-recovery.js";
 import {
   refineCodexThreadGoalClearedNotification,
   refineCodexThreadGoalUpdatedNotification,
+  codexThreadGoalGetMethod,
+  projectCodexNativeGoal,
 } from "./codex-goal-protocol.js";
 import {
   CodexFastModeSessionRegistry,
@@ -405,6 +409,10 @@ export class CodexConversationHandle implements ConversationHandle {
     fresh: boolean,
   ) => Promise<readonly ("text" | "image")[]>;
   readonly #goalSessions: CodexGoalSessionRegistry | undefined;
+  readonly #goalRecovery = new CodexGoalRecoveryTracker();
+  readonly #goalRecoveryPolicies = new Map<string, CodexObservedExecutionSettings>();
+  #goalRecoveryObservedPolicy: CodexObservedExecutionSettings | undefined;
+  #goalRecoveryGeneration = 0;
   readonly #managedTui:
     | import("./codex-managed-tui-controller.js").CodexManagedTuiController
     | undefined;
@@ -2021,6 +2029,7 @@ export class CodexConversationHandle implements ConversationHandle {
   }
 
   async interrupt(input: InterruptConversationInput): Promise<void> {
+    this.#goalRecovery.cancelRecovery();
     this.#assertOpen();
     const generation = this.#controlGeneration;
     const lifetime = this.#controlLifetime.signal;
@@ -2157,11 +2166,33 @@ export class CodexConversationHandle implements ConversationHandle {
       catch { this.#speedSession.invalidate(); }
       return;
     }
+    if ((notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared") &&
+        !this.#establishing && !this.#replayingPaginatedEstablishmentNotification) {
+      try {
+        if (notification.method === "thread/goal/updated") {
+          const update = refineCodexThreadGoalUpdatedNotification(assertCodexAttestedServerNotificationParams("thread/goal/updated", notification.params));
+          this.#goalRecovery.observeGoal({ generation: notification.generation, turnId: update.turnId, goal: update.goal });
+        } else {
+          refineCodexThreadGoalClearedNotification(assertCodexAttestedServerNotificationParams("thread/goal/cleared", notification.params));
+          this.#goalRecovery.observeGoal({ generation: notification.generation, turnId: null, goal: null });
+        }
+      } catch { this.#goalRecovery.cancelRecovery(); }
+    }
+    if (notification.method === "error" && !this.#establishing && !this.#replayingPaginatedEstablishmentNotification) {
+      try {
+        const failure = codexC2NotificationSchemas.error.parse(notification.params);
+        if (!failure.willRetry && failure.turnId) this.#goalRecovery.completed({ generation: notification.generation, turnId: failure.turnId, outcome: "failed" });
+      } catch { this.#goalRecovery.cancelRecovery(); }
+    }
     if (!["turn/started", "turn/completed", "thread/status/changed"].includes(notification.method)) return;
     this.#controlObservationRevision++;
     try {
       if (notification.method === "turn/started") {
         const parsed = codexC2NotificationSchemas["turn/started"].parse(notification.params);
+        if (!this.#establishing && !this.#replayingPaginatedEstablishmentNotification) {
+          this.#goalRecovery.started({ generation: notification.generation, turnId: parsed.turn.id });
+          if (this.#goalRecoveryObservedPolicy) rememberBoundedReceipt(this.#goalRecoveryPolicies, parsed.turn.id, this.#goalRecoveryObservedPolicy);
+        }
         const pending = this.#pendingControlStart;
         if (pending) {
           if (parsed.turn.status !== "inProgress" ||
@@ -2174,6 +2205,10 @@ export class CodexConversationHandle implements ConversationHandle {
       } else if (notification.method === "turn/completed") {
         if (this.#pendingControlStart) this.#pendingControlStart.blocked = true;
         const parsed = codexC2NotificationSchemas["turn/completed"].parse(notification.params);
+        if (!this.#establishing && !this.#replayingPaginatedEstablishmentNotification && parsed.turn.status !== "inProgress") {
+          this.#goalRecovery.completed({ generation: notification.generation, turnId: parsed.turn.id,
+            outcome: parsed.turn.status === "interrupted" ? "interrupted" : parsed.turn.status === "failed" ? "failed" : "completed" });
+        }
         if (this.#subagentSpawningTurn?.turnId === parsed.turn.id) this.#subagentSpawningTurn = undefined;
         if (this.#controlTurn?.turnId === parsed.turn.id) this.#controlTurn = undefined;
         this.#speedSession.completed(parsed.turn.id);
@@ -2430,11 +2465,73 @@ export class CodexConversationHandle implements ConversationHandle {
         safeMessage: "The provider feature is not supported by this handle.",
       };
     }
+    this.#goalRecovery.cancelRecovery();
     return this.#mutateGoal(input, this.#establishedGeneration);
   }
 
+  isNativeRecoveryTurn(backendTurnId: string): boolean {
+    for (const turn of this.#nativeTurnById.values()) {
+      if (codexBackendTurnId(this.binding.backendConversationId, turn.id) === backendTurnId) {
+        return this.#goalRecovery.isGoalTurn(this.#establishedGeneration, turn.id);
+      }
+    }
+    return false;
+  }
+
+  async recoverModelFailure(request: RecoverModelFailureInput): Promise<"accepted" | "uncertain" | "rejected"> {
+    const receipts = this.#goalSessions?.recoveryReceipts;
+    if (!receipts || !request.isCurrent() || this.#closing || this.#closed || this.#establishing || this.#projectionInvalidated) return "rejected";
+    const nativeTurn = [...this.#nativeTurnById.values()].find(turn => codexBackendTurnId(this.binding.backendConversationId, turn.id) === request.backendTurnId);
+    const generation = this.#establishedGeneration;
+    const evidence = nativeTurn && this.#goalRecovery.recovery(generation, nativeTurn.id);
+    if (!evidence) return "rejected";
+    let admission: ReturnType<typeof receipts.begin> | undefined;
+    try {
+      return await this.#withMutation(async () => {
+        this.#assertMutableProjection();
+        const saved = this.#executionSettings.desiredSettings(this.#scope(), this.binding.applicationThreadId);
+        const observed = this.#goalRecoveryPolicies.get(evidence.turnId);
+        if (!saved || !observed || observed.policyObservation !== "complete" ||
+            (["model", "reasoningEffort", "serviceTier", "sandboxMode", "networkAccess", "approvalPolicy", "approvalReviewer"] as const).some(key => saved[key] !== observed[key])) return "rejected";
+        this.#executionSettings.assertExecutionPolicyAllowed(saved);
+        this.#assertModelPolicyAllowed(saved.model, saved.reasoningEffort);
+        await this.#validateExecutionSettingsForTurn(saved);
+        const fresh = await this.#client.request(codexThreadGoalGetMethod, { threadId: this.binding.backendConversationId }, { timeoutMilliseconds: 10_000, signal: this.#controlLifetime.signal });
+        if (!request.isCurrent() || !this.#goalRecovery.canResume(evidence, fresh.goal) || !fresh.goal) return "rejected";
+        this.#goalSessions!.publishObserved({ scope: this.#scope(), applicationThreadId: this.binding.applicationThreadId,
+          nativeThreadId: this.binding.backendConversationId, connectionGeneration: generation,
+          state: projectCodexNativeGoal({ nativeGoal: fresh.goal, expectedThreadId: this.binding.backendConversationId }) });
+        const outcome = await this.#mutateGoal({ ...CODEX_GOAL_FEATURE_REF, actionId: "resume", arguments: {} }, generation, undefined, {
+          evidence, request, beforeWrite: () => {
+            this.#assertMutableProjection();
+            const latest = this.#executionSettings.desiredSettings(this.#scope(), this.binding.applicationThreadId);
+            const native = this.#goalRecoveryObservedPolicy;
+            if (!request.isCurrent() || this.#goalRecovery.recovery(generation, evidence.turnId)?.epoch !== evidence.epoch ||
+                !latest || !sameExecutionSettingsTuple(saved, latest) || !native || native.policyObservation !== "complete" ||
+                (["model", "reasoningEffort", "serviceTier", "sandboxMode", "networkAccess", "approvalPolicy", "approvalReviewer"] as const).some(key => saved[key] !== native[key])) return false;
+            this.#assertModelPolicyAllowed(latest.model, latest.reasoningEffort);
+            this.#executionSettings.assertExecutionPolicyAllowed(latest);
+            admission = receipts.begin({ binding: this.binding, mutationId: request.mutationId, evidence,
+              mutationRevision: this.#goalSessions!.projection(this.#scope(), this.binding.applicationThreadId)!.revision, now: this.#now() });
+            if (admission.outcome !== "admitted") return false;
+            request.onAdmitted();
+            return true;
+          },
+        });
+        if (admission && admission.outcome !== "admitted") return admission.outcome;
+        if (admission?.finish && !admission.finish(outcome.outcome)) return "uncertain";
+        return outcome.outcome;
+      });
+    } catch (error) {
+      this.#reportError(error);
+      return admission?.outcome === "admitted" ? "uncertain" : "rejected";
+    }
+  }
+
   async #mutateGoal(input: Parameters<NonNullable<ConversationHandle["mutateProviderFeature"]>>[0],
-    generation: number, stop?: InterruptConversationInput): Promise<Awaited<ReturnType<NonNullable<ConversationHandle["mutateProviderFeature"]>>>> {
+    generation: number, stop?: InterruptConversationInput,
+    recovery?: { readonly evidence: CodexGoalRecoveryEvidence; readonly request: RecoverModelFailureInput; readonly beforeWrite: () => boolean },
+  ): Promise<Awaited<ReturnType<NonNullable<ConversationHandle["mutateProviderFeature"]>>>> {
     if (!this.#goalSessions) {
       return {
         outcome: "rejected",
@@ -2509,6 +2606,9 @@ export class CodexConversationHandle implements ConversationHandle {
       };
     }
     checkBudget();
+    // Automatic recovery must verify idle defaults, unlike an explicit Goal
+    // action which can intentionally steer an already active turn.
+    if (recovery && !this.#speedSession.isIdleForGoalStart()) return { outcome: "rejected" };
     if ((actionId === "create" || actionId === "resume") &&
         this.#speedSession.isIdleForGoalStart() &&
         (current.state.state === "unset" || current.state.status !== "active")) {
@@ -2531,6 +2631,10 @@ export class CodexConversationHandle implements ConversationHandle {
         };
       }
     }
+    if (recovery) {
+      const fresh = await this.#client.request(codexThreadGoalGetMethod, { threadId: this.binding.backendConversationId }, { timeoutMilliseconds: 10_000, signal: this.#controlLifetime.signal });
+      if (!recovery.request.isCurrent() || !this.#goalRecovery.canResume(recovery.evidence, fresh.goal)) return { outcome: "rejected" };
+    }
     const outcome = await this.#goalSessions.mutateNative({
       client: this.#client,
       nativeThreadId: this.binding.backendConversationId,
@@ -2538,7 +2642,8 @@ export class CodexConversationHandle implements ConversationHandle {
       desired,
       arguments: input.arguments,
       currentState: current.state,
-      origin: stop ? "automatic" : "user",
+      origin: stop || recovery ? "automatic" : "user",
+      ...(recovery ? { beforeWrite: recovery.beforeWrite, signal: this.#controlLifetime.signal } : {}),
       ...(stop ? { deadlineAt: stop.deadlineAt, signal: stopSignal } : {}),
     });
     if (outcome.kind === "accepted") {
@@ -2618,6 +2723,12 @@ export class CodexConversationHandle implements ConversationHandle {
         nativeThreadId: this.binding.backendConversationId,
         connectionGeneration: this.#establishedGeneration,
         client: this.#client,
+        onReadGoal: goal => {
+          if (this.#goalRecoveryGeneration !== this.#establishedGeneration) {
+            this.#goalRecovery.establish(this.#establishedGeneration, goal);
+            this.#goalRecoveryGeneration = this.#establishedGeneration;
+          }
+        },
         ...(signal ? { signal } : {}),
       });
     } catch (cause) {
@@ -5373,6 +5484,10 @@ export class CodexConversationHandle implements ConversationHandle {
     this.#speedSession.lifecycle();
     if (lifecycle.state !== "ready" || lifecycle.generation !== this.#controlGeneration) {
       this.#controlLifetime.abort();
+      this.#goalRecovery.invalidate();
+      this.#goalRecoveryGeneration = 0;
+      this.#goalRecoveryPolicies.clear();
+      this.#goalRecoveryObservedPolicy = undefined;
       this.#controlTurn = undefined;
     }
     this.#projectionWorkQueue.enqueue(() => {
@@ -5671,6 +5786,10 @@ export class CodexConversationHandle implements ConversationHandle {
     confirmationGeneration: number,
     initializeDesired?: CodexExecutionSettingsTuple,
   ): void {
+    this.#goalRecoveryObservedPolicy = settings;
+    if (this.#controlTurn?.turnId && this.#controlTurn.generation === confirmationGeneration) {
+      rememberBoundedReceipt(this.#goalRecoveryPolicies, this.#controlTurn.turnId, settings);
+    }
     try {
       this.#executionSettings.observeEffective(this.#scope(), {
         applicationThreadId: this.binding.applicationThreadId,

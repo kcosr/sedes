@@ -456,7 +456,7 @@ describe("agent control tools through canonical adapters", () => {
         )
         .send({
           toolId: "thread.messages",
-          schemaVersion: 4,
+          schemaVersion: 5,
           requestId: `messages-${backend}`,
           input: { threadId: childThreadId },
         })
@@ -489,7 +489,7 @@ describe("agent control tools through canonical adapters", () => {
           value.canonical.invoke(
             {
               toolId: "thread.messages",
-              schemaVersion: 4,
+              schemaVersion: 5,
               requestId: "pi-native-messages",
               input: { threadId: childThreadId },
             },
@@ -570,7 +570,7 @@ describe("agent control tools through canonical adapters", () => {
             toolId === "thread.create"
               ? 6
               : toolId === "thread.messages"
-                ? 4
+                ? 5
                 : toolId === "thread.send"
                   ? 2
                 : toolId === "thread.status"

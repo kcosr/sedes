@@ -2835,7 +2835,7 @@ describe("QueuedInputDispatcher", () => {
     }
   });
 
-  it("demotes an adapter-proven stale Steer but fails closed for other rejections", async () => {
+  it("demotes an adapter-proven stale Steer", async () => {
     const fixture = createFixture();
     const repository = new QueuedInputRepository(fixture.database);
     const drafts = new ConversationDraftRepository(fixture.database);
@@ -2906,7 +2906,9 @@ describe("QueuedInputDispatcher", () => {
       await dispatcher.close();
       fixture.database.close();
     }
+  });
 
+  it("fails closed for a generic Steer rejection without stale-target evidence", async () => {
     const genericFixture = createFixture();
     const genericRepository = new QueuedInputRepository(
       genericFixture.database,

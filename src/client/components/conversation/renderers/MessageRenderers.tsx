@@ -201,7 +201,7 @@ export function UserMessagePresentation({
   );
   if (origin) {
     const label =
-      origin.kind === "agent_message" ? "Agent message" : "Agent result";
+      origin.kind === "automatic_retry" ? "Automatic retry" : origin.kind === "agent_message" ? "Agent message" : "Agent result";
     return (
       <details
         className="agent-input-disclosure"
@@ -216,12 +216,12 @@ export function UserMessagePresentation({
             strokeWidth={1.8}
           />
           <span className="agent-input-disclosure-label">{label}</span>
-          <span className="agent-input-disclosure-source">
+          {origin.kind !== "automatic_retry" && <span className="agent-input-disclosure-source">
             {origin.sourceThreadLabel.text}
             <TruncationNotice
               truncation={origin.sourceThreadLabel.truncation}
             />
-          </span>
+          </span>}
           <span className="agent-input-disclosure-preview">
             {agentInputPreview(content, origin)}
           </span>

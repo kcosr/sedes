@@ -69,6 +69,7 @@ describe("ApplicationSnapshotService", () => {
     expect(await service.readThreadSummary({ ...scope, principalId: "different" }, id)).toBeUndefined();
     expect(await service.readThreadSummary(scope, "missing")).toBeUndefined();
     expect(loaded).toHaveBeenCalledTimes(1);
+    expect(loaded).toHaveBeenCalledWith(scope, id, { presentation: true });
   });
 
   it("projects every scoped environment and gathers threads from each one", async () => {
@@ -440,7 +441,11 @@ it("keeps scoped background counts equivalent in full snapshots and incremental 
     list: (requested) => { assertScope(requested); return [durable]; },
     listByIds: (requested, ids) => { assertScope(requested); return ids.includes(durable.id) ? [durable] : []; },
   }, {
-    captureLoadedState: async (requested, id) => { assertScope(requested); expect(id).toBe(durable.id); return loaded; },
+    captureLoadedState: async (requested, id, options) => {
+      assertScope(requested); expect(id).toBe(durable.id);
+      expect(options).toEqual({ presentation: true });
+      return loaded;
+    },
   }, {
     read: async () => ({ executionTargets: [{ id: "target-local", environmentId: "environment-local", label: { text: "Local" }, backend: { label: { text: "Claude" }, brand: "claude" as const }, workspaceExecution: { kind: "direct_only" as const }, available: true }], defaultTargetId: "target-local" }),
     requireSelectable: async () => undefined,

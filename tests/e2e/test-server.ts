@@ -1,4 +1,8 @@
 import { ToolPolicyService } from "../../src/server/tool-policies/tool-policy-service.js";
+import { createAutomaticModelRetryRuntime } from "../../src/server/conversations/automatic-model-retry-runtime.js";
+import type { AutomaticModelRetryService } from "../../src/server/conversations/automatic-model-retry-service.js";
+import { MODEL_FAILURE_RETRY_DELAY_MS } from "../../src/server/backends/model-failure-retry.js";
+import { showAutomaticModelRetryNotice } from "../../src/server/events/automatic-model-retry-notice.js";
 import { ToolPolicyRepository } from "../../src/server/db/repositories/tool-policy-repository.js";
 import { AutomationForkTargetResolver } from "../../src/server/runtime/automation-fork-target.js";
 import { readFile, writeFile, unlink } from "node:fs/promises";
@@ -1697,6 +1701,8 @@ class CodexE2eRpcFixture {
   #generation = 1;
   #failNextCreateWithUnknownOutcome = false;
   #failNextSubmitWithUnknownOutcome = false;
+  #modelFailuresRemaining = 0;
+  readonly #turnInputs: Array<{ threadId: string; turnId: string; text: string; startedAt: number; failedAt?: number }> = [];
   readonly #requests: Array<{
     readonly method: string;
     readonly generation: number;
@@ -2051,6 +2057,7 @@ class CodexE2eRpcFixture {
       ),
       createFaultArmed: this.#failNextCreateWithUnknownOutcome,
       submitFaultArmed: this.#failNextSubmitWithUnknownOutcome,
+      turnInputs: this.#turnInputs.map(input => ({ ...input })),
       retirements: Object.freeze(
         this.#retirements.map((retirement) => Object.freeze({ ...retirement })),
       ),
@@ -2062,6 +2069,21 @@ class CodexE2eRpcFixture {
           .map((request) => Object.freeze({ ...request })),
       ),
     });
+  }
+
+  armModelFailures(count: number): void {
+    if (!Number.isInteger(count) || count < 1 || count > 2) throw new Error("e2e_model_failure_count_invalid");
+    this.#modelFailuresRemaining = count;
+  }
+
+  modelFailureState(nativeThreadId: string): unknown {
+    return { turns: this.#turnInputs.filter(input => input.threadId === nativeThreadId).map(input => ({ ...input })) };
+  }
+
+  /** Observe one complete retry interval to prove that no extra turn starts. */
+  observeModelFailureQuietInterval(nativeThreadId: string): Promise<unknown> {
+    return new Promise(resolve => this.#schedule(MODEL_FAILURE_RETRY_DELAY_MS + 200,
+      () => resolve(this.modelFailureState(nativeThreadId))));
   }
 
   emitViewedImage(nativeThreadId: string, absolutePath: string): void {
@@ -3242,6 +3264,11 @@ class CodexE2eRpcFixture {
         ) as { text?: unknown } | undefined;
         const ordinal = ++this.#turnOrdinal;
         const turnId = `interactive-turn-${ordinal}`;
+        const shouldFail = this.#modelFailuresRemaining > 0;
+        if (shouldFail) this.#modelFailuresRemaining -= 1;
+        const turnInput = { threadId: thread.id, turnId, text: typeof textInput?.text === "string" ? textInput.text : "",
+          startedAt: Date.now(), failedAt: undefined as number | undefined };
+        this.#turnInputs.push(turnInput);
         if (this.#holdNextTurnCompletion) {
           this.#holdNextTurnCompletion = false;
           this.#heldTurnCompletionIds.add(turnId);
@@ -3294,6 +3321,22 @@ class CodexE2eRpcFixture {
           turns: [...thread.turns, turn],
         });
         result = { turn };
+        if (shouldFail) {
+          this.#schedule(300, () => {
+            if (this.#interruptedTurnIds.has(turnId)) return;
+            // Prevent the normal fixture's remaining work from completing this
+            // same turn after its confirmed model-response failure.
+            this.#interruptedTurnIds.add(turnId);
+            const current = this.#threads.get(thread.id)!;
+            const failedTurn = { ...turn, status: "failed" as const, completedAt: now + 1, durationMs: 300,
+              error: { message: "The model response failed while decoding inference output.", codexErrorInfo: null, additionalDetails: null, misalignment: null } };
+            turnInput.failedAt = Date.now();
+            this.#replaceThread({ ...current, status: { type: "systemError" }, turns: current.turns.map(candidate =>
+              candidate.id === turnId ? failedTurn : candidate) });
+            this.#notify(generation, "turn/completed", { threadId: thread.id, turn: failedTurn });
+            this.#notify(generation, "thread/status/changed", { threadId: thread.id, status: { type: "systemError" } });
+          });
+        }
         this.#schedule(120, () => {
           if (this.#interruptedTurnIds.has(turnId)) return;
           const commandItem = {
@@ -4600,9 +4643,11 @@ async function main(): Promise<void> {
   const lifecycleTargets = new DatabaseLifecycleTargetResolver(targets);
   let questions: QuestionRequestService | undefined;
   let mutationsForSubmissions: ThreadMutationGateway | undefined;
+  let automaticModelRetries: AutomaticModelRetryService | undefined;
   let observeAuthoritativeCompletion:
     AuthoritativeCompletionObserver | undefined;
   const actors = new ConversationActorManager({
+    onModelFeedback: (eventScope, threadId, input) => automaticModelRetries?.onModelFeedback(eventScope, threadId, input.identity, input.automaticRetry),
     applicationPublications: (publicationScope, threadId, turnIds) => [
       ...pageRepository.publications(publicationScope, threadId, turnIds),
       ...imageShowRepository.publications(publicationScope, threadId, turnIds),
@@ -4742,6 +4787,7 @@ async function main(): Promise<void> {
     ]),
   });
   const threads = new ThreadApplicationService({
+    isAutomaticModelRetryPending: (eventScope, threadId) => automaticModelRetries?.isPending(eventScope, threadId) === true,
       usage,
     inventory: threadInventory,
     conversations: new ActorBackedThreadApplicationConversationReader({
@@ -4767,6 +4813,7 @@ async function main(): Promise<void> {
   let publishApplicationThread: ApplicationThreadChangePublisher | undefined;
   let queue!: QueuedInputDispatcher;
   const runtimes = new ThreadRuntimeCoordinator({
+    isAutomaticModelRetryPending: (eventScope, threadId) => automaticModelRetries?.isPending(eventScope, threadId) === true,
     actors,
     targets: actorTargets,
     bridge: new ConversationEventBridge(new ThreadEventPresentation(threads), (scope, threadId, turns) => usage.registerVisibleTurns(scope, threadId, turns)),
@@ -4794,8 +4841,10 @@ async function main(): Promise<void> {
   queue = new QueuedInputDispatcher({
     repository: queueRepository,
     gateway: queueGateway,
-    onDurableInputChanged: (eventScope, applicationThreadId, item) =>
-      observeAutomationQueue?.observe(eventScope, applicationThreadId, item),
+    onDurableInputChanged: (eventScope, applicationThreadId, item) => {
+      observeAutomationQueue?.observe(eventScope, applicationThreadId, item);
+      automaticModelRetries?.onInputChanged(eventScope, applicationThreadId, item);
+    },
     publisher: {
       publish(eventScope, applicationThreadId, event) {
         threadHubs.thread(eventScope, applicationThreadId).publish(event);
@@ -4823,6 +4872,30 @@ async function main(): Promise<void> {
         applicationThreadId,
         purpose,
       ),
+  });
+  const automaticRetryNotices = new Map<string, () => void>();
+  automaticModelRetries = createAutomaticModelRetryRuntime({
+    database, bindings, inventory: inventoryRepository, queueRepository, operations: operationRepository,
+    actors, runtimes, interactions, queueDispatcher: queue,
+    onPendingChanged(eventScope, threadId, pending) {
+      const key = JSON.stringify([eventScope.tenantId, eventScope.principalId, threadId]);
+      automaticRetryNotices.get(key)?.();
+      automaticRetryNotices.delete(key);
+      if (pending) {
+        automaticRetryNotices.set(key, showAutomaticModelRetryNotice(threadHubs.thread(eventScope, threadId)));
+      }
+      authoritativeCompletionFollowUp.defer(async () => {
+        await runtimes.publishAuthoritativeReplacementIfLoaded(eventScope, threadId);
+        await publishApplicationThread?.publish(eventScope, threadId);
+      });
+    },
+  });
+  const unsubscribeAutomaticRetryActivity = actors.subscribeInputActivity((eventScope, threadId) => {
+    if (!automaticModelRetries?.isPending(eventScope, threadId)) return;
+    const observed = actors.observeInputRuntime(eventScope, threadId);
+    if (!observed?.authoritative || observed.sourceTurnStatus !== "failed" || observed.blockingInteractionIds.length > 0) {
+      automaticModelRetries.cancel(eventScope, threadId);
+    }
   });
   questions = new QuestionRequestService({
     repository: new QuestionRequestRepository(database, inventoryRepository),
@@ -5089,6 +5162,7 @@ async function main(): Promise<void> {
       input,
     );
     if (!observation) return;
+    if (observation.changed) automaticModelRetries?.onCompletion(eventScope, applicationThreadId, input);
     const observed = observation.record;
     try {
       observeAutomationTurns?.observe(
@@ -5100,7 +5174,9 @@ async function main(): Promise<void> {
     } catch {
       // As in production, run history never breaks completion.
     }
-    notificationLifecycle.completion(eventScope, observed, input.provenance, input.voiceSubscriberWatermark, input.responseVoice);
+    if (input.outcome !== "failed" || !automaticModelRetries?.isPending(eventScope, applicationThreadId)) {
+      notificationLifecycle.completion(eventScope, observed, input.provenance, input.voiceSubscriberWatermark, input.responseVoice);
+    }
     if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId,
       observed.completionOutcome ?? "interrupted", input.responseVoice?.superseded);
     authoritativeCompletionFollowUp.defer(() => performCompletionFollowUp({
@@ -5125,6 +5201,11 @@ async function main(): Promise<void> {
       snapshots.publish(eventScope, applicationThreadId),
   });
   const mutations = new ThreadMutationGateway({
+    cancelAutomaticModelRetry(eventScope, threadId) {
+      if (!automaticModelRetries?.isPending(eventScope, threadId)) return false;
+      automaticModelRetries.cancel(eventScope, threadId);
+      return true;
+    },
     actors,
     bindings,
     inventory: inventoryRepository,
@@ -5875,6 +5956,20 @@ async function main(): Promise<void> {
   app.get("/__e2e/codex/state", (_request, response) => {
     response.json(codexRpc.state());
   });
+  app.post("/__e2e/codex/model-failure/arm", express.json(), (request, response) => {
+    codexRpc.armModelFailures(z.strictObject({ count: z.number().int().min(1).max(2) }).parse(request.body).count);
+    response.status(204).end();
+  });
+  app.get("/__e2e/codex/model-failure/state/:threadId", (request, response) => {
+    const binding = bindings.getBinding(scope, request.params.threadId);
+    if (!binding || binding.backendInstanceId !== codexBackend.id) { response.sendStatus(404); return; }
+    response.json(codexRpc.modelFailureState(binding.backendConversationId));
+  });
+  app.get("/__e2e/codex/model-failure/observe/:threadId", async (request, response) => {
+    const binding = bindings.getBinding(scope, request.params.threadId);
+    if (!binding || binding.backendInstanceId !== codexBackend.id) { response.sendStatus(404); return; }
+    response.json(await codexRpc.observeModelFailureQuietInterval(binding.backendConversationId));
+  });
   app.get("/__e2e/codex-tui/state", (_request, response) => {
     response.json(codexTuiFixture.state());
   });
@@ -6175,6 +6270,7 @@ async function main(): Promise<void> {
       applicationSnapshots,
       principalPreferences: new PrincipalApplicationPreferenceService({
         repository: new PrincipalApplicationPreferenceRepository(database),
+        onChanged: () => automaticModelRetries?.cancelDisabled(),
       }),
       threads,
       history,
@@ -6240,6 +6336,8 @@ async function main(): Promise<void> {
         server.close((error) => (error ? reject(error) : resolve()));
       });
       await automationDispatcher.dispose();
+      unsubscribeAutomaticRetryActivity();
+      await automaticModelRetries?.close();
       await authoritativeCompletionFollowUp.close();
       await completionCallbackDispatcher.close();
       await mutations.close();

@@ -520,7 +520,9 @@ export function PendingInputStrip({
         <span
           className="pending-input-origin"
           title={
-            item.inputOrigin?.kind === "question_response"
+            item.inputOrigin?.kind === "automatic_retry"
+              ? "Automatic retry"
+              : item.inputOrigin?.kind === "question_response"
               ? "Question answered"
               : item.inputOrigin?.kind === "page_response"
                 ? `Page response · ${item.inputOrigin.title} · Revision ${item.inputOrigin.revision}`
@@ -529,7 +531,9 @@ export function PendingInputStrip({
                 : undefined
           }
         >
-          {item.inputOrigin?.kind === "question_response"
+          {item.inputOrigin?.kind === "automatic_retry"
+            ? "Automatic retry"
+            : item.inputOrigin?.kind === "question_response"
             ? "Question answered"
             : item.inputOrigin?.kind === "page_response"
               ? `Page response · ${item.inputOrigin.title} · Revision ${item.inputOrigin.revision}`

@@ -1459,6 +1459,8 @@ export function Composer({
   const availableDeliveryModes =
     snapshot?.capabilities.deliveryModes.filter(({ available }) => available) ??
     [];
+  // A retry delay can display activity while the settled backend accepts Send.
+  const busyForDelivery = busy && !availableDeliveryModes.some(({ id }) => id === "submit");
   // Inventory-derived and memoized: the composer renders on every keystroke.
   const currentTasks = useMemo(
     () => new Map((application.snapshot?.tasks ?? []).map((task) => [task.id, task])),
@@ -1558,7 +1560,7 @@ export function Composer({
     taskReferences,
   });
   const attachmentUploadPending = attachmentUploads.uploads.length > 0;
-  const promptDeliveryMode = busy ? deliveryMode : "submit";
+  const promptDeliveryMode = busyForDelivery ? deliveryMode : "submit";
   const promptSendDisabled =
     state.actionPending ||
     state.pendingDeliveryThreadRevision !== undefined ||
@@ -2355,7 +2357,7 @@ export function Composer({
       writeDraftToTerminal("submit");
       return {};
     }
-    const mode = requestedMode ?? (busy ? deliveryMode : "submit");
+    const mode = requestedMode ?? promptDeliveryMode;
     const value = candidate ?? currentDraftValue();
     if (!canDeliver(mode, value) || draftMutationRunning.current) return false;
     setPromptInputError(undefined);
@@ -2595,9 +2597,9 @@ export function Composer({
     });
     if (!parsed.success || composerInputUtf8Bytes(candidate) + composerTaskInputUtf8Bytes(selectedTasks) > MAXIMUM_THREAD_INPUT_BYTES)
       throw new Error("Speech and the draft exceed the 256 KiB input limit. Shorten the draft before sending the saved dictation.");
-    // Native froze Follow Composer at recording end. Current run state still
-    // decides idle Submit; unavailable Steer uses Queue without changing the preference.
-    const mode = !busy
+    // Native froze Follow Composer at recording end. Current capabilities
+    // decide Submit; unavailable Steer uses Queue without changing the preference.
+    const mode = !busyForDelivery
       ? "submit"
       : event.mode === "steer" && supportedBusyDeliveryModes.some(({ id, available }) => id === "steer" && available)
         ? "steer"
@@ -4059,7 +4061,21 @@ export function Composer({
                       </button>
                     ) : busy ? (
                       <>
-                        {snapshot.runState !== "stopping" && (
+                        {snapshot.runState !== "stopping" && promptDeliveryMode === "submit" && (
+                          <button
+                            className="send-button"
+                            aria-label="Send message"
+                            disabled={effectiveDisabled || !canDeliver("submit")}
+                            onPointerDown={() => traceComposerInput("send_pointerdown")}
+                            onClick={() => {
+                              traceComposerInput("send_click");
+                              send();
+                            }}
+                          >
+                            <ArrowUp size={15} strokeWidth={1.8} />
+                          </button>
+                        )}
+                        {snapshot.runState !== "stopping" && promptDeliveryMode !== "submit" && (
                           <div className="delivery-split">
                             <button
                               className="queue-button delivery-split-submit"

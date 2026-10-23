@@ -280,7 +280,13 @@ export class OpenCodeProductionFixture {
       : method === "POST" && /^\/api\/threads\/[^/]+\/operations$/u.test(route)
         ? threadApplicationOperationSchema.parse(body)
         : body;
-    return fetch(`${this.url}${route}`, { method, headers, signal: AbortSignal.timeout(30_000), ...(requestBody === undefined ? {} : { body: JSON.stringify(requestBody) }) });
+    try {
+      return await fetch(`${this.url}${route}`, { method, headers, signal: AbortSignal.timeout(30_000), ...(requestBody === undefined ? {} : { body: JSON.stringify(requestBody) }) });
+    } catch (cause) {
+      // Keep setup failures attributable without exposing fixture credentials,
+      // request contents, origins, or query parameters in the test report.
+      throw new Error(`fixture_request_failed:${method}:${new URL(route, this.url).pathname}`, { cause });
+    }
   }
   async json(route: string, method = "GET", body?: unknown, extraHeaders: Record<string, string> = {}, credential = this.credential): Promise<unknown> {
     const response = await this.request(route, method, body, extraHeaders, credential); const value = await response.json();

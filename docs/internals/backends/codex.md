@@ -654,6 +654,19 @@ provider-observed lifecycle status. Create, pause, resume, and clear are
 capability- and revision-checked. Neither feature is inferred from model names
 or provider text.
 
+Automatic model recovery shares the principal preference, ten-second delay,
+and durable one-retry allowance with ordinary follow-ups. For a live failed
+turn that participated in an active Goal, the handle retains bounded private
+Goal/turn evidence and resumes the same now-blocked Goal instead of sending
+text. This includes native autonomous Goal turns without a Sedes submission.
+The native Goal is re-read before resuming; explicit pause/clear/replacement,
+limits, newer work, and connection changes invalidate recovery. Resume uses an
+automatic-origin durable mutation and does not reset the objective or usage.
+Uncertain delivery never falls back to a Continue message. Goal turns rearm
+the allowance only on terminal success. Native Goal notifications do not expose
+an exact block reason or atomic expected-goal identity, so continuity checks
+cannot prove causality against concurrent changes made by another native client.
+
 Sedes-created native threads receive the per-session experimental
 `step_model_switching` flag on start/fork and provenance-qualified cold resume.
 A known Sedes start owns an exact activation token; `model/rerouted` withdraws

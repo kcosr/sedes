@@ -39,7 +39,7 @@ export interface ApplicationPreferenceControls {
   ): Promise<ApplicationPreferences>;
 }
 
-/** Device-local behavior, plus one account-wide composer preference. */
+/** Device-local behavior and account-wide application preferences. */
 export function GeneralSettingsPage({
   applicationPreferences,
   applicationStore,
@@ -47,6 +47,7 @@ export function GeneralSettingsPage({
   readonly applicationStore?: ApplicationClientStore;
   readonly applicationPreferences?: ApplicationPreferenceControls;
 }): React.JSX.Element {
+  const account = useAccountPreferences(applicationPreferences);
   const clickNamesToFilter = useSyncExternalStore(
     subscribeClickNamesToFilter,
     getClickNamesToFilter,
@@ -79,6 +80,21 @@ export function GeneralSettingsPage({
           onCheckedChange={setClickNamesToFilter}
         />
       </SettingsSection>
+      {applicationPreferences ? (
+        <SettingsSection title="Error recovery" card>
+          <SwitchField
+            id="setting-auto-retry-model-failures"
+            label="Automatically retry failed model requests"
+            description="Retry once after a short delay. Applies to all backends and servers."
+            checked={account.preferences?.autoRetryModelFailures ?? false}
+            disabled={!account.preferences || account.saving}
+            switchProps={{ "data-testid": "auto-retry-model-failures-toggle" }}
+            onCheckedChange={(autoRetryModelFailures) =>
+              account.update({ autoRetryModelFailures })
+            }
+          />
+        </SettingsSection>
+      ) : null}
       <SettingsSection title="Conversation" card>
         <SettingsField
           id="setting-activity-detail"
@@ -133,7 +149,19 @@ export function GeneralSettingsPage({
       </SettingsSection>
       <SettingsSection title="Composer" card>
         {applicationPreferences ? (
-          <OpenAIComposerSkillPreference controls={applicationPreferences} />
+          <SwitchField
+            id="setting-show-openai-composer-skills"
+            label={
+              <>Show OpenAI skills in composer <Tag>Account</Tag></>
+            }
+            description="Show OpenAI Templates, Sites, and Visualize skills across every Codex connection for this account."
+            checked={account.preferences?.showOpenAIComposerSkills ?? false}
+            disabled={!account.preferences || account.saving}
+            switchProps={{ "data-testid": "show-openai-composer-skills-toggle" }}
+            onCheckedChange={(showOpenAIComposerSkills) =>
+              account.update({ showOpenAIComposerSkills })
+            }
+          />
         ) : null}
         <SwitchField
           id="setting-right-option-focuses-composer"
@@ -147,72 +175,71 @@ export function GeneralSettingsPage({
           switchProps={{ "data-testid": "right-option-focuses-composer-toggle" }}
         />
       </SettingsSection>
+      {account.error ? (
+        <Callout
+          tone="danger"
+          role="alert"
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void account.load()}
+            >
+              Retry
+            </Button>
+          }
+        >
+          {account.error}
+        </Callout>
+      ) : null}
     </SettingsPage>
   );
 }
 
-/** An account-wide preference, saved as it changes and restored on failure. */
-function OpenAIComposerSkillPreference({
-  controls,
-}: {
-  readonly controls: ApplicationPreferenceControls;
-}): React.JSX.Element {
+/** Both controls share one snapshot so updates preserve the other preference. */
+function useAccountPreferences(controls?: ApplicationPreferenceControls) {
   const [preferences, setPreferences] = useState<ApplicationPreferences>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const load = useCallback(async () => {
+    if (!controls) return;
     setError("");
+    setPreferences(undefined);
     try {
       setPreferences(await controls.read());
     } catch {
-      setError("Could not load this account preference.");
+      setError("Could not load account preferences.");
     }
   }, [controls]);
   useEffect(() => {
     void load();
   }, [load]);
 
-  return (
-    <>
-      <SwitchField
-        id="setting-show-openai-composer-skills"
-        label={<>Show OpenAI skills in composer <Tag>Account</Tag></>}
-        description="Show OpenAI Templates, Sites, and Visualize skills across every Codex connection for this account."
-        checked={preferences?.showOpenAIComposerSkills ?? false}
-        disabled={!preferences || saving}
-        switchProps={{ "data-testid": "show-openai-composer-skills-toggle" }}
-        onCheckedChange={(showOpenAIComposerSkills) => {
-          if (!preferences || saving) return;
-          const previous = preferences;
-          setPreferences({ ...previous, showOpenAIComposerSkills });
-          setSaving(true);
-          setError("");
-          void controls
-            .update({
-              showOpenAIComposerSkills,
-              expectedRevision: previous.revision,
-            })
-            .then(setPreferences)
-            .catch(() => {
-              setPreferences(previous);
-              setError("Could not save this account preference.");
-            })
-            .finally(() => setSaving(false));
-        }}
-      />
-      {error ? (
-        <Callout
-          tone="danger"
-          role="alert"
-          action={
-            <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
-              Retry
-            </Button>
-          }
-        >
-          {error}
-        </Callout>
-      ) : null}
-    </>
-  );
+  const update = (
+    change: Partial<
+      Pick<ApplicationPreferences, "showOpenAIComposerSkills" | "autoRetryModelFailures">
+    >,
+  ) => {
+    if (!controls || !preferences || saving) return;
+    const previous = preferences;
+    const next = { ...previous, ...change };
+    setPreferences(next);
+    setSaving(true);
+    setError("");
+    void controls
+      .update({
+        showOpenAIComposerSkills: next.showOpenAIComposerSkills,
+        autoRetryModelFailures: next.autoRetryModelFailures,
+        expectedRevision: previous.revision,
+      })
+      .then(setPreferences)
+      .catch(() => {
+        setPreferences(previous);
+        setError("Could not save account preferences.");
+      })
+      .finally(() => setSaving(false));
+  };
+
+  return { preferences, saving, error, load, update };
 }

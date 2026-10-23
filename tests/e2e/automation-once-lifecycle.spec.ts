@@ -4,9 +4,11 @@ import path from "node:path";
 import type { Page } from "@playwright/test";
 import { threadAutomationRunPageSchema, type ThreadAutomationRun } from "../../src/shared/protocol/automation-presentation.js";
 import { normalizedThreadSnapshotSchema } from "../../src/shared/protocol/conversation.js";
+import { applicationPreferencesSchema } from "../../src/shared/protocol/application-preferences.js";
 import { expect, test } from "./fixtures";
 import { capture, createDraftThread, expectNoPageOverflow, openWorkspaceDirectory } from "./helpers";
 import { loadE2ERunContext } from "./run-context.js";
+import { setAutomaticRetry } from "./automatic-model-retry-helpers";
 
 async function fixture(page: Page, name: string) {
   const workspace = path.join(loadE2ERunContext().workspacesDirectory, name);
@@ -52,7 +54,8 @@ async function fixture(page: Page, name: string) {
   const sidebarRow = () => page.getByTestId("desktop-sidebar").locator(`[data-thread-id="${threadId}"]`).first();
   const dismiss = async (name: string, outcome: "triggered" | "failed") => {
     const response = page.waitForResponse(value => value.request().method() === "POST" &&
-      value.url().endsWith(`/api/threads/${threadId}/attention/dismiss`));
+      value.url().endsWith(`/api/threads/${threadId}/attention/dismiss`) &&
+      value.request().postDataJSON().kind === "automation_context");
     await notice(name).getByRole("button", { name: "Dismiss", exact: true }).click();
     const dismissed = await response;
     expect(dismissed.ok()).toBe(true);
@@ -156,6 +159,15 @@ test("a successful one-shot keeps its banner until dismissal and leaves a recurr
 for (const outcome of ["completed", "failed"] as const) {
   test(`dismissing a running one-shot waits for its ${outcome} turn outcome`, async ({ page }, testInfo) => {
     const f = await fixture(page, `once-early-dismissal-${outcome}`);
+    let originalRetryPreference: boolean | undefined;
+    if (outcome === "failed") {
+      // This lifecycle case retains the original failed run for explicit
+      // acknowledgement; automatic recovery is covered independently.
+      const preferences = await page.request.get("/api/application/preferences");
+      expect(preferences.ok()).toBe(true);
+      originalRetryPreference = applicationPreferencesSchema.parse(await preferences.json()).autoRetryModelFailures;
+      await setAutomaticRetry(page, false);
+    }
     expect((await page.request.post("/__e2e/pi/turn-response/arm")).status()).toBe(204);
     const name = "Afternoon reminder";
     try {
@@ -204,6 +216,7 @@ for (const outcome of ["completed", "failed"] as const) {
       }
     } finally {
       await page.request.post("/__e2e/pi/turn-response/reset");
+      if (originalRetryPreference !== undefined) await setAutomaticRetry(page, originalRetryPreference);
     }
   });
 }

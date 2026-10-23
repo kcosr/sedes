@@ -946,6 +946,7 @@ export class ThreadForkService {
             const loaded = await this.#descendantRunStates!.captureLoadedState(
               input.scope,
               thread.id,
+              { presentation: true },
             );
             const runState: ThreadRunState =
               thread.backingState === "creating"

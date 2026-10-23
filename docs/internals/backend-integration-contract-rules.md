@@ -1521,6 +1521,50 @@ diagnostic publishes a turn revision, while replacing an observed diagnostic
 requires an authoritative resnapshot. Never infer failure from a retry warning,
 a tool error, cancellation, or unknown delivery outcome.
 
+Automatic model retry is principal-owned application policy, shared by Pi,
+Codex, Claude, Grok, and OpenCode. After a newly observed confirmed failed turn,
+the application consumes one durable thread allowance and waits ten seconds
+before admitting a new ordinary input, `Please continue from where you left off.`
+It never replays the accepted user input or invokes a provider's inference retry.
+The queue records server-authorized automatic-retry provenance and retains the
+original execution source (including automation restrictions) without creating
+another automation delivery. Provider-native retry loops remain independent.
+Exclude a failed turn with any completion callback, including one
+already materialized or cancelled: callbacks stay tied to the original
+operation, and their caller owns subsequent work. Match callback obligations against
+all accepted inputs correlated to that exact failed turn, within the same
+tenant, principal, and target thread; a callback on unrelated work does not
+exclude an ordinary message.
+Successful completed replies and newly observed successful model/tool activity
+in ordinary work reset the allowance. Intermediate feedback in a turn whose
+latest materialized application input has automatic-retry provenance does not
+re-arm it; that turn must complete successfully to restore the allowance.
+Capture that provenance from the canonical input on the exact response turn,
+before deferring its observer. Unknown input origin cannot authorize a reset.
+Partial streaming text, automatic follow-up admission, and history replay do
+not reset it. Newly accepted non-retry input starts independent work.
+Codex may instead recover native autonomous work through its existing Goal
+resume operation. Keep live Goal participation and recovery eligibility
+backend-private and bounded to the current attached turn. A Goal must have
+been observed active for that turn; a blocked or paused baseline alone is not
+proof. Route live terminal Goal outcomes to retry policy independently of
+submitted-input completion bookkeeping. Resume preserves the existing objective
+and counters, and consumes the same durable allowance. Only terminal success
+restores the allowance for Goal turns. Pauses, clears, replacement, limits,
+newer work, and owner changes prevent recovery. Re-read native state and recheck
+application admission before the effect; persist the recovery intent and
+reconcile uncertainty without a second mutation or ordinary-message fallback.
+Stop, newer input, unavailable/replaced owners, and disabling the account policy
+cancel pending admission. Recheck the exact failed head, current binding,
+available workspace, interactions, operations, and queue before committing the
+new input. Restart does not resurrect a delayed retry or restore its allowance.
+Pi, Codex, Claude, and OpenCode can publish failed turns; Grok's present protocol
+has no confirmed failed-turn outcome, so its uncertain submission outcomes do
+not authorize automatic input. Any future backend reporting confirmed failure
+uses this same application queue path unless it explicitly implements the
+server-only native-work recovery contract. Pi, Claude, Grok, and OpenCode do not
+implement that optional contract; Codex alone uses it for live Goal work.
+
 Pi derives the final diagnostic after retry settlement and reconstructs it from
 native assistant records. Cancellation during retry backoff is retained as
 conversation-authenticated non-message metadata, since Pi does not append an

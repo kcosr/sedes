@@ -318,3 +318,16 @@ it("labels page responses with their pinned title and revision while preserving 
   expect(entries[0]?.userLabel).toBe("Page response · Setup · Revision 2");
   expect(entries[0]?.userPreview).toBe("**literal** value");
 });
+
+it("attributes automatic continuation messages in chat history", () => {
+  const entries = createChatHistoryEntries(["turn-1"], {
+    "turn-1": { id: "turn-1", revision: 1, status: "completed", orderedItemIds: ["retry"] },
+  }, {
+    retry: { id: "retry", turnId: "turn-1", kind: "user_message", status: "completed", revision: 1,
+      origin: { kind: "automatic_retry" },
+      content: [{ kind: "text", text: { text: "Please continue from where you left off." } }],
+    },
+  });
+  expect(entries[0]?.userLabel).toBe("Automatic retry");
+  expect(entries[0]?.userPreview).toBe("Please continue from where you left off.");
+});

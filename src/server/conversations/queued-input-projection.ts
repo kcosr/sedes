@@ -74,7 +74,9 @@ function queuedInputDeliveryMode(
 }
 
 function queuedInputOrigin(item: QueuedInputRecord): QueuedInputSummary["origin"] {
-  return item.inputOrigin?.kind === "agent_result"
+  return item.inputOrigin?.kind === "automatic_retry"
+    ? "automatic_retry"
+    : item.inputOrigin?.kind === "agent_result"
     ? "agent_result"
     : item.initiatingAgentThreadId !== null
       ? "agent_control"

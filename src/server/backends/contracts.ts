@@ -696,6 +696,16 @@ export type BackendMutationReconciliation =
 export type Unsubscribe = () => void;
 export type BackendEventListener = (event: SequencedBackendEvent) => void;
 
+/** Server-only native recovery; never replays a submitted input. */
+export interface RecoverModelFailureInput {
+  readonly backendTurnId: string;
+  readonly mutationId: string;
+  /** Recheck immediately before every external effect after asynchronous work. */
+  readonly isCurrent: () => boolean;
+  /** Called after durable admission; does not itself restore the retry allowance. */
+  readonly onAdmitted: () => void;
+}
+
 export interface ConversationHandle {
   readonly binding: ConversationBinding;
   /** Whether idle client eviction can detach while native background work remains resident. */
@@ -726,6 +736,10 @@ export interface ConversationHandle {
    * attempt.
    */
   captureSubmissionRetryAnchor(): Promise<string>;
+  /** Live, bounded evidence that this turn belongs to native autonomous work. */
+  isNativeRecoveryTurn?(backendTurnId: string): boolean;
+  /** Optional native recovery. Any returned outcome forbids a text fallback. */
+  recoverModelFailure?(input: RecoverModelFailureInput): Promise<"accepted" | "uncertain" | "rejected">;
   submit(input: SubmitTurnInput): Promise<SubmitTurnResult>;
   steer(input: SteerTurnInput): Promise<SteerTurnResult>;
   interrupt(input: InterruptConversationInput): Promise<void>;

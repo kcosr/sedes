@@ -921,7 +921,7 @@ describe("Codex execution settings persistence", () => {
     });
   });
 
-  it("defers explicitly incomplete observations but preserves imported custom policy truth", () => {
+  it("defers incomplete managed settings until a complete observation arrives", () => {
     const managed = fixture();
     const managedRepository = new CodexThreadExecutionSettingsRepository(
       managed.database,
@@ -980,7 +980,9 @@ describe("Codex execution settings persistence", () => {
       },
       effectiveConfirmationState: "confirmed",
     });
+  });
 
+  it("defers explicitly incomplete observations for imported settings", () => {
     const imported = fixture();
     const importedRepository = new CodexThreadExecutionSettingsRepository(
       imported.database,
@@ -1014,7 +1016,9 @@ describe("Codex execution settings persistence", () => {
       effective: null,
       effectiveConfirmationState: "unconfirmed",
     });
+  });
 
+  it("preserves imported unrestricted policy from a complete observation", () => {
     const unrestricted = fixture();
     const unrestrictedRepository = new CodexThreadExecutionSettingsRepository(
       unrestricted.database,

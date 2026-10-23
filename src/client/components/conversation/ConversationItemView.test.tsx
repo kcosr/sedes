@@ -918,6 +918,16 @@ describe("normalized conversation renderers", () => {
     expect(container).not.toHaveTextContent('"threadReferences"');
   });
 
+  it("labels automatic continuation messages without exposing a caller or treating their text as user references", () => {
+    const text = "Please continue from where you left off.";
+    const { container } = render(<ConversationItemView item={{ ...common, kind: "user_message",
+      origin: { kind: "automatic_retry" }, content: [{ kind: "text", text: { text } }],
+    }} />);
+    expect(screen.getByText("Automatic retry")).toBeInTheDocument();
+    expect(container.querySelector('[data-message-origin="automatic_retry"]')).toHaveTextContent(text);
+    expect(container.querySelector(".agent-input-disclosure-source")).toBeNull();
+  });
+
   it.each(["agent_message", "agent_result", "question_response"] as const)(
     "leaves reference-looking text literal for %s input",
     (kind) => {

@@ -403,7 +403,7 @@ describe("C2 same-thread automation acceptance", () => {
     });
   });
 
-  it("runs an invoking precheck with its effective prompt and skips a nonzero precheck without backend dispatch", async () => {
+  it("runs an invoking precheck with its effective prompt", async () => {
     const invoked = fixture();
     const invokedRuntime = invoked.createRuntime();
     const invokedDefinition = createRecurring(invoked, invokedRuntime.service, {
@@ -437,7 +437,9 @@ describe("C2 same-thread automation acceptance", () => {
       precheckStatus: "passed",
       precheckStdoutIncluded: true,
     });
+  });
 
+  it("skips a nonzero precheck without backend dispatch", async () => {
     const skipped = fixture();
     const skippedRuntime = skipped.createRuntime();
     const skippedDefinition = createRecurring(skipped, skippedRuntime.service, {
@@ -503,7 +505,7 @@ describe("C2 same-thread automation acceptance", () => {
     });
   });
 
-  it("reclaims a pre-boundary claimed run after restart but never repeats a dispatching run", async () => {
+  it("reclaims a pre-boundary claimed run after restart", async () => {
     const reclaimed = fixture();
     const initial = reclaimed.createRuntime();
     const definition = createRecurring(reclaimed, initial.service);
@@ -538,7 +540,9 @@ describe("C2 same-thread automation acceptance", () => {
       });
     });
     expect(reclaimed.dispatches).toHaveLength(1);
+  });
 
+  it("never repeats a dispatching run after restart", async () => {
     const uncertain = fixture();
     const uncertainInitial = uncertain.createRuntime();
     const uncertainDefinition = createRecurring(

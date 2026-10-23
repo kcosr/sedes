@@ -565,9 +565,9 @@ test.describe.serial("managed Codex TUI browser journeys", () => {
     await expect
       .poll(() => completedAssistantMessages.count(), { timeout: 15_000 })
       .toBeGreaterThan(completedBeforeTurn);
-    await expect(otherPage.getByRole("button", { name: "Retry" })).toHaveCount(
-      0,
-    );
+    await expect(
+      otherPage.getByRole("button", { name: "Retry", exact: true }),
+    ).toHaveCount(0);
     await otherContext.close();
   });
 

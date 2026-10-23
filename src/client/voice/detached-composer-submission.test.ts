@@ -86,6 +86,19 @@ describe("detached composer voice submission", () => {
     expect(draft.text).toBe("Existing composer text");
   });
 
+  it.each(["queue", "steer"] as const)("submits detached voice during a retry delay despite the saved %s preference", async mode => {
+    const { api, context, snapshot } = fixture({ runState: "starting" });
+    snapshot.capabilities.deliveryModes = snapshot.capabilities.deliveryModes.map(capability => ({
+      ...capability, available: capability.id === "submit",
+    }));
+    const adopted = await prepareDetachedVoiceSubmission(api, { ...event, mode }, context);
+    await expect(adopted?.submission).resolves.toBeUndefined();
+    expect(api.saveDraft).toHaveBeenCalledOnce();
+    expect(api.operateThread).toHaveBeenCalledExactlyOnceWith(event.threadId, {
+      kind: "deliver", mode: "submit", mutationId: expect.any(String), expectedThreadRevision: 42, expectedDraftRevision: 8,
+    }, { signal: context.signal });
+  });
+
   it.each([
     { mode: "queue" as const, activeTurnId: "active-turn", steerTarget: "turn", expected: { mode: "queue" } },
     { mode: "steer" as const, activeTurnId: "active-turn", steerTarget: "turn", expected: { mode: "steer", steerTarget: { kind: "turn", turnId: "active-turn" } } },

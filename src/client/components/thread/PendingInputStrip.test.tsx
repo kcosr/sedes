@@ -414,6 +414,17 @@ describe("PendingInputStrip", () => {
     expect(within(row).queryAllByRole("button")).toHaveLength(0);
   });
 
+  it("labels automatic continuation messages without composer or steer controls", () => {
+    renderStrip(new FakeStripStore(snapshot([queued("retry", 1, "pending", {
+      origin: "automatic_retry", inputOrigin: { kind: "automatic_retry" },
+      resolvedDeliveryMode: "submit", preview: { text: "Please continue from where you left off." },
+    })])));
+    const row = screen.getByRole("listitem");
+    expect(row).toHaveAttribute("data-input-origin", "automatic_retry");
+    expect(within(row).getByText("Automatic retry")).toHaveAttribute("title", "Automatic retry");
+    expect(within(row).queryAllByRole("button")).toHaveLength(0);
+  });
+
   it("labels a durable question reply while retaining ordinary user queue controls", () => {
     const reply = queued("question-reply", 1, "pending", {
       origin: "user",

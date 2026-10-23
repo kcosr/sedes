@@ -132,7 +132,7 @@ describe("thread control tool definitions", () => {
     expect(
       registry.list().map(({ id, schemaVersion }) => [id, schemaVersion]),
     ).toEqual([
-      ["thread.messages", 4],
+      ["thread.messages", 5],
       ["thread.send", 2],
       ["thread.fork", 1],
       ["thread.archive", 2],
@@ -201,13 +201,13 @@ describe("thread control tool definitions", () => {
     registry.register(createThreadRestoreToolDefinition(value));
 
     expect(
-      registry.validatesInput("thread.messages", 4, {
+      registry.validatesInput("thread.messages", 5, {
         threadId: "thread-1",
         pageSize: 25,
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("thread.messages", 4, {
+      registry.validatesInput("thread.messages", 5, {
         threadId: "thread-1",
         pageSize: 26,
       }),
@@ -284,7 +284,7 @@ describe("thread control tool definitions", () => {
       }),
     ).toBe(true);
     expect(
-      registry.validatesOutput("thread.messages", 4, {
+      registry.validatesOutput("thread.messages", 5, {
         turns: [
           {
             id: "application-turn-id-up-to-one-hundred-and-sixty-characters",
@@ -338,7 +338,7 @@ describe("thread control tool definitions", () => {
       }),
     ).toBe(true);
     expect(
-      registry.validatesOutput("thread.messages", 4, {
+      registry.validatesOutput("thread.messages", 5, {
         turns: [
           {
             id: "turn-1",

@@ -138,12 +138,15 @@ const messageSchema = Type.Object(
     role: Type.String({ enum: ["user", "assistant"], maxLength: 9 }),
     text: boundedTextSchema,
     origin: Type.Optional(deliveryInputOriginSchema),
+    automaticRetry: Type.Optional(Type.Boolean({
+      description: "True only for a Sedes-generated automatic retry follow-up, not human instructions.",
+    })),
   },
   {
     additionalProperties: false,
-    maxProperties: 3,
+    maxProperties: 4,
     description:
-      "One settled ordinary user or assistant message. Messages remain chronological within their turn. Authenticated inter-agent provenance is emitted only with role user.",
+      "One settled ordinary user or assistant message. Messages remain chronological within their turn. Application input provenance is emitted only with role user.",
   },
 );
 const activeMessageSchema = Type.Object(
@@ -152,12 +155,15 @@ const activeMessageSchema = Type.Object(
     role: Type.String({ enum: ["user", "assistant"], maxLength: 9 }),
     text: boundedTextSchema,
     origin: Type.Optional(deliveryInputOriginSchema),
+    automaticRetry: Type.Optional(Type.Boolean({
+      description: "True only for a Sedes-generated automatic retry follow-up, not human instructions.",
+    })),
   },
   {
     additionalProperties: false,
-    maxProperties: 4,
+    maxProperties: 5,
     description:
-      "One text-finalized ordinary user or assistant message from the active turn. Completion means its text receives no more live deltas; it does not assert that the model response succeeded. Authenticated inter-agent provenance is emitted only with role user.",
+      "One text-finalized ordinary user or assistant message from the active turn. Completion means its text receives no more live deltas; it does not assert that the model response succeeded. Application input provenance is emitted only with role user.",
   },
 );
 const messagesTruncationSchema = Type.Object(

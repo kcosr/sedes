@@ -2347,11 +2347,17 @@ plugins = false
           requestOptions,
         );
         await Promise.all([streamed, completed]);
-        await supervisor.client.request(
-          codexThreadUnsubscribeMethod,
-          { threadId: started.thread.id },
-          requestOptions,
-        );
+        // Keep the creator subscription until the passive read finishes so an
+        // operator-configured unload delay cannot change native status midway
+        // through capture. The reader itself must acquire no session authority.
+        const activeSupervisor = supervisor;
+        await vi.waitFor(async () => {
+          await expect(activeSupervisor.client.request(
+            codexThreadReadMethod,
+            { threadId: started.thread.id, includeTurns: false },
+            requestOptions,
+          )).resolves.toMatchObject({ thread: { status: { type: "idle" } } });
+        }, { timeout: 10_000, interval: 100 });
 
         const instance: AgentBackendInstance = {
           id: runtimeScope.backendInstanceId, tenantId: scope.tenantId,
@@ -2405,6 +2411,11 @@ plugins = false
         } finally {
           await reader.close();
           requests.mockRestore();
+          await supervisor.client.request(
+            codexThreadUnsubscribeMethod,
+            { threadId: started.thread.id },
+            requestOptions,
+          );
         }
 
         await closeObserver(observer);

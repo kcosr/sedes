@@ -107,6 +107,7 @@ export type AuthoritativeCompletionObserver = (
     readonly applicationTurnId: string;
     readonly completionIdentity: string;
     readonly provenance: "live" | "recovered";
+    readonly nativeRecovery?: true;
     readonly voiceSubscriberWatermark?: number;
     readonly responseVoice?: ResponseVoiceFreshness;
     readonly outcome: "completed" | "interrupted" | "failed";
@@ -137,6 +138,12 @@ export type LiveProgressObserver = (
     readonly responseVoice?: ResponseVoiceFreshness;
     readonly text: BoundedText;
   },
+) => void;
+
+export type ModelFeedbackObserver = (
+  scope: ExecutionScope,
+  applicationThreadId: string,
+  input: { readonly identity: string; readonly automaticRetry: boolean },
 ) => void;
 
 export interface ConversationInputRuntimeObservation {
@@ -281,6 +288,22 @@ function sameRuntimeBudgetScope(
   );
 }
 
+function isCompletedModelToolActivity(item: ConversationItem): boolean {
+  if (item.status !== "completed") return false;
+  switch (item.kind) {
+    case "command":
+    case "file_read":
+    case "file_change":
+    case "tool":
+    case "mcp":
+    case "web_search":
+    case "collaboration":
+      return true;
+    default:
+      return false;
+  }
+}
+
 type HistoricalQuestionObserver = (
   scope: ExecutionScope,
   threadId: string,
@@ -306,6 +329,7 @@ export class ConversationActorManager {
   readonly #captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
   readonly #onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
   readonly #onLiveProgress?: LiveProgressObserver;
+  readonly #onModelFeedback?: ModelFeedbackObserver;
   readonly #entries = new Map<string, ActorEntry>();
   readonly #inputActivityListeners = new Set<InputActivityListener>();
   readonly #maintenance = new Map<string, ActorMaintenance>();
@@ -324,6 +348,7 @@ export class ConversationActorManager {
     readonly captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
     readonly onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
     readonly onLiveProgress?: LiveProgressObserver;
+    readonly onModelFeedback?: ModelFeedbackObserver;
     readonly onNonblockingQuestions?: NonblockingQuestionObserver;
     readonly onHistoricalQuestion?: HistoricalQuestionObserver;
   }) {
@@ -335,6 +360,7 @@ export class ConversationActorManager {
     this.#captureResponseVoiceContext = input.captureResponseVoiceContext;
     this.#onAuthoritativeSubmission = input.onAuthoritativeSubmission;
     this.#onLiveProgress = input.onLiveProgress;
+    this.#onModelFeedback = input.onModelFeedback;
     this.#onNonblockingQuestions = input.onNonblockingQuestions;
     this.#onHistoricalQuestion = input.onHistoricalQuestion;
     assertConversationRetentionMilliseconds(input.retentionMilliseconds);
@@ -1403,6 +1429,37 @@ export class ConversationActorManager {
     let actor: ConversationActor | undefined;
     let observationChain = Promise.resolve();
     const completionVoiceContexts = new Map<string, CapturedResponseVoiceContext | undefined>();
+    const observedModelFeedback = new Set<string>();
+    const observedNativeCompletions = new Set<string>();
+    const rememberModelFeedback = (turnId: string, itemId: string) => {
+      const identity = `${turnId}:${itemId}`;
+      if (observedModelFeedback.has(identity)) return;
+      observedModelFeedback.add(identity);
+      if (observedModelFeedback.size > 512) {
+        observedModelFeedback.delete(observedModelFeedback.values().next().value!);
+      }
+      return identity;
+    };
+    const observeModelFeedback = (turnId: string, itemId: string) => {
+      if (!this.#onModelFeedback) return;
+      const timeline = actor?.peekSnapshotState()?.timeline;
+      const user = timeline?.turnsById[turnId]?.orderedItemIds.map(id => timeline.itemsById[id])
+        .findLast(item => item?.kind === "user_message");
+      // Native history without a materialized application input cannot prove
+      // whether this response belongs to an automatic follow-up.
+      if (user?.kind !== "user_message") return;
+      // Autonomous native recovery has no queued retry message. Goal turns
+      // always wait for terminal success before restoring the allowance.
+      const automaticRetry = user.origin?.kind === "automatic_retry" ||
+        actor?.isNativeRecoveryTurn(turnId) === true;
+      const identity = rememberModelFeedback(turnId, itemId);
+      if (!identity) return;
+      // Liveness is captured at arrival. Later completion must not erase a
+      // successful response waiting behind an earlier admission observer.
+      observationChain = observationChain.then(() => {
+        this.#onModelFeedback?.(input.scope, input.binding.applicationThreadId, { identity, automaticRetry });
+      }).catch(() => undefined);
+    };
     try {
       const handle = await input.driver.attach({
         scope: input.scope,
@@ -1457,6 +1514,31 @@ export class ConversationActorManager {
           : {}),
         initialObserver: (event) => {
           onStateChanged();
+          const historyItems = event.type === "projection_replaced"
+            ? Object.values(event.state.timeline.itemsById)
+            : event.type === "projection_events"
+              ? event.events.flatMap(projected => projected.type === "history_prepend"
+                ? Object.values(projected.page.itemsById) : [])
+              : [];
+          if (this.#onModelFeedback) {
+            for (const item of historyItems) {
+              if (isCompletedModelToolActivity(item)) rememberModelFeedback(item.turnId, item.id);
+            }
+          }
+          const timeline = actor?.peekSnapshotState()?.timeline;
+          if (this.#onModelFeedback && !signal.aborted && timeline?.runState === "running") {
+            if (event.type === "live_progress" && timeline.activeTurnId === event.applicationTurnId) {
+              observeModelFeedback(event.applicationTurnId, event.applicationItemId);
+            } else if (event.type === "projection_events") {
+              for (const projected of event.events) {
+                if (projected.type !== "item_upsert") continue;
+                const item = projected.item;
+                if (item.turnId === timeline.activeTurnId && isCompletedModelToolActivity(item)) {
+                  observeModelFeedback(item.turnId, item.id);
+                }
+              }
+            }
+          }
           let responseVoice: CapturedResponseVoiceContext | undefined;
           if (event.type === "authoritative_completion") {
             if (event.provenance === "live" && this.#captureResponseVoiceContext) {
@@ -1499,6 +1581,19 @@ export class ConversationActorManager {
             (event.type === "authoritative_completion" && this.#onAuthoritativeCompletion) ||
             (event.type === "authoritative_submission" && this.#onAuthoritativeSubmission)
           ) {
+            // Capture native turn evidence before a queued observer can see a
+            // later turn or a replacement owner. Recovered history never opts in.
+            const nativeCompletionKey = event.type === "authoritative_completion"
+              ? JSON.stringify([event.completionIdentity, event.backendCorrelation]) : undefined;
+            const nativeRecovery = event.type === "authoritative_completion" && event.provenance === "live" &&
+              !observedNativeCompletions.has(nativeCompletionKey!) && actor?.isNativeRecoveryTurn(event.applicationTurnId) === true;
+            if (nativeRecovery) {
+              // Each newly closed submitted input must retain the native mode,
+              // even if an earlier correlation was already reconciled. Policy
+              // still admits only one attempt for the terminal turn identity.
+              observedNativeCompletions.add(nativeCompletionKey!);
+              if (observedNativeCompletions.size > 512) observedNativeCompletions.delete(observedNativeCompletions.values().next().value!);
+            }
             observationChain = observationChain
               .then(async () => {
                 const observation =
@@ -1516,6 +1611,7 @@ export class ConversationActorManager {
                         {
                           backendCorrelation: event.backendCorrelation,
                           backendTurnId: event.backendTurnId,
+                          ...(nativeRecovery ? { nativeRecovery: true as const } : {}),
                           backendCorrelations: event.backendCorrelations,
                           applicationTurnId: event.applicationTurnId,
                           completionIdentity: event.completionIdentity,
@@ -1539,16 +1635,6 @@ export class ConversationActorManager {
               .catch(() => undefined);
           }
 
-          const historyItems =
-            event.type === "projection_replaced"
-              ? Object.values(event.state.timeline.itemsById)
-              : event.type === "projection_events"
-                ? event.events.flatMap((entry) =>
-                    entry.type === "history_prepend"
-                      ? Object.values(entry.page.itemsById)
-                      : [],
-                  )
-                : [];
           for (const item of historyItems) {
             if (
               item.kind === "assistant_message" &&

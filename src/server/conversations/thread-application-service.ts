@@ -306,6 +306,7 @@ export class ThreadApplicationService {
   #history?: ThreadApplicationHistoryBoundary;
 
   readonly #usage: Pick<UsageService, "registerVisibleTurns">;
+  readonly #isAutomaticModelRetryPending?: (scope: RequestScope, applicationThreadId: string) => boolean;
   constructor(input: {
     readonly usage: Pick<UsageService, "registerVisibleTurns">;
     readonly inventory: ThreadApplicationInventoryReader;
@@ -323,6 +324,7 @@ export class ThreadApplicationService {
       "supports"
     >;
     readonly mutations?: ThreadApplicationMutationGateway;
+    readonly isAutomaticModelRetryPending?: (scope: RequestScope, applicationThreadId: string) => boolean;
   }) {
     this.#usage = input.usage;
     this.#inventory = input.inventory;
@@ -334,6 +336,7 @@ export class ThreadApplicationService {
     this.#actionPersistence = input.actionPersistence;
     this.#attachmentDelivery = input.attachmentDelivery;
     this.#mutations = input.mutations;
+    this.#isAutomaticModelRetryPending = input.isAutomaticModelRetryPending;
   }
 
   bindMutations(mutations: ThreadApplicationMutationGateway): void {
@@ -618,12 +621,15 @@ export class ThreadApplicationService {
     );
     assertCompositionScope(inventory, interactions);
     const actor = capture.status === "connected" ? capture.state : undefined;
-    const runState = deriveRunState(
+    const actualRunState = deriveRunState(
       inventory.thread.backingState,
       actor?.timeline.runState,
       interactions,
       capture.status === "disconnected",
     );
+    const retryPending = actualRunState === "failed" &&
+      this.#isAutomaticModelRetryPending?.(scope, applicationThreadId) === true;
+    const runState = retryPending ? "starting" : actualRunState;
     const backendCapabilities =
       actor?.backendCapabilities ?? emptyBackendCapabilities;
     const actionPersistence = this.#actionPersistence.get(
@@ -637,6 +643,8 @@ export class ThreadApplicationService {
       inventory,
       queue,
       runState,
+      actualRunState,
+      retryPending,
       ...(actor?.timeline.activeTurnId
         ? { activeTurnId: actor.timeline.activeTurnId }
         : {}),
@@ -673,7 +681,7 @@ export class ThreadApplicationService {
     }
     const projectedForkSource = projectedThreadForkSourceCapability({
       branching: backendCapabilities.branching,
-      sourceRunState: runState,
+      sourceRunState: actualRunState,
     });
     const forkSource = forkSourceUnavailableReason
       ? {
@@ -953,6 +961,9 @@ function composeCapabilities(input: {
   readonly inventory: AuthorizedThreadApplicationState;
   readonly queue: readonly QueuedInputSummary[];
   readonly runState: ThreadRunState;
+  /** Presentation may show a retry delay while the provider is already settled. */
+  readonly actualRunState: ThreadRunState;
+  readonly retryPending?: boolean;
   readonly activeTurnId?: string;
   readonly backendCapabilities: BackendCapabilityDocument;
   readonly presentation: ThreadApplicationPresentation;
@@ -969,21 +980,21 @@ function composeCapabilities(input: {
   const bound = input.inventory.thread.backingState === "bound";
   const unbound = input.inventory.thread.backingState === "unbound";
   const interactive = input.presentation.interactionMode === "interactive";
-  const idle = input.runState === "idle";
-  const settled = idle || input.runState === "failed";
+  const idle = input.actualRunState === "idle";
+  const settled = idle || input.actualRunState === "failed";
   const inFlight = new Set<ThreadRunState>([
     "starting",
     "running",
     "waiting_for_approval",
     "waiting_for_input",
     "stopping",
-  ]).has(input.runState);
+  ]).has(input.actualRunState);
   const mutationBlocked =
     inFlight ||
-    input.runState === "disconnected" ||
-    input.runState === "reconciling";
+    input.actualRunState === "disconnected" ||
+    input.actualRunState === "reconciling";
   const backendTransitioning =
-    input.runState === "disconnected" || input.runState === "reconciling";
+    input.actualRunState === "disconnected" || input.actualRunState === "reconciling";
   const backendCanSubmit =
     interactive &&
     (unbound || input.backendCapabilities.deliveryModes.includes("submit"));
@@ -999,13 +1010,13 @@ function composeCapabilities(input: {
     "running",
     "waiting_for_approval",
     "waiting_for_input",
-  ]).has(input.runState);
+  ]).has(input.actualRunState);
   const steerAvailable =
     interactive &&
     available &&
     !archived &&
     bound &&
-    input.runState === "running" &&
+    input.actualRunState === "running" &&
     (input.backendCapabilities.steerTarget === "conversation" || input.activeTurnId !== undefined) &&
     input.recovery === undefined &&
     !input.exclusivePendingSteer &&
@@ -1016,7 +1027,7 @@ function composeCapabilities(input: {
     inventoryState: input.inventory.thread.inventoryState,
     available, interactive, settingsReady: initialSettingsReady,
     exclusivePendingSteer: input.exclusivePendingSteer,
-    runState: input.runState,
+    runState: input.actualRunState,
     submitSupported: input.backendCapabilities.deliveryModes.includes("submit"),
     queuedInputCount: input.queue.length,
   });
@@ -1112,7 +1123,7 @@ function composeCapabilities(input: {
     operation(
       "interrupt",
       "Stop",
-      available && bound && turnControllable,
+      available && bound && (turnControllable || input.retryPending === true),
       "There is no active turn to stop.",
       true,
     ),
@@ -1357,6 +1368,8 @@ function composeCapabilities(input: {
         interactionMode: input.presentation.interactionMode,
         backend: input.backendCapabilities.revision,
         runState: input.runState,
+        actualRunState: input.actualRunState,
+        retryPending: input.retryPending === true,
         inventoryRevision: input.inventory.thread.inventoryRevision,
         threadRevision: input.inventory.thread.threadRevision,
         available,

@@ -219,6 +219,8 @@ export async function createInMemoryThreadRuntimeHarness(options: {
   readonly retentionMilliseconds?: number;
   readonly persistDeliveryInputSnapshots?: boolean;
   readonly onCompletion?: (scope: RequestScope, threadId: string, turnId: string) => void;
+  readonly isAutomaticModelRetryPending?: (scope: RequestScope, threadId: string) => boolean;
+  readonly onDurableInputChanged?: ConstructorParameters<typeof QueuedInputDispatcher>[0]["onDurableInputChanged"];
   readonly captureResponseVoiceContext?: NonNullable<ConstructorParameters<typeof ConversationActorManager>[0]["captureResponseVoiceContext"]>;
   readonly onObservedCompletion?: (
     scope: RequestScope,
@@ -419,6 +421,7 @@ export async function createInMemoryThreadRuntimeHarness(options: {
     applicationRunStates.set(applicationThreadId, states);
   };
   const threads = new ThreadApplicationService({
+    isAutomaticModelRetryPending: options.isAutomaticModelRetryPending,
     usage,
     inventory: new DatabaseThreadApplicationInventoryReader({
       inventory: inventoryRepository,
@@ -467,7 +470,7 @@ export async function createInMemoryThreadRuntimeHarness(options: {
   queueDispatcher = new QueuedInputDispatcher({
     repository: queueRepository,
     gateway: queueGateway,
-    onDurableInputChanged: () => undefined,
+    onDurableInputChanged: options.onDurableInputChanged ?? (() => undefined),
     publisher: {
       publish(eventScope, applicationThreadId, event) {
         threadHubs.thread(eventScope, applicationThreadId).publish(event);

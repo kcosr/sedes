@@ -270,6 +270,7 @@ export class ThreadRuntimeCoordinator {
     scope: RequestScope,
     applicationThreadId: string,
   ) => void | Promise<void>;
+  readonly #isAutomaticModelRetryPending?: (scope: RequestScope, applicationThreadId: string) => boolean;
   readonly #entries = new Map<string, RuntimeEntry>();
   readonly #maintenance = new Map<string, Promise<unknown>>();
   readonly #shutdownController = new AbortController();
@@ -295,6 +296,7 @@ export class ThreadRuntimeCoordinator {
       scope: RequestScope,
       applicationThreadId: string,
     ) => void | Promise<void>;
+    readonly isAutomaticModelRetryPending?: (scope: RequestScope, applicationThreadId: string) => boolean;
   }) {
     this.#actors = input.actors;
     this.#targets = input.targets;
@@ -303,6 +305,7 @@ export class ThreadRuntimeCoordinator {
     this.#hubs = input.hubs;
     this.#onThreadChanged = input.onThreadChanged;
     this.#onAuthoritativeSettled = input.onAuthoritativeSettled;
+    this.#isAutomaticModelRetryPending = input.isAutomaticModelRetryPending;
     assertConversationRetentionMilliseconds(input.retentionMilliseconds);
     this.#retentionMilliseconds = input.retentionMilliseconds;
   }
@@ -1019,9 +1022,11 @@ export class ThreadRuntimeCoordinator {
     this.#hubs.dismissNotice(scope, applicationThreadId, request);
   }
 
+  /** Returns actual provider state unless an application summary requests presentation. */
   async captureLoadedState(
     scope: RequestScope,
     applicationThreadId: string,
+    options?: { readonly presentation?: boolean },
   ): Promise<{
     readonly runState: ThreadRunState;
     readonly backgroundWork?: NormalizedApplicationThreadSummary["backgroundWork"];
@@ -1060,7 +1065,12 @@ export class ThreadRuntimeCoordinator {
               other: backgroundActivity.other,
             }
           : undefined;
-      return { runState, ...(backgroundWork ? { backgroundWork } : {}) };
+      return {
+        runState: options?.presentation === true && runState === "failed" &&
+          this.#isAutomaticModelRetryPending?.(scope, applicationThreadId) === true
+          ? "starting" : runState,
+        ...(backgroundWork ? { backgroundWork } : {}),
+      };
     } finally {
       this.#release(key, entry);
     }

@@ -6,6 +6,7 @@ import { directInputRequestSchema, type DirectInputRequest } from "../../src/sha
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
 import { BackendError } from "../../src/server/backends/contracts.js";
 import { ThreadActivityService } from "../../src/server/conversations/thread-activity-service.js";
+import { AutomaticModelRetryService } from "../../src/server/conversations/automatic-model-retry-service.js";
 import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
 import { ConversationActor } from "../../src/server/conversations/conversation-actor.js";
 import { projectApiError } from "../../src/server/http/errors.js";
@@ -29,6 +30,78 @@ async function settled(harness: Harness, threadId: string) {
 }
 
 describe("direct thread input admission", { timeout: 30_000 }, () => {
+  it("admits a new Send during a pending retry and cancels only after commit, while replay preserves a later retry", async () => {
+    let retries: AutomaticModelRetryService | undefined;
+    const observedNewReceipts: string[] = [];
+    let newMutationId: string | undefined;
+    const h = await createInMemoryThreadRuntimeHarness({
+      retentionMilliseconds: 60_000,
+      isAutomaticModelRetryPending: (scope, threadId) => retries?.isPending(scope, threadId) ?? false,
+      onDurableInputChanged(scope, threadId, item) {
+        if (item.mutationId === newMutationId) {
+          observedNewReceipts.push(new DirectInputRepository(h.database).lookup(scope, item.mutationId).status);
+        }
+        retries?.onInputChanged(scope, threadId, item);
+      },
+    });
+    let acceptedSequence = 1;
+    const cancelTimer = vi.fn();
+    retries = new AutomaticModelRetryService({
+      resolvePolicy: () => ({ enabled: () => true, claim: () => true, reset: () => undefined,
+        resetForInput(sequence) { if (sequence <= acceptedSequence) return false; acceptedSequence = sequence; return true; } }),
+      enqueue: async () => { throw new Error("The delayed retry must not dispatch in this test."); },
+      scheduler: { schedule: () => ({}), cancel: cancelTimer },
+    });
+    const emitted = vi.spyOn(h.driver, "emit");
+    let runtime: Awaited<ReturnType<typeof h.runtimes.acquire>> | undefined;
+    try {
+      const id = (await draft(h)).applicationThreadId;
+      const original = request("Initial input before a model failure");
+      await h.mutations.admitInput(h.scope, id, original);
+      await settled(h, id);
+      const record = emitted.mock.calls[0]![0];
+      record.snapshot.runState = "failed";
+      h.driver.emit(record, { type: "run_state_changed", state: "failed" });
+      await vi.waitFor(() => expect(h.actors.observeInputRuntime(h.scope, id)?.runState).toBe("failed"));
+      const failure = { provenance: "live" as const, outcome: "failed" as const,
+        completionIdentity: "failed-model-response", backendTurnId: "failed-model-turn" };
+      retries.onCompletion(h.scope, id, failure);
+      runtime = await h.runtimes.acquire(h.scope, id);
+      await runtime.publishAuthoritativeReplacement();
+      expect(runtime.hub.snapshot?.runState).toBe("starting");
+      expect(runtime.hub.snapshot?.capabilities.deliveryModes.find(mode => mode.id === "submit")?.available).toBe(true);
+      expect(runtime.actor.timeline.runState).toBe("failed");
+
+      await expect(h.mutations.admitInput({ ...h.scope, principalId: randomUUID() }, id, request("Wrong owner"))).rejects.toThrow();
+      await expect(h.mutations.admitInput(h.scope, id, { ...original, text: "Reused request with changed text" })).rejects.toThrow("reused with different input");
+      await h.mutations.admitInput(h.scope, id, original);
+      expect(retries.isPending(h.scope, id)).toBe(true);
+      expect(cancelTimer).not.toHaveBeenCalled();
+
+      const next = request("A new human input replaces the delayed retry");
+      newMutationId = next.mutationId;
+      const receipt = await h.mutations.admitInput(h.scope, id, next);
+      expect(receipt.admittedMode).toBe("submit");
+      await vi.waitFor(() => expect(retries!.isPending(h.scope, id)).toBe(false));
+      expect(observedNewReceipts.length).toBeGreaterThan(0);
+      expect(observedNewReceipts.every(status => status === "found")).toBe(true);
+      expect(cancelTimer).toHaveBeenCalledOnce();
+      await settled(h, id);
+      await vi.waitFor(() => expect(h.mutations.readInputReceipt(h.scope, next.mutationId)).toMatchObject({ status: "found", receipt: { status: "accepted" } }));
+
+      retries.onCompletion(h.scope, id, { ...failure, completionIdentity: "another-later-failure" });
+      await h.mutations.admitInput(h.scope, id, next);
+      expect(retries.isPending(h.scope, id)).toBe(true);
+      expect(cancelTimer).toHaveBeenCalledOnce();
+      expect(h.database.prepare("SELECT COUNT(*) AS count FROM queued_inputs WHERE mutation_id = ?").get(next.mutationId)).toEqual({ count: 1 });
+    } finally {
+      runtime?.release();
+      await retries.close();
+      vi.restoreAllMocks();
+      await h.close();
+    }
+  });
+
   it("dispatches a bound 256 KiB input through its immutable snapshot and retained receipt", async () => {
     const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000, persistDeliveryInputSnapshots: true });
     try {

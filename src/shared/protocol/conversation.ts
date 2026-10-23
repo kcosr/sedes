@@ -267,6 +267,7 @@ export const messageContentPartSchema = z.discriminatedUnion("kind", [
 export type MessageContentPart = z.infer<typeof messageContentPartSchema>;
 
 export const deliveryInputOriginSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("automatic_retry") }),
   questionResponseOriginSchema,
   pageResponseOriginSchema,
   z.strictObject({
@@ -1016,6 +1017,7 @@ export const queuedInputSummarySchema = z
       "agent_control",
       "principal_client_control",
       "agent_result",
+      "automatic_retry",
     ]),
     inputOrigin: deliveryInputOriginSchema.optional(),
     initiatingAgentThreadId: z.string().min(1).max(160).optional(),
@@ -1074,7 +1076,7 @@ export const queuedInputSummarySchema = z
         (!hasToolClient || hasAgentThread)) ||
       ((item.origin === "user" ||
         item.origin === "automation" ||
-        item.origin === "agent_result") &&
+        item.origin === "agent_result" || item.origin === "automatic_retry") &&
         (hasAgentThread || hasToolClient))
     ) {
       context.addIssue({
@@ -1084,7 +1086,9 @@ export const queuedInputSummarySchema = z
       });
     }
     const expectedInputOriginKind =
-      item.origin === "agent_result"
+      item.origin === "automatic_retry"
+        ? "automatic_retry"
+        : item.origin === "agent_result"
         ? "agent_result"
         : item.origin === "agent_control"
           ? "agent_message"

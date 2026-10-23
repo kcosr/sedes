@@ -80,7 +80,12 @@ env -u NODE_ENV npm run test:e2e
 - `typecheck` checks repository-local documentation links, generated agent-tool
   contracts, and the E2E timing baseline before compiling the client and server
   TypeScript projects without emitting.
-- `test` runs unit, component, and integration tests with disposable state.
+- `test` first builds the sidecar, Pi sandbox, and Claude runtime artifacts, then runs
+  unit, component, and integration tests with disposable state. This keeps
+  production-shaped fixtures runnable before a full build on a clean checkout.
+  Use `npm test -- <file>` for focused runs so the worker prerequisites run too.
+  Keep builds and tests sequential within one checkout: worker builders replace
+  manifests that a running production fixture may need to read.
   Vitest defaults to at most eight workers to keep host load bounded. Use
   `npm test -- --maxWorkers=N` to explicitly choose a different limit.
   Most provider boundaries are fake-backed; the Codex lifecycle/TUI fixtures

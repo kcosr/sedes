@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CODEX_SPEED_REF, speedArgumentsValue } from "../../src/shared/provider-features/codex-speed.js";
+import { AutomaticModelRetryService } from "../../src/server/conversations/automatic-model-retry-service.js";
 import { boundValue } from "../../src/server/conversations/payload-policy.js";
 import type { AppliedToolPolicySet } from "../../src/shared/protocol/conversation.js";
 import { BackendError } from "../../src/server/backends/contracts.js";
@@ -76,6 +77,7 @@ function deliveryHub(
 }
 
 function fixture(input?: {
+  cancelAutomaticModelRetry?: (scope: RequestScope, threadId: string) => boolean;
   discardFork?: (scope: RequestScope, threadId: string) => Promise<{
     status: "aborted"; childThreadId: string; diagnostic: string; restartable: boolean;
   }>;
@@ -376,7 +378,8 @@ function fixture(input?: {
     input?.afterInterruptAccepted ?? (async () => false),
   );
   const gateway = new ThreadMutationGateway({
-      actors: {} as never,
+      actors: { observeInputRuntime: () => ({ authoritative: true, settled: actor.authoritativelySettled, runState: actor.timeline.runState }) } as never,
+    cancelAutomaticModelRetry: input?.cancelAutomaticModelRetry,
     bindings: {
       database,
       isUnboundThreadWorkspaceMoveReplay,
@@ -483,6 +486,49 @@ function fixture(input?: {
     },
   };
 }
+
+describe("ThreadMutationGateway scheduled model retry Stop", () => {
+  it("cancels a pending retry with a durable replayable Stop receipt and no native request", async () => {
+    const cancel = vi.fn(() => true);
+    const subject = fixture({ runState: "failed", cancelAutomaticModelRetry: cancel });
+    const operation = { kind: "interrupt" as const, operationId: "stop-scheduled-retry" };
+    try {
+      const result = await subject.gateway.mutate(scope, "thread-1", operation);
+      expect(result).toEqual({ status: "accepted", operationId: operation.operationId });
+      expect(subject.getRecord()?.state).toBe("accepted");
+      expect(subject.operations.markInterruptStarted).toHaveBeenCalledOnce();
+      expect(subject.actor.interrupt).not.toHaveBeenCalled();
+      expect(subject.actor.reconcileInterrupt).not.toHaveBeenCalled();
+      expect(subject.publishThreadSnapshot).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledWith(scope, "thread-1");
+      expect(await subject.gateway.mutate(scope, "thread-1", operation)).toEqual(result);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(subject.operations.prepareInterrupt).toHaveBeenCalledOnce();
+    } finally { await subject.gateway.close(); }
+  });
+
+  it("still interrupts active native work after cancelling a pending retry", async () => {
+    const subject = fixture({ runState: "running", cancelAutomaticModelRetry: () => true });
+    try {
+      expect(await subject.gateway.mutate(scope, "thread-1", { kind: "interrupt", operationId: "stop-active-work" }))
+        .toMatchObject({ status: "accepted" });
+      expect(subject.actor.interrupt).toHaveBeenCalledOnce();
+    } finally { await subject.gateway.close(); }
+  });
+
+  it("checks scope before cancelling or creating a Stop receipt", async () => {
+    const cancel = vi.fn(() => true);
+    const subject = fixture({ runState: "failed", cancelAutomaticModelRetry: cancel });
+    vi.spyOn(subject.gateway.input.inventory, "getThread").mockImplementation(() => { throw new DomainError("not_found", "Thread not found."); });
+    try {
+      await expect(subject.gateway.mutate({ ...scope, principalId: "wrong-principal" }, "thread-1", { kind: "interrupt", operationId: "wrong-scope-stop" }))
+        .rejects.toThrow("Thread not found.");
+      expect(cancel).not.toHaveBeenCalled();
+      expect(subject.operations.prepareInterrupt).not.toHaveBeenCalled();
+      expect(subject.actor.interrupt).not.toHaveBeenCalled();
+    } finally { await subject.gateway.close(); }
+  });
+});
 
 describe("ThreadMutationGateway pending Steer restart recovery", () => {
   it("finishes startup after an uncertain legacy draft becomes terminal unknown", async () => {
@@ -5127,7 +5173,12 @@ function providerFeatureMutationFixture(input: {
   readonly concurrency: ProviderFeatureConcurrency;
   readonly runState: "idle" | "running";
   readonly queuedInput: boolean;
+  readonly cancelAutomaticModelRetry?: (scope: RequestScope, threadId: string, mode?: "native_only") => boolean;
+  readonly feature?: { readonly featureId: string; readonly schemaVersion: number };
+  readonly actionId?: string;
 }) {
+  const feature = input.feature ?? { featureId: "codex.tui", schemaVersion: 1 };
+  const actionId = input.actionId ?? "start";
   const database = {
     prepare: (sql: string) => ({
       get: () =>
@@ -5176,16 +5227,16 @@ function providerFeatureMutationFixture(input: {
       },
     ) => {
       await request.mutateExternal?.({
-        featureId: "codex.tui",
-        schemaVersion: 1,
-        actionId: "start",
+        ...feature,
+        actionId,
         arguments: null,
       });
       return { applicationOperationId: request.mutationId };
     },
   );
   const gateway = new ThreadMutationGateway({
-      actors: {} as never,
+    cancelAutomaticModelRetry: input.cancelAutomaticModelRetry,
+    actors: {} as never,
     bindings: { database } as never,
     inventory: {
       assertWorkspaceActive: vi.fn(),
@@ -5220,13 +5271,13 @@ function providerFeatureMutationFixture(input: {
         providerFeatureStates: [],
         providerFeatureCapabilities: [
           {
-            ref: { featureId: "codex.tui", schemaVersion: 1 },
+            ref: feature,
             revision: 7,
             mutationRevision: 7,
             availability: "available",
             operations: [
               {
-                actionId: "start",
+                actionId,
                 confirmation: "none",
               },
             ],
@@ -5254,8 +5305,8 @@ function providerFeatureMutationFixture(input: {
     expectedThreadRevision: 4,
     operation: {
       action: "perform_provider_feature" as const,
-      feature: { featureId: "codex.tui", schemaVersion: 1 },
-      actionId: "start",
+      feature,
+      actionId,
       arguments: null,
       expectedMutationRevision: 7,
     },
@@ -5271,8 +5322,8 @@ function providerFeatureMutationFixture(input: {
   };
 }
 
-function speedGatewayFixture() {
-  const f = providerFeatureMutationFixture({ concurrency: CONCURRENT_PROVIDER_FEATURE_CONCURRENCY, runState: "running", queuedInput: false });
+function speedGatewayFixture(cancelAutomaticModelRetry?: (scope: RequestScope, threadId: string, mode?: "native_only") => boolean) {
+  const f = providerFeatureMutationFixture({ concurrency: CONCURRENT_PROVIDER_FEATURE_CONCURRENCY, runState: "running", queuedInput: false, cancelAutomaticModelRetry });
   const receipt = { status: "provider_feature_result" as const, operationId: "speed-op", feature: CODEX_SPEED_REF,
     result: boundValue({ operationId: "speed-op", receiptRevision: 3, saved: { status: "saved", selection: "fast", desiredRevision: 8 },
       currentRun: { status: "published", target: { turnId: "turn-1", activationId: "activation" }, selection: "fast" } }) };
@@ -5320,6 +5371,74 @@ describe("ThreadMutationGateway Speed receipt replay", () => {
     await vi.waitFor(() => expect(publish).toHaveBeenCalled());
     expect(await f.gateway.mutate(scope, "thread-1", f.operation)).toEqual(f.receipt);
     expect(f.perform).toHaveBeenCalledOnce(); await f.gateway.close();
+  });
+});
+
+describe("ThreadMutationGateway provider controls preserve ordinary automatic retry", () => {
+  it("changing Codex Speed leaves an ordinary pending continuation retry scheduled", async () => {
+    const retry = new AutomaticModelRetryService({
+      resolvePolicy: () => ({ enabled: () => true, claim: () => true, reset: () => {}, resetForInput: () => false }),
+      enqueue: vi.fn(),
+    });
+    retry.onCompletion(scope, "thread-1", {
+      backendTurnId: "capacity-failure", completionIdentity: "capacity-failure:failed", outcome: "failed", provenance: "live",
+    });
+    const cancel = vi.fn((requestScope: RequestScope, threadId: string, mode?: "native_only") => {
+      if (mode === "native_only") return retry.cancelNativeRecovery(requestScope, threadId);
+      const pending = retry.isPending(requestScope, threadId);
+      retry.cancel(requestScope, threadId);
+      return pending;
+    });
+    const subject = speedGatewayFixture(cancel);
+    try {
+      expect(retry.isPending(scope, "thread-1")).toBe(true);
+      expect(await subject.gateway.mutate(scope, "thread-1", subject.operation)).toEqual(subject.receipt);
+      expect(cancel).toHaveBeenCalledExactlyOnceWith(scope, "thread-1", "native_only");
+      expect(cancel).toHaveReturnedWith(false);
+      expect(retry.isPending(scope, "thread-1")).toBe(true);
+    } finally { await retry.close(); await subject.gateway.close(); }
+  });
+});
+
+describe("ThreadMutationGateway goal controls cancel automatic retry", () => {
+  it.each(["pause", "clear", "resume"])("cancels before asynchronous %s admission and leaves a fresh retry intact on receipt replay", async actionId => {
+    let pendingRetry = true;
+    const cancel = vi.fn(() => { const cancelled = pendingRetry; pendingRetry = false; return cancelled; });
+    const subject = providerFeatureMutationFixture({
+      concurrency: CONCURRENT_PROVIDER_FEATURE_CONCURRENCY, runState: "idle", queuedInput: false,
+      feature: { featureId: "codex.goal", schemaVersion: 1 }, actionId, cancelAutomaticModelRetry: cancel,
+    });
+    const runtimeGate = deferred<void>();
+    const acquire = subject.acquire.getMockImplementation()!;
+    subject.acquire.mockImplementation(async () => {
+      expect(cancel).toHaveBeenCalledExactlyOnceWith(scope, "thread-1", "native_only");
+      expect(pendingRetry).toBe(false);
+      await runtimeGate.promise;
+      return acquire();
+    });
+    const provider = subject.gateway.input.actionPersistence.get("backend-1")!;
+    const replay = vi.spyOn(provider, "replayProviderFeature");
+    const mutation = subject.gateway.mutate(scope, "thread-1", subject.operation);
+    try {
+      await vi.waitFor(() => expect(subject.acquire).toHaveBeenCalledOnce());
+      expect(cancel).toHaveBeenCalledExactlyOnceWith(scope, "thread-1", "native_only");
+      expect(subject.performProviderFeature).not.toHaveBeenCalled();
+      expect(subject.mutateProviderFeature).not.toHaveBeenCalled();
+      runtimeGate.resolve();
+      const result = await mutation;
+      expect(result).toEqual({ status: "accepted", operationId: subject.operation.mutationId });
+      expect(subject.performProviderFeature).toHaveBeenCalledOnce();
+      expect(subject.mutateProviderFeature).toHaveBeenCalledOnce();
+      expect(subject.release).toHaveBeenCalledOnce();
+
+      replay.mockReturnValue({ applicationOperationId: subject.operation.mutationId });
+      pendingRetry = true;
+      expect(await subject.gateway.mutate(scope, "thread-1", subject.operation)).toEqual(result);
+      expect(pendingRetry).toBe(true);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(subject.acquire).toHaveBeenCalledOnce();
+      expect(subject.performProviderFeature).toHaveBeenCalledOnce();
+    } finally { runtimeGate.resolve(); await mutation; await subject.gateway.close(); }
   });
 });
 

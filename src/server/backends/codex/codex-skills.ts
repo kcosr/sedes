@@ -18,7 +18,7 @@ export interface CodexComposerSkillPreferenceReader {
 
 export const defaultCodexComposerSkillPreferenceReader: CodexComposerSkillPreferenceReader =
   Object.freeze({
-    read: () => ({ showOpenAIComposerSkills: false, revision: 0 }),
+    read: () => ({ showOpenAIComposerSkills: false, autoRetryModelFailures: true, revision: 0 }),
   });
 
 export interface CodexNativeSkill extends BackendSkillDescriptor {

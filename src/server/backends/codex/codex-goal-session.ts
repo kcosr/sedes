@@ -1,4 +1,5 @@
 import type { RequestScope } from "../../identity/identity-provider.js";
+import type { CodexGoalRecoveryReceipts } from "./codex-goal-recovery-receipts.js";
 import {
   availableCodexGoalActionIds,
   codexGoalPostconditionMatches,
@@ -52,6 +53,7 @@ export type CodexGoalNativeOutcome =
  */
 export class CodexGoalSessionRegistry {
   readonly store: CodexGoalProjectionStore;
+  readonly recoveryReceipts: CodexGoalRecoveryReceipts | undefined;
   readonly #pendingInvalidations = new Map<string, Promise<void>>();
   /** Keys dirtied by a notification while a reread for that key is in flight. */
   readonly #dirtiedInvalidations = new Set<string>();
@@ -60,8 +62,10 @@ export class CodexGoalSessionRegistry {
   constructor(input?: {
     readonly store?: CodexGoalProjectionStore;
     readonly now?: () => number;
+    readonly recoveryReceipts?: CodexGoalRecoveryReceipts;
   }) {
     this.store = input?.store ?? new CodexGoalProjectionStore();
+    this.recoveryReceipts = input?.recoveryReceipts;
     this.#now = input?.now ?? (() => Date.now());
   }
 
@@ -83,6 +87,7 @@ export class CodexGoalSessionRegistry {
     readonly connectionGeneration: number;
     readonly client: CodexSharedClientFacade;
     readonly signal?: AbortSignal;
+    readonly onReadGoal?: (goal: import("./codex-goal-protocol.js").CodexNativeThreadGoal | null) => void;
   }): Promise<CodexGoalProjectionRecord> {
     try {
       input.signal?.throwIfAborted();
@@ -99,6 +104,7 @@ export class CodexGoalSessionRegistry {
         response,
         expectedThreadId: input.nativeThreadId,
       });
+      input.onReadGoal?.(response.goal);
       return this.store.publish(input.scope, {
         applicationThreadId: input.applicationThreadId,
         nativeThreadId: input.nativeThreadId,
@@ -251,6 +257,7 @@ export class CodexGoalSessionRegistry {
     readonly origin: import("./codex-goal-protocol.js").CodexGoalMutationOrigin;
     readonly deadlineAt?: number;
     readonly signal?: AbortSignal;
+    readonly beforeWrite?: () => boolean;
   }): Promise<CodexGoalNativeOutcome> {
     const available = availableCodexGoalActionIds(input.currentState);
     if (!available.includes(input.actionId)) {
@@ -275,6 +282,7 @@ export class CodexGoalSessionRegistry {
     }
 
     try {
+      if (input.beforeWrite && !input.beforeWrite()) return { kind: "rejected", preBoundary: true, reason: "Goal recovery is no longer current." };
       if (input.actionId === "clear") {
         const response = await input.client.request(
           codexThreadGoalClearMethod,
