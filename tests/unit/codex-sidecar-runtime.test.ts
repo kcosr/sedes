@@ -666,7 +666,7 @@ async function attachment(host: CodexRuntimeHost, services: PersistentSidecarSer
   const capabilities = rightRegistry.capabilities().map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion }));
   registerControlV2Operations(rightRegistry, { buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: leftRegistry.capabilities() });
   sedes.start(); sidecar.start();
-  await sedes.call(controlHelloOperation, { expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), authorizedSidecarCapabilities: capabilities, offeredSedesCapabilities: leftRegistry.capabilities() });
+  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), authorizedSidecarCapabilities: capabilities, offeredSedesCapabilities: leftRegistry.capabilities() });
   return { detach, epoch, hostChannel: right, channel: left, closed: pair.left.closed, connection: new CodexSidecarRuntimeConnection(left), close: async () => { detach(); services.detach(epoch); left.close(); right.close(); await sedes.close("test_complete"); } };
 }
 
@@ -780,6 +780,7 @@ class Queue implements AsyncIterable<SidecarFrame> {
 }
 
 class Transport implements SidecarFrameTransport {
+  commitCompression(_mode: "none" | "zstd"): void {}
   readonly sizes: number[] = [];
   readonly assurance = { kind: "memory", carrierGeneration: 1 };
   readonly queue = new Queue();

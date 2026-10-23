@@ -26,7 +26,7 @@ function fixture(authorizedCapabilities: readonly SidecarAuthorizedCapability[] 
   const launch = vi.fn(async () => stream("normal"));
   const attachExisting = vi.fn(async () => stream("recovery"));
   const negotiated: Array<readonly SidecarAuthorizedCapability[]> = [];
-  const owner = new SidecarRuntimeOwner({ scope, executionEnvironmentId: "remote", environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
+  const owner = new SidecarRuntimeOwner({ connectionCompression: () => true, scope, executionEnvironmentId: "remote", environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
     authorizedCapabilities, authorizedRuntimeCapabilities: [],
     activeEnvironmentConfigurationRevision: environmentProbe, activeOperationsConfigurationRevision: () => operationsRevision, isAutomaticConnectionEnabled: () => enabled,
     artifact: { artifactId: SIDECAR_ARTIFACT_ID, modes: SIDECAR_ARTIFACT_MODES, executableDirectory: "/fixture", executablePath: "/fixture/sedes",

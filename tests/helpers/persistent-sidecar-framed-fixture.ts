@@ -7,7 +7,7 @@ import { sidecarSocketByteStream } from "../../src/server/sidecar/sidecar-socket
 
 /** Both sides exchange production length-prefixed protocol bytes over a fresh
  * local socket standing in for the SSH stdio carrier. Provider-independent. */
-export async function createSidecarFramedCarrier() {
+export async function createSidecarFramedCarrier(compression: "none" | "zstd" = "none") {
   let accept!: (socket: Socket) => void;
   const accepted = new Promise<Socket>((resolve) => { accept = resolve; });
   const server = createServer(accept);
@@ -32,13 +32,16 @@ export async function createSidecarFramedCarrier() {
     stream: sidecarSocketByteStream(socket),
     assurance: { kind: "test-ssh-byte-carrier", carrierGeneration: 1 },
   });
-  const mainPeer = new SidecarProtocolPeer({ role: "sedes", transport: makeTransport(clientSocket), sessionNonce, registry: mainRegistry });
-  const hostPeer = new SidecarProtocolPeer({ role: "sidecar", transport: makeTransport(serverSocket), sessionNonce, registry: hostRegistry });
+  const mainTransport = makeTransport(clientSocket);
+  const hostTransport = makeTransport(serverSocket);
+  const mainPeer = new SidecarProtocolPeer({ role: "sedes", transport: mainTransport, sessionNonce, registry: mainRegistry });
+  const hostPeer = new SidecarProtocolPeer({ role: "sidecar", transport: hostTransport, sessionNonce, registry: hostRegistry });
   const mainChannel = new SidecarRuntimeChannel(mainPeer, mainRegistry);
   const hostChannel = new SidecarRuntimeChannel(hostPeer, hostRegistry);
   let closePromise: Promise<void> | undefined;
   return {
-    mainPeer, hostPeer, mainChannel, hostChannel, mainRegistry, hostRegistry,
+    mainPeer, hostPeer, mainChannel, hostChannel, mainRegistry, hostRegistry, mainTransport, hostTransport,
+    wireBytes: () => clientSocket.bytesWritten + serverSocket.bytesWritten,
     async start(options: Pick<Parameters<typeof registerControlV2Operations>[1], "prepareSedesCapabilities"> = {}) {
       const capabilities = hostRegistry.capabilities().map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion }));
       registerControlV2Operations(hostRegistry, {
@@ -46,7 +49,7 @@ export async function createSidecarFramedCarrier() {
         enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: mainRegistry.capabilities(), ...options,
       });
       mainPeer.start(); hostPeer.start();
-      await mainPeer.call(controlHelloOperation, {
+      await mainPeer.call(controlHelloOperation, { compression,
         expectedBuildId: "persistent-runtime-test", expectedArtifactSha256: "a".repeat(64),
         authorizedSidecarCapabilities: capabilities, offeredSedesCapabilities: mainRegistry.capabilities(),
       });

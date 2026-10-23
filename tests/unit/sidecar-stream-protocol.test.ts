@@ -36,8 +36,8 @@ const contextCapability = {
 } as const;
 
 describe("sidecar retained streams", () => {
-  it.each([5, 8, 9, 10, 11, 12, 13])("uses exact wire v14 and rejects a tagged wire-v%s control envelope", async wireVersion => {
-    expect(SIDECAR_WIRE_VERSION).toBe(14);
+  it.each([5, 8, 9, 10, 11, 12, 13, 14])("uses exact wire v15 and rejects a tagged wire-v%s control envelope", async wireVersion => {
+    expect(SIDECAR_WIRE_VERSION).toBe(15);
     const fixture = await streamFixture();
     await fixture.pair.right.send(
       Buffer.concat([
@@ -691,7 +691,7 @@ async function streamFixture(
   });
   sedes.start();
   sidecar.start();
-  await sedes.call(controlHelloOperation, {
+  await sedes.call(controlHelloOperation, { compression: "none",
     expectedBuildId: "test",
     expectedArtifactSha256: "a".repeat(64),
     authorizedSidecarCapabilities: [capability, contextCapability],
@@ -728,6 +728,7 @@ class Queue implements AsyncIterable<SidecarFrame> {
 }
 
 class Transport implements SidecarFrameTransport {
+  commitCompression(_mode: "none" | "zstd"): void {}
   readonly assurance = { kind: "memory", carrierGeneration: 1 };
   readonly queue = new Queue();
   readonly frames = this.queue;

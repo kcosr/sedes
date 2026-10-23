@@ -10,7 +10,7 @@ import { z } from "zod";
 // history pages). Older persistent services must go through upgrade handling
 // before attachment.
 // Managed peers require this exact version; there is no dual parser.
-export const SIDECAR_WIRE_VERSION = 14 as const;
+export const SIDECAR_WIRE_VERSION = 15 as const;
 export const SIDECAR_JSON_FRAME_TAG = 0x01 as const;
 export const SIDECAR_STREAM_DATA_FRAME_TAG = 0x02 as const;
 const STREAM_DATA_SESSION_BINDING_BYTES = 16;

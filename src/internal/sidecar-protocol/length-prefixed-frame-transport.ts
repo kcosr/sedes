@@ -12,16 +12,29 @@ import {
 } from "./contracts.js";
 import { BoundedAsyncQueue } from "./bounded-async-queue.js";
 import {
+  decompressSidecarFrame,
+  SIDECAR_COMPRESSION_MINIMUM_BYTES,
+  tryCompressSidecarFrame,
+  type SidecarFrameCompression,
+} from "./frame-compression.js";
+import {
   resolveSidecarProtocolLimits,
   type SidecarProtocolLimits,
 } from "./limits.js";
 
-const MAGIC = Buffer.from([0x48, 0x53, 0x43, 0x31]); // HSC1
-const HEADER_BYTES = 8;
+const MAGIC = Buffer.from("HSC2");
+const HEADER_BYTES = 16;
+
+type EncodedFrame = {
+  readonly bytes: Uint8Array;
+  readonly encoding: 0 | 1;
+  readonly decodedLength: number;
+};
 
 type WriteEntry = {
-  readonly framed: Uint8Array;
+  readonly payload: Uint8Array;
   readonly payloadBytes: number;
+  readonly lane: SidecarFrameLane;
   readonly signal?: AbortSignal;
   readonly settlement: boolean;
   readonly onWriteDiagnostic?: SidecarFrameSendOptions["onWriteDiagnostic"];
@@ -29,7 +42,9 @@ type WriteEntry = {
   readonly resolve: (value: { readonly disposition: "sent" }) => void;
   readonly reject: (error: Error) => void;
   abort?: () => void;
-  started: boolean;
+  framed?: Uint8Array;
+  state: "queued" | "preparing" | "prepared" | "writing";
+  charged: boolean;
   settled: boolean;
 };
 
@@ -40,7 +55,7 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
   readonly closed: Promise<SidecarTransportClosure>;
   readonly #stream: SidecarByteStream;
   readonly #limits: SidecarProtocolLimits;
-  readonly #inbound: BoundedAsyncQueue<SidecarFrame>;
+  readonly #inbound: BoundedAsyncQueue<EncodedFrame>;
   readonly #controlWrites: WriteEntry[] = [];
   readonly #operationWrites: WriteEntry[] = [];
   readonly #resolveClosed: (closure: SidecarTransportClosure) => void;
@@ -52,10 +67,16 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
   #pendingBytes = 0;
   #queuedWriteBytes = 0;
   #activeWrite: WriteEntry | undefined;
+  #preparingWrite: WriteEntry | undefined;
+  #preparedWrite: WriteEntry | undefined;
   #pumping = false;
   #acceptingWrites = true;
   #closePromise: Promise<void> | undefined;
   #closedSettled = false;
+  #compression: SidecarFrameCompression | undefined;
+  readonly #decodeAbort = new AbortController();
+  #unconsumedFrames = 0;
+  #cleanEOF: SidecarTransportClosure | undefined;
 
   constructor(input: {
     readonly assurance: SidecarTransportAssurance;
@@ -75,9 +96,16 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
     this.#inbound = new BoundedAsyncQueue({
       maximumItems: this.#limits.maximumInboundQueueFrames,
       maximumBytes: this.#limits.maximumInboundQueueBytes,
-      sizeOf: (frame: SidecarFrame) => frame.bytes.byteLength,
+      sizeOf: (frame: EncodedFrame) => frame.decodedLength,
     });
-    this.frames = this.#inbound;
+    let consumerClaimed = false;
+    this.frames = {
+      [Symbol.asyncIterator]: () => {
+        if (consumerClaimed) throw new Error("sidecar_queue_already_consumed");
+        consumerClaimed = true;
+        return this.#decodeFrames();
+      },
+    };
     let resolveClosed!: (closure: SidecarTransportClosure) => void;
     let rejectClosed!: (error: Error) => void;
     this.closed = new Promise((resolve, reject) => {
@@ -87,6 +115,13 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
     this.#resolveClosed = resolveClosed;
     this.#rejectClosed = rejectClosed;
     void this.#read();
+  }
+
+  commitCompression(mode: SidecarFrameCompression): void {
+    if (this.#compression !== undefined || this.#decodeAbort.signal.aborted || this.#closedSettled || (mode !== "none" && mode !== "zstd")) {
+      throw new Error("sidecar_transport_compression_state_invalid");
+    }
+    this.#compression = mode;
   }
 
   send(
@@ -116,6 +151,8 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
     const queuedCount =
       this.#controlWrites.length +
       this.#operationWrites.length +
+      (this.#preparingWrite && !this.#preparingWrite.settled ? 1 : 0) +
+      (this.#preparedWrite ? 1 : 0) +
       (this.#activeWrite ? 1 : 0);
     const maximumFrames = options.settlement
       ? this.#limits.maximumOutboundQueueFrames +
@@ -133,17 +170,19 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
         new SidecarFrameWriteError("sidecar_outbound_queue_limit", "not_sent"),
       );
     }
-    const framed = frameBytes(bytes);
+    const payload = Uint8Array.from(bytes);
     return new Promise((resolve, reject) => {
       const entry: WriteEntry = {
-        framed,
+        payload,
         payloadBytes: bytes.byteLength,
+        lane: options.lane,
         ...(options.signal ? { signal: options.signal } : {}),
         settlement: options.settlement === true,
         ...(options.onWriteDiagnostic ? { onWriteDiagnostic: options.onWriteDiagnostic, queuedAt: performance.now() } : {}),
         resolve,
         reject,
-        started: false,
+        state: "queued",
+        charged: true,
         settled: false,
       };
       if (entry.signal) {
@@ -170,7 +209,8 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
 
   diagnosticSnapshot(): Readonly<{ queuedWriteBytes: number; queuedWriteFrames: number; activeWriteBytes: number }> {
     return { queuedWriteBytes: this.#queuedWriteBytes,
-      queuedWriteFrames: this.#controlWrites.filter(entry => !entry.settled).length + this.#operationWrites.filter(entry => !entry.settled).length,
+      queuedWriteFrames: this.#controlWrites.filter(entry => !entry.settled).length + this.#operationWrites.filter(entry => !entry.settled).length +
+        (this.#preparingWrite && !this.#preparingWrite.settled ? 1 : 0) + (this.#preparedWrite ? 1 : 0),
       activeWriteBytes: this.#activeWrite?.payloadBytes ?? 0 };
   }
 
@@ -190,17 +230,27 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
         // read that coalesces many small frames applies backpressure instead of
         // overflowing the queue.
         for (let frame = this.#takeFrame(); frame; frame = this.#takeFrame()) {
-          await this.#inbound.push({ bytes: frame });
+          this.#unconsumedFrames += 1;
+          await this.#inbound.push(frame);
         }
       }
+      if (this.#decodeAbort.signal.aborted || this.#closedSettled) return;
       if (this.#pendingBytes !== 0) {
         throw new Error("sidecar_stream_partial_frame");
       }
       const closure = await this.#stream.closed;
-      this.#settleClosed({
+      this.#cleanEOF = {
         reason: closure.reason,
         ...(closure.cause ? { cause: closure.cause } : {}),
-      });
+      };
+      if (closure.cause) {
+        this.#settleClosed(this.#cleanEOF);
+      } else {
+        // Deliver buffered responses before rejecting their pending writes.
+        this.#acceptingWrites = false;
+        this.#inbound.close();
+        this.#finishCleanEOF();
+      }
     } catch (error) {
       const failure = asError(error, "sidecar_stream_read_failed");
       this.#closePromise ??= this.#performAutonomousClose(failure);
@@ -208,7 +258,49 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
     }
   }
 
+  async *#decodeFrames(): AsyncGenerator<SidecarFrame> {
+    let drained = false;
+    try {
+      for await (const frame of this.#inbound) {
+        let consumed = false;
+        try {
+          if (this.#closedSettled || this.#decodeAbort.signal.aborted) return;
+          if (frame.encoding === 1 && this.#compression !== "zstd") {
+            throw new Error("sidecar_stream_compression_not_negotiated");
+          }
+          const bytes = frame.encoding === 0 ? frame.bytes : await decompressSidecarFrame(
+            frame.bytes, frame.decodedLength, this.#decodeAbort.signal,
+          );
+          if (this.#closedSettled || this.#decodeAbort.signal.aborted) return;
+          yield { bytes };
+          consumed = true;
+        } finally {
+          this.#unconsumedFrames -= 1;
+          if (consumed) this.#finishCleanEOF();
+        }
+      }
+      drained = true;
+    } catch (error) {
+      const failure = asError(error, "sidecar_stream_decode_failed");
+      if (!this.#closedSettled) {
+        this.#closePromise ??= this.#performAutonomousClose(failure);
+        await this.#closePromise.catch(() => undefined);
+      }
+      throw failure;
+    } finally {
+      if (!drained && !this.#closedSettled) {
+        await this.close("sidecar_frame_consumer_closed");
+      }
+    }
+  }
+
+  #finishCleanEOF(): void {
+    if (this.#cleanEOF && this.#unconsumedFrames === 0) this.#settleClosed(this.#cleanEOF);
+  }
+
   async #performAutonomousClose(failure: Error): Promise<void> {
+    this.#stopWrites();
+    this.#decodeAbort.abort(failure);
     try {
       await this.#stream.close(failure.message);
       this.#settleClosed({ reason: failure.message, cause: failure });
@@ -235,7 +327,7 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
   }
 
   /** Removes and returns the next complete frame payload, if one is buffered. */
-  #takeFrame(): Uint8Array | undefined {
+  #takeFrame(): EncodedFrame | undefined {
     if (this.#closedSettled || this.#pendingBytes < HEADER_BYTES) {
       return undefined;
     }
@@ -243,15 +335,21 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
     if (!header.subarray(0, MAGIC.byteLength).equals(MAGIC)) {
       throw new Error("sidecar_stream_magic_invalid");
     }
-    const length = header.readUInt32BE(MAGIC.byteLength);
-    if (length === 0 || length > this.#limits.maximumFrameBytes) {
+    const encoding = header[4];
+    if ((encoding !== 0 && encoding !== 1) || header[5] !== 0 || header[6] !== 0 || header[7] !== 0) {
+      throw new Error("sidecar_stream_encoding_invalid");
+    }
+    const length = header.readUInt32BE(8);
+    const decodedLength = header.readUInt32BE(12);
+    if (length === 0 || length > this.#limits.maximumFrameBytes || decodedLength === 0 || decodedLength > this.#limits.maximumFrameBytes ||
+        (encoding === 0 ? length !== decodedLength : length >= decodedLength)) {
       throw new Error("sidecar_stream_frame_length_invalid");
     }
     if (this.#pendingBytes < HEADER_BYTES + length) return undefined;
     this.#consume(HEADER_BYTES);
     const frame = new Uint8Array(length);
     this.#consume(length, frame);
-    return frame;
+    return { bytes: frame, encoding, decodedLength };
   }
 
   #peekHeader(): Buffer {
@@ -295,12 +393,38 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
     try {
       while (this.#acceptingWrites) {
         const entry =
-          this.#controlWrites.shift() ?? this.#operationWrites.shift();
+          this.#controlWrites.shift() ?? this.#preparedWrite ?? this.#operationWrites.shift();
         if (!entry) break;
+        if (this.#preparedWrite === entry) this.#preparedWrite = undefined;
         if (entry.settled) continue;
-        entry.started = true;
+        if (!entry.framed && (this.#compression !== "zstd" || entry.lane === "control" ||
+            entry.settlement || entry.payloadBytes < SIDECAR_COMPRESSION_MINIMUM_BYTES)) {
+          entry.framed = frameBytes(entry.payload, 0, entry.payloadBytes);
+        }
+        if (!entry.framed) {
+          entry.state = "preparing";
+          this.#preparingWrite = entry;
+          try {
+            const compressed = await tryCompressSidecarFrame(entry.payload);
+            if (entry.settled || !this.#acceptingWrites) continue;
+            const useCompressed = compressed !== undefined && compressed.byteLength < entry.payloadBytes;
+            entry.framed = frameBytes(useCompressed ? compressed : entry.payload, useCompressed ? 1 : 0, entry.payloadBytes);
+            entry.state = "prepared";
+            // A control write queued during encoding gets the next carrier write.
+            this.#preparedWrite = entry;
+          } catch (error) {
+            if (entry.settled || !this.#acceptingWrites) continue;
+            this.#releaseCharge(entry);
+            rejectWrite(entry, new SidecarFrameWriteError("sidecar_frame_compression_failed", "not_sent", { cause: error }));
+            void this.close("sidecar_frame_compression_failed").catch(() => undefined);
+          } finally {
+            if (this.#preparingWrite === entry) this.#preparingWrite = undefined;
+          }
+          continue;
+        }
+        entry.state = "writing";
         this.#activeWrite = entry;
-        this.#queuedWriteBytes -= entry.payloadBytes;
+        this.#releaseCharge(entry);
         const started = entry.onWriteDiagnostic ? performance.now() : 0;
         this.#diagnoseWrite(entry, "write_start", entry.queuedAt === undefined ? 0 : started - entry.queuedAt);
         try {
@@ -332,11 +456,13 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
 
   #abortWrite(entry: WriteEntry): void {
     if (entry.settled) return;
-    const delivery = entry.started ? "sent_outcome_unknown" : "not_sent";
-    if (!entry.started) {
+    const writing = entry.state === "writing";
+    const delivery = writing ? "sent_outcome_unknown" : "not_sent";
+    if (!writing) {
       // Free the queue slot now; a stalled active write must not let
       // abandoned frames exhaust the outbound frame limit.
-      this.#queuedWriteBytes -= entry.payloadBytes;
+      this.#releaseCharge(entry);
+      if (this.#preparedWrite === entry) this.#preparedWrite = undefined;
       if (!removeQueued(this.#controlWrites, entry)) {
         removeQueued(this.#operationWrites, entry);
       }
@@ -347,12 +473,18 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
         cause: entry.signal?.reason,
       }),
     );
-    if (entry.started) {
+    if (writing) {
       void this.close("sidecar_active_write_aborted").catch(() => undefined);
     }
   }
 
-  async #performClose(reason: string): Promise<void> {
+  #releaseCharge(entry: WriteEntry): void {
+    if (!entry.charged) return;
+    entry.charged = false;
+    this.#queuedWriteBytes -= entry.payloadBytes;
+  }
+
+  #stopWrites(): void {
     this.#acceptingWrites = false;
     if (this.#activeWrite) {
       rejectWrite(
@@ -366,13 +498,21 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
     for (const entry of [
       ...this.#controlWrites.splice(0),
       ...this.#operationWrites.splice(0),
+      ...(this.#preparingWrite ? [this.#preparingWrite] : []),
+      ...(this.#preparedWrite ? [this.#preparedWrite] : []),
     ]) {
+      this.#releaseCharge(entry);
       rejectWrite(
         entry,
         new SidecarFrameWriteError("sidecar_transport_closed", "not_sent"),
       );
     }
-    this.#queuedWriteBytes = 0;
+    this.#preparedWrite = undefined;
+  }
+
+  async #performClose(reason: string): Promise<void> {
+    this.#stopWrites();
+    this.#decodeAbort.abort(new Error(reason));
     try {
       await this.#stream.close(reason);
       this.#settleClosed({ reason });
@@ -386,26 +526,8 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
   #settleClosed(closure: SidecarTransportClosure): void {
     if (this.#closedSettled) return;
     this.#closedSettled = true;
-    this.#acceptingWrites = false;
-    if (this.#activeWrite) {
-      rejectWrite(
-        this.#activeWrite,
-        new SidecarFrameWriteError(
-          "sidecar_transport_closed_during_write",
-          "sent_outcome_unknown",
-        ),
-      );
-    }
-    for (const entry of [
-      ...this.#controlWrites.splice(0),
-      ...this.#operationWrites.splice(0),
-    ]) {
-      rejectWrite(
-        entry,
-        new SidecarFrameWriteError("sidecar_transport_closed", "not_sent"),
-      );
-    }
-    this.#queuedWriteBytes = 0;
+    this.#stopWrites();
+    this.#decodeAbort.abort(closure.cause ?? new Error(closure.reason));
     this.#inbound.close(closure.cause);
     this.#resolveClosed(closure);
   }
@@ -413,35 +535,19 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
   #settleCleanupFailure(error: SidecarTransportCleanupError): void {
     if (this.#closedSettled) return;
     this.#closedSettled = true;
-    this.#acceptingWrites = false;
-    if (this.#activeWrite) {
-      rejectWrite(
-        this.#activeWrite,
-        new SidecarFrameWriteError(
-          "sidecar_transport_closed_during_write",
-          "sent_outcome_unknown",
-        ),
-      );
-    }
-    for (const entry of [
-      ...this.#controlWrites.splice(0),
-      ...this.#operationWrites.splice(0),
-    ]) {
-      rejectWrite(
-        entry,
-        new SidecarFrameWriteError("sidecar_transport_closed", "not_sent"),
-      );
-    }
-    this.#queuedWriteBytes = 0;
+    this.#stopWrites();
+    this.#decodeAbort.abort(error);
     this.#inbound.close(error);
     this.#rejectClosed(error);
   }
 }
 
-function frameBytes(payload: Uint8Array): Uint8Array {
-  const result = Buffer.allocUnsafe(HEADER_BYTES + payload.byteLength);
+function frameBytes(payload: Uint8Array, encoding: 0 | 1, decodedLength: number): Uint8Array {
+  const result = Buffer.alloc(HEADER_BYTES + payload.byteLength);
   MAGIC.copy(result, 0);
-  result.writeUInt32BE(payload.byteLength, MAGIC.byteLength);
+  result[4] = encoding;
+  result.writeUInt32BE(payload.byteLength, 8);
+  result.writeUInt32BE(decodedLength, 12);
   result.set(payload, HEADER_BYTES);
   return result;
 }

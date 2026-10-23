@@ -10,7 +10,7 @@ describe("automatic recovery preference races", () => {
       stateRoot: "/home/remote/.local/state/sedes/sidecar", environment: { HOME: "/home/remote" }, executableDirectory: "/fixture", executablePath: "/fixture/sedes" }));
     const unavailable = vi.fn(async (): Promise<never> => { throw new Error("unexpected_attachment"); });
     const scope = { tenantId: "tenant", principalId: "principal" };
-    const owner = new SidecarRuntimeOwner({ scope, executionEnvironmentId: "remote", environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
+    const owner = new SidecarRuntimeOwner({ connectionCompression: () => true, scope, executionEnvironmentId: "remote", environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
       authorizedCapabilities: [{ capabilityId: "workspace_files", majorVersion: 8 }], authorizedRuntimeCapabilities: [],
       activeEnvironmentConfigurationRevision: async () => { enabled = false; return 1; }, activeOperationsConfigurationRevision: () => 1,
       isAutomaticConnectionEnabled: () => enabled,

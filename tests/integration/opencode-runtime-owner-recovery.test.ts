@@ -32,7 +32,7 @@ function fixture(transportKind: string) {
   }
   const launch = vi.fn(async () => attach(false)), attachExisting = vi.fn(async () => attach(true));
   let activeRevision = 1;
-  const owner = new SidecarRuntimeOwner({ scope: f.scope, executionEnvironmentId: environmentId,
+  const owner = new SidecarRuntimeOwner({ connectionCompression: () => true, scope: f.scope, executionEnvironmentId: environmentId,
     environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
     activeEnvironmentConfigurationRevision: () => activeRevision, activeOperationsConfigurationRevision: () => 1,
     authorizedCapabilities: [], authorizedRuntimeCapabilities: [], isAutomaticConnectionEnabled: () => true,

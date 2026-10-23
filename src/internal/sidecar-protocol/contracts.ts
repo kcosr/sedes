@@ -1,4 +1,5 @@
 import type { EnvironmentProcessWriteDelivery } from "../../server/execution/environment-channel.js";
+import type { SidecarFrameCompression } from "./frame-compression.js";
 
 export type SidecarFrameLane = "control" | "operation";
 
@@ -74,6 +75,8 @@ export interface SidecarFrameTransport {
   readonly assurance: SidecarTransportAssurance;
   readonly frames: AsyncIterable<SidecarFrame>;
   readonly closed: Promise<SidecarTransportClosure>;
+  /** One-shot selection committed synchronously by the successful hello. */
+  commitCompression(mode: SidecarFrameCompression): void;
   diagnosticSnapshot?(): Readonly<{ queuedWriteBytes: number; queuedWriteFrames: number; activeWriteBytes: number }>;
   send(
     bytes: Uint8Array,

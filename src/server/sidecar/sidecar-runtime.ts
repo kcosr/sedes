@@ -107,6 +107,8 @@ export interface SidecarRuntimeOwnerOptions<
   readonly operationsConfigurationRevision: number;
   readonly authorizedCapabilities: readonly SidecarAuthorizedCapability[];
   readonly authorizedRuntimeCapabilities: readonly SidecarRuntimeCapability[];
+  /** Read when each new normal or recovery connection starts. */
+  readonly connectionCompression: () => boolean;
   readonly isAutomaticConnectionEnabled: () => boolean | Promise<boolean>;
   readonly activeEnvironmentConfigurationRevision: () =>
     number | Promise<number>;
@@ -116,6 +118,7 @@ export interface SidecarRuntimeOwnerOptions<
   readonly provisioner: SidecarProvisioner;
   readonly sedesOperations: SidecarOperationRegistry;
   readonly startSession: (input: {
+    readonly connectionCompression: boolean;
     readonly executionEnvironmentId?: string;
     readonly stream: SidecarByteStream;
     readonly transportKind: string;
@@ -150,6 +153,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   readonly #authorizedCapabilities: readonly SidecarAuthorizedCapability[];
   readonly #authorizedRuntimeCapabilities: readonly SidecarRuntimeCapability[];
   readonly #isAutomaticConnectionEnabled: () => boolean | Promise<boolean>;
+  readonly #connectionCompression: () => boolean;
   readonly #activeEnvironmentConfigurationRevision: () =>
     number | Promise<number>;
   readonly #activeOperationsConfigurationRevision: () =>
@@ -257,6 +261,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     );
     this.#authorizedRuntimeCapabilities = Object.freeze(input.authorizedRuntimeCapabilities.map((capability) => Object.freeze({ ...capability })));
     this.#isAutomaticConnectionEnabled = input.isAutomaticConnectionEnabled;
+    this.#connectionCompression = input.connectionCompression;
     this.#activeEnvironmentConfigurationRevision =
       input.activeEnvironmentConfigurationRevision;
     this.#activeOperationsConfigurationRevision =
@@ -469,6 +474,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
       if (automatic) await this.#assertActive(allowPendingRevision);
       controller.throwIfAborted();
       session = await this.#startSession({ stream, transportKind: this.#provisioner.transportKind, carrierGeneration, sessionNonce, artifact: stream.serviceStatus, installation: stream.installation,
+        connectionCompression: this.#connectionCompression(),
         executionEnvironmentId: this.#executionEnvironmentId,
         authorizedCapabilities: recoveryCapabilities, authorizedRuntimeCapabilities: this.#authorizedRuntimeCapabilities,
         sedesOperations: this.#sedesOperations, signal: controller });
@@ -748,6 +754,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
       await this.#assertActive();
       handshakeStarted = true;
       session = await this.#startSession({
+        connectionCompression: this.#connectionCompression(),
         executionEnvironmentId: this.#executionEnvironmentId,
         stream,
         transportKind: this.#provisioner.transportKind,
