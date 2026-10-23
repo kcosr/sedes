@@ -30,9 +30,9 @@ const scope = {
   backendInstanceId: "real-claude-persistent-backend",
 };
 
-/** Real provider and managed-worker stdio, with local framed sockets standing
- * in for the SSH carrier. This does not verify an SSH server or remote login. */
-describe.sequential("real Claude persistent runtime with local SSH carrier stand-in", () => {
+/** Real provider and managed-worker stdio, with zstd-compressed local framed
+ * sockets standing in for SSH. This does not verify an SSH server or remote login. */
+describe.sequential("real Claude persistent runtime with a compressed local SSH carrier stand-in", () => {
   it("finishes an active turn after main disposal and reattaches its worker without resubmitting", async () => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "sedes-real-claude-persistent-")));
     const workspace = path.join(root, "workspace");
@@ -78,7 +78,7 @@ describe.sequential("real Claude persistent runtime with local SSH carrier stand
       return value;
     };
     async function attach() {
-      const carrier = await createSidecarFramedCarrier();
+      const carrier = await createSidecarFramedCarrier("zstd");
       const controllerEpoch = services.attach(serviceConfiguration);
       const detach = registerClaudePersistentRuntimeHost({
         registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, controllerEpoch,
