@@ -1,9 +1,11 @@
 import { assertAutomationDispatchClaim } from "./automation-dispatch-claim.js";
+import { z } from "zod";
 import { AutomationDeferredError } from "../../domain/automation-deferred.js";
 import { steerTargetSchema, type SteerTarget } from "../../../shared/protocol/conversation.js";
 import { createHash, randomUUID } from "node:crypto";
 import { UserInputRevisionRepository } from "./user-input-revision-repository.js";
 import type Database from "better-sqlite3";
+import type { ConversationSubmissionSource } from "../../backends/contracts.js";
 import { prepareCached } from "../prepared-statements.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -78,6 +80,11 @@ export type QueuedInputRecord = {
   readonly initiatingToolClientId: string | null;
   readonly completionCallbackId: string | null;
   readonly inputOrigin: DeliveryInputOrigin | null;
+  /** Server-only completion identity; never part of normalized input provenance. */
+  readonly sourceFailureIdentity?: string;
+  readonly sourceThreadRevision?: number;
+  /** Keeps the failed run's backend execution restrictions on its follow-up. */
+  readonly automaticRetryExecutionSource?: ConversationSubmissionSource;
   readonly state: QueuedInputState;
   readonly deliveryMode: "submit" | "steer" | null;
   readonly retryOfId: string | null;
@@ -106,6 +113,17 @@ export type QueueRetryPolicy = {
 };
 
 export const MAXIMUM_ACTIVE_QUEUED_INPUTS = 500;
+
+const storedAutomaticRetryOriginSchema = z.strictObject({
+  kind: z.literal("automatic_retry"),
+  sourceFailureIdentity: z.string().min(1).max(1024),
+  expectedThreadRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  executionSource: z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("user") }),
+    z.strictObject({ kind: z.literal("automation"),
+      automationId: z.string().min(1).max(160), automationRunId: z.string().min(1).max(160) }),
+  ]),
+});
 
 export function isResolvedSteer(
   item: Pick<QueuedInputRecord, "resolvedDeliveryMode">,
@@ -418,6 +436,13 @@ export class QueuedInputRepository {
             readonly expectedThreadRevision: number;
           }
         | {
+            /** A new ordinary Send after one confirmed failed model run. */
+            readonly kind: "automatic_retry";
+            readonly expectedThreadRevision: number;
+            readonly sourceFailureIdentity: string;
+            readonly executionSource: ConversationSubmissionSource;
+          }
+        | {
             readonly kind: "automation";
             readonly claimToken: string;
             readonly automationId: string;
@@ -451,6 +476,16 @@ export class QueuedInputRepository {
       readonly now: number;
     },
   ): { readonly item: QueuedInputRecord; readonly replayed: boolean } {
+    if (input.source.kind === "automatic_retry") {
+      const validOrigin = storedAutomaticRetryOriginSchema.safeParse({
+        kind: input.source.kind, sourceFailureIdentity: input.source.sourceFailureIdentity,
+        expectedThreadRevision: input.source.expectedThreadRevision,
+        executionSource: input.source.executionSource,
+      }).success;
+      if (!validOrigin || input.selectedSkillId != null) {
+        throw new DomainError("invalid_transition", "The automatic retry source is invalid.");
+      }
+    }
     const maximumTextBytes = input.source.kind === "composer" || input.source.kind === "direct_input"
       ? MAXIMUM_THREAD_INPUT_BYTES
       : input.source.kind === "page_response" ? PAGE_RESPONSE_MAX_BYTES : 65_536;
@@ -500,15 +535,19 @@ export class QueuedInputRepository {
         if (
           replay.text !== input.text ||
           JSON.stringify(
-            replay.inputOrigin?.kind === "question_response" || replay.inputOrigin?.kind === "page_response"
+            replay.inputOrigin?.kind === "question_response" || replay.inputOrigin?.kind === "page_response" || replay.inputOrigin?.kind === "automatic_retry"
               ? replay.inputOrigin
               : null,
           ) !==
             JSON.stringify(
               input.source.kind === "question_response" || input.source.kind === "page_response"
                 ? deliveryInputOriginSchema.parse(input.source.inputOrigin)
-                : null,
+                : input.source.kind === "automatic_retry" ? { kind: "automatic_retry" } : null,
             ) ||
+          replay.sourceFailureIdentity !== (input.source.kind === "automatic_retry" ? input.source.sourceFailureIdentity : undefined) ||
+          replay.sourceThreadRevision !== (input.source.kind === "automatic_retry" ? input.source.expectedThreadRevision : undefined) ||
+          JSON.stringify(replay.automaticRetryExecutionSource) !== JSON.stringify(input.source.kind === "automatic_retry"
+            ? storedAutomaticRetryOriginSchema.shape.executionSource.parse(input.source.executionSource) : undefined) ||
           replay.selectedSkillId !== (input.selectedSkillId ?? null) ||
           !sameContextExcerpts(replay.contextExcerpts, input.contextExcerpts) ||
           replay.attachments.map(({ id }) => id).join("\0") !==
@@ -557,6 +596,8 @@ export class QueuedInputRepository {
             (input.source.kind === "composer"
               ? input.source.expectedDraftRevision
               : null) ||
+          (input.source.kind === "automatic_retry" &&
+            (replay.resolvedDeliveryMode !== "submit" || replay.isUserInput !== 0)) ||
           (input.source.kind === "agent_control" &&
           input.source.completionCallback !== undefined
             ? registeredCallback?.id !== input.source.completionCallback.id ||
@@ -767,7 +808,11 @@ export class QueuedInputRepository {
             ? JSON.stringify(
                 deliveryInputOriginSchema.parse(input.source.inputOrigin),
               )
-            : null,
+            : input.source.kind === "automatic_retry"
+              ? JSON.stringify(storedAutomaticRetryOriginSchema.parse({ kind: "automatic_retry",
+                sourceFailureIdentity: input.source.sourceFailureIdentity, expectedThreadRevision: input.source.expectedThreadRevision,
+                executionSource: input.source.executionSource }))
+              : null,
           input.source.kind === "composer" ||
             input.source.kind === "completion_callback"
             ? input.source.requestedDeliveryMode === "steer"
@@ -784,7 +829,7 @@ export class QueuedInputRepository {
             input.source.kind === "question_response" || input.source.kind === "page_response" ||
             input.source.kind === "completion_callback"
             ? input.source.resolvedDeliveryMode
-            : "queue",
+            : input.source.kind === "automatic_retry" ? "submit" : "queue",
           (input.source.kind === "composer" ||
             input.source.kind === "direct_input" ||
             input.source.kind === "question_response" ||
@@ -1350,6 +1395,9 @@ export class QueuedInputRepository {
           );
         }
         const item = this.get(scope, applicationThreadId, id);
+        if (item.inputOrigin?.kind === "automatic_retry") {
+          throw new DomainError("invalid_transition", "Automatic retry messages cannot replace the composer draft.");
+        }
         if (
           item.triggerKind !== "user" ||
           item.initiatingAgentThreadId !== null ||
@@ -1539,6 +1587,9 @@ export class QueuedInputRepository {
         );
       }
       const current = this.get(scope, applicationThreadId, id);
+      if (current.inputOrigin?.kind === "automatic_retry") {
+        throw new DomainError("invalid_transition", "Automatic retry messages use ordinary Send and cannot be steered.");
+      }
       if (current.inputOrigin?.kind === "page_response") {
         throw new DomainError("invalid_transition", "Page responses cannot be steered. They remain queued until the conversation is idle.");
       }
@@ -2090,7 +2141,7 @@ export class QueuedInputRepository {
               input_origin_json,
               resolved_delivery_mode, state, retry_of_id, created_at, is_user_input
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queue', 'pending', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
           `,
         )
         .run(
@@ -2109,9 +2160,14 @@ export class QueuedInputRepository {
           failed.sourceAutomationRunId,
           failed.initiatingAgentThreadId,
           failed.initiatingToolClientId,
-          failed.inputOrigin?.kind === "question_response" || failed.inputOrigin?.kind === "page_response"
+          failed.inputOrigin?.kind === "automatic_retry"
+            ? JSON.stringify(storedAutomaticRetryOriginSchema.parse({ kind: "automatic_retry",
+              sourceFailureIdentity: failed.sourceFailureIdentity, expectedThreadRevision: failed.sourceThreadRevision,
+              executionSource: failed.automaticRetryExecutionSource }))
+            : failed.inputOrigin?.kind === "question_response" || failed.inputOrigin?.kind === "page_response"
             ? JSON.stringify(failed.inputOrigin)
             : null,
+          failed.inputOrigin?.kind === "automatic_retry" ? "submit" : "queue",
           failed.id,
           input.now,
           failed.isUserInput,
@@ -2704,16 +2760,24 @@ export class QueuedInputRepository {
 
   #hydrate(scope: RequestScope, row: QueuedInputRow): QueuedInputRecord {
     let inputOrigin: DeliveryInputOrigin | null = null;
+    let sourceFailureIdentity: string | undefined;
+    let sourceThreadRevision: number | undefined;
+    let automaticRetryExecutionSource: ConversationSubmissionSource | undefined;
     if (row.inputOriginJson !== null) {
-      const parsed = deliveryInputOriginSchema.parse(
-        JSON.parse(row.inputOriginJson),
-      );
+      const stored: unknown = JSON.parse(row.inputOriginJson);
+      const automatic = typeof stored === "object" && stored !== null && "kind" in stored && stored.kind === "automatic_retry"
+        ? storedAutomaticRetryOriginSchema.parse(stored) : undefined;
+      const parsed = automatic ? { kind: "automatic_retry" as const } : deliveryInputOriginSchema.parse(stored);
+      sourceFailureIdentity = automatic?.sourceFailureIdentity;
+      sourceThreadRevision = automatic?.expectedThreadRevision;
+      automaticRetryExecutionSource = automatic?.executionSource;
       if (
-        (parsed.kind !== "question_response" && parsed.kind !== "page_response") ||
+        (parsed.kind !== "question_response" && parsed.kind !== "page_response" && parsed.kind !== "automatic_retry") ||
         row.initiatingAgentThreadId !== null ||
         row.completionCallbackId !== null ||
         row.initiatingToolClientId !== null ||
-        row.triggerKind !== "user"
+        row.triggerKind !== "user" ||
+        (parsed.kind === "automatic_retry" && row.isUserInput !== 0)
       ) {
         throw new DomainError(
           "conflict",
@@ -2760,7 +2824,7 @@ export class QueuedInputRepository {
         sourceThreadLabel: callback.sourceThreadLabel,
       };
     }
-    return hydrateQueuedInput(
+    const hydrated = hydrateQueuedInput(
       row,
       this.#attachments.descriptorsForOwner(scope, {
         kind: "queue",
@@ -2769,6 +2833,7 @@ export class QueuedInputRepository {
       }),
       inputOrigin,
     );
+    return sourceFailureIdentity === undefined ? hydrated : { ...hydrated, sourceFailureIdentity, sourceThreadRevision, automaticRetryExecutionSource };
   }
 
   #boundThreadRevision(

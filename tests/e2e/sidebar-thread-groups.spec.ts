@@ -3,6 +3,7 @@ import type { Locator, Page } from "@playwright/test";
 import {
   normalizedApplicationSessionSchema,
   normalizedApplicationSnapshotSchema,
+  applicationPreferencesSchema,
   taskMutationResultSchema,
   threadGroupMutationResultSchema,
 } from "../../src/shared/index.js";
@@ -49,6 +50,26 @@ async function currentSnapshot(page: Page) {
   const response = await page.request.get("/api/application/snapshot");
   expect(response.ok()).toBe(true);
   return normalizedApplicationSnapshotSchema.parse(await response.json());
+}
+
+async function setAutomaticModelRetry(
+  page: Page,
+  enabled: boolean,
+  csrfToken: string,
+): Promise<boolean> {
+  const response = await page.request.get("/api/application/preferences");
+  expect(response.ok()).toBe(true);
+  const current = applicationPreferencesSchema.parse(await response.json());
+  const updated = await page.request.put("/api/application/preferences", {
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+    data: {
+      showOpenAIComposerSkills: current.showOpenAIComposerSkills,
+      autoRetryModelFailures: enabled,
+      expectedRevision: current.revision,
+    },
+  });
+  expect(updated.ok()).toBe(true);
+  return current.autoRetryModelFailures;
 }
 
 async function pickerContext(page: Page, threadId: string) {
@@ -344,6 +365,7 @@ test("dragging individual threads creates a group and adds to its stack", async 
   const projectName = "Reference selector interface preview with a deliberately long project name";
   const session = await currentSession(page);
   let environmentNeedsRestore = false;
+  let previousAutomaticRetry: boolean | undefined;
   try {
     const renamed = await page.request.patch(`/api/projects/${initialContext.project.id}`, {
       headers: { "Content-Type": "application/json", "X-CSRF-Token": session.csrfToken },
@@ -560,6 +582,9 @@ test("dragging individual threads creates a group and adds to its stack", async 
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`/threads/${sourceId}`);
+    // This journey exercises the final failure glyph. The separate automatic
+    // retry scenarios cover recovery with the default account preference on.
+    previousAutomaticRetry = await setAutomaticModelRetry(page, false, session.csrfToken);
     await fillAndPersistDraft(page, "Fail with a visible model configuration diagnostic");
     await sendCurrentDraft(page);
     await expect(page.locator(".thread-notice.error").filter({ hasText: "The configured model is unavailable." })).toBeVisible();
@@ -579,6 +604,9 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await expect(message).toHaveValue("Compare ");
     await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText(sourceTitle);
   } finally {
+    if (previousAutomaticRetry !== undefined) {
+      await setAutomaticModelRetry(page, previousAutomaticRetry, session.csrfToken);
+    }
     if (environmentNeedsRestore) {
       await renameEnvironment(page, initialContext.environmentId, initialContext.environment, session.csrfToken);
     }

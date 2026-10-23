@@ -10,6 +10,14 @@
       "estimatedMilliseconds": 71000
     },
     {
+      "file": "automatic-model-retry-controls.spec.ts",
+      "estimatedMilliseconds": 30000
+    },
+    {
+      "file": "automatic-model-retry.spec.ts",
+      "estimatedMilliseconds": 40000
+    },
+    {
       "file": "automation-once-lifecycle.spec.ts",
       "estimatedMilliseconds": 44000
     },

@@ -172,7 +172,7 @@ export class ApplicationSnapshotService {
     if (!durable) return undefined;
     const terminalSummary = this.terminalSummaries.summariesByThread(scope, [id]).get(id)
       ?? { runningCount: 0, retainedCount: 0 };
-    const loaded = await this.runtimes.captureLoadedState(scope, id);
+    const loaded = await this.runtimes.captureLoadedState(scope, id, { presentation: true });
     return normalizedApplicationThreadSummarySchema.parse({
       ...durable,
       ...(durable.available && durable.backingState === "bound" && loaded?.backgroundWork
@@ -255,7 +255,7 @@ export class ApplicationSnapshotService {
         : null;
     const threads = await Promise.all(
       durableThreads.map(async (thread) => {
-        const loaded = await this.runtimes.captureLoadedState(scope, thread.id);
+        const loaded = await this.runtimes.captureLoadedState(scope, thread.id, { presentation: true });
         return {
           ...thread,
           ...(thread.available &&
@@ -611,6 +611,7 @@ export class ApplicationSnapshotPublicationBoundary {
       const loaded = await this.snapshots.runtimes.captureLoadedState(
         scope,
         id,
+        { presentation: true },
       );
       if (!this.#readyToPublish(scope, hub)) return "retry";
       thread = {

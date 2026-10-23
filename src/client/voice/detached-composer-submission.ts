@@ -21,7 +21,9 @@ function sameContribution(left: NormalizedDraft, right: NormalizedDraft): boolea
 }
 
 function deliveryMode(snapshot: NormalizedThreadSnapshot, event: NativeVoiceComposerHandoff) {
-  const busy = ["starting", "running", "waiting_for_approval", "waiting_for_input", "stopping"].includes(snapshot.runState);
+  const submitAvailable = snapshot.capabilities.deliveryModes.some(({ id, available }) => id === "submit" && available);
+  const busy = !submitAvailable &&
+    ["starting", "running", "waiting_for_approval", "waiting_for_input", "stopping"].includes(snapshot.runState);
   const steer = snapshot.capabilities.deliveryModes.find(({ id, available }) => id === "steer" && available);
   const steerTarget = steer?.steerTarget === "conversation"
     ? { kind: "conversation" as const }

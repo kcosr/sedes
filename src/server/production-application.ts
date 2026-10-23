@@ -2,6 +2,9 @@ import { ThreadAppliedToolPolicySetRepository } from "./db/repositories/thread-a
 import { ToolPolicyRepository } from "./db/repositories/tool-policy-repository.js";
 import { ToolPolicyService } from "./tool-policies/tool-policy-service.js";
 import { performCompletionFollowUp } from "./conversations/authoritative-completion-follow-up.js";
+import type { AutomaticModelRetryService } from "./conversations/automatic-model-retry-service.js";
+import { createAutomaticModelRetryRuntime } from "./conversations/automatic-model-retry-runtime.js";
+import { showAutomaticModelRetryNotice } from "./events/automatic-model-retry-notice.js";
 import { AutomationForkTargetResolver } from "./runtime/automation-fork-target.js";
 import { ImageShowRepository } from "./db/repositories/image-show-repository.js";
 import { ImageShowService } from "./output-artifacts/image-show-service.js";
@@ -429,6 +432,7 @@ export async function startProductionApplication(
   let runtimes: ThreadRuntimeCoordinator | undefined;
   let interactions: InteractionBroker | undefined;
   let actors: ConversationActorManager | undefined;
+  let automaticModelRetries: AutomaticModelRetryService | undefined;
   let execution: CompositeExecutionEnvironment | undefined;
   let applicationSnapshots: ApplicationSnapshotPublicationBoundary | undefined;
   let threadSnapshots: ThreadSnapshotPublisher | undefined;
@@ -559,6 +563,7 @@ export async function startProductionApplication(
     });
     const principalPreferences = new PrincipalApplicationPreferenceService({
       repository: new PrincipalApplicationPreferenceRepository(database),
+      onChanged: () => automaticModelRetries?.cancelDisabled(),
     });
     const cannedPrompts = new CannedPromptService(
       new CannedPromptRepository(database),
@@ -1102,6 +1107,7 @@ export async function startProductionApplication(
       AuthoritativeCompletionObserver | undefined;
     const pageRepository = new PageRepository(database);
     actors = new ConversationActorManager({
+      onModelFeedback: (eventScope, threadId, input) => automaticModelRetries?.onModelFeedback(eventScope, threadId, input.identity, input.automaticRetry),
       applicationPublications: (eventScope, threadId, turnIds) => [
         ...pageRepository.publications(eventScope, threadId, turnIds), ...imageShowRepository.publications(eventScope, threadId, turnIds)],
       onLiveProgress: (eventScope, threadId, input) => notificationLifecycle.progress(eventScope, threadId, input),
@@ -1254,6 +1260,7 @@ export async function startProductionApplication(
       providers: presentationProviders,
     });
     const threads = new ThreadApplicationService({
+      isAutomaticModelRetryPending: (eventScope, threadId) => automaticModelRetries?.isPending(eventScope, threadId) === true,
       usage,
       inventory: threadInventory,
       conversations: new ActorBackedThreadApplicationConversationReader({
@@ -1284,6 +1291,7 @@ export async function startProductionApplication(
 
     let publishApplicationThread: ApplicationThreadChangePublisher | undefined;
     runtimes = new ThreadRuntimeCoordinator({
+      isAutomaticModelRetryPending: (eventScope, threadId) => automaticModelRetries?.isPending(eventScope, threadId) === true,
       actors,
       targets: actorTargets,
       bridge: new ConversationEventBridge(new ThreadEventPresentation(threads), (scope, threadId, turns) => usage.registerVisibleTurns(scope, threadId, turns)),
@@ -1332,8 +1340,10 @@ export async function startProductionApplication(
     queueDispatcher = new QueuedInputDispatcher({
       repository: queueRepository,
       gateway: queueGateway,
-      onDurableInputChanged: (eventScope, applicationThreadId, item) =>
-        observeAutomationQueue?.observe(eventScope, applicationThreadId, item),
+      onDurableInputChanged: (eventScope, applicationThreadId, item) => {
+        automaticModelRetries?.onInputChanged(eventScope, applicationThreadId, item);
+        observeAutomationQueue?.observe(eventScope, applicationThreadId, item);
+      },
       publisher: {
         publish(eventScope, applicationThreadId, event) {
           requestAutomationReadmission?.();
@@ -1361,6 +1371,33 @@ export async function startProductionApplication(
           purpose,
         ),
     });
+    const automaticRetryNotices = new Map<string, () => void>();
+    automaticModelRetries = createAutomaticModelRetryRuntime({
+      database: applicationDatabase, bindings, inventory: inventoryRepository, queueRepository,
+      operations: operationRepository, actors, runtimes, interactions, queueDispatcher,
+      onPendingChanged(eventScope, threadId, pending) {
+        const key = JSON.stringify([eventScope.tenantId, eventScope.principalId, threadId]);
+        automaticRetryNotices.get(key)?.();
+        automaticRetryNotices.delete(key);
+        if (pending) {
+          automaticRetryNotices.set(key, showAutomaticModelRetryNotice(threadHubs.thread(eventScope, threadId)));
+        }
+        // Retry is an application-owned run-state overlay. An ordinary
+        // application delta intentionally preserves the retained native state.
+        authoritativeCompletionFollowUp.defer(async () => {
+          await runtimes?.publishAuthoritativeReplacementIfLoaded(eventScope, threadId);
+          await publishApplicationThread?.publish(eventScope, threadId);
+        });
+      },
+    });
+    const unsubscribeAutomaticRetryActivity = actors.subscribeInputActivity((eventScope, threadId) => {
+      if (!automaticModelRetries?.isPending(eventScope, threadId)) return;
+      const observed = actors!.observeInputRuntime(eventScope, threadId);
+      if (!observed?.authoritative || observed.sourceTurnStatus !== "failed" || observed.blockingInteractionIds.length > 0) {
+        automaticModelRetries.cancel(eventScope, threadId);
+      }
+    });
+    resources.defer("automatic retry activity subscription", unsubscribeAutomaticRetryActivity);
     questions = new QuestionRequestService({
       repository: new QuestionRequestRepository(database, inventoryRepository),
       inventory: inventoryRepository,
@@ -1400,6 +1437,7 @@ export async function startProductionApplication(
     resources.defer("queued input dispatcher", () => queueDispatcher?.close(), {
       mode: "ownership_critical",
     });
+    resources.defer("automatic model retries", () => automaticModelRetries?.close(), { mode: "ownership_critical" });
     resources.defer(
       "thread completion callback dispatcher",
       () => completionCallbackDispatcher.close(),
@@ -1738,6 +1776,7 @@ export async function startProductionApplication(
         input,
       );
       if (!observation) return;
+      if (observation.changed) automaticModelRetries?.onCompletion(eventScope, applicationThreadId, input);
       const observed = observation.record;
       try {
         observeAutomationTurns?.observe(
@@ -1750,6 +1789,8 @@ export async function startProductionApplication(
         // Run history is an observer; it must never break completion.
         reportAutomationTurnError(error);
       }
+      // A scheduled follow-up may be cancelled or refused before admission.
+      // Keep the existing confirmed-completion notifications in every case.
       notificationLifecycle.completion(eventScope, observed, input.provenance, input.voiceSubscriberWatermark, input.responseVoice);
       if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId,
         observed.completionOutcome ?? "interrupted", input.responseVoice?.superseded);
@@ -1776,6 +1817,11 @@ export async function startProductionApplication(
       },
     });
     mutations = new ThreadMutationGateway({
+      cancelAutomaticModelRetry: (eventScope, threadId) => {
+        if (!automaticModelRetries?.isPending(eventScope, threadId)) return false;
+        automaticModelRetries.cancel(eventScope, threadId);
+        return true;
+      },
       bindings,
       actors,
       inventory: inventoryRepository,
@@ -3355,6 +3401,7 @@ export async function startProductionApplication(
         // generation.
         drain.beginDrain();
         backendStartupAbort.abort();
+        void automaticModelRetries?.close().catch(reportBackgroundError("Automatic retry shutdown"));
         // Stop new previews and abort active renderers before tool shutdown
         // waits for admitted calls. The resource stack awaits the same close
         // promise and keeps dependent resources alive through browser cleanup.

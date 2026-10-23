@@ -8,12 +8,13 @@ User-facing changes are collected here before release. See the
 ### Breaking Changes
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **169**. Provider-feature mutations now require explicit mutation revisions;
+  **170**. Provider-feature mutations now require explicit mutation revisions;
   Codex Speed uses its strict v3 action/result contract. Sedes tool policies replace cross-boundary approval modes with
   independent project/environment limits: queries filter to scope and direct
   outside requests are denied. Legacy thread-only policies are disabled for
   review rather than broadened. Saved Agent and thread-create tool contracts
-  advance to version 6. See [tool policy sets](docs/user/tool-policies.md).
+  advance to version 6; thread-message transcripts advance to version 5 to
+  identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
   ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112))
 
 - Upgrade OpenCode execution sidecars with the server for private OpenCode
@@ -35,7 +36,8 @@ User-facing changes are collected here before release. See the
   [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
   ([#85](https://github.com/kcosr/sedes/pull/85), [#112](https://github.com/kcosr/sedes/pull/112))
 
-- Client protocol **169** also includes explicit skill-catalog refresh intent,
+- Client protocol **170** also includes account-wide automatic model retry settings
+  and automatic follow-up attribution, explicit skill-catalog refresh intent,
   dismissible runtime notices, Page
   responses, HTML page downloads and shared download metadata,
   larger composer reference lists, the updated
@@ -50,6 +52,12 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
+
+- Settings → General can retry failed model requests once by sending an
+  automatic Continue message after ten seconds across all backends and servers.
+  Successful ordinary model feedback restores the allowance; a failed automatic
+  follow-up stops retries until successful completion or new input. See
+  [Agent behavior](docs/user/settings.md#agent-behavior).
 
 - Codex Speed now saves the preference for future Sedes turns and can apply it
   to the next eligible model step during a Sedes-started turn. The composer

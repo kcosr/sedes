@@ -1308,7 +1308,9 @@ export const queuedInputPresentationSchema = z.strictObject({
     .min(1)
     .max(MAXIMUM_USER_MESSAGE_CONTENT_PARTS),
 }).superRefine((input, context) => {
-  const expectedOrigin = input.origin === "agent_result"
+  const expectedOrigin = input.origin === "automatic_retry"
+    ? "automatic_retry"
+    : input.origin === "agent_result"
     ? "agent_result"
     : input.origin === "agent_control"
       ? "agent_message"

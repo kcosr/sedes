@@ -74,7 +74,7 @@ function runtimeTarget(
 
 function resettableActor(input: {
   generation: string;
-  runState?: "idle" | "running";
+  runState?: "idle" | "running" | "failed";
   activeTurnId?: string;
   closeFailure?: Error;
   canEvict?: boolean;
@@ -130,6 +130,7 @@ function resetCoordinator(
   hubs = new ScopedThreadEventHubRegistry(),
   bridgeReady = Promise.resolve(),
   onThreadChanged?: (eventScope: typeof scope, threadId: string) => Promise<void>,
+  isAutomaticModelRetryPending?: (eventScope: typeof scope, threadId: string) => boolean,
 ) {
   const actorRelease = actors.map(() => vi.fn());
   let actorIndex = 0;
@@ -200,6 +201,7 @@ function resetCoordinator(
     hubs,
     retentionMilliseconds,
     onThreadChanged,
+    isAutomaticModelRetryPending,
   });
   return { coordinator, actorRelease, replacementPublications, interactionRelease, interactionDetach };
 }
@@ -307,6 +309,25 @@ function pendingOverlayFixture() {
 }
 
 describe("ThreadRuntimeCoordinator", () => {
+  it("overlays only failed sidebar state while an automatic retry is pending", async () => {
+    let pending = true;
+    const retryPending = vi.fn(() => pending);
+    const current = resettableActor({ generation: "retry-generation", runState: "failed" });
+    const { coordinator } = resetCoordinator([current.actor], 60_000, runtimeTarget, new ScopedThreadEventHubRegistry(), Promise.resolve(), undefined, retryPending);
+    const acquired = await coordinator.acquire(scope, "retry-thread");
+    try {
+      expect(await coordinator.captureLoadedState(scope, "retry-thread")).toEqual({ runState: "failed" });
+      expect(retryPending).not.toHaveBeenCalled();
+      expect(await coordinator.captureLoadedState(scope, "retry-thread", { presentation: true })).toEqual({ runState: "starting" });
+      expect(current.actor.timeline.runState).toBe("failed");
+      expect(retryPending).toHaveBeenCalledWith(scope, "retry-thread");
+      pending = false;
+      expect(await coordinator.captureLoadedState(scope, "retry-thread")).toEqual({ runState: "failed" });
+      expect(await coordinator.captureLoadedState(scope, "retry-thread", { presentation: true })).toEqual({ runState: "failed" });
+      expect(await coordinator.captureLoadedState({ ...scope, principalId: "wrong-principal" }, "retry-thread")).toBeUndefined();
+    } finally { acquired.release(); await coordinator.close(); }
+  });
+
   it("retires a history runtime that finishes establishment concurrently with restore", async () => {
     const threadId = "restore-during-establishment";
     const history = resettableActor({ generation: "history", canEvict: true });

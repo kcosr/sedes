@@ -397,6 +397,26 @@ a duplicate row. **Ctrl+Shift+H** on Windows/Linux or **⌘+Shift+H** on macOS o
 it and focuses the composer. Android voice uses the same default. Changing this
 choice does not start recording or redirect an active interaction.
 
+### Agent behavior
+
+**Automatically retry failed model requests** is on by default. After a
+confirmed model failure, Sedes waits ten seconds and sends **Please continue
+from where you left off.** as a new message through the normal Send path.
+The original user message is not replayed. Sedes sends one automatic follow-up
+per failure episode; successful completed model feedback during ordinary work,
+including a tool-call response, restores the allowance. If the automatic
+follow-up also fails, its intermediate model or tool progress does not trigger
+another follow-up. The automatic turn must complete successfully, or new user
+input must arrive, before the allowance is restored. Stop or a new user message cancels a pending
+retry. Uncertain submission outcomes use recovery instead of automatic
+resending. Messages with completion callbacks are excluded; their calling thread
+controls any further work.
+
+This account preference applies to all backends and execution servers on the
+connected Sedes installation, across clients and restarts. Independent Sedes
+installations keep separate account settings. Native harness retries remain
+independent of this automatic follow-up.
+
 ### Click project and environment names to filter
 
 This setting is off by default and saved on this client. Enable it to click or

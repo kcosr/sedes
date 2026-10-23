@@ -12,6 +12,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
+import type { ApplicationPreferences, UpdateApplicationPreferencesRequest } from "../../shared/protocol/application-preferences.js";
 import type { ConfigurationSnapshot } from "../../shared/protocol/configuration-admin.js";
 import { getAppearance } from "../app/appearance.js";
 import {
@@ -860,10 +861,12 @@ describe("SettingsView", () => {
   it("loads and CAS-updates the account-wide OpenAI skill visibility", async () => {
     const read = vi.fn(async () => ({
       showOpenAIComposerSkills: false,
+      autoRetryModelFailures: true,
       revision: 0,
     }));
     const update = vi.fn(async () => ({
       showOpenAIComposerSkills: true,
+      autoRetryModelFailures: true,
       revision: 1,
     }));
     renderSettings({ applicationPreferences: { read, update } });
@@ -874,7 +877,7 @@ describe("SettingsView", () => {
     expect(screen.getByText(/across every Codex connection/)).toBeVisible();
     // The page's settings are this browser's; this one follows the account.
     expect(toggle).toHaveAccessibleName("Show OpenAI skills in composer Account");
-    expect(screen.getByText("Account", { selector: '[data-slot="tag"]' })).toBeVisible();
+    expect(screen.getAllByText("Account", { selector: '[data-slot="tag"]' })).toHaveLength(2);
     expect(
       screen.getByText(/Preferences for this browser, unless a setting names another scope\./),
     ).toBeVisible();
@@ -883,12 +886,85 @@ describe("SettingsView", () => {
     await waitFor(() =>
       expect(update).toHaveBeenCalledWith({
         showOpenAIComposerSkills: true,
+      autoRetryModelFailures: true,
         expectedRevision: 0,
       }),
     );
     await waitFor(() =>
       expect(toggle).toHaveAttribute("data-state", "checked"),
     );
+  });
+
+  it("shares the account preference revision and preserves both toggle values", async () => {
+    const read = vi.fn(async () => ({
+      showOpenAIComposerSkills: true,
+      autoRetryModelFailures: true,
+      revision: 4,
+    }));
+    const update = vi.fn(async (request: UpdateApplicationPreferencesRequest) => ({
+      showOpenAIComposerSkills: request.showOpenAIComposerSkills,
+      autoRetryModelFailures: request.autoRetryModelFailures,
+      revision: request.expectedRevision + 1,
+    }));
+    renderSettings({ applicationPreferences: { read, update } });
+
+    const retryToggle = screen.getByTestId("auto-retry-model-failures-toggle");
+    const skillsToggle = screen.getByTestId("show-openai-composer-skills-toggle");
+    await waitFor(() => expect(retryToggle).not.toBeDisabled());
+    expect(screen.getByRole("heading", { name: "Agent behavior" })).toBeVisible();
+    expect(retryToggle).toHaveAccessibleName("Automatically retry failed model requests Account");
+    expect(retryToggle).toHaveAccessibleDescription("Retry once after a short delay. Applies to all backends and servers.");
+    expect(retryToggle).toHaveAttribute("data-state", "checked");
+    expect(read).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(retryToggle);
+    await waitFor(() => expect(retryToggle).not.toBeDisabled());
+    expect(update).toHaveBeenLastCalledWith({
+      showOpenAIComposerSkills: true,
+      autoRetryModelFailures: false,
+      expectedRevision: 4,
+    });
+    expect(skillsToggle).toHaveAttribute("data-state", "checked");
+
+    fireEvent.click(skillsToggle);
+    await waitFor(() => expect(skillsToggle).not.toBeDisabled());
+    expect(update).toHaveBeenLastCalledWith({
+      showOpenAIComposerSkills: false,
+      autoRetryModelFailures: false,
+      expectedRevision: 5,
+    });
+    expect(retryToggle).toHaveAttribute("data-state", "unchecked");
+  });
+
+  it("disables account toggles until loaded and restores a failed retry-preference save", async () => {
+    let completeRead!: (value: ApplicationPreferences) => void;
+    const read = vi.fn(() => new Promise<ApplicationPreferences>((resolve) => {
+      completeRead = resolve;
+    }));
+    let rejectUpdate!: (reason: Error) => void;
+    const update = vi.fn(() => new Promise<never>((_resolve, reject) => {
+      rejectUpdate = reject;
+    }));
+    renderSettings({ applicationPreferences: { read, update } });
+    const retryToggle = screen.getByTestId("auto-retry-model-failures-toggle");
+    const skillsToggle = screen.getByTestId("show-openai-composer-skills-toggle");
+    expect(retryToggle).toBeDisabled();
+    expect(skillsToggle).toBeDisabled();
+    await act(async () => completeRead({ showOpenAIComposerSkills: false, autoRetryModelFailures: true, revision: 2 }));
+
+    fireEvent.click(retryToggle);
+    expect(retryToggle).toBeDisabled();
+    expect(skillsToggle).toBeDisabled();
+    expect(retryToggle).toHaveAttribute("data-state", "unchecked");
+    await act(async () => rejectUpdate(new Error("conflict")));
+    expect(retryToggle).not.toBeDisabled();
+    expect(retryToggle).toHaveAttribute("data-state", "checked");
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not save account preferences.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(read).toHaveBeenCalledTimes(2);
+    await act(async () => completeRead({ showOpenAIComposerSkills: true, autoRetryModelFailures: false, revision: 3 }));
+    expect(retryToggle).toHaveAttribute("data-state", "unchecked");
+    expect(skillsToggle).toHaveAttribute("data-state", "checked");
   });
 
   it("toggles right-Option composer focus through the settings module", () => {

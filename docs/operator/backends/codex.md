@@ -141,7 +141,7 @@ for the parser and generation contract.
 Upgrade Codex execution sidecars together with the server: active Speed requires
 Codex runtime protocol 5, and managed-terminal settings handoffs require
 managed-TUI capability 3. Upgrade browser and packaged clients for application
-protocol 169 and the strict `codex.fast_mode@3` contract.
+protocol 170 and the strict `codex.fast_mode@3` contract.
 
 Sedes automatically adds the native experimental `step_model_switching` flag
 to sessions it creates, including fork and later provenance-qualified cold

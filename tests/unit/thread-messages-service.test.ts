@@ -374,6 +374,51 @@ describe("ThreadMessagesService", () => {
     },
   );
 
+  it.each(["in_progress", "completed", "history"] as const)(
+    "preserves automatic retry attribution in %s transcript tool output",
+    async (projection) => {
+      const text = "Please continue from where you left off.";
+      const human = item("human", "turn-1", "user", text);
+      const automatic: ConversationItem = {
+        ...item("retry", "turn-1", "user", text),
+        kind: "user_message",
+        content: [{ kind: "text", text: { text } }],
+        deliveryOperationId: "automatic-operation",
+        origin: { kind: "automatic_retry" },
+      };
+      const messages = [human, automatic];
+      const projectedTurn = turn("turn-1", projection === "history" ? "completed" : projection, 0, messages.map(({ id }) => id));
+      const harness = projection === "history"
+        ? fixture(state([], [], { previousCursor: "older" }), { older: historyPage([projectedTurn], messages) })
+        : fixture(state([projectedTurn], messages));
+      const page = await harness.service.list(scope, "thread-1");
+      const output = projection === "in_progress" ? page.activeTurn!.messages : page.turns[0]!.messages;
+      expect(output[0]).toMatchObject({ role: "user", text: { text } });
+      expect(output[0]).not.toHaveProperty("origin");
+      expect(output[0]).not.toHaveProperty("automaticRetry");
+      expect(output[1]).toMatchObject({ role: "user", text: { text }, automaticRetry: true });
+      expect(output[1]).not.toHaveProperty("origin");
+      const definition = createThreadMessagesToolDefinition({
+        messages: harness.rawService,
+        send: { sendDirect: vi.fn() },
+        forks: { forkAgent: vi.fn(), forkPrincipalClient: vi.fn() },
+        inventory: { archive: vi.fn(), restore: vi.fn() },
+      });
+      const registry = new AgentToolRegistry();
+      registry.register(definition);
+      expect(registry.validatesOutput(definition.id, definition.schemaVersion, page)).toBe(true);
+      expect(registry.validatesOutput(definition.id, definition.schemaVersion, {
+        turns: [], nextCursor: null, activeTurn: {
+          id: "active", status: "in_progress", messages: [{
+            id: "missing-source", role: "user", text: { text },
+            origin: { kind: "agent_message" },
+          }],
+        },
+      })).toBe(false);
+      expect(harness.publish).not.toHaveBeenCalled();
+    },
+  );
+
   it("returns an empty page for an unbound thread without acquiring a runtime", async () => {
     const harness = fixture(state([]), {}, { backingState: "unbound" });
     await expect(harness.service.list(scope, "thread-1")).resolves.toEqual({

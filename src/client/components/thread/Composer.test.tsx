@@ -431,6 +431,19 @@ function snapshot(
   } as unknown as NormalizedThreadSnapshot;
 }
 
+function retryPendingSnapshot(): NormalizedThreadSnapshot {
+  const pending = snapshot();
+  pending.runState = "starting";
+  pending.capabilities.runState = "starting";
+  pending.capabilities.deliveryModes.push(
+    { id: "queue", steerTarget: null, label: { text: "Queue" }, available: false },
+    { id: "steer", steerTarget: "turn", label: { text: "Steer" }, available: false },
+  );
+  pending.capabilities.operations = [{ id: "interrupt", label: { text: "Stop" }, destructive: true,
+    available: true, parameters: { kind: "none" } }];
+  return pending;
+}
+
 function pressEnter(store: FakeComposerStore): void {
   fireEvent.keyDown(screen.getByRole("textbox"), {
     key: "Enter",
@@ -1647,6 +1660,21 @@ describe("Composer textarea sizing", () => {
 });
 
 describe("Composer delivery guards", () => {
+  it.each(["click", "Enter"] as const)("sends through %s during a retry delay without changing the busy delivery preference", async action => {
+    localStorage.setItem("sedes-composer-delivery-mode", "queue");
+    const store = new FakeComposerStore(retryPendingSnapshot(), "Replace the delayed retry with this input");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Stop$/ })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Delivery mode" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Queue$/ })).not.toBeInTheDocument();
+    if (action === "click") fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    else pressEnter(store);
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledWith("submit",
+      expect.objectContaining({ text: "Replace the delayed retry with this input" }), expect.any(String)));
+    expect(localStorage.getItem("sedes-composer-delivery-mode")).toBe("queue");
+  });
+
   it.each(["", "Send this once"])(
     "chooses and remembers Queue with draft %j",
     async (text) => {
@@ -6238,6 +6266,19 @@ describe("foreground voice composer ownership", () => {
     await waitFor(() => expect(fake.plugin.completeComposerHandoff).toHaveBeenLastCalledWith(
       expect.objectContaining({ outcome: "accepted" })));
   }
+
+  it.each(["queue", "steer"] as const)("uses Submit for native %s auto-send during a retry delay", async mode => {
+    localStorage.setItem("sedes-composer-delivery-mode", mode);
+    const { fake } = await native();
+    const store = new FakeComposerStore(retryPendingSnapshot(), "snippet");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    offer(fake, { mode });
+    await accepted(fake);
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledWith("submit",
+      expect.objectContaining({ text: "Explain this\n\nsnippet" }), expect.any(String)));
+    expect(localStorage.getItem("sedes-composer-delivery-mode")).toBe(mode);
+    expect(screen.queryByText("Speech added to the draft. Resolve the current Send restriction, then press Send.")).toBeNull();
+  });
 
   it("captures unsaved code with all draft fields, preserves references and does not open the keyboard", async () => {
     localStorage.setItem("sedes-diagnostics-voice", "true");

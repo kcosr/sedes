@@ -56,6 +56,7 @@ export type ThreadMessagesMessage =
       readonly role: "user";
       readonly text: BoundedText;
       readonly origin?: ThreadMessageOrigin;
+      readonly automaticRetry?: true;
     }
   | {
       readonly role: "assistant";
@@ -107,6 +108,7 @@ type RawMessage =
       readonly role: "user";
       readonly text: string;
       readonly origin?: ThreadMessageOrigin;
+      readonly automaticRetry?: true;
       readonly sourceTruncation?: TruncationInfo;
     }
   | {
@@ -211,6 +213,7 @@ function projectMessage(
     role: "user",
     text: boundedText(message, maximumTextBytes),
     ...(message.origin ? { origin: message.origin } : {}),
+    ...(message.automaticRetry ? { automaticRetry: true } : {}),
   };
 }
 
@@ -237,8 +240,8 @@ function rawMessage(item: ConversationItem): RawMessage | undefined {
         reason: omittedPart.kind === "image" ? "binary_omitted" : "entry_limit",
       }
     : undefined;
-  // Transcript tools expose inter-agent provenance, not question interaction
-  // envelopes. The ordinary user message text already contains the answer.
+  // Preserve application-generated input attribution without exposing question
+  // interaction envelopes. Ordinary message text already contains the answer.
   const origin =
     item.origin?.kind === "agent_message" || item.origin?.kind === "agent_result"
       ? item.origin
@@ -248,6 +251,7 @@ function rawMessage(item: ConversationItem): RawMessage | undefined {
     role: "user",
     text,
     ...(origin ? { origin } : {}),
+    ...(item.origin?.kind === "automatic_retry" ? { automaticRetry: true } : {}),
     ...(omission ? { sourceTruncation: omission } : {}),
   };
 }

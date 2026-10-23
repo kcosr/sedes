@@ -74,7 +74,9 @@ const turnHistoryEntries = derivedPerTurn(function turnHistoryEntries(
       ...(item.origin
         ? {
             userLabel:
-              item.origin.kind === "question_response"
+              item.origin.kind === "automatic_retry"
+                ? "Automatic retry"
+                : item.origin.kind === "question_response"
                 ? "Question answered"
                 : item.origin.kind === "page_response"
                   ? `Page response · ${item.origin.title} · Revision ${item.origin.revision}`

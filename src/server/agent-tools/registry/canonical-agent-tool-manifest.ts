@@ -300,7 +300,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "thread.messages": manifestEntry({
     environmentAuthority: { kind: "direct_resource", resource: "thread" },
     id: "thread.messages",
-    schemaVersion: 4,
+    schemaVersion: 5,
     description:
       "Returns the newest bounded page of settled terminal turns and, on a fresh read, text-finalized ordinary messages from the active turn; continuation moves toward older settled history.",
     catalog: { groupId: "threads", label: "Thread messages", order: 40 },

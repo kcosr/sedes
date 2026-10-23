@@ -171,6 +171,7 @@ const concurrentTuiAndQuietPreference = (
     : QUIET_THREAD_PROVIDER_FEATURE_CONCURRENCY;
 
 function createService(input?: {
+  isAutomaticModelRetryPending?: (eventScope: typeof scope, threadId: string) => boolean;
   state?: AuthorizedThreadApplicationState;
   disconnected?: boolean;
   runState?:
@@ -425,6 +426,7 @@ function createService(input?: {
   const readCachedPresentation = vi.fn(async () => ({ ...await presentation(), inputTargetAvailable: true }));
   const service = new ThreadApplicationService({
     usage: { registerVisibleTurns: () => undefined },
+    isAutomaticModelRetryPending: input?.isAutomaticModelRetryPending,
     inventory: { getAuthorized },
     conversations: { capture },
     queue: { list, read: vi.fn(async () => { throw new Error("unexpected_queued_input_read"); }) },
@@ -478,6 +480,88 @@ function createService(input?: {
 }
 
 describe("ThreadApplicationService", () => {
+  it("restores failed run state and removes Stop through an authoritative replacement after retry cancellation", async () => {
+    let pending = true;
+    const current = createService({ runState: "failed", includeInteraction: false, isAutomaticModelRetryPending: () => pending });
+    const captured = await current.capture();
+    if (captured.status !== "connected") throw new Error("fixture");
+    const hub = new ThreadEventHub();
+    const client = new NormalizedThreadStore();
+    const results: string[] = [];
+    const subscription = hub.subscribe(event => results.push(client.apply(event).kind));
+    const binding = new ConversationEventBridge(new ThreadEventPresentation(current.service), () => undefined).bind({
+      scope, applicationThreadId: "thread-1", hub,
+      actor: { subscribe(listener) { listener({ type: "projection_replaced", state: captured.state }); return () => undefined; } },
+      captureAuthoritativeState: async () => captured.state,
+    });
+    try {
+      await binding.ready;
+      expect(client.state.snapshot?.runState).toBe("starting");
+      pending = false;
+      await binding.publishAuthoritativeReplacement();
+      expect(client.state.snapshot?.runState).toBe("failed");
+      expect(client.state.snapshot?.capabilities.operations.find(operation => operation.id === "interrupt")?.available).toBe(false);
+      expect(captured.state.timeline.runState).toBe("failed");
+      expect(results).not.toContain("resnapshot_required");
+    } finally { subscription.close(); await binding.release(); }
+  });
+
+  it("presents a scheduled model retry as starting with Stop while retaining failed provider state", async () => {
+    let pending = true;
+    const retryPending = vi.fn(() => pending);
+    const current = createService({ runState: "failed", includeInteraction: false, isAutomaticModelRetryPending: retryPending });
+    const capture = await current.capture();
+    if (capture.status !== "connected") throw new Error("fixture");
+    const retrying = await current.service.snapshotFromActorCapture(scope, "thread-1", capture.state);
+    expect(retrying.runState).toBe("starting");
+    expect(retrying.thread.runState).toBe("starting");
+    expect(retrying.capabilities.runState).toBe("starting");
+    expect(retrying.capabilities.operations.find(operation => operation.id === "interrupt")?.available).toBe(true);
+    expect(retrying.capabilities.deliveryModes.find(mode => mode.id === "submit")?.available).toBe(true);
+    expect(capture.state.timeline.runState).toBe("failed");
+    expect(retryPending).toHaveBeenCalledWith(scope, "thread-1");
+    pending = false;
+    const exhausted = await current.service.snapshotFromActorCapture(scope, "thread-1", capture.state);
+    expect(exhausted.runState).toBe("failed");
+    expect(exhausted.capabilities.operations.find(operation => operation.id === "interrupt")?.available).toBe(false);
+    expect(exhausted.capabilities.revision).not.toBe(retrying.capabilities.revision);
+  });
+
+  it("keeps settled settings and inventory controls available throughout the retry delay", async () => {
+    const options = {
+      runState: "failed" as const, queue: [], includeInteraction: false,
+      nextTurnSettingIds: ["model"] as const,
+      providerFeatureCapabilities: [mutableProviderFeature("test.preference")],
+    };
+    const ordinary = await createService(options).service.snapshot(scope, "thread-1");
+    const pending = await createService({ ...options, isAutomaticModelRetryPending: () => true })
+      .service.snapshot(scope, "thread-1");
+    expect(pending.runState).toBe("starting");
+    expect(pending.capabilities.settings).toEqual(ordinary.capabilities.settings);
+    expect(pending.capabilities.settings.find(setting => setting.id === "model")?.available).toBe(true);
+    expect(pending.capabilities.providerFeatures).toEqual(ordinary.capabilities.providerFeatures);
+    expect(pending.capabilities.providerFeatures[0]?.availability).toBe("available");
+    expect(pending.forkSource).toEqual(ordinary.forkSource);
+    for (const id of ["archive", "settle", "snooze", "compact", "attach_automation"] as const) {
+      expect(pending.capabilities.operations.find(operation => operation.id === id)?.available).toBe(true);
+    }
+    expect(pending.capabilities.operations.filter(operation => operation.id !== "interrupt"))
+      .toEqual(ordinary.capabilities.operations.filter(operation => operation.id !== "interrupt"));
+
+    const starting = await createService({ ...options, runState: "starting" }).service.snapshot(scope, "thread-1");
+    expect(starting.capabilities.settings.find(setting => setting.id === "model")?.available).toBe(false);
+    expect(starting.capabilities.operations.find(operation => operation.id === "archive")?.available).toBe(false);
+    expect(starting.capabilities.providerFeatures[0]?.availability).toBe("read_only");
+    expect(starting.capabilities.revision).not.toBe(pending.capabilities.revision);
+  });
+
+  it.each(["idle", "running", "disconnected"] as const)("does not overlay %s with pending retry state", async runState => {
+    const retryPending = vi.fn(() => true);
+    const current = createService({ runState, includeInteraction: false, isAutomaticModelRetryPending: retryPending });
+    expect((await current.service.snapshot(scope, "thread-1")).runState).toBe(runState);
+    expect(retryPending).not.toHaveBeenCalled();
+  });
+
   it("fits pages only after including the complete application envelope", async () => {
     const state = { ...inventory(), stashes: Array.from({ length: 120 }, (_, index) => ({
       id: `padding-${index}`, text: "s".repeat(200_000), contextExcerpts: [], attachments: [], taskReferences: [],

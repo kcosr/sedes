@@ -7,6 +7,7 @@ import type {
 import { MAXIMUM_NORMALIZED_TIMELINE_TURNS, normalizedThreadSnapshotSchema, pageItemSchema, threadEventEnvelopeSchema, type PageItem } from "../../src/shared/protocol/conversation.js";
 import { ScopedThreadEventHubRegistry } from "../../src/server/events/thread-runtime-coordinator.js";
 import { ThreadEventHub } from "../../src/server/events/thread-event-hub.js";
+import { showAutomaticModelRetryNotice } from "../../src/server/events/automatic-model-retry-notice.js";
 import { fitApplicationItemsToSnapshot } from "../../src/server/conversations/application-publication-projection.js";
 import * as pageProjection from "../../src/server/conversations/application-publication-projection.js";
 import { MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES, serializedUtf8Bytes } from "../../src/shared/protocol/payload.js";
@@ -1524,6 +1525,85 @@ describe("ThreadEventHub", () => {
   });
 });
 
+
+describe("automatic model retry notice", () => {
+  it("waits for the initial snapshot and publishes once after its baseline", async () => {
+    const hub = new ThreadEventHub();
+    const events: ThreadEventEnvelope[] = [];
+    const external = hub.subscribe(event => events.push(event));
+    const cleanup = showAutomaticModelRetryNotice(hub);
+    try {
+      await Promise.resolve();
+      expect(events).toEqual([]);
+      hub.publish({ type: "snapshot", generation: "initial", snapshot: snapshot() });
+      expect(events.map(({ event }) => event.type)).toEqual(["snapshot"]);
+      await Promise.resolve();
+      expect(events.map(({ event }) => event.type)).toEqual(["snapshot", "notice"]);
+      expect(hub.currentCheckpoint()?.notices).toMatchObject([{ tone: "info", message: { text: "Retrying in 10 seconds…" } }]);
+      hub.publish({ type: "snapshot", generation: "initial", snapshot: snapshot() });
+      await Promise.resolve();
+      expect(events.filter(({ event }) => event.type === "notice")).toHaveLength(1);
+    } finally { cleanup(); external.close(); }
+  });
+
+  it("dismisses the hub-assigned notice identity and preserves provider notices", async () => {
+    const hub = new ThreadEventHub();
+    hub.publish({ type: "snapshot", generation: "bound", snapshot: snapshot() });
+    hub.publish({ type: "notice", generation: "bound", notice: { id: "native", tone: "warning", message: { text: "Provider warning" }, createdAt: new Date().toISOString() } });
+    const provider = hub.currentCheckpoint()!.notices[0]!;
+    const cleanup = showAutomaticModelRetryNotice(hub);
+    await Promise.resolve();
+    const retry = hub.currentCheckpoint()!.notices[1]!;
+    expect(retry.id).not.toBe("automatic-model-retry");
+    expect(hub.subscriberCount).toBe(0);
+    cleanup();
+    cleanup();
+    expect(hub.currentCheckpoint()!.notices).toEqual([provider]);
+  });
+
+  it("restores the notice after replacement and fences a queued publication after Stop", async () => {
+    const hub = new ThreadEventHub();
+    hub.publish({ type: "snapshot", generation: "before-binding", snapshot: snapshot() });
+    const cleanup = showAutomaticModelRetryNotice(hub);
+    await Promise.resolve();
+    const initialId = hub.currentCheckpoint()!.notices[0]!.id;
+    hub.publish({ type: "snapshot", generation: "bound", snapshot: snapshot() });
+    expect(hub.currentCheckpoint()!.notices).toEqual([]);
+    await Promise.resolve();
+    expect(hub.currentCheckpoint()!.notices).toHaveLength(1);
+    expect(hub.currentCheckpoint()!.notices[0]!.id).not.toBe(initialId);
+    hub.publish({ type: "snapshot", generation: "after-stop", snapshot: snapshot() });
+    const watermark = hub.watermark;
+    cleanup();
+    await Promise.resolve();
+    expect(hub.currentCheckpoint()!.notices).toEqual([]);
+    expect(hub.watermark).toBe(watermark);
+    hub.publish({ type: "snapshot", generation: "later", snapshot: snapshot() });
+    await Promise.resolve();
+    expect(hub.currentCheckpoint()!.notices).toEqual([]);
+  });
+
+  it("does not dismiss an existing provider notice with identical text", async () => {
+    const hub = new ThreadEventHub();
+    hub.publish({ type: "snapshot", generation: "deduplicated", snapshot: snapshot() });
+    hub.publish({ type: "notice", generation: "deduplicated", notice: { id: "native", tone: "info", message: { text: "Retrying in 10 seconds…" }, createdAt: new Date().toISOString() } });
+    const existing = hub.currentCheckpoint()!.notices[0]!;
+    const cleanup = showAutomaticModelRetryNotice(hub);
+    await Promise.resolve();
+    cleanup();
+    expect(hub.currentCheckpoint()!.notices).toEqual([existing]);
+  });
+
+  it("cleans up when Stop runs during notice fanout", async () => {
+    const hub = new ThreadEventHub();
+    hub.publish({ type: "snapshot", generation: "reentrant", snapshot: snapshot() });
+    const cleanup = showAutomaticModelRetryNotice(hub);
+    const external = hub.subscribe(({ event }) => { if (event.type === "notice") cleanup(); });
+    await Promise.resolve();
+    expect(hub.currentCheckpoint()!.notices).toEqual([]);
+    external.close();
+  });
+});
 
 describe("transient runtime notice lifecycle", () => {
   const notice = { id: "provider-notice", tone: "warning" as const,

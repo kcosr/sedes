@@ -3596,24 +3596,33 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
-  it("persists the OpenAI composer-skill preference per authenticated principal", async () => {
+  it("persists application preferences per authenticated principal with revision checks", async () => {
     const current = await fixture();
     try {
       await current
         .withHost(request(current.app).get("/api/application/preferences"))
         .expect(200)
-        .expect({ showOpenAIComposerSkills: false, revision: 0 });
+        .expect({ showOpenAIComposerSkills: false, autoRetryModelFailures: true, revision: 0 });
 
       await current
         .withHost(request(current.app).put("/api/application/preferences"))
-        .send({ showOpenAIComposerSkills: true, expectedRevision: 0 })
+        .send({ showOpenAIComposerSkills: true, autoRetryModelFailures: false, expectedRevision: 0 })
         .expect(403);
 
       await current
         .mutate(request(current.app).put("/api/application/preferences"))
         .send({ showOpenAIComposerSkills: true, expectedRevision: 0 })
+        .expect(400);
+      await current
+        .mutate(request(current.app).put("/api/application/preferences"))
+        .send({ showOpenAIComposerSkills: true, autoRetryModelFailures: false, expectedRevision: 0, principalId: "other" })
+        .expect(400);
+
+      await current
+        .mutate(request(current.app).put("/api/application/preferences"))
+        .send({ showOpenAIComposerSkills: true, autoRetryModelFailures: false, expectedRevision: 0 })
         .expect(200)
-        .expect({ showOpenAIComposerSkills: true, revision: 1 });
+        .expect({ showOpenAIComposerSkills: true, autoRetryModelFailures: false, revision: 1 });
 
       await current
         .withHost(
@@ -3622,7 +3631,7 @@ describe("normalized HTTP application contract", () => {
             .set("X-Test-Foreign-Principal", "yes"),
         )
         .expect(200)
-        .expect({ showOpenAIComposerSkills: false, revision: 0 });
+        .expect({ showOpenAIComposerSkills: false, autoRetryModelFailures: true, revision: 0 });
 
       await current
         .mutate(
@@ -3630,15 +3639,15 @@ describe("normalized HTTP application contract", () => {
             .put("/api/application/preferences")
             .set("X-Test-Foreign-Principal", "yes"),
         )
-        .send({ showOpenAIComposerSkills: true, expectedRevision: 0 })
+        .send({ showOpenAIComposerSkills: true, autoRetryModelFailures: false, expectedRevision: 0 })
         .expect(200)
-        .expect({ showOpenAIComposerSkills: true, revision: 1 });
+        .expect({ showOpenAIComposerSkills: true, autoRetryModelFailures: false, revision: 1 });
 
       await current
         .mutate(request(current.app).put("/api/application/preferences"))
-        .send({ showOpenAIComposerSkills: false, expectedRevision: 1 })
+        .send({ showOpenAIComposerSkills: false, autoRetryModelFailures: true, expectedRevision: 1 })
         .expect(200)
-        .expect({ showOpenAIComposerSkills: false, revision: 2 });
+        .expect({ showOpenAIComposerSkills: false, autoRetryModelFailures: true, revision: 2 });
 
       await current
         .withHost(
@@ -3647,11 +3656,11 @@ describe("normalized HTTP application contract", () => {
             .set("X-Test-Foreign-Principal", "yes"),
         )
         .expect(200)
-        .expect({ showOpenAIComposerSkills: true, revision: 1 });
+        .expect({ showOpenAIComposerSkills: true, autoRetryModelFailures: false, revision: 1 });
 
       await current
         .mutate(request(current.app).put("/api/application/preferences"))
-        .send({ showOpenAIComposerSkills: true, expectedRevision: 1 })
+        .send({ showOpenAIComposerSkills: true, autoRetryModelFailures: false, expectedRevision: 1 })
         .expect(409)
         .expect(({ body }) => expect(body.error.code).toBe("conflict"));
     } finally {

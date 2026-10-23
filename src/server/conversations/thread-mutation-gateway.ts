@@ -350,6 +350,8 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         scope: RequestScope,
         applicationThreadId: string,
       ) => void | Promise<void>;
+      /** Cancels a scheduled follow-up before it reaches native admission. */
+      readonly cancelAutomaticModelRetry?: (scope: RequestScope, applicationThreadId: string) => boolean;
     },
   ) {
     const database = input.bindings.database;
@@ -2159,6 +2161,24 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     if (deadlineAt <= this.#now()) {
       this.#expireInterrupts(scope, this.#now(), applicationThreadId);
       return this.#interruptUnconfirmed(scope, operation.operationId);
+    }
+    const retryCancelled = this.input.cancelAutomaticModelRetry?.(scope, applicationThreadId) === true;
+    if (retryCancelled && receipt.state === "prepared") {
+      const observed = this.input.actors.observeInputRuntime(scope, applicationThreadId);
+      // Cancelling a scheduled follow-up is a complete Stop when the provider
+      // has no active work. An active turn still follows the native Stop path.
+      if (!observed || (observed.authoritative && observed.settled &&
+          (observed.runState === "idle" || observed.runState === "failed"))) {
+        this.input.operations.markInterruptStarted(scope, operation.operationId);
+        const accepted = this.input.operations.acceptInterrupt(scope, operation.operationId);
+        if (accepted.state !== "accepted") return this.#interruptUnconfirmed(scope, operation.operationId);
+        try {
+          await this.#publishThreadSnapshot(scope, applicationThreadId);
+          await this.#changed(scope, applicationThreadId);
+        }
+        catch (error) { this.#reportPublicationError(error); }
+        return { status: "accepted", operationId: accepted.applicationOperationId };
+      }
     }
     const key = operationKey(scope, operation.operationId);
     let deadline = this.#interruptDeadlines.get(key);

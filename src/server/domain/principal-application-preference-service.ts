@@ -10,6 +10,7 @@ export class PrincipalApplicationPreferenceService {
     readonly input: {
       readonly repository: PrincipalApplicationPreferenceRepository;
       readonly now?: () => number;
+      readonly onChanged?: () => void;
     },
   ) {}
 
@@ -21,9 +22,11 @@ export class PrincipalApplicationPreferenceService {
     scope: RequestScope,
     input: UpdateApplicationPreferencesRequest,
   ): ApplicationPreferences {
-    return this.input.repository.update(scope, {
+    const updated = this.input.repository.update(scope, {
       ...input,
       now: this.input.now?.() ?? Date.now(),
     });
+    this.input.onChanged?.();
+    return updated;
   }
 }

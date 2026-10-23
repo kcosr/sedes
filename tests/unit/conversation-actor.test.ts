@@ -28,6 +28,7 @@ import type {
   AuthoritativeCompletionObserver,
   AuthoritativeSubmissionObserver,
   LiveProgressObserver,
+  ModelFeedbackObserver,
 } from "../../src/server/conversations/conversation-actor-manager.js";
 import type { ConversationActor, ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
 import { applicationTurnIdForBackendTurn, ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
@@ -299,6 +300,16 @@ class FakeHandle {
   }
 }
 
+function withModelFeedbackUser(base: BackendConversationSnapshot): BackendConversationSnapshot {
+  const user = { backendItemId: "feedback-user", backendTurnId: "turn-1", semanticKind: "user_message" as const,
+    status: "completed" as const, sourceOrder: 0, deliveryOperationId: "feedback-input",
+    content: [{ kind: "text" as const, text: { text: "A materialized application input" } }] };
+  return { ...base,
+    turnsById: { ...base.turnsById, "turn-1": { ...base.turnsById["turn-1"]!,
+      orderedBackendItemIds: [user.backendItemId, ...base.turnsById["turn-1"]!.orderedBackendItemIds] } },
+    itemsById: { ...base.itemsById, [user.backendItemId]: user } };
+}
+
 function fixture(
   onAuthoritativeCompletion?: AuthoritativeCompletionObserver,
   onAuthoritativeSubmission?: AuthoritativeSubmissionObserver,
@@ -308,6 +319,7 @@ function fixture(
   onLiveProgress?: LiveProgressObserver,
   captureResponseVoiceContext?: NonNullable<ConstructorParameters<typeof ConversationActorManager>[0]["captureResponseVoiceContext"]>,
   applicationPublications?: (requestedScope: typeof scope, threadId: string, turnIds: readonly string[]) => readonly PagePublication[],
+  onModelFeedback?: ModelFeedbackObserver,
 ) {
   const closeOrder: string[] = [];
   const handle = new FakeHandle(closeOrder);
@@ -372,6 +384,7 @@ function fixture(
     ...(onAuthoritativeCompletion ? { onAuthoritativeCompletion } : {}),
     ...(onAuthoritativeSubmission ? { onAuthoritativeSubmission } : {}),
     ...(onLiveProgress ? { onLiveProgress } : {}),
+    ...(onModelFeedback ? { onModelFeedback } : {}),
     ...(captureResponseVoiceContext ? { captureResponseVoiceContext } : {}),
     ...(applicationPublications ? { applicationPublications } : {}),
   });
@@ -5361,6 +5374,124 @@ describe("ConversationActorManager", () => {
     );
     acquired.release();
     await manager.close();
+  });
+
+  it("observes completed tool-only model feedback once, excluding token updates, unqualified text, and replay", async () => {
+    const feedback = vi.fn<ModelFeedbackObserver>();
+    const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, undefined, undefined, undefined, feedback);
+    const tool = {
+      backendItemId: "tool-1", backendTurnId: "turn-1", semanticKind: "command" as const,
+      status: "completed" as const, sourceOrder: 1, phase: "completed" as const,
+      command: { text: "pwd" }, exitCode: 0,
+    };
+    const base = snapshot("running", "partial tokens");
+    const initial: BackendConversationSnapshot = withModelFeedbackUser({
+      ...base,
+      turnsById: { "turn-1": { ...base.turnsById["turn-1"]!, orderedBackendItemIds: ["item-1", "tool-1"] } },
+      itemsById: { ...base.itemsById, "tool-1": tool },
+    });
+    handle.establishmentSnapshots[0] = initial;
+    handle.establishmentSnapshots.push(initial);
+    handle.history.mockResolvedValue({ orderedBackendTurnIds: ["turn-1"], turnsById: initial.turnsById, itemsById: initial.itemsById });
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      await acquired.actor.history({ limit: 10 });
+      expect(feedback).not.toHaveBeenCalled();
+      let sequence = 0;
+      handle.emit(0, { type: "item_updated", item: tool }, sequence++);
+      await acquired.actor.captureSnapshotState();
+      expect(feedback).not.toHaveBeenCalled();
+      expect(handle.establishCount).toBe(2);
+      sequence = 0;
+      const text = initial.itemsById["item-1"]!;
+      handle.emit(1, { type: "item_updated", item: text }, sequence++);
+      handle.emit(1, { type: "item_completed", item: { ...text, status: "completed" } }, sequence++);
+      await acquired.actor.captureSnapshotState();
+      expect(feedback).not.toHaveBeenCalled();
+
+      const nextTool = { ...tool, backendItemId: "tool-2", sourceOrder: 2 };
+      handle.emit(1, { type: "item_started", item: { ...nextTool, status: "streaming", phase: "preflight_or_executing" } }, sequence++);
+      await acquired.actor.captureSnapshotState();
+      expect(feedback).not.toHaveBeenCalled();
+      handle.emit(1, { type: "item_completed", item: nextTool }, sequence++);
+      await vi.waitFor(() => expect(feedback).toHaveBeenCalledOnce());
+      expect(feedback).toHaveBeenCalledWith(scope, binding.applicationThreadId, { identity: expect.any(String), automaticRetry: false });
+      handle.emit(1, { type: "resnapshot_required", reason: "ambiguous_correlation" }, sequence++);
+      await vi.waitFor(() => expect(handle.establishCount).toBe(3));
+      expect(feedback).toHaveBeenCalledOnce();
+      handle.emit(2, { type: "run_state_changed", state: "idle" }, 0);
+      handle.emit(2, { type: "item_updated", item: { ...tool, backendItemId: "late-tool", sourceOrder: 3 } }, 1);
+      await acquired.actor.captureSnapshotState();
+      expect(feedback).toHaveBeenCalledOnce();
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it.each([false, true])("captures automatic-retry provenance from canonical input before reporting model feedback (%s)", async automaticRetry => {
+    const feedback = vi.fn<ModelFeedbackObserver>();
+    const deliveryInputSnapshots = { find: vi.fn(() => ({
+      tenantId: scope.tenantId, principalId: scope.principalId, threadId: binding.applicationThreadId,
+      deliveryOperationId: "feedback-input", text: "Canonical input", contextExcerpts: [], taskContexts: [], attachments: [],
+      ...(automaticRetry ? { origin: { kind: "automatic_retry" } } : {}), fingerprint: "fixture", createdAt: 1,
+    })) } as unknown as DeliveryInputSnapshotRepository;
+    const { driver, handle, manager } = fixture(undefined, undefined, 10, deliveryInputSnapshots, 8, undefined, undefined, undefined, feedback);
+    const initial = withModelFeedbackUser(snapshot("running", "Tool-only response"));
+    handle.establishmentSnapshots[0] = initial;
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      handle.emit(0, { type: "item_completed", item: {
+        backendItemId: "feedback-tool", backendTurnId: "turn-1", semanticKind: "command", status: "completed", sourceOrder: 2,
+        phase: "completed", command: { text: "pwd" }, exitCode: 0,
+      } }, 0);
+      await vi.waitFor(() => expect(feedback).toHaveBeenCalledOnce());
+      expect(feedback).toHaveBeenCalledWith(scope, binding.applicationThreadId, { identity: expect.any(String), automaticRetry });
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it("does not reset retry state when model feedback has no materialized input proving its provenance", async () => {
+    const feedback = vi.fn<ModelFeedbackObserver>();
+    const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, undefined, undefined, undefined, feedback);
+    handle.establishmentSnapshots[0] = snapshot("running", "Unattributed native work");
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      handle.emit(0, { type: "item_completed", item: {
+        backendItemId: "unattributed-tool", backendTurnId: "turn-1", semanticKind: "command", status: "completed", sourceOrder: 2,
+        phase: "completed", command: { text: "pwd" }, exitCode: 0,
+      } }, 0);
+      await acquired.actor.captureSnapshotState();
+      expect(feedback).not.toHaveBeenCalled();
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it.each(["provisional", "partial"] as const)("observes completed live %s feedback before a later failure despite delayed admission", async (phase) => {
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const order: string[] = [];
+    const submission = vi.fn<AuthoritativeSubmissionObserver>(async () => { entered(); await gate; });
+    const feedback = vi.fn<ModelFeedbackObserver>(() => { order.push("feedback"); throw new Error("passive-observer-failure"); });
+    const completion = vi.fn<AuthoritativeCompletionObserver>(() => { order.push("completion"); });
+    const { driver, handle, manager } = fixture(completion, submission, 10, undefined, 8, undefined, undefined, undefined, feedback);
+    const base = snapshot("running", "Completed feedback");
+    const initial = withModelFeedbackUser({ ...base, turnsById: { "turn-1": { ...base.turnsById["turn-1"]!, completionCorrelations: ["accepted-input"] } } });
+    handle.establishmentSnapshots[0] = initial;
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      await waiting;
+      const item = { ...initial.itemsById["item-1"]!, semanticKind: "assistant_message" as const,
+        status: "completed" as const, responsePhase: phase, markdown: { text: "Completed feedback" } };
+      handle.emit(0, { type: "item_completed", item, liveProgress: true }, 0);
+      handle.emit(0, { type: "item_updated", item: { ...item, responsePhase: phase === "partial" ? "provisional" : "partial" }, liveProgress: true }, 1);
+      handle.emit(0, { type: "turn_completed", turn: { ...initial.turnsById["turn-1"]!, status: "failed" } }, 2);
+      handle.emit(0, { type: "run_state_changed", state: "failed" }, 3);
+      await acquired.actor.captureSnapshotState();
+      expect(handle.establishCount).toBe(1);
+      expect(acquired.actor.timeline.runState).toBe("failed");
+      expect(feedback).not.toHaveBeenCalled();
+      release();
+      await vi.waitFor(() => expect(completion).toHaveBeenCalledOnce());
+      expect(feedback).toHaveBeenCalledOnce();
+      expect(order).toEqual(["feedback", "completion"]);
+    } finally { release(); acquired.release(); await manager.close(); }
   });
 
   it.each(["provisional", "partial"] as const)("publishes qualified live %s progress after projection, including late phase evidence, but not snapshots or terminal backfill", async (phase) => {

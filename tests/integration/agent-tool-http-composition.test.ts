@@ -682,7 +682,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "thread.messages",
-          schemaVersion: 4,
+          schemaVersion: 5,
           requestId: "messages-request",
           input: { threadId: thread.thread.id },
         })
@@ -772,7 +772,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
           }),
         }),
       );
-      expect(canonical.registry.get("thread.messages", 4)).toBeDefined();
+      expect(canonical.registry.get("thread.messages", 5)).toBeDefined();
       expect(canonical.registry.get("thread.send", 2)).toBeDefined();
       expect(canonical.registry.get("thread.fork", 1)).toBeDefined();
 

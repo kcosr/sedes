@@ -76,6 +76,7 @@ function deliveryHub(
 }
 
 function fixture(input?: {
+  cancelAutomaticModelRetry?: (scope: RequestScope, threadId: string) => boolean;
   discardFork?: (scope: RequestScope, threadId: string) => Promise<{
     status: "aborted"; childThreadId: string; diagnostic: string; restartable: boolean;
   }>;
@@ -376,7 +377,8 @@ function fixture(input?: {
     input?.afterInterruptAccepted ?? (async () => false),
   );
   const gateway = new ThreadMutationGateway({
-      actors: {} as never,
+      actors: { observeInputRuntime: () => ({ authoritative: true, settled: actor.authoritativelySettled, runState: actor.timeline.runState }) } as never,
+    cancelAutomaticModelRetry: input?.cancelAutomaticModelRetry,
     bindings: {
       database,
       isUnboundThreadWorkspaceMoveReplay,
@@ -483,6 +485,49 @@ function fixture(input?: {
     },
   };
 }
+
+describe("ThreadMutationGateway scheduled model retry Stop", () => {
+  it("cancels a pending retry with a durable replayable Stop receipt and no native request", async () => {
+    const cancel = vi.fn(() => true);
+    const subject = fixture({ runState: "failed", cancelAutomaticModelRetry: cancel });
+    const operation = { kind: "interrupt" as const, operationId: "stop-scheduled-retry" };
+    try {
+      const result = await subject.gateway.mutate(scope, "thread-1", operation);
+      expect(result).toEqual({ status: "accepted", operationId: operation.operationId });
+      expect(subject.getRecord()?.state).toBe("accepted");
+      expect(subject.operations.markInterruptStarted).toHaveBeenCalledOnce();
+      expect(subject.actor.interrupt).not.toHaveBeenCalled();
+      expect(subject.actor.reconcileInterrupt).not.toHaveBeenCalled();
+      expect(subject.publishThreadSnapshot).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledWith(scope, "thread-1");
+      expect(await subject.gateway.mutate(scope, "thread-1", operation)).toEqual(result);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(subject.operations.prepareInterrupt).toHaveBeenCalledOnce();
+    } finally { await subject.gateway.close(); }
+  });
+
+  it("still interrupts active native work after cancelling a pending retry", async () => {
+    const subject = fixture({ runState: "running", cancelAutomaticModelRetry: () => true });
+    try {
+      expect(await subject.gateway.mutate(scope, "thread-1", { kind: "interrupt", operationId: "stop-active-work" }))
+        .toMatchObject({ status: "accepted" });
+      expect(subject.actor.interrupt).toHaveBeenCalledOnce();
+    } finally { await subject.gateway.close(); }
+  });
+
+  it("checks scope before cancelling or creating a Stop receipt", async () => {
+    const cancel = vi.fn(() => true);
+    const subject = fixture({ runState: "failed", cancelAutomaticModelRetry: cancel });
+    vi.spyOn(subject.gateway.input.inventory, "getThread").mockImplementation(() => { throw new DomainError("not_found", "Thread not found."); });
+    try {
+      await expect(subject.gateway.mutate({ ...scope, principalId: "wrong-principal" }, "thread-1", { kind: "interrupt", operationId: "wrong-scope-stop" }))
+        .rejects.toThrow("Thread not found.");
+      expect(cancel).not.toHaveBeenCalled();
+      expect(subject.operations.prepareInterrupt).not.toHaveBeenCalled();
+      expect(subject.actor.interrupt).not.toHaveBeenCalled();
+    } finally { await subject.gateway.close(); }
+  });
+});
 
 describe("ThreadMutationGateway pending Steer restart recovery", () => {
   it("finishes startup after an uncertain legacy draft becomes terminal unknown", async () => {

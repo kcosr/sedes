@@ -1384,13 +1384,18 @@ export class QueuedInputDispatcher {
           let accepted: SubmitTurnResult | undefined;
           const submitStart = Date.now();
           try {
+            if (claimed.inputOrigin?.kind === "automatic_retry" && !claimed.automaticRetryExecutionSource) {
+              throw new Error("automatic_retry_execution_source_missing");
+            }
             const attachmentDelivery =
               await conversation.materializeAttachments(claimed.attachments);
             accepted = await conversation.submit({
               applicationOperationId: claimed.mutationId,
               mutationId: claimed.mutationId,
               source:
-                claimed.triggerKind === "user"
+                claimed.inputOrigin?.kind === "automatic_retry"
+                  ? claimed.automaticRetryExecutionSource!
+                  : claimed.triggerKind === "user"
                   ? { kind: "user" }
                   : {
                       kind: "automation",

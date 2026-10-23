@@ -2285,14 +2285,18 @@ describe("ThreadForkService", () => {
     }
   });
 
-  it("omits volatile background work from cacheable descendant pages without attaching a provider", async () => {
+  it("uses presentation run state and omits volatile background work from descendant pages without attaching a provider", async () => {
     const current = fixture();
     try {
-      const created = await current.service.forkManual(current.manual("background-page-child"));
-      current.captureLoadedState.mockResolvedValue({
-        runState: "idle",
-        backgroundWork: { agents: 2, commands: 1, other: 0 },
-      });
+      const created = await current.service.forkManual(
+        current.manual("background-page-child"),
+      );
+      current.captureLoadedState.mockImplementation(
+        async (_scope, _id, options) => ({
+          runState: options?.presentation ? "starting" : "failed",
+          backgroundWork: { agents: 2, commands: 1, other: 0 },
+        }),
+      );
       const priorAcquisitions = current.actors.acquire.mock.calls.length;
       const page = await current.service.listDescendants({
         scope: current.scope,
@@ -2301,9 +2305,13 @@ describe("ThreadForkService", () => {
       });
       expect(page.descendants).toHaveLength(1);
       expect(page.descendants[0]?.thread.id).toBe(created.childThreadId);
-      expect(page.descendants[0]?.thread.runState).toBe("idle");
+      expect(page.descendants[0]?.thread.runState).toBe("starting");
       expect(page.descendants[0]?.thread).not.toHaveProperty("backgroundWork");
-      expect(current.captureLoadedState).toHaveBeenCalledWith(current.scope, created.childThreadId);
+      expect(current.captureLoadedState).toHaveBeenCalledWith(
+        current.scope,
+        created.childThreadId,
+        { presentation: true },
+      );
       expect(current.actors.acquire).toHaveBeenCalledTimes(priorAcquisitions);
     } finally {
       current.database.close();

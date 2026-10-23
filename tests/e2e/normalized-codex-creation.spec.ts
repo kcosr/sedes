@@ -12,7 +12,7 @@ import {
 test.describe.serial("normalized Codex creation surfaces", () => {
   test("account settings reveal OpenAI composer skills across Codex", async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.goto("/");
     await openSedesWorkspace(page);
     await page
@@ -48,6 +48,25 @@ test.describe.serial("normalized Codex creation surfaces", () => {
 
     await openSettingsPage(page, "general");
     const toggle = page.getByTestId("show-openai-composer-skills-toggle");
+    const retryToggle = page.getByTestId("auto-retry-model-failures-toggle");
+    await expect(retryToggle).toBeEnabled();
+    await expect(retryToggle).toHaveAttribute("data-state", "checked");
+    await expect(retryToggle).toHaveAccessibleDescription(
+      "Retry once after a short delay. Applies to all backends and servers.",
+    );
+    await capture(page, testInfo, "general-agent-behavior.png");
+    const retryDisabled = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        response.url().endsWith("/api/application/preferences") &&
+        response.ok(),
+    );
+    await retryToggle.click();
+    expect((await retryDisabled).request().postDataJSON()).toEqual({
+      showOpenAIComposerSkills: false,
+      autoRetryModelFailures: false,
+      expectedRevision: 0,
+    });
     await expect(toggle).toBeEnabled();
     await expect(toggle).toHaveAttribute("data-state", "unchecked");
     const enabled = page.waitForResponse(
@@ -59,7 +78,8 @@ test.describe.serial("normalized Codex creation surfaces", () => {
     await toggle.click();
     expect((await enabled).request().postDataJSON()).toEqual({
       showOpenAIComposerSkills: true,
-      expectedRevision: 0,
+      autoRetryModelFailures: false,
+      expectedRevision: 1,
     });
     await returnFromSettings(page);
 
@@ -79,6 +99,7 @@ test.describe.serial("normalized Codex creation surfaces", () => {
     await openSettingsPage(page, "general");
     await expect(toggle).toBeEnabled();
     await expect(toggle).toHaveAttribute("data-state", "checked");
+    await expect(retryToggle).toHaveAttribute("data-state", "unchecked");
     const disabled = page.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
@@ -88,7 +109,21 @@ test.describe.serial("normalized Codex creation surfaces", () => {
     await toggle.click();
     expect((await disabled).request().postDataJSON()).toEqual({
       showOpenAIComposerSkills: false,
-      expectedRevision: 1,
+      autoRetryModelFailures: false,
+      expectedRevision: 2,
+    });
+    await expect(retryToggle).toBeEnabled();
+    const retryEnabled = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        response.url().endsWith("/api/application/preferences") &&
+        response.ok(),
+    );
+    await retryToggle.click();
+    expect((await retryEnabled).request().postDataJSON()).toEqual({
+      showOpenAIComposerSkills: false,
+      autoRetryModelFailures: true,
+      expectedRevision: 3,
     });
     await returnFromSettings(page);
   });

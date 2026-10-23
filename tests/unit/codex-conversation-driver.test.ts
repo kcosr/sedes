@@ -2188,7 +2188,7 @@ describe("CodexConversationBackendDriver", () => {
   it("refreshes only skills when the principal enables OpenAI composer skills", async () => {
     const harness = new RpcHarness();
     let preferences = {
-      showOpenAIComposerSkills: false,
+      showOpenAIComposerSkills: false, autoRetryModelFailures: true,
       revision: 0,
     };
     const preferenceReader = { read: () => preferences };
@@ -2233,7 +2233,7 @@ describe("CodexConversationBackendDriver", () => {
     const hidden = await target.catalog({ scope, workspace });
     expect(hidden.skills.map(({ name }) => name)).toEqual(["review"]);
 
-    preferences = { showOpenAIComposerSkills: true, revision: 1 };
+    preferences = { showOpenAIComposerSkills: true, autoRetryModelFailures: true, revision: 1 };
     harness.enqueue("model/list", { data: [nativeModel()], nextCursor: null });
     harness.enqueue("skills/list", {
       data: [{ cwd: "/workspace", skills: nativeSkills, errors: [] }],
@@ -16367,7 +16367,7 @@ describe("CodexConversationHandle", () => {
     const handle = await attachIdle(
       harness,
       driverWithComposerSkillPreferences(harness, {
-        read: () => ({ showOpenAIComposerSkills: true, revision: 1 }),
+        read: () => ({ showOpenAIComposerSkills: true, autoRetryModelFailures: true, revision: 1 }),
       }),
     );
     const established = await establish(harness, handle);
