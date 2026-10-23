@@ -363,6 +363,31 @@ function source(
 }
 
 describe("serveThreadEventStream", () => {
+  it("logs one client close and releases listeners when the response closes first", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const hub = new ThreadEventHub();
+    publishedSnapshot(hub, "projection-1");
+    const request = new FakeRequest();
+    const response = new FakeResponse();
+    try {
+      await serveThreadEventStream(asRequest(request), asResponse(response), hub,
+        source(hub, { capture: vi.fn() }));
+      response.emit("close");
+      request.emit("close");
+      const closeRecords = log.mock.calls.map(([record]) => String(record)).filter(record =>
+        record.includes(" close reason=client_closed "));
+      expect(closeRecords).toHaveLength(1);
+      expect(closeRecords[0]).toContain("live=1 pendingEvents=0 pendingBytes=0");
+      expect(hub.subscriberCount).toBe(0);
+      expect(request.listenerCount("close")).toBe(0);
+    } finally {
+      request.emit("close");
+      log.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("replays a small suffix without constructing a checkpoint", async () => {
     const hub = new ThreadEventHub();
     const anchor = hub.publish({

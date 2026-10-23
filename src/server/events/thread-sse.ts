@@ -318,20 +318,26 @@ export async function serveThreadEventStream(
     if (closed) return;
     closed = true;
     clearInterval(heartbeat);
-    writer.removeListener("close", cleanup);
+    request.removeListener("close", onClientClose);
+    writer.removeListener("close", onClientClose);
     clearDrainTimer();
     finishInitialDrain?.(false);
     writer.removeDrainListener(flushAfterDrain);
     subscription?.close();
   };
 
-  writer.once("close", cleanup);
-
   const logClose = (reason: string): void => {
     debugStream?.(
       `close reason=${reason} live=${live ? 1 : 0} pendingEvents=${pending.length} pendingBytes=${pendingBytes}`,
     );
   };
+
+  const onClientClose = (): void => {
+    if (!closed) logClose("client_closed");
+    cleanup();
+  };
+  writer.once("close", onClientClose);
+  request.once("close", onClientClose);
 
   const close = (reason: string): void => {
     if (closed) return;
@@ -674,11 +680,6 @@ export async function serveThreadEventStream(
     }
   }, heartbeatMilliseconds);
   heartbeat.unref();
-  request.once("close", () => {
-    if (!closed) logClose("client_closed");
-    cleanup();
-  });
-
   try {
     const recoverFromOverflow = async (isOverflow = true): Promise<boolean> => {
       if (isOverflow && overflowCheckpointAttempted) {
