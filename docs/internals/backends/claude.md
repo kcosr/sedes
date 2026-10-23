@@ -367,7 +367,7 @@ them. A native link missing from the transcript still ends the read, as it does
 in the SDK. Boundary rows appear only with `includeSystemMessages`. The summary
 row keeps the SDK's `isCompactSummary` marker, and a converted queued command
 its `isQueuedCommand` marker; the worker protocol carries both under sidecar
-wire 14. The SDK's derived `is_meta`, `interruptedByShutdown`, and
+wire 15. The SDK's derived `is_meta`, `interruptedByShutdown`, and
 `isCompletedLocalCommand` do not cross it.
 
 The earlier segments can be several times the size of the newest one, so only
