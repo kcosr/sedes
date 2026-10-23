@@ -81,7 +81,7 @@ export function GeneralSettingsPage({
         />
       </SettingsSection>
       {applicationPreferences ? (
-        <SettingsSection title="Agent behavior" card>
+        <SettingsSection title="Error recovery" card>
           <SwitchField
             id="setting-auto-retry-model-failures"
             label="Automatically retry failed model requests"

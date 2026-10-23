@@ -911,7 +911,7 @@ describe("SettingsView", () => {
     const retryToggle = screen.getByTestId("auto-retry-model-failures-toggle");
     const skillsToggle = screen.getByTestId("show-openai-composer-skills-toggle");
     await waitFor(() => expect(retryToggle).not.toBeDisabled());
-    expect(screen.getByRole("heading", { name: "Agent behavior" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Error recovery" })).toBeVisible();
     expect(retryToggle).toHaveAccessibleName("Automatically retry failed model requests");
     expect(retryToggle).toHaveAccessibleDescription("Retry once after a short delay. Applies to all backends and servers.");
     expect(retryToggle).toHaveAttribute("data-state", "checked");

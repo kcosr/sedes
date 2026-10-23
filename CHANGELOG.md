@@ -57,7 +57,7 @@ User-facing changes are collected here before release. See the
   automatic Continue message after ten seconds across all backends and servers.
   Successful ordinary model feedback restores the allowance; a failed automatic
   follow-up stops retries until successful completion or new input. See
-  [Agent behavior](docs/user/settings.md#agent-behavior).
+  [Error recovery](docs/user/settings.md#error-recovery).
   ([#113](https://github.com/kcosr/sedes/pull/113))
 
 - Codex Speed now saves the preference for future Sedes turns and can apply it

@@ -397,7 +397,7 @@ a duplicate row. **Ctrl+Shift+H** on Windows/Linux or **⌘+Shift+H** on macOS o
 it and focuses the composer. Android voice uses the same default. Changing this
 choice does not start recording or redirect an active interaction.
 
-### Agent behavior
+### Error recovery
 
 **Automatically retry failed model requests** is on by default. After a
 confirmed model failure, Sedes waits ten seconds and sends **Please continue

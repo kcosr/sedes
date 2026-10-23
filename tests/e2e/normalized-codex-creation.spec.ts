@@ -54,7 +54,7 @@ test.describe.serial("normalized Codex creation surfaces", () => {
     await expect(retryToggle).toHaveAccessibleDescription(
       "Retry once after a short delay. Applies to all backends and servers.",
     );
-    await capture(page, testInfo, "general-agent-behavior.png");
+    await capture(page, testInfo, "general-error-recovery.png");
     const retryDisabled = page.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
