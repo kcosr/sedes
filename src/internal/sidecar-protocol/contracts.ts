@@ -78,6 +78,8 @@ export interface SidecarFrameTransport {
   /** One-shot selection committed synchronously by the successful hello. */
   commitCompression(mode: SidecarFrameCompression): void;
   diagnosticSnapshot?(): Readonly<{ queuedWriteBytes: number; queuedWriteFrames: number; activeWriteBytes: number }>;
+  /** Takes ownership of a fresh frame on admission; callers must not mutate it.
+   * A frame rejected by the queue before admission remains caller-owned. */
   send(
     bytes: Uint8Array,
     options: SidecarFrameSendOptions,

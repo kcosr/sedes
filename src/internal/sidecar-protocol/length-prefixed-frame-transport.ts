@@ -32,7 +32,7 @@ type EncodedFrame = {
 };
 
 type WriteEntry = {
-  readonly payload: Uint8Array;
+  payload: Uint8Array | undefined;
   readonly payloadBytes: number;
   readonly lane: SidecarFrameLane;
   readonly signal?: AbortSignal;
@@ -170,10 +170,9 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
         new SidecarFrameWriteError("sidecar_outbound_queue_limit", "not_sent"),
       );
     }
-    const payload = Uint8Array.from(bytes);
     return new Promise((resolve, reject) => {
       const entry: WriteEntry = {
-        payload,
+        payload: bytes,
         payloadBytes: bytes.byteLength,
         lane: options.lane,
         ...(options.signal ? { signal: options.signal } : {}),
@@ -399,16 +398,18 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
         if (entry.settled) continue;
         if (!entry.framed && (this.#compression !== "zstd" || entry.lane === "control" ||
             entry.settlement || entry.payloadBytes < SIDECAR_COMPRESSION_MINIMUM_BYTES)) {
-          entry.framed = frameBytes(entry.payload, 0, entry.payloadBytes);
+          entry.framed = frameBytes(entry.payload!, 0, entry.payloadBytes);
+          entry.payload = undefined;
         }
         if (!entry.framed) {
           entry.state = "preparing";
           this.#preparingWrite = entry;
           try {
-            const compressed = await tryCompressSidecarFrame(entry.payload);
+            const compressed = await tryCompressSidecarFrame(entry.payload!);
             if (entry.settled || !this.#acceptingWrites) continue;
             const useCompressed = compressed !== undefined && compressed.byteLength < entry.payloadBytes;
-            entry.framed = frameBytes(useCompressed ? compressed : entry.payload, useCompressed ? 1 : 0, entry.payloadBytes);
+            entry.framed = frameBytes(useCompressed ? compressed : entry.payload!, useCompressed ? 1 : 0, entry.payloadBytes);
+            entry.payload = undefined;
             entry.state = "prepared";
             // A control write queued during encoding gets the next carrier write.
             this.#preparedWrite = entry;
@@ -418,6 +419,12 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
             rejectWrite(entry, new SidecarFrameWriteError("sidecar_frame_compression_failed", "not_sent", { cause: error }));
             void this.close("sidecar_frame_compression_failed").catch(() => undefined);
           } finally {
+            // Clean EOF can stop admission while inbound frames are still being
+            // decoded. Do not orphan this entry when clearing the preparation slot.
+            if (!entry.settled && !this.#acceptingWrites) {
+              this.#releaseCharge(entry);
+              rejectWrite(entry, new SidecarFrameWriteError("sidecar_transport_closed", "not_sent"));
+            }
             if (this.#preparingWrite === entry) this.#preparingWrite = undefined;
           }
           continue;
@@ -543,9 +550,10 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
 }
 
 function frameBytes(payload: Uint8Array, encoding: 0 | 1, decodedLength: number): Uint8Array {
-  const result = Buffer.alloc(HEADER_BYTES + payload.byteLength);
+  const result = Buffer.allocUnsafe(HEADER_BYTES + payload.byteLength);
   MAGIC.copy(result, 0);
   result[4] = encoding;
+  result.fill(0, 5, 8);
   result.writeUInt32BE(payload.byteLength, 8);
   result.writeUInt32BE(decodedLength, 12);
   result.set(payload, HEADER_BYTES);
@@ -574,12 +582,16 @@ function removeQueued(lane: WriteEntry[], entry: WriteEntry): boolean {
 function settleWrite(entry: WriteEntry): void {
   if (entry.settled) return;
   entry.settled = true;
+  entry.payload = undefined;
+  entry.framed = undefined;
   entry.resolve({ disposition: "sent" });
 }
 
 function rejectWrite(entry: WriteEntry, error: Error): void {
   if (entry.settled) return;
   entry.settled = true;
+  entry.payload = undefined;
+  entry.framed = undefined;
   if (entry.abort) entry.signal!.removeEventListener("abort", entry.abort);
   entry.reject(error);
 }

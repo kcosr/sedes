@@ -1,5 +1,5 @@
 import { constants, zstdCompressSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { asyncCodecBudget } from "../../src/internal/compression/async-codec-budget.js";
 import { decompressSidecarFrame, tryCompressSidecarFrame } from "../../src/internal/sidecar-protocol/frame-compression.js";
 
@@ -10,6 +10,22 @@ const encode = (bytes: Uint8Array, extra: Record<number, number> = {}) => zstdCo
 });
 
 describe("independent sidecar zstd frames", () => {
+  it("loads without zstd exports so unsupported runtimes can reach their version guard", async () => {
+    vi.resetModules();
+    vi.doMock("node:zlib", async importOriginal => ({
+      ...await importOriginal<typeof import("node:zlib")>(),
+      zstdCompress: undefined,
+      zstdDecompress: undefined,
+    }));
+    try {
+      const codec = await import("../../src/internal/sidecar-protocol/frame-compression.js");
+      await expect(codec.tryCompressSidecarFrame(input)).rejects.toThrow("sidecar_node_version_unsupported");
+    } finally {
+      vi.doUnmock("node:zlib");
+      vi.resetModules();
+    }
+  });
+
   it("round-trips a multi-block frame and releases the shared codec slot", async () => {
     const encoded = await tryCompressSidecarFrame(input);
     expect(encoded!.length).toBeLessThan(input.length / 10);

@@ -1,24 +1,32 @@
 import { promisify } from "node:util";
-import { constants, zstdCompress, zstdDecompress } from "node:zlib";
+import * as zlib from "node:zlib";
 import { asyncCodecBudget } from "../compression/async-codec-budget.js";
 
 export type SidecarFrameCompression = "none" | "zstd";
 
 export const SIDECAR_COMPRESSION_MINIMUM_BYTES = 1024;
 const MAXIMUM_WINDOW_BYTES = 1024 * 1024;
-const compress = promisify(zstdCompress);
-const decompress = promisify(zstdDecompress);
+let codec: ReturnType<typeof createCodec> | undefined;
+
+// Resolve zstd only after the CLI's Node version guard has had a chance to run.
+// Older runtimes must be able to load the bundle and report that explicit error.
+function createCodec() {
+  if (typeof zlib.zstdCompress !== "function" || typeof zlib.zstdDecompress !== "function") {
+    throw new Error("sidecar_node_version_unsupported");
+  }
+  return { compress: promisify(zlib.zstdCompress), decompress: promisify(zlib.zstdDecompress) };
+}
 
 /** An encoder never waits for a codec slot while holding up control traffic. */
 export async function tryCompressSidecarFrame(bytes: Uint8Array): Promise<Buffer | undefined> {
   const lease = asyncCodecBudget.tryAcquire();
   if (!lease) return undefined;
   try {
-    return await compress(bytes, {
+    return await (codec ??= createCodec()).compress(bytes, {
       params: {
-        [constants.ZSTD_c_compressionLevel]: 1,
-        [constants.ZSTD_c_windowLog]: 20,
-        [constants.ZSTD_c_checksumFlag]: 1,
+        [zlib.constants.ZSTD_c_compressionLevel]: 1,
+        [zlib.constants.ZSTD_c_windowLog]: 20,
+        [zlib.constants.ZSTD_c_checksumFlag]: 1,
       },
     });
   } finally {
@@ -35,9 +43,9 @@ export async function decompressSidecarFrame(
   const lease = await asyncCodecBudget.acquire(signal);
   try {
     signal.throwIfAborted();
-    const decoded = await decompress(bytes, {
+    const decoded = await (codec ??= createCodec()).decompress(bytes, {
       maxOutputLength: decodedLength,
-      params: { [constants.ZSTD_d_windowLogMax]: 20 },
+      params: { [zlib.constants.ZSTD_d_windowLogMax]: 20 },
     });
     signal.throwIfAborted();
     if (decoded.byteLength !== decodedLength) {

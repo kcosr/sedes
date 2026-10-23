@@ -441,6 +441,46 @@ describe("length-prefixed sidecar frame transport", () => {
     await expect(transport.closed).resolves.toEqual({ reason: "eof" });
   });
 
+  it.each(["completes", "fails"] as const)("settles an encoder that %s after clean EOF while inbound decoding is paused", async outcome => {
+    const stream = new TestByteStream();
+    const transport = createTransport(stream);
+    transport.commitCompression("zstd");
+    const encoding = deferred<Buffer | undefined>();
+    const decoding = deferred<Uint8Array>();
+    const compress = vi.spyOn(compression, "tryCompressSidecarFrame").mockReturnValueOnce(encoding.promise);
+    const decompress = vi.spyOn(compression, "decompressSidecarFrame").mockReturnValueOnce(decoding.promise);
+    const outbound = Buffer.alloc(4 * 1024 * 1024, 97);
+    const inbound = Buffer.alloc(4096, 98);
+    try {
+      const sending = transport.send(outbound, { lane: "operation" });
+      const rejected = expect(sending).rejects.toMatchObject({ message: "sidecar_transport_closed", delivery: "not_sent" });
+      expect(compress.mock.calls[0]?.[0]).toBe(outbound);
+      stream.push(encodeCompressedStreamFrame(inbound));
+      stream.end("eof");
+      const iterator = transport.frames[Symbol.asyncIterator]();
+      const reading = iterator.next();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(decompress).toHaveBeenCalledOnce();
+      await expect(transport.send(Buffer.from("after EOF"), { lane: "control" })).rejects.toMatchObject({ delivery: "not_sent" });
+      if (outcome === "completes") encoding.resolve(undefined);
+      else encoding.reject(new Error("encoder_failed_after_eof"));
+      await rejected;
+      expect(transport.diagnosticSnapshot()).toEqual({ queuedWriteBytes: 0, queuedWriteFrames: 0, activeWriteBytes: 0 });
+      expect(stream.writes).toHaveLength(0);
+      await expect(settledWithin(transport.closed)).resolves.toBe("pending");
+      decoding.resolve(inbound);
+      await expect(reading).resolves.toEqual({ done: false, value: { bytes: inbound } });
+      await expect(iterator.next()).resolves.toMatchObject({ done: true });
+      await expect(transport.closed).resolves.toEqual({ reason: "eof" });
+    } finally {
+      encoding.resolve(undefined);
+      decoding.resolve(inbound);
+      compress.mockRestore();
+      decompress.mockRestore();
+      await transport.close("test_complete");
+    }
+  });
+
   it.each([undefined, "none"] as const)("rejects compressed records when mode is %s", async mode => {
     const stream = new TestByteStream();
     const transport = createTransport(stream);
@@ -782,6 +822,7 @@ function encodeCompressedStreamFrame(payload: Uint8Array): Buffer {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
