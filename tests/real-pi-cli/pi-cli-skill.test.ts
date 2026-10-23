@@ -592,7 +592,7 @@ sources, testAgentToolExecutionAuthority);
         new ScopedApplicationEventHubs(),
       );
       const appConfig: AppConfig = {
-        authenticationRequired: true,
+        authenticationRequired: true, clientResponseCompression: true,
         experimentalUsageEnabled: false,
         host: "127.0.0.1",
         port: 4784,

@@ -4708,6 +4708,16 @@ change, and leave shared transcripts and backend event/history text unchanged.
 This boundary applies equally to Pi, Codex, Claude,
 Grok, and OpenCode.
 
+Client response compression belongs after normalization and applies equally to
+all five backends. Select eligible JSON routes explicitly; credentials, upload
+contracts, and exact-byte downloads retain their own transport rules. Thread
+and application SSE use one shared response writer for events, diagnostics,
+errors, drains, and shutdown. Preserve decoded frame and pending-byte limits,
+prompt event flushing, and immediate disconnect/revocation cleanup. Browser,
+Android WebView, Electron, and native Android voice HTTP use their normal gzip
+decoders; do not introduce a backend-specific browser codec or compression
+state shared across responses or principals.
+
 ### Paired-client admission
 
 Production HTTP management routes, content routes, event streams, and

@@ -37,6 +37,8 @@ class FakeRequest extends EventEmitter {
 class FakeResponse extends EventEmitter {
   readonly writes: string[] = [];
   readonly end = vi.fn();
+  readonly destroy = vi.fn();
+  readonly vary = vi.fn();
   readonly setHeader = vi.fn();
   readonly flushHeaders = vi.fn();
   readonly status = vi.fn(() => this);
@@ -764,7 +766,7 @@ describe("serveThreadEventStream", () => {
       hub,
       source(hub, { capture: vi.fn() }),
     );
-    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.destroy).toHaveBeenCalledOnce();
     expect(hub.subscriberCount).toBe(0);
     expect(response.writes).toEqual([]);
     expect(response.listenerCount("drain")).toBe(0);
@@ -1569,7 +1571,7 @@ describe("serveThreadEventStream", () => {
     expect(checkpoints(response)).toHaveLength(2);
     expect(envelopes(response)).toEqual([]);
     expect(response.writes).not.toContain("event: thread-live\ndata: {}\n\n");
-    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.destroy).toHaveBeenCalledOnce();
     expect(hub.subscriberCount).toBe(0);
     expect(response.listenerCount("drain")).toBe(0);
     request.emit("close");

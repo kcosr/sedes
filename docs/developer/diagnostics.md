@@ -50,6 +50,11 @@ native mutation. Repeated requests leave the guard intact.
 
 ## Server delivery diagnostics
 
+SSE frame and pending-byte diagnostics count decoded UTF-8 event bytes. They do
+not measure compressed HTTP transfer size. Thread and application streams may
+use negotiated gzip; inspect HTTP response headers and wire measurements when
+comparing network traffic.
+
 Set `SEDES_DEBUG_DELIVERY` to any nonempty value before starting Sedes:
 
 ```sh

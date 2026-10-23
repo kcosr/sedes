@@ -21,7 +21,7 @@ async function close(server: Server): Promise<void> {
 
 it("admits same-origin requests through the development proxy without admitting hostile origins", async () => {
   const config: AppConfig = {
-    authenticationRequired: true,
+    authenticationRequired: true, clientResponseCompression: true,
     experimentalUsageEnabled: false,
     host: "127.0.0.1",
     port: 4784,

@@ -48,7 +48,7 @@ function httpFixture(
     turnBookmarks: unavailableTurnBookmarks(),
     workspaceDiffReviews: {} as never,
     config: {
-      authenticationRequired: true,
+      authenticationRequired: true, clientResponseCompression: true,
       experimentalUsageEnabled: false,
       host: "127.0.0.1",
       port: 4783,

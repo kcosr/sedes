@@ -15,7 +15,7 @@ const threadId = "00000000-0000-4000-8000-000000000001";
 const pageId = "00000000-0000-4000-8000-000000000002";
 const mintPath = `/api/threads/${threadId}/pages/${pageId}/revisions/2/render-token`;
 const config: AppConfig = {
-  authenticationRequired: true,
+  authenticationRequired: true, clientResponseCompression: true,
   experimentalUsageEnabled: false,
   host: "127.0.0.1",
   port: 4783,

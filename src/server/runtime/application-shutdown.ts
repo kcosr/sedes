@@ -98,27 +98,41 @@ export class HttpRequestOperationGate {
   }
 }
 
+export interface TrackedHttpResponse {
+  release(): void;
+  /** Replace the raw end action when a streaming representation takes ownership. */
+  setGracefulEnd(end: () => void): void;
+}
+
 /** Owns only Sedes HTTP responses and their client sockets. */
 export class LongLivedHttpConnectionRegistry {
-  readonly #responses = new Set<ServerResponse>();
+  readonly #responses = new Map<ServerResponse, () => void>();
   readonly #ownedConnections = new Map<object, () => void>();
   #closing = false;
   #closePromise: Promise<void> | undefined;
 
-  track(response: ServerResponse): () => void {
+  track(response: ServerResponse): TrackedHttpResponse {
     if (this.#closing) {
       response.end();
-      return () => undefined;
+      return { release() {}, setGracefulEnd() {} };
     }
-    this.#responses.add(response);
+    this.#responses.set(response, () => { response.end(); });
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
       this.#responses.delete(response);
+      response.removeListener("close", release);
+      response.removeListener("finish", release);
     };
     response.once("close", release);
-    return release;
+    response.once("finish", release);
+    return {
+      release,
+      setGracefulEnd: (end) => {
+        if (!released) this.#responses.set(response, end);
+      },
+    };
   }
 
   get size(): number {
@@ -153,10 +167,12 @@ export class LongLivedHttpConnectionRegistry {
       closeOwnedClient();
     }
     this.#ownedConnections.clear();
-    for (const response of this.#responses) response.end();
+    for (const [response, end] of this.#responses) {
+      try { end(); } catch { response.destroy(); }
+    }
     if (this.#responses.size === 0) return;
     await delay(graceMilliseconds);
-    for (const response of this.#responses) {
+    for (const response of this.#responses.keys()) {
       response.socket?.destroy();
     }
     this.#responses.clear();

@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { sseResponseWriter } from "./sse-response-writer.js";
 import { type ApplicationEventEnvelope } from "../../shared/protocol/application.js";
 import { recordVoiceDiagnostic, type VoiceDiagnosticReason } from "../diagnostics/voice-diagnostics.js";
 import type { ApplicationEventHub } from "./application-event-hub.js";
@@ -47,6 +48,7 @@ export async function serveApplicationEventStream(
   }>,
   options: ApplicationEventStreamOptions = {},
 ): Promise<void> {
+  const writer = sseResponseWriter(request, response);
   const pendingEventLimit =
     options.pendingEventLimit ?? DEFAULT_APPLICATION_SSE_PENDING_EVENT_LIMIT;
   const pendingByteLimit =
@@ -67,12 +69,7 @@ export async function serveApplicationEventStream(
     "application_sse_heartbeat_invalid",
   );
 
-  response.status(200);
-  response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  response.setHeader("Cache-Control", "no-cache, no-transform");
-  response.setHeader("Connection", "keep-alive");
-  response.setHeader("X-Accel-Buffering", "no");
-  response.flushHeaders();
+  writer.start();
 
   let pending: ApplicationEventEnvelope[] = [];
   let pendingBytes = 0;
@@ -107,13 +104,13 @@ export async function serveApplicationEventStream(
     transient = [];
     transientBytes = 0;
     request.removeListener("close", onClientClose);
-    response.removeListener("close", onClientClose);
+    writer.removeListener("close", onClientClose);
   };
   const onClientClose = (): void => cleanup("client_closed");
   const close = (reason: VoiceDiagnosticReason): void => {
     if (!closed) {
       cleanup(reason);
-      response.end();
+      writer.destroy();
     }
   };
   // A bounded full replacement supersedes queued deltas and may itself be
@@ -153,14 +150,14 @@ export async function serveApplicationEventStream(
       if (drain?.promise !== promise) return;
       drain = undefined;
       clearTimeout(timer);
-      response.removeListener("drain", onDrain);
+      writer.removeDrainListener(onDrain);
       resolve(ok);
     };
     drain = { promise, finish };
-    response.once("drain", onDrain);
+    writer.onceDrain(onDrain);
   };
   const write = (frame: string): void => {
-    if (!response.write(frame)) armDrain();
+    if (!writer.write(frame)) armDrain();
   };
   function flush(): void {
     try {
@@ -217,7 +214,7 @@ export async function serveApplicationEventStream(
   }, heartbeatMilliseconds);
   heartbeat.unref();
   request.once("close", onClientClose);
-  response.once("close", onClientClose);
+  writer.once("close", onClientClose);
   try {
     removeTransient = options.subscribeTransient?.((frame) => {
       try {

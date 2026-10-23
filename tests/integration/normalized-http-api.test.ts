@@ -1275,7 +1275,7 @@ async function fixture(
   };
   const config: AppConfig = {
     experimentalUsageEnabled: options.experimentalUsageEnabled ?? false,
-    authenticationRequired: true,
+    authenticationRequired: true, clientResponseCompression: true,
     host: "127.0.0.1",
     port: 4783,
     stateDirectory,

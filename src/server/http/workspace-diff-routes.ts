@@ -1,3 +1,4 @@
+import type { JsonResponseSender } from "./response-compression.js";
 import type { Request, RequestHandler } from "express";
 import { z } from "zod";
 import {
@@ -157,6 +158,7 @@ export function registerWorkspaceDiffRoutes(
     readonly workspaceFiles: WorkspaceFileService;
     readonly workspaceDiffReviews: WorkspaceDiffReviewService;
   },
+  sendJson: JsonResponseSender,
 ): void {
   routes.get(
     "/api/workspaces/:workspaceId/file-roots/:rootId/diff/repositories",
@@ -165,7 +167,7 @@ export function registerWorkspaceDiffRoutes(
       const { workspaceId, rootId } = workspaceDiffRouteParametersSchema.parse(
         request.params,
       );
-      response.json(
+      await sendJson(request, response,
         workspaceDiffRepositoriesResultSchema.parse(
           await dependencies.workspaceFiles.diffRepositories(
             requestScope,
@@ -186,7 +188,7 @@ export function registerWorkspaceDiffRoutes(
         request.params,
       );
       const query = workspaceDiffRefCatalogQuerySchema.parse(request.query);
-      response.json(
+      await sendJson(request, response,
         workspaceDiffRefCatalogResultSchema.parse(
           await dependencies.workspaceFiles.diffRefCatalog(
             requestScope,
@@ -234,7 +236,7 @@ export function registerWorkspaceDiffRoutes(
         request.params,
       );
       const query = workspaceDiffChangedFilesQuerySchema.parse(request.query);
-      response.json(
+      await sendJson(request, response,
         workspaceDiffChangedFilesResultSchema.parse(
           await dependencies.workspaceFiles.diffChangedFiles(
             requestScope,
@@ -256,7 +258,7 @@ export function registerWorkspaceDiffRoutes(
         request.params,
       );
       const input = workspaceDiffFileRequestSchema.parse(request.query);
-      response.json(
+      await sendJson(request, response,
         workspaceDiffPatchResultSchema.parse(
           await dependencies.workspaceFiles.diffPatch(
             requestScope,
@@ -278,7 +280,7 @@ export function registerWorkspaceDiffRoutes(
         request.params,
       );
       const input = workspaceDiffFileContentRequestSchema.parse(request.query);
-      response.json(
+      await sendJson(request, response,
         workspaceDiffFileContentResultSchema.parse(
           await dependencies.workspaceFiles.diffFileContent(
             requestScope,
@@ -313,7 +315,7 @@ export function registerWorkspaceDiffRoutes(
       if (resolved.status !== "available") {
         throw workspaceDiffResolutionError(resolved.status);
       }
-      response.json(
+      await sendJson(request, response,
         workspaceDiffReviewListResultSchema.parse({
           reviews: dependencies.workspaceDiffReviews
             .listReviews(requestScope, {
@@ -350,7 +352,7 @@ export function registerWorkspaceDiffRoutes(
         rootId,
         resolved.identity,
       );
-      response.json(
+      await sendJson(request, response,
         workspaceDiffReviewListResultSchema.parse({
           reviews: dependencies.workspaceDiffReviews
             .listReviews(requestScope, {
@@ -385,7 +387,7 @@ export function registerWorkspaceDiffRoutes(
       if (resolved.status !== "available") {
         throw workspaceDiffResolutionError(resolved.status);
       }
-      response.status(201).json(
+      await sendJson(request, response.status(201),
         workspaceDiffReview(
           dependencies.workspaceDiffReviews.openReview(
             requestScope,
@@ -415,7 +417,7 @@ export function registerWorkspaceDiffRoutes(
         request.params,
       );
       const input = workspaceDiffReviewUpdateRequestSchema.parse(request.body);
-      response.json(
+      await sendJson(request, response,
         workspaceDiffReview(
           dependencies.workspaceDiffReviews.updateReview(
             requestScope,
@@ -434,7 +436,7 @@ export function registerWorkspaceDiffRoutes(
       const { reviewId } = workspaceDiffReviewRouteParametersSchema.parse(
         request.params,
       );
-      response.json(
+      await sendJson(request, response,
         workspaceDiffReviewCommentsResultSchema.parse({
           comments: dependencies.workspaceDiffReviews
             .listComments(requestScope, reviewId)
@@ -496,7 +498,7 @@ export function registerWorkspaceDiffRoutes(
           mutationId: input.mutationId,
         },
       );
-      response.status(201).json(
+      await sendJson(request, response.status(201),
         workspaceDiffReviewMutationResultSchema.parse({
           review: workspaceDiffReview(result.review),
           comment: workspaceDiffReviewComment(result.value),
@@ -520,7 +522,7 @@ export function registerWorkspaceDiffRoutes(
         commentId,
         input,
       );
-      response.json(
+      await sendJson(request, response,
         workspaceDiffReviewMutationResultSchema.parse({
           review: workspaceDiffReview(result.review),
           comment: workspaceDiffReviewComment(result.value),
@@ -544,7 +546,7 @@ export function registerWorkspaceDiffRoutes(
         commentId,
         input,
       );
-      response.json(
+      await sendJson(request, response,
         workspaceDiffReviewMutationResultSchema.parse({
           review: workspaceDiffReview(result.review),
           comment: workspaceDiffReviewComment(result.value),
@@ -560,7 +562,7 @@ export function registerWorkspaceDiffRoutes(
       const { reviewId } = workspaceDiffReviewRouteParametersSchema.parse(
         request.params,
       );
-      response.json(
+      await sendJson(request, response,
         workspaceDiffReviewedFilesResultSchema.parse({
           files: dependencies.workspaceDiffReviews
             .listReviewedFiles(requestScope, reviewId)
@@ -624,7 +626,7 @@ export function registerWorkspaceDiffRoutes(
           mutationId: input.mutationId,
         },
       );
-      response.json(
+      await sendJson(request, response,
         workspaceDiffReviewedFileMutationResultSchema.parse({
           review: workspaceDiffReview(result.review),
           file: workspaceDiffReviewedFile(result.value),
