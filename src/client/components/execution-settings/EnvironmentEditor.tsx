@@ -20,7 +20,7 @@ type Capability = typeof configurationSidecarCapabilities[number];
 export const environmentKindNames: Record<EnvironmentDefinition["kind"], string> = { local: "This machine", ssh: "SSH host", outbound: "Paired host" };
 
 /** The fields the environment editor shows a control for, relative to the environment. */
-export const environmentFields = /^(label|hostAlias|workspaceRoots(\.\d+)?|operations(\..+)?|workspaceIsolation(\..+)?|environmentVariables(\..+)?)$/u;
+export const environmentFields = /^(label|hostAlias|connectionCompression|workspaceRoots(\.\d+)?|operations(\..+)?|workspaceIsolation(\..+)?|environmentVariables(\..+)?)$/u;
 
 export const capabilityLabels: Record<Capability, string> = {
   directory_browser: "Directory browsing", workspace_files: "Files and comparisons",
@@ -69,7 +69,7 @@ export function RemoteOperationsFields({ value, onChange, errors, disabled = fal
 export function newEnvironment(kind: "local" | "ssh"): EnvironmentDefinition {
   return kind === "local"
     ? { id: crypto.randomUUID(), label: "", kind: "local", workspaceRoots: [], workspaceIsolation: { kind: "bubblewrap", networkProfiles: ["isolated"] } }
-    : { id: crypto.randomUUID(), label: "", kind: "ssh", hostAlias: "", workspaceRoots: [], operations: { kind: "sidecar", enabledCapabilities: defaultCapabilities } };
+    : { id: crypto.randomUUID(), label: "", kind: "ssh", hostAlias: "", workspaceRoots: [], connectionCompression: true, operations: { kind: "sidecar", enabledCapabilities: defaultCapabilities } };
 }
 
 /** The first step of adding an environment: what kind of host it is. */
@@ -135,6 +135,9 @@ export function EnvironmentEditor({ draft, setDraft, creating, errors, disabled,
         : <ReadOnlyField label="SSH host alias" mono value={draft.hostAlias} description="Add a new environment for a different host." /> : null}
       {draft.kind === "outbound" ? <ReadOnlyField label="Platform" value={hostPlatform(draft.platform)}
         description="The installation is fixed. Accept a new host to use a different installation." /> : null}
+      {draft.kind !== "local" ? <SwitchField label="Compress connection traffic" checked={draft.connectionCompression} disabled={disabled}
+        description="Applies to future connections. Active connections keep their current setting." error={fields.get("connectionCompression")}
+        onCheckedChange={(connectionCompression) => setDraft({ ...draft, connectionCompression })} /> : null}
     </SettingsSection>
     <SettingsSection id="environment-access" title="Workspace access" card>
       <ListField label="Workspace roots" itemLabel="Workspace root" addLabel="Add root" disabled={disabled}

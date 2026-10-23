@@ -52,12 +52,14 @@ export const configurationEnvironmentSchema = z.discriminatedUnion("kind", [
     id: z.string().uuid(), kind: z.literal("ssh"), label, environmentVariables: configuredEnvironmentVariablesSchema.optional(),
     hostAlias: z.string().min(1).max(255).regex(/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/),
     workspaceRoots: z.array(remotePath).min(1).max(16).refine(values => new Set(values).size === values.length),
+    connectionCompression: z.boolean(),
     operations: configurationRemoteOperationsSchema,
   }),
   z.strictObject({
     id: z.string().uuid(), kind: z.literal("outbound"), label, environmentVariables: configuredEnvironmentVariablesSchema.optional(),
     pairingId: z.string().uuid(), platform: configurationHostPlatformSchema,
     workspaceRoots: configurationOutboundWorkspaceRootsSchema,
+    connectionCompression: z.boolean(),
     operations: configurationRemoteOperationsSchema,
   }),
 ]);

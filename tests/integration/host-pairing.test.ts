@@ -64,7 +64,7 @@ describe("outbound host pairing persistence", () => {
     expect(accepted.configuration.revision).toBe(1);
     expect(accepted.configuration.configuration.executionEnvironments).toEqual([{
       id: accepted.pairing.executionEnvironmentId, kind: "outbound", pairingId: accepted.pairing.id, platform: "darwin",
-      label: input.label, workspaceRoots: input.workspaceRoots, operations: input.operations,
+      label: input.label, workspaceRoots: input.workspaceRoots, operations: input.operations, connectionCompression: true,
     }]);
     expect(f.database.prepare("SELECT kind, availability FROM execution_environments").get()).toEqual({ kind: "outbound", availability: "unavailable" });
     expect(f.database.pragma("foreign_key_check")).toEqual([]);

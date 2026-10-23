@@ -116,6 +116,7 @@ export function EnvironmentDetail({ environment, toolPolicyApi, selected, tab, o
   const hostFacts: KeyValueItem[] = [
     { label: "Type", value: environmentKindNames[environment.kind] },
     ...(environment.kind === "ssh" ? [{ label: "SSH alias", value: environment.hostAlias, mono: true }] : []),
+    ...(environment.kind === "local" ? [] : [{ label: "Connection compression", value: environment.connectionCompression ? "On for future connections" : "Off for future connections" }]),
     ...(environment.kind === "local" ? [{ label: "Isolated workspaces", value: environment.workspaceIsolation.networkProfiles.some(profile => profile === "execution_host") ? "Can use the host network" : "Offline" }] : []),
     ...(environment.kind === "outbound" ? [
       { label: "Presence", value: <>{presence?.label}{binding ? <span className="execution-muted"> · seen <time dateTime={binding.lastSeenAt} title={new Date(binding.lastSeenAt).toLocaleString()}>{relativeTime(binding.lastSeenAt)}</time></span> : null}</> },

@@ -13,6 +13,7 @@ for (const kind of ["local", "ssh", "outbound"] as const) for (const overrides o
     const saved = await request.put("/api/configuration", { headers: { "X-CSRF-Token": session.csrfToken }, data: {
       mutationId: randomUUID(), expectedRevision: before.revision, configuration: { ...before.configuration,
         executionEnvironments: [...before.configuration.executionEnvironments, { id: randomUUID(), kind: "ssh",
+          connectionCompression: true,
           label: hostLabel, hostAlias: `opencode-${profile}-e2e`, workspaceRoots: ["/fixture/workspace"],
           operations: { kind: "sidecar", enabledCapabilities: ["workspace_files"] } }],
       },

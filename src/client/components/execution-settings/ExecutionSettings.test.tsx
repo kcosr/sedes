@@ -20,15 +20,15 @@ function configuration(): ConfigurationDocument {
   return {
     executionEnvironments: [
       { id: localId, kind: "local", label: "Local", workspaceRoots: ["/work"], workspaceIsolation: { kind: "bubblewrap", networkProfiles: ["isolated"] } },
-      { id: remoteId, kind: "ssh", label: "Build host", hostAlias: "build-host", workspaceRoots: ["/projects"], operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files", "workspace_tools", "workspace_context"] } },
+      { id: remoteId, kind: "ssh", label: "Build host", hostAlias: "build-host", connectionCompression: true, workspaceRoots: ["/projects"], operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files", "workspace_tools", "workspace_context"] } },
     ], backends: [], targets: [], defaultTargetId: null, webSearch: null,
   };
 }
 
 function configurationWithOutbound(): ConfigurationDocument {
   const document = configuration();
-  document.executionEnvironments.push({ id: outboundId, kind: "outbound", pairingId: "10000000-0000-4000-8000-000000000004", platform: "darwin", label: "Paired Mac", workspaceRoots: ["/Users/operator/Projects"], operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files"] } });
-  document.executionEnvironments.push({ id: linuxOutboundId, kind: "outbound", pairingId: "10000000-0000-4000-8000-000000000006", platform: "linux", label: "Paired Linux", workspaceRoots: ["/work"], operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files"] } });
+  document.executionEnvironments.push({ id: outboundId, kind: "outbound", pairingId: "10000000-0000-4000-8000-000000000004", platform: "darwin", label: "Paired Mac", connectionCompression: true, workspaceRoots: ["/Users/operator/Projects"], operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files"] } });
+  document.executionEnvironments.push({ id: linuxOutboundId, kind: "outbound", pairingId: "10000000-0000-4000-8000-000000000006", platform: "linux", label: "Paired Linux", connectionCompression: true, workspaceRoots: ["/work"], operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files"] } });
   return document;
 }
 
@@ -72,6 +72,37 @@ beforeEach(() => { vi.stubGlobal("ResizeObserver", class { observe(): void {} un
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("execution configuration administration", () => {
+  it.each([remoteId, outboundId])("saves compression changes in both directions for remote environment %s", async id => {
+    const api = controls(configurationWithOutbound(), [runtime({ resourceId: id, activeResources: 1 })]);
+    renderAt(environmentPath(id, "/edit"), api);
+    const compression = await screen.findByRole("switch", { name: "Compress connection traffic" });
+    expect(compression).toBeChecked();
+    expect(compression).toHaveAccessibleDescription("Applies to future connections. Active connections keep their current setting.");
+    fireEvent.click(compression);
+    fireEvent.click(screen.getByRole("button", { name: "Save environment" }));
+    await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledTimes(1));
+    expect(api.saveConfiguration.mock.calls[0]![0].configuration.executionEnvironments.find((entry: { id: string }) => entry.id === id))
+      .toMatchObject({ connectionCompression: false });
+    expect(await screen.findByText("Saved")).toBeVisible();
+    act(() => navigate(environmentPath(id)));
+    expect(screen.getByText("Off for future connections")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: id === remoteId ? "Edit Build host" : "Edit Paired Mac" }));
+    const disabled = await screen.findByRole("switch", { name: "Compress connection traffic" });
+    expect(disabled).not.toBeChecked();
+    fireEvent.click(disabled);
+    fireEvent.click(screen.getByRole("button", { name: "Save environment" }));
+    await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledTimes(2));
+    expect(api.saveConfiguration.mock.calls[1]![0].configuration.executionEnvironments.find((entry: { id: string }) => entry.id === id))
+      .toMatchObject({ connectionCompression: true });
+    expect(api.configurationLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("does not expose connection compression for the local environment", async () => {
+    renderAt(environmentPath(localId, "/edit"));
+    await screen.findByLabelText("Environment name");
+    expect(screen.queryByRole("switch", { name: "Compress connection traffic" })).toBeNull();
+  });
+
   it("lists environments as rows and separates overview, backends and activity in a routed detail", async () => {
     const document = configuration();
     const backend = backendEditors.pi.createBackend("pi-remote");
@@ -605,6 +636,7 @@ describe("execution configuration administration", () => {
     fireEvent.click(screen.getByRole("link", { name: "SSH host" }));
     expect(window.location.pathname).toBe("/settings/environments/~new/ssh");
     expect(screen.getByRole("heading", { name: "New SSH environment" })).toHaveFocus();
+    expect(screen.getByRole("switch", { name: "Compress connection traffic" })).toBeChecked();
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "New host" } });
     fireEvent.change(screen.getByLabelText("SSH host alias"), { target: { value: "new-host" } });
     fireEvent.change(screen.getByLabelText("Workspace root 1"), { target: { value: "/work/projects" } });
@@ -619,7 +651,7 @@ describe("execution configuration administration", () => {
     expect(request).not.toHaveProperty("principalId");
     const created = request.configuration.executionEnvironments[2];
     expect(created).toMatchObject({
-      kind: "ssh", label: "New host", hostAlias: "new-host", workspaceRoots: ["/work/projects", "/work/scratch"],
+      kind: "ssh", label: "New host", hostAlias: "new-host", connectionCompression: true, workspaceRoots: ["/work/projects", "/work/scratch"],
       operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files", "workspace_tools", "workspace_context", "interactive_terminal"] },
     });
     expect(created).not.toHaveProperty("operations.carrier");

@@ -133,6 +133,20 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     await viewer.command("printf 'OUTBOUND_PID=%s\\n' \"$$\"\n");
     await fixture.waitFor(async () => /OUTBOUND_PID=[0-9]+/.test(viewer.output));
     const shellPid = /OUTBOUND_PID=([0-9]+)/.exec(viewer.output)![1]!;
+    const attached = await fixture.serviceStatus();
+    for (const connectionCompression of [false, true]) {
+      const beforePolicy = await fixture.configuration();
+      const configured = beforePolicy.configuration.executionEnvironments.find(environment => environment.id === fixture.environmentId)!;
+      if (configured.kind !== "outbound") throw new Error("Expected outbound fixture");
+      configured.connectionCompression = connectionCompression;
+      const afterPolicy = configurationSnapshotSchema.parse(await fixture.json("/api/configuration", "PUT", {
+        mutationId: randomUUID(), expectedRevision: beforePolicy.revision, configuration: beforePolicy.configuration,
+      }));
+      expect(afterPolicy.runtimes).toEqual(beforePolicy.runtimes);
+      expect(await fixture.serviceStatus()).toMatchObject({ serviceIncarnation: attached!.serviceIncarnation, controllerEpoch: attached!.controllerEpoch });
+      await viewer.command(`printf 'COMPRESSION_${connectionCompression}=%s\\n' "$$"\n`);
+      await fixture.waitFor(async () => viewer.output.includes(`COMPRESSION_${connectionCompression}=${shellPid}`));
+    }
     await viewer.close();
 
     const attachmentId = randomUUID();
@@ -584,6 +598,7 @@ async function rejectUnissuedRuntime(url: string, credential: string): Promise<b
 class TerminalViewer {
   output = "";
   readonly frames: TerminalServerFrame[] = [];
+  private lastSentInputSeq = 0;
   private constructor(readonly fixture: OutboundFixture, readonly socket: WebSocket, readonly terminal: TerminalResource, readonly producerId: string) {}
   static async open(fixture: OutboundFixture, terminal: TerminalResource): Promise<TerminalViewer> {
     const deadline = Date.now() + 20_000;
@@ -620,9 +635,11 @@ class TerminalViewer {
   async command(command: string) {
     const control = this.frames.findLast(frame => frame.type === "attached" || frame.type === "control_changed");
     if (!control || !("controllerEpoch" in control)) throw new Error("fixture_terminal_no_control");
-    this.socket.send(encodeTerminalBinaryFrame("input", { v: 2, type: "input", terminalId: this.terminal.terminalId, incarnationId: this.terminal.incarnationId, controllerEpoch: control.controllerEpoch, producerId: this.producerId, inputSeq: control.lastAcceptedInputSeq + 1 }, Buffer.from(command)));
-    await this.fixture.waitFor(async () => this.frames.some(frame => frame.type === "input_result"));
-    expect(this.frames.filter(frame => frame.type === "input_result" || frame.type === "attached" || frame.type === "control_changed"), this.fixture.logs).toEqual(expect.arrayContaining([expect.objectContaining({ type: "input_result", outcome: "accepted" })]));
+    const inputSeq = Math.max(this.lastSentInputSeq, control.lastAcceptedInputSeq) + 1;
+    this.lastSentInputSeq = inputSeq;
+    this.socket.send(encodeTerminalBinaryFrame("input", { v: 2, type: "input", terminalId: this.terminal.terminalId, incarnationId: this.terminal.incarnationId, controllerEpoch: control.controllerEpoch, producerId: this.producerId, inputSeq }, Buffer.from(command)));
+    await this.fixture.waitFor(async () => this.frames.some(frame => frame.type === "input_result" && frame.inputSeq === inputSeq));
+    expect(this.frames.find(frame => frame.type === "input_result" && frame.inputSeq === inputSeq), this.fixture.logs).toMatchObject({ type: "input_result", inputSeq, outcome: "accepted" });
   }
   async close() {
     if (this.socket.readyState === WebSocket.CLOSED) return;

@@ -58,6 +58,7 @@ function remoteDocument(overrides: Partial<Omit<SshEnvironment, "id" | "kind">> 
   return configurationDocumentSchema.parse({
     executionEnvironments: [...localDocument().executionEnvironments, {
       id: sshEnvironmentId, kind: "ssh", label: "srv", hostAlias: "srv",
+      connectionCompression: true,
       workspaceRoots: ["/home/operator/projects"], operations: { kind: "none" }, ...overrides,
     }],
     backends: [{ id: "remote-codex", kind: "codex_app_server", label: "Remote Codex", enabled: true,

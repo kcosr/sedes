@@ -173,7 +173,7 @@ export class HostPairingRepository {
           JSON.stringify(request.metadata), now, now, Date.parse(request.lastSeenAt));
       const document = validateConfigurationDocument({ ...current.configuration, executionEnvironments: [...current.configuration.executionEnvironments,
         { id: environmentId, kind: "outbound", pairingId, platform: request.metadata.platform, label: input.label,
-          workspaceRoots: input.workspaceRoots, operations: input.operations }] });
+          workspaceRoots: input.workspaceRoots, operations: input.operations, connectionCompression: true }] });
       const configuration = this.configuration.save(scope, { mutationId: input.mutationId, expectedRevision: input.expectedConfigurationRevision,
         configuration: document }, value => this.options.project(scope, value));
       this.database.prepare(`UPDATE host_registration_requests SET state = 'accepted', pairing_id = ?, revision = revision + 1, updated_at = ?
