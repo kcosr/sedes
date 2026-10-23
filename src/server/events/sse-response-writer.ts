@@ -6,9 +6,6 @@ import type { AsyncCodecLease } from "../../internal/compression/async-codec-bud
 import { MAXIMUM_SSE_EVENT_BYTES } from "../../shared/protocol/payload.js";
 import { ClientResponseCompression, negotiateResponseEncoding, responseCompressionBusy } from "../http/response-compression.js";
 
-const writers = new WeakMap<Response, SseResponseWriter>();
-const standaloneCompression = new ClientResponseCompression(true);
-
 /** Owns one HTTP representation; the native stream supplies input backpressure and flushes. */
 export class SseResponseWriter extends EventEmitter {
   readonly #response: Response;
@@ -111,18 +108,4 @@ export class SseResponseWriter extends EventEmitter {
     // A real response can emit an error after close too; this handler remains harmless.
     this.emit("close");
   };
-}
-
-/** Every owner of a response, including early thread errors, receives the same writer. */
-export function sseResponseWriter(
-  request: Request,
-  response: Response,
-  compression = standaloneCompression,
-): SseResponseWriter {
-  let writer = writers.get(response);
-  if (!writer) {
-    writer = new SseResponseWriter(request, response, compression);
-    writers.set(response, writer);
-  }
-  return writer;
 }

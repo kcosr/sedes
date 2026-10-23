@@ -160,16 +160,17 @@ describe("finite JSON response compression", () => {
     expect(codecs.activeCount).toBe(0);
   });
 
-  it("does not commit encoding headers before codec success", async () => {
+  it.each([true, false])("uses acceptable identity after codec failure: %s", async identityAllowed => {
     vi.mocked(gzip).mockImplementationOnce(((_input: string, _options: unknown, callback: (error: Error) => void) => {
       callback(new Error("codec failed"));
     }) as typeof gzip);
     const compression = new ClientResponseCompression(true);
     const get = await serve((request, response) => sendJsonResponse(request, response, { text: "a".repeat(2_000) }, compression));
-    const response = await get({ "Accept-Encoding": "gzip" });
-    expect(response.status).toBe(500);
+    const response = await get({ "Accept-Encoding": identityAllowed ? "gzip" : "gzip, identity;q=0" });
+    expect(response.status).toBe(identityAllowed ? 200 : 500);
     expect(response.headers["content-encoding"]).toBeUndefined();
-    expect(JSON.parse(response.body.toString())).toHaveProperty("error.code", "internal_error");
+    if (identityAllowed) expect(JSON.parse(response.body.toString())).toEqual({ text: "a".repeat(2_000) });
+    else expect(JSON.parse(response.body.toString())).toHaveProperty("error.code", "internal_error");
     expect(compression.jsonInputBytes).toBe(0);
   });
 

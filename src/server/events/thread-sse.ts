@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { sseResponseWriter, type SseResponseWriter } from "./sse-response-writer.js";
-import type { Request, Response } from "express";
+import type { SseResponseWriter } from "./sse-response-writer.js";
+import type { Request } from "express";
 import { ZodError } from "zod";
 import {
   threadLoadErrorSchema,
@@ -99,12 +99,10 @@ function encodeLoadError(error: ThreadLoadError): string {
  * server-declared bootstrap failure crosses this SSE control boundary.
  */
 export function serveThreadLoadError(
-  request: Request,
-  response: Response,
+  writer: SseResponseWriter,
   error: unknown,
   requestId = "unavailable",
 ): void {
-  const writer = sseResponseWriter(request, response);
   if (writer.destroyed || writer.writableEnded) return;
   const projected = projectApiError(error);
   const frame = encodeLoadError({
@@ -199,12 +197,11 @@ function assertPositiveLimit(value: number, code: string): void {
  */
 export async function serveThreadEventStream(
   request: Request,
-  response: Response,
+  writer: SseResponseWriter,
   hub: ThreadEventHub,
   source: ThreadSnapshotCapture,
   options: ThreadEventStreamOptions = {},
 ): Promise<void> {
-  const writer = sseResponseWriter(request, response);
   const activityDetail = options.activityDetail ?? "full";
   // Hub envelopes and checkpoints are validated once at the hub and shared
   // by every subscriber, which also share their encoded frames.
@@ -657,8 +654,7 @@ export async function serveThreadEventStream(
   } catch (error) {
     cleanup();
     serveThreadLoadError(
-      request,
-      response,
+      writer,
       classifyThreadStreamLoadError(error),
       options.requestId,
     );
@@ -801,8 +797,7 @@ export async function serveThreadEventStream(
     if (!live && !closed) {
       try {
         serveThreadLoadError(
-          request,
-          response,
+          writer,
           classifyThreadStreamLoadError(error),
           options.requestId,
         );

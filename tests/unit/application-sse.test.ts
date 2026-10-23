@@ -10,12 +10,21 @@ import {
 import type { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
 import { NotificationService } from "../../src/server/domain/notification-service.js";
 import { ApplicationEventHub } from "../../src/server/events/application-event-hub.js";
+import { SseResponseWriter } from "../../src/server/events/sse-response-writer.js";
+import { ClientResponseCompression } from "../../src/server/http/response-compression.js";
 import {
   DEFAULT_APPLICATION_SSE_DRAIN_TIMEOUT_MILLISECONDS,
   DEFAULT_APPLICATION_SSE_PENDING_BYTE_LIMIT,
   DEFAULT_APPLICATION_SSE_PENDING_EVENT_LIMIT,
-  serveApplicationEventStream,
+  serveApplicationEventStream as serveApplicationEventStreamWithWriter,
 } from "../../src/server/events/application-sse.js";
+
+function serveApplicationEventStream(request: Request, response: Response, hub: ApplicationEventHub,
+  checkpoint: Parameters<typeof serveApplicationEventStreamWithWriter>[3],
+  options?: Parameters<typeof serveApplicationEventStreamWithWriter>[4]) {
+  return serveApplicationEventStreamWithWriter(request,
+    new SseResponseWriter(request, response, new ClientResponseCompression(false)), hub, checkpoint, options);
+}
 
 class FakeRequest extends EventEmitter {
   constructor(private readonly lastEventId?: string) {

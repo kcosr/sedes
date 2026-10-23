@@ -582,10 +582,10 @@ client admission before protected management routes and upgrades. Public
 frontend assets and the downloadable connector enable enrollment; they confer
 no application authority. Built client files are sent with Brotli or gzip when
 the browser accepts it (compressed once per file version in a bounded process
-cache). Eligible dynamic JSON and thread/application SSE responses negotiate
+cache). Eligible JSON read responses and thread/application SSE responses negotiate
 gzip independently under the installation-owned
 `SEDES_CLIENT_RESPONSE_COMPRESSION` policy. Explicit route selection excludes
-credentials and exact-byte downloads. Finite codecs share a process-wide
+mutations, credentials, and exact-byte downloads. Finite codecs share a process-wide
 two-job budget and admit at most 64 MiB of JSON input per
 server; at most 64 compressed SSE streams are active per server. Every SSE event
 write flushes without ending or resetting its response's gzip history, while

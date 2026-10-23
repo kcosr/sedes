@@ -387,7 +387,7 @@ export function registerWorkspaceDiffRoutes(
       if (resolved.status !== "available") {
         throw workspaceDiffResolutionError(resolved.status);
       }
-      await sendJson(request, response.status(201),
+      response.status(201).json(
         workspaceDiffReview(
           dependencies.workspaceDiffReviews.openReview(
             requestScope,
@@ -417,7 +417,7 @@ export function registerWorkspaceDiffRoutes(
         request.params,
       );
       const input = workspaceDiffReviewUpdateRequestSchema.parse(request.body);
-      await sendJson(request, response,
+      response.json(
         workspaceDiffReview(
           dependencies.workspaceDiffReviews.updateReview(
             requestScope,
@@ -498,7 +498,7 @@ export function registerWorkspaceDiffRoutes(
           mutationId: input.mutationId,
         },
       );
-      await sendJson(request, response.status(201),
+      response.status(201).json(
         workspaceDiffReviewMutationResultSchema.parse({
           review: workspaceDiffReview(result.review),
           comment: workspaceDiffReviewComment(result.value),
@@ -522,7 +522,7 @@ export function registerWorkspaceDiffRoutes(
         commentId,
         input,
       );
-      await sendJson(request, response,
+      response.json(
         workspaceDiffReviewMutationResultSchema.parse({
           review: workspaceDiffReview(result.review),
           comment: workspaceDiffReviewComment(result.value),
@@ -546,7 +546,7 @@ export function registerWorkspaceDiffRoutes(
         commentId,
         input,
       );
-      await sendJson(request, response,
+      response.json(
         workspaceDiffReviewMutationResultSchema.parse({
           review: workspaceDiffReview(result.review),
           comment: workspaceDiffReviewComment(result.value),
@@ -626,7 +626,7 @@ export function registerWorkspaceDiffRoutes(
           mutationId: input.mutationId,
         },
       );
-      await sendJson(request, response,
+      response.json(
         workspaceDiffReviewedFileMutationResultSchema.parse({
           review: workspaceDiffReview(result.review),
           file: workspaceDiffReviewedFile(result.value),

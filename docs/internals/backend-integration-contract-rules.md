@@ -4709,7 +4709,7 @@ This boundary applies equally to Pi, Codex, Claude,
 Grok, and OpenCode.
 
 Client response compression belongs after normalization and applies equally to
-all five backends. Select eligible JSON routes explicitly; credentials, upload
+all five backends. Select eligible JSON read routes explicitly; mutations, credentials, upload
 contracts, and exact-byte downloads retain their own transport rules. Thread
 and application SSE use one shared response writer for events, diagnostics,
 errors, drains, and shutdown. Preserve decoded frame and pending-byte limits,

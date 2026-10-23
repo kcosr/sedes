@@ -94,7 +94,7 @@ function responseUnavailable(response: Response): boolean {
   return response.destroyed || response.writableEnded || response.headersSent;
 }
 
-/** Explicit data-route sender. Downloads, credentials and ordinary error handlers never use it. */
+/** Explicit read-route sender. Mutations, downloads, credentials and ordinary error handlers never use it. */
 export async function sendJsonResponse(
   request: Request,
   response: Response,
@@ -137,7 +137,7 @@ export async function sendJsonResponse(
         }
       } catch (error) {
         if (responseUnavailable(response)) return;
-        throw error;
+        if (!selected.identityAllowed) throw error;
       } finally {
         lease.release();
       }

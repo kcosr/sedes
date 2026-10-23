@@ -81,7 +81,7 @@ export function registerWorkpadRoutes(
   routes.post("/api/workpads", async (request, response) => {
     const owner = await scope(request);
     const workpad = await service.create(owner, parseWorkpadValue(createWorkpadRequestSchema, request.body));
-    await sendJson(request, response.status(201), { workpad: workpadSchema.parse(workpad) });
+    response.status(201).json({ workpad: workpadSchema.parse(workpad) });
   });
   routes.get("/api/workpads/:workpadId", async (request, response) => {
     const owner = await scope(request);
@@ -92,7 +92,7 @@ export function registerWorkpadRoutes(
     const owner = await scope(request);
     const { workpadId } = pathSchema.parse(request.params);
     const workpad = await service.update(owner, workpadId, parseWorkpadValue(updateWorkpadRequestSchema, request.body));
-    await sendJson(request, response, { workpad: workpadSchema.parse(workpad) });
+    response.json({ workpad: workpadSchema.parse(workpad) });
   });
   routes.delete("/api/workpads/:workpadId", async (request, response) => {
     const owner = await scope(request);
@@ -118,18 +118,18 @@ export function registerWorkpadRoutes(
   routes.put("/api/workpads/:workpadId/draft", async (request, response) => {
     const owner = await scope(request);
     const { workpadId } = pathSchema.parse(request.params);
-    await sendJson(request, response, { draft: workpadDraftSchema.parse(await service.saveDraft(owner, workpadId, parseWorkpadValue(saveWorkpadDraftRequestSchema, request.body))) });
+    response.json({ draft: workpadDraftSchema.parse(await service.saveDraft(owner, workpadId, parseWorkpadValue(saveWorkpadDraftRequestSchema, request.body))) });
   });
   routes.delete("/api/workpads/:workpadId/draft", async (request, response) => {
     const owner = await scope(request);
     const { workpadId } = pathSchema.parse(request.params);
     const input = z.strictObject({ expectedRevision: revisionNumber }).parse(request.body);
-    await sendJson(request, response, { draft: workpadDraftSchema.parse(await service.discardDraft(owner, workpadId, input.expectedRevision)) });
+    response.json({ draft: workpadDraftSchema.parse(await service.discardDraft(owner, workpadId, input.expectedRevision)) });
   });
   routes.post("/api/workpads/:workpadId/draft/commit", async (request, response) => {
     const owner = await scope(request);
     const { workpadId } = pathSchema.parse(request.params);
     const workpad = await service.commitDraft(owner, workpadId, commitWorkpadDraftRequestSchema.parse(request.body));
-    await sendJson(request, response, { workpad: workpadSchema.parse(workpad), draft: workpadDraftSchema.parse(await service.getDraft(owner, workpadId)) });
+    response.json({ workpad: workpadSchema.parse(workpad), draft: workpadDraftSchema.parse(await service.getDraft(owner, workpadId)) });
   });
 }

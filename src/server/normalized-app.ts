@@ -1,5 +1,5 @@
 import { ClientResponseCompression, sendJsonResponse } from "./http/response-compression.js";
-import { sseResponseWriter } from "./events/sse-response-writer.js";
+import { SseResponseWriter } from "./events/sse-response-writer.js";
 import {
   toolPolicyOptionsSchema, toolPolicySetListSchema, toolPolicySetListQuerySchema, toolPolicySetSchema, createToolPolicySetRequestSchema,
   updateToolPolicySetRequestSchema, deleteToolPolicySetRequestSchema, toolPolicySetRouteParametersSchema,
@@ -1368,7 +1368,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const query = applicationEventStreamQuerySchema.parse(request.query);
       const tracked = dependencies.longLivedConnections?.track(response);
       if (tracked) response.once("close", tracked.release);
-      const writer = sseResponseWriter(request, response, compression);
+      const writer = new SseResponseWriter(request, response, compression);
       tracked?.setGracefulEnd(() => writer.end());
       const requestScope = await scope(request);
       const voiceStream = query.voiceStreamId === undefined ? undefined : dependencies.notifications.reserveVoiceStream(requestScope, query.voiceStreamId);
@@ -1382,7 +1382,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
         release = () => dependencies.applicationSnapshots.release(requestScope);
         await serveApplicationEventStream(
           request,
-          response,
+          writer,
           hub,
           (force) => dependencies.applicationSnapshots.checkpoint(requestScope, hub, force),
           {
@@ -1463,7 +1463,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const requestStartedAt = performance.now();
       const tracked = dependencies.longLivedConnections?.track(response);
       if (tracked) response.once("close", tracked.release);
-      const writer = sseResponseWriter(request, response, compression);
+      const writer = new SseResponseWriter(request, response, compression);
       tracked?.setGracefulEnd(() => writer.end());
       const requestId =
         typeof response.locals.requestId === "string"
@@ -1522,7 +1522,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
           try {
             await serveThreadEventStream(
               request,
-              response,
+              writer,
               runtime.hub,
               {
                 publishAuthoritativeReplacement:
@@ -1564,7 +1564,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
         try {
           await serveThreadEventStream(
             request,
-            response,
+            writer,
             quiet.hub,
             { publishAuthoritativeReplacement: replacement },
             {
@@ -1598,7 +1598,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
           if (!releaseOnClose) quiet.release();
         }
       } catch (error) {
-        serveThreadLoadError(request, response, error, requestId);
+        serveThreadLoadError(writer, error, requestId);
       }
     }),
   );
@@ -2279,7 +2279,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
         request.params,
       );
       const input = workspaceFileWriteRequestSchema.parse(request.body);
-      await sendJson(request, response,
+      response.json(
         workspaceFileWriteResultSchema.parse(
           await dependencies.workspaceFiles.write(
             requestScope,

@@ -231,7 +231,7 @@ database files to `0600`; it leaves existing state-directory permissions intact.
 
 ### Client response compression
 
-Sedes negotiates gzip with the browser, Android, or Electron HTTP client for
+Sedes negotiates gzip with the browser, Android, or Electron HTTP client when reading
 application and thread snapshots, history, usage data, workspace text and diffs,
 Workpad data, page metadata, and thread/application event streams. Finite JSON
 responses normally use compression from 1 KiB when it reduces their size. Each
@@ -240,7 +240,7 @@ promptly; reconnecting starts a fresh response with the normal replay cursor.
 
 Set `SEDES_CLIENT_RESPONSE_COMPRESSION=false` and restart to disable this
 installation policy. It is not a Settings preference or a bootstrap-file key.
-The setting leaves static asset compression, uploads, exact-byte downloads,
+The setting leaves mutation responses, static asset compression, uploads, exact-byte downloads,
 credentials, the small workspace-file invalidation stream, and terminal
 WebSockets unchanged. Existing cache controls and decoded payload limits still
 apply. Compression capacity is bounded: requests can use acceptable identity

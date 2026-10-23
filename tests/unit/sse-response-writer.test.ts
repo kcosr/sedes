@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, errorMiddleware } from "../../src/server/http/errors.js";
 import { ClientResponseCompression } from "../../src/server/http/response-compression.js";
 import { serveThreadLoadError } from "../../src/server/events/thread-sse.js";
-import { sseResponseWriter, type SseResponseWriter } from "../../src/server/events/sse-response-writer.js";
+import { SseResponseWriter } from "../../src/server/events/sse-response-writer.js";
 import { LongLivedHttpConnectionRegistry } from "../../src/server/runtime/application-shutdown.js";
 
 vi.mock("node:zlib", async importOriginal => {
@@ -32,7 +32,7 @@ async function serve(
 ) {
   const app = express();
   app.get("/", (request, response) => {
-    const writer = sseResponseWriter(request, response, compression);
+    const writer = new SseResponseWriter(request, response, compression);
     writer.start();
     onWriter(writer, request, response);
   });
@@ -62,7 +62,7 @@ describe("SSE response writer", () => {
     response.end();
     const compression = new ClientResponseCompression(true);
     const request = { header: () => "gzip" } as unknown as Request;
-    const writer = sseResponseWriter(request, response as unknown as Response, compression);
+    const writer = new SseResponseWriter(request, response as unknown as Response, compression);
     expect(writer.write("data: late\n\n")).toBe(false);
     writer.end();
     writer.destroy();
@@ -112,10 +112,9 @@ describe("SSE response writer", () => {
   });
 
   it("reuses the writer for a post-header thread load error and finishes its gzip trailer", async () => {
-    const connect = await serve((writer, request, response) => {
-      expect(sseResponseWriter(request, response)).toBe(writer);
+    const connect = await serve(writer => {
       writer.write("event: diagnostic\ndata: {}\n\n");
-      serveThreadLoadError(request, response, new ApiError(409, "backend_incompatible_protocol", "Invalid history."), "request-test");
+      serveThreadLoadError(writer, new ApiError(409, "backend_incompatible_protocol", "Invalid history."), "request-test");
     });
     const output = decode(await connect());
     await output.ended;
@@ -208,7 +207,7 @@ describe("SSE response writer", () => {
     const response = new BlockedResponse();
     const request = { header: () => "gzip" } as unknown as Request;
     const compression = new ClientResponseCompression(true);
-    const writer = sseResponseWriter(request, response as unknown as Response, compression);
+    const writer = new SseResponseWriter(request, response as unknown as Response, compression);
     const frame = `data: ${randomBytes(256 * 1_024).toString("base64")}\n\n`;
     expect(writer.write(frame)).toBe(false);
     await vi.waitFor(() => expect(response.pending.length).toBe(1));

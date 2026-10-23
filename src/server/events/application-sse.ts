@@ -1,5 +1,5 @@
-import type { Request, Response } from "express";
-import { sseResponseWriter } from "./sse-response-writer.js";
+import type { Request } from "express";
+import type { SseResponseWriter } from "./sse-response-writer.js";
 import { type ApplicationEventEnvelope } from "../../shared/protocol/application.js";
 import { recordVoiceDiagnostic, type VoiceDiagnosticReason } from "../diagnostics/voice-diagnostics.js";
 import type { ApplicationEventHub } from "./application-event-hub.js";
@@ -41,14 +41,13 @@ function positiveSafeInteger(value: number, code: string): void {
  */
 export async function serveApplicationEventStream(
   request: Request,
-  response: Response,
+  writer: SseResponseWriter,
   hub: ApplicationEventHub,
   checkpoint: (force: boolean) => Promise<{
     readonly envelope: ApplicationEventEnvelope;
   }>,
   options: ApplicationEventStreamOptions = {},
 ): Promise<void> {
-  const writer = sseResponseWriter(request, response);
   const pendingEventLimit =
     options.pendingEventLimit ?? DEFAULT_APPLICATION_SSE_PENDING_EVENT_LIMIT;
   const pendingByteLimit =

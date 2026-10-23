@@ -15,14 +15,23 @@ import {
   threadReplayServerDiagnosticSchema,
 } from "../../src/shared/protocol/diagnostics.js";
 import { ThreadEventHub } from "../../src/server/events/thread-event-hub.js";
+import { SseResponseWriter } from "../../src/server/events/sse-response-writer.js";
+import { ClientResponseCompression } from "../../src/server/http/response-compression.js";
 import { DomainError } from "../../src/server/domain/errors.js";
 import {
   DEFAULT_THREAD_SSE_DRAIN_TIMEOUT_MILLISECONDS,
   DEFAULT_THREAD_SSE_PENDING_BYTE_LIMIT,
   DEFAULT_THREAD_SSE_PENDING_EVENT_LIMIT,
-  serveThreadEventStream,
+  serveThreadEventStream as serveThreadEventStreamWithWriter,
+  type ThreadEventStreamOptions,
   type ThreadSnapshotCapture,
 } from "../../src/server/events/thread-sse.js";
+
+function serveThreadEventStream(request: Request, response: Response, hub: ThreadEventHub,
+  source: ThreadSnapshotCapture, options?: ThreadEventStreamOptions) {
+  return serveThreadEventStreamWithWriter(request,
+    new SseResponseWriter(request, response, new ClientResponseCompression(false)), hub, source, options);
+}
 
 class FakeRequest extends EventEmitter {
   constructor(private readonly lastEventId?: string) {

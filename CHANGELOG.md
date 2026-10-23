@@ -55,7 +55,7 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
-- Dynamic client data and thread/application event streams now negotiate gzip,
+- Client data reads and thread/application event streams now negotiate gzip,
   reducing transfer size while flushing live events promptly. Operators can
   disable it with `SEDES_CLIENT_RESPONSE_COMPRESSION=false`; see
   [client response compression](docs/operator/configuration.md#client-response-compression).

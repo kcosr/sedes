@@ -2,7 +2,8 @@
  * Offline accumulated-thread catch-up benchmark; no provider or network access.
  * Run: env -u NODE_ENV npm run measure:catchup
  * Compare medians on the same idle host. Timings exclude publication, the SSE
- * byte parser, React and network latency; they are evidence, not test gates.
+ * byte parser, HTTP compression, React and network latency; reported bytes are
+ * decoded SSE bytes. These measurements are evidence, not test gates.
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -15,6 +16,8 @@ import {
 } from "../../src/shared/protocol/conversation.js";
 import { ThreadEventHub } from "../../src/server/events/thread-event-hub.js";
 import { serveThreadEventStream } from "../../src/server/events/thread-sse.js";
+import { SseResponseWriter } from "../../src/server/events/sse-response-writer.js";
+import { ClientResponseCompression } from "../../src/server/http/response-compression.js";
 import { projectThreadEventEnvelopeActivity } from "../../src/server/conversations/thread-activity-projection.js";
 import { assertBoundedSseFrame } from "../../src/server/events/sse-frame.js";
 
@@ -158,8 +161,10 @@ class CaptureResponse extends EventEmitter {
   readonly writableHighWaterMark = 16_384;
   status(): this { return this; }
   setHeader(): void {}
+  vary(): void {}
   flushHeaders(): void {}
   end(): void {}
+  destroy(): void { this.emit("close"); }
   write(value: string): boolean { this.writes.push(value); return true; }
 }
 
@@ -277,7 +282,9 @@ try {
     const checkpointStarted = performance.now();
     try {
       await serveThreadEventStream(
-        request as unknown as Request, response as unknown as Response, hub,
+        request as unknown as Request,
+        new SseResponseWriter(request as unknown as Request, response as unknown as Response,
+          new ClientResponseCompression(false)), hub,
         { publishAuthoritativeReplacement: async () => {
           throw new Error("benchmark_must_not_recapture_or_publish");
         } },
