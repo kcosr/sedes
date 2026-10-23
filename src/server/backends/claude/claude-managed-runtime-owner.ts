@@ -301,6 +301,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
       });
       peer.start();
       const hello = await peer.call(controlHelloOperation, {
+        compression: "none",
         expectedBuildId: artifact.buildId,
         expectedArtifactSha256: artifact.artifactSha256,
         authorizedSidecarCapabilities: [{

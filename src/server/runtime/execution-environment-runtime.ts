@@ -119,6 +119,7 @@ export interface ExecutionEnvironmentRuntimeInput {
   readonly authorizedRuntimeCapabilities: SidecarRuntimeOwnerOptions<SidecarClientSession>["authorizedRuntimeCapabilities"];
   readonly activeEnvironmentRecord: () => InventoryEnvironmentRecord;
   readonly automaticConnectionEnabled: () => boolean | Promise<boolean>;
+  readonly connectionCompression: () => boolean;
   readonly reportAvailability: (
     available: boolean,
     diagnosticCode?: string,
@@ -401,6 +402,7 @@ export async function createExecutionEnvironmentRuntime(
       activeOperationsConfigurationRevision: () =>
         activeRecord().operationsConfigurationRevision,
       isAutomaticConnectionEnabled: input.automaticConnectionEnabled,
+      connectionCompression: input.connectionCompression,
       isTransportAvailable: () => !outbound || outbound.isConnected(),
       artifact,
       provisioner,

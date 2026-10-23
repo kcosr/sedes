@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import type { SidecarFrameCompression } from "./frame-compression.js";
 import {
   SidecarFrameWriteError,
   SidecarProtocolDeliveryError,
@@ -38,6 +39,7 @@ import {
 } from "./operation-registry.js";
 
 type PendingRequest = {
+  readonly requestedCompression?: SidecarFrameCompression;
   readonly definition: SidecarOperationDefinition<unknown, unknown>;
   readonly resolve: (value: unknown) => void;
   readonly reject: (error: Error) => void;
@@ -304,6 +306,7 @@ export class SidecarProtocolPeer {
           : undefined;
       timer?.unref();
       const pending: PendingRequest = {
+        ...(isHello ? { requestedCompression: controlHelloOperation.requestSchema.parse(payload).compression } : {}),
         definition: definition as SidecarOperationDefinition<unknown, unknown>,
         resolve: resolve as (value: unknown) => void,
         reject,
@@ -884,7 +887,7 @@ export class SidecarProtocolPeer {
       );
       const payload = operation.definition.responseSchema.parse(result);
       if (diagnosticStarted !== undefined) this.#diagnoseHeartbeat(envelope.requestId, "handler_complete", { durationMs: performance.now() - diagnosticStarted, outcome: "ok" });
-      if (isHello) this.#commitHello("sidecar", payload);
+      if (isHello) this.#commitHello("sidecar", payload, controlHelloOperation.requestSchema.parse(request).compression);
       response = {
         wireVersion: SIDECAR_WIRE_VERSION,
         sessionNonce: this.#sessionNonce,
@@ -971,7 +974,7 @@ export class SidecarProtocolPeer {
       });
     }
     if (isHelloDefinition(pending.definition)) {
-      this.#commitHello("sedes", parsed.data);
+      this.#commitHello("sedes", parsed.data, pending.requestedCompression);
       this.#onReady?.();
     }
     if (pending.diagnosticStarted !== undefined) this.#diagnoseHeartbeat(envelope.requestId, "response_parsed", { durationMs: performance.now() - pending.diagnosticStarted, outcome: "ok" });
@@ -1183,11 +1186,14 @@ export class SidecarProtocolPeer {
     } catch { /* Observations cannot affect protocol admission or delivery. */ }
   }
 
-  #commitHello(role: SidecarRequestNamespace, payload: unknown): void {
+  #commitHello(role: SidecarRequestNamespace, payload: unknown, requestedCompression: SidecarFrameCompression | undefined): void {
     if (this.#role !== role || this.#helloComplete) {
       throw new Error("sidecar_protocol_hello_state_invalid");
     }
     const hello = controlHelloOperation.responseSchema.parse(payload);
+    if (hello.compression !== requestedCompression) {
+      throw new Error("sidecar_protocol_compression_mismatch");
+    }
     const agentToolCliAccepted = hello.sedesCapabilities.some(
       (capability) =>
         capability.capabilityId === "agent_tools_cli" &&
@@ -1215,6 +1221,7 @@ export class SidecarProtocolPeer {
         throw new Error("sidecar_protocol_local_capability_mismatch");
       }
     }
+    this.#transport.commitCompression(hello.compression);
     this.#localCapabilities = local.capabilities;
     this.#remoteCapabilities = remote.capabilities;
     this.#localOperations = local.operations;

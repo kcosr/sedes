@@ -1,3 +1,5 @@
+import { ClientResponseCompression, sendJsonResponse } from "./http/response-compression.js";
+import { SseResponseWriter } from "./events/sse-response-writer.js";
 import {
   toolPolicyOptionsSchema, toolPolicySetListSchema, toolPolicySetListQuerySchema, toolPolicySetSchema, createToolPolicySetRequestSchema,
   updateToolPolicySetRequestSchema, deleteToolPolicySetRequestSchema, toolPolicySetRouteParametersSchema,
@@ -45,7 +47,7 @@ import {
   dismissQuestionRequestSchema,
 } from "../shared/protocol/questions.js";
 import { pipeline } from "node:stream/promises";
-import type { Request, RequestHandler } from "express";
+import type { Request, RequestHandler, Response } from "express";
 import express from "express";
 import { z } from "zod";
 import type { ContextExcerpt } from "../shared/protocol/context-excerpts.js";
@@ -671,6 +673,9 @@ function roundedDiagnosticMilliseconds(value: number): number {
 
 export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   const app = express();
+  const compression = new ClientResponseCompression(dependencies.config.clientResponseCompression);
+  const sendJson = (request: Request, response: Response, value: unknown) =>
+    sendJsonResponse(request, response, value, compression);
   const workspacePublications = {
     handoffAuthoritativeReplacement(eventScope: RequestScope) {
       dependencies.automations.requestDeferredReconcile();
@@ -837,11 +842,11 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   routes.post("/api/client-controls/poll", longLived(async (request, response) => {
     if (!dependencies.clientControls) throw new ApiError(503, "client_controls_unavailable", "Client controls are unavailable.");
     response.setHeader("Cache-Control", "no-store");
-    const untrack = dependencies.longLivedConnections?.track(response);
+    const tracked = dependencies.longLivedConnections?.track(response);
     try {
       response.json(await dependencies.clientControls.poll(await scope(request), request.get("X-Sedes-Client"),
         clientIdentity(request)?.id, clientPollRequestSchema.parse(request.body), workspaceFileRequestSignal(request, response)));
-    } finally { untrack?.(); }
+    } finally { tracked?.release(); }
   }));
   const attachmentRouteParametersSchema = z.strictObject({
     threadId: z.uuid(),
@@ -1157,28 +1162,28 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const requestScope = await scope(request);
     if (!dependencies.config.experimentalUsageEnabled) throw new ApiError(403, "experimental_usage_disabled", "Experimental usage accounting is disabled on this server.", false);
     response.setHeader("Cache-Control", "no-store");
-    response.json(dependencies.usage.analytics(requestScope, usageAnalyticsRequestSchema.parse(request.body)));
+    await sendJson(request, response, dependencies.usage.analytics(requestScope, usageAnalyticsRequestSchema.parse(request.body)));
   });
 
   routes.post("/api/usage/facets", async (request, response) => {
     const requestScope = await scope(request);
     if (!dependencies.config.experimentalUsageEnabled) throw new ApiError(403, "experimental_usage_disabled", "Experimental usage accounting is disabled on this server.", false);
     response.setHeader("Cache-Control", "no-store");
-    response.json(dependencies.usage.facets(requestScope, usageFacetRequestSchema.parse(request.body)));
+    await sendJson(request, response, dependencies.usage.facets(requestScope, usageFacetRequestSchema.parse(request.body)));
   });
 
   routes.get("/api/threads/:threadId/usage", async (request, response) => {
     const requestScope = await scope(request);
     if (!dependencies.config.experimentalUsageEnabled) throw new ApiError(403, "experimental_usage_disabled", "Experimental usage accounting is disabled on this server.", false);
     response.setHeader("Cache-Control", "no-store");
-    response.json(dependencies.usage.read(requestScope, threadRouteParametersSchema.parse(request.params).threadId));
+    await sendJson(request, response, dependencies.usage.read(requestScope, threadRouteParametersSchema.parse(request.params).threadId));
   });
   routes.get("/api/threads/:threadId/usage/turns/:turnId", async (request, response) => {
     const requestScope = await scope(request);
     if (!dependencies.config.experimentalUsageEnabled) throw new ApiError(403, "experimental_usage_disabled", "Experimental usage accounting is disabled on this server.", false);
     response.setHeader("Cache-Control", "no-store");
     const {threadId,turnId}=threadRouteParametersSchema.extend({turnId:z.string().min(1).max(160)}).parse(request.params);
-    response.json(dependencies.usage.read(requestScope, threadId, turnId));
+    await sendJson(request, response, dependencies.usage.read(requestScope, threadId, turnId));
   });
 
   routes.get("/api/threads/:threadId/turns/:turnId/reply-speech", async (request, response) => {
@@ -1209,7 +1214,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   routes.get("/api/application/snapshot", async (request, response) => {
     const requestScope = await scope(request);
     response.setHeader("Cache-Control", "no-store");
-    response.json(
+    await sendJson(request, response,
       normalizedApplicationSnapshotSchema.parse(
         await dependencies.applicationSnapshots.capture(requestScope),
       ),
@@ -1361,8 +1366,10 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     "/api/application/events",
     longLived(async (request, response) => {
       const query = applicationEventStreamQuerySchema.parse(request.query);
-      const untrack = dependencies.longLivedConnections?.track(response);
-      if (untrack) response.once("close", untrack);
+      const tracked = dependencies.longLivedConnections?.track(response);
+      if (tracked) response.once("close", tracked.release);
+      const writer = new SseResponseWriter(request, response, compression);
+      tracked?.setGracefulEnd(() => writer.end());
       const requestScope = await scope(request);
       const voiceStream = query.voiceStreamId === undefined ? undefined : dependencies.notifications.reserveVoiceStream(requestScope, query.voiceStreamId);
       if (voiceStream) {
@@ -1375,7 +1382,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
         release = () => dependencies.applicationSnapshots.release(requestScope);
         await serveApplicationEventStream(
           request,
-          response,
+          writer,
           hub,
           (force) => dependencies.applicationSnapshots.checkpoint(requestScope, hub, force),
           {
@@ -1442,8 +1449,8 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const { workspaceId } = workspaceFileRouteParametersSchema.parse(
         request.params,
       );
-      const untrack = dependencies.longLivedConnections?.track(response);
-      if (untrack) response.once("close", untrack);
+      const tracked = dependencies.longLivedConnections?.track(response);
+      if (tracked) response.once("close", tracked.release);
       await serveWorkspaceFileEventStream(request, response, (listener) =>
         dependencies.workspaceFiles.watch(requestScope, workspaceId, listener),
       );
@@ -1454,8 +1461,10 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     "/api/threads/:threadId/events",
     longLived(async (request, response) => {
       const requestStartedAt = performance.now();
-      const untrack = dependencies.longLivedConnections?.track(response);
-      if (untrack) response.once("close", untrack);
+      const tracked = dependencies.longLivedConnections?.track(response);
+      if (tracked) response.once("close", tracked.release);
+      const writer = new SseResponseWriter(request, response, compression);
+      tracked?.setGracefulEnd(() => writer.end());
       const requestId =
         typeof response.locals.requestId === "string"
           ? response.locals.requestId
@@ -1513,7 +1522,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
           try {
             await serveThreadEventStream(
               request,
-              response,
+              writer,
               runtime.hub,
               {
                 publishAuthoritativeReplacement:
@@ -1555,7 +1564,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
         try {
           await serveThreadEventStream(
             request,
-            response,
+            writer,
             quiet.hub,
             { publishAuthoritativeReplacement: replacement },
             {
@@ -1589,7 +1598,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
           if (!releaseOnClose) quiet.release();
         }
       } catch (error) {
-        serveThreadLoadError(response, error, requestId);
+        serveThreadLoadError(writer, error, requestId);
       }
     }),
   );
@@ -1704,7 +1713,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const { threadId } = threadRouteParametersSchema.parse(request.params);
     const { cursor, limit, activityDetail } =
       loadThreadHistoryRequestSchema.parse(request.body);
-    response.json(
+    await sendJson(request, response,
       threadEventEnvelopeSchema.parse(
         projectThreadEventEnvelopeActivity(
           await dependencies.history.loadOlder(
@@ -1727,7 +1736,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const { turnId, activityDetail } = seekThreadHistoryRequestSchema.parse(
         request.body,
       );
-      response.json(
+      await sendJson(request, response,
         threadHistorySeekResultSchema.parse(
           projectThreadHistorySeekActivity(
             await dependencies.history.seekTurn(requestScope, threadId, turnId),
@@ -1802,7 +1811,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const requestScope = await scope(request);
     const { threadId } = threadRouteParametersSchema.parse(request.params);
     const { activityDetail } = threadSnapshotQuerySchema.parse(request.query);
-    response.json(
+    await sendJson(request, response,
       projectThreadSnapshotActivity(
         await dependencies.threads.snapshot(requestScope, threadId),
         activityDetail,
@@ -1952,7 +1961,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
         request.params,
       );
       const query = workspaceFileListQuerySchema.parse(request.query);
-      response.json(
+      await sendJson(request, response,
         workspaceFileListResultSchema.parse(
           await dependencies.workspaceFiles.list(
             requestScope,
@@ -1973,7 +1982,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
         request.params,
       );
       const query = workspaceFileDirectoryQuerySchema.parse(request.query);
-      response.json(
+      await sendJson(request, response,
         workspaceFileDirectoryResultSchema.parse(
           await dependencies.workspaceFiles.listDirectory(
             requestScope,
@@ -1993,7 +2002,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const { workspaceId } = workspaceFileRouteParametersSchema.parse(
         request.params,
       );
-      response.json(
+      await sendJson(request, response,
         workspaceFileRootsResultSchema.parse(
           await dependencies.workspaceFiles.listRoots(
             requestScope,
@@ -2150,7 +2159,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       );
       const { rootId, path: relativePath } =
         workspaceFileContentQuerySchema.parse(request.query);
-      response.json(
+      await sendJson(request, response,
         workspaceFileContentResultSchema.parse(
           await dependencies.workspaceFiles.read(
             requestScope,
@@ -2289,7 +2298,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const { workspaceId } = workspaceFileRouteParametersSchema.parse(
         request.params,
       );
-      response.json(
+      await sendJson(request, response,
         workspaceFileStatusResultSchema.parse(
           await dependencies.workspaceFiles.status(
             requestScope,
@@ -2301,7 +2310,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     },
   );
 
-  registerWorkspaceDiffRoutes(routes, scope, dependencies);
+  registerWorkspaceDiffRoutes(routes, scope, dependencies, sendJson);
 
   const policySets = () => {
     if (!dependencies.policySets) throw new DomainError("runtime_unavailable", "Tool policies are unavailable.");
@@ -2618,7 +2627,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const task = await dependencies.tasks.create(requestScope, body);
     response.status(201).json(taskMutationResultSchema.parse({ task }));
   });
-  registerWorkpadRoutes(routes, scope, dependencies.workpads);
+  registerWorkpadRoutes(routes, scope, dependencies.workpads, sendJson);
   if (pageRoutes && dependencies.pages) {
     const pageParameters = z.object({ threadId: z.string().uuid(), pageId: z.string().uuid().optional(), revision: z.coerce.number().int().positive().safe().optional() });
     const pageQuery = z.strictObject({ limit: z.coerce.number().int().min(1).max(100).optional(), cursor: z.string().max(256).optional() });
@@ -2646,19 +2655,19 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const requestScope = await scope(request);
       const { threadId } = pageParameters.parse(request.params);
       response.setHeader("Cache-Control", "no-store");
-      response.json(pageRevisionPageSchema.parse(dependencies.pages!.list(requestScope, threadId, pageQuery.parse(request.query))));
+      await sendJson(request, response, pageRevisionPageSchema.parse(dependencies.pages!.list(requestScope, threadId, pageQuery.parse(request.query))));
     });
     routes.get("/api/threads/:threadId/pages/:pageId/revisions", async (request, response) => {
       const requestScope = await scope(request);
       const { threadId, pageId } = pageParameters.parse(request.params);
       response.setHeader("Cache-Control", "no-store");
-      response.json(pageRevisionPageSchema.parse(dependencies.pages!.revisions(requestScope, threadId, pageId!, pageQuery.parse(request.query))));
+      await sendJson(request, response, pageRevisionPageSchema.parse(dependencies.pages!.revisions(requestScope, threadId, pageId!, pageQuery.parse(request.query))));
     });
     routes.get("/api/threads/:threadId/pages/:pageId/revisions/:revision", async (request, response) => {
       const requestScope = await scope(request);
       const { threadId, pageId, revision } = pageParameters.parse(request.params);
       response.setHeader("Cache-Control", "no-store");
-      response.json({ page: pageRevisionSchema.parse(dependencies.pages!.get(requestScope, threadId, pageId!, revision!)) });
+      await sendJson(request, response, { page: pageRevisionSchema.parse(dependencies.pages!.get(requestScope, threadId, pageId!, revision!)) });
     });
   }
   if (dependencies.hostPairingAdmin) {

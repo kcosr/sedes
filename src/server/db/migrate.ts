@@ -1,5 +1,6 @@
 import { automaticModelRetryMigration } from "./migrations/155-automatic-model-retry.js";
 import { modelFailureRetryStateMigration } from "./migrations/156-model-failure-retry-state.js";
+import { connectionCompressionMigration } from "./migrations/157-connection-compression.js";
 import { codexActiveSpeedMigration } from "./migrations/154-codex-active-speed.js";
 import { mutationReceiptThreadIndexMigration } from "./migrations/153-mutation-receipt-thread-index.js";
 import { threadAppliedToolPolicySetsMigration } from "./migrations/152-thread-applied-tool-policy-sets.js";
@@ -326,6 +327,7 @@ export const backendNormalizedMigrations = [
   codexActiveSpeedMigration,
   automaticModelRetryMigration,
   modelFailureRetryStateMigration,
+  connectionCompressionMigration,
 ] as const;
 
 export type DatabaseMigration = {

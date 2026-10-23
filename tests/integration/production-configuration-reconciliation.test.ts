@@ -26,6 +26,7 @@ import type { BackendModuleRuntime, BackendModuleRuntimeContext } from "../../sr
 import { OpenCodeBackendModule } from "../../src/server/backends/opencode/opencode-backend-module.js";
 import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import { openCodeRuntimeNamespaceKey } from "../../src/server/backends/opencode/opencode-runtime.js";
+import * as environmentRuntime from "../../src/server/runtime/execution-environment-runtime.js";
 
 let application: RunningApplication | undefined;
 let directory: string | undefined;
@@ -125,6 +126,64 @@ function addBackgroundOpenCode(configuration: ConfigurationDocument, environment
 }
 
 describe("production configuration reconciliation", () => {
+  it("keeps the environment owner and backend when only the next connection's compression changes", async () => {
+    directory = await mkdtemp(path.join(tmpdir(), "sedes-compression-reconcile-"));
+    await writeFile(path.join(directory, "server.json"), JSON.stringify({ schemaVersion: 11, packagedClients: [] }));
+    const { service, scope } = await openApplication();
+    const snapshot = await service.get(scope);
+    const environmentId = randomUUID();
+    const originalFactory = environmentRuntime.createExecutionEnvironmentRuntime;
+    let captured: environmentRuntime.ExecutionEnvironmentRuntimeInput | undefined;
+    let runtime: environmentRuntime.ExecutionEnvironmentRuntime | undefined;
+    let creations = 0;
+    vi.spyOn(environmentRuntime, "createExecutionEnvironmentRuntime").mockImplementation(async input => {
+      const result = await originalFactory(input);
+      if (input.configured.id === environmentId) { captured = input; runtime = result; creations++; }
+      return result;
+    });
+    vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockResolvedValue(undefined);
+    vi.spyOn(SidecarRuntimeOwner.prototype, "connect").mockRejectedValue(new Error("unexpected_sidecar_connect"));
+    const apply = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "apply");
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Compression host", hostAlias: "compression-host",
+      connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "sidecar", enabledCapabilities: ["workspace_tools", "workspace_context"] } });
+    configuration.backends.push({ id: "compression-pi", kind: "pi", label: "Remote workspace Pi", enabled: true, modelPolicy: { type: "catalog" } });
+    configuration.targets.push({ id: "compression-pi-target", kind: "pi_sdk", label: "Remote workspace Pi", enabled: true,
+      backendInstanceId: "compression-pi", executionEnvironmentId: environmentId });
+    await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    expect((await service.get(scope)).runtimes.find(item => item.resourceId === "compression-pi")).toMatchObject({ applyState: "applied" });
+    expect(creations).toBe(1);
+    const collection = apply.mock.contexts[0] as PrincipalBackendRuntimeCollection;
+    const backend = collection.runtimes.get("compression-pi");
+    expect(backend).toBeDefined();
+    const initial = await service.get(scope);
+    const initialRuntimes = initial.runtimes.filter(item => [environmentId, "compression-pi"].includes(item.resourceId));
+    const close = vi.spyOn(runtime!, "close");
+    const remove = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "remove");
+    const policy = captured!.connectionCompression;
+    expect(policy()).toBe(true);
+    for (const connectionCompression of [false, true]) {
+      const remote = configuration.executionEnvironments.find(item => item.id === environmentId)!;
+      if (remote.kind !== "ssh") throw new Error("Expected SSH fixture");
+      remote.connectionCompression = connectionCompression;
+      const before = await service.get(scope);
+      await service.save(scope, { mutationId: randomUUID(), expectedRevision: before.revision, configuration });
+      const after = await service.get(scope);
+      expect(after.revision).toBe(before.revision + 1);
+      expect(after.runtimes.filter(item => [environmentId, "compression-pi"].includes(item.resourceId))).toEqual(initialRuntimes);
+      expect(policy()).toBe(connectionCompression);
+      expect(creations).toBe(1);
+      expect(collection.runtimes.get("compression-pi")).toBe(backend);
+      expect(close).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
+    }
+    configuration.executionEnvironments.find(item => item.id === environmentId)!.workspaceRoots.push("/additional-root");
+    await service.save(scope, { mutationId: randomUUID(), expectedRevision: (await service.get(scope)).revision, configuration });
+    expect(creations).toBe(2);
+    expect(close).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith("compression-pi", expect.objectContaining({ run: expect.any(Function) }));
+  });
+
   it("attaches a replacement module's retained work before the old pass settles", async () => {
     const modules: BackendModuleRuntime[] = [];
     const installAdministration = (runtime: BackendModuleRuntime) => {
@@ -254,7 +313,7 @@ describe("production configuration reconciliation", () => {
       } else {
         const replacementEnvironmentId = randomUUID();
         configuration.executionEnvironments = [{ id: replacementEnvironmentId, kind: "ssh", label: "Replacement host",
-          hostAlias: "test-target", workspaceRoots: ["/workspace"], operations: { kind: "sidecar", enabledCapabilities: ["workspace_tools", "workspace_context"] } }];
+          hostAlias: "test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "sidecar", enabledCapabilities: ["workspace_tools", "workspace_context"] } }];
         configuration.targets = configuration.targets.map(target => ({ ...target, executionEnvironmentId: replacementEnvironmentId }));
       }
       await expect(service.save(scope, { mutationId: randomUUID(), expectedRevision: (await service.get(scope)).revision, configuration }))
@@ -382,7 +441,7 @@ describe("production configuration reconciliation", () => {
     const environmentId = randomUUID();
     const configuration = structuredClone(snapshot.configuration);
     configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Cleanup host", hostAlias: "test-target",
-      workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+      connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
     addBackgroundOpenCode(configuration, environmentId);
     const status: SidecarServiceStatus = { scope: { ...scope, installationId: "installation", executionEnvironmentId: environmentId },
       serviceIncarnation: "retained-service", buildId: "test-build", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
@@ -531,7 +590,7 @@ describe("production configuration reconciliation", () => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();
     const configuration = structuredClone(snapshot.configuration);
-    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Held host", hostAlias: "held-test-target", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Held host", hostAlias: "held-test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
     configuration.backends.push({ id: "held-opencode", kind: "opencode", label: "Held", enabled: true, modelPolicy: { type: "catalog" },
       moduleConfiguration: { connection: { ownership: "owned", channel: { type: "process_stdio" } } } });
     configuration.targets.push({ id: "held-opencode-target", kind: "opencode_http", backendInstanceId: "held-opencode",
@@ -568,7 +627,7 @@ describe("production configuration reconciliation", () => {
     const backendId = "retained-startup-claude";
     const configuration = structuredClone(snapshot.configuration);
     const appliedStartup = { BUILD_STAGE: { kind: "literal" as const, value: "A" } };
-    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Retained host", hostAlias: "test-target", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Retained host", hostAlias: "test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
     configuration.backends.push({ id: backendId, kind: "claude_agent_sdk", label: "Retained Claude", enabled: true, modelPolicy: { type: "catalog" },
       environmentVariables: { execution: {}, startup: appliedStartup },
       moduleConfiguration: { executablePath: "/bin/claude", configDirectory: "/config/claude", initializationTimeoutMs: 1000, permissionPolicy: { allowedModes: ["default"] } } });
@@ -677,7 +736,7 @@ describe("production configuration reconciliation", () => {
     const environmentId = randomUUID();
     const backendId = "retained-claude";
     const configuration = structuredClone(snapshot.configuration);
-    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Retained host", hostAlias: "test-target", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Retained host", hostAlias: "test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
     configuration.backends.push({ id: backendId, kind: "claude_agent_sdk", label: "Retained Claude", enabled: false, modelPolicy: { type: "catalog" },
       moduleConfiguration: { executablePath: "/bin/claude", configDirectory: "/config/claude", initializationTimeoutMs: 1000, permissionPolicy: { allowedModes: ["default"] } } });
     configuration.targets.push({ id: "retained-claude-target", backendInstanceId: backendId, executionEnvironmentId: environmentId, kind: "claude_agent_sdk", label: "Retained Claude", enabled: false,
@@ -734,7 +793,7 @@ describe("production configuration reconciliation", () => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();
     const configuration = structuredClone(snapshot.configuration);
-    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Failing host", hostAlias: "test-target", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Failing host", hostAlias: "test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
     vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockResolvedValue(undefined);
     const connect = vi.spyOn(SidecarRuntimeOwner.prototype, "connect").mockRejectedValue(new SidecarUnavailableError({
       cause: new Error("sidecar_hello_build_mismatch", { cause: new Error("expected fixture digest") }),
@@ -775,7 +834,7 @@ describe("production configuration reconciliation", () => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();
     const configuration = structuredClone(snapshot.configuration);
-    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Older Node host", hostAlias: "test-target", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Older Node host", hostAlias: "test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
     configuration.backends.push({ id: "unsupported-claude", kind: "claude_agent_sdk", label: "Retained Claude", enabled: false, modelPolicy: { type: "catalog" },
       moduleConfiguration: { executablePath: "/bin/claude", configDirectory: "/config/claude", initializationTimeoutMs: 1000, permissionPolicy: { allowedModes: ["default"] } } });
     configuration.targets.push({ id: "unsupported-claude-target", backendInstanceId: "unsupported-claude", executionEnvironmentId: environmentId, kind: "claude_agent_sdk", label: "Retained Claude", enabled: false,
@@ -821,7 +880,7 @@ describe("production configuration reconciliation", () => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();
     const configuration = structuredClone(snapshot.configuration);
-    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "SSH target", hostAlias: "test-target", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "SSH target", hostAlias: "test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
     const status: SidecarServiceStatus = { scope: { ...scope, installationId: "installation", executionEnvironmentId: environmentId },
       serviceIncarnation: "live-old-service", buildId: "old-build", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
       controllerEpoch: 1, attached: false, attachmentMode: "none", state: "ready", configurationState: "applied",
@@ -867,7 +926,7 @@ describe("production configuration reconciliation", () => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();
     const configuration = structuredClone(snapshot.configuration);
-    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "SSH target", hostAlias: "test-target", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "SSH target", hostAlias: "test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
     const status: SidecarServiceStatus = { scope: { ...scope, installationId: "installation", executionEnvironmentId: environmentId },
       serviceIncarnation: "live-service", buildId: "build", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
       controllerEpoch: 1, attached: false, attachmentMode: "none", state: "ready", configurationState: "applied",
@@ -921,7 +980,7 @@ describe("production configuration reconciliation", () => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();
     const configuration = structuredClone(snapshot.configuration);
-    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "SSH target", hostAlias: "test-target", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "SSH target", hostAlias: "test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
     const status: SidecarServiceStatus = { scope: { ...scope, installationId: "installation", executionEnvironmentId: environmentId },
       serviceIncarnation: "older-build-service", buildId: "older-build", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
       controllerEpoch: 1, attached: false, attachmentMode: "none", state: "ready", configurationState: "applied",
@@ -944,7 +1003,7 @@ describe("production configuration reconciliation", () => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();
     const configuration = structuredClone(snapshot.configuration);
-    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "SSH target", hostAlias: "test-target", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "SSH target", hostAlias: "test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
     const status: SidecarServiceStatus = { scope: { ...scope, installationId: "installation", executionEnvironmentId: environmentId },
       serviceIncarnation: "old-protocol-service", buildId: "old-build", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION + 1,
       controllerEpoch: 1, attached: false, attachmentMode: "none", state: "ready", configurationState: "applied",
@@ -968,7 +1027,7 @@ describe("production configuration reconciliation", () => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();
     const configuration = structuredClone(snapshot.configuration);
-    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "SSH target", hostAlias: "test-target", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "SSH target", hostAlias: "test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
     configuration.backends.push({ id: "remote-codex", kind: "codex_app_server", label: "Remote Codex", enabled: false, modelPolicy: { type: "catalog" }, moduleConfiguration: {
       connection: { ownership: "external", channel: { type: "unix_websocket", socketPath: "/tmp/codex.sock" } },
       policy: { allowedSandboxModes: ["read-only"], allowedNetworkAccess: ["disabled"], allowedApprovalPolicies: ["on-request"], allowedApprovalReviewers: ["user"] },

@@ -10,12 +10,21 @@ import {
 import type { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
 import { NotificationService } from "../../src/server/domain/notification-service.js";
 import { ApplicationEventHub } from "../../src/server/events/application-event-hub.js";
+import { SseResponseWriter } from "../../src/server/events/sse-response-writer.js";
+import { ClientResponseCompression } from "../../src/server/http/response-compression.js";
 import {
   DEFAULT_APPLICATION_SSE_DRAIN_TIMEOUT_MILLISECONDS,
   DEFAULT_APPLICATION_SSE_PENDING_BYTE_LIMIT,
   DEFAULT_APPLICATION_SSE_PENDING_EVENT_LIMIT,
-  serveApplicationEventStream,
+  serveApplicationEventStream as serveApplicationEventStreamWithWriter,
 } from "../../src/server/events/application-sse.js";
+
+function serveApplicationEventStream(request: Request, response: Response, hub: ApplicationEventHub,
+  checkpoint: Parameters<typeof serveApplicationEventStreamWithWriter>[3],
+  options?: Parameters<typeof serveApplicationEventStreamWithWriter>[4]) {
+  return serveApplicationEventStreamWithWriter(request,
+    new SseResponseWriter(request, response, new ClientResponseCompression(false)), hub, checkpoint, options);
+}
 
 class FakeRequest extends EventEmitter {
   constructor(private readonly lastEventId?: string) {
@@ -29,6 +38,8 @@ class FakeRequest extends EventEmitter {
 class FakeResponse extends EventEmitter {
   readonly writes: string[] = [];
   readonly end = vi.fn();
+  readonly destroy = vi.fn();
+  readonly vary = vi.fn();
   readonly setHeader = vi.fn();
   readonly flushHeaders = vi.fn();
   readonly status = vi.fn(() => this);
@@ -154,7 +165,7 @@ describe("serveApplicationEventStream", () => {
       });
     response.writeResult = () => { throw new Error("socket unavailable"); };
     expect(() => transient('event: notification\ndata: {}\n\n')).not.toThrow();
-    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.destroy).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
     const writes = response.writes.length;
     hub.publish({ type: "environment_upsert", generation: hub.generation, environment: renamedEnvironment(0) });
@@ -208,7 +219,7 @@ describe("serveApplicationEventStream", () => {
     transient('event: notification\ndata: {"sourceEventId":"1"}\n\n');
     expect(response.end).not.toHaveBeenCalled();
     transient('event: notification\ndata: {"sourceEventId":"2"}\n\n');
-    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.destroy).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
     release({ envelope: hub.currentCheckpoint()! });
     await serving;
@@ -244,7 +255,7 @@ describe("serveApplicationEventStream", () => {
     transient(frame(5));
     expect(response.end).not.toHaveBeenCalled();
     transient(frame(6));
-    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.destroy).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(response.listenerCount("drain")).toBe(0);
     expect(response.writes.at(-1)).toBe(frame(3));
@@ -938,7 +949,7 @@ describe("serveApplicationEventStream", () => {
     await serving;
     expect(envelopes(response).slice(1)).toEqual([replacement, later]);
     hub.close();
-    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.destroy).toHaveBeenCalledOnce();
     expect(response.listenerCount("drain")).toBe(0);
   });
 });
@@ -1002,7 +1013,7 @@ describe("application stream close diagnostics", () => {
       transientEventCount: 1, transientBytes: Buffer.byteLength(frame, "utf8"), durationMs: expect.any(Number),
     }]);
     expect(JSON.stringify(records())).not.toContain("private speech");
-    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.destroy).toHaveBeenCalledOnce();
   });
 
   it("identifies inventory overflow without logging queued content", async () => {
@@ -1018,7 +1029,7 @@ describe("application stream close diagnostics", () => {
     await serving;
     expect(records()).toHaveLength(1);
     expect(records()[0]).toMatchObject({ reason: "overflow", live: false, pendingEventCount: 1, pendingBytes: hub.encoded(event).bytes });
-    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.destroy).toHaveBeenCalledOnce();
   });
 
   it("records drain timeout and clears the existing drain owner", async () => {
@@ -1038,7 +1049,7 @@ describe("application stream close diagnostics", () => {
     expect(records()).toHaveLength(1);
     expect(records()[0]).toMatchObject({ reason: "drain_timeout", live: true, transientEventCount: 1, transientBytes: 30 });
     expect(response.listenerCount("drain")).toBe(0);
-    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.destroy).toHaveBeenCalledOnce();
   });
 
   it.each(["write", "handshake"] as const)("does not log raw %s errors", async (source) => {
@@ -1056,7 +1067,7 @@ describe("application stream close diagnostics", () => {
     expect(records()).toHaveLength(1);
     expect(records()[0]).toMatchObject({ reason: source === "write" ? "stream_error" : "handshake_error", live: source === "write" });
     expect(JSON.stringify(records())).not.toContain("private");
-    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.destroy).toHaveBeenCalledOnce();
   });
 
   it("stays silent while disabled and still closes when stderr throws", async () => {
@@ -1067,7 +1078,7 @@ describe("application stream close diagnostics", () => {
       await serveApplicationEventStream(request as unknown as Request, response as unknown as Response, hub,
         async () => ({ envelope: baseline }));
       expect(() => hub.close()).not.toThrow();
-      expect(response.end).toHaveBeenCalledOnce();
+      expect(response.destroy).toHaveBeenCalledOnce();
       expect(log).toHaveBeenCalledTimes(gate ? 1 : 0);
     }
   });

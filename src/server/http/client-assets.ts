@@ -60,7 +60,7 @@ function clientFilePath(root: string, requestPath: string): string | undefined {
 /**
  * Serves the built client. Compressible files are sent with Brotli or gzip
  * when the browser accepts it, compressed once per file version and kept in a
- * bounded in-process cache; SSE and API responses are never compressed.
+ * bounded in-process cache. Dynamic response coding is owned by its routes.
  * Content-hashed assets are immutable for a year; every other file, including
  * index.html, is revalidated on each use.
  */

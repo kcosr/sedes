@@ -165,7 +165,7 @@ async function shellFixture() {
     });
     peers.push(currentPeer);
     currentPeer.start();
-    const session = await SidecarClientSession.start({ transportKind: "ssh_stdio",
+    const session = await SidecarClientSession.start({ connectionCompression: true, transportKind: "ssh_stdio",
       stream: sidecarSocketByteStream(clientSocket),
       sessionNonce,
       carrierGeneration: sessions.length + 1,

@@ -180,7 +180,7 @@ function runtimeFixture() {
   };
   const launch = vi.fn(async () => stream("normal"));
   const attachExisting = vi.fn(async () => stream("recovery"));
-  const owner = new SidecarRuntimeOwner<SidecarClientSession>({
+  const owner = new SidecarRuntimeOwner<SidecarClientSession>({ connectionCompression: () => true,
     scope, executionEnvironmentId: "remote", environmentConfigurationRevision: 1,
     operationsConfigurationRevision: 1,
     authorizedCapabilities: [

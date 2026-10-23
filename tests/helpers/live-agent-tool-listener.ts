@@ -177,7 +177,7 @@ policies,
 new AgentToolEnvironmentAuthorityResolver(sources),
 sources, testAgentToolExecutionAuthority);
   const config: AppConfig = {
-    authenticationRequired: true,
+    authenticationRequired: true, clientResponseCompression: true,
     experimentalUsageEnabled: false,
     host: "127.0.0.1",
     port: 4784,

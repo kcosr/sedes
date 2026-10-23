@@ -266,6 +266,7 @@ describe("sidecar hello capability evidence", () => {
 
   it("rejects obsolete executable evidence, inexact limits, and runtime evidence", () => {
     const response = {
+      compression: "none",
       wireVersion: SIDECAR_WIRE_VERSION,
       buildId: "build",
       artifactSha256: "a".repeat(64),
@@ -366,6 +367,7 @@ async function invokeHello(
   const registered = registry.resolve(controlHelloOperation)!;
   const value = await registered.handler(
     {
+      compression: "none",
       expectedBuildId: "build",
       expectedArtifactSha256: "a".repeat(64),
       authorizedSidecarCapabilities,

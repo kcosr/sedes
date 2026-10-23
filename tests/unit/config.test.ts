@@ -6,10 +6,24 @@ import {
 } from "../../src/server/config/config.js";
 
 describe("loadConfig", () => {
+  it.each([[undefined, true], ["true", true], ["false", false]] as const)(
+    "selects client response compression for %s", (configured, expected) => {
+      expect(loadConfig({ SEDES_CLIENT_RESPONSE_COMPRESSION: configured }).clientResponseCompression).toBe(expected);
+    },
+  );
+
+  it.each(["", "TRUE", "FALSE", "1", "0", " true", "false "])(
+    "rejects malformed client response compression setting %j", configured => {
+      expect(() => loadConfig({ SEDES_CLIENT_RESPONSE_COMPRESSION: configured })).toThrow(
+        "SEDES_CLIENT_RESPONSE_COMPRESSION must be exactly true or false.",
+      );
+    },
+  );
+
   it("uses the production defaults when optional values are omitted", () => {
     expect(loadConfig({ APP_STATE_DIR: "/tmp/sedes-state" })).toMatchObject({
       port: 4784,
-      authenticationRequired: true,
+      authenticationRequired: true, clientResponseCompression: true,
       experimentalUsageEnabled: false,
       conversationRetentionMilliseconds: 3_600_000,
       conversationRuntimeBudget: 32,

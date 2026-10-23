@@ -19,7 +19,7 @@ const registration: HostRegistration = {
   lastSeenAt: "2026-09-12T12:00:00.000Z", expiresAt: "2026-09-13T12:00:00.000Z", pairingId: null,
 };
 const environment = { id: "20000000-0000-4000-8000-000000000004", kind: "outbound" as const, label: "My Mac", pairingId: "20000000-0000-4000-8000-000000000005",
-  platform: "darwin" as const, workspaceRoots: ["/Users/operator/Projects"], operations: { kind: "sidecar" as const, enabledCapabilities: ["workspace_files" as const] } };
+  platform: "darwin" as const, connectionCompression: true, workspaceRoots: ["/Users/operator/Projects"], operations: { kind: "sidecar" as const, enabledCapabilities: ["workspace_files" as const] } };
 function fixture(paired = false) {
   let snapshot: ConfigurationSnapshot = { revision: 3, configuration: { executionEnvironments: paired ? [environment] : [], backends: [], targets: [], defaultTargetId: null, webSearch: null }, runtimes: [] };
   const binding = { id: environment.pairingId, connectorId: registration.connectorId, executionEnvironmentId: environment.id, platform: "darwin" as const,
@@ -29,7 +29,7 @@ function fixture(paired = false) {
     outboundConnectorSetup: () => ({ serverUrl: "http://sedes.test:4784", downloadUrl: "http://sedes.test:4784/api/outbound/connector/sedes-sidecar.mjs" }),
     listHostRegistrations: vi.fn(async () => structuredClone(hosts)),
     acceptHostRegistration: vi.fn(async request => {
-      snapshot = { ...snapshot, revision: 4, configuration: { ...snapshot.configuration, executionEnvironments: [{ ...environment, label: request.label, workspaceRoots: request.workspaceRoots, operations: request.operations }] } };
+      snapshot = { ...snapshot, revision: 4, configuration: { ...snapshot.configuration, executionEnvironments: [{ ...environment, label: request.label, connectionCompression: true, workspaceRoots: request.workspaceRoots, operations: request.operations }] } };
       const accepted = { ...registration, state: "accepted" as const, pairingId: binding.id };
       hosts = { registrations: [{ ...accepted, connected: false }], pairings: [{ ...binding, connected: false }] };
       return { registration: accepted, pairing: binding, configuration: snapshot };

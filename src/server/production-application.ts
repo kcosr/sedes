@@ -70,6 +70,7 @@ import { OutboundSidecarProvisioner } from "./sidecar/outbound-sidecar-provision
 import { ConfigurationAdminService, type ConfigurationRuntimeAdapter } from "./configuration-admin/configuration-admin-service.js";
 import { ConfigurationProjection } from "./configuration-admin/configuration-projection.js";
 import { configurationFingerprint } from "./config/configuration-fingerprint.js";
+import { withoutConnectionCompression } from "./configuration-admin/configuration-identities.js";
 import type { ConfigurationRuntimeState } from "../shared/protocol/configuration-admin.js";
 import type { SidecarServiceStatus } from "../internal/sidecar-protocol/service-management-v1.js";
 import {
@@ -522,7 +523,7 @@ export async function startProductionApplication(
         // configuration. A command must retain management access after its
         // intent is committed, and unrelated hosts must stay connected.
         return definition ? configurationFingerprint({
-          environment: definition,
+          environment: withoutConnectionCompression(definition),
           backends: snapshot.configuration.targets.filter(target => target.executionEnvironmentId === environmentId)
             .map(target => ({id: target.backendInstanceId, kind: target.kind})),
         }) : undefined;
@@ -663,7 +664,7 @@ export async function startProductionApplication(
     const appliedEnvironmentFingerprints = new Map<string, string>();
     const environmentPreparationFailures = new Map<string, unknown>();
     const environmentRuntimeFingerprint = (id: string) => configurationFingerprint({
-      environment: (() => { const found = desiredConfiguration.configuration.executionEnvironments.find(item => item.id === id); if (!found) return null; const { environmentVariables: _variables, ...transport } = found; return transport; })(),
+      environment: (() => { const found = desiredConfiguration.configuration.executionEnvironments.find(item => item.id === id); if (!found) return null; const { environmentVariables: _variables, ...transport } = withoutConnectionCompression(found); return transport; })(),
       backends: desiredConfiguration.configuration.targets.filter(target => target.executionEnvironmentId === id)
         .map(target => ({id: target.backendInstanceId, kind: target.kind})),
     });
@@ -698,6 +699,11 @@ export async function startProductionApplication(
           .map(capability => [capability.capabilityId, capability] as const)).values()],
         activeEnvironmentRecord: () => inventoryRepository.getEnvironment(scope, environmentId),
         automaticConnectionEnabled: () => configurationRepository.runtime(scope, "environment", environmentId).preference === "automatic",
+        connectionCompression: () => {
+          const current = configurationRepository.get(scope).configuration.executionEnvironments.find(item => item.id === environmentId);
+          if (!current || current.kind === "local") throw new Error("remote_execution_environment_configuration_missing");
+          return current.connectionCompression;
+        },
         reportAvailability: (available, diagnosticCode) => reportRemoteAvailability(environmentId, available, diagnosticCode),
         ...(configured.kind === "outbound" ? {outboundConnection: {
           createProvisioner: (options: Omit<ConstructorParameters<typeof OutboundSidecarProvisioner>[0], "registry">) =>

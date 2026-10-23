@@ -148,6 +148,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
   }
 
   static async start(input: {
+    readonly connectionCompression: boolean;
     readonly stream: SidecarByteStream;
     readonly transportKind: string;
     readonly carrierGeneration: number;
@@ -210,6 +211,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
       const hello = await peer.call(
         controlHelloOperation,
         {
+          compression: input.connectionCompression ? "zstd" : "none",
           expectedBuildId: input.artifact.buildId,
           expectedArtifactSha256: input.artifact.artifactSha256,
           authorizedSidecarCapabilities: [...authorizedCapabilities.filter(

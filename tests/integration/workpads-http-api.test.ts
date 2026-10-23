@@ -16,6 +16,7 @@ import { CanonicalInlineAgentToolService, mapAgentToolDomainError } from "../../
 import { DomainError } from "../../src/server/domain/errors.js";
 import { createWorkpadRequestSchema, updateWorkpadRequestSchema } from "../../src/shared/protocol/workpads.js";
 import { runSedesCli } from "../../src/cli/sedes-cli.js";
+import { asyncCodecBudget } from "../../src/internal/compression/async-codec-budget.js";
 
 function fixture(agentTools: AgentToolRouterDependencies = unavailableAgentToolRouterDependencies()) {
   const { database, scope } = savedAgentDatabase();
@@ -33,7 +34,7 @@ function fixture(agentTools: AgentToolRouterDependencies = unavailableAgentToolR
     turnBookmarks: unavailableTurnBookmarks(),
     workspaceDiffReviews: {} as never,
     config: {
-      authenticationRequired: true,
+      authenticationRequired: true, clientResponseCompression: true,
       experimentalUsageEnabled: false,
       host: "127.0.0.1",
       port: 4783,
@@ -86,6 +87,25 @@ function fixture(agentTools: AgentToolRouterDependencies = unavailableAgentToolR
 }
 
 describe("Workpads HTTP", () => {
+  it("returns committed mutations even when response encoding is invalid, forbidden, or busy", async () => {
+    const f = fixture();
+    const leases = [asyncCodecBudget.tryAcquire(), asyncCodecBudget.tryAcquire()];
+    try {
+      expect(leases.every(Boolean)).toBe(true);
+      for (const encoding of ["gzip;q=invalid", "gzip;q=0, identity;q=0", "gzip, identity;q=0"]) {
+        const created = await f.mutate("post", "/api/workpads").set("Accept-Encoding", encoding)
+          .send({ title: "Committed", scope: { kind: "global" }, content: "content ".repeat(256) }).expect(201);
+        expect(created.headers["content-encoding"]).toBeUndefined();
+        expect(f.workpads.get(f.scope, created.body.workpad.id).content).toBe("content ".repeat(256));
+      }
+      expect(f.workpads.list(f.scope, { scope: { kind: "global" } }).items).toHaveLength(3);
+      expect(asyncCodecBudget.waitingCount).toBe(0);
+    } finally {
+      for (const lease of leases) lease?.release();
+      f.database.close();
+    }
+  });
+
   it("runs the CLI through real normalized HTTP at the 256K boundary and preserves rejection details", async () => {
     const baseDependencies = unavailableAgentToolRouterDependencies();
     const descriptions = new CanonicalInlineAgentToolService({ application: {} as never, workpads: {} as never });

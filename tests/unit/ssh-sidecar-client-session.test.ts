@@ -116,7 +116,7 @@ describe("SidecarClientSession", () => {
       error: { code: "permission_denied" as const, message: "Fixture denied without executing a tool.", retryable: false } }));
     for (const operation of agentToolsV6Operations) sedesOperations.register(operation as never, (() => ({ outcome: "ok", tools: [] })) as never);
     sedesOperations.register(openCodeToolInvokeOperation, invoked);
-    const session = await SidecarClientSession.start({ stream: streams.left, transportKind, carrierGeneration: 1, sessionNonce, artifact, installation,
+    const session = await SidecarClientSession.start({ connectionCompression: true, stream: streams.left, transportKind, carrierGeneration: 1, sessionNonce, artifact, installation,
       signal: new AbortController().signal, authorizedCapabilities: [agentToolsCapability], authorizedRuntimeCapabilities: [runtime], sedesOperations });
     try {
       expect(host.supportsOperation(openCodeToolInvokeOperation)).toBe(privateSupported);
@@ -149,7 +149,7 @@ describe("SidecarClientSession", () => {
     if (cli) for (const operation of agentToolsV6Operations) sedesOperations.register(operation as never, (() => { throw new Error("unreachable"); }) as never);
     if (registered) sedesOperations.register(openCodeToolInvokeOperation, () => { throw new Error("unreachable"); });
     try {
-      await expect(SidecarClientSession.start({ stream: streams.left, transportKind: "ssh_stdio", carrierGeneration: 1, sessionNonce, artifact, installation,
+      await expect(SidecarClientSession.start({ connectionCompression: true, stream: streams.left, transportKind: "ssh_stdio", carrierGeneration: 1, sessionNonce, artifact, installation,
         signal: new AbortController().signal, authorizedCapabilities: cli ? [agentToolsCapability] : [],
         authorizedRuntimeCapabilities: runtime ? [{ capabilityId: runtime, majorVersion: runtime === "opencode_runtime" ? 3 : 1, operations: openCodeRuntimeOperations.map(operation => operation.operation) }] : [], sedesOperations }))
         .rejects.toThrow("sidecar_sedes_capabilities_invalid");
@@ -167,7 +167,7 @@ describe("SidecarClientSession", () => {
     const host = new SidecarProtocolPeer({ role: "sidecar", transport, sessionNonce, registry });
     host.start();
     try {
-      const session = await SidecarClientSession.start({ stream: streams.left, transportKind: "ssh_stdio", carrierGeneration: 7,
+      const session = await SidecarClientSession.start({ connectionCompression: true, stream: streams.left, transportKind: "ssh_stdio", carrierGeneration: 7,
         executionEnvironmentId: "add8e8af-7bca-4273-9274-2bb9d3a320bb", sessionNonce, artifact, installation,
         signal: new AbortController().signal, authorizedCapabilities: [], authorizedRuntimeCapabilities: [], sedesOperations: new SidecarOperationRegistry() });
       await streams.right.close("/private/secret-provider-response");
@@ -209,7 +209,7 @@ describe("SidecarClientSession", () => {
     const host = new SidecarProtocolPeer({ role: "sidecar", transport, sessionNonce, registry });
     host.start();
     try {
-      const session = await SidecarClientSession.start({ stream: streams.left, transportKind: "ssh_stdio", carrierGeneration: 1,
+      const session = await SidecarClientSession.start({ connectionCompression: true, stream: streams.left, transportKind: "ssh_stdio", carrierGeneration: 1,
         sessionNonce, artifact, installation, signal: new AbortController().signal, authorizedCapabilities: [],
         authorizedRuntimeCapabilities: [], sedesOperations: new SidecarOperationRegistry(), heartbeatIntervalMilliseconds: 10 });
       streams.right.blockWrites();
@@ -269,7 +269,7 @@ describe("SidecarClientSession", () => {
       registry,
     });
     sidecar.start();
-    const session = await SidecarClientSession.start({
+    const session = await SidecarClientSession.start({ connectionCompression: true,
       transportKind: "ssh_stdio",
       stream: streams.left,
       carrierGeneration: 1,
@@ -360,6 +360,7 @@ describe("SidecarClientSession", () => {
         ticket: randomUUID(),
       }));
       registry.register(controlHelloOperation, (request) => ({
+        compression: request.compression,
         wireVersion: SIDECAR_WIRE_VERSION,
         buildId: artifact.buildId,
         artifactSha256: artifact.artifactSha256,
@@ -419,7 +420,7 @@ describe("SidecarClientSession", () => {
         }),
       });
       host.start();
-      const started = SidecarClientSession.start({
+      const started = SidecarClientSession.start({ connectionCompression: true,
         transportKind: "outbound",
         stream: streams.left,
         carrierGeneration: 1,
@@ -480,7 +481,8 @@ describe("SidecarClientSession", () => {
           }) as never,
         );
       }
-      sidecarOperations.register(controlHelloOperation, () => ({
+      sidecarOperations.register(controlHelloOperation, (request) => ({
+        compression: request.compression,
         wireVersion: SIDECAR_WIRE_VERSION,
         buildId: artifact.buildId,
         artifactSha256: artifact.artifactSha256,
@@ -505,7 +507,7 @@ describe("SidecarClientSession", () => {
       sidecar.start();
 
       await expect(
-        SidecarClientSession.start({
+        SidecarClientSession.start({ connectionCompression: true,
           transportKind: "ssh_stdio",
           stream: streams.left,
           carrierGeneration: 1,
@@ -593,7 +595,7 @@ describe("SidecarClientSession", () => {
         );
       }
 
-      const started = SidecarClientSession.start({
+      const started = SidecarClientSession.start({ connectionCompression: true,
         transportKind: windows ? "outbound_websocket" : "ssh_stdio",
         stream: streams.left,
         carrierGeneration: 1,
@@ -649,7 +651,7 @@ describe("SidecarClientSession", () => {
       }
 
       await expect(
-        SidecarClientSession.start({
+        SidecarClientSession.start({ connectionCompression: true,
           transportKind: "ssh_stdio",
           stream: streams.left,
           carrierGeneration: 1,
@@ -698,7 +700,7 @@ describe("SidecarClientSession", () => {
         registry,
       });
       host.start();
-      const session = await SidecarClientSession.start({
+      const session = await SidecarClientSession.start({ connectionCompression: true,
         transportKind: "ssh_stdio",
         stream: streams.left,
         carrierGeneration: 1,
@@ -724,7 +726,7 @@ describe("SidecarClientSession", () => {
         schema: workspaceFilesWatchFailedEventSchema,
         payload: { subscriptionHandle: earlyFailureHandle },
       });
-      await Promise.resolve();
+      await session.call(controlPingOperation, { pingId: randomUUID() });
       const earlyFailure = vi.fn();
       session.registerWatchFailure(earlyFailureHandle, earlyFailure);
       await Promise.resolve();
@@ -793,7 +795,7 @@ describe("SidecarClientSession", () => {
         registry,
       });
       host.start();
-      const session = await SidecarClientSession.start({
+      const session = await SidecarClientSession.start({ connectionCompression: true,
         transportKind: "ssh_stdio",
         stream: streams.left,
         carrierGeneration: 1,
@@ -857,7 +859,7 @@ describe("SidecarClientSession", () => {
       registry,
     });
     host.start();
-    const session = await SidecarClientSession.start({
+    const session = await SidecarClientSession.start({ connectionCompression: true,
       transportKind: "ssh_stdio",
       stream: streams.left,
       carrierGeneration: 1,
@@ -919,7 +921,7 @@ describe("SidecarClientSession", () => {
       registry,
     });
     host.start();
-    const session = await SidecarClientSession.start({
+    const session = await SidecarClientSession.start({ connectionCompression: true,
       transportKind: "ssh_stdio",
       stream: streams.left,
       carrierGeneration: 1,
@@ -937,7 +939,7 @@ describe("SidecarClientSession", () => {
       .mockRejectedValue(cleanupFailure);
 
     await streams.right.write(
-      Buffer.from([0x42, 0x41, 0x44, 0x21, 0, 0, 0, 1, 0x78]),
+      Buffer.concat([Buffer.from("BAD!"), Buffer.alloc(12)]),
     );
     await expect(session.closed).rejects.toMatchObject({
       name: SidecarSessionCleanupError.name,
@@ -973,16 +975,15 @@ describe("SidecarClientSession", () => {
 
       const earlyHandle = randomUUID();
       await sendInvalidation(host, earlyHandle);
-      await vi.waitFor(async () => {
-        const early = vi.fn();
-        const remove = session.registerInvalidation(earlyHandle, early);
-        try {
-          await Promise.resolve();
-          expect(early).toHaveBeenCalledOnce();
-        } finally {
-          remove();
-        }
-      });
+      await session.call(controlPingOperation, { pingId: randomUUID() });
+      const early = vi.fn();
+      const remove = session.registerInvalidation(earlyHandle, early);
+      try {
+        await Promise.resolve();
+        expect(early).toHaveBeenCalledOnce();
+      } finally {
+        remove();
+      }
     } finally {
       await session.close("test_complete");
       await host.close("test_complete");
@@ -1047,7 +1048,7 @@ async function startWorkspaceFilesSession() {
     }),
   });
   host.start();
-  const session = await SidecarClientSession.start({
+  const session = await SidecarClientSession.start({ connectionCompression: true,
     transportKind: "ssh_stdio",
     stream: streams.left,
     carrierGeneration: 1,

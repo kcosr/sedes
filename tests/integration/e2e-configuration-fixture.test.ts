@@ -24,7 +24,7 @@ describe("scripted configuration administration fixture", () => {
       expect(onReconciled).toHaveBeenCalledTimes(1);
       const remoteId = randomUUID();
       const next = structuredClone(document);
-      next.executionEnvironments.push({ id: remoteId, kind: "ssh", label: "Uncertain fixture", hostAlias: "e2e-unknown-lifecycle", workspaceRoots: ["/work"], operations: { kind: "none" } });
+      next.executionEnvironments.push({ id: remoteId, kind: "ssh", label: "Uncertain fixture", hostAlias: "e2e-unknown-lifecycle", connectionCompression: true, workspaceRoots: ["/work"], operations: { kind: "none" } });
       await service.save(fixture.scope, { mutationId: randomUUID(), expectedRevision: 0, configuration: next });
       expect(onReconciled).toHaveBeenCalledTimes(2);
       const runtime = (await service.get(fixture.scope)).runtimes.find(entry => entry.resourceId === remoteId)!;
@@ -56,7 +56,7 @@ describe("scripted configuration administration fixture", () => {
       expect((await service.get(fixture.scope)).runtimes[0]?.applyState).toBe("applied");
       const next = structuredClone(document);
       const remoteId = randomUUID();
-      next.executionEnvironments.push({ id: remoteId, kind: "ssh", label: "Unavailable fixture", hostAlias: "e2e-unreachable", workspaceRoots: ["/work"], operations: { kind: "none" } });
+      next.executionEnvironments.push({ id: remoteId, kind: "ssh", label: "Unavailable fixture", hostAlias: "e2e-unreachable", connectionCompression: true, workspaceRoots: ["/work"], operations: { kind: "none" } });
       await service.save(fixture.scope, { mutationId: randomUUID(), expectedRevision: 0, configuration: next });
       expect(published).toHaveLength(2);
       expect(published[1]?.configuration).toEqual(next);

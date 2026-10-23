@@ -691,6 +691,17 @@ Shared transport owns framing, bounds, generation fencing, write-boundary
 classification, closure, and owned-resource cleanup. It does not own method
 catalogs, session meaning, capabilities, history, policy, or recovery.
 
+Sidecar compression belongs to that shared transport, after backend messages
+are serialized. Preserve decoded-byte frame/queue bounds, stream credit and
+sequence accounting, and the distinction between preparation and a carrier
+write. Hello commits its exact negotiated mode before the next frame is
+decoded; control and settlement traffic stays plain. Compression-only
+environment edits must not invalidate execution authority or existing runtimes,
+and recovery reads the latest setting. Local Pi sandbox and Claude worker
+carriers use the same framing with compression disabled. See
+[Sidecar transport](sidecar-transport.md). This does not change any provider's
+native protocol or unsupported-topology disposition.
+
 An installation-managed provider worker is a digest-verified, statically
 registered artifact, not an arbitrary remote command facility. Local and remote
 launchers must run the same worker protocol and provider semantics. The
@@ -4707,6 +4718,16 @@ chunking, preserve original envelopes so queued speech can be rebuilt when setti
 change, and leave shared transcripts and backend event/history text unchanged.
 This boundary applies equally to Pi, Codex, Claude,
 Grok, and OpenCode.
+
+Client response compression belongs after normalization and applies equally to
+all five backends. Select eligible JSON read routes explicitly; mutations, credentials, upload
+contracts, and exact-byte downloads retain their own transport rules. Thread
+and application SSE use one shared response writer for events, diagnostics,
+errors, drains, and shutdown. Preserve decoded frame and pending-byte limits,
+prompt event flushing, and immediate disconnect/revocation cleanup. Browser,
+Android WebView, Electron, and native Android voice HTTP use their normal gzip
+decoders; do not introduce a backend-specific browser codec or compression
+state shared across responses or principals.
 
 ### Paired-client admission
 

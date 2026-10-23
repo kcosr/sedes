@@ -9,7 +9,7 @@ import { BackendConfigurationRepository } from "../../src/server/db/repositories
 import { ConfigurationRepository } from "../../src/server/configuration-admin/configuration-repository.js";
 import { ConfigurationProjection } from "../../src/server/configuration-admin/configuration-projection.js";
 import { ConfigurationAdminService, type ConfigurationRuntimeAdapter } from "../../src/server/configuration-admin/configuration-admin-service.js";
-import { configurationDocumentSchema, type ConfigurationDocument, type ConfigurationLifecycleRequest, type ConfigurationRuntimeState } from "../../src/shared/protocol/configuration-admin.js";
+import { configurationDocumentSchema, configurationEnvironmentSchema, type ConfigurationDocument, type ConfigurationLifecycleRequest, type ConfigurationRuntimeState } from "../../src/shared/protocol/configuration-admin.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
 import { validateConfigurationDocument } from "../../src/server/configuration-admin/configuration-validation.js";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
@@ -55,11 +55,55 @@ function fixture(imported = true) {
 }
 function remoteDocument(): ConfigurationDocument {
   const document = initialDocument();
-  document.executionEnvironments.push({ id: remoteId, kind: "ssh", label: "Remote", hostAlias: "workstation", workspaceRoots: ["/work"], operations: { kind: "sidecar", enabledCapabilities: ["workspace_tools", "workspace_context"] } });
+  document.executionEnvironments.push({ id: remoteId, kind: "ssh", label: "Remote", hostAlias: "workstation", connectionCompression: true, workspaceRoots: ["/work"], operations: { kind: "sidecar", enabledCapabilities: ["workspace_tools", "workspace_context"] } });
   return document;
 }
 
 describe("database-owned configuration", () => {
+  it("requires a boolean compression policy only on remote environments", () => {
+    const remote = remoteDocument().executionEnvironments[1]!;
+    const { connectionCompression: _compression, ...missing } = remote as Extract<typeof remote, { kind: "ssh" }>;
+    expect(configurationEnvironmentSchema.safeParse(missing).success).toBe(false);
+    expect(configurationEnvironmentSchema.safeParse({ ...remote, connectionCompression: "true" }).success).toBe(false);
+    expect(configurationEnvironmentSchema.safeParse({ ...remote, connectionCompression: false }).success).toBe(true);
+    const outbound = { ...missing, kind: "outbound", pairingId: randomUUID(), platform: "linux" } as Record<string, unknown>;
+    delete outbound.hostAlias;
+    expect(configurationEnvironmentSchema.safeParse(outbound).success).toBe(false);
+    expect(configurationEnvironmentSchema.safeParse({ ...outbound, connectionCompression: true }).success).toBe(true);
+    expect(configurationEnvironmentSchema.safeParse({ ...initialDocument().executionEnvironments[0], connectionCompression: true }).success).toBe(false);
+  });
+
+  it("persists compression without changing runtime desires or projected authority", () => {
+    const current = fixture();
+    const document = remoteDocument();
+    document.backends.push({ id: "remote-pi", kind: "pi", label: "Remote Pi", enabled: true, modelPolicy: { type: "catalog" } });
+    document.targets.push({ id: "remote-pi-target", backendInstanceId: "remote-pi", executionEnvironmentId: remoteId, kind: "pi_sdk", label: "Remote Pi", enabled: true });
+    let saved = current.repository.save(current.scope, { mutationId: randomUUID(), expectedRevision: 0, configuration: document },
+      value => current.projection.project(current.scope, value));
+    for (const runtime of saved.runtimes) current.repository.observe(current.scope, { ...runtime, applyState: "applied", effectiveRevision: runtime.desiredRevision });
+    const original = current.repository.get(current.scope);
+    const authority = () => current.database.prepare("SELECT configuration_revision, operations_configuration_revision FROM execution_environments WHERE id = ?").get(remoteId);
+    const originalAuthority = authority();
+    for (const connectionCompression of [false, true]) {
+      const remote = document.executionEnvironments.find(environment => environment.id === remoteId)!;
+      if (remote.kind !== "ssh") throw new Error("Expected SSH fixture");
+      remote.connectionCompression = connectionCompression;
+      saved = current.repository.save(current.scope, { mutationId: randomUUID(), expectedRevision: saved.revision, configuration: document },
+        value => current.projection.project(current.scope, value));
+      expect(saved.runtimes).toEqual(original.runtimes);
+      expect(authority()).toEqual(originalAuthority);
+      expect(new ConfigurationRepository(current.database).get(current.scope).configuration.executionEnvironments[1])
+        .toMatchObject({ connectionCompression });
+    }
+    document.executionEnvironments[1]!.workspaceRoots.push("/another-root");
+    const changed = current.repository.save(current.scope, { mutationId: randomUUID(), expectedRevision: saved.revision, configuration: document },
+      value => current.projection.project(current.scope, value));
+    expect(changed.runtimes.filter(runtime => [remoteId, "remote-pi"].includes(runtime.resourceId)))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ resourceId: remoteId, applyState: "pending", desiredRevision: changed.revision }),
+        expect.objectContaining({ resourceId: "remote-pi", applyState: "pending", desiredRevision: changed.revision })]));
+    expect(authority()).not.toEqual(originalAuthority);
+  });
+
   it("rejects incomplete legacy import before adopting ownership or reserving identities", () => {
     const current = fixture(false);
     const document = { ...current.document, backends: [], executionEnvironments: [], targets: [], defaultTargetId: null };
@@ -282,7 +326,7 @@ describe("database-owned configuration", () => {
   it("keeps Pi backend ownership in one environment even after its definition is removed", async () => {
     const current = fixture();
     const replacement = initialDocument();
-    replacement.executionEnvironments.push({ id: remoteId, kind: "ssh", label: "Other host", hostAlias: "other-host", workspaceRoots: ["/tmp"], operations: { kind: "none" } });
+    replacement.executionEnvironments.push({ id: remoteId, kind: "ssh", label: "Other host", hostAlias: "other-host", connectionCompression: true, workspaceRoots: ["/tmp"], operations: { kind: "none" } });
     replacement.backends[0]!.enabled = false;
     replacement.targets[0]!.enabled = false;
     replacement.defaultTargetId = null;
@@ -676,7 +720,7 @@ describe("configuration validation", () => {
     expect((await service.save(current.scope, request)).revision).toBe(1);
     expect(authorizeReference).toHaveBeenCalledWith(current.scope, environmentId, { source: "protected_file", path: "/protected/codex-token" });
     const providerOnly = structuredClone(document);
-    providerOnly.executionEnvironments.push({ id: remoteId, kind: "ssh", label: "Provider only", hostAlias: "provider-only", workspaceRoots: ["/work"], operations: { kind: "none" } });
+    providerOnly.executionEnvironments.push({ id: remoteId, kind: "ssh", label: "Provider only", hostAlias: "provider-only", connectionCompression: true, workspaceRoots: ["/work"], operations: { kind: "none" } });
     providerOnly.targets.at(-1)!.executionEnvironmentId = remoteId;
     expect(validateConfigurationDocument(providerOnly).targets.at(-1)?.executionEnvironmentId).toBe(remoteId);
     const invalid = structuredClone(document);

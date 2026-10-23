@@ -5,7 +5,7 @@ import { commitWithConfigurationRemovalGuard, type ConfigurationRemovalGuard } f
 function document(): ConfigurationDocument {
   return {
     executionEnvironments: [{ id: "environment-z", kind: "local", label: "Local", workspaceRoots: ["/tmp"], workspaceIsolation: { kind: "bubblewrap", networkProfiles: ["isolated"] } },
-      { id: "environment-a", kind: "ssh", label: "Remote", hostAlias: "remote", workspaceRoots: ["/tmp"], operations: { kind: "none" } }],
+      { id: "environment-a", kind: "ssh", label: "Remote", hostAlias: "remote", connectionCompression: true, workspaceRoots: ["/tmp"], operations: { kind: "none" } }],
     backends: ["backend-z", "backend-a"].map(id => ({ id, kind: "pi", label: id, enabled: true, modelPolicy: { type: "catalog" } })),
     targets: [{ id: "target-z", kind: "pi_sdk", label: "Z", backendInstanceId: "backend-z", executionEnvironmentId: "environment-z", enabled: true },
       { id: "target-a", kind: "pi_sdk", label: "A", backendInstanceId: "backend-a", executionEnvironmentId: "environment-z", enabled: true },

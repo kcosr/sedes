@@ -1,6 +1,9 @@
 import { MAXIMUM_THREAD_INPUT_BYTES } from "../../src/shared/protocol/context-excerpts.js";
 import { MAXIMUM_DRAFT_REQUEST_BYTES } from "../../src/shared/protocol/api.js";
 import { ClientControlService } from "../../src/server/domain/client-control-service.js";
+import { AuthenticationAdmission } from "../../src/server/authentication/authentication-admission.js";
+import { AuthenticationRepository } from "../../src/server/authentication/authentication-repository.js";
+import { ClientResponseCompression } from "../../src/server/http/response-compression.js";
 import { scriptDelivery } from "../support/notification-settings.js";
 import { largeDirectInputText } from "../support/large-direct-input.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
@@ -533,6 +536,8 @@ async function readFirstSseEvent(
   readonly event: string;
   readonly data: unknown;
   readonly corsOrigin: string | null;
+  readonly contentEncoding: string | null;
+  readonly vary: string | null;
 }> {
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -565,6 +570,8 @@ async function readFirstSseEvent(
     event,
     data: JSON.parse(data),
     corsOrigin: response.headers.get("access-control-allow-origin"),
+    contentEncoding: response.headers.get("content-encoding"),
+    vary: response.headers.get("vary"),
   };
 }
 
@@ -656,6 +663,8 @@ async function fixture(
     readonly agentTools?: AgentToolRouterDependencies;
     readonly providerPulseEnabled?: boolean;
     readonly experimentalUsageEnabled?: boolean;
+    readonly clientResponseCompression?: boolean;
+    readonly authentication?: AuthenticationAdmission;
     readonly terminals?: NormalizedAppDependencies["terminals"];
   } = {},
 ) {
@@ -1275,7 +1284,7 @@ async function fixture(
   };
   const config: AppConfig = {
     experimentalUsageEnabled: options.experimentalUsageEnabled ?? false,
-    authenticationRequired: true,
+    authenticationRequired: true, clientResponseCompression: options.clientResponseCompression ?? true,
     host: "127.0.0.1",
     port: 4783,
     stateDirectory,
@@ -1306,6 +1315,7 @@ async function fixture(
     repository: new NotificationRepository(database),
   });
   const app = createNormalizedApp({
+    ...(options.authentication ? { authentication: options.authentication } : {}),
     clientControls,
     ...(options.terminals ? { terminals: options.terminals } : {}),
     usage: new UsageService(database, {enabled: options.experimentalUsageEnabled ?? false,
@@ -8115,6 +8125,122 @@ describe("normalized HTTP application contract", () => {
         );
     } finally {
       current.close();
+    }
+  });
+
+  it("disables compression for JSON reads and both normalized SSE routes", async () => {
+    const current = await fixture({ clientResponseCompression: false });
+    const server = current.app.listen(0, "127.0.0.1");
+    try {
+      await new Promise<void>(resolve => server.once("listening", resolve));
+      const workspace = await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } }).expect(201);
+      const created = await current.mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Uncompressed reads" }).expect(201);
+      const json = await current.withHost(request(current.app).get("/api/application/snapshot"))
+        .set("Accept-Encoding", "gzip").expect(200);
+      expect(Buffer.byteLength(json.text, "utf8")).toBeGreaterThan(1_024);
+      expect(json.headers["content-encoding"]).toBeUndefined();
+      expect(json.headers.vary).toContain("Accept-Encoding");
+      expect(json.body.threads).toEqual(expect.arrayContaining([expect.objectContaining({ id: created.body.threadId })]));
+      for (const route of ["/api/application/events", `/api/threads/${created.body.threadId}/events?activityDetail=full`]) {
+        const stream = await readFirstSseEvent(server, route, { "Accept-Encoding": "gzip" });
+        expect(stream.contentEncoding).toBeNull();
+        expect(stream.vary).toContain("Accept-Encoding");
+      }
+    } finally {
+      await closeHttpTestServer(server);
+      current.close();
+    }
+  });
+
+  it("releases compressed application and thread streams when their authenticated client is revoked", async () => {
+    const authRoot = await mkdtemp(path.join(os.tmpdir(), "sedes-compression-auth-"));
+    roots.push(authRoot);
+    const repository = new AuthenticationRepository(authRoot);
+    const authentication = new AuthenticationAdmission(repository, authRoot);
+    const device = repository.exchangePairing({ token: repository.createPairing({ kind: "management" }).token,
+      clientName: "Compression fixture", kind: "device" })!;
+    const policies = new Set<ClientResponseCompression>();
+    const trySse = ClientResponseCompression.prototype.trySse;
+    const admission = vi.spyOn(ClientResponseCompression.prototype, "trySse").mockImplementation(function (this: ClientResponseCompression) {
+      policies.add(this);
+      return trySse.call(this);
+    });
+    const current = await fixture({ authentication });
+    const server = current.app.listen(0, "127.0.0.1");
+    const controllers: AbortController[] = [];
+    try {
+      await new Promise<void>(resolve => server.once("listening", resolve));
+      const session = await current.withHost(request(current.app).get("/api/application/session"))
+        .auth(device.credential, { type: "bearer" }).expect(200);
+      const mutate = (test: request.Test) => current.withHost(test)
+        .auth(device.credential, { type: "bearer" }).set("X-CSRF-Token", session.body.csrfToken);
+      const workspace = await mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } }).expect(201);
+      const created = await mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Revoked streams" }).expect(201);
+      current.bindThread(created.body.threadId);
+      const threadHub = await current.loadBoundHub(created.body.threadId);
+      const applicationHub = current.applicationHubs.application(current.owner);
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("test_server_address_invalid");
+      const openStream = async (route: string) => {
+        const controller = new AbortController();
+        controllers.push(controller);
+        const response = await fetch(`http://127.0.0.1:${address.port}${route}`, {
+          headers: { Host: "127.0.0.1:4783", Authorization: `Bearer ${device.credential}`, "Accept-Encoding": "gzip" },
+          signal: controller.signal,
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-encoding")).toBe("gzip");
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let text = "";
+        let closed = false;
+        const finished = (async () => {
+          try {
+            for (;;) {
+              const next = await reader.read();
+              if (next.done) break;
+              text += decoder.decode(next.value, { stream: true });
+            }
+          } catch {
+            // Revocation destroys the response, including its incomplete gzip member.
+          } finally {
+            closed = true;
+            reader.releaseLock();
+          }
+        })();
+        return { get text() { return text; }, get closed() { return closed; }, finished };
+      };
+      const application = await openStream("/api/application/events");
+      const thread = await openStream(`/api/threads/${created.body.threadId}/events?activityDetail=full`);
+      await vi.waitFor(() => {
+        expect(application.text).toContain("event: application-live\n");
+        expect(thread.text).toContain("event: thread-live\n");
+      });
+      expect(policies.size).toBe(1);
+      const policy = [...policies][0]!;
+      expect(policy.sseStreams).toBe(2);
+      expect(applicationHub.subscriberCount).toBe(1);
+      expect(threadHub.subscriberCount).toBe(1);
+      authentication.revokeClient(device.client.id);
+      await vi.waitFor(() => {
+        expect(application.closed).toBe(true);
+        expect(thread.closed).toBe(true);
+        expect(policy.sseStreams).toBe(0);
+        expect(applicationHub.subscriberCount).toBe(0);
+        expect(threadHub.subscriberCount).toBe(0);
+      });
+      await Promise.all([application.finished, thread.finished]);
+    } finally {
+      for (const controller of controllers) controller.abort();
+      await closeHttpTestServer(server);
+      current.close();
+      authentication.close();
+      repository.close();
+      admission.mockRestore();
     }
   });
 

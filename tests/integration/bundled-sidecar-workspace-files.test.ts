@@ -297,7 +297,7 @@ describe("bundled sedes sidecar", () => {
     try {
       const hello = await stage(
         "hello",
-        peer.call(controlHelloOperation, {
+        peer.call(controlHelloOperation, { compression: "zstd",
           expectedBuildId: buildId,
           expectedArtifactSha256: artifactSha256,
           authorizedSidecarCapabilities: [
@@ -757,7 +757,7 @@ describe("bundled sedes sidecar", () => {
       });
       peer.start();
       try {
-        const hello = await peer.call(controlHelloOperation, {
+        const hello = await peer.call(controlHelloOperation, { compression: "zstd",
           expectedBuildId: buildId,
           expectedArtifactSha256: artifactSha256,
           authorizedSidecarCapabilities: [
@@ -857,7 +857,7 @@ describe("bundled sedes sidecar", () => {
     });
     peer.start();
     try {
-      const hello = await peer.call(controlHelloOperation, {
+      const hello = await peer.call(controlHelloOperation, { compression: "zstd",
         expectedBuildId: buildId,
         expectedArtifactSha256: artifactSha256,
         authorizedSidecarCapabilities: [
@@ -1013,7 +1013,7 @@ describe("bundled sedes sidecar", () => {
     try {
       const hello = await stage(
         "hello",
-        peer.call(controlHelloOperation, {
+        peer.call(controlHelloOperation, { compression: "zstd",
           expectedBuildId: buildId,
           expectedArtifactSha256: artifactSha256,
           authorizedSidecarCapabilities: [
@@ -1265,7 +1265,7 @@ async function startServiceAttachment(input: {
       });
       peer.start();
       try {
-        await peer.call(controlHelloOperation, {
+        await peer.call(controlHelloOperation, { compression: "zstd",
           expectedBuildId: input.buildId,
           expectedArtifactSha256: input.artifactSha256,
           authorizedSidecarCapabilities: [

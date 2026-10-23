@@ -12,7 +12,7 @@ import {
 } from "../../src/server/security/http-security.js";
 
 const config: AppConfig = {
-  authenticationRequired: true,
+  authenticationRequired: true, clientResponseCompression: true,
   experimentalUsageEnabled: false,
   host: "127.0.0.1",
   port: 4783,

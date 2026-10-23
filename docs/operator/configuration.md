@@ -188,6 +188,7 @@ configuration or state. See [Electron](clients/electron.md).
 | ------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PORT`                    | `4784`      | Integer from 1024 through 65535. The code-owned Electron managed-Local parent may set `0` to request an ephemeral loopback port reported through its private readiness channel. |
 | `SEDES_AUTH_REQUIRED` | `true` | Exact `true` or `false`, environment-only startup setting. `false` disables paired-client admission; malformed values fail startup. |
+| `SEDES_CLIENT_RESPONSE_COMPRESSION` | `true` | Exact `true` or `false`. Enables negotiated gzip for eligible dynamic JSON and thread/application event streams. Read once at startup; malformed values fail startup. |
 | `SEDES_BIND_HOST`         | `127.0.0.1` | Exactly `127.0.0.1` or `0.0.0.0`. Wildcard binding requires a packaged-client opt-in and trusted LAN Host.                                                                      |
 | `SEDES_TRUSTED_LAN_HOST`  | None        | One exact RFC1918 unicast IPv4 Host admitted with wildcard binding. This is Host validation, not client authentication.                                                         |
 | `ALLOWED_TAILSCALE_HOSTS` | Empty       | Comma-separated list of at most 16 exact tailnet or private-proxy DNS names for Host/Origin checks. IPs, ports, wildcards, credentials, and paths are rejected.                 |
@@ -227,6 +228,24 @@ list, and revoke clients. Pairing records are separate from execution settings
 and are stored in `authentication/authentication.sqlite` beneath the configured
 state directory. Authentication restricts its own directory to mode `0700` and
 database files to `0600`; it leaves existing state-directory permissions intact.
+
+### Client response compression
+
+Sedes negotiates gzip with the browser, Android, or Electron HTTP client when reading
+application and thread snapshots, history, usage data, workspace text and diffs,
+Workpad data, page metadata, and thread/application event streams. Finite JSON
+responses normally use compression from 1 KiB when it reduces their size. Each
+event stream uses one gzip response and flushes complete events and heartbeats
+promptly; reconnecting starts a fresh response with the normal replay cursor.
+
+Set `SEDES_CLIENT_RESPONSE_COMPRESSION=false` and restart to disable this
+installation policy. It is not a Settings preference or a bootstrap-file key.
+The setting leaves mutation responses, static asset compression, uploads, exact-byte downloads,
+credentials, the small workspace-file invalidation stream, and terminal
+WebSockets unchanged. Existing cache controls and decoded payload limits still
+apply. Compression capacity is bounded: requests can use acceptable identity
+encoding when capacity is occupied, or receive an error if the client forbids
+all available encodings.
 
 ### Optional integrations
 
@@ -325,6 +344,21 @@ OpenSSH configuration owns the account, keys/agent, host verification, ports,
 ProxyJump, and route. Paths and protected credential references resolve on the
 selected execution host. The browser cannot provide a different principal or
 make the main host read a same-named remote path.
+
+SSH and outbound environments enable **Compress connection traffic** by
+default. This environment setting covers traffic in both directions between
+Sedes and its persistent sidecar, including provider events, Files, tools, and
+terminal data. Small control messages and data that does not shrink remain
+plain. Turn it off in the environment editor when compression is unwanted.
+Saving the setting applies to the next connection, including automatic recovery;
+it does not disconnect active work or restart a provider. The stored
+`connectionCompression` field belongs to the environment, independently of
+operation grants. Existing remote environments are migrated with it enabled.
+Local environments have no such setting.
+
+Runtime wire version **15** requires a matching sidecar. Follow
+[persistent remote service upgrades](operations.md#persistent-remote-services)
+when an older service reports that an upgrade is required.
 
 Remote targets use the persistent sidecar. Select only the additional operations
 needed by that environment:

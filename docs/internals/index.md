@@ -14,6 +14,7 @@ for installation and everyday use, start with the
 | [Provider-owned conversation state](provider-owned-conversation-state.md) | You need the transcript-storage rationale, projection lifecycle, concurrency limits, or performance methodology. |
 | [Backend integration contract rules](backend-integration-contract-rules.md) | You are adding a backend or changing a contract that reaches any compiled backend. |
 | [Application terminal resources](terminal-panes.md) | You are changing terminal identity, actors, history, attachment, Sidecar, control, or panel ownership. |
+| [Sidecar transport](sidecar-transport.md) | You are changing runtime framing, compression negotiation, decoded bounds, cancellation, or remote connection policy. |
 | [Developer overview](../developer/overview.md) | You need the repository map, development workflow, or guidance on where a change belongs. |
 
 ## Backend designs

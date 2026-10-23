@@ -399,6 +399,13 @@ provider handshake does not grant sidecar capabilities, and sidecar success
 does not grant a provider transport. Unsupported remote operations never fall
 back to local paths.
 
+SSH and outbound carriers share runtime wire version 15 and negotiated,
+independent zstd frames. Their principal-owned environment setting defaults
+to compression and is sampled at each attachment. Compression-only edits do
+not change execution authority or retire a live runtime. Queue limits, stream
+credits, and delivery classification retain their decoded-byte semantics. See
+[Sidecar transport](sidecar-transport.md) for framing and lifecycle invariants.
+
 Claude uses a digest-verified local worker or a backend-private runtime hosted
 by the persistent SSH or outbound sidecar on Linux/macOS. Its SDK, CLI, credentials, and native session
 store share the selected execution namespace. The remote service owns queries
@@ -582,7 +589,16 @@ client admission before protected management routes and upgrades. Public
 frontend assets and the downloadable connector enable enrollment; they confer
 no application authority. Built client files are sent with Brotli or gzip when
 the browser accepts it (compressed once per file version in a bounded process
-cache; API and SSE responses are never compressed). Content-hashed `assets/`
+cache). Eligible JSON read responses and thread/application SSE responses negotiate
+gzip independently under the installation-owned
+`SEDES_CLIENT_RESPONSE_COMPRESSION` policy. Explicit route selection excludes
+mutations, credentials, and exact-byte downloads. Finite codecs share a process-wide
+two-job budget and admit at most 64 MiB of JSON input per
+server; at most 64 compressed SSE streams are active per server. Every SSE event
+write flushes without ending or resetting its response's gzip history, while
+decoded frame limits, bounded pending queues, and downstream backpressure remain
+authoritative. Shutdown ends the writer to complete its trailer; revocation,
+codec failure, and slow-consumer termination destroy the stream. Content-hashed `assets/`
 files are cached as immutable for a year; `index.html` and unhashed files are
 revalidated on every use. Same-origin browsers use HttpOnly cookies, while
 packaged clients use per-profile bearer credentials held in native encrypted

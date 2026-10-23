@@ -20,6 +20,7 @@ export function convertLegacyConfiguration(input: LegacyConfigurationImport): {
       ...environment, workspaceRoots: [...input.localWorkspaceRoots], workspaceIsolation: localWorkspaceIsolationPolicy(environment),
     } : {
       ...environment,
+      connectionCompression: true,
       operations: environment.operations.kind === "none" ? { kind: "none" } : {
         kind: "sidecar", enabledCapabilities: environment.operations.enabledCapabilities,
       },

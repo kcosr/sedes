@@ -10,12 +10,33 @@ import {
 import { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
 import { sidecarRuntimeBodyOffer } from "../../src/server/sidecar/runtime-body-channel.js";
 import { MAXIMUM_PROVIDER_FRAME_BYTES } from "../../src/server/provider-protocol/transport/framed-message-limits.js";
+import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 
 const capability = { capabilityId: "runtime_bodies", majorVersion: 1 };
 const terminalSchema = z.strictObject({ size: z.number().int().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/u) });
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 describe("sidecar runtime bodies", () => {
+  it("preserves body digests and raw credit across zstd socket records in both directions", async () => {
+    const fixture = await createSidecarFramedCarrier("zstd");
+    const mainSend = vi.spyOn(fixture.mainTransport, "send");
+    const hostSend = vi.spyOn(fixture.hostTransport, "send");
+    const value = { data: "λ🙂".repeat(256 * 1024), nested: [true, 1, null] };
+    try {
+      await fixture.start();
+      const body = await fixture.mainChannel.encodeBody(value);
+      expect(body.type).toBe("stream");
+      await expect(fixture.hostChannel.decodeBody(body)).resolves.toEqual(value);
+      const reverse = await fixture.hostChannel.encodeBody(value);
+      await expect(fixture.mainChannel.decodeBody(reverse)).resolves.toEqual(value);
+      const frames = [...mainSend.mock.calls, ...hostSend.mock.calls];
+      const decodedBytes = frames.reduce((total, [bytes]) => total + bytes.byteLength, 0);
+      expect(decodedBytes).toBeGreaterThan(3 * 1024 * 1024);
+      expect(Math.max(...frames.map(([bytes]) => bytes.byteLength))).toBeLessThan(70 * 1024);
+      expect(fixture.wireBytes()).toBeLessThan(decodedBytes / 10);
+    } finally { await fixture.close(); }
+  });
+
   it("transfers large native-shaped JSON in both directions with bounded credit chunks", async () => {
     const fixture = await bodyFixture();
     const value = { data: "λ".repeat(2 * 1024 * 1024), nested: [1, false, null] };
@@ -211,7 +232,7 @@ async function bodyFixture() {
     enabledSedesCapabilities: leftRegistry.capabilities(),
   });
   sedes.start(); sidecar.start();
-  await sedes.call(controlHelloOperation, { expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), authorizedSidecarCapabilities: [capability], offeredSedesCapabilities: leftRegistry.capabilities() });
+  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), authorizedSidecarCapabilities: [capability], offeredSedesCapabilities: leftRegistry.capabilities() });
   return { pair, sedes, left, right, close: async () => { left.close(); right.close(); await sedes.close("test_complete"); } };
 }
 class Queue implements AsyncIterable<SidecarFrame> {
@@ -242,6 +263,7 @@ class Queue implements AsyncIterable<SidecarFrame> {
 }
 
 class Transport implements SidecarFrameTransport {
+  commitCompression(_mode: "none" | "zstd"): void {}
   readonly sizes: number[] = [];
   readonly assurance = { kind: "memory", carrierGeneration: 1 };
   readonly queue = new Queue();

@@ -6,6 +6,9 @@ import { OutboundConnectionRegistry } from "../../src/server/outbound/outbound-c
 import { outboundHelloSchema, type OutboundHello, type OutboundRuntimeBootstrap } from "../../src/internal/outbound-protocol.js";
 import type { HostPairing, HostRegistration } from "../../src/shared/protocol/host-pairing.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
+import type { ConfigurationEnvironment } from "../../src/shared/protocol/configuration-admin.js";
+import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
+import { withoutConnectionCompression } from "../../src/server/configuration-admin/configuration-identities.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" };
 const other = { tenantId: "tenant", principalId: "other" };
@@ -25,7 +28,7 @@ class Socket extends EventEmitter {
   get ws(): WebSocket { return this as unknown as WebSocket; }
 }
 
-function fixture(accepted = false) {
+function fixture(accepted = false, configurationRevision?: () => string) {
   const now = new Date().toISOString();
   const hello: OutboundHello = { type: "hello", protocolVersion: 1, connectorId: randomUUID(), registrationAttemptId: randomUUID(), metadata: { hostname: "mac", platform: "darwin", architecture: "arm64", account: "dev", connectorVersion: "test", nodeVersion: "24.18.0" } };
   const registration: HostRegistration = { id: randomUUID(), connectorId: hello.connectorId, registrationAttemptId: hello.registrationAttemptId, correlationCode: "ABCD-EF12", metadata: hello.metadata, state: accepted ? "accepted" : "pending", revision: 1, createdAt: now, updatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString(), pairingId: null };
@@ -40,7 +43,7 @@ function fixture(accepted = false) {
     pairingForEnvironment(actual, id) { if (actual.principalId !== scope.principalId || actual.tenantId !== scope.tenantId || id !== pairing?.executionEnvironmentId) return undefined; return pairing; },
     observe(actual, id) { assertScope(actual); if (!pairing || pairing.id !== id) throw new Error("missing_pairing"); return pairing; },
   };
-  const registry = new OutboundConnectionRegistry({ repository, installationId: "installation", environmentRevision: () => String(revision), commandTimeoutMs: 1000, runtimeTimeoutMs: 1000 });
+  const registry = new OutboundConnectionRegistry({ repository, installationId: "installation", environmentRevision: configurationRevision ?? (() => String(revision)), commandTimeoutMs: 1000, runtimeTimeoutMs: 1000 });
   registries.push(registry);
   function accept() {
     pairing = { id: randomUUID(), connectorId: hello.connectorId, executionEnvironmentId: randomUUID(), platform: "darwin", metadata: hello.metadata, state: "accepted", revision: 1, createdAt: now, updatedAt: now, lastSeenAt: now };
@@ -60,6 +63,31 @@ function fixture(accepted = false) {
 }
 
 describe("outbound connection authority", () => {
+  it.each(["roots", "operations"])("preserves tickets and carriers across compression changes but fences changed %s", async authority => {
+    const environment: ConfigurationEnvironment = { id: randomUUID(), kind: "outbound", label: "Outbound", pairingId: randomUUID(),
+      platform: "linux", workspaceRoots: ["/workspace"], operations: { kind: "none" }, connectionCompression: true };
+    const f = fixture(true, () => configurationFingerprint(withoutConnectionCompression(environment)));
+    const opening = f.registry.openRuntime(scope, f.pairing.executionEnvironmentId, f.payload());
+    const ticket = f.socket.sent.at(-1)!.ticket as string;
+    environment.connectionCompression = false;
+    f.registry.refresh(scope);
+    expect(() => f.registry.consumeRuntimeTicket(other, ticket)).toThrow("outbound_ticket_invalid");
+    const remote = new Socket();
+    f.registry.consumeRuntimeTicket(scope, ticket)(remote.ws);
+    f.registry.receive(scope, f.hello.connectorId, f.socket.ws, { type: "runtimeReady", ticket, ok: true, installation });
+    const carrier = await opening;
+    environment.connectionCompression = true;
+    f.registry.refresh(scope);
+    expect(f.registry.isConnected(scope, f.pairing.executionEnvironmentId)).toBe(true);
+    expect(remote.readyState).toBe(WebSocket.OPEN);
+    if (authority === "roots") environment.workspaceRoots.push("/additional-root");
+    else environment.operations = { kind: "sidecar", enabledCapabilities: ["workspace_files"] };
+    f.registry.refresh(scope);
+    await expect(carrier.closed).resolves.toMatchObject({ reason: "outbound_configuration_changed" });
+    expect(remote.readyState).toBe(WebSocket.CLOSED);
+    expect(f.socket.readyState).toBe(WebSocket.OPEN);
+  });
+
   it("keeps pending control presence separate from permission to execute", async () => {
     const f = fixture();
     expect(f.registry.presence(scope, f.hello.connectorId).connected).toBe(true);

@@ -114,13 +114,13 @@ describe("OpenCode v2 operator configuration", () => {
     if (backend.kind === "opencode" && backend.moduleConfiguration.connection.ownership === "external") {
       backend.moduleConfiguration.connection.channel.authentication.secret = { source: "protected_file", path: "/host-only/opencode-password" };
     }
-    document.executionEnvironments = [{ id: environmentId, label: "Remote", workspaceRoots: ["/workspace"], operations: { kind: "none" },
+    document.executionEnvironments = [{ id: environmentId, label: "Remote", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" },
       ...(kind === "ssh" ? { kind: "ssh", hostAlias: "execution-host" } : { kind: "outbound", platform: "linux", pairingId: "20000000-0000-4000-8000-000000000001" }) }];
     expect(validateConfigurationDocument(document)).toEqual(document);
     if (kind === "ssh") {
       const legacy = parseBackendConfiguration({ schemaVersion: 10,
         executionEnvironments: [{ id: "30000000-0000-4000-8000-000000000001", kind: "local", label: "Main" },
-          ...document.executionEnvironments.map(environment => ({ ...environment, operations: { kind: "none" } }))],
+          { id: environmentId, kind: "ssh", label: "Remote", hostAlias: "execution-host", workspaceRoots: ["/workspace"], operations: { kind: "none" } }],
         backends: document.backends, targets: document.targets, defaultTargetId: document.defaultTargetId });
       expect(legacy.targets[0]?.executionEnvironmentId).toBe(environmentId);
     }
@@ -128,7 +128,7 @@ describe("OpenCode v2 operator configuration", () => {
 
   it.each(["ssh", "outbound"] as const)("rejects unavailable environment-backed passwords on %s hosts before native admission", kind => {
     const document = configuration(true);
-    document.executionEnvironments = [{ id: environmentId, label: "Remote", workspaceRoots: ["/workspace"], operations: { kind: "none" },
+    document.executionEnvironments = [{ id: environmentId, label: "Remote", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" },
       ...(kind === "ssh" ? { kind: "ssh", hostAlias: "execution-host" } : { kind: "outbound", platform: "linux", pairingId: "20000000-0000-4000-8000-000000000001" }) }];
     expect(() => validateConfigurationDocument(document)).toThrow("owner-protected password file on the execution host");
     expect(() => parseOpenCodeBackendConfiguration({ backend: { ...document.backends[0]!, protocolRelease: OPENCODE_RELEASE },
@@ -138,13 +138,13 @@ describe("OpenCode v2 operator configuration", () => {
   it.each(["darwin", "win32"] as const)("rejects enabled OpenCode on known outbound %s hosts", platform => {
     const document = configuration();
     document.executionEnvironments = [{ id: environmentId, kind: "outbound", platform, label: "Remote",
-      pairingId: "20000000-0000-4000-8000-000000000001", workspaceRoots: ["/workspace"], operations: { kind: "none" } }];
+      pairingId: "20000000-0000-4000-8000-000000000001", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } }];
     expect(() => validateConfigurationDocument(document)).toThrow("OpenCode requires a Linux execution host");
   });
 
   it.each([false, true])("preserves remote external variable limits and accepts owned host variables, external=%s", external => {
     const document = configuration(external);
-    document.executionEnvironments = [{ id: environmentId, kind: "ssh", hostAlias: "execution-host", label: "Remote", workspaceRoots: ["/workspace"], operations: { kind: "none" },
+    document.executionEnvironments = [{ id: environmentId, kind: "ssh", hostAlias: "execution-host", label: "Remote", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" },
       environmentVariables: { startup: { HOST_BOOT: { kind: "literal", value: "configured" } }, execution: { HOST_SECRET: { kind: "secret", source: { kind: "protected_file", path: "/host-only/secret" } } } } }];
     if (external) expect(() => validateConfigurationDocument(document)).toThrow("cannot receive Sedes startup or execution variables");
     else expect(validateConfigurationDocument(document)).toEqual(document);
@@ -161,7 +161,7 @@ describe("OpenCode v2 operator configuration", () => {
   it("reserves an existing backend's execution host independently of its native path", () => {
     const document = configuration(), before = configurationIdentities(document).find(entry => entry.kind === "backend");
     const remoteId = "20000000-0000-4000-8000-000000000001";
-    document.executionEnvironments.push({ id: remoteId, kind: "ssh", hostAlias: "execution-host", label: "Remote", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    document.executionEnvironments.push({ id: remoteId, kind: "ssh", hostAlias: "execution-host", label: "Remote", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
     document.targets[0]!.executionEnvironmentId = remoteId;
     expect(configurationIdentities(document).find(entry => entry.kind === "backend")).not.toEqual(before);
   });

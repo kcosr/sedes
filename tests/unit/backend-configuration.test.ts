@@ -259,6 +259,10 @@ describe("backend operator configuration", () => {
     }));
     const input = { configuration: remote, localWorkspaceRoots: ["/workspace"], sourceLabel: "test" };
     const imported = convertLegacyConfiguration(input);
+    expect(imported.document.executionEnvironments.find(environment => environment.id === sshEnvironmentId))
+      .toMatchObject({ connectionCompression: true });
+    expect(imported.document.executionEnvironments.find(environment => environment.kind === "local"))
+      .not.toHaveProperty("connectionCompression");
     expect(imported.document.targets.map(target => ({ id: target.id, enabled: target.enabled, executionEnvironmentId: target.executionEnvironmentId }))).toEqual(
       remote.targets.map(target => ({ id: target.id, enabled: target.enabled, executionEnvironmentId: sshEnvironmentId })),
     );

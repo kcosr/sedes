@@ -7,6 +7,7 @@ import {
   defineSidecarOperation,
 } from "./operation-registry.js";
 import { SIDECAR_WIRE_VERSION } from "./envelopes.js";
+import type { SidecarFrameCompression } from "./frame-compression.js";
 import {
   INTERACTIVE_TERMINAL_CAPABILITY_ID,
   INTERACTIVE_TERMINAL_MAJOR_VERSION,
@@ -230,6 +231,7 @@ export type SidecarAgentToolCliMetadata = z.infer<
 >;
 
 export interface ControlHelloRequest {
+  readonly compression: SidecarFrameCompression;
   readonly expectedBuildId: string;
   readonly expectedArtifactSha256: string;
   readonly authorizedSidecarCapabilities: readonly SidecarCapabilityRef[];
@@ -237,6 +239,7 @@ export interface ControlHelloRequest {
 }
 
 export interface ControlHelloResponse {
+  readonly compression: SidecarFrameCompression;
   readonly wireVersion: typeof SIDECAR_WIRE_VERSION;
   readonly buildId: string;
   readonly artifactSha256: string;
@@ -254,12 +257,14 @@ export const controlHelloOperation = defineSidecarOperation({
   lane: "control",
   maximumDeadlineMilliseconds: 10_000,
   requestSchema: z.strictObject({
+    compression: z.enum(["none", "zstd"]),
     expectedBuildId: z.string().min(1).max(200),
     expectedArtifactSha256: z.string().regex(/^[0-9a-f]{64}$/u),
     authorizedSidecarCapabilities: z.array(sidecarCapabilityRefSchema).max(32),
     offeredSedesCapabilities: z.array(sidecarCapabilityInventorySchema).max(32),
   }) as z.ZodType<ControlHelloRequest>,
   responseSchema: z.strictObject({
+    compression: z.enum(["none", "zstd"]),
     wireVersion: z.literal(SIDECAR_WIRE_VERSION),
     buildId: z.string().min(1).max(200),
     artifactSha256: z.string().regex(/^[0-9a-f]{64}$/u),
@@ -409,6 +414,7 @@ export function registerControlV2Operations(
             authorizedSidecar.has(capabilityKey(capability))),
       );
     return {
+      compression: request.compression,
       wireVersion: SIDECAR_WIRE_VERSION,
       buildId: registration.buildId,
       artifactSha256: registration.artifactSha256,

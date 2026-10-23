@@ -97,7 +97,7 @@ export async function createPersistentCodexLiveSidecar(fixtureScope?: {
           sessionNonce, carrierGeneration: 1, configuration, mode });
         const response = await readSidecarManagementRecord(stream, sidecarManagementResponseSchema, signal);
         if (response.value.outcome !== "ok") throw new Error(JSON.stringify(response.value));
-        const session = await SidecarClientSession.start({ transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: 1, artifact,
+        const session = await SidecarClientSession.start({ connectionCompression: true, transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: 1, artifact,
           installation: { accountHome: home, stateRoot: paths.stateRoot, nodeExecutable: process.execPath,
             environment: { HOME: home }, executableDirectory: home, executablePath: executable },
           authorizedCapabilities: [], authorizedRuntimeCapabilities: [{ capabilityId: "codex_runtime", majorVersion: 1, operations: ["runtime.ensure", "runtime.lookup", "runtime.execute"] }],

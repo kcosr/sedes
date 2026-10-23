@@ -96,7 +96,7 @@ const remote = (
   kind: "ssh",
   label: "Remote",
   hostAlias: "remote-build",
-  workspaceRoots: ["/workspace"],
+  connectionCompression: true, workspaceRoots: ["/workspace"],
   operations: capabilities ?? { kind: "none" },
 });
 function record(
@@ -132,6 +132,7 @@ function input(
     authorizedRuntimeCapabilities: [],
     activeEnvironmentRecord: () => current,
     automaticConnectionEnabled: () => true,
+    connectionCompression: () => configured.kind !== "local" && configured.connectionCompression,
     reportAvailability: vi.fn(async () => undefined),
     sidecarArtifact: vi.fn(async () => ({ buildId: "test" }) as never),
     agentToolSources: {} as never,
@@ -235,6 +236,7 @@ describe("execution environment runtime composition", () => {
     expect(fake.terminalOptions[0]!.runtime).toBe(runtime.sidecarRuntime);
     expect(fake.runtimeOptions[0]!.authorizedCapabilities).toEqual([]);
     expect(fake.runtimeOptions[0]!.authorizedRuntimeCapabilities).toEqual([]);
+    expect(fake.runtimeOptions[0]!.connectionCompression).toBe(options.connectionCompression);
     expect(runtime.agentToolCliRuntime).toBeUndefined();
     expect(runtime.workspaceFiles.supportsPrimaryRoot(scope, environmentId)).toBe(false);
     expect(runtime.attachments.supports(scope, environmentId)).toBe(false);
@@ -334,7 +336,7 @@ describe("execution environment runtime composition", () => {
     let connected = true;
     let notify: ((connected: boolean) => void) | undefined;
     const unsubscribe = vi.fn();
-    const configured: ConfigurationEnvironment = { id: environmentId, kind: "outbound", label: "Outbound", platform: "linux", pairingId: "019196f7-a0a8-7bc4-a89b-8cf013978406", workspaceRoots: ["/workspace"], operations: { kind: "sidecar", enabledCapabilities: ["interactive_terminal"] } };
+    const configured: ConfigurationEnvironment = { id: environmentId, kind: "outbound", label: "Outbound", platform: "linux", pairingId: "019196f7-a0a8-7bc4-a89b-8cf013978406", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "sidecar", enabledCapabilities: ["interactive_terminal"] } };
     const options: ExecutionEnvironmentRuntimeInput = { ...input(configured), outboundConnection: {
       isConnected: () => connected,
       subscribe: listener => { notify = listener; return unsubscribe; },

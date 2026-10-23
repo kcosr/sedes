@@ -146,7 +146,7 @@ policies,
 new AgentToolEnvironmentAuthorityResolver(sourceAuthority),
 sourceAuthority, testAgentToolExecutionAuthority);
   const sourceCapability = sourceAuthority.issue(sourceAuthority.resolveInScope(scope, source.thread.id, new AbortController().signal), "management_http", "cli");
-  const config: AppConfig = { authenticationRequired: true, experimentalUsageEnabled: false, host: "127.0.0.1", port: 4784,
+  const config: AppConfig = { authenticationRequired: true, clientResponseCompression: true, experimentalUsageEnabled: false, host: "127.0.0.1", port: 4784,
     stateDirectory: root, allowedTailscaleHosts: [], packagedClientOrigins: ["capacitor-electron://localhost"],
     conversationRetentionMilliseconds: 60_000, conversationRuntimeBudget: 2 };
   const requestOperations = new HttpRequestOperationGate();

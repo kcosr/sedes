@@ -109,7 +109,7 @@ policies,
 new AgentToolEnvironmentAuthorityResolver(sources),
 sources, testAgentToolExecutionAuthority);
   const app = createNormalizedApp({ workpads: {}, identity, csrfToken: "image-csrf", config: {
-    authenticationRequired: true, experimentalUsageEnabled: false, host: "127.0.0.1", port: 4784, stateDirectory: root,
+    authenticationRequired: true, clientResponseCompression: true, experimentalUsageEnabled: false, host: "127.0.0.1", port: 4784, stateDirectory: root,
     allowedTailscaleHosts: [], packagedClientOrigins: [], conversationRetentionMilliseconds: 60_000, conversationRuntimeBudget: 2 },
     agentTools: { sources: application, clients: unavailablePrincipalAgentToolClientService(), tools: new PolicyCheckedAgentToolHttpService(scoped) },
   } as unknown as NormalizedAppDependencies);

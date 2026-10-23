@@ -373,7 +373,7 @@ test("unknown lifecycle receipts survive remount and retain confirmed Stop contr
   const saved = await request.put("/api/configuration", { headers: { "X-CSRF-Token": session.csrfToken }, data: {
     mutationId: "31000000-0000-4000-8000-000000000002", expectedRevision: before.revision,
     configuration: { ...before.configuration, executionEnvironments: [...before.configuration.executionEnvironments, {
-      id: environmentId, kind: "ssh", label: "Uncertain lifecycle host", hostAlias: "e2e-unknown-lifecycle", workspaceRoots: ["/work/e2e"],
+      id: environmentId, kind: "ssh", label: "Uncertain lifecycle host", hostAlias: "e2e-unknown-lifecycle", connectionCompression: true, workspaceRoots: ["/work/e2e"],
       operations: { kind: "none" },
     }] },
   } });
@@ -479,7 +479,7 @@ test("outbound hosts can be paired, edited offline, denied, revoked and reapprov
   const acceptedResponse = page.waitForResponse(response => response.url().endsWith("/api/host-registrations/accept") && response.ok());
   await settings.getByRole("button", { name: "Accept host", exact: true }).click();
   const accepted = await (await acceptedResponse).json();
-  expect(accepted.configuration.configuration.executionEnvironments.find((entry: { label: string }) => entry.label === "Paired Studio")).toMatchObject({ kind: "outbound", platform: "darwin", workspaceRoots: ["/Users/operator/Projects"] });
+  expect(accepted.configuration.configuration.executionEnvironments.find((entry: { label: string }) => entry.label === "Paired Studio")).toMatchObject({ kind: "outbound", platform: "darwin", connectionCompression: true, workspaceRoots: ["/Users/operator/Projects"] });
   await expect(page).toHaveURL(`/settings/environments/${accepted.pairing.executionEnvironmentId}`);
   const studio = details(settings, "Paired Studio");
   await expect(studio.getByRole("region", { name: "Host", exact: true })).toContainText("Host online");
@@ -589,7 +589,7 @@ test("large backend inventories stay compact and filterable on mobile in dark ap
     "Integration cluster · Shared application services",
     "Researchclusterexperimentalmodelvalidationwithoutwordbreaks0123456789",
   ].map((label, index) => ({ id: randomUUID(), label, kind: "ssh", hostAlias: `mobile-inventory-host-${index + 1}`,
-    workspaceRoots: ["/work/mobile-inventory"], operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files", "workspace_tools", "workspace_context"] } }));
+    connectionCompression: true, workspaceRoots: ["/work/mobile-inventory"], operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files", "workspace_tools", "workspace_context"] } }));
   const backends: ConfigurationDocument["backends"] = [];
   const targets: ConfigurationDocument["targets"] = [];
   for (let index = 0; index < 26 - before.configuration.backends.length; index++) {

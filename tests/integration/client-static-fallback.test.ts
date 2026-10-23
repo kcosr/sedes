@@ -49,7 +49,7 @@ function createApp(clientDirectory: string) {
     turnBookmarks: unavailableTurnBookmarks(),
     workspaceDiffReviews: {} as never,
     config: {
-      authenticationRequired: false,
+      authenticationRequired: false, clientResponseCompression: true,
       experimentalUsageEnabled: false,
       host: "127.0.0.1",
       port: 4783,

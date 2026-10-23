@@ -122,7 +122,7 @@ async function fixture(nativeAssets = false, selectedArtifact = artifact) {
       sessionNonce, carrierGeneration: 1, configuration, mode });
     const response = await readSidecarManagementRecord(stream, sidecarManagementResponseSchema, signal);
     if (response.value.outcome !== "ok") throw new Error(JSON.stringify(response.value));
-    return await SidecarClientSession.start({ transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: 1, artifact: selectedArtifact,
+    return await SidecarClientSession.start({ connectionCompression: true, transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: 1, artifact: selectedArtifact,
       installation: { accountHome: home, stateRoot: paths.stateRoot, nodeExecutable: process.execPath,
         environment: { HOME: home }, executableDirectory: home, executablePath: executable },
       authorizedCapabilities: [{ capabilityId: "workspace_files", majorVersion: 8 }, ...(nativeAssets ? [{ capabilityId: "interactive_terminal" as const, majorVersion: 2 as const }] : [])], authorizedRuntimeCapabilities: [],
@@ -214,7 +214,7 @@ describe("bundled persistent sidecar service", () => {
     const detached = await service.status();
     expect(detached.resources.find(resource => resource.resourceId === "workspace-files")?.blockers).toContain("unsettled_outcome");
     const installer = localInstaller(service);
-    const owner = new SidecarRuntimeOwner({ scope: { tenantId: service.scope.tenantId, principalId: service.scope.principalId },
+    const owner = new SidecarRuntimeOwner({ connectionCompression: () => true, scope: { tenantId: service.scope.tenantId, principalId: service.scope.principalId },
       executionEnvironmentId: service.scope.executionEnvironmentId, environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
       authorizedCapabilities: [], authorizedRuntimeCapabilities: [], isAutomaticConnectionEnabled: () => false,
       activeEnvironmentConfigurationRevision: () => 1, activeOperationsConfigurationRevision: () => 1,
@@ -274,7 +274,7 @@ describe("bundled persistent sidecar service", () => {
         const nextArtifact = { ...artifact, buildId: nextBuildId, artifactSha256: createHash("sha256").update(newBytes).digest("hex"),
           artifactBytes: newBytes.length, executableDirectory: newDirectory, executablePath: newExecutable };
         const installer = localInstaller(service, nextArtifact);
-        const owner = new SidecarRuntimeOwner({ scope: { tenantId: service.scope.tenantId, principalId: service.scope.principalId },
+        const owner = new SidecarRuntimeOwner({ connectionCompression: () => true, scope: { tenantId: service.scope.tenantId, principalId: service.scope.principalId },
           executionEnvironmentId: service.scope.executionEnvironmentId, environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
           authorizedCapabilities: [{ capabilityId: "interactive_terminal", majorVersion: 2 }], authorizedRuntimeCapabilities: [], isAutomaticConnectionEnabled: () => true,
           activeEnvironmentConfigurationRevision: () => 1, activeOperationsConfigurationRevision: () => 1,

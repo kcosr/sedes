@@ -19,6 +19,7 @@ const REQUIRED_SHARED_SOURCES = Object.freeze([
 ]);
 
 const ALLOWED_REPOSITORY_SOURCES = new Set([
+  "src/internal/compression/async-codec-budget.ts",
   "src/cli/opencode-owner-cli.ts",
   // OpenCode execution-host implementation; no main repositories or SQL.
   "src/server/backends/opencode/opencode-release.ts",
@@ -256,6 +257,7 @@ const ALLOWED_SOURCE_PREFIXES = Object.freeze([
 ]);
 
 const ALLOWED_EXTERNAL_IMPORTS = new Set([
+  "node:zlib",
   "node:timers/promises",
   "node:async_hooks",
   "node:child_process",

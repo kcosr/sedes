@@ -11,6 +11,7 @@ import {
   controlHelloOperation,
   controlPingOperation,
   defineSidecarOperation,
+  decodeSidecarFrame,
   encodeSidecarEnvelope,
   registerControlV2Operations,
   sidecarAgentToolCliMetadataSchema,
@@ -93,6 +94,44 @@ const agentToolInvokeOperation = defineSidecarOperation({
 });
 
 describe("sidecar private protocol", () => {
+  it("commits compression before a coalesced reverse request is decoded", async () => {
+    const streams = coalescingByteStreamPair();
+    const left = new LengthPrefixedSidecarFrameTransport({ assurance: { kind: "test", carrierGeneration: 1 }, stream: streams.left });
+    const right = new LengthPrefixedSidecarFrameTransport({ assurance: { kind: "test", carrierGeneration: 1 }, stream: streams.right });
+    const received = vi.fn(() => ({ tools: ["ready"] }));
+    streams.right.holdWrites();
+    const writes = vi.spyOn(streams.right, "write");
+    const fixture = peerFixture({ transports: { left, right }, compression: "zstd", catalogHandler: received });
+    try {
+      const hello = fixture.hello();
+      await vi.waitFor(() => expect(writes).toHaveBeenCalledTimes(1));
+      const reverse = fixture.sidecar.call(agentToolCatalogOperation, { sourceCapability: "c".repeat(8192) });
+      await vi.waitFor(() => expect(writes).toHaveBeenCalledTimes(2));
+      expect(writes.mock.calls.map(([frame]) => frame[4])).toEqual([0, 1]);
+      expect(received).not.toHaveBeenCalled();
+      expect(streams.right.flushWrites()).toBe(2);
+      await expect(hello).resolves.toMatchObject({ compression: "zstd" });
+      await expect(reverse).resolves.toEqual({ tools: ["ready"] });
+      expect(received).toHaveBeenCalledOnce();
+    } finally {
+      await fixture.sedes.close("test_complete");
+    }
+  });
+
+  it("rejects a hello response that does not echo the requested mode", async () => {
+    const fixture = peerFixture();
+    const send = fixture.pair.right.send.bind(fixture.pair.right);
+    vi.spyOn(fixture.pair.right, "send").mockImplementation(async (bytes, options) => {
+      const decoded = decodeSidecarFrame(bytes, sessionNonce);
+      if (decoded.kind === "control" && decoded.envelope.type === "response" && decoded.envelope.outcome === "ok") {
+        return await send(encodeSidecarEnvelope({ ...decoded.envelope, payload: { ...(decoded.envelope.payload as object), compression: "zstd" } }), options);
+      }
+      return await send(bytes, options);
+    });
+    await expect(fixture.hello()).rejects.toThrow("sidecar_protocol_compression_mismatch");
+    await expect(fixture.pair.left.closed).resolves.toMatchObject({ reason: "sidecar_protocol_compression_mismatch" });
+  });
+
   it("keeps revision history and exact resolver validation strict across the sidecar", () => {
     const query = { rootHandle: randomUUID(), repositoryId: "repository-1", pageSize: 20, history: "revision:revision-1", resolveRef: "refs/heads/feature/layout" };
     expect(workspaceFilesDiffRefCatalogOperation.requestSchema.parse(query)).toEqual(query);
@@ -253,7 +292,7 @@ describe("sidecar private protocol", () => {
 
     expect(sedes.supportsOperation(workspaceEchoOperation)).toBe(false);
     expect(() => sedes.assertReady()).toThrow("sidecar_protocol_hello_required");
-    const hello = await sedes.call(controlHelloOperation, {
+    const hello = await sedes.call(controlHelloOperation, { compression: "none",
       expectedBuildId: buildId,
       expectedArtifactSha256: artifactSha256,
       authorizedSidecarCapabilities: [workspaceCapability],
@@ -339,7 +378,7 @@ describe("sidecar private protocol", () => {
     sedes.start();
     sidecar.start();
     await expect(
-      sedes.call(controlHelloOperation, {
+      sedes.call(controlHelloOperation, { compression: "none",
         expectedBuildId: buildId,
         expectedArtifactSha256: artifactSha256,
         authorizedSidecarCapabilities: [],
@@ -615,6 +654,7 @@ describe("sidecar private protocol", () => {
 });
 
 function peerFixture(input?: {
+  readonly compression?: "none" | "zstd";
   readonly transports?: {
     readonly left: SidecarFrameTransport;
     readonly right: SidecarFrameTransport;
@@ -668,7 +708,7 @@ function peerFixture(input?: {
     sedes,
     sidecar,
     hello: () =>
-      sedes.call(controlHelloOperation, helloRequest([agentToolInventory])),
+      sedes.call(controlHelloOperation, { ...helloRequest([agentToolInventory]), compression: input?.compression ?? "none" }),
   };
 }
 
@@ -680,6 +720,7 @@ function helloRequest(
   }[],
 ) {
   return {
+    compression: "none" as const,
     expectedBuildId: buildId,
     expectedArtifactSha256: artifactSha256,
     authorizedSidecarCapabilities: [workspaceCapability],
@@ -725,6 +766,7 @@ class AsyncFrameQueue implements AsyncIterable<SidecarFrame> {
 }
 
 class MemoryFrameTransport implements SidecarFrameTransport {
+  commitCompression(_mode: "none" | "zstd"): void {}
   readonly assurance = Object.freeze({ kind: "memory", carrierGeneration: 1 });
   readonly frames: AsyncIterable<SidecarFrame>;
   readonly closed: Promise<SidecarTransportClosure>;

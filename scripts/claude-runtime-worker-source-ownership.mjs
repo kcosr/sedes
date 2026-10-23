@@ -18,6 +18,8 @@ const ALLOWED_REPOSITORY_PREFIXES = Object.freeze([
 ]);
 
 const ALLOWED_REPOSITORY_SOURCES = new Set([
+  // Shared finite codec admission has no application service authority.
+  "src/internal/compression/async-codec-budget.ts",
   // The native Stop journal uses the normalized BackendError value. This file
   // declares contracts/schema primitives, not application service authority.
   "src/server/backends/contracts.ts",

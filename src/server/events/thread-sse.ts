@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import type { Request, Response } from "express";
+import type { SseResponseWriter } from "./sse-response-writer.js";
+import type { Request } from "express";
 import { ZodError } from "zod";
 import {
   threadLoadErrorSchema,
@@ -92,27 +93,17 @@ function encodeLoadError(error: ThreadLoadError): string {
   );
 }
 
-function prepareThreadEventStreamResponse(response: Response): void {
-  if (response.headersSent) return;
-  response.status(200);
-  response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  response.setHeader("Cache-Control", "no-cache, no-transform");
-  response.setHeader("Connection", "keep-alive");
-  response.setHeader("X-Accel-Buffering", "no");
-  response.flushHeaders();
-}
-
 /**
  * Completes one pre-live thread stream attempt with a bounded classified
  * error. Native EventSource cannot inspect a non-2xx JSON response, so every
  * server-declared bootstrap failure crosses this SSE control boundary.
  */
 export function serveThreadLoadError(
-  response: Response,
+  writer: SseResponseWriter,
   error: unknown,
   requestId = "unavailable",
 ): void {
-  if (response.destroyed || response.writableEnded) return;
+  if (writer.destroyed || writer.writableEnded) return;
   const projected = projectApiError(error);
   const frame = encodeLoadError({
     format: "sedes-thread-load-error-v1",
@@ -120,10 +111,10 @@ export function serveThreadLoadError(
     error: projected.body.error,
   });
   try {
-    prepareThreadEventStreamResponse(response);
-    response.write(frame);
+    writer.start();
+    writer.write(frame);
   } finally {
-    response.end();
+    writer.end();
   }
 }
 
@@ -163,10 +154,10 @@ function encodeReplayDiagnostic(
   );
 }
 
-function writeOptionalFrame(response: Response, frame: string): void {
+function writeOptionalFrame(writer: SseResponseWriter, frame: string): void {
   const frameBytes = Buffer.byteLength(frame, "utf8");
-  const bufferedBytes = response.writableLength;
-  const highWaterMark = response.writableHighWaterMark;
+  const bufferedBytes = writer.writableLength;
+  const highWaterMark = writer.writableHighWaterMark;
   if (
     Number.isFinite(bufferedBytes) &&
     Number.isFinite(highWaterMark) &&
@@ -175,7 +166,7 @@ function writeOptionalFrame(response: Response, frame: string): void {
     return;
   }
   try {
-    response.write(frame);
+    writer.write(frame);
   } catch {
     // Optional observability cannot close a valid authoritative stream.
   }
@@ -206,7 +197,7 @@ function assertPositiveLimit(value: number, code: string): void {
  */
 export async function serveThreadEventStream(
   request: Request,
-  response: Response,
+  writer: SseResponseWriter,
   hub: ThreadEventHub,
   source: ThreadSnapshotCapture,
   options: ThreadEventStreamOptions = {},
@@ -247,7 +238,7 @@ export async function serveThreadEventStream(
     "thread_sse_heartbeat_interval_invalid",
   );
 
-  prepareThreadEventStreamResponse(response);
+  writer.start();
   if (options.loadDiagnostics) {
     try {
       const requestId =
@@ -268,7 +259,7 @@ export async function serveThreadEventStream(
         ),
       });
       writeOptionalFrame(
-        response,
+        writer,
         assertBoundedSseFrame(
           `event: thread-handshake-diagnostic\ndata: ${JSON.stringify(diagnostic)}\n\n`,
         ),
@@ -324,9 +315,11 @@ export async function serveThreadEventStream(
     if (closed) return;
     closed = true;
     clearInterval(heartbeat);
+    request.removeListener("close", onClientClose);
+    writer.removeListener("close", onClientClose);
     clearDrainTimer();
     finishInitialDrain?.(false);
-    response.removeListener("drain", flushAfterDrain);
+    writer.removeDrainListener(flushAfterDrain);
     subscription?.close();
   };
 
@@ -336,11 +329,18 @@ export async function serveThreadEventStream(
     );
   };
 
+  const onClientClose = (): void => {
+    if (!closed) logClose("client_closed");
+    cleanup();
+  };
+  writer.once("close", onClientClose);
+  request.once("close", onClientClose);
+
   const close = (reason: string): void => {
     if (closed) return;
     logClose(reason);
     cleanup();
-    response.end();
+    writer.destroy();
   };
 
   const armDrain = (): void => {
@@ -349,7 +349,7 @@ export async function serveThreadEventStream(
       `drain_wait pendingEvents=${pending.length} pendingBytes=${pendingBytes}`,
     );
     waitingForDrain = true;
-    response.once("drain", flushAfterDrain);
+    writer.onceDrain(flushAfterDrain);
     drainTimer = setTimeout(
       () => close("drain_timeout"),
       drainTimeoutMilliseconds,
@@ -359,7 +359,7 @@ export async function serveThreadEventStream(
 
   const write = (encoded: ThreadFrame): boolean => {
     if (closed) return false;
-    return response.write(encoded.frame);
+    return writer.write(encoded.frame);
   };
 
   // A complete replacement is independently bounded by the normalized
@@ -440,12 +440,12 @@ export async function serveThreadEventStream(
       const finish = (drained: boolean): void => {
         if (finishInitialDrain !== finish) return;
         finishInitialDrain = undefined;
-        response.removeListener("drain", onDrain);
+        writer.removeDrainListener(onDrain);
         if (timer) clearTimeout(timer);
         resolve(drained);
       };
       finishInitialDrain = finish;
-      response.once("drain", onDrain);
+      writer.onceDrain(onDrain);
       timer = setTimeout(() => {
         finish(false);
         close("initial_drain_timeout");
@@ -481,7 +481,7 @@ export async function serveThreadEventStream(
       performance.now() - encodeStartedAt;
     const writeStartedAt = performance.now();
     const snapshotWritten =
-      response.write(frame) || (await waitForInitialDrain());
+      writer.write(frame) || (await waitForInitialDrain());
     const snapshotWriteMilliseconds = performance.now() - writeStartedAt;
     if (!snapshotWritten || !snapshot) {
       return snapshotWritten;
@@ -536,7 +536,7 @@ export async function serveThreadEventStream(
       // authoritative stream.
       return true;
     }
-    writeOptionalFrame(response, diagnosticFrame);
+    writeOptionalFrame(writer, diagnosticFrame);
     return true;
   };
 
@@ -572,7 +572,7 @@ export async function serveThreadEventStream(
     replayDiagnosticWritten = true;
     try {
       writeOptionalFrame(
-        response,
+        writer,
         encodeReplayDiagnostic({
           format: "sedes-thread-replay-server-v1",
           cursorSource: replayCursorSource,
@@ -654,7 +654,7 @@ export async function serveThreadEventStream(
   } catch (error) {
     cleanup();
     serveThreadLoadError(
-      response,
+      writer,
       classifyThreadStreamLoadError(error),
       options.requestId,
     );
@@ -670,17 +670,12 @@ export async function serveThreadEventStream(
       live &&
       !closed &&
       !waitingForDrain &&
-      !response.write(": heartbeat\n\n")
+      !writer.write(": heartbeat\n\n")
     ) {
       armDrain();
     }
   }, heartbeatMilliseconds);
   heartbeat.unref();
-  request.once("close", () => {
-    if (!closed) logClose("client_closed");
-    cleanup();
-  });
-
   try {
     const recoverFromOverflow = async (isOverflow = true): Promise<boolean> => {
       if (isOverflow && overflowCheckpointAttempted) {
@@ -769,7 +764,7 @@ export async function serveThreadEventStream(
         `open handshake=${openHandshake} ms=${Date.now() - streamStartedAt} snapshotBytes=${lastSnapshotFrameBytes}`,
       );
       writeReplayDiagnostic();
-      if (!response.write(LIVE_FRAME)) armDrain();
+      if (!writer.write(LIVE_FRAME)) armDrain();
       return true;
     };
     recoverPendingOverflow = () => recoverFromOverflow();
@@ -802,7 +797,7 @@ export async function serveThreadEventStream(
     if (!live && !closed) {
       try {
         serveThreadLoadError(
-          response,
+          writer,
           classifyThreadStreamLoadError(error),
           options.requestId,
         );

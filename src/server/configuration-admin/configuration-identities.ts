@@ -1,10 +1,17 @@
-import type { ConfigurationDocument } from "../../shared/protocol/configuration-admin.js";
+import type { ConfigurationDocument, ConfigurationEnvironment } from "../../shared/protocol/configuration-admin.js";
 import { configurationFingerprint } from "../config/configuration-fingerprint.js";
 
 export interface ConfigurationIdentity {
   readonly kind: "environment" | "backend" | "target";
   readonly id: string;
   readonly fingerprint: string;
+}
+
+/** Connection coding changes only on the next attachment, never execution authority. */
+export function withoutConnectionCompression(environment: ConfigurationEnvironment) {
+  if (environment.kind === "local") return environment;
+  const { connectionCompression: _compression, ...execution } = environment;
+  return execution;
 }
 
 /** Removed identities remain reserved so old threads can never be retargeted. */
@@ -32,11 +39,14 @@ export function configurationIdentities(document: ConfigurationDocument): Config
 }
 
 export function runtimeConfigurationFingerprint(document: ConfigurationDocument, kind: "environment" | "backend", id: string): string {
-  if (kind === "environment") return configurationFingerprint(document.executionEnvironments.find(environment => environment.id === id) ?? null);
+  if (kind === "environment") {
+    const environment = document.executionEnvironments.find(environment => environment.id === id);
+    return configurationFingerprint(environment ? withoutConnectionCompression(environment) : null);
+  }
   const targets = document.targets.filter(target => target.backendInstanceId === id);
   return configurationFingerprint({
     backend: document.backends.find(backend => backend.id === id) ?? null,
     targets,
-    environments: document.executionEnvironments.filter(environment => targets.some(target => target.executionEnvironmentId === environment.id)),
+    environments: document.executionEnvironments.filter(environment => targets.some(target => target.executionEnvironmentId === environment.id)).map(withoutConnectionCompression),
   });
 }

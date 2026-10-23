@@ -148,7 +148,7 @@ export class OpenCodeProductionFixture {
     const snapshot = await this.configuration(); const configuration = snapshot.configuration;
     configuration.executionEnvironments.push(this.topology === "local"
       ? { id: this.environmentId, kind: "local", label: "Isolated local", workspaceRoots: [this.workspace], workspaceIsolation: { kind: "bubblewrap", networkProfiles: ["isolated"] } }
-      : { id: this.environmentId, kind: "ssh", label: "Actual OpenSSH", hostAlias: "sedes-production-fixture", workspaceRoots: [this.workspace], operations: { kind: "sidecar", enabledCapabilities: [...CAPABILITIES] } });
+      : { id: this.environmentId, kind: "ssh", label: "Actual OpenSSH", hostAlias: "sedes-production-fixture", connectionCompression: true, workspaceRoots: [this.workspace], operations: { kind: "sidecar", enabledCapabilities: [...CAPABILITIES] } });
     await this.json("/api/configuration", "PUT", { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
     if (this.topology === "ssh") {
       const db = new Database(path.join(this.stateDirectory, "overlay.sqlite"));

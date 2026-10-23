@@ -13,7 +13,7 @@ function document(): Configuration {
   return {
     executionEnvironments: [
       { id: localId, kind: "local", label: "Local", workspaceRoots: ["/work"], workspaceIsolation: { kind: "bubblewrap", networkProfiles: ["isolated"] } },
-      { id: sshId, kind: "ssh", label: "Build server", hostAlias: "build", workspaceRoots: ["/srv"], operations: { kind: "none" } },
+      { id: sshId, kind: "ssh", label: "Build server", hostAlias: "build", connectionCompression: true, workspaceRoots: ["/srv"], operations: { kind: "none" } },
     ],
     backends: [], targets: [], defaultTargetId: null, webSearch: null,
   };
@@ -30,7 +30,7 @@ const environmentFields = /^(label|hostAlias|workspaceRoots(\.\d+)?)$/u;
 describe("validation path mapping", () => {
   it("maps an environment's schema paths to its own fields by position in the submitted document", () => {
     const value = document();
-    value.executionEnvironments[1] = { ...value.executionEnvironments[1]!, kind: "ssh", hostAlias: "build", workspaceRoots: ["relative/path"], label: "" } as Configuration["executionEnvironments"][number];
+    value.executionEnvironments[1] = { ...value.executionEnvironments[1]!, kind: "ssh", hostAlias: "build", connectionCompression: true, workspaceRoots: ["relative/path"], label: "" } as Configuration["executionEnvironments"][number];
     const errors = mapConfigurationIssues(issuesOf(value), value, { kind: "environment", id: sshId }, environmentFields);
     expect(errors.fields.get("workspaceRoots.0")).toBe("An absolute execution-environment path is required.");
     expect(errors.fields.get("label")).toBe("Enter a name.");

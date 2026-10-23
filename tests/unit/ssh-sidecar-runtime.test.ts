@@ -57,6 +57,7 @@ function fixture(
     readonly recoveryStatus?: SidecarServiceStatus;
     readonly servingInstallation?: SidecarArtifactInstallation;
     readonly transportKind?: string;
+    readonly connectionCompression?: () => boolean;
   } = {},
 ) {
   let environmentRevision = 3;
@@ -81,7 +82,7 @@ function fixture(
     return session;
   });
   const management = { transportKind: options.transportKind ?? "ssh_stdio", ...managementInstaller(), install, launch, attachExisting: vi.fn(async () => ({ ...fakeStream(), serviceStatus: options.recoveryStatus ?? serviceStatus() })) };
-  const owner = new SidecarRuntimeOwner({
+  const owner = new SidecarRuntimeOwner({ connectionCompression: options.connectionCompression ?? (() => true),
     scope,
     executionEnvironmentId: environmentId,
     environmentConfigurationRevision: environmentRevision,
@@ -127,6 +128,31 @@ function fixture(
 }
 
 describe("SidecarRuntimeOwner", () => {
+  it.each(["ssh_stdio", "outbound_websocket"].flatMap(transportKind => [true, false].map(initial => ({ transportKind, initial })) ))(
+    "samples $transportKind compression for new normal and recovery sessions (initial $initial)", async ({ transportKind, initial }) => {
+      let enabled = initial;
+      const value = fixture({ transportKind, connectionCompression: () => enabled });
+      const signal = new AbortController().signal;
+      const original = await value.owner.acquireOperation(scope, environmentId, signal);
+      expect(value.startSession).toHaveBeenNthCalledWith(1, expect.objectContaining({ connectionCompression: initial }));
+      enabled = !initial;
+      const existing = await value.owner.acquireExisting(scope, environmentId, signal);
+      expect(existing.session).toBe(original.session);
+      expect(original.session.close).not.toHaveBeenCalled();
+      expect(value.startSession).toHaveBeenCalledTimes(1);
+      existing.release(); original.release();
+      await value.owner.disconnectTransport("test_reconnect");
+      const recovery = await value.owner.acquireAutomaticRecovery(scope, environmentId, signal);
+      expect(value.startSession).toHaveBeenNthCalledWith(2, expect.objectContaining({ connectionCompression: !initial }));
+      enabled = initial;
+      recovery.release();
+      const normal = await value.owner.acquireOperation(scope, environmentId, signal);
+      expect(value.startSession).toHaveBeenNthCalledWith(3, expect.objectContaining({ connectionCompression: initial }));
+      normal.release();
+      await value.owner.close();
+    },
+  );
+
   it.each(["ssh_stdio", "outbound_websocket"])("borrows the current %s carrier for existing invocation authority", async transportKind => {
     const value = fixture({ transportKind });
     const signal = new AbortController().signal;
@@ -793,7 +819,7 @@ describe("SidecarRuntimeOwner", () => {
     const close = vi.fn(async () => {
       throw cleanupFailure;
     });
-    const owner = new SidecarRuntimeOwner({
+    const owner = new SidecarRuntimeOwner({ connectionCompression: () => true,
       scope,
       executionEnvironmentId: environmentId,
       environmentConfigurationRevision: 3,
@@ -845,7 +871,7 @@ describe("SidecarRuntimeOwner", () => {
     const install = vi.fn(async () => {
       throw cleanupFailure;
     });
-    const owner = new SidecarRuntimeOwner({
+    const owner = new SidecarRuntimeOwner({ connectionCompression: () => true,
       scope,
       executionEnvironmentId: environmentId,
       environmentConfigurationRevision: 3,
@@ -947,7 +973,7 @@ describe("SidecarRuntimeOwner", () => {
           },
         ),
     );
-    const owner = new SidecarRuntimeOwner({
+    const owner = new SidecarRuntimeOwner({ connectionCompression: () => true,
       scope,
       executionEnvironmentId: environmentId,
       environmentConfigurationRevision: 3,

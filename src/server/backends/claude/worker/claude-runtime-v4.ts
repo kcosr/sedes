@@ -17,7 +17,7 @@ import { claudeCompactUsageReceiptSchema } from "../claude-compact-usage-receipt
 
 export const CLAUDE_RUNTIME_CAPABILITY_ID = "claude_runtime" as const;
 export const CLAUDE_RUNTIME_MAJOR_VERSION = 4 as const;
-// HSC1's current frame ceiling is a little over 96 MiB. Keep enough room for
+// The sidecar frame ceiling is a little over 96 MiB. Keep enough room for
 // the request/event envelope and JSON escaping rather than treating the whole
 // transport frame as provider payload authority.
 export const CLAUDE_RUNTIME_MAXIMUM_JSON_BYTES = 64 * 1024 * 1024;

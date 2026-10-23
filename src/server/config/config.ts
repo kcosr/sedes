@@ -23,6 +23,7 @@ export type PackagedClientOrigin =
 
 export interface AppConfig {
   readonly authenticationRequired: boolean;
+  readonly clientResponseCompression: boolean;
   readonly experimentalUsageEnabled: boolean;
   readonly host: "127.0.0.1" | "0.0.0.0";
   readonly trustedLanHost?: string;
@@ -39,6 +40,12 @@ function parseAuthenticationRequired(value: string | undefined): boolean {
   if (value === undefined || value === "true") return true;
   if (value === "false") return false;
   throw new Error("SEDES_AUTH_REQUIRED must be exactly true or false.");
+}
+
+function parseClientResponseCompression(value: string | undefined): boolean {
+  if (value === undefined || value === "true") return true;
+  if (value === "false") return false;
+  throw new Error("SEDES_CLIENT_RESPONSE_COMPRESSION must be exactly true or false.");
 }
 
 function parseExperimentalUsage(value: string | undefined): boolean {
@@ -185,6 +192,7 @@ export function loadConfig(
   return {
     ...bind,
     authenticationRequired: parseAuthenticationRequired(environment.SEDES_AUTH_REQUIRED),
+    clientResponseCompression: parseClientResponseCompression(environment.SEDES_CLIENT_RESPONSE_COMPRESSION),
     experimentalUsageEnabled: parseExperimentalUsage(environment.SEDES_EXPERIMENTAL_USAGE),
     port: portSchema.parse(environment.PORT ?? String(installation?.listen?.port ?? 4784)),
     stateDirectory,

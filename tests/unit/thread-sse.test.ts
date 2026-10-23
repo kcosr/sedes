@@ -15,14 +15,23 @@ import {
   threadReplayServerDiagnosticSchema,
 } from "../../src/shared/protocol/diagnostics.js";
 import { ThreadEventHub } from "../../src/server/events/thread-event-hub.js";
+import { SseResponseWriter } from "../../src/server/events/sse-response-writer.js";
+import { ClientResponseCompression } from "../../src/server/http/response-compression.js";
 import { DomainError } from "../../src/server/domain/errors.js";
 import {
   DEFAULT_THREAD_SSE_DRAIN_TIMEOUT_MILLISECONDS,
   DEFAULT_THREAD_SSE_PENDING_BYTE_LIMIT,
   DEFAULT_THREAD_SSE_PENDING_EVENT_LIMIT,
-  serveThreadEventStream,
+  serveThreadEventStream as serveThreadEventStreamWithWriter,
+  type ThreadEventStreamOptions,
   type ThreadSnapshotCapture,
 } from "../../src/server/events/thread-sse.js";
+
+function serveThreadEventStream(request: Request, response: Response, hub: ThreadEventHub,
+  source: ThreadSnapshotCapture, options?: ThreadEventStreamOptions) {
+  return serveThreadEventStreamWithWriter(request,
+    new SseResponseWriter(request, response, new ClientResponseCompression(false)), hub, source, options);
+}
 
 class FakeRequest extends EventEmitter {
   constructor(private readonly lastEventId?: string) {
@@ -37,6 +46,8 @@ class FakeRequest extends EventEmitter {
 class FakeResponse extends EventEmitter {
   readonly writes: string[] = [];
   readonly end = vi.fn();
+  readonly destroy = vi.fn();
+  readonly vary = vi.fn();
   readonly setHeader = vi.fn();
   readonly flushHeaders = vi.fn();
   readonly status = vi.fn(() => this);
@@ -361,6 +372,31 @@ function source(
 }
 
 describe("serveThreadEventStream", () => {
+  it("logs one client close and releases listeners when the response closes first", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const hub = new ThreadEventHub();
+    publishedSnapshot(hub, "projection-1");
+    const request = new FakeRequest();
+    const response = new FakeResponse();
+    try {
+      await serveThreadEventStream(asRequest(request), asResponse(response), hub,
+        source(hub, { capture: vi.fn() }));
+      response.emit("close");
+      request.emit("close");
+      const closeRecords = log.mock.calls.map(([record]) => String(record)).filter(record =>
+        record.includes(" close reason=client_closed "));
+      expect(closeRecords).toHaveLength(1);
+      expect(closeRecords[0]).toContain("live=1 pendingEvents=0 pendingBytes=0");
+      expect(hub.subscriberCount).toBe(0);
+      expect(request.listenerCount("close")).toBe(0);
+    } finally {
+      request.emit("close");
+      log.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("replays a small suffix without constructing a checkpoint", async () => {
     const hub = new ThreadEventHub();
     const anchor = hub.publish({
@@ -764,7 +800,7 @@ describe("serveThreadEventStream", () => {
       hub,
       source(hub, { capture: vi.fn() }),
     );
-    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.destroy).toHaveBeenCalledOnce();
     expect(hub.subscriberCount).toBe(0);
     expect(response.writes).toEqual([]);
     expect(response.listenerCount("drain")).toBe(0);
@@ -1569,7 +1605,7 @@ describe("serveThreadEventStream", () => {
     expect(checkpoints(response)).toHaveLength(2);
     expect(envelopes(response)).toEqual([]);
     expect(response.writes).not.toContain("event: thread-live\ndata: {}\n\n");
-    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.destroy).toHaveBeenCalledOnce();
     expect(hub.subscriberCount).toBe(0);
     expect(response.listenerCount("drain")).toBe(0);
     request.emit("close");

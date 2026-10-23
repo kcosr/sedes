@@ -207,6 +207,7 @@ export class LocalPiSandboxRuntime {
         { signal },
       );
       const session = await SidecarClientSession.start({ transportKind: "pi_sandbox_stdio",
+        connectionCompression: false,
         stream,
         carrierGeneration: generation,
         sessionNonce,
