@@ -77,7 +77,9 @@ Late codec completion cannot revive cancelled or closed work. Independent
 compressed records allow a cancelled preparation to be discarded safely.
 
 Clean byte-stream EOF drains already queued complete records before publishing
-closure. Explicit shutdown, malformed input, and consumer cancellation abort
+closure. Pending outbound preparation still settles as `not_sent` and releases
+its queue charge even if an inbound decoder delays that final closure.
+Explicit shutdown, malformed input, and consumer cancellation abort
 decoding and close promptly. Resource cleanup remains owned by the carrier.
 
 ## Configuration and backend coverage
