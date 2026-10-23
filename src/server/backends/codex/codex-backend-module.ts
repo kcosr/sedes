@@ -45,6 +45,7 @@ import {
 } from "./codex-runtime-config.js";
 import { CodexThreadPresentationProvider } from "./codex-thread-presentation-provider.js";
 import { CodexGoalSessionRegistry } from "./codex-goal-session.js";
+import { CodexGoalRecoveryReceipts } from "./codex-goal-recovery-receipts.js";
 import { CodexFastModeSessionRegistry } from "./codex-fast-mode-session.js";
 import type { CodexExecutionSettingsProvider } from "./codex-conversation-handle.js";
 import type { CodexObservedExecutionSettings } from "./codex-observed-execution-settings.js";
@@ -283,7 +284,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
       executionPolicy,
       input.prepared.modelPolicy,
     );
-    this.#goalSessions = new CodexGoalSessionRegistry();
+    this.#goalSessions = new CodexGoalSessionRegistry({ recoveryReceipts: new CodexGoalRecoveryReceipts(input.context.database) });
     this.#fastModeSessions = new CodexFastModeSessionRegistry();
     const remoteSupervisor = this.#supervisor instanceof CodexRemoteRuntimeSupervisor ? this.#supervisor : undefined;
     this.#remoteManagedTui = remoteSupervisor && input.prepared.configuration.connection.ownership === "external"

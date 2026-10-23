@@ -14,6 +14,7 @@ export interface AutomaticModelRetryCompletion {
   readonly backendTurnId: string;
   readonly outcome: "completed" | "interrupted" | "failed";
   readonly provenance: "live" | "recovered";
+  readonly nativeRecovery?: true;
 }
 
 export interface AutomaticModelRetryInput {
@@ -21,9 +22,10 @@ export interface AutomaticModelRetryInput {
   readonly text: string;
   readonly sourceFailureIdentity: string;
   readonly backendTurnId: string;
+  readonly nativeRecovery?: true;
   /** Recheck after every asynchronous admission step, immediately before commit. */
   readonly isCurrent: () => boolean;
-  /** Retire the delay immediately after durable ordinary-input admission. */
+  /** Retire the delay immediately after durable recovery admission. */
   readonly onAdmitted: () => void;
 }
 
@@ -54,7 +56,7 @@ function threadKey(scope: RequestScope, threadId: string): string {
 }
 
 /**
- * Adds one ordinary follow-up message after a newly observed failed turn.
+ * Adds one follow-up or native recovery after a newly observed failed turn.
  * Durable policy owns the allowance; this service owns only the cancellable
  * delay. Restart and historical replay never resurrect a delayed follow-up.
  */
@@ -153,6 +155,13 @@ export class AutomaticModelRetryService {
     return this.#pending.has(threadKey(scope, threadId));
   }
 
+  /** Goal controls cancel native recovery without cancelling ordinary retries. */
+  cancelNativeRecovery(scope: RequestScope, threadId: string): boolean {
+    if (this.#pending.get(threadKey(scope, threadId))?.completion.nativeRecovery !== true) return false;
+    this.cancel(scope, threadId);
+    return true;
+  }
+
   cancel(scope: RequestScope, threadId: string): void {
     const key = threadKey(scope, threadId);
     const pending = this.#pending.get(key);
@@ -184,6 +193,7 @@ export class AutomaticModelRetryService {
         text: AUTOMATIC_MODEL_RETRY_TEXT,
         sourceFailureIdentity: pending.completion.completionIdentity,
         backendTurnId: pending.completion.backendTurnId,
+        ...(pending.completion.nativeRecovery ? { nativeRecovery: true as const } : {}),
         isCurrent,
         onAdmitted: () => {
           if (this.#pending.get(key) === pending) this.cancel(pending.scope, pending.threadId);

@@ -27,7 +27,7 @@ function hasCompletionCallback(database: Database.Database, scope: RequestScope,
   `).get(scope.tenantId, scope.principalId, threadId, failureIdentity) !== undefined;
 }
 
-/** Shared application composition; provider protocols are not involved. */
+/** Shared admission and allowance; native recovery stays behind the actor. */
 export function createAutomaticModelRetryRuntime(dependencies: {
   readonly database: Database.Database;
   readonly bindings: Pick<ConversationBindingRepository, "getBinding">;
@@ -55,7 +55,7 @@ export function createAutomaticModelRetryRuntime(dependencies: {
         if (!input.isCurrent() || !before?.authoritative || !before.settled) return;
         const acquired = await dependencies.runtimes.acquire(eventScope, threadId);
         try {
-          const admitted = dependencies.database.transaction(() => {
+          const isCurrent = () => {
             const binding = dependencies.bindings.getBinding(eventScope, threadId);
             if (!binding || !input.isCurrent()) return false;
             const observed = dependencies.actors.observeInputRuntime(eventScope, threadId);
@@ -77,6 +77,20 @@ export function createAutomaticModelRetryRuntime(dependencies: {
             // already gives the caller this turn's terminal failure; exclude
             // every correlated callback even after its result was delivered.
             if (hasCompletionCallback(dependencies.database, eventScope, threadId, input.sourceFailureIdentity)) return false;
+            return true;
+          };
+          if (input.nativeRecovery) {
+            if (!isCurrent()) return;
+            await acquired.actor.recoverModelFailure({
+              backendTurnId: input.backendTurnId, mutationId: input.mutationId,
+              isCurrent, onAdmitted: input.onAdmitted,
+            });
+            // Native uncertainty or rejection never permits a second action.
+            return;
+          }
+          const admitted = dependencies.database.transaction(() => {
+            if (!isCurrent()) return false;
+            const aggregate = dependencies.inventory.getThread(eventScope, threadId);
             const previousInput = dependencies.database.prepare(`
               SELECT completion.operation_id AS mutationId,
                 CASE WHEN q.id IS NOT NULL THEN q.trigger_kind ELSE creation.source_kind END AS triggerKind,

@@ -55,6 +55,8 @@ User-facing changes are collected here before release. See the
 
 - Settings → General can retry failed model requests once by sending an
   automatic Continue message after ten seconds across all backends and servers.
+  If a Codex goal was active for the failed turn, retry resumes that goal instead,
+  including turns Codex started automatically. Paused goals remain paused.
   Successful ordinary model feedback restores the allowance; a failed automatic
   follow-up stops retries until successful completion or new input. See
   [Error recovery](docs/user/settings.md#error-recovery).

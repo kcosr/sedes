@@ -107,6 +107,7 @@ export type AuthoritativeCompletionObserver = (
     readonly applicationTurnId: string;
     readonly completionIdentity: string;
     readonly provenance: "live" | "recovered";
+    readonly nativeRecovery?: true;
     readonly voiceSubscriberWatermark?: number;
     readonly responseVoice?: ResponseVoiceFreshness;
     readonly outcome: "completed" | "interrupted" | "failed";
@@ -1429,6 +1430,7 @@ export class ConversationActorManager {
     let observationChain = Promise.resolve();
     const completionVoiceContexts = new Map<string, CapturedResponseVoiceContext | undefined>();
     const observedModelFeedback = new Set<string>();
+    const observedNativeCompletions = new Set<string>();
     const rememberModelFeedback = (turnId: string, itemId: string) => {
       const identity = `${turnId}:${itemId}`;
       if (observedModelFeedback.has(identity)) return;
@@ -1446,7 +1448,10 @@ export class ConversationActorManager {
       // Native history without a materialized application input cannot prove
       // whether this response belongs to an automatic follow-up.
       if (user?.kind !== "user_message") return;
-      const automaticRetry = user.origin?.kind === "automatic_retry";
+      // Autonomous native recovery has no queued retry message. Goal turns
+      // always wait for terminal success before restoring the allowance.
+      const automaticRetry = user.origin?.kind === "automatic_retry" ||
+        actor?.isNativeRecoveryTurn(turnId) === true;
       const identity = rememberModelFeedback(turnId, itemId);
       if (!identity) return;
       // Liveness is captured at arrival. Later completion must not erase a
@@ -1576,6 +1581,19 @@ export class ConversationActorManager {
             (event.type === "authoritative_completion" && this.#onAuthoritativeCompletion) ||
             (event.type === "authoritative_submission" && this.#onAuthoritativeSubmission)
           ) {
+            // Capture native turn evidence before a queued observer can see a
+            // later turn or a replacement owner. Recovered history never opts in.
+            const nativeCompletionKey = event.type === "authoritative_completion"
+              ? JSON.stringify([event.completionIdentity, event.backendCorrelation]) : undefined;
+            const nativeRecovery = event.type === "authoritative_completion" && event.provenance === "live" &&
+              !observedNativeCompletions.has(nativeCompletionKey!) && actor?.isNativeRecoveryTurn(event.applicationTurnId) === true;
+            if (nativeRecovery) {
+              // Each newly closed submitted input must retain the native mode,
+              // even if an earlier correlation was already reconciled. Policy
+              // still admits only one attempt for the terminal turn identity.
+              observedNativeCompletions.add(nativeCompletionKey!);
+              if (observedNativeCompletions.size > 512) observedNativeCompletions.delete(observedNativeCompletions.values().next().value!);
+            }
             observationChain = observationChain
               .then(async () => {
                 const observation =
@@ -1593,6 +1611,7 @@ export class ConversationActorManager {
                         {
                           backendCorrelation: event.backendCorrelation,
                           backendTurnId: event.backendTurnId,
+                          ...(nativeRecovery ? { nativeRecovery: true as const } : {}),
                           backendCorrelations: event.backendCorrelations,
                           applicationTurnId: event.applicationTurnId,
                           completionIdentity: event.completionIdentity,

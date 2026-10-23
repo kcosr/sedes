@@ -172,6 +172,7 @@ class FakeHandle {
     backendTurnId: input.target.kind === "turn" ? input.target.turnId : "conversation-turn",
   }));
   readonly interrupt = vi.fn(async () => undefined);
+  readonly isNativeRecoveryTurn = vi.fn<NonNullable<ConversationHandle["isNativeRecoveryTurn"]>>(() => false);
   readonly reconcileInterrupt = vi.fn(async () => ({
     outcome: "not_applied" as const,
   }));
@@ -5447,6 +5448,30 @@ describe("ConversationActorManager", () => {
     } finally { acquired.release(); await manager.close(); }
   });
 
+  it("marks native goal model feedback as retry work even when its materialized input has ordinary origin", async () => {
+    const feedback = vi.fn<ModelFeedbackObserver>();
+    const deliveryInputSnapshots = { find: vi.fn(() => ({
+      tenantId: scope.tenantId, principalId: scope.principalId, threadId: binding.applicationThreadId,
+      deliveryOperationId: "feedback-input", text: "Start a goal", contextExcerpts: [], taskContexts: [], attachments: [],
+      fingerprint: "fixture", createdAt: 1,
+    })) } as unknown as DeliveryInputSnapshotRepository;
+    const { driver, handle, manager } = fixture(undefined, undefined, 10, deliveryInputSnapshots, 8, undefined, undefined, undefined, feedback);
+    handle.isNativeRecoveryTurn.mockImplementation(backendTurnId => backendTurnId === "turn-1");
+    handle.establishmentSnapshots[0] = withModelFeedbackUser(snapshot("running", "Goal progress"));
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      handle.emit(0, { type: "item_completed", item: {
+        backendItemId: "goal-tool", backendTurnId: "turn-1", semanticKind: "command", status: "completed", sourceOrder: 2,
+        phase: "completed", command: { text: "pwd" }, exitCode: 0,
+      } }, 0);
+      await vi.waitFor(() => expect(feedback).toHaveBeenCalledOnce());
+      expect(feedback).toHaveBeenCalledWith(scope, binding.applicationThreadId, {
+        identity: expect.any(String), automaticRetry: true,
+      });
+      expect(handle.isNativeRecoveryTurn).toHaveBeenCalledWith("turn-1");
+    } finally { acquired.release(); await manager.close(); }
+  });
+
   it("does not reset retry state when model feedback has no materialized input proving its provenance", async () => {
     const feedback = vi.fn<ModelFeedbackObserver>();
     const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, undefined, undefined, undefined, feedback);
@@ -5618,6 +5643,132 @@ describe("ConversationActorManager", () => {
 
     acquired.release();
     await manager.close();
+  });
+
+  it.each(["failed", "completed"] as const)("marks an unsubmitted live native goal %s completion for recovery", async outcome => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.isNativeRecoveryTurn.mockImplementation(backendTurnId => backendTurnId === "turn-1");
+    const initial = snapshot("running", "Autonomous goal work");
+    handle.establishmentSnapshots[0] = initial;
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      expect(observed).not.toHaveBeenCalled();
+      handle.emit(0, { type: "turn_completed", turn: {
+        ...initial.turnsById["turn-1"]!, status: outcome,
+      } }, 0);
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledOnce());
+      expect(observed).toHaveBeenCalledWith(scope, binding.applicationThreadId, expect.objectContaining({
+        backendTurnId: "turn-1", backendCorrelation: "turn-1", backendCorrelations: ["turn-1"],
+        outcome, provenance: "live", nativeRecovery: true,
+      }));
+      expect(handle.isNativeRecoveryTurn).toHaveBeenCalledWith("turn-1");
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it("keeps native goal recovery on every first completion correlation without marking their replays", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.isNativeRecoveryTurn.mockReturnValue(true);
+    const initial = snapshot("running", "Goal work with two accepted inputs");
+    handle.establishmentSnapshots[0] = initial;
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      handle.emit(0, { type: "turn_completed", turn: { ...initial.turnsById["turn-1"]!, status: "failed",
+        completionCorrelations: ["first-input", "second-input"],
+      } }, 0);
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+      expect(observed.mock.calls.map(([, , completion]) => ({
+        correlation: completion.backendCorrelation, identity: completion.completionIdentity, nativeRecovery: completion.nativeRecovery,
+      }))).toEqual([
+        { correlation: "first-input", identity: "turn-1:failed", nativeRecovery: true },
+        { correlation: "second-input", identity: "turn-1:failed", nativeRecovery: true },
+      ]);
+      await acquired.actor.replayAuthoritativeCompletions();
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(4));
+      expect(observed.mock.calls.slice(2).map(([, , completion]) => completion.backendCorrelation)).toEqual(["first-input", "second-input"]);
+      expect(observed.mock.calls.slice(2).every(([, , completion]) => completion.nativeRecovery === undefined)).toBe(true);
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it("reports an unsubmitted native goal failure learned only from a replacement snapshot once", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.isNativeRecoveryTurn.mockReturnValue(true);
+    const active = snapshot("running", "Autonomous goal work");
+    const failed: BackendConversationSnapshot = { ...active, runState: "failed", activeBackendTurnId: undefined,
+      turnsById: { "turn-1": { ...active.turnsById["turn-1"]!, status: "failed" } } };
+    handle.establishmentSnapshots[0] = active;
+    handle.establishmentSnapshots.push(failed, failed);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      expect(observed).not.toHaveBeenCalled();
+      handle.emit(0, { type: "resnapshot_required", reason: "contradictory_state" }, 0);
+      await vi.waitFor(() => expect(observed.mock.calls.filter(([, , completion]) => completion.nativeRecovery)).toHaveLength(1));
+      expect(observed.mock.calls.find(([, , completion]) => completion.nativeRecovery)?.[2]).toMatchObject({
+        backendTurnId: "turn-1", backendCorrelation: "turn-1", backendCorrelations: ["turn-1"],
+        outcome: "failed", provenance: "live", nativeRecovery: true,
+      });
+      await acquired.actor.replayAuthoritativeCompletions();
+      handle.emit(1, { type: "resnapshot_required", reason: "contradictory_state" }, 0);
+      await vi.waitFor(() => expect(handle.establishCount).toBe(3));
+      await acquired.actor.captureSnapshotState();
+      await acquired.actor.replayAuthoritativeCompletions();
+      expect(observed.mock.calls.filter(([, , completion]) => completion.nativeRecovery)).toHaveLength(1);
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it("does not expose an old successful native goal completion again when a later goal turn fails", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.isNativeRecoveryTurn.mockReturnValue(true);
+    handle.establishmentSnapshots[0] = { orderedBackendTurnIds: [], turnsById: {}, itemsById: {}, runState: "idle" };
+    const earlier = { backendTurnId: "earlier-goal", status: "completed" as const, endedBy: "agent_settled" as const,
+      orderedBackendItemIds: [], completionCorrelations: ["accepted-goal-input"] };
+    const later = { backendTurnId: "later-goal", status: "failed" as const, orderedBackendItemIds: [] };
+    const replacement: BackendConversationSnapshot = {
+      orderedBackendTurnIds: [earlier.backendTurnId, later.backendTurnId],
+      turnsById: { [earlier.backendTurnId]: earlier, [later.backendTurnId]: later }, itemsById: {}, runState: "failed",
+    };
+    handle.establishmentSnapshots.push(replacement, replacement);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      handle.emit(0, { type: "turn_started", turn: { ...earlier, status: "in_progress", endedBy: undefined } }, 0);
+      handle.emit(0, { type: "turn_completed", turn: earlier }, 1);
+      await vi.waitFor(() => expect(observed.mock.calls.filter(([, , completion]) => completion.nativeRecovery)).toHaveLength(1));
+      handle.emit(0, { type: "turn_started", turn: { ...later, status: "in_progress" } }, 2);
+      await acquired.actor.captureSnapshotState();
+      handle.emit(0, { type: "resnapshot_required", reason: "contradictory_state" }, 3);
+      await vi.waitFor(() => expect(observed.mock.calls.filter(([, , completion]) => completion.nativeRecovery)).toHaveLength(2));
+      await acquired.actor.replayAuthoritativeCompletions();
+      handle.emit(1, { type: "resnapshot_required", reason: "contradictory_state" }, 0);
+      await vi.waitFor(() => expect(handle.establishCount).toBe(3));
+      await acquired.actor.captureSnapshotState();
+      await acquired.actor.replayAuthoritativeCompletions();
+      expect(observed.mock.calls.filter(([, , completion]) => completion.backendTurnId === earlier.backendTurnId).length).toBeGreaterThan(1);
+      expect(observed.mock.calls.filter(([, , completion]) => completion.nativeRecovery).map(([, , completion]) => ({
+        backendTurnId: completion.backendTurnId, outcome: completion.outcome,
+      }))).toEqual([{ backendTurnId: earlier.backendTurnId, outcome: "completed" }, { backendTurnId: later.backendTurnId, outcome: "failed" }]);
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it("does not mark recovered native goal completions for automatic recovery", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.isNativeRecoveryTurn.mockReturnValue(true);
+    const terminal = snapshot("idle", "Retained goal completion");
+    terminal.turnsById["turn-1"] = { ...terminal.turnsById["turn-1"]!, completionCorrelations: ["turn-1"] };
+    handle.establishmentSnapshots[0] = terminal;
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledOnce());
+      expect(observed.mock.calls[0]![2]).toMatchObject({ backendTurnId: "turn-1", provenance: "recovered" });
+      expect(observed.mock.calls[0]![2]).not.toHaveProperty("nativeRecovery");
+      await acquired.actor.replayAuthoritativeCompletions();
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+      expect(observed.mock.calls[1]![2]).not.toHaveProperty("nativeRecovery");
+      expect(handle.isNativeRecoveryTurn).not.toHaveBeenCalled();
+    } finally { acquired.release(); await manager.close(); }
   });
 
   it("classifies initial, subscriber, and explicit snapshot completion replays as recovered", async () => {

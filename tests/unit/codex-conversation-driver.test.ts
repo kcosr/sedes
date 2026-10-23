@@ -1,3 +1,6 @@
+import { ConversationActorManager, type AuthoritativeCompletionObserver } from "../../src/server/conversations/conversation-actor-manager.js";
+import type { ExecutionEnvironmentProvider } from "../../src/server/execution/contracts.js";
+import { CodexGoalRecoveryReceipts } from "../../src/server/backends/codex/codex-goal-recovery-receipts.js";
 import { largeDirectInputText } from "../support/large-direct-input.js";
 import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { historyConversationHandle } from "../../src/server/conversations/history-conversation-handle.js";
@@ -20882,4 +20885,289 @@ it.each([true, false])("Codex uncertain Goal pause cannot replace a newer contro
     await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} })).rejects.toMatchObject({ category: "unavailable" });
     expect(goals.projection(goalScope, identity.applicationThreadId)).toMatchObject({ availability: "available", connectionGeneration: 2, state: { state: "unset" } });
   } finally { vi.useRealTimers(); await handle.close(); }
+});
+
+
+describe("Codex automatic Goal recovery", () => {
+  async function fixture(initialStatus: "active" | "paused" = "active") {
+    const storage = executionSettingsPersistenceFixture(executionSettingsTuple());
+    const harness = new RpcHarness();
+    const goals = new CodexGoalSessionRegistry({ recoveryReceipts: new CodexGoalRecoveryReceipts(storage.database) });
+    const speeds = new CodexFastModeSessionRegistry();
+    const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(),
+      catalogModelPolicy, storage.adapter, goals, undefined, unavailableCodexAgentToolCliEnvironmentProvider, speeds));
+    const goal = { threadId: "thread-1", objective: "Complete the work", status: initialStatus,
+      tokenBudget: 10000, tokensUsed: 1200, timeUsedSeconds: 30, createdAt: 1, updatedAt: 2 };
+    harness.enqueue("thread/goal/get", { goal });
+    await establish(harness, handle);
+    const sync = vi.spyOn(speeds.controller(scope, binding().applicationThreadId)!, "syncDefaults").mockResolvedValue("confirmed");
+    handle.setProviderFeatureCoordinator({ run: async () => undefined as never, isIdle: () => true, subscribeIdle: () => () => {} });
+    const active = { ...nativeTurn(10), status: "inProgress" as const, completedAt: null, durationMs: null };
+    const failed = { ...active, status: "failed" as const, completedAt: 123, durationMs: 10 };
+    async function fail() {
+      harness.notify("turn/started", { threadId: "thread-1", turn: active });
+      await vi.waitFor(async () => expect((await handle.readCurrent()).snapshot.runState).toBe("running"));
+      if (initialStatus === "active") {
+        const blocked = { ...goal, status: "blocked", updatedAt: 3 };
+        harness.enqueue("thread/goal/get", { goal: blocked });
+        harness.notify("thread/goal/updated", decodeCodexServerNotificationParams("thread/goal/updated", { threadId: "thread-1", turnId: active.id, goal: blocked }));
+        await vi.waitFor(() => expect(goals.projection(scope, binding().applicationThreadId)?.state).toMatchObject({ status: "blocked" }));
+      }
+      harness.notify("turn/completed", { threadId: "thread-1", turn: failed });
+      await vi.waitFor(async () => expect((await handle.readCurrent()).snapshot.runState).toBe("failed"));
+      harness.notify("thread/status/changed", { threadId: "thread-1", status: { type: "idle" } });
+    }
+    return { ...storage, harness, goals, handle, goal, active, failed, sync, fail,
+      request: () => ({ backendTurnId: codexBackendTurnId("thread-1", active.id), mutationId: "auto-goal-recovery", isCurrent: () => true, onAdmitted: vi.fn() }),
+      close: async () => { harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close(); storage.database.close(); },
+    };
+  }
+
+  it("resumes an active goal after its autonomous turn fails without sending text", async () => {
+    const f = await fixture();
+    try {
+      await f.fail();
+      let current = true;
+      const request = { ...f.request(), isCurrent: () => current, onAdmitted: vi.fn(() => { current = false; }) };
+      expect(f.handle.isNativeRecoveryTurn(request.backendTurnId)).toBe(true);
+      f.harness.enqueue("thread/goal/get", { goal: { ...f.goal, status: "blocked" } }, { goal: { ...f.goal, status: "blocked" } });
+      f.harness.enqueue("thread/goal/set", { goal: { ...f.goal, status: "active" } });
+      await expect(f.handle.recoverModelFailure(request)).resolves.toBe("accepted");
+      expect(request.onAdmitted).toHaveBeenCalledOnce();
+      expect(f.sync).toHaveBeenCalled();
+      expect(f.harness.calls.filter(call => call.method === "thread/goal/set")).toEqual([
+        { method: "thread/goal/set", params: { threadId: "thread-1", status: "active", origin: "automatic" } },
+      ]);
+      expect(f.harness.calls.some(call => call.method === "turn/start")).toBe(false);
+      expect(new ProviderFeatureMutationRepository(f.database).find(scope, request.mutationId)?.state).toBe("accepted");
+    } finally { await f.close(); }
+  });
+
+  it("retains live goal failure evidence through terminal-error history reconciliation", async () => {
+    const f = await fixture();
+    try {
+      f.harness.notify("turn/started", { threadId: "thread-1", turn: f.active });
+      await vi.waitFor(async () => expect((await f.handle.readCurrent()).snapshot.runState).toBe("running"));
+      f.harness.notify("error", { threadId: "thread-1", turnId: f.active.id, willRetry: false,
+        error: { message: "Model capacity exhausted", codexErrorInfo: null, additionalDetails: null } });
+      const blocked = { ...f.goal, status: "blocked", updatedAt: 3 };
+      f.harness.enqueue("thread/goal/get", { goal: blocked });
+      f.harness.notify("thread/goal/updated", decodeCodexServerNotificationParams("thread/goal/updated", { threadId: "thread-1", turnId: f.active.id, goal: blocked }));
+      await vi.waitFor(() => expect(f.goals.projection(scope, binding().applicationThreadId)?.state).toMatchObject({ status: "blocked" }));
+      f.harness.enqueue("thread/goal/get", { goal: blocked });
+      const reconciled = await establish(f.harness, f.handle, nativeThread({ status: { type: "systemError" }, turns: [f.failed] }));
+      expect(reconciled.snapshot.runState).toBe("failed");
+      expect(f.handle.isNativeRecoveryTurn(f.request().backendTurnId)).toBe(true);
+      f.harness.enqueue("thread/goal/get", { goal: blocked }, { goal: blocked });
+      f.harness.enqueue("thread/goal/set", { goal: { ...f.goal, status: "active" } });
+      await expect(f.handle.recoverModelFailure(f.request())).resolves.toBe("accepted");
+      expect(f.harness.calls.filter(call => call.method === "thread/goal/set")).toHaveLength(1);
+      expect(f.harness.calls.some(call => call.method === "turn/start")).toBe(false);
+    } finally { await f.close(); }
+  });
+
+  it("publishes one native-recovery completion through the manager after terminal-error resnapshot", async () => {
+    const storage = executionSettingsPersistenceFixture(executionSettingsTuple());
+    const harness = new RpcHarness();
+    const goals = new CodexGoalSessionRegistry({ recoveryReceipts: new CodexGoalRecoveryReceipts(storage.database) });
+    const speeds = new CodexFastModeSessionRegistry();
+    const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy,
+      storage.adapter, goals, undefined, unavailableCodexAgentToolCliEnvironmentProvider, speeds);
+    const complete = vi.fn<AuthoritativeCompletionObserver>();
+    const manager = new ConversationActorManager({
+      environments: { acquireLease: async () => ({ scope, workspace,
+        environment: { id: "environment-1", label: "Test", availability: "available", diagnosticCode: null, revision: 1 },
+        release: async () => {},
+      }) } as unknown as ExecutionEnvironmentProvider,
+      attachmentDelivery: {} as ComposerAttachmentDeliveryService,
+      retentionMilliseconds: 30000, runtimeBudget: 8, onAuthoritativeCompletion: complete,
+    });
+    const goal = { threadId: "thread-1", objective: "Complete the work", status: "active",
+      tokenBudget: 10000, tokensUsed: 1200, timeUsedSeconds: 30, createdAt: 1, updatedAt: 2 };
+    harness.enqueue("thread/read", { thread: nativeThread({ turns: [] }) });
+    harness.enqueue("thread/resume", resumeResult());
+    harness.enqueue("thread/goal/get", { goal });
+    const acquired = await manager.acquire({ ...attachInput(), driver: target }, { idleRelease: "retain" });
+    try {
+      vi.spyOn(speeds.controller(scope, binding().applicationThreadId)!, "syncDefaults").mockResolvedValue("confirmed");
+      const active = { ...nativeTurn(10), status: "inProgress" as const, completedAt: null, durationMs: null };
+      const failed = { ...active, status: "failed" as const, completedAt: 123, durationMs: 10 };
+      harness.notify("turn/started", { threadId: "thread-1", turn: active });
+      await vi.waitFor(() => expect(acquired.actor.timeline.runState).toBe("running"));
+      const blocked = { ...goal, status: "blocked", updatedAt: 3 };
+      harness.enqueue("thread/goal/get", { goal: blocked });
+      harness.notify("thread/goal/updated", decodeCodexServerNotificationParams("thread/goal/updated", { threadId: "thread-1", turnId: active.id, goal: blocked }));
+      await vi.waitFor(() => expect(goals.projection(scope, binding().applicationThreadId)?.state).toMatchObject({ status: "blocked" }));
+      harness.enqueue("thread/read", { thread: nativeThread({ turns: [] }) });
+      harness.enqueue("thread/resume", resumeResult(nativeThread({ status: { type: "systemError" }, turns: [failed] })));
+      harness.enqueue("thread/goal/get", { goal: blocked });
+      harness.notify("error", { threadId: "thread-1", turnId: active.id, willRetry: false,
+        error: { message: "Model capacity exhausted", codexErrorInfo: null, additionalDetails: null } });
+      // Codex sends this after error; the handle is already reconciling and
+      // learns the authoritative terminal state from the replacement snapshot.
+      harness.notify("turn/completed", { threadId: "thread-1", turn: failed });
+      await vi.waitFor(() => expect(acquired.actor.timeline.runState).toBe("failed"));
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledWith(scope, binding().applicationThreadId,
+        expect.objectContaining({ outcome: "failed", provenance: "live", nativeRecovery: true,
+          backendCorrelations: [codexBackendTurnId("thread-1", active.id)] })));
+      const failures = () => complete.mock.calls.filter(([, , completion]) => completion.outcome === "failed");
+      expect(failures()).toHaveLength(1);
+      acquired.actor.replayAuthoritativeCompletions();
+      await acquired.actor.captureSnapshotState();
+      expect(failures()).toHaveLength(1);
+    } finally {
+      acquired.release();
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await manager.close();
+      storage.database.close();
+    }
+  });
+
+  it("does not resume a goal that was already intentionally paused", async () => {
+    const f = await fixture("paused");
+    try { await f.fail(); await expect(f.handle.recoverModelFailure(f.request())).resolves.toBe("rejected");
+      expect(f.harness.calls.some(call => call.method === "thread/goal/set")).toBe(false);
+    } finally { await f.close(); }
+  });
+
+  it("cancels recovery when the goal is paused during the delay", async () => {
+    const f = await fixture();
+    try {
+      await f.fail();
+      const paused = { ...f.goal, status: "paused", updatedAt: 4 };
+      const policyCheck = vi.spyOn(f.adapter, "assertExecutionPolicyAllowed");
+      policyCheck.mockClear();
+      f.harness.enqueue("thread/goal/get", { goal: paused });
+      f.harness.notify("thread/goal/updated", decodeCodexServerNotificationParams("thread/goal/updated", { threadId: "thread-1", turnId: null, goal: paused }));
+      await expect(f.handle.recoverModelFailure(f.request())).resolves.toBe("rejected");
+      expect(policyCheck).not.toHaveBeenCalled();
+      expect(f.harness.calls.some(call => call.method === "thread/goal/set")).toBe(false);
+    } finally { await f.close(); }
+  });
+
+  it("cancels after a pause races the final fresh read", async () => {
+    const f = await fixture();
+    try {
+      await f.fail();
+      f.harness.enqueue("thread/goal/get", { goal: { ...f.goal, status: "blocked" } }, (_params: unknown, harness: RpcHarness) => {
+        const paused = { ...f.goal, status: "paused", updatedAt: 4 };
+        harness.enqueue("thread/goal/get", { goal: paused });
+        harness.notify("thread/goal/updated", decodeCodexServerNotificationParams("thread/goal/updated", { threadId: "thread-1", turnId: null, goal: paused }));
+        return { goal: { ...f.goal, status: "blocked" } };
+      });
+      const request = f.request();
+      await expect(f.handle.recoverModelFailure(request)).resolves.toBe("rejected");
+      expect(request.onAdmitted).not.toHaveBeenCalled();
+      expect(f.harness.calls.some(call => call.method === "thread/goal/set")).toBe(false);
+    } finally { await f.close(); }
+  });
+
+  it("leaves an uncertain resume bounded without a text fallback", async () => {
+    const f = await fixture();
+    try {
+      await f.fail();
+      f.harness.enqueue("thread/goal/get", { goal: { ...f.goal, status: "blocked" } }, { goal: { ...f.goal, status: "blocked" } }, new Error("readback unavailable"));
+      f.harness.enqueue("thread/goal/set", new Error("reply lost"));
+      const request = f.request();
+      await expect(f.handle.recoverModelFailure(request)).resolves.toBe("uncertain");
+      expect(new ProviderFeatureMutationRepository(f.database).find(scope, request.mutationId)?.state).toBe("uncertain");
+      expect(f.harness.calls.filter(call => call.method === "thread/goal/set")).toHaveLength(1);
+      expect(f.harness.calls.some(call => call.method === "turn/start")).toBe(false);
+    } finally { await f.close(); }
+  });
+
+  it("tracks successful resumed work and a later independent goal failure", async () => {
+    const f = await fixture();
+    try {
+      await f.fail();
+      f.harness.enqueue("thread/goal/get", { goal: { ...f.goal, status: "blocked" } }, { goal: { ...f.goal, status: "blocked" } });
+      f.harness.enqueue("thread/goal/set", { goal: { ...f.goal, status: "active" } });
+      await expect(f.handle.recoverModelFailure(f.request())).resolves.toBe("accepted");
+      const activeGoal = { ...f.goal, status: "active", updatedAt: 5 };
+      f.harness.enqueue("thread/goal/get", { goal: activeGoal });
+      f.harness.notify("thread/goal/updated", decodeCodexServerNotificationParams("thread/goal/updated", { threadId: "thread-1", turnId: null, goal: activeGoal }));
+      const recovered = { ...nativeTurn(11), status: "inProgress" as const, completedAt: null, durationMs: null };
+      f.harness.notify("turn/started", { threadId: "thread-1", turn: recovered });
+      f.harness.notify("turn/completed", { threadId: "thread-1", turn: { ...recovered, status: "completed", completedAt: 124, durationMs: 10 } });
+      const later = { ...nativeTurn(12), status: "inProgress" as const, completedAt: null, durationMs: null };
+      f.harness.notify("turn/started", { threadId: "thread-1", turn: later });
+      await vi.waitFor(async () => expect((await f.handle.readCurrent()).snapshot.runState).toBe("running"));
+      expect(f.handle.isNativeRecoveryTurn(codexBackendTurnId("thread-1", recovered.id))).toBe(true);
+      const blocked = { ...activeGoal, status: "blocked", updatedAt: 6 };
+      f.harness.enqueue("thread/goal/get", { goal: blocked });
+      f.harness.notify("thread/goal/updated", decodeCodexServerNotificationParams("thread/goal/updated", { threadId: "thread-1", turnId: later.id, goal: blocked }));
+      f.harness.notify("turn/completed", { threadId: "thread-1", turn: { ...later, status: "failed", completedAt: 125, durationMs: 10 } });
+      f.harness.notify("thread/status/changed", { threadId: "thread-1", status: { type: "idle" } });
+      await vi.waitFor(async () => expect((await f.handle.readCurrent()).snapshot.runState).toBe("failed"));
+      f.harness.enqueue("thread/goal/get", { goal: blocked }, { goal: blocked });
+      f.harness.enqueue("thread/goal/set", { goal: activeGoal });
+      await expect(f.handle.recoverModelFailure({ ...f.request(), backendTurnId: codexBackendTurnId("thread-1", later.id), mutationId: "later-goal-recovery" })).resolves.toBe("accepted");
+      expect(f.harness.calls.filter(call => call.method === "thread/goal/set")).toHaveLength(2);
+    } finally { await f.close(); }
+  });
+
+  it("does not resurrect recovery after owner generation loss", async () => {
+    const f = await fixture();
+    try {
+      await f.fail();
+      f.harness.lifecycle("unavailable");
+      await expect(f.handle.recoverModelFailure(f.request())).resolves.toBe("rejected");
+      expect(f.harness.calls.some(call => call.method === "thread/goal/set")).toBe(false);
+    } finally { await f.close(); }
+  });
+
+  it.each([
+    { label: "model", change: { model: "gpt-5.6-pro" } },
+    { label: "reasoning effort", change: { reasoningEffort: "high" } },
+    { label: "service tier", change: { serviceTier: "fast" as const } },
+  ])("does not resume on stale native settings after saved $label changes", async ({ change }) => {
+    const f = await fixture();
+    try {
+      await f.fail();
+      vi.spyOn(f.adapter, "desiredSettings").mockReturnValue(executionSettingsTuple(change));
+      await expect(f.handle.recoverModelFailure(f.request())).resolves.toBe("rejected");
+      expect(f.harness.calls.some(call => call.method === "thread/goal/set")).toBe(false);
+      expect(f.sync).not.toHaveBeenCalled();
+    } finally { await f.close(); }
+  });
+
+  it.each(["sandbox", "model"] as const)("rejects a fresh native %s change observed during Speed synchronization", async changed => {
+    const f = await fixture();
+    try {
+      await f.fail();
+      const observed = vi.spyOn(f.adapter, "observeEffective");
+      f.sync.mockImplementationOnce(async () => {
+        f.harness.notify("thread/settings/updated", { threadId: "thread-1", threadSettings: {
+          cwd: workspace.canonicalPath, approvalPolicy: "never", approvalsReviewer: "user",
+          sandboxPolicy: changed === "sandbox" ? { type: "dangerFullAccess" } : { type: "readOnly", networkAccess: false },
+          activePermissionProfile: null, model: changed === "model" ? "gpt-5.6-pro" : "gpt-5.6",
+          modelProvider: "openai", serviceTier: "default", effort: "low", summary: null,
+          collaborationMode: { mode: "default", settings: { model: changed === "model" ? "gpt-5.6-pro" : "gpt-5.6",
+            reasoning_effort: "low", developer_instructions: null } },
+          multiAgentMode: "explicitRequestOnly", personality: null,
+        } });
+        await vi.waitFor(() => expect(observed).toHaveBeenCalledWith(scope, expect.objectContaining({ settings:
+          expect.objectContaining(changed === "sandbox" ? { sandboxMode: "danger-full-access" } : { model: "gpt-5.6-pro" }),
+        })));
+        return "confirmed";
+      });
+      f.harness.enqueue("thread/goal/get", { goal: { ...f.goal, status: "blocked" } }, { goal: { ...f.goal, status: "blocked" } });
+      const request = f.request();
+      await expect(f.handle.recoverModelFailure(request)).resolves.toBe("rejected");
+      expect(f.sync).toHaveBeenCalledOnce();
+      expect(f.harness.calls.some(call => call.method === "thread/goal/set")).toBe(false);
+      expect(new ProviderFeatureMutationRepository(f.database).find(scope, request.mutationId)).toBeUndefined();
+      expect(request.onAdmitted).not.toHaveBeenCalled();
+    } finally { await f.close(); }
+  });
+
+  it("rejects saved permissions that would replace the failed turn's restrictions", async () => {
+    const f = await fixture();
+    try {
+      await f.fail();
+      vi.spyOn(f.adapter, "desiredSettings").mockReturnValue(executionSettingsTuple({ networkAccess: "enabled" }));
+      await expect(f.handle.recoverModelFailure(f.request())).resolves.toBe("rejected");
+      expect(f.harness.calls.some(call => call.method === "thread/goal/set")).toBe(false);
+    } finally { await f.close(); }
+  });
 });

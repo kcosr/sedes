@@ -1775,8 +1775,10 @@ export async function startProductionApplication(
         applicationThreadId,
         input,
       );
+      if (observation ? observation.changed : input.nativeRecovery) {
+        automaticModelRetries?.onCompletion(eventScope, applicationThreadId, input);
+      }
       if (!observation) return;
-      if (observation.changed) automaticModelRetries?.onCompletion(eventScope, applicationThreadId, input);
       const observed = observation.record;
       try {
         observeAutomationTurns?.observe(
@@ -1817,7 +1819,8 @@ export async function startProductionApplication(
       },
     });
     mutations = new ThreadMutationGateway({
-      cancelAutomaticModelRetry: (eventScope, threadId) => {
+      cancelAutomaticModelRetry: (eventScope, threadId, mode) => {
+        if (mode === "native_only") return automaticModelRetries?.cancelNativeRecovery(eventScope, threadId) ?? false;
         if (!automaticModelRetries?.isPending(eventScope, threadId)) return false;
         automaticModelRetries.cancel(eventScope, threadId);
         return true;

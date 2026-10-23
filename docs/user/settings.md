@@ -412,6 +412,13 @@ retry. Uncertain submission outcomes use recovery instead of automatic
 resending. Messages with completion callbacks are excluded; their calling thread
 controls any further work.
 
+For Codex, a goal that was active for the failed turn is resumed instead of
+receiving a Continue message. This also covers turns Codex starts on its own
+while pursuing the goal. A paused, cleared, replaced, completed, or
+usage/budget-limited goal is not resumed. Pausing the goal during the delay
+cancels its recovery. A successfully completed goal turn restores the retry
+allowance; intermediate progress and the Resume acknowledgement do not.
+
 This account preference applies to all backends and execution servers on the
 connected Sedes installation, across clients and restarts. Independent Sedes
 installations keep separate account settings. Native harness retries remain

@@ -74,10 +74,24 @@ function fixture(options: { source?: "user" | "automation" | "agent_control"; fi
       completionIdentity: completion.completionIdentity, observedAt: Date.now(), createAttention: true,
       finalized: { applicationTurnId: turnId, outcome: "failed", result: { text: "Capacity exhausted" }, classifiedResult: null },
     });
+    setFailedTimeline(threadId, turnId);
+    return completion;
+  }
+
+  function setFailedTimeline(threadId: string, turnId: string) {
     states.set(threadId, { owner: states.get(threadId)?.owner ?? randomUUID(), readOnly: false,
       timeline: { generation: randomUUID(), runState: "failed", orderedTurnIds: [turnId],
         turnsById: { [turnId]: { id: turnId, revision: 1, status: "failed", orderedItemIds: [] } }, itemsById: {} } });
-    return completion;
+  }
+
+  function failUnsubmitted(threadId: string): AutomaticModelRetryCompletion {
+    const binding = bindings.getBinding(current.scope, threadId)!;
+    const backendTurnId = randomUUID();
+    const turnId = applicationTurnIdForBackendTurn({ backendInstanceId: binding.backendInstanceId,
+      sourceApplicationThreadId: threadId, backendTurnId });
+    setFailedTimeline(threadId, turnId);
+    return { backendTurnId, completionIdentity: `${backendTurnId}:failed`, outcome: "failed", provenance: "live",
+      nativeRecovery: true };
   }
 
   function acceptQueued(threadId: string, item: QueuedInputRecord) {
@@ -150,9 +164,15 @@ function fixture(options: { source?: "user" | "automation" | "agent_control"; fi
     } : undefined;
   });
   const release = vi.fn();
+  const recoverModelFailure = vi.fn<ConversationActor["recoverModelFailure"]>(async input => {
+    expect(input.isCurrent()).toBe(true);
+    input.onAdmitted();
+    return "accepted";
+  });
   function acquisition(threadId: string): AcquiredThreadRuntime {
     const state = states.get(threadId)!;
-    return { actor: { get timeline() { return state.timeline; }, get readOnly() { return state.readOnly; } } as ConversationActor,
+    return { actor: { get timeline() { return state.timeline; }, get readOnly() { return state.readOnly; },
+      recoverModelFailure } as unknown as ConversationActor,
       release, hub: {} as AcquiredThreadRuntime["hub"], publishAuthoritativeReplacement: vi.fn() };
   }
   const acquire = vi.fn(async (_scope: RequestScope, threadId: string) => acquisition(threadId));
@@ -164,7 +184,7 @@ function fixture(options: { source?: "user" | "automation" | "agent_control"; fi
     queueDispatcher: { dispatchAdmitted }, onPendingChanged });
   const result = { ...current, ...original, queue, completions, bindings, inventory, operations, callbacks, states,
     service, observeInputRuntime, acquire, acquisition, release, listPending, dispatchAdmitted, onPendingChanged,
-    seedFailed, failAccepted, acceptQueued, revision,
+    seedFailed, failAccepted, failUnsubmitted, acceptQueued, revision, recoverModelFailure,
     async close() { await service.close(); current.database.close(); } };
   fixtures.push(result);
   return result;
@@ -193,11 +213,97 @@ describe("automatic retry runtime admission", () => {
       origin: "automatic_retry", inputOrigin: { kind: "automatic_retry" },
     });
     expect(f.dispatchAdmitted).toHaveBeenCalledExactlyOnceWith(f.scope, f.threadId);
+    expect(f.recoverModelFailure).not.toHaveBeenCalled();
     f.service.onCompletion(f.scope, f.threadId, f.completion);
     await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
     expect(f.queue.list(f.scope, f.threadId)).toHaveLength(2);
     expect(f.release).toHaveBeenCalledOnce();
   });
+
+  it.each(["submitted", "autonomous"] as const)("resumes a native goal after a failed %s turn without sending a follow-up", async source => {
+    const f = fixture();
+    const completion = source === "autonomous" ? f.failUnsubmitted(f.threadId) : { ...f.completion, nativeRecovery: true as const };
+    const originalInputs = f.queue.list(f.scope, f.threadId);
+    const originalDraft = f.inventory.getDraft(f.scope, f.threadId);
+    if (source === "autonomous") {
+      expect(f.database.prepare("SELECT 1 FROM submission_completion_observations WHERE last_completion_identity = ?")
+        .get(completion.completionIdentity)).toBeUndefined();
+    }
+    f.service.onCompletion(f.scope, f.threadId, completion);
+    expect(f.service.isPending(f.scope, f.threadId)).toBe(true);
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS - 1);
+    expect(f.recoverModelFailure).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.recoverModelFailure).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      backendTurnId: completion.backendTurnId,
+      mutationId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+      isCurrent: expect.any(Function), onAdmitted: expect.any(Function),
+    }));
+    expect(f.queue.list(f.scope, f.threadId)).toEqual(originalInputs);
+    expect(f.inventory.getDraft(f.scope, f.threadId)).toEqual(originalDraft);
+    expect(f.dispatchAdmitted).not.toHaveBeenCalled();
+    expect(f.service.isPending(f.scope, f.threadId)).toBe(false);
+    expect(f.release).toHaveBeenCalledOnce();
+  });
+
+  it.each(["uncertain", "rejected"] as const)("never falls back to a message or reattempts after %s native recovery", async result => {
+    const f = fixture();
+    f.recoverModelFailure.mockResolvedValue(result);
+    const completion = f.failUnsubmitted(f.threadId);
+    const originalInputs = f.queue.list(f.scope, f.threadId);
+    f.service.onCompletion(f.scope, f.threadId, completion);
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.recoverModelFailure).toHaveBeenCalledOnce();
+    expect(f.service.isPending(f.scope, f.threadId)).toBe(false);
+    f.service.onCompletion(f.scope, f.threadId, f.failUnsubmitted(f.threadId));
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.recoverModelFailure).toHaveBeenCalledOnce();
+    expect(f.queue.list(f.scope, f.threadId)).toEqual(originalInputs);
+    expect(f.dispatchAdmitted).not.toHaveBeenCalled();
+  });
+
+  it("rearms native goal recovery after a fully completed turn without a submitted input", async () => {
+    const f = fixture();
+    f.service.onCompletion(f.scope, f.threadId, f.failUnsubmitted(f.threadId));
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    const completed = f.failUnsubmitted(f.threadId);
+    f.service.onCompletion(f.scope, f.threadId, { ...completed, outcome: "completed" });
+    f.service.onCompletion(f.scope, f.threadId, f.failUnsubmitted(f.threadId));
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.recoverModelFailure).toHaveBeenCalledTimes(2);
+    expect(f.queue.list(f.scope, f.threadId)).toHaveLength(1);
+    expect(f.dispatchAdmitted).not.toHaveBeenCalled();
+  });
+
+  it.each(["newer_head", "queued_input", "interaction", "operation", "read_only", "cancelled", "replaced_owner"] as const)(
+    "does not resume a native goal after %s invalidates its failed turn", async blocker => {
+      const f = fixture();
+      f.service.onCompletion(f.scope, f.threadId, f.failUnsubmitted(f.threadId));
+      const state = f.states.get(f.threadId)!;
+      if (blocker === "newer_head") {
+        state.timeline = { ...state.timeline, orderedTurnIds: [...state.timeline.orderedTurnIds, "newer-turn"],
+          turnsById: { ...state.timeline.turnsById, "newer-turn": { id: "newer-turn", revision: 1, status: "failed", orderedItemIds: [] } } };
+      } else if (blocker === "queued_input") {
+        f.queue.enqueue(f.scope, f.threadId, { mutationId: randomUUID(), text: "Newer user work", contextExcerpts: [], attachmentIds: [], taskReferences: [],
+          source: { kind: "direct_input", expectedThreadRevision: f.revision(f.threadId), resolvedDeliveryMode: "submit" }, now: Date.now() });
+      } else if (blocker === "interaction") f.listPending.mockReturnValue([{
+        id: "approval", threadId: f.threadId, sourceLabel: { text: "Provider" }, openedAt: new Date().toISOString(),
+        secret: false, destructive: false, cancellable: true, kind: "confirmation", title: { text: "Approve work?" }, message: { text: "An answer is required." },
+      }]);
+      else if (blocker === "operation") vi.spyOn(f.operations, "hasBlockingThreadOperation").mockReturnValue(true);
+      else if (blocker === "read_only") state.readOnly = true;
+      else if (blocker === "cancelled") f.service.cancel(f.scope, f.threadId);
+      else f.acquire.mockImplementationOnce(async (_scope, threadId) => {
+        f.states.get(threadId)!.owner = "replacement-owner";
+        return f.acquisition(threadId);
+      });
+      await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+      expect(f.recoverModelFailure).not.toHaveBeenCalled();
+      expect(f.dispatchAdmitted).not.toHaveBeenCalled();
+      expect(f.queue.list(f.scope, f.threadId).filter(item => item.inputOrigin?.kind === "automatic_retry")).toEqual([]);
+      expect(f.service.isPending(f.scope, f.threadId)).toBe(false);
+    },
+  );
 
   it.each(["user", "automation"] as const)("recovers the first %s send through durable creation provenance without a queued original", async source => {
     const f = fixture({ firstSend: true, source });
@@ -235,6 +341,17 @@ describe("automatic retry runtime admission", () => {
     expect(f.completions.get(f.scope, f.threadId, f.operationId).completionOutcome).toBe("failed");
     expect(f.queue.list(f.scope, f.threadId)).toEqual(targetInputs);
     expect(f.dispatchAdmitted).not.toHaveBeenCalled();
+    expect(f.service.isPending(f.scope, f.threadId)).toBe(false);
+  });
+
+  it("preserves callback ownership when a failed submitted turn is eligible for native goal recovery", async () => {
+    const f = fixture({ source: "agent_control", callback: true });
+    const originalInputs = f.queue.list(f.scope, f.threadId);
+    f.service.onCompletion(f.scope, f.threadId, { ...f.completion, nativeRecovery: true });
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.recoverModelFailure).not.toHaveBeenCalled();
+    expect(f.dispatchAdmitted).not.toHaveBeenCalled();
+    expect(f.queue.list(f.scope, f.threadId)).toEqual(originalInputs);
     expect(f.service.isPending(f.scope, f.threadId)).toBe(false);
   });
 

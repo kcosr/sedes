@@ -15,6 +15,7 @@ import type {
   BackendCheckpointRef,
   BranchCheckpointSelection,
   ConversationHandle,
+  RecoverModelFailureInput,
   InterruptConversationInput,
   EstablishedBackendProjection,
   InteractionResponseInput,
@@ -274,6 +275,7 @@ export class ConversationActor {
   // Preserve live acceptance replays and explicit recovery evidence across
   // projection retries without retaining unbounded turn history.
   readonly #completionProvenances = new Map<string, "live" | "recovered">();
+  readonly #publishedUnsubmittedCompletions = new Set<string>();
   readonly #pendingInteractions = new Map<string, Extract<AncillaryBackendEvent, { type: "interaction_opened" }>>();
   readonly #closeListeners = new Set<() => void>();
   readonly #coalescer: ProjectionEventCoalescer;
@@ -1169,6 +1171,25 @@ export class ConversationActor {
       : this.#enqueue(() => this.#handle.perform(input));
   }
 
+  isNativeRecoveryTurn(applicationTurnId: string): boolean {
+    const backendTurnId = this.#projector.backendTurnId(applicationTurnId);
+    return !this.#closing && !this.#closed &&
+      backendTurnId !== undefined && (this.#handle.isNativeRecoveryTurn?.(backendTurnId) ?? false);
+  }
+
+  recoverModelFailure(input: RecoverModelFailureInput): Promise<"accepted" | "uncertain" | "rejected"> {
+    return this.#enqueue(async () => {
+      const timeline = this.#projector.timeline();
+      const head = timeline.orderedTurnIds.at(-1);
+      if (!input.isCurrent() || !this.authoritativelySettled || this.readOnly ||
+          !head || timeline.runState !== "failed" || timeline.turnsById[head]?.status !== "failed" ||
+          this.#projector.backendTurnId(head) !== input.backendTurnId || !this.#handle.recoverModelFailure) {
+        return "rejected";
+      }
+      return this.#nativeEffects.run(() => this.#handle.recoverModelFailure!(input));
+    });
+  }
+
   runProviderFeatureMutation<T>(operation: (context: {
     isIdle(): boolean;
     resolveTurnId(turnId: string): string | undefined;
@@ -1564,9 +1585,11 @@ export class ConversationActor {
             const completion = this.#completionResult(
               event.event.turn.backendTurnId,
             );
-            const correlations = event.event.turn.completionCorrelations ?? [
-              event.event.turn.backendTurnId,
-            ];
+            const submittedCorrelations = event.event.turn.completionCorrelations;
+            const provenance = this.#completionProvenance(completionIdentity);
+            if (!submittedCorrelations?.length && provenance === "live" &&
+                !this.#claimUnsubmittedCompletion(completionIdentity)) return;
+            const correlations = submittedCorrelations?.length ? submittedCorrelations : [event.event.turn.backendTurnId];
             for (const backendCorrelation of correlations) {
               this.#publish({
                 type: "authoritative_completion",
@@ -1575,7 +1598,7 @@ export class ConversationActor {
                 backendTurnId: event.event.turn.backendTurnId,
                 applicationTurnId: completion.applicationTurnId,
                 completionIdentity,
-                provenance: this.#completionProvenance(completionIdentity),
+                provenance,
                 outcome: event.event.turn.status,
                 result: completion.result,
                 classifiedResult: completion.classifiedResult,
@@ -1620,10 +1643,18 @@ export class ConversationActor {
     return this.#completionProvenances.get(completionIdentity) ?? "recovered";
   }
 
+  #claimUnsubmittedCompletion(completionIdentity: string): boolean {
+    if (this.#publishedUnsubmittedCompletions.has(completionIdentity)) return false;
+    this.#publishedUnsubmittedCompletions.add(completionIdentity);
+    if (this.#publishedUnsubmittedCompletions.size > MAXIMUM_REMEMBERED_COMPLETION_PROVENANCES) {
+      this.#publishedUnsubmittedCompletions.delete(this.#publishedUnsubmittedCompletions.values().next().value!);
+    }
+    return true;
+  }
+
   #publishSnapshotCompletions(listener?: ConversationActorListener): void {
     for (const backendTurn of this.#projector.backendTurns()) {
       if (
-        !backendTurn.completionCorrelations ||
         (backendTurn.status !== "completed" &&
           backendTurn.status !== "interrupted" &&
           backendTurn.status !== "failed")
@@ -1631,16 +1662,24 @@ export class ConversationActor {
         continue;
       }
       const completionIdentity = `${backendTurn.backendTurnId}:${backendTurn.status}`;
+      const provenance = this.#completionProvenance(completionIdentity);
+      // A same-owner replacement can be the first terminal evidence after a
+      // live error invalidates the projection. Preserve that transition even
+      // for autonomous work, without turning imported history into new work.
+      if (!backendTurn.completionCorrelations?.length &&
+          (provenance !== "live" || !this.#claimUnsubmittedCompletion(completionIdentity))) continue;
+      const correlations = backendTurn.completionCorrelations?.length
+        ? backendTurn.completionCorrelations : [backendTurn.backendTurnId];
       const completion = this.#completionResult(backendTurn.backendTurnId);
-      for (const backendCorrelation of backendTurn.completionCorrelations) {
+      for (const backendCorrelation of correlations) {
         const event: ConversationActorEvent = {
           type: "authoritative_completion",
           backendCorrelation,
-          backendCorrelations: backendTurn.completionCorrelations,
+          backendCorrelations: correlations,
           backendTurnId: backendTurn.backendTurnId,
           applicationTurnId: completion.applicationTurnId,
           completionIdentity,
-          provenance: this.#completionProvenance(completionIdentity),
+          provenance,
           outcome: backendTurn.status,
           result: completion.result,
           classifiedResult: completion.classifiedResult,

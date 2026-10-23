@@ -351,7 +351,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         applicationThreadId: string,
       ) => void | Promise<void>;
       /** Cancels a scheduled follow-up before it reaches native admission. */
-      readonly cancelAutomaticModelRetry?: (scope: RequestScope, applicationThreadId: string) => boolean;
+      readonly cancelAutomaticModelRetry?: (scope: RequestScope, applicationThreadId: string, mode?: "native_only") => boolean;
     },
   ) {
     const database = input.bindings.database;
@@ -3282,6 +3282,9 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     if (replay) {
       return "status" in replay ? replay : { status: "accepted", operationId: replay.applicationOperationId };
     }
+    // An explicit feature control (including pausing/clearing a native goal)
+    // supersedes delayed automatic work before any asynchronous admission.
+    this.input.cancelAutomaticModelRetry?.(scope, applicationThreadId, "native_only");
     try {
     const concurrency = provider?.providerFeatureConcurrency(
       operation.operation.feature,

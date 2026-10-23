@@ -84,6 +84,95 @@ describe("automatic model failure follow-up", () => {
     await f.service.close();
   });
 
+  it("passes native recovery to admission without altering the failure identity", async () => {
+    const f = fixture();
+    f.service.onCompletion(scope, threadId, { ...failure, nativeRecovery: true });
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.enqueue).toHaveBeenCalledExactlyOnceWith(scope, threadId, expect.objectContaining({
+      nativeRecovery: true, backendTurnId: failure.backendTurnId, sourceFailureIdentity: failure.completionIdentity,
+    }));
+    expect(f.service.isPending(scope, threadId)).toBe(false);
+  });
+
+  it("does not rearm native recovery from intermediate model feedback", async () => {
+    const f = fixture();
+    f.service.onCompletion(scope, threadId, { ...failure, nativeRecovery: true });
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    f.service.onModelFeedback(scope, threadId, "native-goal-tool-response", true);
+    expect(f.policy.reset).not.toHaveBeenCalled();
+    f.service.onCompletion(scope, threadId, { ...failure, nativeRecovery: true,
+      backendTurnId: "resumed-goal-turn", completionIdentity: "resumed-goal-turn:failed" });
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.enqueue).toHaveBeenCalledTimes(1);
+    f.service.onCompletion(scope, threadId, { ...failure, nativeRecovery: true,
+      backendTurnId: "successful-goal-turn", completionIdentity: "successful-goal-turn:completed", outcome: "completed" });
+    expect(f.policy.reset).toHaveBeenCalledExactlyOnceWith("successful-goal-turn:completed");
+    f.service.onCompletion(scope, threadId, { ...failure, nativeRecovery: true,
+      backendTurnId: "later-goal-turn", completionIdentity: "later-goal-turn:failed" });
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.enqueue).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])("native-only cancellation preserves an ordinary pending retry (nativeRecovery=%s)", async nativeRecovery => {
+    const f = fixture();
+    f.service.onCompletion(scope, threadId, { ...failure, ...(nativeRecovery ? { nativeRecovery: true as const } : {}) });
+    expect(f.service.cancelNativeRecovery(scope, threadId)).toBe(nativeRecovery);
+    expect(f.service.isPending(scope, threadId)).toBe(!nativeRecovery);
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.enqueue).toHaveBeenCalledTimes(nativeRecovery ? 0 : 1);
+    await f.service.close();
+  });
+
+  it("cancels native recovery on new input before admission", async () => {
+    const f = fixture();
+    f.service.onCompletion(scope, threadId, { ...failure, nativeRecovery: true });
+    f.service.onInputChanged(scope, threadId, input("pending"));
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.enqueue).not.toHaveBeenCalled();
+    expect(f.service.isPending(scope, threadId)).toBe(false);
+  });
+
+  it("cancels a pending native recovery without restoring its consumed allowance", async () => {
+    const f = fixture();
+    f.service.onCompletion(scope, threadId, { ...failure, nativeRecovery: true });
+    expect(f.service.cancelNativeRecovery(scope, threadId)).toBe(true);
+    expect(f.service.cancelNativeRecovery(scope, threadId)).toBe(false);
+    expect(f.service.isPending(scope, threadId)).toBe(false);
+    expect(f.onPendingChanged.mock.calls.map(call => call[2])).toEqual([true, false]);
+    expect(f.policy.reset).not.toHaveBeenCalled();
+    expect(f.policy.resetForInput).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.enqueue).not.toHaveBeenCalled();
+    f.service.onCompletion(scope, threadId, { ...failure, nativeRecovery: true,
+      backendTurnId: "later-turn", completionIdentity: "later-turn:failed" });
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.enqueue).not.toHaveBeenCalled();
+    expect(f.service.isPending(scope, threadId)).toBe(false);
+    await f.service.close();
+  });
+
+  it("leaves an ordinary retry pending when only native recovery is cancelled", async () => {
+    const f = fixture();
+    f.service.onCompletion(scope, threadId, failure);
+    expect(f.service.cancelNativeRecovery(scope, threadId)).toBe(false);
+    expect(f.service.isPending(scope, threadId)).toBe(true);
+    expect(f.onPendingChanged.mock.calls.map(call => call[2])).toEqual([true]);
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.enqueue).toHaveBeenCalledExactlyOnceWith(scope, threadId, expect.not.objectContaining({ nativeRecovery: true }));
+    await f.service.close();
+  });
+
+  it("scopes native cancellation to the exact principal and thread", async () => {
+    const f = fixture();
+    f.service.onCompletion(scope, threadId, { ...failure, nativeRecovery: true });
+    expect(f.service.cancelNativeRecovery({ ...scope, principalId: "other" }, threadId)).toBe(false);
+    expect(f.service.cancelNativeRecovery(scope, "other-thread")).toBe(false);
+    expect(f.service.isPending(scope, threadId)).toBe(true);
+    await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
+    expect(f.enqueue).toHaveBeenCalledOnce();
+    await f.service.close();
+  });
+
   it("does not retry a failed follow-up again until a completed successful response", async () => {
     const f = fixture();
     f.service.onCompletion(scope, threadId, failure);
@@ -136,10 +225,11 @@ describe("automatic model failure follow-up", () => {
     expect(f.enqueue).toHaveBeenCalledTimes(1);
   });
 
-  it("does not schedule or reset from recovered history", async () => {
+  it.each([false, true])("does not schedule or reset from recovered history with nativeRecovery=%s", async nativeRecovery => {
     const f = fixture();
-    f.service.onCompletion(scope, threadId, { ...failure, provenance: "recovered" });
-    f.service.onCompletion(scope, threadId, { ...failure, provenance: "recovered", outcome: "completed" });
+    const recovery = nativeRecovery ? { nativeRecovery: true as const } : {};
+    f.service.onCompletion(scope, threadId, { ...failure, ...recovery, provenance: "recovered" });
+    f.service.onCompletion(scope, threadId, { ...failure, ...recovery, provenance: "recovered", outcome: "completed" });
     await vi.advanceTimersByTimeAsync(MODEL_FAILURE_RETRY_DELAY_MS);
     expect(f.policy.claim).not.toHaveBeenCalled();
     expect(f.policy.reset).not.toHaveBeenCalled();
