@@ -2156,6 +2156,14 @@ receipt. A valid active-status hint alone must not discard an exact successful
 start. Codex applies this to Speed; Pi, Claude, Grok, and OpenCode intentionally
 do not expose that control. History-read observation guards remain independent.
 
+Metadata-only history reads omit turn identities; they do not revoke a known
+active target within the same uninterrupted control lifetime. Revalidate that
+target from authoritative turn details using the observation fence captured
+before acquisition, so completion or conflicting live events during hydration
+win over the snapshot. History recovery must never create a Sedes-started Speed
+activation. Codex implements this per scoped thread handle; Pi, Claude, Grok,
+and OpenCode do not expose active Speed and keep their existing controls.
+
 A saved preference plus a fallible native publication is two effects under one
 request identity. Keep the accepted save receipt immutable and use a scoped
 child for the native attempt. Replay exact receipts before current capability,

@@ -1078,19 +1078,25 @@ describe("Codex Speed turn-start ownership", () => {
   const activeTurn = () => ({ ...nativeTurn(1), items: [], itemsView: "notLoaded" as const,
     status: "inProgress" as const, completedAt: null, durationMs: null });
 
-  async function fixture() {
-    const harness = new RpcHarness();
+  async function fixture(historyMode: "legacy" | "paginated" = "legacy", persistentSessions?: CodexPersistentSessionAccess) {
+    const harness = new RpcHarness(persistentSessions);
     const speeds = new CodexFastModeSessionRegistry();
     const handle = await attachIdle(harness, driver(harness, connection, undefined, undefined,
       undefined, undefined, undefined, undefined, speeds));
-    const features = fastModeFeatures(true);
-    harness.enqueue("experimentalFeature/list", { ...features, data: [...features.data, {
+    const fastFeatures = fastModeFeatures(true);
+    const features = { ...fastFeatures, data: [...fastFeatures.data, {
       name: "step_model_switching", stage: "underDevelopment", displayName: null,
       description: null, announcement: null, enabled: true, defaultEnabled: false,
-    }] });
-    await establish(harness, handle);
+    }] };
+    harness.enqueue("experimentalFeature/list", features);
+    if (historyMode === "legacy") await establish(harness, handle);
+    else {
+      harness.enqueue("thread/read", { thread: paginatedThread() });
+      harness.enqueue("thread/resume", paginatedResumeResult({ shells: [] }));
+      await handle.establishProjection({ signal: new AbortController().signal });
+    }
     const speed = speeds.controller(scope, binding().applicationThreadId)!;
-    return { harness, handle, speed,
+    return { harness, handle, speed, features,
       submit: (operationId = "speed-start") => handle.submit({ applicationOperationId: operationId, source: { kind: "user" },
         mutationId: `${operationId}-mutation`, reconciliationToken: `${operationId}-token`,
         taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" }),
@@ -1100,6 +1106,124 @@ describe("Codex Speed turn-start ownership", () => {
       },
     };
   }
+
+  function enqueueActiveRefresh(f: Awaited<ReturnType<typeof fixture>>, mode: "legacy" | "paginated",
+    turn = activeTurn(), duringHydration?: () => void) {
+    const thread = nativeThread({ historyMode: mode, status: { type: "active", activeFlags: [] }, turns: [] });
+    const resumed = mode === "legacy" ? resumeResult({ ...thread, turns: [{ ...turn, itemsView: "full" }] })
+      : paginatedResumeResult({ thread, shells: [turn, notLoadedTurn(0)] });
+    f.harness.enqueue("thread/read", { thread });
+    f.harness.enqueue("thread/resume", resumed);
+    f.harness.enqueue("experimentalFeature/list", f.features);
+    if (mode === "paginated") {
+      f.harness.enqueue("thread/turns/list", { data: [turn], nextCursor: "after-active", backwardsCursor: "turns-head" });
+      f.harness.enqueue("thread/items/list", () => {
+        duringHydration?.();
+        const items = paginatedItems(1);
+        return { ...items, data: items.data.map(item => ({ ...item, turnId: turn.id })) };
+      }, paginatedItems(0));
+    }
+    return codexThreadResumeMethod.decodeResult(resumed);
+  }
+
+  it.each(["legacy", "paginated", "persistent"] as const)("preserves active Speed through a %s history refresh", async mode => {
+    const persistent = { reattachThread: vi.fn<CodexPersistentSessionAccess["reattachThread"]>(), detachThread: vi.fn() };
+    const historyMode = mode === "legacy" ? "legacy" : "paginated";
+    const f = await fixture(historyMode, mode === "persistent" ? persistent : undefined);
+    try {
+      f.harness.enqueue("turn/start", { turn: activeTurn() });
+      await f.submit();
+      const before = f.speed.currentRun();
+      expect(before?.target).toMatchObject({ turnId: expect.any(String), activationId: expect.any(String) });
+      f.harness.enqueue("turn/settings/update", { status: "applied" });
+      await expect(f.speed.publish({ arguments: { selection: "fast", currentRunTarget: before!.target! },
+        backendTurnId: codexBackendTurnId("thread-1", "turn-1"), operationId: "before-refresh",
+        dispatching: () => {} })).resolves.toMatchObject({ status: "published" });
+      const published = f.speed.currentRun();
+      const resumed = enqueueActiveRefresh(f, historyMode, activeTurn(), () => {
+        expect(f.speed.currentRun()).toEqual(published);
+      });
+      f.harness.after("thread/read", () => expect(f.speed.currentRun()).toEqual(published));
+      if (mode === "persistent") {
+        persistent.reattachThread.mockImplementationOnce(async () => {
+          expect(f.speed.currentRun()).toEqual(published);
+          return { result: resumed, generation: f.harness.generation, inboundSequence: ++f.harness.sequence };
+        });
+      } else f.harness.after("thread/resume", () => expect(f.speed.currentRun()).toEqual(published));
+      await f.handle.establishProjection({ signal: new AbortController().signal });
+      expect(f.speed.currentRun()).toEqual(published);
+      f.harness.enqueue("turn/settings/update", { status: "applied" });
+      await expect(f.speed.publish({ arguments: { selection: "ultrafast", currentRunTarget: before!.target! },
+        backendTurnId: codexBackendTurnId("thread-1", "turn-1"), operationId: "after-refresh",
+        dispatching: () => {} })).resolves.toMatchObject({ status: "published" });
+      expect(f.harness.calls.filter(call => call.method === "turn/settings/update")).toHaveLength(2);
+      if (mode === "persistent") expect(f.harness.calls.filter(call => call.method === "thread/resume")).toHaveLength(1);
+    } finally { await f.close(); }
+  });
+
+  it.each(["legacy", "paginated"] as const)("rejects the old Speed activation when %s recovered history identifies another active turn", async mode => {
+    const f = await fixture(mode);
+    try {
+      f.harness.enqueue("turn/start", { turn: activeTurn() });
+      await f.submit();
+      const target = f.speed.currentRun()!.target!;
+      expect(target).not.toBeNull();
+      enqueueActiveRefresh(f, mode, { ...activeTurn(), id: "turn-2" });
+      await f.handle.establishProjection({ signal: new AbortController().signal });
+      expect(f.speed.currentRun()?.target ?? null).toBeNull();
+      // Even an older snapshot returning to the original identity cannot
+      // recreate the activation that the conflicting history invalidated.
+      enqueueActiveRefresh(f, mode);
+      await f.handle.establishProjection({ signal: new AbortController().signal });
+      expect(f.speed.currentRun()?.target ?? null).toBeNull();
+      await expect(f.speed.publish({ arguments: { selection: "fast", currentRunTarget: target },
+        backendTurnId: codexBackendTurnId("thread-1", "turn-1"), operationId: "stale-refresh",
+        dispatching: () => {} })).resolves.not.toMatchObject({ status: "published" });
+      expect(f.harness.calls.some(call => call.method === "turn/settings/update")).toBe(false);
+    } finally { await f.close(); }
+  });
+
+  it.each(["completion", "idle", "another_turn"] as const)("does not overwrite %s observed during paginated hydration", async event => {
+    const f = await fixture("paginated");
+    try {
+      f.harness.enqueue("turn/start", { turn: activeTurn() });
+      await f.submit();
+      expect(f.speed.currentRun()?.target).not.toBeNull();
+      enqueueActiveRefresh(f, "paginated", activeTurn(), () => {
+        if (event === "completion") f.harness.notify("turn/completed", { threadId: "thread-1", turn: nativeTurn(1) });
+        else if (event === "idle") f.harness.notify("thread/status/changed", { threadId: "thread-1", status: { type: "idle" } });
+        else f.harness.notify("turn/started", { threadId: "thread-1", turn: { ...activeTurn(), id: "turn-2" } });
+      });
+      await f.handle.establishProjection({ signal: new AbortController().signal });
+      expect(f.speed.currentRun()?.target ?? null).toBeNull();
+      expect(f.harness.calls.some(call => call.method === "turn/settings/update")).toBe(false);
+    } finally { await f.close(); }
+  });
+
+  it.each(["imported", "same_generation_reconnect", "new_generation", "invalidated"] as const)("does not create a Speed activation from %s history", async previous => {
+    const f = await fixture("paginated");
+    try {
+      if (previous !== "imported") {
+        f.harness.enqueue("turn/start", { turn: activeTurn() });
+        await f.submit();
+        expect(f.speed.currentRun()?.target).not.toBeNull();
+        if (previous === "invalidated") f.harness.notifyUndecodable("turn/started", "thread-1");
+        else if (previous === "same_generation_reconnect") {
+          // A carrier interruption can retain the native runtime/router's
+          // generation while ending this handle's control lifetime.
+          f.harness.facade.updateLifecycle({ state: "unavailable", generation: 1 });
+          f.harness.facade.updateLifecycle({ state: "ready", generation: 1 });
+        } else {
+          f.harness.lifecycle("unavailable");
+          f.harness.lifecycle("ready", 2);
+        }
+      }
+      enqueueActiveRefresh(f, "paginated");
+      await f.handle.establishProjection({ signal: new AbortController().signal });
+      expect(f.speed.currentRun()?.target ?? null).toBeNull();
+      expect(f.harness.calls.some(call => call.method === "turn/settings/update")).toBe(false);
+    } finally { await f.close(); }
+  });
 
   it.each(["before_receipt", "after_receipt_before_continuation"] as const)("retains accepted Speed ownership when active status arrives %s and turn/started is delayed", async timing => {
     const f = await fixture();
