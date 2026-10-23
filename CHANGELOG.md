@@ -238,6 +238,7 @@ User-facing changes are collected here before release. See the
 
 - Usage combines redundant refreshes, avoids repeated aggregation scans, and
   loads only the requested report sections or filter choices.
+  ([#115](https://github.com/kcosr/sedes/pull/115))
 
 - The Codex skill picker refreshes available skills through the app-server
   without reloading the model catalog. Fork indicators use a consistent
