@@ -19,7 +19,7 @@ function TableToggle({ pressed, onToggle }: { readonly pressed: boolean; readonl
 
 const WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
-export function UsagePatterns({ data }: { readonly data: UsageAnalyticsResponse }) {
+export function UsagePatterns({ data, heatmap }: { readonly data: UsageAnalyticsResponse; readonly heatmap: NonNullable<UsageAnalyticsResponse["heatmap"]> }) {
   const [heatMetric, setHeatMetric] = useState<"tokens" | "cost">("tokens");
   const [tables, setTables] = useState<ReadonlySet<string>>(new Set());
   const toggleTable = (id: string) => setTables((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
@@ -31,7 +31,7 @@ export function UsagePatterns({ data }: { readonly data: UsageAnalyticsResponse 
   // Only drawn usage belongs to a bucket; recovered work spanning buckets is not averaged in.
   const plotted = tokens.reduce((sum, value) => sum + value, 0);
   const cacheReported = metricReported(data.totals, "cacheRead"), reasoningReported = metricReported(data.totals, "reasoning");
-  const peak = [...data.heatmap].sort((a, b) => toNumber(b.tokens) - toNumber(a.tokens))[0];
+  const peak = [...heatmap].sort((a, b) => toNumber(b.tokens) - toNumber(a.tokens))[0];
   const input = toNumber(data.totals.input), output = toNumber(data.totals.output);
 
   const mixSeries = useMemo(() => {
@@ -72,9 +72,9 @@ export function UsagePatterns({ data }: { readonly data: UsageAnalyticsResponse 
             options={[{ value: "tokens", label: "Tokens" }, { value: "cost", label: "Cost" }]} />
           <TableToggle pressed={tables.has("heatmap")} onToggle={() => toggleTable("heatmap")} />
         </>}>
-        {tables.has("heatmap") ? <HeatmapTable data={data} metric={heatMetric} /> : (
+        {tables.has("heatmap") ? <HeatmapTable data={data} heatmap={heatmap} metric={heatMetric} /> : (
           <Heatmap label={`${heatMetric === "tokens" ? "Tokens" : "Estimated cost"} by weekday and hour`}
-            cells={data.heatmap.map((cell) => ({ weekday: cell.weekday, hour: cell.hour, value: toNumber(heatMetric === "tokens" ? cell.tokens : cell.cost) }))}
+            cells={heatmap.map((cell) => ({ weekday: cell.weekday, hour: cell.hour, value: toNumber(heatMetric === "tokens" ? cell.tokens : cell.cost) }))}
             format={(value) => heatMetric === "tokens" ? `${formatCountPrecise(value)} tokens` : formatCost(value, currency)} />
         )}
       </UsageCard>
@@ -118,9 +118,13 @@ export function UsagePatterns({ data }: { readonly data: UsageAnalyticsResponse 
   );
 }
 
-function HeatmapTable({ data, metric }: { readonly data: UsageAnalyticsResponse; readonly metric: "tokens" | "cost" }) {
+function HeatmapTable({ data, heatmap, metric }: {
+  readonly data: UsageAnalyticsResponse;
+  readonly heatmap: NonNullable<UsageAnalyticsResponse["heatmap"]>;
+  readonly metric: "tokens" | "cost";
+}) {
   const value = (weekday: number, hour: number) => {
-    const cell = data.heatmap.find((entry) => entry.weekday === weekday && entry.hour === hour);
+    const cell = heatmap.find((entry) => entry.weekday === weekday && entry.hour === hour);
     return cell ? toNumber(metric === "tokens" ? cell.tokens : cell.cost) : 0;
   };
   const format = (amount: number) => amount ? (metric === "tokens" ? formatCountPrecise(amount) : formatCost(amount, data.costCurrency)) : "–";

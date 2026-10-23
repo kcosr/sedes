@@ -41,6 +41,7 @@ function createApp(clientDirectory: string) {
       availability: unused,
       read: unused,
       analytics: unused,
+      facets: unused,
     },
     workpads: {} as never,
     questions: {} as never,

@@ -8,7 +8,9 @@ User-facing changes are collected here before release. See the
 ### Breaking Changes
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **170**. Provider-feature mutations now require explicit mutation revisions;
+  **171**. Usage requests now select report sections and load filter choices
+  through a separate endpoint; see [Usage accounting](docs/internals/usage-accounting.md#analytics-read).
+  Provider-feature mutations now require explicit mutation revisions;
   Codex Speed uses its strict v3 action/result contract. Sedes tool policies replace cross-boundary approval modes with
   independent project/environment limits: queries filter to scope and direct
   outside requests are denied. Legacy thread-only policies are disabled for
@@ -36,7 +38,7 @@ User-facing changes are collected here before release. See the
   [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
   ([#85](https://github.com/kcosr/sedes/pull/85), [#112](https://github.com/kcosr/sedes/pull/112))
 
-- Client protocol **170** also includes account-wide automatic model retry settings
+- Client protocol **171** also includes account-wide automatic model retry settings
   and automatic follow-up attribution, explicit skill-catalog refresh intent,
   dismissible runtime notices, Page
   responses, HTML page downloads and shared download metadata,
@@ -233,6 +235,9 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Usage combines redundant refreshes, avoids repeated aggregation scans, and
+  loads only the requested report sections or filter choices.
 
 - The Codex skill picker refreshes available skills through the app-server
   without reloading the model catalog. Fork indicators use a consistent

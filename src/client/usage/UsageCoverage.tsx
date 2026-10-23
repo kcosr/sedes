@@ -14,13 +14,12 @@ function Meter({ label, share, detail }: { readonly label: string; readonly shar
   );
 }
 
-export function UsageCoverage({ data }: { readonly data: UsageAnalyticsResponse }) {
+export function UsageCoverage({ data, coverage }: { readonly data: UsageAnalyticsResponse; readonly coverage: NonNullable<UsageAnalyticsResponse["coverage"]> }) {
   const tokens = toNumber(data.totals.tokens);
   const share = (unknown: number) => tokens > 0 ? Math.max(0, 1 - unknown / tokens) : null;
   const records = toNumber(data.totals.increments);
   const placement = data.placement;
   const period = GRANULARITY_NOUN[data.bucket];
-  const coverage = data.coverage;
   return (
     <div className="usage-coverage">
       <UsageCard className="usage-card-wide" title="How each token's time is known"

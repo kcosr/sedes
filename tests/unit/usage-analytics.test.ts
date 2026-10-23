@@ -9,7 +9,7 @@ import type { UsageFact, UsageObservation, UsageSink } from "../../src/server/us
 import { UsageService } from "../../src/server/usage/usage-service.js";
 import { usageCostAmount, usageCostUnits } from "../../src/server/usage/usage-timeline.js";
 import { zonedBuckets, zonedInstant } from "../../src/server/usage/zoned-time.js";
-import { usageAnalyticsResponseSchema, type UsageAnalyticsRequest } from "../../src/shared/protocol/usage-analytics.js";
+import { USAGE_ANALYTICS_DIMENSIONS, usageAnalyticsRequestSchema, usageAnalyticsResponseSchema, usageFacetRequestSchema, type UsageAnalyticsRequest, type UsageFacetRequest } from "../../src/shared/protocol/usage-analytics.js";
 
 const scope = {tenantId: "tenant", principalId: "principal"};
 const databases: Database.Database[] = [];
@@ -54,7 +54,11 @@ function counter(id: string, tokens: UsageFact["tokens"], extra: Partial<UsageOb
 }
 function request(overrides: Partial<UsageAnalyticsRequest> = {}): UsageAnalyticsRequest {
   return {from: "2026-09-01T00:00:00.000Z", to: "2026-09-08T00:00:00.000Z", timeZone: "UTC", bucket: "day", filters: {},
-    groupBy: null, crossBy: null, breakdownLimit: 20, facets: false, ...overrides};
+    groupBy: null, matrix: null, breakdownLimit: 20, breakdownDimensions: [...USAGE_ANALYTICS_DIMENSIONS], includeHeatmap: true, includeCoverage: true, ...overrides};
+}
+function facetRequest(overrides: Partial<UsageFacetRequest> = {}): UsageFacetRequest {
+  const {from, to, timeZone, bucket, filters} = request();
+  return {from, to, timeZone, bucket, filters, dimension: "model", search: "", ...overrides};
 }
 const at = (value: string) => { vi.useFakeTimers({toFake: ["Date"]}); vi.setSystemTime(new Date(value)); };
 const rows = (db: Database.Database) => db.prepare("SELECT fact_id,placement,occurred_at,interval_start,input,output,model,effort,cost_units FROM usage_increments ORDER BY id").safeIntegers(false).all();
@@ -82,7 +86,7 @@ describe("bucket time-index query plan", () => {
     addThread(db, "foreign", "Other principal", "other");
     service.open(source("foreign", "proven_zero", "other")).capture([entry("foreign", "05:00:00", "1000")]);
     const query = request({from: "2026-11-01T05:00:00.000Z", to: "2026-11-01T07:30:00.000Z",
-      timeZone: "America/New_York", bucket: "hour", groupBy: "model", crossBy: "provider", breakdownLimit: 1});
+      timeZone: "America/New_York", bucket: "hour", groupBy: "model", matrix: {rows: "model", columns: "provider"}, breakdownLimit: 1});
     return {db, service, query};
   }
 
@@ -200,8 +204,8 @@ describe("usage timeline projection", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM usage_gaps WHERE reason='conflicting_evidence'").get()).toEqual({count: 0});
     expect(db.prepare("SELECT evidence_json FROM usage_observations WHERE observation_id='a'").pluck().get()).not.toContain("attribution");
     const result = service.analytics(scope, request({groupBy: "effort"}));
-    expect(result.breakdowns.effort.rows.map((row) => [row.key, row.totals.tokens])).toEqual([["high", "100"], [null, "30"]]);
-    expect(result.coverage.effortUnknownTokens).toBe("30");
+    expect(result.breakdowns.effort!.rows.map((row) => [row.key, row.totals.tokens])).toEqual([["high", "100"], [null, "30"]]);
+    expect(result.coverage!.effortUnknownTokens).toBe("30");
   });
 
   it("uses reported occurrence time and fact models for additive evidence", () => {
@@ -221,7 +225,7 @@ describe("usage timeline projection", () => {
     expect(result.labels.thread.thread).toMatchObject({label: "First thread", kind: "pi", workspaceId: "workspace"});
     expect(result.labels.workspace.workspace).toMatchObject({label: "App", detail: "Laptop · /src/app"});
     expect(result.labels.environment.environment).toMatchObject({label: "Laptop", kind: "local"});
-    const heat = new Map(result.heatmap.map((cell) => [`${cell.weekday}:${cell.hour}`, cell.tokens]));
+    const heat = new Map(result.heatmap!.map((cell) => [`${cell.weekday}:${cell.hour}`, cell.tokens]));
     expect(heat.get("2:1")).toBe("48");
     expect(heat.get("3:13")).toBe("12");
   });
@@ -233,7 +237,7 @@ describe("usage timeline projection", () => {
     const summary = (amount: string) => fact("query_cost", {}, {kind: "cumulative", sessionContribution: "checkpoint", models: [], costs: [{amount, currency: "USD", kind: "estimated", provenance: "sdk"}]});
     at("2026-09-02T10:00:00Z"); capture.capture([{...counter("a", {}), facts: [model("opus", "100", "0.3"), model("haiku", "50", "0.0100000001"), summary("0.31")]}]);
     at("2026-09-02T10:10:00Z"); capture.capture([{...counter("b", {}), facts: [model("opus", "150", "0.5"), model("haiku", "50", "0.02"), summary("0.9")]}]);
-    const cost = (key: string | null) => service.analytics(scope, request()).breakdowns.model.rows.find((row) => row.key === key)?.totals.costs[0]?.amount;
+    const cost = (key: string | null) => service.analytics(scope, request()).breakdowns.model!.rows.find((row) => row.key === key)?.totals.costs[0]?.amount;
     expect(cost("opus")).toBe("0.3");
     expect(cost("haiku")).toBe("0.0100000001");
     expect(cost(null)).toBe("0.59");
@@ -383,8 +387,8 @@ describe("usage timeline review regressions", () => {
     const grouped = service.analytics(scope, request({groupBy: "model", breakdownLimit: 3}));
     const other = grouped.timeline.series.find((entry) => entry.other)!;
     expect(other.totals.input).toBe(other.points.input.reduce((sum, value) => String(BigInt(sum) + BigInt(value)), "0"));
-    const shown = grouped.breakdowns.model.rows.reduce((sum, row) => sum + BigInt(row.totals.input), 0n);
-    expect(String(shown + BigInt(grouped.breakdowns.model.other!.input))).toBe(grouped.totals.input);
+    const shown = grouped.breakdowns.model!.rows.reduce((sum, row) => sum + BigInt(row.totals.input), 0n);
+    expect(String(shown + BigInt(grouped.breakdowns.model!.other!.input))).toBe(grouped.totals.input);
   });
 
   it("counts no unsupported threads when a filter needs recorded usage details", () => {
@@ -392,9 +396,9 @@ describe("usage timeline review regressions", () => {
     db.exec("INSERT INTO agent_backend_instances(tenant_id,id,kind,label) VALUES('tenant','grok','grok_build','Grok')");
     db.prepare("INSERT INTO application_threads(tenant_id,owner_principal_id,id,backend_instance_id,environment_id,workspace_id,title,last_activity_at) VALUES('tenant','principal','g1','grok','environment','workspace','Grok',?)").run(Date.parse("2026-09-03T00:00:00Z"));
     at("2026-09-06T00:00:00Z");
-    expect(service.analytics(scope, request()).coverage.unsupportedThreads).toBe("1");
-    expect(service.analytics(scope, request({filters: {model: ["opus"]}})).coverage.unsupportedThreads).toBe("0");
-    expect(service.analytics(scope, request({filters: {workspace: ["elsewhere"]}})).coverage.unsupportedThreads).toBe("0");
+    expect(service.analytics(scope, request()).coverage!.unsupportedThreads).toBe("1");
+    expect(service.analytics(scope, request({filters: {model: ["opus"]}})).coverage!.unsupportedThreads).toBe("0");
+    expect(service.analytics(scope, request({filters: {workspace: ["elsewhere"]}})).coverage!.unsupportedThreads).toBe("0");
   });
 });
 
@@ -450,7 +454,7 @@ describe("usage timeline second review regressions", () => {
     at("2026-09-02T10:05:00Z"); capture.capture([{...counter("b", {}), facts: [model("opus", "120", "0.8"), model("haiku", "90", "0.7"), summary("1.5")]}]);
     at("2026-09-02T10:10:00Z"); capture.capture([{...counter("c", {}), facts: [model("opus", "130", "0.9"), model("haiku", "90", "0.7"), summary("1.6")]}]);
     const result = service.analytics(scope, request());
-    const cost = (key: string | null) => result.breakdowns.model.rows.find((row) => row.key === key)?.totals.costs[0]?.amount;
+    const cost = (key: string | null) => result.breakdowns.model!.rows.find((row) => row.key === key)?.totals.costs[0]?.amount;
     expect(result.totals.costs[0]?.amount).toBe("1.6");
     expect(service.read(scope, "thread").summary.costs[0]?.amount).toBe("1.6");
     // The first split and the one after the correction stay per model; the correction is model-less.
@@ -465,15 +469,15 @@ describe("usage timeline second review regressions", () => {
       occurredAt: "2026-09-02T08:00:00.000Z", facts: [fact(`m${index}`, {input: String(1000 - index), output: "0"}, {models: [{provider: null, model: `model_${index}`}]})]})));
     service.open(source("quiet")).capture([{...counter("q", {}), id: "q", replaceCheckpoint: false, occurredAt: "2026-09-02T09:00:00.000Z",
       facts: [fact("q", {input: "1", output: "0"}, {models: [{provider: null, model: "model_0"}]})]}]);
-    const ranked = service.analytics(scope, request({facets: true}));
-    expect(ranked.facets?.model).toHaveLength(60);
-    expect(ranked.facets?.model.some((row) => row.key === "model_64")).toBe(false);
-    const found = service.analytics(scope, request({facets: true, facetSearch: {dimension: "model", text: "_64"}}));
-    expect(found.facets?.model.map((row) => row.key)).toEqual(["model_64"]);
-    const titled = service.analytics(scope, request({facets: true, facetSearch: {dimension: "thread", text: "100%"}}));
-    expect(titled.facets?.thread.map((row) => row.key)).toEqual(["quiet"]);
-    expect(titled.labels.thread.quiet?.label).toBe("Quiet 100% thread");
-    expect(service.analytics(scope, request({facets: true, facetSearch: {dimension: "thread", text: "%"}})).facets?.thread.map((row) => row.key)).toEqual(["quiet"]);
+    const ranked = service.facets(scope, facetRequest());
+    expect(ranked.choices).toHaveLength(60);
+    expect(ranked.choices.some((row) => row.key === "model_64")).toBe(false);
+    const found = service.facets(scope, facetRequest({search: "_64"}));
+    expect(found.choices.map((row) => row.key)).toEqual(["model_64"]);
+    const titled = service.facets(scope, facetRequest({dimension: "thread", search: "100%"}));
+    expect(titled.choices.map((row) => row.key)).toEqual(["quiet"]);
+    expect(titled.labels.quiet?.label).toBe("Quiet 100% thread");
+    expect(service.facets(scope, facetRequest({dimension: "thread", search: "%"})).choices.map((row) => row.key)).toEqual(["quiet"]);
   });
 
   it("breaks continuity when evidence is dropped as invalid", () => {
@@ -488,6 +492,162 @@ describe("usage timeline second review regressions", () => {
 });
 
 describe("usage analytics reads", () => {
+  function rankedFixture(unknownFirst: boolean) {
+    const db = database("pi"), service = new UsageService(db, {enabled: true});
+    addThread(db, "second", "Second thread");
+    addThread(db, "foreign", "Foreign thread", "other");
+    at("2026-09-06T00:00:00Z");
+    const entries = Array.from({length: 10}, (_, index) => ({
+      ...counter(`rank-${index}`, {}), replaceCheckpoint: false, occurredAt: "2026-09-02T08:00:00.000Z",
+      facts: [fact(`rank-${index}`, {input: String(index === 0 ? (unknownFirst ? 1000 : 1) : 100 - index), output: index % 2 ? "2" : null}, {
+        models: [{provider: "provider", model: index === 0 ? null : `model-${index}`}],
+        costs: index % 3 === 0 ? [] : [{amount: "0.01", currency: "USD", kind: index % 2 ? "estimated" as const : "reported" as const, provenance: "fixture"}],
+      })],
+      attribution: {model: index === 0 ? null : {provider: "provider", model: `model-${index}`}, reasoningEffort: index % 2 ? "high" : null},
+    }));
+    service.open(source()).capture(entries);
+    // Shared threads across multiple groups must count once in each Other aggregate.
+    service.open(source("second")).capture(entries.slice(8));
+    service.open(source("foreign", "proven_zero", "other")).capture(entries);
+    return {db, service};
+  }
+
+  it.each([1, 7, 8, 20, 100])("keeps exact chart and breakdown totals at row limit %i", breakdownLimit => {
+    for (const unknownFirst of [false, true]) {
+      const {service} = rankedFixture(unknownFirst);
+      const full = service.analytics(scope, request({breakdownLimit: 100}));
+      const grouped = service.analytics(scope, request({breakdownLimit, groupBy: "model"}));
+      const ranking = full.breakdowns.model!.rows;
+      expect(grouped.breakdowns.model!.rows).toEqual(ranking.slice(0, breakdownLimit));
+      expect(grouped.breakdowns.model!.distinct).toBe("10");
+      const omitted = ranking.slice(breakdownLimit).map(row => row.key);
+      expect(grouped.breakdowns.model!.other).toEqual(omitted.length
+        ? service.analytics(scope, request({filters: {model: omitted}})).totals : null);
+      expect(grouped.timeline.series.filter(series => !series.other).map(({key, totals}) => ({key, totals}))).toEqual(ranking.slice(0, 7));
+      const other = grouped.timeline.series.find(series => series.other)!;
+      expect(other.totals).toEqual(service.analytics(scope, request({filters: {model: ranking.slice(7).map(row => row.key)}})).totals);
+      expect(other.points.tokens.reduce((sum, count) => sum + BigInt(count), 0n)).toBe(BigInt(other.totals.tokens));
+      expect(grouped.coverage!.modelUnknownTokens).toBe(ranking.find(row => row.key === null)!.totals.tokens);
+      expect(grouped.coverage!.effortUnknownTokens).toBe(full.breakdowns.effort!.rows.find(row => row.key === null)!.totals.tokens);
+    }
+  });
+
+  it("keeps zero distinct groups and unknown totals for an empty filtered report", () => {
+    const {service} = rankedFixture(true);
+    const empty = service.analytics(scope, request({groupBy: "model", filters: {workspace: ["missing"]}, breakdownLimit: 1}));
+    expect(Object.values(empty.breakdowns)).toEqual(Array.from({length: 10}, () => ({rows: [], other: null, distinct: "0"})));
+    expect(empty.timeline.series).toEqual([]);
+    expect(empty.coverage).toMatchObject({modelUnknownTokens: "0", effortUnknownTokens: "0"});
+  });
+
+  it("shares dimension ranking work and avoids separate group-count scans", () => {
+    const {db, service} = rankedFixture(true);
+    const prepare = db.prepare.bind(db);
+    const statements: string[] = [];
+    const spy = vi.spyOn(db, "prepare").mockImplementation(sql => { statements.push(sql); return prepare(sql); });
+    try { service.analytics(scope, request({groupBy: "model", breakdownLimit: 7})); }
+    finally { spy.mockRestore(); }
+    // Each dimension is ranked once, including the one used by both table and chart.
+    expect(statements.filter(sql => sql.includes("AS groupKey") && sql.includes("ORDER BY tokens DESC, costUnits DESC"))).toHaveLength(10);
+    expect(statements.some(sql => sql.includes("SELECT COUNT(*) AS count FROM (SELECT 1 FROM usage_increments"))).toBe(false);
+  });
+
+  it("queries only requested breakdowns and keeps matrix dimensions independent of the chart", () => {
+    const {db, service} = rankedFixture(true);
+    const full = service.analytics(scope, request({groupBy: "model", matrix: {rows: "thread", columns: "effort"}}));
+    const prepare = db.prepare.bind(db), statements: string[] = [];
+    const spy = vi.spyOn(db, "prepare").mockImplementation(sql => { statements.push(sql); return prepare(sql); });
+    let selected;
+    try {
+      selected = service.analytics(scope, request({groupBy: "model", matrix: {rows: "thread", columns: "effort"},
+        breakdownDimensions: ["thread"], includeHeatmap: false, includeCoverage: false}));
+    } finally { spy.mockRestore(); }
+    expect(selected).toMatchObject({totals: full.totals, previous: full.previous, timeline: full.timeline, placement: full.placement,
+      matrix: full.matrix, breakdowns: {thread: full.breakdowns.thread}, heatmap: null, coverage: null});
+    expect(Object.keys(selected.breakdowns)).toEqual(["thread"]);
+    expect(statements.filter(sql => sql.includes("AS groupKey") && sql.includes("ORDER BY tokens DESC, costUnits DESC"))).toHaveLength(2);
+    expect(statements.some(sql => sql.includes("AS slot") || sql.includes("partialThreads") || sql.includes("AS effort"))).toBe(false);
+    const bare = service.analytics(scope, request({breakdownDimensions: [], includeHeatmap: false, includeCoverage: false}));
+    expect(bare).toMatchObject({breakdowns: {}, matrix: null, heatmap: null, coverage: null});
+    expect(Object.values(bare.labels).every(labels => Object.keys(labels).length === 0)).toBe(true);
+  });
+
+  it("returns one facet with scoped labels using only the chosen dimension's queries", () => {
+    const {db, service} = rankedFixture(true);
+    const prepare = db.prepare.bind(db), statements: string[] = [];
+    const spy = vi.spyOn(db, "prepare").mockImplementation(sql => { statements.push(sql); return prepare(sql); });
+    let result;
+    try { result = service.facets(scope, facetRequest({dimension: "thread", filters: {thread: ["foreign"]}})); }
+    finally { spy.mockRestore(); }
+    expect(new Set(result.choices.map(choice => choice.key))).toEqual(new Set(["thread", "second"]));
+    expect(Object.keys(result.labels).sort()).toEqual(["second", "thread"]);
+    expect(result.labels.thread).toMatchObject({label: "First thread", detail: "App"});
+    expect(result.labels.foreign).toBeUndefined();
+    expect(statements.filter(sql => sql.includes("FROM usage_increments"))).toHaveLength(1);
+    expect(statements.some(sql => sql.includes("partialThreads") || sql.includes("AS slot") || sql.includes("WITH b(i,s,e)"))).toBe(false);
+    expect(service.facets({...scope, principalId: "nobody"}, facetRequest({dimension: "thread"}))).toMatchObject({choices: [], labels: {}});
+    expect(service.facets(scope, facetRequest({dimension: "model", filters: {thread: ["foreign"]}}))).toMatchObject({choices: [], labels: {}});
+  });
+
+  it("keeps thread project subtitles scoped when only thread labels are requested", () => {
+    const {db, service} = rankedFixture(true);
+    db.exec("INSERT INTO workspaces VALUES('tenant','other','environment','workspace','/foreign','Foreign project',NULL)");
+    const result = service.analytics(scope, request({breakdownDimensions: ["thread"], includeCoverage: false, includeHeatmap: false}));
+    expect(result.labels.thread.thread?.detail).toBe("App");
+    expect(result.labels.workspace).toEqual({});
+    expect(service.facets({...scope, principalId: "other"}, facetRequest({dimension: "thread"})).labels.foreign?.detail).toBe("Foreign project");
+    db.exec("DELETE FROM workspaces WHERE owner_principal_id='principal'");
+    expect(service.facets(scope, facetRequest({dimension: "thread"})).labels.thread?.detail).toBeNull();
+  });
+
+  it("resolves active filter labels without requesting their breakdowns", () => {
+    const {service} = rankedFixture(true);
+    const result = service.analytics(scope, request({breakdownDimensions: [], includeCoverage: false, includeHeatmap: false,
+      filters: {thread: ["thread", "foreign"], workspace: ["workspace", "missing"], environment: ["environment"], backend: ["backend"]}}));
+    expect(result.breakdowns).toEqual({});
+    expect(result.labels.thread.thread).toMatchObject({label: "First thread", detail: "App"});
+    expect(result.labels.workspace.workspace?.label).toBe("App");
+    expect(result.labels.environment.environment?.label).toBe("Laptop");
+    expect(result.labels.backend.backend?.label).toBe("Primary");
+    expect(result.labels.thread.foreign).toBeUndefined();
+    expect(result.labels.workspace.missing).toBeUndefined();
+  });
+
+  it("resolves selected facet labels outside the matched choices without exposing another principal", () => {
+    const {service} = rankedFixture(true);
+    const result = service.facets(scope, facetRequest({dimension: "thread", search: "Second", filters: {thread: ["thread", "foreign"]}}));
+    expect(result.choices.map(choice => choice.key)).toEqual(["second"]);
+    expect(Object.keys(result.labels).sort()).toEqual(["second", "thread"]);
+    expect(result.labels.thread).toMatchObject({label: "First thread", detail: "App"});
+    expect(result.labels.foreign).toBeUndefined();
+  });
+
+  it("aligns facet ranges and interval inclusion with analytics for rounded and all-time ranges", () => {
+    const {db, service} = rankedFixture(true);
+    db.prepare("UPDATE usage_increments SET placement='interval',interval_start=? WHERE fact_id=?")
+      .run("2026-09-01T12:00:00.000Z", "rank-0");
+    for (const from of ["2026-09-02T03:00:00.000Z", null]) {
+      const full = service.analytics(scope, request({from, timeZone: "America/New_York", bucket: "day"}));
+      const facets = service.facets(scope, facetRequest({from, timeZone: "America/New_York", bucket: "day"}));
+      expect({from: facets.from, to: facets.to}).toEqual({from: full.from, to: full.to});
+      expect(facets.choices).toEqual(full.breakdowns.model!.rows.map(row => ({key: row.key, tokens: row.totals.tokens})));
+    }
+  });
+
+  it("requires the explicit section and facet contracts", () => {
+    expect(usageAnalyticsRequestSchema.safeParse(request({breakdownDimensions: ["model", "model"]})).success).toBe(false);
+    expect(usageAnalyticsRequestSchema.safeParse(request({matrix: {rows: "model", columns: "model"}})).success).toBe(false);
+    expect(usageAnalyticsRequestSchema.safeParse({...request(), facets: true}).success).toBe(false);
+    expect(usageAnalyticsRequestSchema.safeParse({...request(), crossBy: "model"}).success).toBe(false);
+    const {includeCoverage: omitted, ...missingSection} = request();
+    void omitted;
+    expect(usageAnalyticsRequestSchema.safeParse(missingSection).success).toBe(false);
+    expect(usageFacetRequestSchema.parse(facetRequest({search: "  model  "})).search).toBe("model");
+    expect(usageFacetRequestSchema.safeParse(facetRequest({dimension: "provider", search: "provider"})).success).toBe(false);
+    expect(usageFacetRequestSchema.safeParse({...facetRequest(), principalId: "other"}).success).toBe(false);
+    expect(usageFacetRequestSchema.safeParse(facetRequest({search: "x".repeat(121)})).success).toBe(false);
+  });
+
   it("scopes every aggregate to the requesting principal", () => {
     const db = database(), service = new UsageService(db, {enabled: true});
     addThread(db, "foreign", "Foreign", "other");
@@ -511,14 +671,14 @@ describe("usage analytics reads", () => {
     expect(grouped.timeline.series.at(-1)).toMatchObject({other: true, totals: {input: "30"}});
     expect(grouped.timeline.series[0]).toMatchObject({key: null, totals: {input: "90"}});
     expect(grouped.timeline.colorOrder[0]).toBeNull();
-    const filtered = service.analytics(scope, request({groupBy: "model", filters: {model: ["model-0", null]}, facets: true}));
+    const filtered = service.analytics(scope, request({groupBy: "model", filters: {model: ["model-0", null]}}));
     expect(filtered.totals.input).toBe("100");
-    expect(filtered.breakdowns.model.distinct).toBe("2");
-    expect(filtered.facets?.model).toHaveLength(9);
-    expect(filtered.facets?.provider).toEqual([{key: null, tokens: "100"}]);
+    expect(filtered.breakdowns.model!.distinct).toBe("2");
+    expect(service.facets(scope, facetRequest({filters: {model: ["model-0", null]}})).choices).toHaveLength(9);
+    expect(service.facets(scope, facetRequest({dimension: "provider", filters: {model: ["model-0", null]}})).choices).toEqual([{key: null, tokens: "100"}]);
     expect(Object.keys(filtered.labels.model)).toHaveLength(0);
     expect(filtered.timeline.colorOrder).toEqual(grouped.timeline.colorOrder);
-    const matrix = service.analytics(scope, request({groupBy: "model", crossBy: "provider", breakdownLimit: 3}));
+    const matrix = service.analytics(scope, request({groupBy: "model", matrix: {rows: "model", columns: "provider"}, breakdownLimit: 3}));
     expect(matrix.matrix?.cells).toHaveLength(9);
     expect(matrix.breakdowns.model).toMatchObject({distinct: "9", other: {input: "210"}});
     expect(usageAnalyticsResponseSchema.parse(matrix)).toEqual(matrix);

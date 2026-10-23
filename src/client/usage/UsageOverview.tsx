@@ -12,7 +12,7 @@ import {
 import { toggleFilter, type UsageFilterState, type UsageViewSettings } from "./usage-settings.js";
 import { DimensionIcon, MenuSelect, Segmented, UsageCard } from "./usage-ui.js";
 
-const CARD_DIMENSIONS: readonly UsageAnalyticsDimension[] = ["model", "provider", "effort", "backend", "environment", "workspace", "agentRole", "activity"];
+export const OVERVIEW_DIMENSIONS: readonly UsageAnalyticsDimension[] = ["model", "provider", "effort", "backend", "environment", "workspace", "agentRole", "activity"];
 const CARD_ROWS = 6;
 
 /** Chart series for the selected metric, colored by filter-independent rank. */
@@ -105,8 +105,9 @@ export function UsageOverview({ data, settings, onSettings, filters, onFilters, 
       </UsageCard>
 
       <div className="usage-breakdown-grid">
-        {CARD_DIMENSIONS.map((dimension) => {
+        {OVERVIEW_DIMENSIONS.map((dimension) => {
           const breakdown = data.breakdowns[dimension];
+          if (!breakdown) return null;
           const total = metricValue(data.totals, metric, currency);
           const rows = breakdown.rows.slice(0, CARD_ROWS).map((row) => {
             const label = dimensionLabel(data.labels, dimension, row.key);

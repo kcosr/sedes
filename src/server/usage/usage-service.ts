@@ -10,7 +10,7 @@ import { DomainError } from "../domain/errors.js";
 import { applicationTurnIdForBackendTurn } from "../conversations/conversation-projector.js";
 import type { UsageCapture, UsageFact, UsageObservation, UsageSink } from "./contracts.js";
 import { NO_USAGE_CAPTURE } from "./contracts.js";
-import type { UsageAnalyticsRequest, UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
+import type { UsageAnalyticsRequest, UsageAnalyticsResponse, UsageFacetRequest, UsageFacetResponse } from "../../shared/protocol/usage-analytics.js";
 import { UsageAnalyticsService } from "./usage-analytics-service.js";
 import { costSplit, increaseOverBaseline, rebuildUsageTimeline, snapshotFact, snapshotReshaped, timelineInstant, writeUsageIncrement, type TimelineSource, type TimelineTime } from "./usage-timeline.js";
 
@@ -81,6 +81,8 @@ export class UsageService implements UsageSink {
   }
   /** Principal-wide aggregates over the timeline projection; database-only. */
   analytics(scope:RequestScope, request:UsageAnalyticsRequest): UsageAnalyticsResponse { this.#assertEnabled(); return this.#analytics.query(scope,request); }
+  /** One scoped filter dimension's choices and labels; database-only. */
+  facets(scope:RequestScope, request:UsageFacetRequest): UsageFacetResponse { this.#assertEnabled(); return this.#analytics.facets(scope,request); }
   /** Rebuild pre-projection timelines one source per macrotask; returns a stop function. */
   startTimelineBackfill(): () => void {
     if (!this.enabled) return () => undefined;

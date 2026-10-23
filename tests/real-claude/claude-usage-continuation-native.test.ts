@@ -175,7 +175,8 @@ it("counts a resumed query and a fork child's continued totals once", async () =
     expect(totals("child")).toMatchObject({ input: "1", output: "1", quality: "complete" });
     expect(totals("parent")).toMatchObject({ input: "3", output: "3" });
     expect(usage.analytics(scope, { from: null, to: new Date(Date.now() + 60_000).toISOString(), timeZone: "UTC", bucket: "day",
-      filters: {}, groupBy: null, crossBy: null, breakdownLimit: 10, facets: false }).totals).toMatchObject({ input: "4", output: "4" });
+      filters: {}, groupBy: null, matrix: null, breakdownDimensions: [], breakdownLimit: 10,
+      includeHeatmap: false, includeCoverage: false }).totals).toMatchObject({ input: "4", output: "4" });
     expect(errors).toEqual([]);
   } finally {
     server.closeAllConnections();

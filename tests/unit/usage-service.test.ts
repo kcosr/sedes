@@ -121,7 +121,9 @@ describe("durable scoped usage service", () => {
     expect(() => disabled.read(scope,"thread")).toThrow("Experimental usage accounting is disabled");
     expect(() => disabled.availability(scope,"thread",[])).toThrow("Experimental usage accounting is disabled");
     expect(() => disabled.analytics(scope,{from:null,to:"2026-09-24T00:00:00Z",timeZone:"UTC",bucket:"day",
-      filters:{},groupBy:null,crossBy:null,breakdownLimit:10,facets:false})).toThrow("Experimental usage accounting is disabled");
+      filters:{},groupBy:null,matrix:null,breakdownLimit:10,breakdownDimensions:[],includeHeatmap:false,includeCoverage:false})).toThrow("Experimental usage accounting is disabled");
+    expect(() => disabled.facets(scope,{from:null,to:"2026-09-24T00:00:00Z",timeZone:"UTC",bucket:"day",
+      filters:{},dimension:"model",search:""})).toThrow("Experimental usage accounting is disabled");
     expect(prepare).not.toHaveBeenCalled();
     expect(callback).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);

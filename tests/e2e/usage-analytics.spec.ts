@@ -27,11 +27,32 @@ test("recorded turn usage appears on the Usage page with filters and thread link
   await page.getByTestId("desktop-sidebar").getByRole("button", { name: "More" }).click();
   await page.getByRole("menuitem", { name: "Usage (Experimental)", exact: true }).click();
   await expect(page).toHaveURL(/\/usage$/);
-  await firstRead;
+  const overviewResponse = await firstRead;
+  expect(overviewResponse.request().postDataJSON()).toMatchObject({ includeHeatmap: false, includeCoverage: false, matrix: null });
+  expect(overviewResponse.request().postDataJSON().breakdownDimensions).toHaveLength(8);
 
   // Other threads on a shared server may have usage too; scope the page to this thread.
   const view = page.getByRole("region", { name: "Usage" });
+  const facetRead = page.waitForResponse((response) => response.url().endsWith("/api/usage/facets") && response.ok());
+  await view.getByRole("button", { name: "Filter", exact: true }).click();
+  const facetResponse = await facetRead;
+  expect(facetResponse.request().postDataJSON()).toMatchObject({ dimension: "model", search: "" });
+  expect(await facetResponse.json()).toMatchObject({ dimension: "model", choices: expect.any(Array) });
+  const facetSearch = page.waitForResponse((response) => response.url().endsWith("/api/usage/facets") &&
+    response.request().postDataJSON().search === "fixture" && response.ok());
+  await page.getByRole("textbox", { name: /Search models/i }).fill("fixture");
+  await facetSearch;
+  await expect(page.locator(".usage-filter-values")).toContainText("fixture-model");
+  await page.keyboard.press("Escape");
+
+  const threadsRead = page.waitForResponse((response) => response.url().endsWith("/api/usage/analytics") &&
+    JSON.stringify(response.request().postDataJSON().breakdownDimensions) === '["thread"]' && response.ok());
   await view.getByRole("tab", { name: "Threads" }).click();
+  const threadsResponse = await threadsRead;
+  const threadsData = await threadsResponse.json();
+  expect(Object.keys(threadsData.breakdowns)).toEqual(["thread"]);
+  expect(threadsData.heatmap).toBeNull();
+  expect(threadsData.coverage).toBeNull();
   const threadRow = view.locator(`.usage-thread-row[data-thread-id="${threadId}"]`);
   await expect(threadRow).toContainText("18");
   await capture(page, testInfo, "usage-threads-desktop.png");

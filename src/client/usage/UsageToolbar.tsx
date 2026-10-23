@@ -17,7 +17,7 @@ import {
   USAGE_ANALYTICS_MAX_FACETS, USAGE_ANALYTICS_MAX_FILTER_VALUES, USAGE_ANALYTICS_SEARCHABLE_FACETS,
   type UsageAnalyticsBucket, type UsageAnalyticsDimension, type UsageAnalyticsRequest, type UsageAnalyticsResponse,
 } from "../../shared/protocol/usage-analytics.js";
-import { useUsageAnalytics } from "./use-usage-analytics.js";
+import { useUsageFacets } from "./use-usage-analytics.js";
 import { DIMENSION_META, DIMENSION_ORDER, GRANULARITY_LABEL, dimensionLabel, formatCount } from "./usage-format.js";
 import {
   RANGE_PRESETS, activeFilterCount, localDateInput, resolveRange, toggleFilter,
@@ -123,7 +123,7 @@ export function GranularityMenu({ value, resolved, onChange }: {
 
 /** Faceted choices: each dimension's list ignores only its own selection. */
 export function FilterPicker({ api, filters, onChange, buildRequest, requestKey, labels }: {
-  readonly api: Pick<ApiClient, "getUsageAnalytics"> | undefined;
+  readonly api: Pick<ApiClient, "getUsageFacets"> | undefined;
   readonly filters: UsageFilterState;
   readonly onChange: (filters: UsageFilterState) => void;
   readonly buildRequest: () => UsageAnalyticsRequest;
@@ -140,26 +140,30 @@ export function FilterPicker({ api, filters, onChange, buildRequest, requestKey,
     return () => window.clearTimeout(timer);
   }, [query]);
   const searchable = (USAGE_ANALYTICS_SEARCHABLE_FACETS as readonly string[]).includes(dimension);
-  const facetSearch = searchable && search ? { dimension: dimension as (typeof USAGE_ANALYTICS_SEARCHABLE_FACETS)[number], text: search.slice(0, 120) } : undefined;
-  const facets = useUsageAnalytics(api, open ? `facets:${requestKey}:${facetSearch ? `${facetSearch.dimension}:${facetSearch.text}` : ""}` : null,
-    () => ({ ...buildRequest(), groupBy: null, crossBy: null, breakdownLimit: 1, facets: true, ...(facetSearch ? { facetSearch } : {}) }));
-  const known = facets.data?.labels ?? labels;
+  const serverSearch = searchable ? search.slice(0, 120) : "";
+  const facets = useUsageFacets(api, open ? JSON.stringify([requestKey, dimension, serverSearch]) : null, () => {
+    const { from, to, timeZone, bucket, filters } = buildRequest();
+    return { from, to, timeZone, bucket, filters, dimension, search: serverSearch };
+  });
+  // A previous dimension's values must never become choices in the new filter.
+  const currentFacets = facets.data?.dimension === dimension ? facets.data : undefined;
+  const known = useMemo(() => currentFacets ? { ...labels, [dimension]: currentFacets.labels } : labels, [currentFacets, labels, dimension]);
   const count = activeFilterCount(filters);
   const selected = filters[dimension] ?? [];
   const atLimit = selected.length >= USAGE_ANALYTICS_MAX_FILTER_VALUES;
   const choices = useMemo(() => {
-    const rows = facets.data?.facets?.[dimension] ?? [];
+    const rows = currentFacets?.choices ?? [];
     const keys = new Set(rows.map((row) => row.key));
     const extra = selected.filter((key) => !keys.has(key)).map((key) => ({ key, tokens: "0" }));
     const needle = query.trim().toLocaleLowerCase();
     // The server also matches IDs and full paths that labels may not show, so
     // keep every row it returned for the current text; filter the rest locally.
-    const answered = facetSearch !== undefined && facetSearch.text === query.trim() && !facets.stale;
+    const answered = serverSearch !== "" && serverSearch === query.trim() && !facets.stale;
     const labelled = <Row extends { key: string | null }>(row: Row) => ({ ...row, label: dimensionLabel(known, dimension, row.key) });
     const matches = (row: ReturnType<typeof labelled<{ key: string | null }>>) =>
       !needle || `${row.key ?? ""} ${row.label.label} ${row.label.detail ?? ""}`.toLocaleLowerCase().includes(needle);
     return [...rows.map(labelled).filter((row) => answered || matches(row)), ...extra.map(labelled).filter(matches)];
-  }, [facets.data, facets.stale, facetSearch?.text, dimension, selected, query, known]);
+  }, [currentFacets, facets.stale, serverSearch, dimension, selected, query, known]);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -175,7 +179,7 @@ export function FilterPicker({ api, filters, onChange, buildRequest, requestKey,
             const active = filters[candidate]?.length ?? 0;
             return (
               <button key={candidate} type="button" aria-current={candidate === dimension ? "true" : undefined}
-                onClick={() => { setDimension(candidate); setQuery(""); }}>
+                onClick={() => { setDimension(candidate); setQuery(""); setSearch(""); }}>
                 <span>{DIMENSION_META[candidate].label}</span>
                 {active ? <span className="usage-filter-count">{active}</span> : null}
               </button>
@@ -205,7 +209,7 @@ export function FilterPicker({ api, filters, onChange, buildRequest, requestKey,
               );
             })}
           </div>
-          {!query.trim() && (facets.data?.facets?.[dimension].length ?? 0) >= USAGE_ANALYTICS_MAX_FACETS
+          {!query.trim() && (currentFacets?.choices.length ?? 0) >= USAGE_ANALYTICS_MAX_FACETS
             ? <p className="usage-footnote">Showing the {USAGE_ANALYTICS_MAX_FACETS} largest. {searchable ? "Search to find others." : ""}</p> : null}
           {atLimit ? <p className="usage-footnote">Up to {USAGE_ANALYTICS_MAX_FILTER_VALUES} values can be selected per filter.</p> : null}
           <div className="usage-filter-actions">

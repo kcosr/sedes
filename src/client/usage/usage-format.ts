@@ -69,12 +69,12 @@ export function backendKindBrand(kind: string | null | undefined): BackendBrand 
 }
 
 export function dimensionLabel(
-  labels: UsageAnalyticsResponse["labels"] | undefined, dimension: UsageAnalyticsDimension, key: string | null,
+  labels: Partial<UsageAnalyticsResponse["labels"]> | undefined, dimension: UsageAnalyticsDimension, key: string | null,
 ): DimensionLabel {
   const plain = (label: string, extra: Partial<DimensionLabel> = {}): DimensionLabel =>
     ({ label, detail: null, brand: undefined, retired: false, unknown: false, ...extra });
   if (key === null) return plain(DIMENSION_META[dimension].unknown, { unknown: true });
-  const known = labels?.[dimension][key];
+  const known = labels?.[dimension]?.[key];
   switch (dimension) {
     case "backendKind": return plain(BACKEND_KINDS[key]?.label ?? key, { brand: backendKindBrand(key) });
     case "provider": return plain(PROVIDERS[key] ?? key);
@@ -85,10 +85,8 @@ export function dimensionLabel(
     case "backend": return plain(known?.label ?? "Removed backend", { brand: backendKindBrand(known?.kind), unknown: !known });
     case "environment": return plain(known?.label ?? "Removed environment", { unknown: !known });
     case "workspace": return plain(known?.label ?? "Removed location", { detail: shortenPath(known?.detail ?? null), retired: known?.retired ?? false, unknown: !known });
-    case "thread": {
-      const location = known?.workspaceId ? labels?.workspace[known.workspaceId]?.label ?? null : null;
-      return plain(known?.label ?? "Removed thread", { detail: location, brand: backendKindBrand(known?.kind), retired: known?.retired ?? false, unknown: !known });
-    }
+    case "thread": return plain(known?.label ?? "Removed thread", { detail: known?.detail ?? null,
+      brand: backendKindBrand(known?.kind), retired: known?.retired ?? false, unknown: !known });
   }
 }
 
