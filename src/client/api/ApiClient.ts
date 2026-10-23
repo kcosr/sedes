@@ -6,7 +6,10 @@ import {
   type ToolPolicySet, type ToolPolicySelectionSetting, type ToolPolicyPreview,
 } from "../../shared/protocol/tool-policies.js";
 import { usageReportSchema, usageAvailabilitySchema, usageAvailabilityRequestSchema, type UsageAvailability, type UsageReport } from "../../shared/protocol/usage-accounting.js";
-import { usageAnalyticsRequestSchema, usageAnalyticsResponseSchema, type UsageAnalyticsRequest, type UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
+import {
+  usageAnalyticsRequestSchema, usageAnalyticsResponseSchema, usageFacetRequestSchema, usageFacetResponseSchema,
+  type UsageAnalyticsRequest, type UsageAnalyticsResponse, type UsageFacetRequest, type UsageFacetResponse,
+} from "../../shared/protocol/usage-analytics.js";
 import { turnReplySpeechSchema, type TurnReplySpeech } from "../../shared/protocol/turn-reply-speech.js";
 import {
   directInputReceiptSchema, directInputReceiptLookupSchema, directInputRequestBodySchema,
@@ -1117,6 +1120,12 @@ export class ApiClient {
   getUsageAnalytics(request: UsageAnalyticsRequest, signal?: AbortSignal): Promise<UsageAnalyticsResponse> {
     const body = usageAnalyticsRequestSchema.parse(request);
     return this.#mutation("/api/usage/analytics", usageAnalyticsResponseSchema, {method: "POST", body: JSON.stringify(body), signal});
+  }
+
+  /** One usage filter's choices, without recomputing the report. */
+  getUsageFacets(request: UsageFacetRequest, signal?: AbortSignal): Promise<UsageFacetResponse> {
+    const body = usageFacetRequestSchema.parse(request);
+    return this.#mutation("/api/usage/facets", usageFacetResponseSchema, {method: "POST", body: JSON.stringify(body), signal});
   }
 
   getThreadEnvironmentVariables(threadId: string, signal?: AbortSignal): Promise<ThreadEnvironmentVariablesResult> {

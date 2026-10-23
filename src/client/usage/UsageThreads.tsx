@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ArrowUpRight, ListFilter, Search } from "lucide-react";
-import type { UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
+import type { UsageAnalyticsBreakdown, UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { dimensionLabel, formatCount, formatCost, formatMetric, formatPercent, metricReported, metricValue, toNumber, type UsageMetric } from "./usage-format.js";
 import { toggleFilter, type UsageFilterState } from "./usage-settings.js";
@@ -8,15 +8,15 @@ import { DimensionIcon, MenuSelect, UsageCard } from "./usage-ui.js";
 
 type ThreadSort = Extract<UsageMetric, "tokens" | "cost" | "input" | "output" | "reasoning">;
 
-export function UsageThreads({ data, filters, onFilters }: {
+export function UsageThreads({ data, breakdown, filters, onFilters }: {
   readonly data: UsageAnalyticsResponse;
+  readonly breakdown: UsageAnalyticsBreakdown;
   readonly filters: UsageFilterState;
   readonly onFilters: (filters: UsageFilterState) => void;
 }) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<ThreadSort>("tokens");
   const currency = data.costCurrency;
-  const breakdown = data.breakdowns.thread;
   const total = metricValue(data.totals, sort, currency);
   const needle = query.trim().toLocaleLowerCase();
   const rows = breakdown.rows

@@ -1840,6 +1840,7 @@ describe("normalized HTTP application contract", () => {
     const reads = vi.spyOn(UsageService.prototype, "read");
     const availability = vi.spyOn(UsageService.prototype, "availability");
     const analytics = vi.spyOn(UsageService.prototype, "analytics");
+    const facets = vi.spyOn(UsageService.prototype, "facets");
     try {
       const session = await current.withHost(request(current.app).get("/api/application/session")).expect(200);
       expect(session.body.experimentalUsageEnabled).toBe(false);
@@ -1852,13 +1853,15 @@ describe("normalized HTTP application contract", () => {
             ),
           ).send({invalid:true}).expect(403),
         await current.mutate(request(current.app).post("/api/usage/analytics")).send({invalid:true}).expect(403),
+        await current.mutate(request(current.app).post("/api/usage/facets")).send({invalid:true}).expect(403),
       ];
       for (const response of responses) expect(response.body).toMatchObject({error:{code:"experimental_usage_disabled",message:"Experimental usage accounting is disabled on this server.",retryable:false,
           },
         });
       expect(reads).not.toHaveBeenCalled(); expect(availability).not.toHaveBeenCalled(); expect(analytics).not.toHaveBeenCalled();
+      expect(facets).not.toHaveBeenCalled();
       expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
-    } finally { reads.mockRestore(); availability.mockRestore(); analytics.mockRestore(); await current.close(); }
+    } finally { reads.mockRestore(); availability.mockRestore(); analytics.mockRestore(); facets.mockRestore(); await current.close(); }
   });
   it("reads durable usage and known empty turns without acquiring a provider", async () => {
     const current=await fixture({experimentalUsageEnabled: true});
@@ -1999,7 +2002,8 @@ describe("normalized HTTP application contract", () => {
       )
         .run(current.owner.tenantId,current.owner.principalId,threadId,thread.backend,thread.environment,workspace.body.id,
       );
-      const body={from:"2026-09-01T00:00:00.000Z",to:"2026-09-03T00:00:00.000Z",timeZone:"America/Chicago",bucket:"auto",filters:{effort:["high"]},groupBy:"thread",crossBy:"model",breakdownLimit:10,facets:true,
+      const body={from:"2026-09-01T00:00:00.000Z",to:"2026-09-03T00:00:00.000Z",timeZone:"America/Chicago",bucket:"auto",filters:{effort:["high"]},groupBy:"thread",
+        matrix:{rows:"thread",columns:"model"},breakdownLimit:10,breakdownDimensions:["thread","workspace","environment","backend"],includeHeatmap:false,includeCoverage:false,
       };
       await current.withHost(request(current.app).post("/api/usage/analytics")).send(body).expect(403);
       const response=await current.mutate(request(current.app).post("/api/usage/analytics")).send(body).expect(200);
@@ -2016,6 +2020,20 @@ describe("normalized HTTP application contract", () => {
       ).toBeTruthy();
       expect(response.body.labels.backend[thread.backend]).toMatchObject({kind:"pi",
       });
+      expect(Object.keys(response.body.breakdowns).sort()).toEqual(["backend","environment","thread","workspace"]);
+      expect(response.body.heatmap).toBeNull();
+      expect(response.body.coverage).toBeNull();
+      expect(response.body).not.toHaveProperty("facets");
+      const facetBody={from:body.from,to:body.to,timeZone:body.timeZone,bucket:body.bucket,filters:body.filters,dimension:"thread",search:"Analytics"};
+      await current.withHost(request(current.app).post("/api/usage/facets")).send(facetBody).expect(403);
+      const choices=await current.mutate(request(current.app).post("/api/usage/facets")).send(facetBody).expect(200);
+      expect(choices.headers["cache-control"]).toBe("no-store");
+      expect(choices.body).toMatchObject({from:response.body.from,to:response.body.to,dimension:"thread",choices:[{key:threadId,tokens:"150"}]});
+      expect(choices.body.labels[threadId]).toEqual(response.body.labels.thread[threadId]);
+      expect(choices.body).not.toHaveProperty("totals");
+      await current.mutate(request(current.app).post("/api/usage/facets")).send({...facetBody,principalId:"forged"}).expect(400);
+      await current.mutate(request(current.app).post("/api/usage/facets")).send({...facetBody,dimension:"effort"}).expect(400);
+      await current.mutate(request(current.app).post("/api/usage/facets")).send({...facetBody,timeZone:"Nowhere/Invalid"}).expect(400);
       const filtered=await current.mutate(request(current.app).post("/api/usage/analytics")).send({...body,filters:{effort:[null]}}).expect(200);
       expect(filtered.body.totals.increments).toBe("0");
       await current.mutate(request(current.app).post("/api/usage/analytics")).send({...body,principalId:"forged"}).expect(400);

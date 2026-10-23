@@ -59,8 +59,12 @@ remembered in this browser.
   and reasoning effort, and which threads have incomplete accounting.
 
 The page refreshes about once a minute while it is visible, and when you
-return to it. If a refresh fails, the last successful numbers stay on screen
-with a warning.
+return to it. Closely spaced automatic refreshes are combined, and a refresh
+already in progress is reused. The Refresh button requests a new read when
+none is running, or replaces one that has been pending for a minute. Each tab
+loads the data it needs; searching a filter loads only that filter's choices.
+If a refresh fails, the last successful numbers
+for that view stay on screen with a warning.
 
 ## Read the numbers
 

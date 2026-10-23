@@ -1,8 +1,8 @@
 import type Database from "better-sqlite3";
 import {
-  USAGE_ANALYTICS_DIMENSIONS, USAGE_ANALYTICS_MAX_FACETS, USAGE_ANALYTICS_SERIES_LIMIT, usageAnalyticsResponseSchema,
+  USAGE_ANALYTICS_DIMENSIONS, USAGE_ANALYTICS_MAX_FACETS, USAGE_ANALYTICS_SERIES_LIMIT, usageAnalyticsResponseSchema, usageFacetResponseSchema,
   type UsageAnalyticsAggregate, type UsageAnalyticsBreakdown, type UsageAnalyticsDimension, type UsageAnalyticsLabel,
-  type UsageAnalyticsPoints, type UsageAnalyticsRequest, type UsageAnalyticsResponse,
+  type UsageAnalyticsPoints, type UsageAnalyticsRequest, type UsageAnalyticsResponse, type UsageFacetRequest, type UsageFacetResponse,
 } from "../../shared/protocol/usage-analytics.js";
 import { DomainError } from "../domain/errors.js";
 import type { RequestScope } from "../identity/identity-provider.js";
@@ -32,6 +32,8 @@ const within = (start: string, end: string) =>
   `occurred_at >= ${start} AND occurred_at < ${end} AND (interval_start IS NULL OR interval_start >= ${start})`;
 
 type AggregateRow = Record<string, bigint | string | null>;
+type RankedGroups = Pick<UsageAnalyticsBreakdown, "rows" | "distinct">;
+type RangeRequest = Pick<UsageAnalyticsRequest, "from" | "to" | "timeZone" | "bucket">;
 
 function aggregateSelect(): string {
   const tokens = "COALESCE(input,0)+COALESCE(output,0)";
@@ -91,6 +93,35 @@ export class UsageAnalyticsService {
 
   query(scope: RequestScope, request: UsageAnalyticsRequest, now = new Date()): UsageAnalyticsResponse {
     assertTimeZone(request.timeZone);
+    this.#finishBackfill(scope);
+    // One read transaction keeps every aggregate on the same snapshot.
+    return this.database.transaction(() => this.#query(scope, request, now))();
+  }
+
+  facets(scope: RequestScope, request: UsageFacetRequest, now = new Date()): UsageFacetResponse {
+    assertTimeZone(request.timeZone);
+    this.#finishBackfill(scope);
+    return this.database.transaction(() => {
+      const {from, to} = this.#range(request, now, request.from === null ? this.#firstRecordedAt(scope) : null);
+      const filter = this.#filters(request, request.dimension);
+      const column = COLUMN[request.dimension];
+      const matching = request.search === "" ? "" : ` AND ${column} IS NOT NULL AND (${column} LIKE @facetLike ESCAPE '\\'${FACET_NAMES[request.dimension] ?? ""})`;
+      const choices = (this.database.prepare(`SELECT ${column} AS key, SUM(COALESCE(input,0)+COALESCE(output,0)) AS tokens FROM usage_increments
+        WHERE tenant_id=@tenant AND principal_id=@principal${filter.sql}${matching} AND ${PLACED} AND ${within("@from", "@to")}
+        GROUP BY ${column} ORDER BY tokens DESC, ${column} LIMIT ${USAGE_ANALYTICS_MAX_FACETS}`)
+        .safeIntegers().all({tenant: scope.tenantId, principal: scope.principalId, ...filter.values, from: new Date(from).toISOString(), to: new Date(to).toISOString(),
+          ...(request.search === "" ? {} : {facetLike: `%${request.search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`})}) as {key: string | null; tokens: bigint}[])
+        .map(row => ({key: row.key, tokens: String(row.tokens)}));
+      // Selected values remain visible even when outside the search or top choices.
+      const labelKeys = new Set([...choices.map(row => row.key), ...(request.filters[request.dimension] ?? [])]
+        .filter((key): key is string => key !== null));
+      const labels = this.#labelsForKeys(scope, {[request.dimension]: labelKeys})[request.dimension];
+      return usageFacetResponseSchema.parse({generatedAt: now.toISOString(), from: new Date(from).toISOString(), to: new Date(to).toISOString(),
+        dimension: request.dimension, choices, labels});
+    })();
+  }
+
+  #finishBackfill(scope: RequestScope): void {
     // Startup rebuilds pending sources in the background; a read finishes what
     // remains for its own scope within a bounded observation budget.
     for (let replayed = 0; replayed < 50_000;) {
@@ -98,20 +129,28 @@ export class UsageAnalyticsService {
       if (step === null) break;
       replayed += Math.max(1, step);
     }
-    // One read transaction keeps every aggregate on the same snapshot.
-    return this.database.transaction(() => this.#query(scope, request, now))();
   }
 
-  #query(scope: RequestScope, request: UsageAnalyticsRequest, now: Date): UsageAnalyticsResponse {
-    const to = Math.min(Date.parse(request.to), now.getTime() + 60_000);
-    const scoped = {sql: "tenant_id=@tenant AND principal_id=@principal"};
-    const base = {tenant: scope.tenantId, principal: scope.principalId};
+  #firstRecordedAt(scope: RequestScope): string | null {
     // An interval that begins before its receipt extends "all time" back to its start.
-    const first = this.database.prepare(`SELECT MIN(COALESCE(interval_start, occurred_at)) AS at FROM usage_increments WHERE ${scoped.sql} AND ${PLACED}`).get(base) as {at: string | null};
-    const requestedFrom = request.from === null ? (first.at ? Date.parse(first.at) : to - 86_400_000 * 7) : Date.parse(request.from);
+    return (this.database.prepare(`SELECT MIN(COALESCE(interval_start, occurred_at)) AS at FROM usage_increments
+      WHERE tenant_id=@tenant AND principal_id=@principal AND ${PLACED}`).get({tenant: scope.tenantId, principal: scope.principalId}) as {at: string | null}).at;
+  }
+
+  #range(request: RangeRequest, now: Date, first: string | null) {
+    const to = Math.min(Date.parse(request.to), now.getTime() + 60_000);
+    const requestedFrom = request.from === null ? (first ? Date.parse(first) : to - 86_400_000 * 7) : Date.parse(request.from);
     if (!(requestedFrom < to)) throw new DomainError("bad_request", "The range must start before it ends.");
     const {bucket, buckets} = zonedBuckets(requestedFrom, to, request.bucket, request.timeZone);
     const from = Math.min(requestedFrom, buckets[0]!.start);
+    return {from, to, bucket, buckets};
+  }
+
+  #query(scope: RequestScope, request: UsageAnalyticsRequest, now: Date): UsageAnalyticsResponse {
+    const scoped = {sql: "tenant_id=@tenant AND principal_id=@principal"};
+    const base = {tenant: scope.tenantId, principal: scope.principalId};
+    const first = this.#firstRecordedAt(scope);
+    const {from, to, bucket, buckets} = this.#range(request, now, first);
     const iso = (value: number) => new Date(value).toISOString();
     const filter = this.#filters(request);
     const where = `${scoped.sql}${filter.sql}`;
@@ -134,15 +173,22 @@ export class UsageAnalyticsService {
     const overall = emptyPoints(buckets.length);
     let placedIntervals = 0n;
     for (const row of bucketed(null)) setPoint(overall, Number(row.bucketIndex), row);
-    const breakdowns = Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => [dimension, this.#breakdown(dimension, where, values, request.breakdownLimit, currency)])) as Record<UsageAnalyticsDimension, UsageAnalyticsBreakdown>;
+    // The chart and its breakdown share one ranking, even when their row limits differ.
+    const dimensions = new Set(request.breakdownDimensions);
+    if (request.groupBy) dimensions.add(request.groupBy);
+    const rankings = new Map([...dimensions].map(dimension => [dimension, this.#rankedGroups(dimension, where, values,
+      Math.max(request.breakdownDimensions.includes(dimension) ? request.breakdownLimit : 0,
+        dimension === request.groupBy ? USAGE_ANALYTICS_SERIES_LIMIT : 0), currency)]));
+    const breakdowns: UsageAnalyticsResponse["breakdowns"] = Object.fromEntries(request.breakdownDimensions.map(dimension => [dimension,
+      this.#breakdown(dimension, where, values, rankings.get(dimension)!, request.breakdownLimit, currency)]));
 
     let series: UsageAnalyticsResponse["timeline"]["series"] = [];
     let colorOrder: (string | null)[] = [];
     if (request.groupBy) {
       const column = COLUMN[request.groupBy];
-      const ranked = this.#breakdown(request.groupBy, where, values, USAGE_ANALYTICS_SERIES_LIMIT + 1, currency);
-      const named = ranked.rows.length > USAGE_ANALYTICS_SERIES_LIMIT ? ranked.rows.slice(0, USAGE_ANALYTICS_SERIES_LIMIT) : ranked.rows;
-      const folded = ranked.rows.length > named.length || ranked.other !== null;
+      const ranked = request.breakdownLimit === USAGE_ANALYTICS_SERIES_LIMIT && breakdowns[request.groupBy] ? breakdowns[request.groupBy]!
+        : this.#breakdown(request.groupBy, where, values, rankings.get(request.groupBy)!, USAGE_ANALYTICS_SERIES_LIMIT, currency);
+      const named = ranked.rows;
       const namedKeys = named.map((row) => row.key).filter((key): key is string => key !== null);
       const includesNull = named.some((row) => row.key === null);
       const named_ = `(${column} IN (SELECT value FROM json_each(@named)) OR (${column} IS NULL AND @includesNull))`;
@@ -156,10 +202,8 @@ export class UsageAnalyticsService {
       }
       series = named.map((row) => ({key: row.key, other: false, totals: row.totals,
         points: pointsByKey.get(row.key === null ? "null" : `key:${row.key}`) ?? emptyPoints(buckets.length)}));
-      if (folded) {
-        const otherTotals = this.#aggregateWhere(`${where} AND ${PLACED} AND ${within("@from", "@to")} AND ${outside(column, "@named", includesNull)}`,
-          {...values, named: JSON.stringify(namedKeys)}, currency);
-        series.push({key: null, other: true, totals: otherTotals, points: pointsByKey.get("other") ?? emptyPoints(buckets.length)});
+      if (ranked.other) {
+        series.push({key: null, other: true, totals: ranked.other, points: pointsByKey.get("other") ?? emptyPoints(buckets.length)});
       }
       colorOrder = (this.database.prepare(`SELECT ${column} AS key FROM usage_increments WHERE ${scoped.sql} GROUP BY ${column}
         ORDER BY SUM(COALESCE(input,0)+COALESCE(output,0)) DESC, ${column} LIMIT 8`).all(base) as {key: string | null}[]).map((row) => row.key);
@@ -169,16 +213,16 @@ export class UsageAnalyticsService {
       .safeIntegers().all({...values, buckets: bucketJson}) as {tokens: bigint | null}[]) placedIntervals += row.tokens ?? 0n;
 
     let matrix: UsageAnalyticsResponse["matrix"] = null;
-    if (request.groupBy && request.crossBy && request.crossBy !== request.groupBy) {
-      const rows = COLUMN[request.groupBy], columns = COLUMN[request.crossBy];
-      matrix = {rows: request.groupBy, columns: request.crossBy, cells: (this.database.prepare(`SELECT ${rows} AS rowKey, ${columns} AS columnKey, ${aggregateSelect()}
+    if (request.matrix) {
+      const rows = COLUMN[request.matrix.rows], columns = COLUMN[request.matrix.columns];
+      matrix = {rows: request.matrix.rows, columns: request.matrix.columns, cells: (this.database.prepare(`SELECT ${rows} AS rowKey, ${columns} AS columnKey, ${aggregateSelect()}
         FROM usage_increments WHERE ${where} AND ${PLACED} AND ${within("@from", "@to")}
         GROUP BY ${rows}, ${columns} ORDER BY tokens DESC LIMIT 2000`).safeIntegers().all(values) as AggregateRow[])
         .map((row) => ({row: row.rowKey === null ? null : String(row.rowKey), column: row.columnKey === null ? null : String(row.columnKey), totals: aggregate(row, currency)}))};
     }
 
     const heatmap = new Map<string, {weekday: number; hour: number; tokens: bigint; cost: bigint}>();
-    for (const row of this.database.prepare(`SELECT substr(occurred_at,1,14) || (CAST(substr(occurred_at,15,2) AS INTEGER)/15) AS slot,
+    if (request.includeHeatmap) for (const row of this.database.prepare(`SELECT substr(occurred_at,1,14) || (CAST(substr(occurred_at,15,2) AS INTEGER)/15) AS slot,
         SUM(COALESCE(input,0)+COALESCE(output,0)) AS tokens, SUM(CASE WHEN currency=@currency THEN cost_units ELSE 0 END) AS cost
       FROM usage_increments WHERE ${where} AND placement IN ('reported','observed') AND ${within("@from", "@to")} GROUP BY slot`).safeIntegers().all(values) as {slot: string; tokens: bigint; cost: bigint}[]) {
       const quarter = Number(row.slot.slice(14));
@@ -199,36 +243,24 @@ export class UsageAnalyticsService {
     const straddling = (this.database.prepare(`SELECT SUM(COALESCE(input,0)+COALESCE(output,0)) AS tokens FROM usage_increments
       WHERE ${where} AND placement='interval' AND occurred_at >= @from AND occurred_at < @to AND interval_start < @from`).safeIntegers().get(values) as {tokens: bigint | null}).tokens ?? 0n;
 
-    const facets = request.facets ? Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => {
-      // Each dimension's choices ignore only its own selection.
-      const others = this.#filters(request, dimension);
-      const column = COLUMN[dimension];
-      const search = request.facetSearch?.dimension === dimension ? request.facetSearch.text : null;
-      const matching = search === null ? "" : ` AND ${column} IS NOT NULL AND (${column} LIKE @facetLike ESCAPE '\\'${FACET_NAMES[dimension] ?? ""})`;
-      return [dimension, (this.database.prepare(`SELECT ${column} AS key, SUM(COALESCE(input,0)+COALESCE(output,0)) AS tokens FROM usage_increments
-        WHERE ${scoped.sql}${others.sql}${matching} AND ${PLACED} AND ${within("@from", "@to")} GROUP BY ${column} ORDER BY tokens DESC, ${column} LIMIT ${USAGE_ANALYTICS_MAX_FACETS}`)
-        .safeIntegers().all({...base, ...others.values, from: iso(from), to: iso(to),
-          ...(search === null ? {} : {facetLike: `%${search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`})}) as {key: string | null; tokens: bigint}[])
-        .map((row) => ({key: row.key === null ? null : String(row.key), tokens: String(row.tokens)}))];
-    })) as NonNullable<UsageAnalyticsResponse["facets"]> : null;
-    const coverage = this.#coverage(scope, where, values, request);
-    const labels = this.#labels(scope, breakdowns, series, matrix, colorOrder, request.groupBy, facets);
+    const coverage = request.includeCoverage ? this.#coverage(scope, where, values, request) : null;
+    const labels = this.#labels(scope, breakdowns, series, matrix, colorOrder, request.groupBy, request.filters);
     return usageAnalyticsResponseSchema.parse({
       generatedAt: now.toISOString(), timeZone: request.timeZone, from: iso(from), to: iso(to),
-      firstRecordedAt: first.at ? new Date(first.at).toISOString() : null, bucket,
+      firstRecordedAt: first ? new Date(first).toISOString() : null, bucket,
       buckets: buckets.map((b) => ({start: iso(b.start), end: iso(b.end)})), costCurrency: currency,
       totals, previous,
       timeline: {overall, groupBy: request.groupBy, series, colorOrder},
-      breakdowns, matrix, facets,
-      heatmap: [...heatmap.values()].filter((cell) => cell.tokens > 0n || cell.cost > 0n)
-        .map((cell) => ({weekday: cell.weekday, hour: cell.hour, tokens: String(cell.tokens), cost: usageCostAmount(cell.cost)})),
+      breakdowns, matrix,
+      heatmap: request.includeHeatmap ? [...heatmap.values()].filter((cell) => cell.tokens > 0n || cell.cost > 0n)
+        .map((cell) => ({weekday: cell.weekday, hour: cell.hour, tokens: String(cell.tokens), cost: usageCostAmount(cell.cost)})) : null,
       placement: {reported: String(placed("reported")), observed: String(placed("observed")), interval: String(placedIntervals),
         spanning: String(placed("interval") - placedIntervals < 0n ? 0n : placed("interval") - placedIntervals), straddling: String(straddling), unplaced: String(unplaced)},
       coverage, labels,
     });
   }
 
-  #filters(request: UsageAnalyticsRequest, except?: UsageAnalyticsDimension): {sql: string; values: Record<string, string>} {
+  #filters(request: Pick<UsageAnalyticsRequest, "filters">, except?: UsageAnalyticsDimension): {sql: string; values: Record<string, string>} {
     let sql = "";
     const values: Record<string, string> = {};
     for (const dimension of USAGE_ANALYTICS_DIMENSIONS) {
@@ -247,22 +279,30 @@ export class UsageAnalyticsService {
     return aggregate(this.database.prepare(`SELECT ${aggregateSelect()} FROM usage_increments WHERE ${where}`).safeIntegers().get(values) as AggregateRow, currency);
   }
 
-  #breakdown(dimension: UsageAnalyticsDimension, where: string, values: Record<string, unknown>, limit: number, currency: string): UsageAnalyticsBreakdown {
+  #rankedGroups(dimension: UsageAnalyticsDimension, where: string, values: Record<string, unknown>, limit: number, currency: string): RankedGroups {
     const column = COLUMN[dimension];
     const range = `${where} AND ${PLACED} AND ${within("@from", "@to")}`;
-    const rows = this.database.prepare(`SELECT ${column} AS groupKey, ${aggregateSelect()} FROM usage_increments WHERE ${range}
-      GROUP BY ${column} ORDER BY tokens DESC, costUnits DESC, ${column} LIMIT @limit`).safeIntegers().all({...values, limit: limit + 1}) as AggregateRow[];
-    const distinct = (this.database.prepare(`SELECT COUNT(*) AS count FROM (SELECT 1 FROM usage_increments WHERE ${range} GROUP BY ${column})`).safeIntegers().get(values) as {count: bigint}).count;
-    const shown = rows.slice(0, limit);
-    const other = rows.length > limit ? this.#aggregateWhere(`${range} AND ${outside(column, "@shown", shown.some((row) => row.groupKey === null))}`,
-      {...values, shown: JSON.stringify(shown.flatMap((row) => row.groupKey === null ? [] : [String(row.groupKey)]))}, currency) : null;
-    return {rows: shown.map((row) => ({key: row.groupKey === null ? null : String(row.groupKey), totals: aggregate(row, currency)})), other, distinct: String(distinct)};
+    // Window COUNT runs over the groups before LIMIT and counts the NULL group too.
+    const rows = this.database.prepare(`SELECT ${column} AS groupKey, ${aggregateSelect()}, COUNT(*) OVER() AS distinctGroups FROM usage_increments WHERE ${range}
+      GROUP BY ${column} ORDER BY tokens DESC, costUnits DESC, ${column} LIMIT @limit`).safeIntegers().all({...values, limit}) as AggregateRow[];
+    return {rows: rows.map((row) => ({key: row.groupKey === null ? null : String(row.groupKey), totals: aggregate(row, currency)})), distinct: text(rows[0]?.distinctGroups)};
   }
 
-  #coverage(scope: RequestScope, where: string, values: Record<string, unknown>, request: UsageAnalyticsRequest): UsageAnalyticsResponse["coverage"] {
+  #breakdown(dimension: UsageAnalyticsDimension, where: string, values: Record<string, unknown>, ranked: RankedGroups, limit: number, currency: string): UsageAnalyticsBreakdown {
+    const shown = ranked.rows.slice(0, limit);
+    // Distinct thread counts overlap between groups, so Other must aggregate its own rows.
+    const other = BigInt(ranked.distinct) > BigInt(shown.length) ? this.#aggregateWhere(
+      `${where} AND ${PLACED} AND ${within("@from", "@to")} AND ${outside(COLUMN[dimension], "@shown", shown.some((row) => row.key === null))}`,
+      {...values, shown: JSON.stringify(shown.flatMap((row) => row.key === null ? [] : [row.key]))}, currency) : null;
+    return {rows: shown, other, distinct: ranked.distinct};
+  }
+
+  #coverage(scope: RequestScope, where: string, values: Record<string, unknown>, request: UsageAnalyticsRequest): NonNullable<UsageAnalyticsResponse["coverage"]> {
     const range = `${where} AND ${PLACED} AND ${within("@from", "@to")}`;
-    const tokens = (condition: string) => String((this.database.prepare(`SELECT SUM(COALESCE(input,0)+COALESCE(output,0)) AS tokens FROM usage_increments
-      WHERE ${range} AND ${condition}`).safeIntegers().get(values) as {tokens: bigint | null}).tokens ?? 0n);
+    const unknown = this.database.prepare(`SELECT
+        SUM(CASE WHEN model IS NULL THEN COALESCE(input,0)+COALESCE(output,0) ELSE 0 END) AS model,
+        SUM(CASE WHEN effort IS NULL THEN COALESCE(input,0)+COALESCE(output,0) ELSE 0 END) AS effort
+      FROM usage_increments WHERE ${range}`).safeIntegers().get(values) as {model: bigint | null; effort: bigint | null};
     const quality = this.database.prepare(`SELECT
         COUNT(*) AS threads,
         SUM(json_extract(s.report_json,'$.state')='partial') AS partialThreads,
@@ -286,23 +326,28 @@ export class UsageAnalyticsService {
       WHERE t.tenant_id=? AND t.owner_principal_id=? AND b.kind='grok_build' AND t.last_activity_at >= ? AND t.last_activity_at < ?${threadFilter}`)
       .safeIntegers().get(scope.tenantId, scope.principalId, Date.parse(String(values.from)), Date.parse(String(values.to)), ...threadValues) as {count: bigint};
     return {threads: text(quality.threads), partialThreads: text(quality.partialThreads), conflictThreads: text(quality.conflictThreads),
-      unsupportedThreads: String(unsupported.count), modelUnknownTokens: tokens("model IS NULL"), effortUnknownTokens: tokens("effort IS NULL")};
+      unsupportedThreads: String(unsupported.count), modelUnknownTokens: text(unknown.model), effortUnknownTokens: text(unknown.effort)};
   }
 
-  #labels(scope: RequestScope, breakdowns: Record<UsageAnalyticsDimension, UsageAnalyticsBreakdown>, series: UsageAnalyticsResponse["timeline"]["series"],
+  #labels(scope: RequestScope, breakdowns: UsageAnalyticsResponse["breakdowns"], series: UsageAnalyticsResponse["timeline"]["series"],
     matrix: UsageAnalyticsResponse["matrix"], colorOrder: readonly (string | null)[], groupBy: UsageAnalyticsDimension | null,
-    facets: UsageAnalyticsResponse["facets"]): UsageAnalyticsResponse["labels"] {
+    filters: UsageAnalyticsRequest["filters"]): UsageAnalyticsResponse["labels"] {
     const keys = Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => [dimension, new Set<string>()])) as Record<UsageAnalyticsDimension, Set<string>>;
-    for (const dimension of USAGE_ANALYTICS_DIMENSIONS) for (const row of breakdowns[dimension].rows) if (row.key !== null) keys[dimension].add(row.key);
+    for (const dimension of USAGE_ANALYTICS_DIMENSIONS) for (const row of breakdowns[dimension]?.rows ?? []) if (row.key !== null) keys[dimension].add(row.key);
+    // Filter chips need their labels regardless of which report sections were requested.
+    for (const dimension of USAGE_ANALYTICS_DIMENSIONS) for (const key of filters[dimension] ?? []) if (key !== null) keys[dimension].add(key);
     if (groupBy) for (const key of [...series.map((entry) => entry.key), ...colorOrder]) if (key !== null) keys[groupBy].add(key);
-    if (facets) for (const dimension of USAGE_ANALYTICS_DIMENSIONS) for (const row of facets[dimension]) if (row.key !== null) keys[dimension].add(row.key);
     if (matrix) for (const cell of matrix.cells) {
       if (cell.row !== null) keys[matrix.rows].add(cell.row);
       if (cell.column !== null) keys[matrix.columns].add(cell.column);
     }
+    return this.#labelsForKeys(scope, keys);
+  }
+
+  #labelsForKeys(scope: RequestScope, keys: Partial<Record<UsageAnalyticsDimension, Set<string>>>): UsageAnalyticsResponse["labels"] {
     const label = (value: string, detail: string | null = null, kind: string | null = null, retired = false, workspaceId: string | null = null): UsageAnalyticsLabel =>
       ({label: value.slice(0, 512), detail: detail?.slice(0, 512) ?? null, kind, retired, workspaceId});
-    const lookup = <T>(sql: string, ids: Set<string>) => ids.size ? this.database.prepare(sql).all(scope.tenantId, scope.principalId, JSON.stringify([...ids])) as T[] : [];
+    const lookup = <T>(sql: string, ids: Set<string> | undefined) => ids?.size ? this.database.prepare(sql).all(scope.tenantId, scope.principalId, JSON.stringify([...ids])) as T[] : [];
     const labels = Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => [dimension, {} as Record<string, UsageAnalyticsLabel>])) as UsageAnalyticsResponse["labels"];
     for (const row of lookup<{id: string; label: string; kind: string}>(`SELECT id,label,kind FROM execution_environments
       WHERE tenant_id=? AND owner_principal_id=? AND id IN (SELECT value FROM json_each(?))`, keys.environment)) labels.environment[row.id] = label(row.label, null, row.kind);
@@ -314,12 +359,13 @@ export class UsageAnalyticsService {
       WHERE w.tenant_id=? AND w.owner_principal_id=? AND w.id IN (SELECT value FROM json_each(?))`, keys.workspace)) {
       labels.workspace[row.id] = label(row.name, row.environment ? `${row.environment} · ${row.path}` : row.path, null, row.removed !== null);
     }
-    for (const row of lookup<{id: string; title: string; kind: string | null; workspace: string; archived: number}>(`SELECT t.id,t.title,b.kind,t.workspace_id AS workspace,
+    for (const row of lookup<{id: string; title: string; kind: string | null; workspace: string; workspaceName: string | null; archived: number}>(`SELECT t.id,t.title,b.kind,t.workspace_id AS workspace,w.display_name AS workspaceName,
         COALESCE(p.inventory_state='archived',0) AS archived FROM application_threads t
       LEFT JOIN agent_backend_instances b ON b.tenant_id=t.tenant_id AND b.id=t.backend_instance_id
       LEFT JOIN thread_principal_state p ON p.tenant_id=t.tenant_id AND p.principal_id=t.owner_principal_id AND p.thread_id=t.id
+      LEFT JOIN workspaces w ON w.tenant_id=t.tenant_id AND w.owner_principal_id=t.owner_principal_id AND w.id=t.workspace_id
       WHERE t.tenant_id=? AND t.owner_principal_id=? AND t.id IN (SELECT value FROM json_each(?))`, keys.thread)) {
-      labels.thread[row.id] = label(row.title, null, row.kind, row.archived === 1, row.workspace);
+      labels.thread[row.id] = label(row.title, row.workspaceName, row.kind, row.archived === 1, row.workspace);
     }
     return labels;
   }

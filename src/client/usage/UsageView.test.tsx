@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   USAGE_ANALYTICS_DIMENSIONS, usageAnalyticsResponseSchema,
-  type UsageAnalyticsAggregate, type UsageAnalyticsRequest, type UsageAnalyticsResponse,
+  type UsageAnalyticsAggregate, type UsageAnalyticsRequest, type UsageAnalyticsResponse, type UsageFacetRequest, type UsageFacetResponse,
 } from "../../shared/protocol/usage-analytics.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { UsageDisabledView, UsageView } from "./UsageView.js";
@@ -22,9 +22,9 @@ const points = (values: number[]) => ({
 });
 function response(request: UsageAnalyticsRequest, overrides: Partial<UsageAnalyticsResponse> = {}): UsageAnalyticsResponse {
   const empty: UsageAnalyticsResponse["breakdowns"]["model"] = { rows: [], other: null, distinct: "0" };
-  const breakdowns = Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => [dimension, empty])) as UsageAnalyticsResponse["breakdowns"];
-  breakdowns.model = { rows: [{ key: "opus", totals: aggregate(2_000_000) }, { key: null, totals: aggregate(500_000, { costs: [] }) }], other: null, distinct: "2" };
-  breakdowns.thread = { rows: [{ key: "thread-1", totals: aggregate(2_500_000) },
+  const breakdowns = Object.fromEntries(request.breakdownDimensions.map((dimension) => [dimension, empty])) as UsageAnalyticsResponse["breakdowns"];
+  if (request.breakdownDimensions.includes("model")) breakdowns.model = { rows: [{ key: "opus", totals: aggregate(2_000_000) }, { key: null, totals: aggregate(500_000, { costs: [] }) }], other: null, distinct: "2" };
+  if (request.breakdownDimensions.includes("thread")) breakdowns.thread = { rows: [{ key: "thread-1", totals: aggregate(2_500_000) },
     { key: "thread-2", totals: aggregate(400_000, { costs: [], uncostedTokens: "400000", missing: { ...aggregate(0).missing, cost: "4" } }) }], other: null, distinct: "2" };
   const labels = Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => [dimension, {}])) as UsageAnalyticsResponse["labels"];
   labels.thread = { "thread-1": { label: "Ship usage page", detail: null, kind: "pi", retired: false, workspaceId: null },
@@ -37,17 +37,25 @@ function response(request: UsageAnalyticsRequest, overrides: Partial<UsageAnalyt
     timeline: { overall: points([1_000_000, 0, 1_500_000]), groupBy: request.groupBy,
       series: request.groupBy === "model" ? [{ key: "opus", other: false, totals: aggregate(2_000_000), points: points([800_000, 0, 1_200_000]) },
         { key: null, other: false, totals: aggregate(500_000), points: points([200_000, 0, 300_000]) }] : [], colorOrder: ["opus"] },
-    breakdowns, matrix: null, facets: null, heatmap: [{ weekday: 0, hour: 9, tokens: "2500000", cost: "2.5" }],
+    breakdowns, matrix: request.matrix ? { ...request.matrix, cells: [] } : null,
+    heatmap: request.includeHeatmap ? [{ weekday: 0, hour: 9, tokens: "2500000", cost: "2.5" }] : null,
     placement: { reported: "2500000", observed: "0", interval: "0", spanning: "0", straddling: "0", unplaced: "0" },
-    coverage: { threads: "2", partialThreads: "0", conflictThreads: "0", unsupportedThreads: "0", modelUnknownTokens: "500000", effortUnknownTokens: "2500000" },
+    coverage: request.includeCoverage ? { threads: "2", partialThreads: "0", conflictThreads: "0", unsupportedThreads: "0", modelUnknownTokens: "500000", effortUnknownTokens: "2500000" } : null,
     labels, ...overrides,
   });
 }
-function mount(implementation?: (request: UsageAnalyticsRequest) => Promise<UsageAnalyticsResponse>) {
+function facetResponse(request: UsageFacetRequest): UsageFacetResponse {
+  return { generatedAt: "2026-09-23T12:00:00.000Z", from: "2026-09-21T00:00:00.000Z", to: request.to, dimension: request.dimension,
+    choices: request.dimension === "thread" ? [{ key: "thread-1", tokens: "2500000" }] : [{ key: "opus", tokens: "2500000" }],
+    labels: request.dimension === "thread" ? { "thread-1": { label: "Ship usage page", detail: null, kind: "pi", retired: false, workspaceId: null } } : {} };
+}
+function mount(implementation?: (request: UsageAnalyticsRequest) => Promise<UsageAnalyticsResponse>,
+  facetImplementation?: (request: UsageFacetRequest, signal?: AbortSignal) => Promise<UsageFacetResponse>) {
   // A synchronous throw models client-side request validation failing before any fetch.
   const getUsageAnalytics = vi.fn(implementation ?? (async (request: UsageAnalyticsRequest) => response(request)));
-  render(<UsageView store={{ api: { getUsageAnalytics } } as unknown as ApplicationClientStore} />);
-  return getUsageAnalytics;
+  const getUsageFacets = vi.fn(facetImplementation ?? (async (request: UsageFacetRequest) => facetResponse(request)));
+  render(<UsageView store={{ api: { getUsageAnalytics, getUsageFacets } } as unknown as ApplicationClientStore} />);
+  return Object.assign(getUsageAnalytics, { getUsageFacets });
 }
 
 beforeEach(() => {
@@ -59,7 +67,9 @@ describe("UsageView", () => {
   it("summarizes the range and compares it with the previous period", async () => {
     const api = mount();
     expect(await screen.findByText("2.5M")).toBeVisible();
-    expect(api).toHaveBeenCalledWith(expect.objectContaining({ groupBy: "model", crossBy: null, breakdownLimit: 8, facets: false, bucket: "auto", filters: {} }), expect.any(AbortSignal));
+    expect(api).toHaveBeenCalledWith(expect.objectContaining({ groupBy: "model", matrix: null, breakdownLimit: 8,
+      breakdownDimensions: ["model", "provider", "effort", "backend", "environment", "workspace", "agentRole", "activity"],
+      includeHeatmap: false, includeCoverage: false, bucket: "auto", filters: {} }), expect.any(AbortSignal));
     const request = api.mock.calls[0]![0];
     expect(Date.parse(request.to) - Date.parse(request.from!)).toBeGreaterThan(29 * 86_400_000);
     const tokens = screen.getByText("Total tokens").closest(".usage-stat")!;
@@ -156,12 +166,105 @@ describe("UsageView", () => {
     const api = mount();
     await screen.findByText("2.5M");
     await user.click(screen.getByRole("tab", { name: "Explore" }));
-    expect(api).toHaveBeenLastCalledWith(expect.objectContaining({ groupBy: "model", breakdownLimit: 100 }), expect.any(AbortSignal));
+    expect(api).toHaveBeenLastCalledWith(expect.objectContaining({ groupBy: null, breakdownDimensions: ["model"], breakdownLimit: 100,
+      matrix: null, includeHeatmap: false, includeCoverage: false }), expect.any(AbortSignal));
     const table = await screen.findByRole("table");
     const opus = within(table).getByRole("button", { name: /opus/ }).closest("tr")!;
     expect(within(opus).getByText("2M")).toBeVisible();
     expect(within(table).queryByRole("columnheader", { name: /Requests/ })).toBeNull();
     expect(JSON.parse(localStorage.getItem("sedes-usage-view-v1")!).tab).toBe("explore");
+  });
+
+  it("requests only each tab's rendered sections and keeps the Explore matrix independent of chart grouping", async () => {
+    const user = userEvent.setup();
+    const api = mount();
+    await screen.findByText("2.5M");
+    await user.click(screen.getByRole("tab", { name: "Threads" }));
+    expect(api.mock.lastCall![0]).toMatchObject({ groupBy: null, breakdownDimensions: ["thread"], matrix: null,
+      includeHeatmap: false, includeCoverage: false });
+    await user.click(screen.getByRole("tab", { name: "Patterns" }));
+    expect(api.mock.lastCall![0]).toMatchObject({ groupBy: null, breakdownDimensions: [], matrix: null,
+      includeHeatmap: true, includeCoverage: false });
+    await user.click(screen.getByRole("tab", { name: "Coverage" }));
+    expect(api.mock.lastCall![0]).toMatchObject({ groupBy: null, breakdownDimensions: [], matrix: null,
+      includeHeatmap: false, includeCoverage: true });
+    await user.click(screen.getByRole("tab", { name: "Explore" }));
+    await user.click(await screen.findByRole("button", { name: "Split by: Nothing" }));
+    await user.click(await screen.findByRole("menuitemradio", { name: "Reasoning effort" }));
+    expect(api.mock.lastCall![0]).toMatchObject({ groupBy: null, breakdownDimensions: ["model"],
+      matrix: { rows: "model", columns: "effort" }, includeHeatmap: false, includeCoverage: false });
+  });
+
+  it.each(["Threads", "Patterns", "Coverage"])("keeps missing %s sections visibly unavailable through a failed tab read", async (tab) => {
+    let fail = false;
+    let reject!: (error: Error) => void;
+    mount((request) => fail ? new Promise((_resolve, no) => { reject = no; }) : Promise.resolve(response(request)));
+    await screen.findByText("2.5M");
+    fail = true;
+    await userEvent.setup().click(screen.getByRole("tab", { name: tab }));
+    expect(screen.getByRole("status")).toHaveTextContent("Loading this view");
+    expect(screen.getByText("2.5M")).toBeVisible();
+    expect(screen.queryByText("No thread usage in this range")).toBeNull();
+    expect(screen.queryByText("No timed usage")).toBeNull();
+    expect(screen.queryByText("Every token in range has a source estimate.")).toBeNull();
+    await act(async () => { reject(new Error("database_unavailable")); });
+    expect(screen.getByRole("status")).toHaveTextContent("This view is unavailable. Retry to load it.");
+    expect(screen.getByText("2.5M")).toBeVisible();
+    fail = false;
+    await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps Overview controls and local chart state when a new grouping is pending or fails", async () => {
+    let fail = false;
+    let reject!: (error: Error) => void;
+    mount((request) => fail ? new Promise((_resolve, no) => { reject = no; }) : Promise.resolve(response(request)));
+    const user = userEvent.setup();
+    await screen.findByText("2.5M");
+    await user.click(screen.getByRole("button", { name: "Show as table" }));
+    fail = true;
+    await user.click(screen.getByRole("button", { name: "Group by: Model" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Provider" }));
+    expect(screen.getByRole("button", { name: "Group by: Provider" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Show as table" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/by model · daily/)).toBeVisible();
+    await act(async () => { reject(new Error("database_unavailable")); });
+    expect(screen.getByRole("button", { name: "Group by: Provider" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Show as table" })).toHaveAttribute("aria-pressed", "true");
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "Group by: Provider" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Model" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Show as table" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it.each(["rows", "split"])("keeps Explore controls and sort state while a changed %s request is pending or fails", async (change) => {
+    localStorage.setItem("sedes-usage-view-v1", JSON.stringify({ tab: "explore" }));
+    let fail = false;
+    let reject!: (error: Error) => void;
+    mount((request) => fail ? new Promise((_resolve, no) => { reject = no; }) : Promise.resolve(response(request)));
+    const user = userEvent.setup();
+    const table = await screen.findByRole("table");
+    await user.click(within(table).getByRole("button", { name: "Tokens" }));
+    expect(within(table).getByRole("columnheader", { name: "Tokens" })).toHaveAttribute("aria-sort", "ascending");
+    fail = true;
+    await user.click(screen.getByRole("button", { name: change === "rows" ? "Rows: Model" : "Split by: Nothing" }));
+    await user.click(screen.getByRole("menuitemradio", { name: change === "rows" ? "Environment" : "Reasoning effort" }));
+    const changedControl = change === "rows" ? "Rows: Environment" : "Split by: Reasoning effort";
+    expect(screen.getByRole("button", { name: changedControl })).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading this view");
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.getByRole("button", { name: "Export CSV" })).toBeDisabled();
+    expect(screen.queryByText("No recorded usage in this range")).toBeNull();
+    await act(async () => { reject(new Error("database_unavailable")); });
+    expect(screen.getByRole("button", { name: changedControl })).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent("This view is unavailable");
+    fail = false;
+    await user.click(screen.getByRole("button", { name: changedControl }));
+    await user.click(screen.getByRole("menuitemradio", { name: change === "rows" ? "Model" : "Nothing" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(within(await screen.findByRole("table")).getByRole("columnheader", { name: "Tokens" })).toHaveAttribute("aria-sort", "ascending");
   });
 
   it("lists threads with a link that opens them", async () => {
@@ -205,19 +308,41 @@ describe("UsageView", () => {
     await user.click(screen.getByRole("button", { name: /^Filter/ }));
     await user.click(await screen.findByRole("button", { name: "Thread" }));
     await user.type(screen.getByRole("textbox", { name: "Search Threads" }), "ship");
-    await waitFor(() => expect(api).toHaveBeenCalledWith(expect.objectContaining({ facets: true, facetSearch: { dimension: "thread", text: "ship" } }), expect.any(AbortSignal)));
+    await waitFor(() => expect(api.getUsageFacets).toHaveBeenCalledWith(expect.objectContaining({ dimension: "thread", search: "ship" }), expect.any(AbortSignal)));
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(api.getUsageFacets.mock.calls.every(([request]) => Object.keys(request).sort().join(",") === "bucket,dimension,filters,from,search,timeZone,to")).toBe(true);
+    const reads = api.getUsageFacets.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Environment" }));
+    expect(api.getUsageFacets).toHaveBeenCalledTimes(reads + 1);
+    expect(api.getUsageFacets).toHaveBeenLastCalledWith(expect.objectContaining({ dimension: "environment", search: "" }), expect.any(AbortSignal));
   });
 
   it("offers every server match even when its visible label does not contain the search", async () => {
     const user = userEvent.setup();
     // The server matched "c0ffee" in a thread ID that the choice label does not show.
-    const facets = Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => [dimension, []])) as unknown as NonNullable<UsageAnalyticsResponse["facets"]>;
-    mount(async (request) => response(request, request.facetSearch?.text === "c0ffee" ? { facets: { ...facets, thread: [{ key: "thread-1", tokens: "2500000" }] } } : {}));
+    mount(undefined, async (request) => ({ ...facetResponse(request), choices: request.search === "c0ffee" ? [{ key: "thread-1", tokens: "2500000" }] : [] }));
     await screen.findByText("2.5M");
     await user.click(screen.getByRole("button", { name: /^Filter/ }));
     await user.click(await screen.findByRole("button", { name: "Thread" }));
     await user.type(screen.getByRole("textbox", { name: "Search Threads" }), "c0ffee");
     expect(await screen.findByRole("checkbox", { name: /Ship usage page/ })).toBeEnabled();
+  });
+
+  it("discards a pending filter dimension's response after switching dimensions", async () => {
+    const pending = new Map<string, { request: UsageFacetRequest; signal: AbortSignal | undefined; resolve: (value: UsageFacetResponse) => void }>();
+    const api = mount(undefined, (request, signal) => new Promise((resolve) => { pending.set(request.dimension, { request, signal, resolve }); }));
+    const user = userEvent.setup();
+    await screen.findByText("2.5M");
+    await user.click(screen.getByRole("button", { name: /^Filter/ }));
+    await user.click(await screen.findByRole("button", { name: "Thread" }));
+    expect(pending.get("model")!.signal!.aborted).toBe(true);
+    await act(async () => { const old = pending.get("model")!; old.resolve(facetResponse(old.request)); });
+    const choices = screen.getByRole("group", { name: "Threads" });
+    expect(within(choices).queryAllByRole("checkbox")).toHaveLength(0);
+    await act(async () => { const current = pending.get("thread")!; current.resolve(facetResponse(current.request)); });
+    expect(within(choices).getByRole("checkbox", { name: /Ship usage page/ })).toBeVisible();
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(api.getUsageFacets).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the last successful read when a refresh fails", async () => {

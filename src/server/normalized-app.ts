@@ -10,7 +10,7 @@ import { registerClientSchema, clientPollRequestSchema } from "../shared/protoco
 import { attachmentContentDisposition, SEDES_DOWNLOAD_REVISION_HEADER } from "../shared/downloads.js";
 import { pageDownloadFileName } from "../shared/page-download.js";
 import type { ClientControlService } from "./domain/client-control-service.js";
-import { usageAnalyticsRequestSchema } from "../shared/protocol/usage-analytics.js";
+import { usageAnalyticsRequestSchema, usageFacetRequestSchema } from "../shared/protocol/usage-analytics.js";
 import { usageAvailabilityRequestSchema } from "../shared/protocol/usage-accounting.js";
 import type { UsageService } from "./usage/usage-service.js";
 import { environmentVariablesPreviewQuerySchema, environmentVariablesPreviewResultSchema, threadEnvironmentVariablesResultSchema } from "../shared/protocol/environment-variables.js";
@@ -348,7 +348,7 @@ import type { SidecarArtifactRegistration } from "./sidecar/sidecar-artifact.js"
 import type { AuthenticationAdmission } from "./authentication/authentication-admission.js";
 
 export interface NormalizedAppDependencies {
-  readonly usage: Pick<UsageService, "read" | "availability" | "analytics">;
+  readonly usage: Pick<UsageService, "read" | "availability" | "analytics" | "facets">;
   readonly environmentVariables?: EnvironmentVariablesService;
   /** Production always supplies admission; isolated service fixtures may omit it. */
   readonly authentication?: AuthenticationAdmission;
@@ -1158,6 +1158,13 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     if (!dependencies.config.experimentalUsageEnabled) throw new ApiError(403, "experimental_usage_disabled", "Experimental usage accounting is disabled on this server.", false);
     response.setHeader("Cache-Control", "no-store");
     response.json(dependencies.usage.analytics(requestScope, usageAnalyticsRequestSchema.parse(request.body)));
+  });
+
+  routes.post("/api/usage/facets", async (request, response) => {
+    const requestScope = await scope(request);
+    if (!dependencies.config.experimentalUsageEnabled) throw new ApiError(403, "experimental_usage_disabled", "Experimental usage accounting is disabled on this server.", false);
+    response.setHeader("Cache-Control", "no-store");
+    response.json(dependencies.usage.facets(requestScope, usageFacetRequestSchema.parse(request.body)));
   });
 
   routes.get("/api/threads/:threadId/usage", async (request, response) => {

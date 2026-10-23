@@ -12,7 +12,7 @@ const labels = {
   environment: {}, backend: { b1: { label: "Primary Pi", detail: null, kind: "pi", retired: false, workspaceId: null } }, backendKind: {},
   provider: {}, model: {}, effort: {},
   workspace: { w1: { label: "App", detail: "Laptop · /home/me/src/app", kind: null, retired: false, workspaceId: null } },
-  thread: { t1: { label: "Fix it", detail: null, kind: "codex_app_server", retired: true, workspaceId: "w1" } },
+  thread: { t1: { label: "Fix it", detail: "App", kind: "codex_app_server", retired: true, workspaceId: "w1" } },
   agentRole: {}, activity: {},
 } satisfies UsageAnalyticsResponse["labels"];
 
@@ -53,6 +53,7 @@ describe("usage presentation", () => {
     expect(dimensionLabel(labels, "workspace", null)).toMatchObject({ label: "Unknown location", unknown: true });
     expect(dimensionLabel(labels, "workspace", "gone")).toMatchObject({ label: "Removed location", unknown: true });
     expect(dimensionLabel(labels, "thread", "t1")).toMatchObject({ label: "Fix it", detail: "App", brand: "codex", retired: true });
+    expect(dimensionLabel({ thread: labels.thread }, "thread", "t1").detail).toBe("App");
     expect(dimensionLabel(labels, "thread", "gone")).toMatchObject({ label: "Removed thread", unknown: true });
   });
 

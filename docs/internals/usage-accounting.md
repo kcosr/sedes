@@ -406,8 +406,9 @@ separate child monitor, and Grok usage accounting remains unsupported.
 | `GET /api/threads/:threadId/usage/turns/:turnId` | Turn report for a registered turn |
 | `POST /api/threads/:threadId/usage/turn-availability` | Up to 100 turn IDs; returns which ended turns have recorded metrics or cost |
 | `POST /api/usage/analytics` | Principal-wide aggregates; see [Analytics read](#analytics-read) |
+| `POST /api/usage/facets` | Ranked filter choices for one requested dimension |
 
-All four use the ordinary scope, send `Cache-Control: no-store`, and never open
+All five use the ordinary scope, send `Cache-Control: no-store`, and never open
 a backend. Strict schemas live in
 [`usage-accounting.ts`](../../src/shared/protocol/usage-accounting.ts) and
 [`usage-analytics.ts`](../../src/shared/protocol/usage-analytics.ts); token
@@ -426,7 +427,14 @@ created to send it. The per-thread
 availability checks, fetches full reports only when opened, ignores stale
 revisions, polls every five seconds while visible, and refreshes on focus,
 visibility, and reconnect. The Usage page polls analytics every minute while
-visible and refreshes on focus. A failed read keeps the last successful data.
+visible and refreshes on focus, visibility, and browser online events. Automatic refreshes
+share a five-second cooldown, and a read already in progress satisfies another
+refresh for the same query while it is less than a minute old. Once a read has
+been pending for a minute, the next refresh replaces it to recover from stalled
+connections. Manual refresh bypasses the cooldown. Changing the
+query cancels the old browser request and ignores its eventual result; it does
+not cancel synchronous server SQL. A failed read keeps the last successful data
+for the requested sections.
 
 ## Timeline projection
 
@@ -531,8 +539,12 @@ transaction. The strict request contains:
 - `filters`: up to 50 values for each of `environment`, `backend`,
   `backendKind`, `provider`, `model`, `effort`, `workspace`, `thread`,
   `agentRole`, and `activity`, where `null` selects an unknown value;
-- `groupBy` for the series, `crossBy` for the matrix, `breakdownLimit` (at
-  most 100), and `facets`.
+- `groupBy` for the timeline series, or `null`;
+- `breakdownDimensions`, a unique list of the requested dimensions, and
+  `breakdownLimit` (at most 100);
+- `matrix`, either an explicit pair of distinct `rows` and `columns`
+  dimensions or `null`;
+- `includeHeatmap` and `includeCoverage`.
 
 Buckets are calendar hours, days, Monday-start weeks, or months in the
 requested zone, computed on the server across daylight-saving transitions.
@@ -555,28 +567,40 @@ The response contains:
 - **Timeline**: ungrouped points per bucket and, with `groupBy`, the top seven
   keys plus Other with per-bucket points, and a filter-independent all-time
   color order. Cost points use the most common currency in range.
-- **Breakdowns** for every dimension (top `breakdownLimit` rows, Other, and a
-  distinct count), an optional **matrix** of `groupBy` × `crossBy` (up to 2,000
-  cells), and optional **facets** (up to 60 choices per dimension, each ranked
-  under every other dimension's filter but not its own). `facetSearch` narrows
-  one dimension's choices by ID, model name, or the principal's own thread
-  title, project name or path, environment label, or backend label, so values
-  outside the top 60 stay reachable. Other dimensions have few values and are
-  searched in the client.
-- **Heatmap** of local weekday by hour from `reported` and `observed` rows,
-  aggregated at 15-minute resolution so every zone offset maps exactly.
+- **Breakdowns** for the requested dimensions only (top `breakdownLimit` rows,
+  Other, and a distinct count), and the requested **matrix** (up to 2,000
+  cells). An absent breakdown was not requested; it is not a zero total.
+- **Heatmap**, when requested, of local weekday by hour from `reported` and
+  `observed` rows, aggregated at 15-minute resolution so every zone offset maps
+  exactly. Otherwise this field is `null`.
 - **Placement**: reported, observed, placed intervals, intervals spanning more
   than one bucket, intervals that began before the range (`straddling`), and
   all-time unplaced usage.
-- **Coverage**: threads with usage, threads whose session report is partial or
+- **Coverage**, when requested: threads with usage, threads whose session report is partial or
   in conflict, active Grok threads that report no usage (narrowed by
-  thread-level filters), and tokens with unknown model or effort.
+  thread-level filters), and tokens with unknown model or effort. Otherwise this
+  field is `null`.
 - **Labels** for environments, backend instances, projects, and threads,
   resolved from the principal's own rows. Removed items keep their IDs and are
   labelled as removed or archived.
 
 Every aggregate is scoped to the requesting tenant and principal. Grouping uses
 explicit null-aware predicates so unknown keys fold into Other correctly.
+
+The browser requests eight breakdowns on Overview, the chosen row dimension
+and optional matrix on Explore, and the thread breakdown on Threads. Patterns
+requests the heatmap; Coverage requests accounting coverage. Totals, the
+ungrouped timeline, and placement remain common report data. Switching tabs
+does not render an unrequested section as an empty result.
+
+`POST /api/usage/facets` uses the same `from`, `to`, `timeZone`, `bucket`, and
+`filters` fields, plus one `dimension` and a `search` string (empty for no
+search). It returns that dimension's top 60 `choices`, their labels, the
+resolved range, and generation time. Choices ignore only their own dimension's
+filter. Search matches IDs and model names or the principal's own thread title,
+project name or path, environment label, or backend label. Dimensions with few
+values are filtered in the client. Facet reads use the same range alignment as
+reports and do not compute dashboard sections.
 
 ## Recovery, migration, and retention
 
@@ -659,8 +683,10 @@ explicit null-aware predicates so unknown keys fold into Other correctly.
 
 **Scale and bounds**
 
-- Analytics aggregates are computed on each request (roughly thirty indexed
-  range scans). Very large all-time ranges are the most expensive reads.
+- Analytics aggregates are computed on each request for the selected sections.
+  Breakdown rankings and group counts share one scan, and a timeline series
+  reuses its dimension's ranking. Queries still run synchronously on the server;
+  very large all-time ranges can delay unrelated application work.
 - Series show seven keys plus Other; breakdowns at most 100 rows; the matrix at
   most 2,000 cells; facets 60 choices per search; filters 50 values per
   dimension; charts 500 buckets. Only the most common currency is charted.

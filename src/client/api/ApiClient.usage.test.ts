@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { ApiClient } from "./ApiClient.js";
 import { usageReport } from "../stores/usage-test-fixture.js";
 import { SEDES_CLIENT_PROTOCOL_VERSION } from "../../shared/protocol/application.js";
+import type { UsageAnalyticsRequest, UsageFacetRequest, UsageFacetResponse } from "../../shared/protocol/usage-analytics.js";
 afterEach(() => vi.unstubAllGlobals());
 it("uses a completed CSRF refresh for retry while a newer reconnect refresh is pending", async () => {
   let resolveRetry!: (response: Response) => void;
@@ -53,4 +54,27 @@ it("rejects legacy number-shaped counters", async () => {
   const report = usageReport(); vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ ...report,
     summary: { ...report.summary, metrics: { ...report.summary.metrics, input: { ...report.summary.metrics.input, value: 123 } } } })));
   await expect(new ApiClient().getUsage("thread-1", "turn-1")).rejects.toThrow();
+});
+it("reads one usage filter through its own endpoint with cancellation and exact counters", async () => {
+  const request: UsageFacetRequest = { from: null, to: "2026-10-23T10:00:00.000Z", timeZone: "UTC", bucket: "auto",
+    filters: { backend: ["backend-1"] }, dimension: "model", search: " opus " };
+  const response: UsageFacetResponse = { generatedAt: request.to, from: request.to, to: request.to, dimension: "model",
+    choices: [{ key: "opus", tokens: "9007199254740993" }], labels: {} };
+  const fetch = vi.fn().mockResolvedValueOnce(Response.json({ clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION, version: "0.2.0",
+    csrfToken: "csrf-token", providerPulseEnabled: false, experimentalUsageEnabled: true })).mockResolvedValueOnce(Response.json(response));
+  vi.stubGlobal("fetch", fetch);
+  const api = new ApiClient();
+  const abort = new AbortController();
+  await expect(api.getUsageFacets(request, abort.signal)).resolves.toEqual(response);
+  expect(fetch.mock.calls[1]![0]).toBe("/api/usage/facets");
+  expect(fetch.mock.calls[1]![1]).toMatchObject({ method: "POST", signal: abort.signal });
+  expect(JSON.parse(fetch.mock.calls[1]![1].body)).toEqual({ ...request, search: "opus" });
+  expect(new Headers(fetch.mock.calls[1]![1].headers).get("X-CSRF-Token")).toBe("csrf-token");
+});
+it("rejects the retired combined report and facets request before sending it", () => {
+  const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+  const legacy = { from: null, to: "2026-10-23T10:00:00.000Z", timeZone: "UTC", bucket: "auto", filters: {},
+    groupBy: "model", crossBy: null, breakdownLimit: 8, facets: true };
+  expect(() => new ApiClient().getUsageAnalytics(legacy as unknown as UsageAnalyticsRequest)).toThrow();
+  expect(fetch).not.toHaveBeenCalled();
 });

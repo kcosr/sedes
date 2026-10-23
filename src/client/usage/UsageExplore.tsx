@@ -1,7 +1,7 @@
 import { useMemo, useState, type CSSProperties } from "react";
 import { ArrowDown, ArrowUp, Download } from "lucide-react";
 import { Button } from "@client/components/ui/button";
-import type { UsageAnalyticsAggregate, UsageAnalyticsDimension, UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
+import type { UsageAnalyticsAggregate, UsageAnalyticsBreakdown, UsageAnalyticsDimension, UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import {
   DIMENSION_META, DIMENSION_ORDER, EFFORT_ORDER, METRIC_META, METRIC_ORDER, dimensionLabel, formatCount, formatMetric, formatPercent,
   metricReported, metricValue, toNumber, type DimensionLabel, type UsageMetric,
@@ -59,19 +59,22 @@ function columnValue(row: ExploreRow, column: Column, currency: string, total: n
   return metricValue(row.totals, column, currency);
 }
 
-export function UsageExplore({ data, settings, onSettings, filters, onFilters }: {
+export function UsageExplore({ data, breakdown, settings, onSettings, filters, onFilters, loading }: {
   readonly data: UsageAnalyticsResponse;
+  readonly breakdown: UsageAnalyticsBreakdown | undefined;
   readonly settings: UsageViewSettings;
   readonly onSettings: (patch: Partial<UsageViewSettings>) => void;
   readonly filters: UsageFilterState;
   readonly onFilters: (filters: UsageFilterState) => void;
+  readonly loading: boolean;
 }) {
   const [sort, setSort] = useState<{ column: Column; descending: boolean }>({ column: "tokens", descending: true });
   const dimension = settings.exploreRows;
   const currency = data.costCurrency;
-  const breakdown = data.breakdowns[dimension];
   const totalTokens = toNumber(data.totals.tokens);
+  const matrixReady = !settings.exploreColumns || (data.matrix?.rows === dimension && data.matrix.columns === settings.exploreColumns);
   const rows = useMemo<ExploreRow[]>(() => {
+    if (!breakdown) return [];
     const list: ExploreRow[] = breakdown.rows.map((row) => ({ id: row.key ?? "∅", key: row.key, other: false,
       label: dimensionLabel(data.labels, dimension, row.key), totals: row.totals }));
     if (breakdown.other) list.push({ id: "\u0000other", key: null, other: true, totals: breakdown.other,
@@ -114,9 +117,11 @@ export function UsageExplore({ data, settings, onSettings, filters, onFilters }:
         {settings.exploreColumns ? <MenuSelect label="Metric" value={settings.metric} onChange={(metric) => onSettings({ metric })}
           options={METRIC_ORDER.map((value) => ({ value, label: METRIC_META[value].short }))} /> : null}
         <span className="usage-toolbar-spacer" />
-        <Button variant="outline" size="sm" onClick={exportCsv} disabled={!rows.length}><Download aria-hidden="true" />Export CSV</Button>
+        <Button variant="outline" size="sm" onClick={exportCsv} disabled={!rows.length || !matrixReady}><Download aria-hidden="true" />Export CSV</Button>
       </div>
-      {settings.exploreColumns && data.matrix ? (
+      {!breakdown || !matrixReady ? (
+        <p className="usage-empty-note" role="status">{loading ? "Loading this view…" : "This view is unavailable. Retry to load it."}</p>
+      ) : settings.exploreColumns && data.matrix ? (
         <MatrixCard data={data} rows={rows.filter((row) => !row.other)} dimension={dimension} columns={settings.exploreColumns} metric={settings.metric} />
       ) : (
         <UsageCard className="usage-card-wide" title={`Usage by ${DIMENSION_META[dimension].label.toLocaleLowerCase()}`}

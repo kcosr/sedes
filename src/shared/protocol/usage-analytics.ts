@@ -28,25 +28,36 @@ export const usageAnalyticsFiltersSchema = z.strictObject(
 );
 export type UsageAnalyticsFilters = z.infer<typeof usageAnalyticsFiltersSchema>;
 
-export const usageAnalyticsRequestSchema = z.strictObject({
+const usageRangeShape = {
   /** Null reads from the earliest placed usage. */
   from: z.iso.datetime().nullable(),
   to: z.iso.datetime(),
   timeZone: z.string().min(1).max(64),
   bucket: z.enum(["auto", ...USAGE_ANALYTICS_BUCKETS]),
   filters: usageAnalyticsFiltersSchema,
+};
+
+export const usageAnalyticsRequestSchema = z.strictObject({
+  ...usageRangeShape,
   groupBy: usageAnalyticsDimensionSchema.nullable(),
-  crossBy: usageAnalyticsDimensionSchema.nullable(),
   breakdownLimit: z.number().int().min(1).max(USAGE_ANALYTICS_MAX_BREAKDOWN),
-  /** Filter choices: each dimension ranked under every other dimension's filter. */
-  facets: z.boolean(),
-  /**
-   * Narrow one dimension's facet choices by ID or name, so values outside the
-   * top-ranked choices stay reachable. Only ID-labelled dimensions and models search.
-   */
-  facetSearch: z.strictObject({ dimension: z.enum(USAGE_ANALYTICS_SEARCHABLE_FACETS), text: z.string().trim().min(1).max(120) }).optional(),
+  breakdownDimensions: z.array(usageAnalyticsDimensionSchema).max(USAGE_ANALYTICS_DIMENSIONS.length)
+    .refine(dimensions => new Set(dimensions).size === dimensions.length, "Breakdown dimensions must be unique."),
+  matrix: z.strictObject({rows: usageAnalyticsDimensionSchema, columns: usageAnalyticsDimensionSchema})
+    .refine(matrix => matrix.rows !== matrix.columns, "Matrix dimensions must differ.").nullable(),
+  includeHeatmap: z.boolean(),
+  includeCoverage: z.boolean(),
 });
 export type UsageAnalyticsRequest = z.infer<typeof usageAnalyticsRequestSchema>;
+
+/** One dimension's choices, ignoring that dimension's own selection. */
+export const usageFacetRequestSchema = z.strictObject({
+  ...usageRangeShape,
+  dimension: usageAnalyticsDimensionSchema,
+  search: z.string().trim().max(120),
+}).refine(request => request.search === "" || (USAGE_ANALYTICS_SEARCHABLE_FACETS as readonly string[]).includes(request.dimension),
+  {message: "This dimension does not support server search.", path: ["search"]});
+export type UsageFacetRequest = z.infer<typeof usageFacetRequestSchema>;
 
 const count = usageIntegerSchema;
 export const usageAnalyticsCostSchema = z.strictObject({
@@ -115,6 +126,16 @@ export const usageAnalyticsLabelSchema = z.strictObject({
 });
 export type UsageAnalyticsLabel = z.infer<typeof usageAnalyticsLabelSchema>;
 
+export const usageFacetResponseSchema = z.strictObject({
+  generatedAt: z.iso.datetime(),
+  from: z.iso.datetime(),
+  to: z.iso.datetime(),
+  dimension: usageAnalyticsDimensionSchema,
+  choices: z.array(z.strictObject({key: dimensionKey, tokens: count})).max(USAGE_ANALYTICS_MAX_FACETS),
+  labels: z.record(z.string(), usageAnalyticsLabelSchema),
+});
+export type UsageFacetResponse = z.infer<typeof usageFacetResponseSchema>;
+
 export const usageAnalyticsResponseSchema = z.strictObject({
   generatedAt: z.iso.datetime(),
   timeZone: z.string().min(1).max(64),
@@ -143,21 +164,17 @@ export const usageAnalyticsResponseSchema = z.strictObject({
   breakdowns: z.strictObject(
     Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => [dimension, usageAnalyticsBreakdownSchema])) as
       Record<UsageAnalyticsDimension, typeof usageAnalyticsBreakdownSchema>,
-  ),
+  ).partial(),
   matrix: z.strictObject({
     rows: usageAnalyticsDimensionSchema,
     columns: usageAnalyticsDimensionSchema,
     cells: z.array(z.strictObject({ row: dimensionKey, column: dimensionKey, totals: usageAnalyticsAggregateSchema })).max(2000),
   }).nullable(),
-  facets: z.strictObject(
-    Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => [dimension, z.array(z.strictObject({key: dimensionKey, tokens: count})).max(USAGE_ANALYTICS_MAX_FACETS)])) as
-      Record<UsageAnalyticsDimension, z.ZodArray<z.ZodObject<{key: typeof dimensionKey; tokens: typeof count}>>>,
-  ).nullable(),
   /** Local weekday (0 = Monday) by local hour, for placed usage. */
   heatmap: z.array(z.strictObject({
     weekday: z.number().int().min(0).max(6), hour: z.number().int().min(0).max(23),
     tokens: count, cost: usageMoneyAmountSchema,
-  })).max(168),
+  })).max(168).nullable(),
   placement: z.strictObject({
     /** Source-reported occurrence time. */
     reported: count,
@@ -179,7 +196,7 @@ export const usageAnalyticsResponseSchema = z.strictObject({
     unsupportedThreads: count,
     modelUnknownTokens: count,
     effortUnknownTokens: count,
-  }),
+  }).nullable(),
   labels: z.strictObject(
     Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => [dimension, z.record(z.string(), usageAnalyticsLabelSchema)])) as
       Record<UsageAnalyticsDimension, z.ZodRecord<z.ZodString, typeof usageAnalyticsLabelSchema>>,

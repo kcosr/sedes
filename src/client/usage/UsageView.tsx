@@ -14,7 +14,7 @@ import {
 import { formatCost, formatCount, formatCountPrecise, formatPercent, metricReported, relativeChange, relativeTime, toNumber } from "./usage-format.js";
 import { FilterChips, FilterPicker, GranularityMenu, RangePicker } from "./UsageToolbar.js";
 import { StatTile } from "./usage-ui.js";
-import { UsageOverview } from "./UsageOverview.js";
+import { OVERVIEW_DIMENSIONS, UsageOverview } from "./UsageOverview.js";
 import { UsageExplore } from "./UsageExplore.js";
 import { UsageThreads } from "./UsageThreads.js";
 import { UsagePatterns } from "./UsagePatterns.js";
@@ -25,12 +25,15 @@ const timeZone = (): string => {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; }
 };
 
-/** Per-tab query shape: only the Explore matrix and Threads list need wider reads. */
-function tabQuery(tab: UsageTab, settings: UsageViewSettings): Pick<UsageAnalyticsRequest, "groupBy" | "crossBy" | "breakdownLimit"> {
-  if (tab === "overview") return { groupBy: settings.groupBy, crossBy: null, breakdownLimit: 8 };
-  if (tab === "explore") return { groupBy: settings.exploreRows, crossBy: settings.exploreColumns, breakdownLimit: 100 };
-  if (tab === "threads") return { groupBy: null, crossBy: null, breakdownLimit: 100 };
-  return { groupBy: null, crossBy: null, breakdownLimit: 8 };
+/** Ask only for the breakdowns and optional sections rendered by this tab. */
+function tabQuery(tab: UsageTab, settings: UsageViewSettings): Pick<UsageAnalyticsRequest,
+  "groupBy" | "matrix" | "breakdownLimit" | "breakdownDimensions" | "includeHeatmap" | "includeCoverage"> {
+  const common = { groupBy: null, matrix: null, breakdownDimensions: [], breakdownLimit: 8, includeHeatmap: false, includeCoverage: false };
+  if (tab === "overview") return { ...common, groupBy: settings.groupBy, breakdownDimensions: [...OVERVIEW_DIMENSIONS] };
+  if (tab === "explore") return { ...common, breakdownDimensions: [settings.exploreRows], breakdownLimit: 100,
+    matrix: settings.exploreColumns ? { rows: settings.exploreRows, columns: settings.exploreColumns } : null };
+  if (tab === "threads") return { ...common, breakdownDimensions: ["thread"], breakdownLimit: 100 };
+  return { ...common, includeHeatmap: tab === "patterns", includeCoverage: tab === "coverage" };
 }
 
 /** The Usage page when the server has not enabled usage accounting. */
@@ -67,7 +70,7 @@ export function UsageView({ store }: { store: ApplicationClientStore }) {
   const key = JSON.stringify([baseKey, query]);
   const build = useCallback((): UsageAnalyticsRequest => {
     const range = resolveRange(settings, new Date());
-    return { from: range.from?.toISOString() ?? null, to: range.to.toISOString(), timeZone: zone, bucket: settings.bucket, filters, facets: false, ...query };
+    return { from: range.from?.toISOString() ?? null, to: range.to.toISOString(), timeZone: zone, bucket: settings.bucket, filters, ...query };
   }, [settings, filters, zone, query]);
   const analytics = useUsageAnalytics(store.api, key, build, { poll: true });
   const data = analytics.data;
@@ -126,11 +129,8 @@ export function UsageView({ store }: { store: ApplicationClientStore }) {
                 {USAGE_TABS.map((tab) => <TabsTrigger key={tab.id} value={tab.id}>{tab.label}</TabsTrigger>)}
               </TabsList>
               <TabsContent value={settings.tab} className="usage-tab-panel">
-                {settings.tab === "overview" ? <UsageOverview data={data} settings={settings} onSettings={update} filters={filters} onFilters={setFilters} onExplore={explore} />
-                  : settings.tab === "explore" ? <UsageExplore data={data} settings={settings} onSettings={update} filters={filters} onFilters={setFilters} />
-                  : settings.tab === "threads" ? <UsageThreads data={data} filters={filters} onFilters={setFilters} />
-                  : settings.tab === "patterns" ? <UsagePatterns data={data} />
-                  : <UsageCoverage data={data} />}
+                <UsageTabPanel data={data} settings={settings} onSettings={update} filters={filters} onFilters={setFilters}
+                  onExplore={explore} loading={analytics.loading} />
               </TabsContent>
             </Tabs>
           </div>
@@ -138,6 +138,34 @@ export function UsageView({ store }: { store: ApplicationClientStore }) {
       </div>
     </section>
   );
+}
+
+/** Retained data may omit the newly selected tab's sections; absence is not zero. */
+function UsageTabPanel({ data, settings, onSettings, filters, onFilters, onExplore, loading }: {
+  readonly data: UsageAnalyticsResponse;
+  readonly settings: UsageViewSettings;
+  readonly onSettings: (patch: Partial<UsageViewSettings>) => void;
+  readonly filters: UsageFilterState;
+  readonly onFilters: (filters: UsageFilterState) => void;
+  readonly onExplore: (dimension: UsageAnalyticsDimension) => void;
+  readonly loading: boolean;
+}) {
+  const pending = <p className="usage-empty-note" role="status">{loading ? "Loading this view…" : "This view is unavailable. Retry to load it."}</p>;
+  switch (settings.tab) {
+    case "overview":
+      if (OVERVIEW_DIMENSIONS.some((dimension) => !data.breakdowns[dimension])) return pending;
+      return <UsageOverview data={data} settings={settings} onSettings={onSettings} filters={filters} onFilters={onFilters} onExplore={onExplore} />;
+    case "explore": {
+      const breakdown = data.breakdowns[settings.exploreRows];
+      return <UsageExplore data={data} breakdown={breakdown} settings={settings} onSettings={onSettings} filters={filters} onFilters={onFilters} loading={loading} />;
+    }
+    case "threads":
+      return data.breakdowns.thread ? <UsageThreads data={data} breakdown={data.breakdowns.thread} filters={filters} onFilters={onFilters} /> : pending;
+    case "patterns":
+      return data.heatmap ? <UsagePatterns data={data} heatmap={data.heatmap} /> : pending;
+    case "coverage":
+      return data.coverage ? <UsageCoverage data={data} coverage={data.coverage} /> : pending;
+  }
 }
 
 function SummaryTiles({ data, rangeLabel, comparable }: { readonly data: UsageAnalyticsResponse; readonly rangeLabel: string; readonly comparable: boolean }) {
