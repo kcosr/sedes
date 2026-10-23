@@ -58,6 +58,7 @@ User-facing changes are collected here before release. See the
   Successful ordinary model feedback restores the allowance; a failed automatic
   follow-up stops retries until successful completion or new input. See
   [Agent behavior](docs/user/settings.md#agent-behavior).
+  ([#113](https://github.com/kcosr/sedes/pull/113))
 
 - Codex Speed now saves the preference for future Sedes turns and can apply it
   to the next eligible model step during a Sedes-started turn. The composer
