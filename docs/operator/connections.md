@@ -89,6 +89,13 @@ Grants are named per environment in **Settings → Environments**: see
 [Execution environments](configuration.md#execution-environments). A granted
 capability still requires the connected host to advertise matching support.
 
+SSH and outbound sidecar connections compress eligible traffic in both
+directions by default. **Compress connection traffic** in the environment
+editor controls future connections; changing it leaves the active connection
+and its work running. This policy is independent of client HTTP compression
+and provider-native connections. See
+[execution environment settings](configuration.md#execution-environments).
+
 ## Supported routes
 
 | Backend | Provider runtime location | Transport options | Execution environments | What the route grants |

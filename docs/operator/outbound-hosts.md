@@ -139,6 +139,13 @@ an operation; the connected host must also advertise the corresponding support.
 Shell and provider execution use the host account's authority. Workspace roots
 are not an operating-system sandbox for shell processes.
 
+New and existing outbound environments default to **Compress connection
+traffic**. The environment editor can disable compression for future
+connections without interrupting current work. The same setting covers both
+directions of the runtime transport, including Files and provider events;
+connector management and pairing retain their existing protocols. See
+[execution environment settings](configuration.md#execution-environments).
+
 | Feature | Outbound behavior |
 | --- | --- |
 | Files and Git comparisons | The shared sidecar implements browsing, reads/writes, transfers, watchers, links, and comparisons on the selected host. |

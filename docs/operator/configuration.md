@@ -345,6 +345,21 @@ ProxyJump, and route. Paths and protected credential references resolve on the
 selected execution host. The browser cannot provide a different principal or
 make the main host read a same-named remote path.
 
+SSH and outbound environments enable **Compress connection traffic** by
+default. This environment setting covers traffic in both directions between
+Sedes and its persistent sidecar, including provider events, Files, tools, and
+terminal data. Small control messages and data that does not shrink remain
+plain. Turn it off in the environment editor when compression is unwanted.
+Saving the setting applies to the next connection, including automatic recovery;
+it does not disconnect active work or restart a provider. The stored
+`connectionCompression` field belongs to the environment, independently of
+operation grants. Existing remote environments are migrated with it enabled.
+Local environments have no such setting.
+
+Runtime wire version **15** requires a matching sidecar. Follow
+[persistent remote service upgrades](operations.md#persistent-remote-services)
+when an older service reports that an upgrade is required.
+
 Remote targets use the persistent sidecar. Select only the additional operations
 needed by that environment:
 

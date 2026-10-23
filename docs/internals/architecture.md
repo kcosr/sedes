@@ -399,6 +399,13 @@ provider handshake does not grant sidecar capabilities, and sidecar success
 does not grant a provider transport. Unsupported remote operations never fall
 back to local paths.
 
+SSH and outbound carriers share runtime wire version 15 and negotiated,
+independent zstd frames. Their principal-owned environment setting defaults
+to compression and is sampled at each attachment. Compression-only edits do
+not change execution authority or retire a live runtime. Queue limits, stream
+credits, and delivery classification retain their decoded-byte semantics. See
+[Sidecar transport](sidecar-transport.md) for framing and lifecycle invariants.
+
 Claude uses a digest-verified local worker or a backend-private runtime hosted
 by the persistent SSH or outbound sidecar on Linux/macOS. Its SDK, CLI, credentials, and native session
 store share the selected execution namespace. The remote service owns queries
