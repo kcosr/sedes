@@ -207,6 +207,13 @@ generation changes, even if discovery rereads enabled configuration.
 An activation records the exact successful Sedes start's model and starting
 tier, normalized application turn, and random token. It must still own that
 native turn and generation, and its model must equal the desired model.
+While a start is pending, a valid active-status hint or matching turn-start
+notification does not invalidate its receipt. The handle retains the original
+control lifetime and observed turn identity until the request settles. Idle,
+completion, conflicting turn identities, malformed control events, reroute,
+or a lost control lifetime prevent that receipt from creating Speed authority,
+even if a matching start notification follows. Metadata reads keep their
+separate observation-revision guard.
 Reroutes, ownership replacement, recovery without a retained start, externally
 started turns, native continuations, and active managed TUI work withdraw active
 mutation authority. External UDS/TCP daemons and sidecar routes can still carry

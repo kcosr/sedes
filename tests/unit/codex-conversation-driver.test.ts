@@ -1074,6 +1074,169 @@ async function startSubagentParentTurn(harness: RpcHarness, handle: Conversation
     taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
 }
 
+describe("Codex Speed turn-start ownership", () => {
+  const activeTurn = () => ({ ...nativeTurn(1), items: [], itemsView: "notLoaded" as const,
+    status: "inProgress" as const, completedAt: null, durationMs: null });
+
+  async function fixture() {
+    const harness = new RpcHarness();
+    const speeds = new CodexFastModeSessionRegistry();
+    const handle = await attachIdle(harness, driver(harness, connection, undefined, undefined,
+      undefined, undefined, undefined, undefined, speeds));
+    const features = fastModeFeatures(true);
+    harness.enqueue("experimentalFeature/list", { ...features, data: [...features.data, {
+      name: "step_model_switching", stage: "underDevelopment", displayName: null,
+      description: null, announcement: null, enabled: true, defaultEnabled: false,
+    }] });
+    await establish(harness, handle);
+    const speed = speeds.controller(scope, binding().applicationThreadId)!;
+    return { harness, handle, speed,
+      submit: (operationId = "speed-start") => handle.submit({ applicationOperationId: operationId, source: { kind: "user" },
+        mutationId: `${operationId}-mutation`, reconciliationToken: `${operationId}-token`,
+        taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" }),
+      close: async () => {
+        harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+        await handle.close();
+      },
+    };
+  }
+
+  it.each(["before_receipt", "after_receipt_before_continuation"] as const)("retains accepted Speed ownership when active status arrives %s and turn/started is delayed", async timing => {
+    const f = await fixture();
+    try {
+      const activeStatus = () => {
+        f.harness.notify("thread/status/changed", { threadId: "thread-1", status: { type: "active", activeFlags: [] } });
+        expect(f.speed.currentRun()?.target).toBeNull();
+      };
+      f.harness.enqueue("turn/start", () => {
+        if (timing === "before_receipt") activeStatus();
+        return { turn: activeTurn() };
+      });
+      // `after` runs after receipt sequence allocation but before the caller's
+      // awaiting continuation can grant ownership from that receipt.
+      if (timing === "after_receipt_before_continuation") f.harness.after("turn/start", activeStatus);
+      await expect(f.submit()).resolves.toMatchObject({ accepted: true });
+      const run = f.speed.currentRun();
+      expect(run?.target).toEqual({
+        turnId: applicationTurnIdForBackendTurn({ backendInstanceId: instance.id,
+          sourceApplicationThreadId: binding().applicationThreadId, backendTurnId: codexBackendTurnId("thread-1", "turn-1") }),
+        activationId: expect.any(String),
+      });
+      f.harness.notify("turn/started", { threadId: "thread-1", turn: activeTurn() });
+      expect(f.speed.currentRun()).toEqual(run);
+      f.harness.enqueue("turn/settings/update", { status: "applied" });
+      await expect(f.speed.publish({ arguments: { selection: "fast", currentRunTarget: run!.target! },
+        backendTurnId: codexBackendTurnId("thread-1", "turn-1"), operationId: "speed-publication",
+        dispatching: () => {} })).resolves.toMatchObject({ status: "published" });
+      expect(f.harness.calls.filter(call => call.method === "turn/settings/update")).toEqual([
+        { method: "turn/settings/update", params: { threadId: "thread-1", turnId: "turn-1", serviceTier: "priority" } },
+      ]);
+    } finally { await f.close(); }
+  });
+
+  it.each(["started_then_active", "active_then_started"] as const)("retains accepted Speed ownership when matching notifications arrive %s before the receipt", async order => {
+    const f = await fixture();
+    try {
+      f.harness.enqueue("turn/start", () => {
+        const started = () => f.harness.notify("turn/started", { threadId: "thread-1", turn: activeTurn() });
+        const active = () => f.harness.notify("thread/status/changed", { threadId: "thread-1", status: { type: "active", activeFlags: [] } });
+        for (const notify of order === "started_then_active" ? [started, active] : [active, started]) notify();
+        expect(f.speed.currentRun()?.target).toBeNull();
+        return { turn: activeTurn() };
+      });
+      await expect(f.submit()).resolves.toMatchObject({ accepted: true });
+      expect(f.speed.currentRun()?.target).toMatchObject({ turnId: expect.any(String), activationId: expect.any(String) });
+    } finally { await f.close(); }
+  });
+
+  const fences = [
+    { name: "terminal turn/started", notify: (h: RpcHarness) => h.notify("turn/started", { threadId: "thread-1", turn: nativeTurn(1) }) },
+    { name: "matching completion", notify: (h: RpcHarness) => h.notify("turn/completed", { threadId: "thread-1", turn: nativeTurn(1) }) },
+    { name: "idle status", notify: (h: RpcHarness) => h.notify("thread/status/changed", { threadId: "thread-1", status: { type: "idle" } }) },
+    { name: "unloaded status", notify: (h: RpcHarness) => h.notify("thread/status/changed", { threadId: "thread-1", status: { type: "notLoaded" } }) },
+    { name: "another turn", notify: (h: RpcHarness) => h.notify("turn/started", { threadId: "thread-1", turn: { ...activeTurn(), id: "turn-2" } }) },
+    { name: "invalidated notification", notify: (h: RpcHarness) => h.notifyUndecodable("turn/started", "thread-1") },
+    { name: "matching reroute", notify: (h: RpcHarness) => h.notify("model/rerouted", { threadId: "thread-1", turnId: "turn-1",
+      fromModel: "gpt-5.6", toModel: "gpt-5.6-mini", reason: "highRiskCyberActivity" }) },
+  ];
+  const stickyFences = fences.filter(fence => ["matching completion", "idle status", "invalidated notification", "matching reroute"].includes(fence.name))
+    .map(fence => ({ name: `${fence.name} followed by the accepted turn`, notify: (h: RpcHarness) => {
+      fence.notify(h);
+      h.notify("turn/started", { threadId: "thread-1", turn: activeTurn() });
+    } }));
+  it.each([...fences, ...stickyFences].flatMap(fence => ["before_receipt", "after_receipt_before_continuation"].map(timing => ({ ...fence, timing }))))(
+    "does not grant Speed ownership after $name $timing", async ({ notify, timing }) => {
+      const f = await fixture();
+      try {
+        const notifyFence = () => {
+          // The accepted ID was already observed. A later invalidation must
+          // remain authoritative even when its successful start reply arrives.
+          f.harness.notify("turn/started", { threadId: "thread-1", turn: activeTurn() });
+          notify(f.harness);
+        };
+        f.harness.enqueue("turn/start", () => {
+          if (timing === "before_receipt") notifyFence();
+          return { turn: activeTurn() };
+        });
+        if (timing === "after_receipt_before_continuation") f.harness.after("turn/start", notifyFence);
+        await expect(f.submit()).resolves.toMatchObject({ accepted: true });
+        expect(f.speed.currentRun()?.target ?? null).toBeNull();
+        expect(f.harness.calls.some(call => call.method === "turn/settings/update")).toBe(false);
+      } finally { await f.close(); }
+    },
+  );
+
+  it.each(["same_generation_reconnect", "new_generation"] as const)("does not restore Speed ownership after %s during turn/start", async transition => {
+    const f = await fixture();
+    try {
+      f.harness.enqueue("turn/start", { turn: activeTurn() });
+      f.harness.after("turn/start", () => {
+        f.harness.notify("turn/started", { threadId: "thread-1", turn: activeTurn() });
+        f.harness.lifecycle("unavailable");
+        f.harness.lifecycle("ready", transition === "new_generation" ? 2 : 1);
+      });
+      if (transition === "new_generation") {
+        await expect(f.submit()).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+      } else {
+        // Delivery is confirmed, but the interrupted control lifetime cannot
+        // authorize publishing settings into that accepted native turn.
+        await expect(f.submit()).resolves.toMatchObject({ accepted: true });
+      }
+      expect(f.speed.currentRun()?.target ?? null).toBeNull();
+      expect(f.harness.calls.some(call => call.method === "turn/settings/update")).toBe(false);
+    } finally { await f.close(); }
+  });
+
+  it("does not grant Speed ownership for a terminal turn/start receipt", async () => {
+    const f = await fixture();
+    try {
+      f.harness.enqueue("turn/start", { turn: nativeTurn(1) });
+      await expect(f.submit()).resolves.toMatchObject({ accepted: true });
+      expect(f.speed.currentRun()?.target ?? null).toBeNull();
+      expect(f.harness.calls.some(call => call.method === "turn/settings/update")).toBe(false);
+    } finally { await f.close(); }
+  });
+
+  it("clears a failed start fence before a subsequent accepted Speed activation", async () => {
+    const f = await fixture();
+    try {
+      f.harness.enqueue("turn/start", () => {
+        f.harness.notify("thread/status/changed", { threadId: "thread-1", status: { type: "idle" } });
+        throw new CodexRpcRemoteError({ code: -32600, message: "turn rejected", generation: 1, method: "turn/start" });
+      });
+      await expect(f.submit()).rejects.toMatchObject({ category: "rejected", crossedSubmissionBoundary: false });
+      expect(f.speed.currentRun()?.target ?? null).toBeNull();
+      f.harness.enqueue("turn/start", () => {
+        f.harness.notify("thread/status/changed", { threadId: "thread-1", status: { type: "active", activeFlags: [] } });
+        return { turn: activeTurn() };
+      });
+      await expect(f.submit("speed-start-retry")).resolves.toMatchObject({ accepted: true });
+      expect(f.speed.currentRun()?.target).toMatchObject({ turnId: expect.any(String), activationId: expect.any(String) });
+      expect(f.harness.calls.filter(call => call.method === "turn/start")).toHaveLength(2);
+    } finally { await f.close(); }
+  });
+});
+
 describe("Codex Goal Speed preflight", () => {
   it.each(["create", "resume"] as const)("preserves Goal %s during an active Sedes run", async actionId => {
     const harness = new RpcHarness();

@@ -452,7 +452,10 @@ child.on('exit', code => process.exit(code ?? 1));
       expect(JSON.stringify(snapshot)).toContain(nativeTurnId);
       holdSpeedFrame = false;
       await until(() => supervisor!.client.lifecycleSnapshot().state === "ready" && supervisor!.client.lifecycleSnapshot().generation > generation, "successor generation");
-      expect(sessions.controller(f.scope, f.codexThreadId)!.currentRun()?.target).toBeNull();
+      // A ready successor can still report idle before recovery's active
+      // notification. Neither idle nor an unowned run grants the old target.
+      const recoveredRun = sessions.controller(f.scope, f.codexThreadId)!.currentRun();
+      expect(recoveredRun === null || recoveredRun.target === null).toBe(true);
       await expect(change("ultrafast", oldTarget)).rejects.toThrow();
       expect(requestSpy.mock.calls.filter(([method]) => method.method === "turn/settings/update")).toHaveLength(1);
       expect(requestSpy.mock.calls.filter(([method]) => method.method === "thread/settings/update")).toHaveLength(beforeDefaults);

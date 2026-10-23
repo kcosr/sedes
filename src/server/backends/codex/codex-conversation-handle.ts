@@ -523,6 +523,14 @@ export class CodexConversationHandle implements ConversationHandle {
   #controlGeneration = 0;
   #controlObservationRevision = 0;
   #controlTurn: { generation: number; turnId: string | null } | undefined;
+  // Status can become active before turn/start names the accepted turn. Keep
+  // that compatible hint separate from evidence that withdraws start authority.
+  #pendingControlStart: {
+    readonly generation: number;
+    readonly lifetime: AbortSignal;
+    blocked: boolean;
+    observedTurnId: string | undefined;
+  } | undefined;
   #acceptedStop: InterruptConversationInput | undefined;
   readonly #submitOperations = new Map<
     string,
@@ -1505,7 +1513,13 @@ export class CodexConversationHandle implements ConversationHandle {
             ? this.#lastSettingsObservationInboundSequence
             : 0;
         this.#pendingUsageTuple = { model: executionSettings.model, reasoningEffort: executionSettings.reasoningEffort ?? null };
-        const controlObservationBeforeStart = this.#controlObservationRevision;
+        const controlStart = {
+          generation: this.#controlGeneration,
+          lifetime: this.#controlLifetime.signal,
+          blocked: false,
+          observedTurnId: undefined as string | undefined,
+        };
+        this.#pendingControlStart = controlStart;
         const response = await this.#client.requestWithReceipt(
           codexTurnStartMethod,
           {
@@ -1644,14 +1658,13 @@ export class CodexConversationHandle implements ConversationHandle {
               (latestSettings.settings.reasoningEffort ?? null) === spawningSettings.reasoningEffort))
           ? { generation: response.generation, turnId: acceptedTurn.id, settings: spawningSettings }
           : undefined;
-        if (this.#controlGeneration === response.generation && !this.#controlLifetime.signal.aborted &&
-            controlObservationBeforeStart === this.#controlObservationRevision &&
-            !this.#nativeThread?.turns.some(turn => turn.id === acceptedTurn.id && turn.status !== "inProgress")) {
-          this.#controlTurn = { generation: response.generation, turnId: acceptedTurn.id };
-        }
         if (acceptedTurn.status === "inProgress" && (!observedTurn || observedTurn.status === "inProgress") &&
-            this.#controlGeneration === response.generation && !this.#controlLifetime.signal.aborted &&
-            this.#controlTurn?.turnId === acceptedTurn.id) {
+            !this.#nativeThread?.turns.some(turn => turn.id === acceptedTurn.id && turn.status !== "inProgress") &&
+            this.#controlGeneration === response.generation && controlStart.generation === response.generation &&
+            this.#controlLifetime.signal === controlStart.lifetime && !controlStart.lifetime.aborted &&
+            !controlStart.blocked &&
+            (controlStart.observedTurnId === undefined || controlStart.observedTurnId === acceptedTurn.id)) {
+          this.#controlTurn = { generation: response.generation, turnId: acceptedTurn.id };
           this.#speedSession.started(response.generation, acceptedTurn.id, executionSettings);
         }
         // turn/start notifications are delivered on the same app-server
@@ -1746,6 +1759,8 @@ export class CodexConversationHandle implements ConversationHandle {
               : {}),
           },
         );
+      } finally {
+        this.#pendingControlStart = undefined;
       }
     });
   }
@@ -2123,11 +2138,15 @@ export class CodexConversationHandle implements ConversationHandle {
     if (this.#closing || this.#closed || notification.generation !== this.#client.lifecycleSnapshot().generation) return;
     if (isCodexRpcUndecodableNotification(notification)) {
       if (notification.method === "mcpServer/startupStatus/updated") return;
-      if (notification.nativeThreadId === this.binding.backendConversationId) { this.#controlObservationRevision++; this.#controlTurn = undefined; this.#speedSession.invalidate(); }
+      if (notification.nativeThreadId === this.binding.backendConversationId) {
+        if (this.#pendingControlStart) this.#pendingControlStart.blocked = true;
+        this.#controlObservationRevision++; this.#controlTurn = undefined; this.#speedSession.invalidate();
+      }
       return;
     }
     if (notificationThreadId(notification.params) !== this.binding.backendConversationId) return;
     if (notification.method === "model/rerouted") {
+      if (this.#pendingControlStart) this.#pendingControlStart.blocked = true;
       try { this.#speedSession.rerouted(codexC2NotificationSchemas["model/rerouted"].parse(notification.params).turnId); }
       catch { this.#speedSession.invalidate(); }
       return;
@@ -2137,21 +2156,32 @@ export class CodexConversationHandle implements ConversationHandle {
     try {
       if (notification.method === "turn/started") {
         const parsed = codexC2NotificationSchemas["turn/started"].parse(notification.params);
+        const pending = this.#pendingControlStart;
+        if (pending) {
+          if (parsed.turn.status !== "inProgress" ||
+              (pending.observedTurnId !== undefined && pending.observedTurnId !== parsed.turn.id)) pending.blocked = true;
+          pending.observedTurnId = parsed.turn.id;
+        }
         if (this.#subagentSpawningTurn?.turnId !== parsed.turn.id) this.#subagentSpawningTurn = undefined;
         this.#controlTurn = { generation: notification.generation, turnId: parsed.turn.id };
         this.#speedSession.observedStart(parsed.turn.id);
       } else if (notification.method === "turn/completed") {
+        if (this.#pendingControlStart) this.#pendingControlStart.blocked = true;
         const parsed = codexC2NotificationSchemas["turn/completed"].parse(notification.params);
         if (this.#subagentSpawningTurn?.turnId === parsed.turn.id) this.#subagentSpawningTurn = undefined;
         if (this.#controlTurn?.turnId === parsed.turn.id) this.#controlTurn = undefined;
         this.#speedSession.completed(parsed.turn.id);
       } else if (notification.method === "thread/status/changed") {
         const parsed = codexC2NotificationSchemas["thread/status/changed"].parse(notification.params);
+        if (parsed.status.type !== "active" && this.#pendingControlStart) this.#pendingControlStart.blocked = true;
         if (parsed.status.type === "idle") { this.#controlTurn = { generation: notification.generation, turnId: null }; this.#speedSession.observedIdle(); }
         else if (this.#controlTurn?.turnId === null) this.#controlTurn = undefined;
       }
       this.#speedSession.scheduleDefaults();
-    } catch { this.#controlTurn = undefined; this.#subagentSpawningTurn = undefined; this.#speedSession.invalidate(); }
+    } catch {
+      if (this.#pendingControlStart) this.#pendingControlStart.blocked = true;
+      this.#controlTurn = undefined; this.#subagentSpawningTurn = undefined; this.#speedSession.invalidate();
+    }
   }
 
   async perform(

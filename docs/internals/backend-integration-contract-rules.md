@@ -2116,6 +2116,15 @@ discovery and receipt results change presentation only. Pi, Claude, Grok and
 OpenCode do not expose active Speed. Claude permissions and the other Codex
 features retain their existing mutation authorities.
 
+When a start receipt grants per-turn controls, distinguish compatible status
+hints from intervening ownership loss. Retain bounded evidence for that pending
+request: its original lifetime, generation, and any observed turn identity.
+Completion, idle, conflicting identities, malformed control evidence, or a
+reroute must remain disqualifying even when a later notification matches the
+receipt. A valid active-status hint alone must not discard an exact successful
+start. Codex applies this to Speed; Pi, Claude, Grok, and OpenCode intentionally
+do not expose that control. History-read observation guards remain independent.
+
 A saved preference plus a fallible native publication is two effects under one
 request identity. Keep the accepted save receipt immutable and use a scoped
 child for the native attempt. Replay exact receipts before current capability,
