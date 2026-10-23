@@ -254,7 +254,7 @@ owned-stdio process-group/native-lock ordering. It currently requires Linux
 x64, procfs, and a compatible operator-installed Codex command.
 
 The OpenCode v2 qualification suite uses an explicitly selected supported
-stable `opencode2` binary (minimum 2.0.29, tested through 2.0.32) with disposable configuration/storage and loopback model/MCP
+stable `opencode2` binary (minimum 2.1.1, tested through 2.1.1) with disposable configuration/storage and loopback model/MCP
 fixtures. Its page-preview image qualification uses the pinned Playwright
 Chromium installed for browser tests, with the production preview sandbox
 enabled; it does not require an operator-owned Sedes preview-browser
@@ -340,6 +340,12 @@ SEDES_RUN_LIVE_OPENCODE=1 \
   env -u NODE_ENV npm run test:live-opencode
 ```
 
+The [OpenCode 2.1.1 profile](../../protocol/opencode-http/2.1.1/README.md)
+records **intermittent live results and inconclusive stable qualification**:
+three authorized AW Qwen read-only canary attempts produced one two-model-step
+guard stop and two passes under unchanged request, step and time limits. No finish
+diagnostic was retained for the first attempt; its cause was not established.
+
 The endpoint must use HTTPS without embedded credentials, query or fragment.
 The native provider ID is fixed to `sedes-live-gate`, so stock built-in provider
 plugins cannot substitute another transport or reshape the rehearsed request.
@@ -353,9 +359,8 @@ steps, a 45-second total runner deadline including setup, and native 20-second
 request/10-second chunk timeouts. A synchronous check refuses to submit if
 setup exhausted that deadline. The test harness reserves additional time for
 bounded native startup settlement and independent cleanup after cancellation.
-Stock 2.0.29 has internal transient retries which cannot be
-disabled through configuration; the first observed retry fails the gate and
-requests Stop. The gate checks parsed events before closing its observation and
+The native runtime can retry transient failures internally; the first observed
+retry fails the gate and requests Stop. The gate checks parsed events before closing its observation and
 settles that monitor before success; the local cutoff cannot prove that every
 server-side retry was observed. These are exposure limits, **not a guaranteed monetary cap**:
 interrupted or retried remote requests can still be billed, and endpoint token

@@ -437,6 +437,9 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         this.#ownerLost(); return false;
       }
       if ("sessionID" in event.data && event.data.sessionID === this.binding.backendConversationId) {
+        // Native archive state is metadata, independent of Sedes archival and
+        // the transcript. The host still retains this event's sequence proof.
+        if (event.type === "session.archived" || event.type === "session.unarchived") return false;
         if (this.context.usage.enabled && event.type === "session.usage.updated" && this.#retained && this.#projection) {
           this.#usage.record(this.#retained.messages, Object.values(this.#projection.turnsById));
         }

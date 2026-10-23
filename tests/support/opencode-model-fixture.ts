@@ -7,6 +7,35 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 
+// The stock compactor validates these required summary sections. Returning an
+// ordinary chat sentence makes native compaction fail before Sedes can qualify
+// the completed record. The other requests keep a short ordinary chat response.
+const compactionResponse = `## Objective
+- Qualify isolated native conversation behavior.
+
+## Requirements
+- Use disposable state and the loopback model only.
+
+## Decisions
+- Keep all test data synthetic.
+
+## Work State
+### Completed
+- The preceding fixture exchange.
+### Active
+- None.
+### Blocked
+- None.
+
+## Next Move
+1. Continue qualification.
+
+## Relevant Files
+- None.
+
+## Important Context
+- This is a deterministic local test response.`;
+
 /** Local deterministic inference only. This fixture never contacts a provider. */
 export async function startOpencodeModelFixture(options: { readonly vision?: boolean } = {}) {
   let requestCount = 0;
@@ -119,6 +148,8 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
       maxTokens: "max_tokens" in input && typeof input.max_tokens === "number" ? input.max_tokens : undefined,
       maxCompletionTokens: "max_completion_tokens" in input && typeof input.max_completion_tokens === "number" ? input.max_completion_tokens : undefined,
     });
+    const responseText = lastText?.includes("## Objective") && lastText.includes("## Work State")
+      ? compactionResponse : "Fixture response";
     const id = `chatcmpl-fixture-${requestCount}`;
     const usage = { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24 };
     if (!input.stream) {
@@ -132,7 +163,7 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
           choices: [
             {
               index: 0,
-              message: { role: "assistant", content: "Fixture response" },
+              message: { role: "assistant", content: responseText },
               finish_reason: "stop",
             },
           ],
@@ -179,7 +210,7 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
       send({}, "tool_calls"); response.end("data: [DONE]\n\n"); tool.started(); return;
     }
     send(
-      { role: "assistant", content: hold ? "PREFIX" : "Fixture response" },
+      { role: "assistant", content: hold ? "PREFIX" : responseText },
       null,
     );
     if (hold) {

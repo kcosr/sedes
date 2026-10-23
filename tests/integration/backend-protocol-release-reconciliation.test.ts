@@ -49,8 +49,8 @@ const releaseValidationCases = [
     label: "OpenCode",
     backendKind: "opencode",
     connectionKind: "opencode_http",
-    supportedRelease: "2.0.32",
-    unsupportedRelease: "2.0.29",
+    supportedRelease: "2.1.1",
+    unsupportedRelease: "2.0.32",
   },
 ] as const;
 
@@ -256,9 +256,9 @@ describe("backend protocol release reconciliation", () => {
   );
 
   it.each([
-    { previousRelease: "2.0.29", expectedRevision: 8, expectedUpdatedAt: 300 },
-    { previousRelease: "2.0.32", expectedRevision: 7, expectedUpdatedAt: 240 },
-  ])("reconciles OpenCode profile $previousRelease to 2.0.32 while retaining its scoped native binding", ({
+    { previousRelease: "2.0.32", expectedRevision: 8, expectedUpdatedAt: 300 },
+    { previousRelease: "2.1.1", expectedRevision: 7, expectedUpdatedAt: 240 },
+  ])("reconciles OpenCode profile $previousRelease to 2.1.1 while retaining its scoped native binding", ({
     previousRelease, expectedRevision, expectedUpdatedAt,
   }) => {
     const value = savedAgentDatabase();
@@ -267,7 +267,7 @@ describe("backend protocol release reconciliation", () => {
       const openCodeCase = releaseValidationCases.find(releaseCase => releaseCase.backendKind === "opencode")!;
       const currentConfiguration = databaseSeedConfiguration(openCodeCase);
       const backendId = "opencode-primary", targetId = "opencode_http-local";
-      expect(currentConfiguration.backends.find(backend => backend.id === backendId)?.protocolRelease).toBe("2.0.32");
+      expect(currentConfiguration.backends.find(backend => backend.id === backendId)?.protocolRelease).toBe("2.1.1");
       repository.reconcile(value.scope, {
         ...currentConfiguration,
         backends: currentConfiguration.backends.map(backend => backend.id === backendId
@@ -313,7 +313,7 @@ describe("backend protocol release reconciliation", () => {
       for (const now of [300, 400]) {
         repository.reconcile(value.scope, currentConfiguration, { localWorkspaceRoots: [], now });
         expect(repository.getBackend(value.scope, backendId)).toEqual({
-          ...backend, protocolRelease: "2.0.32", configurationRevision: expectedRevision,
+          ...backend, protocolRelease: "2.1.1", configurationRevision: expectedRevision,
         });
         expect(value.database.prepare(`SELECT updated_at AS updatedAt
           FROM agent_backend_instances WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)

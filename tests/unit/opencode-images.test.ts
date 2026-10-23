@@ -134,17 +134,41 @@ describe("OpenCode viewed native images", () => {
     const conflict = await materialize([readMessage({ uri: "data:image/png;base64,YWJj" }), nextStep()], artifacts);
     expect([...conflict.values()][0]!.artifact).toBeUndefined(); expect(artifacts.publishImage).toHaveBeenCalledTimes(1);
   });
-  it("leaves opaque provider checkpoint context unavailable and trims media at local compaction", async () => {
-    const checkpoint = parseOpenCodeNativeMessage({ id: "msg_compact", type: "compaction", status: "completed", reason: "manual", time: { created: 1 }, summary: "summary", recent: "",
-      providerContext: { version: 1, provenance: { providerID: "fixture", provider: "fixture", modelID: "vision", route: "route", protocol: "protocol", endpoint: "endpoint" }, messages: [] } });
+  it.each([{ messages: [] }, { messages: null }, { messages: "invalid-window" }])("leaves opaque native checkpoint context unavailable ($messages)", async ({ messages }) => {
+    const checkpoint = parseOpenCodeNativeMessage({ id: "msg_compact", type: "compaction", status: "completed", reason: "manual", time: { created: 1 }, summary: "summary",
+      native: { messages } });
     const artifacts = publisher(); await materialize([checkpoint, readMessage(), nextStep()], artifacts); expect(artifacts.publishImage).not.toHaveBeenCalled();
-    const local = { ...checkpoint, providerContext: undefined } as OpenCodeNativeMessage;
+    const local = { ...checkpoint, native: { unrelated: "summary metadata" } } as OpenCodeNativeMessage;
     await materialize([local, readMessage(), nextStep()], artifacts); expect(artifacts.publishImage).toHaveBeenCalledTimes(1);
+  });
+  it("does not qualify a pre-compaction read from the response to the replacement context", async () => {
+    const checkpoint = parseOpenCodeNativeMessage({ id: "msg_compact", type: "compaction", status: "completed", reason: "manual", time: { created: 16 }, summary: "summary" });
+    const artifacts = publisher(); await materialize([readMessage(), checkpoint, nextStep()], artifacts);
+    expect(artifacts.publishImage).not.toHaveBeenCalled();
   });
   it("does not claim image survival above stock 25MiB omission trigger", async () => {
     const users = Array.from({ length: 26 }, (_, index) => parseOpenCodeNativeMessage({ id: `msg_user${index}`, type: "user", text: "image", time: { created: 1 },
       files: [{ data: "A".repeat(1_024 * 1_024), mime: "image/png", source: { type: "inline" } }] }));
     const artifacts = publisher(); await materialize([...users, readMessage(), nextStep()], artifacts); expect(artifacts.publishImage).not.toHaveBeenCalled();
+  });
+  it("keeps an old read unavailable after the 2.1 pruning trigger even when a short suffix remains", async () => {
+    // Stock 2.1 prunes an oldest prefix down to 15 MiB after crossing 25 MiB.
+    // Later small images cannot prove that an earlier candidate survived.
+    const users = Array.from({ length: 26 }, (_, index) => parseOpenCodeNativeMessage({ id: `msg_user${index}`, type: "user", text: "image", time: { created: 16 },
+      files: [{ data: "A".repeat(1_024 * 1_024), mime: "image/png", source: { type: "inline" } }] }));
+    const artifacts = publisher(); await materialize([readMessage(), ...users, nextStep()], artifacts);
+    expect(artifacts.publishImage).not.toHaveBeenCalled();
+  });
+  it.each(["xai", "operator-alias"])("does not publish GIF bytes omitted by resolved xAI provider %s", async providerID => {
+    const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+    const read = readMessage({ path: "/private/images/pixel.gif", mime: "image/gif", uri: `data:image/gif;base64,${gif.toString("base64")}` });
+    const next = nextStep({ model: { providerID, id: model.id } });
+    const models = new Map([[qualifiedOpenCodeModelId({ providerID, id: model.id }), { ...modelInfo, providerID, canonical: "xai" }]]);
+    const artifacts = publisher(); await materialize([read, next], artifacts, models);
+    expect(artifacts.publishImage).not.toHaveBeenCalled();
+    const supported = new Map([[qualifiedOpenCodeModelId(model), modelInfo]]);
+    await materialize([read, nextStep()], artifacts, supported);
+    expect(artifacts.publishImage).toHaveBeenCalledTimes(1);
   });
   it("requires complete reviewed arguments and exact raster result grammar", () => {
     const read = readMessage({ path: "/private/extensionless" }) as Extract<OpenCodeNativeMessage, { type: "assistant" }>;

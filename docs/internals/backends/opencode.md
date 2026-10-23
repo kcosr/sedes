@@ -74,8 +74,9 @@ the most queued data must resnapshot. Retention exhaustion for unacknowledged
 critical evidence prevents new ordinary work while preserving the independent
 control path.
 
-The persistent sidecar advertises major 3 of the private `opencode_runtime` capability on
-Linux. Its registry owns the same runtime/host used locally; SSH and outbound
+The persistent sidecar advertises major 4 of the private `opencode_runtime`
+capability under sidecar wire protocol 16 on Linux. Its registry owns the same
+runtime/host used locally; SSH and outbound
 carriers share typed operations and the bounded runtime body channel. Carrier
 detach releases ports and subscribers, preserving the native owner and evidence.
 Existing-only recovery can reopen exact retained thread authority after a
@@ -105,9 +106,9 @@ Pi, Codex, Claude and Grok retain their existing backend contracts.
 ## Native ownership
 
 The immutable compiled HTTP/SSE profile pins `@opencode/client`,
-`@opencode/protocol` and `@opencode/schema` to **2.0.32**, upstream source revision
-`843a6c514e606b436a7fe713422ace0a93ad3d61`. Runtime admission is independent:
-stable stock releases **2.0.29 or newer** are admitted, tested through **2.0.32**.
+`@opencode/protocol` and `@opencode/schema` to **2.1.1**, upstream source revision
+`ba546ec1598a70db2570e9c6258028d955ba8f58`. Runtime admission is independent:
+stable stock releases **2.1.1 or newer** are admitted, tested through **2.1.1**.
 Prereleases, malformed versions and releases below the floor fail closed; build
 metadata does not change version precedence. Every admitted runtime uses the
 one compiled schema profile and the existing authentication, process/store
@@ -116,13 +117,19 @@ backend resolves `opencode2` from its execution environment’s PATH unless an
 absolute executable override is supplied. Sedes never searches for the older
 `opencode` executable as an alternative.
 
+The 2.1.1 profile is one strict schema cutover, with no legacy message parser.
+OpenCode native archive metadata remains private metadata and does not select
+or synchronize Sedes thread state. Pi, Codex, Claude and Grok keep their existing
+provider SDKs, runtime admission, history, settings, image and accounting
+contracts; only their sidecar carriers require the current shared wire version.
+
 | Mode | Connection | Lifetime |
 | --- | --- | --- |
 | Owned | `serve --stdio --hostname 127.0.0.1 --port 0`; stdout announces the HTTP endpoint, and stdin controls process lifetime. Application traffic uses authenticated HTTP and SSE. | Conversation references can reach zero while the daemon and its background work remain alive. Backend Stop/Restart retire the owned process. Main shutdown ends a local owner; a persistent sidecar owner outlives main. |
 | External | Authenticated HTTP to an explicit loopback IP literal and port on the execution host. DNS, direct remote native endpoints, URL credentials, redirects, query strings and endpoint paths are rejected. | Retiring the host attachment closes its subscriptions and lease without interrupting the external daemon. Remote Disconnect releases only main's attachment; the sidecar attachment remains resident. |
 
 Runtime snapshots carry the observed native version through private sidecar
-protocol 3. Main revalidates this evidence and derives a process-local active
+protocol 4. Main revalidates this evidence and derives a process-local active
 installation advisory when the version exceeds the tested-through release.
 Successful assessment replaces the current advisory; disconnect, retirement or
 failed admission clears it. Pi keeps its explicit empty advisory source;
@@ -264,7 +271,7 @@ it never resends a native effect. Lifetime invalidation remains visible on the
 separate raw subscription while snapshot hydration is pending.
 
 Only `/api/event` and the finite native input-log route use the provider-private
-SSE framing reader. The official 2.0.32 client hardcodes a 16 MiB decoded buffer,
+SSE framing reader. The official 2.1.1 client hardcodes a 16 MiB decoded buffer,
 including several frames received in one chunk, and offers no override. The
 local reader enforces 32 MiB UTF-8 line/frame bounds, preserves finite EOF flush
 and multiline framing, and rejects malformed JSON/UTF-8. Payloads still pass
@@ -285,6 +292,9 @@ correlations and native usage counters remain available without updating input
 evidence or native history.
 
 Each resident handle retains one complete, disposable native-history projection.
+The upstream idle-only message query is available in the admitted release but
+is not used to change acquisition or paging. Full-history counters, image proof
+and recorded-usage attribution retain their existing evidence sources.
 Initial acquisition reads to a captured finite head, validates continuation
 anchors, and catches up by refreshing mutable records, exact records identified
 by durable events, and the retained head before following native forward cursors.
@@ -379,7 +389,7 @@ reconciliation, queue and automatic-detachment rules.
 Deterministic tests cover schema/authentication boundaries, release mismatch,
 HTTP response limits, runtime identity replacement, runtime ownership leases and
 scoped operation evidence. Opt-in isolated native tests qualify stock
-`opencode2` 2.0.29 and 2.0.32 with fixture-owned state. They verify owned startup, malformed/expired
+`opencode2` 2.1.1 with fixture-owned state. They exercise owned startup, malformed/expired
 readiness, background-shell survival after reference release, external
 Disconnect, detached-descendant cleanup, retained database identity and restart.
 History qualification also exercises the actual driver/handle/actor with native
@@ -442,7 +452,7 @@ pending input remains unresolved; exact user/Delivered evidence is accepted.
 If neither survives, the bounded finite experimental event log is additional
 evidence only. Its final `log.synced` watermark and EOF must validate, sequence
 gaps remain explicit, and a watermark alone proves no event payload. Stock CLI
-2.0.29 disables event persistence by default, so this read usually has no
+disables event persistence by default, so this read usually has no
 replay payload. With no surviving proof, lost tracking becomes `failed_unknown`;
 a healthy pending tracker never does so solely because time passes. There is
 no automatic resend or late-acceptance path for terminal ordinary Submit.
@@ -684,7 +694,12 @@ result grammar. It never rereads the path. The completed in-band bytes qualify
 as `provider_input` only after a subsequent actual vision response, with a
 conservative active-context inline-image bound at or below stock's 25 MiB
 omission trigger. A local compaction resets that context; an opaque provider
-checkpoint prevents new qualification until a later local reset. The retained
+checkpoint, identified by a completed compaction with `native.messages`
+present, prevents new qualification until a later local reset. An arbitrary
+`native` payload without that field does not itself establish a checkpoint.
+Vision support follows native image-prefixed input modalities; the resolved
+catalog provider (`canonical`, otherwise `providerID`) also applies stock xAI's
+GIF exclusion before qualification. The retained
 artifact association is scoped to store/session/message/tool/content coordinate
 and survives source-byte disappearance; conflicting bytes cannot replace it.
 The viewed row and its future child reserve stable source orders. Reads with

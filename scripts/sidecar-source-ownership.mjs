@@ -236,7 +236,7 @@ const ALLOWED_SOURCE_PREFIXES = Object.freeze([
   "src/internal/agent-tool-cli-protocol/",
   "src/internal/agent-tool-mcp/",
   "src/internal/sidecar-protocol/",
-  // Pinned OpenCode 2.0.32 contracts and Effect schema/HTTP runtime.
+  // Pinned OpenCode 2.1.1 contracts and Effect schema/HTTP runtime.
   // Database adapters remain forbidden by the import audit below.
   "node_modules/@opencode/client/",
   "node_modules/@opencode/protocol/",

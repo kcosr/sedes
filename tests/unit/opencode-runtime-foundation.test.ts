@@ -48,7 +48,7 @@ async function server(input: { authenticated?: boolean; version?: string; redire
         cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 } } })); return;
     }
     response.end(input.oversized ? JSON.stringify("s".repeat(17 * 1024 * 1024)) : JSON.stringify({
-      version: input.version ?? "2.0.29", pid: process.pid, urls: [], paths: { tmp: os.tmpdir() },
+      version: input.version ?? "2.1.1", pid: process.pid, urls: [], paths: { tmp: os.tmpdir() },
     }));
   });
   servers.push(http);
@@ -59,11 +59,11 @@ async function server(input: { authenticated?: boolean; version?: string; redire
 }
 
 describe("OpenCode v2 transport admission", () => {
-  it.each(["2.0.30", "2.0.32"])("rejects owned startup when CLI 2.0.29 and HTTP %s evidence disagree", async version => {
+  it.each(["2.1.2", "2.2.0"])("rejects owned startup when CLI 2.1.1 and HTTP %s evidence disagree", async version => {
     const root = await directory(), store = path.join(root, "opencode.db"); await writeFile(store, "native history");
     const fixture = await server({ version }), client = new OpenCodeHttpClient({ endpoint: fixture.endpoint, password }), stop = vi.fn(async () => {});
     vi.spyOn(ownedProcesses, "startOpenCodeOwnedProcess").mockResolvedValue({ pid: process.pid,
-      executablePath: process.execPath, runtimeVersion: "2.0.29", endpoint: fixture.endpoint, client,
+      executablePath: process.execPath, runtimeVersion: "2.1.1", endpoint: fixture.endpoint, client,
       exited: new Promise(() => {}), shellEnvironment: {}, stop });
     const runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host", authority, nativeStorePath: store,
       ownershipDirectory: root, environment: {}, connection: { ownership: "owned", channel: { type: "process_stdio" } } });
@@ -72,13 +72,13 @@ describe("OpenCode v2 transport admission", () => {
       expect(runtime.snapshot().state).toBe("stopped"); expect(stop).toHaveBeenCalledOnce();
     } finally { await runtime.close(); }
   });
-  it.each(["2.0.29", "2.0.32", "2.0.33+vendor.1", "3.0.0"])("admits external HTTP runtime %s through the same stable floor policy", async version => {
+  it.each(["2.1.1", "2.1.1+vendor.1", "2.1.2+vendor.1", "3.0.0"])("admits external HTTP runtime %s through the same stable floor policy", async version => {
     const fixture = await server({ version });
     const client = new OpenCodeHttpClient({ endpoint: fixture.endpoint, password });
     try { await expect(client.info()).resolves.toMatchObject({ version }); }
     finally { client.close(); }
   });
-  it.each(["1.18.30", "2.0.18", "2.0.28", "2.0.29-beta.1", "2.00.29"])("rejects incompatible external HTTP runtime %s", async version => {
+  it.each(["1.18.30", "2.0.32", "2.1.0", "2.1.0+build.1", "2.1.1-beta.1", "2.01.1"])("rejects incompatible external HTTP runtime %s", async version => {
     const fixture = await server({ version });
     const client = new OpenCodeHttpClient({ endpoint: fixture.endpoint, password });
     try { await expect(client.info()).rejects.toThrow("opencode_release_incompatible"); }
@@ -86,18 +86,18 @@ describe("OpenCode v2 transport admission", () => {
   });
   it("records the observed runtime version and clears assessment when its same-process identity changes version", async () => {
     const root = await directory(), store = path.join(root, "opencode.db"); await writeFile(store, "native history");
-    const input = { version: "2.0.33+vendor.1" }, fixture = await server(input), observeVersion = vi.fn();
+    const input = { version: "2.1.2+vendor.1" }, fixture = await server(input), observeVersion = vi.fn();
     const runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host", authority, nativeStorePath: store,
       ownershipDirectory: root, environment: {}, externalPassword: async () => password,
       onRuntimeVersionAssessment: observeVersion,
       connection: { ownership: "external", channel: { type: "http", url: fixture.endpoint } } });
     try {
       await runtime.start();
-      expect(runtime.snapshot().runtimeVersion).toBe("2.0.33+vendor.1");
-      expect(observeVersion).toHaveBeenLastCalledWith({ version: "2.0.33+vendor.1", newerThanTested: true });
-      input.version = "2.0.33+daemon.2";
+      expect(runtime.snapshot().runtimeVersion).toBe("2.1.2+vendor.1");
+      expect(observeVersion).toHaveBeenLastCalledWith({ version: "2.1.2+vendor.1", newerThanTested: true });
+      input.version = "2.1.2+daemon.2";
       await expect(runtime.assertCurrent()).resolves.toBeUndefined();
-      input.version = "2.0.29";
+      input.version = "2.1.1";
       await expect(runtime.assertCurrent()).rejects.toThrow("opencode_runtime_identity_changed");
       expect(runtime.snapshot().state).toBe("disconnected");
       expect(observeVersion).toHaveBeenLastCalledWith(undefined);
@@ -109,8 +109,8 @@ describe("OpenCode v2 transport admission", () => {
   it("accepts literal loopback and compatible stable runtime releases", () => {
     expect(openCodeEndpoint("http://127.0.0.1:80/")).toBe("http://127.0.0.1:80");
     expect(openCodeEndpoint("http://[::1]:1234")).toBe("http://[::1]:1234");
-    for (const version of ["2.0.29", "2.0.32", "2.0.33+build.1", "3.0.0"]) expect(admitOpenCodeRelease(version)).toBe(version);
-    for (const version of ["1.0.0", "2.0.18", "2.0.28", "v2.0.29", "2.0.29-beta"]) expect(() => admitOpenCodeRelease(version)).toThrow();
+    for (const version of ["2.1.1", "2.1.1+build.1", "2.1.2+build.1", "3.0.0"]) expect(admitOpenCodeRelease(version)).toBe(version);
+    for (const version of ["1.0.0", "2.0.32", "2.1.0", "2.1.0+build.1", "v2.1.1", "2.1.1-beta"]) expect(() => admitOpenCodeRelease(version)).toThrow();
   });
   it("preserves native HOME/provider authentication while removing incompatible process inputs", () => {
     const ambientSedesSecrets = {
@@ -148,7 +148,7 @@ describe("OpenCode v2 transport admission", () => {
     const fixture = await server();
     const client = new OpenCodeHttpClient({ endpoint: fixture.endpoint, password });
     await client.requireAuthentication();
-    await expect(client.info()).resolves.toMatchObject({ version: "2.0.29", pid: process.pid });
+    await expect(client.info()).resolves.toMatchObject({ version: "2.1.1", pid: process.pid });
     client.close();
     await expect(client.info()).rejects.toThrow("opencode_request_aborted");
     expect(JSON.stringify(client)).not.toContain(password);

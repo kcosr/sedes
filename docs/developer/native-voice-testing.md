@@ -106,7 +106,7 @@ microphone recognition quality or Android device behavior.
 ## Sedes pipeline and packaged Android lanes
 
 The pipeline fixture retains real Sedes and a supported stable stock OpenCode
-release (minimum 2.0.29, tested through 2.0.32) with a loopback model endpoint. Set `SEDES_REAL_OPENCODE_EXECUTABLE` if `opencode2` is
+release (minimum 2.1.1, tested through 2.1.1) with a loopback model endpoint. Set `SEDES_REAL_OPENCODE_EXECUTABLE` if `opencode2` is
 not on PATH. Its speech fixture is the same real speech server used above.
 
 ```sh

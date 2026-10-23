@@ -28,14 +28,15 @@ User-facing changes are collected here before release. See the
   identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
   ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112), [#116](https://github.com/kcosr/sedes/pull/116))
 
-- Upgrade execution sidecars with the server for runtime wire version **15**
+- Upgrade execution sidecars with the server for runtime wire version **16**
   and negotiated traffic compression. Incompatible active services retain the
   existing interruption checks; see
   [persistent service upgrades](docs/operator/operations.md#persistent-remote-services).
   ([#116](https://github.com/kcosr/sedes/pull/116))
 
-- Upgrade OpenCode execution sidecars with the server for private OpenCode
-  runtime protocol **3**, which reports the observed native version. See
+- Upgrade OpenCode to stable stock **2.1.1 or newer** on every execution host,
+  and upgrade execution sidecars with the server for sidecar wire protocol
+  **16** and private OpenCode runtime protocol **4**. See
   [OpenCode setup](docs/operator/backends/opencode.md).
   ([#93](https://github.com/kcosr/sedes/pull/93))
 
@@ -227,9 +228,10 @@ User-facing changes are collected here before release. See the
   [parking](docs/user/organize-work.md#park-quiet-work).
   ([#95](https://github.com/kcosr/sedes/pull/95))
 
-- OpenCode accepts stable stock releases **2.0.29 or newer**, tested through
-  **2.0.32**, with an updated SDK/schema profile and an active advisory for
-  newer-than-tested runtimes. See [OpenCode compatibility](docs/operator/backends/opencode.md).
+- OpenCode uses the **2.1.1** SDK/schema profile, retaining existing history,
+  session statistics and usage accounting. Newer-than-tested
+  stable runtimes still show an active advisory. See
+  [OpenCode compatibility](docs/operator/backends/opencode.md).
   ([#93](https://github.com/kcosr/sedes/pull/93))
 
 - Archiving and restoring Codex threads also updates their native archive state
@@ -267,6 +269,10 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- OpenCode viewed-image checks recognize image-prefixed model modalities and
+  honor the resolved xAI provider's GIF exclusion, preventing omitted GIFs from
+  being shown as captured. See [OpenCode images](docs/operator/backends/opencode.md#images-and-compaction).
 
 - OpenCode's confirmed replies now arrive under Final and completed tool-call
   commentary under Provisional. **Turn progress** can announce that commentary

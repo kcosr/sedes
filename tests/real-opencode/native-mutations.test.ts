@@ -53,6 +53,13 @@ it.runIf(RUN_REAL_OPENCODE)("qualifies native mutations, prepared admission, for
     await mutations.prompt({ sessionID: session.id, id: "msg_consumed", text: "baseline", delivery: "queue", resume: true }, openCodeTestMutationControl("prompt"));
     await vi.waitFor(async () => expect((await api.getHistoryPage(session.id, { order: "desc", limit: 1 })).data[0]?.type).toBe("idle"), { timeout: 20_000, interval: 25 });
     await expect(api.getMessage(session.id, "msg_consumed")).resolves.toMatchObject({ type: "user", text: "baseline" });
+    await expect(api.getSession(session.id)).resolves.toMatchObject({
+      outcome: "succeeded", time: { idle: expect.any(Number) },
+    });
+    expect((await native.api("PATCH", `/api/session/${session.id}`, { archived: true })).status).toBe(204);
+    await expect(api.getSession(session.id)).resolves.toMatchObject({ time: { archived: expect.any(Number) } });
+    expect((await native.api("PATCH", `/api/session/${session.id}`, { archived: false })).status).toBe(204);
+    expect((await api.getSession(session.id)).time.archived).toBeUndefined();
 
     const form = await native.api("POST", `/api/session/${session.id}/form`, { title: "Native question", fields: [{ key: "answer", type: "string" }] });
     expect(form.status).toBe(200);
@@ -73,6 +80,8 @@ it.runIf(RUN_REAL_OPENCODE)("qualifies native mutations, prepared admission, for
     await expect(api.getMessage(session.id, "msg_consumed")).rejects.toThrow("opencode_native_not_found");
     await mutations.cancelInput({ sessionID: session.id, inboxID: "msg_erased" }, openCodeTestMutationControl("cancelInput")); // exact no-op acknowledgment
     const events = observation.drain().map(value => value.event);
+    expect(events.some(event => event.type === "session.archived" && event.data.sessionID === session.id)).toBe(true);
+    expect(events.some(event => event.type === "session.unarchived" && event.data.sessionID === session.id)).toBe(true);
     expect(events.some(event => event.type === "session.inbox.cancelled" && event.data.inboxID === "msg_cancelled")).toBe(true);
     expect(events.some(event => event.type === "session.inbox.delivered" && event.data.inboxID === "msg_consumed")).toBe(true);
     expect(events.some(event => event.type === "session.inbox.delivered" && event.data.inboxID === "msg_erased")).toBe(false);

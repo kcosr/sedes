@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPersistentOpenCodeFixture } from "../helpers/persistent-opencode-fixture.js";
 import { callOpenCodeRemoteRuntime } from "../../src/server/backends/opencode/opencode-remote-runtime.js";
 import { openCodeRuntimeExecuteOperation, openCodeRuntimeResponseSchema, openCodeRuntimeCommandSchema, openCodePortAdmissionSchema } from "../../src/server/backends/opencode/opencode-runtime-wire.js";
+import type { OpenCodeNativeMessage } from "../../src/server/backends/opencode/opencode-native-api.js";
 import type { OpenCodeMutationControl, OpenCodeObservationRecord } from "../../src/server/backends/opencode/opencode-native-port.js";
 
 const fixtures: ReturnType<typeof createPersistentOpenCodeFixture>[] = [];
@@ -228,6 +229,31 @@ describe("OpenCode resident runtime over shared sidecar framing", () => {
     expect(history.data[0]).toMatchObject({ text });
     expect((await Promise.all(encodeRequest.mock.results.map(result => result.value))).some(body => body.type === "stream")).toBe(true);
     expect((await Promise.all(encodeResponse.mock.results.map(result => result.value))).some(body => body.type === "stream")).toBe(true);
+  });
+
+  it("preserves 2.1 native replay fields and archive observations across the private runtime contract", async () => {
+    const f = fixture(); await f.attach();
+    const client = f.client(); await client.start();
+    const scope = client.acquire(f.target);
+    const messages: OpenCodeNativeMessage[] = [
+      { id: "msg_native", type: "assistant" as const, agent: "build", model: { providerID: "fixture", id: "fixture" },
+        native: { responseId: "response-native" }, time: { created: 1, completed: 2 },
+        content: [{ type: "text" as const, text: "answer", native: { replay: "text-native" } }] },
+      { id: "msg_compacted", type: "compaction" as const, status: "completed" as const, reason: "manual" as const,
+        summary: "compacted", native: { messages: [{ role: "assistant", content: "provider checkpoint" }] }, time: { created: 3 } },
+    ];
+    f.wire.messages.push(...messages);
+    const page = await scope.client.read("getHistoryPage", { sessionID: f.wire.sessionID, order: "asc" });
+    expect(page.data).toEqual(messages);
+    const observation = scope.client.observe({ purpose: "presentation" }); await observation.ready;
+    f.wire.send(nativeEvent(1, "session.archived", {}));
+    const records: OpenCodeObservationRecord[] = [];
+    await vi.waitFor(() => {
+      records.push(...observation.drain());
+      expect(records).toHaveLength(1);
+    });
+    expect(records[0]).toMatchObject({ kind: "native", event: { type: "session.archived", data: { sessionID: f.wire.sessionID } } });
+    await observation.close(); scope.release();
   });
 
   it("admits a fresh Stop and evidence scope on control while ordinary history requests fill the carrier", async () => {

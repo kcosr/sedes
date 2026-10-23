@@ -7,7 +7,9 @@ worker carriers share the framing but select no compression.
 
 ## Framing and negotiation
 
-Runtime wire version 15 uses one `HSC2` parser with a 16-byte header:
+Runtime wire version 16 carries the OpenCode 2.1.1 schema cutover while retaining
+the negotiated compression and `HSC2` framing introduced in version 15. It uses
+one parser with a 16-byte header:
 
 | Offset | Field |
 | --- | --- |

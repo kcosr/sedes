@@ -37,7 +37,7 @@ describe("OpenCode validated native reads", () => {
         { type: "text", text: "observed" }, { type: "reasoning", text: "observed reasoning" },
         { type: "tool", id: "call_1", name: "read", time: { created: 1 }, state: { status: "running", input: {}, metadata: {} } },
       ] },
-      { ...base, type: "compaction", status: "running", reason: "manual", summary: "", recent: "" },
+      { ...base, type: "compaction", status: "running", reason: "manual", summary: "" },
       { ...base, type: "idle", outcome: "interrupted" },
     ];
     for (const value of values) expect(parseOpenCodeNativeMessage(value)).toMatchObject(value);

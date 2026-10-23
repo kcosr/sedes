@@ -1,6 +1,9 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
+// Wire v16 cuts over OpenCode's private runtime to capability 4 and the 2.1.1
+// native schemas. Main and sidecar must agree on these message/event shapes.
+// It retains wire v15's negotiated compression and HSC2 framing.
 // Wire v14 requires a sidecar whose Claude runtime reads native history through
 // the transcript's true tip and reports transcript presence; main's submission
 // reconciliation, fork verification, and resume decisions rely on both. Its
@@ -10,7 +13,7 @@ import { z } from "zod";
 // history pages). Older persistent services must go through upgrade handling
 // before attachment.
 // Managed peers require this exact version; there is no dual parser.
-export const SIDECAR_WIRE_VERSION = 15 as const;
+export const SIDECAR_WIRE_VERSION = 16 as const;
 export const SIDECAR_JSON_FRAME_TAG = 0x01 as const;
 export const SIDECAR_STREAM_DATA_FRAME_TAG = 0x02 as const;
 const STREAM_DATA_SESSION_BINDING_BYTES = 16;

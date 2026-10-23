@@ -68,7 +68,7 @@ export async function materializeOpenCodeViewedImages(input: {
     if (message.type === "compaction" && message.status === "completed") {
       // A local summary discards prior media. Provider checkpoints can instead
       // embed canonical media under route provenance that HTTP does not expose.
-      pending.length = 0; imageBytes = 0; opaqueContext = message.providerContext !== undefined;
+      pending.length = 0; imageBytes = 0; opaqueContext = message.native?.messages !== undefined;
     }
     if (message.type === "user") for (const file of message.files ?? []) {
       if (file.mime.toLowerCase().startsWith("image/")) imageBytes += Buffer.byteLength(file.data);
@@ -76,10 +76,15 @@ export async function materializeOpenCodeViewedImages(input: {
     if (message.type !== "assistant") continue;
     const received = message.time.streamed !== undefined && (message.content.some(part => part.type === "tool" || part.text.length > 0) ||
       !message.error && message.finish !== undefined && message.finish !== "error");
-    const vision = input.models.get(qualifiedOpenCodeModelId(message.model))?.capabilities.input.includes("image") === true;
+    const model = input.models.get(qualifiedOpenCodeModelId(message.model));
+    const vision = model?.capabilities.input.some(modality => modality.startsWith("image")) === true;
+    // The resolved provider can differ from the configured provider-ID alias.
+    // Stock replaces GIF input for xAI before applying its image-size bound.
+    const provider = model?.canonical ?? model?.providerID;
     if (received && vision && !opaqueContext && imageBytes <= 25 * 1_024 * 1_024) {
       for (let index = pending.length - 1; index >= 0; index--) {
         const item = pending[index]!;
+        if (provider === "xai" && item.image.mime === "image/gif") continue;
         if (item.part.time.completed !== undefined && item.part.time.completed <= message.time.created) {
           qualified.add(item.coordinate); pending.splice(index, 1);
         }

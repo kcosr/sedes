@@ -367,7 +367,7 @@ them. A native link missing from the transcript still ends the read, as it does
 in the SDK. Boundary rows appear only with `includeSystemMessages`. The summary
 row keeps the SDK's `isCompactSummary` marker, and a converted queued command
 its `isQueuedCommand` marker; the worker protocol carries both under sidecar
-wire 15. The SDK's derived `is_meta`, `interruptedByShutdown`, and
+wire 16. The SDK's derived `is_meta`, `interruptedByShutdown`, and
 `isCompletedLocalCommand` do not cross it.
 
 The earlier segments can be several times the size of the newest one, so only
@@ -1315,7 +1315,7 @@ the operation uncertain; recovery consults its retained receipt and never
 resends a command whose outcome cannot be proven. Persistent sidecars carry
 the same command, result, and scoped receipt behavior. This operation requires
 the current `claude_runtime@4` / `claude_persistent_runtime@5` capability majors;
-the shared sidecar wire protocol remains 14.
+the shared sidecar wire protocol is 16.
 
 Full accounting receipts are limited to 256 per native query and persistent
 session journal, including earlier query incarnations under the same authority.

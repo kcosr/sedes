@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
+import { OPENCODE_RELEASE } from "../../src/server/backends/opencode/opencode-release.js";
 
 async function alive(pid: number): Promise<boolean> {
   try {
@@ -33,7 +34,7 @@ it.skipIf(process.platform !== "linux" || process.env.SEDES_RUN_REAL_OPENCODE !=
     await writeFile(executable, `#!${process.execPath}
 const { spawn } = require("node:child_process");
 const { writeFileSync } = require("node:fs");
-if (process.argv.includes("--version")) { console.log("opencode v2.0.29"); process.exit(0); }
+if (process.argv.includes("--version")) { console.log("opencode v${OPENCODE_RELEASE}"); process.exit(0); }
 const code = ${JSON.stringify(`const { writeFileSync } = require("node:fs");
 process.on("SIGTERM", () => writeFileSync(process.env.CLEANUP_TERM_EVIDENCE, JSON.stringify({ at: Date.now() })));
 writeFileSync(process.env.CLEANUP_CHILD_EVIDENCE, JSON.stringify({ pid: process.pid, root: process.ppid }));
@@ -55,7 +56,7 @@ process.stdin.on("end", () => process.exit(0));
       CLEANUP_CHILD_EVIDENCE: childEvidence,
       CLEANUP_TERM_EVIDENCE: termEvidence,
     } });
-    expect(fixture.account.runtimeVersion).toBe("2.0.29");
+    expect(fixture.account.runtimeVersion).toBe(OPENCODE_RELEASE);
     detachedPid = JSON.parse(await readFile(childEvidence, "utf8")).pid as number;
     expect(await alive(detachedPid)).toBe(true);
     const detachedStat = await readFile(`/proc/${detachedPid}/stat`, "utf8");
