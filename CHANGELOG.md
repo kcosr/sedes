@@ -58,7 +58,7 @@ User-facing changes are collected here before release. See the
   show tooltips after tapping or dismissing the menu. Opt-in
   [diagnostics](docs/developer/diagnostics.md) explain Speed availability.
   See [Speed](docs/user/provider-features.md#speed) for Goal and subagent limits.
-  ([#112](https://github.com/kcosr/sedes/pull/112))
+  ([#112](https://github.com/kcosr/sedes/pull/112), [#114](https://github.com/kcosr/sedes/pull/114))
 
 - Voice diagnostics trace composer availability, recording routes, task and
   attachment counts, and draft save/delivery outcomes in the existing Copy log.
