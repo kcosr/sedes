@@ -173,13 +173,16 @@ describe("finite JSON response compression", () => {
     expect(compression.jsonInputBytes).toBe(0);
   });
 
-  it.each(["started", "ended", "destroyed"])("does not change a response %s during compression", async state => {
+  it.each([
+    ["started", "success"], ["ended", "success"], ["destroyed", "success"],
+    ["started", "failure"], ["ended", "failure"], ["destroyed", "failure"],
+  ])("does not change a response %s during codec %s", async (state, outcome) => {
     let completeCodec!: () => void;
     let serverResponse!: Response;
     let completeHandler!: () => void;
     const handlerCompleted = new Promise<void>(resolve => { completeHandler = resolve; });
-    vi.mocked(gzip).mockImplementationOnce(((_input: string, _options: unknown, callback: (error: null, result: Buffer) => void) => {
-      completeCodec = () => callback(null, Buffer.from("late codec result"));
+    vi.mocked(gzip).mockImplementationOnce(((_input: string, _options: unknown, callback: (error: Error | null, result?: Buffer) => void) => {
+      completeCodec = () => outcome === "success" ? callback(null, Buffer.from("late codec result")) : callback(new Error("late codec failure"));
     }) as typeof gzip);
     const codecs = new AsyncCodecBudget({ slots: 1 });
     const compression = new ClientResponseCompression(true, codecs);

@@ -135,6 +135,9 @@ export async function sendJsonResponse(
           body = compressed;
           encoding = "gzip";
         }
+      } catch (error) {
+        if (responseUnavailable(response)) return;
+        throw error;
       } finally {
         lease.release();
       }
