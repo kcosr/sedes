@@ -54,7 +54,8 @@ User-facing changes are collected here before release. See the
 - Codex Speed now saves the preference for future Sedes turns and can apply it
   to the next eligible model step during a Sedes-started turn. The composer
   icon and menu checkmark show the saved preference. Mobile controls do not
-  show tooltips after tapping or dismissing the menu.
+  show tooltips after tapping or dismissing the menu. Opt-in
+  [diagnostics](docs/developer/diagnostics.md) explain Speed availability.
   See [Speed](docs/user/provider-features.md#speed) for Goal and subagent limits.
   ([#112](https://github.com/kcosr/sedes/pull/112))
 
@@ -220,13 +221,6 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
-
-- Codex Speed remains available when active-status notifications race a successful
-  turn start, and no longer repeats metadata requests for unchanged Goal snapshots.
-  Genuine Goal changes retain a pending defaults check. Opt-in delivery
-  diagnostics explain Speed availability changes and distinguish handle replacement
-  from connection changes; see [diagnostics](docs/developer/diagnostics.md).
-  ([#112](https://github.com/kcosr/sedes/pull/112))
 
 - The Codex skill picker refreshes available skills through the app-server
   without reloading the model catalog. Fork indicators use a consistent
