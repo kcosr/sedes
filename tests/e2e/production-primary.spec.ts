@@ -80,7 +80,7 @@ test("mobile Accounts opens as a viewport-anchored bottom sheet", async ({
   await page.getByRole("button", { name: "Open thread navigation" }).click();
   const navigation = page.getByRole("dialog", { name: "Thread navigation" });
   await expect(navigation).toBeVisible();
-  await navigation.getByRole("button", { name: "More" }).click();
+  await navigation.getByRole("button", { name: "More", exact: true }).click();
   const usageMenuItem = page.getByRole("menuitem", { name: "Accounts" });
   await expect(usageMenuItem).toBeVisible({ timeout: 5_000 });
   await usageMenuItem.click();

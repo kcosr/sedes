@@ -49,7 +49,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     localPolicyId = await createPolicy("Reviewer local", false);
     await page
       .getByTestId("desktop-sidebar")
-      .getByRole("button", { name: "More" })
+      .getByRole("button", { name: "More", exact: true })
       .click();
     await page.getByRole("menuitem", { name: "Agents", exact: true }).click();
     // Agents are a Settings page under Execution, beside the settings nav.

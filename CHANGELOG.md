@@ -259,6 +259,10 @@ User-facing changes are collected here before release. See the
   valid offscreen previews from failing until **Retry preview** is tapped.
   ([#118](https://github.com/kcosr/sedes/pull/118))
 
+- Loading earlier Codex history stays available as the active turn advances,
+  while replacement history and daemon generations still invalidate stale reads.
+  ([#117](https://github.com/kcosr/sedes/pull/117))
+
 - Usage combines redundant refreshes, avoids repeated aggregation scans, and
   loads only the requested report sections or filter choices.
   ([#115](https://github.com/kcosr/sedes/pull/115))
