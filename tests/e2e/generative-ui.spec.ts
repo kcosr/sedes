@@ -524,6 +524,26 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
 test("page loading waits for transfer completion and viewport-based content reaches a bounded height", async ({
   page,
 }, testInfo) => {
+  await page.addInitScript(() => {
+    if (location.href !== "about:srcdoc") return;
+    const documentWindow = window as Window & {
+      suspendPreviewAnimation?: boolean;
+      suspendedPreviewFrames?: number;
+      resumePreviewAnimation?: () => void;
+    };
+    const requestFrame = window.requestAnimationFrame.bind(window);
+    const suspended: FrameRequestCallback[] = [];
+    documentWindow.resumePreviewAnimation = () => {
+      documentWindow.suspendPreviewAnimation = false;
+      for (const callback of suspended.splice(0)) requestFrame(callback);
+    };
+    window.requestAnimationFrame = callback => {
+      if (!documentWindow.suspendPreviewAnimation) return requestFrame(callback);
+      documentWindow.suspendedPreviewFrames = (documentWindow.suspendedPreviewFrames ?? 0) + 1;
+      suspended.push(callback);
+      return 0;
+    };
+  });
   const workspace = path.join(
     loadE2ERunContext().workspacesDirectory,
     "generative-ui-sizing",
@@ -566,7 +586,7 @@ test("page loading waits for transfer completion and viewport-based content reac
   });
   try {
     await publish(page, threadId, {
-      html: "<!doctype html><html><body><p>Slow valid document</p></body></html>",
+      html: "<!doctype html><html><head><script>window.suspendPreviewAnimation=true</script></head><body><p>Slow valid document</p></body></html>",
       title: "Slow delivery",
     });
     const slow = pageCard(page, "Slow delivery", 1);
@@ -582,6 +602,25 @@ test("page loading waits for transfer completion and viewport-based content reac
     await expect(
       pageDocument(slow).getByText("Slow valid document"),
     ).toBeVisible();
+    // Model WebView's suppressed painting callbacks for offscreen previews.
+    // Loading must complete even while every rAF is held, while interrupted-
+    // render recovery still waits for the first measured animation frame.
+    await expect.poll(() => pageDocument(slow).locator("body").evaluate(() =>
+      (window as Window & { suspendedPreviewFrames?: number }).suspendedPreviewFrames ?? 0,
+    )).toBeGreaterThan(0);
+    const pendingRecovery = await page.evaluate(() => localStorage.getItem("sedes-page-preview-pending"));
+    expect(pendingRecovery).not.toBeNull();
+    // Timing is the behavior under test: suppressing painting after load
+    // must survive the separate ten-second bootstrap deadline as well.
+    await page.waitForTimeout(11_000);
+    await expect(slow.getByRole("alert")).toHaveCount(0);
+    await expect(slow.locator(".page-frame-document")).toBeAttached();
+    expect(await page.evaluate(() => localStorage.getItem("sedes-page-preview-pending"))).toBe(pendingRecovery);
+    await capture(page, testInfo, "generative-ui-preview-without-paint.png");
+    await pageDocument(slow).locator("body").evaluate(() =>
+      (window as Window & { resumePreviewAnimation?: () => void }).resumePreviewAnimation?.(),
+    );
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("sedes-page-preview-pending"))).toBeNull();
 
     await publish(page, threadId, {
       html: "<!doctype html><html><head><style>body{min-height:100vh;padding:12px}</style></head><body><p>Viewport-sized content</p></body></html>",

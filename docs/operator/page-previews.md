@@ -86,8 +86,16 @@ sandbox stays enabled. The rendered document has a trusted outer wrapper and an
 opaque, sandboxed inner frame containing the authored HTML. The immutable
 revision stores the captured authored payload; rendering adds the current
 trusted wrapper and bootstrap, so security fixes also protect older revisions.
-This is the same document used by the published viewer. The composed document
-allows up to 32 MiB of escaped payload plus 64 KiB of trusted rendering overhead;
+This is the same document used by the published viewer. Published viewers
+acknowledge loading after either the first measured animation frame or both the
+trusted wrapper announcement and the outer frame loading its child document.
+The latter path does not depend on animation frames, which browsers may pause
+for offscreen previews. The browser's
+interrupted-render recovery mark remains pending until the first measured
+animation frame; a failed render or process restart still requires explicit
+retry. Deliberate frame release cancels its pending attempt.
+
+The composed document allows up to 32 MiB of escaped payload plus 64 KiB of trusted rendering overhead;
 the captured authored document itself remains limited to 16 MiB. Its content security
 policies allow inline HTML/CSS/JavaScript and captured data images, while
 denying network connections, authored nested frames, workers, native form
