@@ -48,7 +48,8 @@ test("Home opens the default chat and connection changes leave the toolbar in pl
   await page.keyboard.press("Enter");
   await expect(stagePanel(page, "Pages")).toBeVisible();
   await home.click();
-  await expect(composer).toBeFocused();
+  await expect(composer).toBeVisible();
+  await expect(page.getByRole("region", { name: "Chat panel content", exact: true })).toBeFocused();
   await capture(page, testInfo, "default-home-mobile.png");
 
   const positions = () => bar.locator(".sidebar-nav-control, .workspace-workbench-actions")
@@ -76,5 +77,11 @@ test("Home opens the default chat and connection changes leave the toolbar in pl
   await openSettingsPage(page, "general");
   await page.getByTestId("settings-view").getByRole("button", { name: "Home", exact: true }).click();
   await expect(page).toHaveURL(homePath);
-  await expect(composer).toBeFocused();
+  await expect(composer).toBeVisible();
+  await expect(page.getByRole("region", { name: "Chat panel content", exact: true })).toBeFocused();
+
+  await openSettingsPage(page, "general");
+  await page.getByRole("region", { name: "Default thread", exact: true })
+    .getByRole("button", { name: "Clear", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Home", exact: true, includeHidden: true })).toHaveCount(0);
 });
