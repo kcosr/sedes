@@ -62,6 +62,10 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
+- A Home button beside Notifications opens the configured default thread and
+  reveals Chat. The connection indicator now follows these buttons in reserved
+  space, keeping the toolbar steady when connection status changes.
+
 - Client data reads and thread/application event streams now negotiate gzip,
   reducing transfer size while flushing live events promptly. Operators can
   disable it with `SEDES_CLIENT_RESPONSE_COMPRESSION=false`; see

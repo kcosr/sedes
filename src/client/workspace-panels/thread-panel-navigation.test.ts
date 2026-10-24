@@ -28,4 +28,16 @@ describe("thread panel navigation", () => {
     expect(window.location.pathname).toBe("/threads/thread-destination");
     expect(window.location.hash).toBe("#turn=turn-1");
   });
+
+  it("requests Chat activation again when the destination route is already open", () => {
+    openThreadRoute("thread-destination");
+    const observed = vi.fn();
+    const remove = installThreadPanelOpenRequestListener(window, observed);
+
+    openThreadRoute("thread-destination");
+
+    expect(observed).toHaveBeenCalledExactlyOnceWith({ threadId: "thread-destination" });
+    expect(window.location.pathname).toBe("/threads/thread-destination");
+    remove();
+  });
 });
