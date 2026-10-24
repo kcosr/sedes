@@ -1173,6 +1173,14 @@ export class ClaudeThreadRepository {
       ) as ClaudeTerminalReceipt | undefined;
   }
 
+  /** Replay identity is private to one principal's exact application thread. */
+  findTerminalResult(scope: RequestScope, applicationThreadId: string, providerResultUuid: string): ClaudeTerminalReceipt | undefined {
+    return this.database.prepare(`SELECT ${terminalReceiptColumns} FROM claude_turn_terminal_receipts
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ?
+        AND provider_result_uuid = ? LIMIT 1`)
+      .get(scope.tenantId, scope.principalId, applicationThreadId, providerResultUuid) as ClaudeTerminalReceipt | undefined;
+  }
+
   listTerminalReceipts(
     scope: RequestScope,
     applicationThreadId: string,

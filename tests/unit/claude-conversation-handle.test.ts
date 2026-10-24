@@ -2562,7 +2562,9 @@ describe("ClaudeConversationHandle", () => {
     expect(JSON.stringify(await projectionSnapshot(handle))).not.toContain(OPERATION_ID);
     provider.messages.push(nativeFrames.result([], { origin: { kind: "task-notification" } }));
     await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
-    expect(writeTerminal).not.toHaveBeenCalled();
+    const providerTurnId = (await projectionSnapshot(handle)).orderedBackendTurnIds.at(-1)!;
+    expect(writeTerminal).toHaveBeenCalledExactlyOnceWith(expect.anything(), BINDING.applicationThreadId,
+      expect.objectContaining({ backendTurnId: providerTurnId, status: "completed" }));
     expect(settled).toBe(false);
 
     provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "started"));
@@ -2577,7 +2579,8 @@ describe("ClaudeConversationHandle", () => {
     expect(own).toMatchObject({ status: "completed", completionCorrelations: [OPERATION_ID] });
     expect(own.orderedBackendItemIds.map(id => JSON.stringify(history.itemsById[id]))).not.toContainEqual(
       expect.stringContaining("Background work finished."));
-    expect(writeTerminal).toHaveBeenCalledOnce();
+    expect(writeTerminal).toHaveBeenCalledTimes(2);
+    expect(own.backendTurnId).not.toBe(providerTurnId);
     expect(writeTerminal).toHaveBeenCalledWith(expect.anything(), BINDING.applicationThreadId,
       expect.objectContaining({ backendTurnId: own.backendTurnId, status: "completed" }));
     await handle.close();
@@ -5624,7 +5627,7 @@ describe("Claude native run state without prompt echoes", () => {
     await handle.close();
   });
 
-  it("models a task-notification turn Claude starts itself as running, then idle, without a receipt", async () => {
+  it("settles a task-notification turn with its own receipt and no application-input correlation", async () => {
     const provider = fixture();
     const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
     const established = await handle.establishProjection({ signal: new AbortController().signal });
@@ -5663,7 +5666,9 @@ describe("Claude native run state without prompt echoes", () => {
     expect(live.turnsById[notificationTurnId]!.orderedBackendItemIds.map(id => JSON.stringify(live.itemsById[id])))
       .toEqual([expect.stringContaining("The agents finished.")]);
     expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
-    expect(writeTerminal).not.toHaveBeenCalled();
+    expect(writeTerminal).toHaveBeenCalledExactlyOnceWith(expect.anything(), BINDING.applicationThreadId,
+      expect.objectContaining({ backendTurnId: notificationTurnId, status: "completed" }));
+    expect(live.turnsById[notificationTurnId]!.completionCorrelations).toBeUndefined();
     expect(runStates(events)).toEqual(["running", "running", "idle"]);
     expect(handle.retirementBlocked).toBe(true);
     const nudges = events.filter(event => event.type === "background_activity_changed").length;
@@ -5671,6 +5676,169 @@ describe("Claude native run state without prompt echoes", () => {
     await vi.waitFor(() => expect(handle.retirementBlocked).toBe(false));
     // Retirement eligibility changed without a run-state edge; re-evaluate it.
     expect(events.filter(event => event.type === "background_activity_changed").length).toBeGreaterThan(nudges);
+    await handle.close();
+  });
+
+  it.each([
+    { outcome: "completed", idleFirst: false },
+    { outcome: "completed", idleFirst: true },
+    { outcome: "failed", idleFirst: false },
+    { outcome: "interrupted", idleFirst: false },
+  ] as const)("settles a streamed notification answer from its exact $outcome result (idle first: $idleFirst)", async ({ outcome, idleFirst }) => {
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const priorTurnId = established.snapshot.orderedBackendTurnIds[0]!;
+    provider.messages.push(nativeFrames.taskNotification("task-streamed"));
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.start("msg-streamed"));
+    const answer = nativeFrames.text("msg-streamed", "Review finished.");
+    if (answer.type !== "assistant") throw new Error("Wrong fixture");
+    const streamed = { ...answer, message: { ...answer.message, stop_reason: null } };
+    provider.messages.push(streamed);
+    provider.messages.push({ type: "stream_event", uuid: crypto.randomUUID(), session_id: SESSION_ID,
+      parent_tool_use_id: null, event: { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null },
+      usage: { output_tokens: 5 } } } as unknown as SDKMessage);
+    provider.messages.push({ type: "stream_event", uuid: crypto.randomUUID(), session_id: SESSION_ID,
+      parent_tool_use_id: null, event: { type: "message_stop" } } as unknown as SDKMessage);
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).orderedBackendTurnIds).toHaveLength(2));
+    const turnId = (await projectionSnapshot(handle)).orderedBackendTurnIds.at(-1)!;
+    const drain = nativeFrames.result([], { origin: { kind: "task-notification" }, num_turns: 0, result: "" });
+    provider.messages.push(drain);
+    if (idleFirst) provider.messages.push(nativeFrames.state("idle"));
+    // Drain and session state are not completion evidence for this answer.
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect((await projectionSnapshot(handle)).turnsById[turnId]!.status).toBe("in_progress");
+    expect(events.some(event => event.type === "turn_completed")).toBe(false);
+    const result = nativeFrames.result([], { origin: { kind: "task-notification" },
+      ...(outcome === "failed" ? { subtype: "error_during_execution", is_error: true,
+        terminal_reason: "error", errors: ["The review failed."] } : {}),
+      ...(outcome === "interrupted" ? { subtype: "error_during_execution", is_error: true,
+        terminal_reason: "aborted_streaming", errors: [] } : {}),
+    });
+    provider.messages.push(result);
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).turnsById[turnId]!.status).toBe(outcome));
+    const live = await projectionSnapshot(handle);
+    expect(live.runState).toBe(outcome === "failed" ? "failed" : "idle");
+    expect(live.turnsById[priorTurnId]).toEqual(established.snapshot.turnsById[priorTurnId]);
+    expect(live.turnsById[turnId]!.completionCorrelations).toBeUndefined();
+    expect(settings.listTerminalReceipts({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, BINDING.applicationThreadId)).toEqual([
+      expect.objectContaining({ backendTurnId: turnId, status: outcome, providerResultUuid: result.uuid }),
+    ]);
+    const completionIndex = events.findIndex(event => event.type === "turn_completed" && event.turn.backendTurnId === turnId);
+    expect(completionIndex).toBeGreaterThanOrEqual(0);
+    expect(completionIndex).toBeLessThan(events.findIndex(event => event.type === "run_state_changed" &&
+      event.state === (outcome === "failed" ? "failed" : "idle")));
+    if (outcome === "completed") {
+      expect(Object.values(live.itemsById).find(item => item.semanticKind === "assistant_message" &&
+        item.markdown.text === "Review finished.")).toMatchObject({ responsePhase: "final" });
+    }
+    await handle.close();
+    const notification = { type: "user", uuid: crypto.randomUUID(), session_id: SESSION_ID,
+      parent_tool_use_id: null, parent_agent_id: null, origin: { kind: "task-notification" },
+      message: { role: "user", content: "<task-notification>Review complete</task-notification>" } } as SessionMessage;
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, resumeSession: true,
+      initialMessages: [...settledTurn, notification, { ...streamed, parent_agent_id: null } as SessionMessage] }).handle;
+    expect((await projectionSnapshot(reloaded)).turnsById[turnId]).toEqual(live.turnsById[turnId]);
+    await reloaded.close();
+  });
+
+  it("does not apply a replayed provider result to the next notification turn", async () => {
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const firstResult = nativeFrames.result([], { origin: { kind: "task-notification" } });
+    for (const id of ["first", "second"]) {
+      provider.messages.push(nativeFrames.taskNotification(`task-${id}`));
+      provider.messages.push(nativeFrames.state("running"));
+      provider.messages.push(nativeFrames.start(`msg-${id}`));
+      const answer = nativeFrames.text(`msg-${id}`, id);
+      if (answer.type !== "assistant") throw new Error("Wrong fixture");
+      provider.messages.push({ ...answer, message: { ...answer.message, stop_reason: null } });
+      await vi.waitFor(async () => expect((await projectionSnapshot(handle)).orderedBackendTurnIds).toHaveLength(id === "first" ? 2 : 3));
+      if (id === "first") {
+        provider.messages.push(firstResult);
+        await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+      }
+    }
+    provider.messages.push(firstResult);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const snapshot = await projectionSnapshot(handle);
+    expect(snapshot.runState).toBe("running");
+    expect(snapshot.turnsById[snapshot.orderedBackendTurnIds.at(-1)!]!.status).toBe("in_progress");
+    expect(settings.listTerminalReceipts({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, BINDING.applicationThreadId)).toHaveLength(1);
+    provider.messages.push(nativeFrames.result([], { origin: { kind: "task-notification" } }));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    expect(settings.listTerminalReceipts({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, BINDING.applicationThreadId)).toHaveLength(2);
+    await handle.close();
+  });
+
+  it("does not apply a replayed provider result to a newer Sedes input", async () => {
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    provider.messages.push(nativeFrames.taskNotification("task-before-send"));
+    provider.messages.push(nativeFrames.start("msg-before-send"));
+    provider.messages.push(nativeFrames.text("msg-before-send", "Review complete."));
+    const result = nativeFrames.result([], { origin: { kind: "task-notification" } });
+    provider.messages.push(result);
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).orderedBackendTurnIds).toHaveLength(2));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    const nextOperation = crypto.randomUUID();
+    const submitted = handle.submit(submitInput(nextOperation, "Next request"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.lifecycle(nextOperation, "started"));
+    await expect(submitted).resolves.toMatchObject({ accepted: true });
+    const resultRead = vi.spyOn(settings, "findTerminalResult");
+    provider.messages.push(result);
+    await vi.waitFor(() => expect(resultRead).toHaveBeenCalledWith(expect.anything(), BINDING.applicationThreadId, result.uuid));
+    const current = await projectionSnapshot(handle);
+    expect(current.runState).toBe("running");
+    const owned = current.turnsById[current.activeBackendTurnId!]!;
+    expect(owned).toMatchObject({ status: "in_progress", completionCorrelations: [nextOperation] });
+    expect(settings.listTerminalReceipts({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, BINDING.applicationThreadId)).toHaveLength(1);
+    provider.messages.push(nativeFrames.result([nextOperation]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    await handle.close();
+  });
+
+  it("finishes publication when the current provider result was already persisted", async () => {
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    provider.messages.push(nativeFrames.taskNotification("task-persisted"));
+    provider.messages.push(nativeFrames.start("msg-persisted"));
+    const answer = nativeFrames.text("msg-persisted", "Completed before the acknowledgement was lost.");
+    if (answer.type !== "assistant") throw new Error("Wrong fixture");
+    provider.messages.push({ ...answer, message: { ...answer.message, stop_reason: null } });
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).orderedBackendTurnIds).toHaveLength(2));
+    const turnId = (await projectionSnapshot(handle)).activeBackendTurnId!;
+    const result = nativeFrames.result([], { origin: { kind: "task-notification" } });
+    // Receipt storage succeeded before projection/publication. Retained replay
+    // must finish that same owner rather than discard its only terminal event.
+    settings.writeTerminalReceipt({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, BINDING.applicationThreadId, {
+      backendTurnId: turnId, status: "completed", providerResultUuid: result.uuid, terminalAt: Date.now(), now: Date.now(),
+    });
+    provider.messages.push(result);
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    expect((await projectionSnapshot(handle)).turnsById[turnId]!.status).toBe("completed");
+    await handle.close();
+  });
+
+  it("keeps an empty notification drain idle without manufacturing a turn receipt", async () => {
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    provider.messages.push(nativeFrames.taskNotification("task-empty"));
+    provider.messages.push(nativeFrames.state("running"));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("running"));
+    provider.messages.push(nativeFrames.result([], { origin: { kind: "task-notification" }, num_turns: 0, result: "" }));
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    expect((await projectionSnapshot(handle)).orderedBackendTurnIds).toHaveLength(1);
+    expect(settings.listTerminalReceipts({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, BINDING.applicationThreadId)).toEqual([]);
     await handle.close();
   });
 
@@ -5764,6 +5932,43 @@ describe("Claude native run state without prompt echoes", () => {
       .map(id => corrected.itemsById[id]))).toContain("Follow-up answer");
     await expect(handle.captureSubmissionRetryAnchor()).resolves.toContain('"messageCount":3');
     await handle.close();
+  });
+
+  it.each([false, true])("keeps a failed peer continuation idle without a separate turn (notification observed: %s)", async (observed) => {
+    const settings = repository();
+    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+    const turnId = projectClaudeHistory(settledTurn).snapshot.orderedBackendTurnIds[0]!;
+    const originalReceipt = settings.writeTerminalReceipt(scope, BINDING.applicationThreadId, {
+      backendTurnId: turnId, status: "completed", providerResultUuid: crypto.randomUUID(), terminalAt: 100, now: 100,
+    });
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { settings, initialMessages: settledTurn, resumeSession: true });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const writeTerminal = vi.spyOn(settings, "writeTerminalReceipt");
+    if (observed) provider.messages.push(nativeFrames.taskNotification("task-peer-continuation"));
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.start("msg-peer-continuation"));
+    const answer = nativeFrames.text("msg-peer-continuation", "Peer follow-up before its later failure.");
+    provider.messages.push(answer);
+    await vi.waitFor(async () => expect(JSON.stringify(await projectionSnapshot(handle))).toContain("Peer follow-up before its later failure."));
+    provider.messages.push(nativeFrames.result([], { origin: { kind: "peer" },
+      subtype: "error_during_execution", is_error: true, terminal_reason: "error", errors: ["Peer follow-up failed."] }));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).not.toBe("running"));
+    const live = await projectionSnapshot(handle);
+    expect(live.runState).toBe("idle");
+    expect(live.orderedBackendTurnIds).toEqual([turnId]);
+    expect(live.turnsById[turnId]).toMatchObject({ status: "completed", completionCorrelations: [OPERATION_ID] });
+    expect(writeTerminal).not.toHaveBeenCalled();
+    expect(settings.listTerminalReceipts(scope, BINDING.applicationThreadId)).toEqual([originalReceipt]);
+    await handle.close();
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, resumeSession: true,
+      initialMessages: [...settledTurn, { ...answer, parent_agent_id: null } as SessionMessage] }).handle;
+    const restored = await projectionSnapshot(reloaded);
+    expect(restored.runState).toBe(live.runState);
+    expect(restored.turnsById).toEqual(live.turnsById);
+    expect(restored.itemsById).toEqual(live.itemsById);
+    expect(settings.listTerminalReceipts(scope, BINDING.applicationThreadId)).toEqual([originalReceipt]);
+    await reloaded.close();
   });
 
   it("stops a turn Claude started itself", async () => {
@@ -6628,7 +6833,8 @@ describe("Claude image reads and meta rows", () => {
       expect(writeTerminal).toHaveBeenCalledExactlyOnceWith(scope, BINDING.applicationThreadId,
         expect.objectContaining({ backendTurnId: turnId, status: "completed" }));
     } else {
-      expect(writeTerminal).not.toHaveBeenCalled();
+      expect(writeTerminal).toHaveBeenCalledExactlyOnceWith(scope, BINDING.applicationThreadId,
+        expect.objectContaining({ backendTurnId: resultOwner, status: "completed" }));
       expect(settings.findTerminalReceipt(scope, receiptKey)).toEqual(receipt);
     }
     await handle.close();
@@ -6678,7 +6884,8 @@ describe("Claude image reads and meta rows", () => {
     await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
     const settled = await projectionSnapshot(handle);
     expect(settled.turnsById[providerTurn]).toMatchObject({ status: "completed" });
-    expect(writeTerminal).not.toHaveBeenCalled();
+    expect(writeTerminal).toHaveBeenCalledExactlyOnceWith(scope, BINDING.applicationThreadId,
+      expect.objectContaining({ backendTurnId: providerTurn, status: "completed" }));
     expect(settings.findTerminalReceipt(scope, receiptKey)).toEqual(receipt);
     const finalUsage = captured.filter(observation => observation.id === `${messageId(transcript, answer)}:message`);
     expect(finalUsage).toHaveLength(1);
@@ -6715,7 +6922,8 @@ describe("Claude image reads and meta rows", () => {
     await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
     const liveSnapshot = await projectionSnapshot(handle);
     expect(liveSnapshot.turnsById[turnId]).toMatchObject({ status: "completed" });
-    expect(writeTerminal).not.toHaveBeenCalled();
+    expect(writeTerminal).toHaveBeenCalledExactlyOnceWith(expect.anything(), BINDING.applicationThreadId,
+      expect.objectContaining({ backendTurnId: turnId, status: "completed" }));
     expect(JSON.stringify(liveSnapshot)).toContain("External source input.");
     await handle.close();
 
@@ -6746,7 +6954,8 @@ describe("Claude image reads and meta rows", () => {
     expect(running.turnsById[running.orderedBackendTurnIds[0]!]!.status).toBe("in_progress");
     provider.messages.push(nativeFrames.result([first, second], { origin: { kind: "peer" } }));
     await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
-    expect(writeTerminal).not.toHaveBeenCalled();
+    expect(writeTerminal).toHaveBeenCalledExactlyOnceWith(expect.anything(), BINDING.applicationThreadId,
+      expect.objectContaining({ backendTurnId: running.orderedBackendTurnIds[0], status: "completed" }));
     await handle.close();
   });
 

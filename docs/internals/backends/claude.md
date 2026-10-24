@@ -565,6 +565,17 @@ Unrelated receipts neither accept input nor settle the foreground turn, and
 acknowledging them cannot prune active persistent replay. Ordinary foreground
 zero-turn successes and errors retain terminal semantics.
 
+A result for work Claude starts itself also persists a terminal receipt when
+its native provenance confirms a separate notification or external-input turn.
+The handle resolves that boundary before writing the receipt; peer output that
+extends an earlier Sedes turn cannot replace that turn's outcome. Replayed
+result UUIDs are checked within the owning principal and application thread
+before they can settle later provider work. Empty notification drains create
+no completion receipt, and idle alone cannot retire a provider turn that has
+already produced output. This restores completed response controls even when
+the live assistant wrappers still carry a null stop reason. Native history
+remains the authority for fork checkpoints.
+
 A compaction summary projects as a normalized compaction item whose summary
 is the text Claude Code wrote for the model. The item belongs to the turn that
 was running when Claude compacted, which is usually the turn whose prompt the

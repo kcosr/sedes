@@ -778,6 +778,19 @@ describe("Claude thread repository", () => {
     }
   });
 
+  it("finds replayed terminal results only in the exact tenant, principal and thread", () => {
+    const settings = repository();
+    const receipt = settings.writeTerminalReceipt(scope, "thread-a", {
+      backendTurnId: "claude-turn:provider", status: "completed", providerResultUuid: "result-a",
+      terminalAt: 100, now: 100,
+    });
+    expect(settings.findTerminalResult(scope, "thread-a", "result-a")).toEqual(receipt);
+    expect(settings.findTerminalResult(scope, "thread-a", "result-b")).toBeUndefined();
+    expect(settings.findTerminalResult(scope, "thread-b", "result-a")).toBeUndefined();
+    expect(settings.findTerminalResult({ ...scope, tenantId: "other" }, "thread-a", "result-a")).toBeUndefined();
+    expect(settings.findTerminalResult({ ...scope, principalId: "other" }, "thread-a", "result-a")).toBeUndefined();
+  });
+
   it("lists terminal receipts only inside the exact principal and thread", () => {
     const settings = repository();
     settings.writeTerminalReceipt(scope, "thread-a", {
