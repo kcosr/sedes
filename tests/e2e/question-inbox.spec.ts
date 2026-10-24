@@ -153,7 +153,7 @@ test("nonblocking questions navigate oldest first, send individual answers, and 
     await archiveDialog.getByRole("button", { name: "Cancel", exact: true }).click();
     expect((await list()).requests).toHaveLength(2);
     await saveDraft("Keep this unrelated draft intact.");
-    await page.getByTestId("desktop-sidebar").getByRole("button", { name: "More" }).click();
+    await page.getByTestId("desktop-sidebar").getByRole("button", { name: "More", exact: true }).click();
     await page.getByRole("menuitem", { name: "Archived threads" }).click();
     await expect(page).toHaveURL("/archived");
     await page.goBack();
