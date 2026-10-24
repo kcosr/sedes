@@ -346,6 +346,11 @@ then switches to direct live delivery. Active output therefore does not require
 or wait for a quiet interval. Older pages use `thread/turns/list` plus exact
 per-turn hydration as request-local work and release each page after projection.
 
+Older-page reads keep the exact paginated adapter and daemon generation that
+issued their cursor. Ordinary live-tail projection installs do not invalidate
+that authority. Reestablishment, invalidation, close, or a daemon generation
+change rejects an in-flight page, including after an artifact capture wait.
+
 Repeated cursors, wrong-turn items, malformed shells, catch-up overflow or
 sequence contradiction, undecodable catch-up input, generation changes, and
 history-mode changes fail closed. Sedes publishes no partial page and does not
