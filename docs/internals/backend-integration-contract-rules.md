@@ -1113,6 +1113,13 @@ unbounded moving head and repeatedly wait for a quiet interval: an active turn
 may produce output continuously, so quiet-window reconciliation can starve
 correct attachment indefinitely.
 
+For older-page reads whose native cursors remain valid as the live tail advances,
+fence the captured cursor authority and daemon generation rather than every live
+projection install. Recheck after asynchronous hydration and artifact capture;
+replacement authority must invalidate in-flight work even if reconciliation has
+already restored a ready runtime. Keep the existing scoped cursors and count,
+byte, and deadline bounds.
+
 When a backend irreversibly fences or closes a conversation handle, it must
 publish a backend-neutral invalidation before releasing its dependencies. A
 cached conversation actor must retire that handle and reacquire a fresh one on

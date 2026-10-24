@@ -7311,6 +7311,96 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it.each(["turns", "items"] as const)(
+    "keeps older paginated history valid when the active turn advances during %s loading",
+    async (heldRead) => {
+      const harness = new RpcHarness();
+      const handle = await attachIdle(harness);
+      const initialIndexes = Array.from({ length: 10 }, (_, index) => 11 - index);
+      harness.enqueue("thread/read", { thread: paginatedThread() });
+      harness.enqueue("thread/resume", paginatedResumeResult({
+        shells: initialIndexes.map(notLoadedTurn), nextCursor: "older-page",
+      }));
+      harness.enqueue("thread/turns/list", {
+        data: [notLoadedTurn(1)], nextCursor: null, backwardsCursor: "older-head",
+      });
+      harness.enqueue("thread/items/list", ...initialIndexes.map(paginatedItems), paginatedItems(1));
+      const established = await handle.establishProjection({ signal: new AbortController().signal });
+      const events: SequencedBackendEvent[] = [];
+      const unsubscribe = established.subscribeFromNext(event => events.push(event));
+      harness.notify("turn/started", { threadId: "thread-1", turn: {
+        ...nativeTurn(12), status: "inProgress", completedAt: null,
+      } });
+      await vi.waitFor(async () => expect((await handle.readCurrent()).snapshot.runState).toBe("running"));
+
+      let release!: (value: unknown) => void;
+      const heldResponse = () => new Promise(resolve => { release = resolve; });
+      const turns = { data: [notLoadedTurn(1)], nextCursor: null, backwardsCursor: "older-head" };
+      harness.enqueue("thread/turns/list", heldRead === "turns" ? heldResponse : turns);
+      harness.enqueue("thread/items/list", heldRead === "items" ? heldResponse : paginatedItems(1));
+      const older = handle.history({ cursor: established.history.previousCursor, limit: 1 });
+      await vi.waitFor(() => expect(release).toBeDefined());
+      const beforeProgress = events.length;
+      harness.notify("thread/status/changed", {
+        threadId: "thread-1", status: { type: "active", activeFlags: ["waitingOnApproval"] },
+      });
+      await vi.waitFor(() => {
+        expect(events.length).toBeGreaterThan(beforeProgress);
+        expect(events.at(-1)?.event.type).toBe("run_state_changed");
+      });
+      release(heldRead === "turns" ? turns : paginatedItems(1));
+
+      const page = await older;
+      expect(page.orderedBackendTurnIds).toEqual([codexBackendTurnId("thread-1", "turn-1")]);
+      expect(page.previousCursor).toBeUndefined();
+      expect(new Set([...page.orderedBackendTurnIds, ...established.snapshot.orderedBackendTurnIds]).size).toBe(11);
+      expect((await handle.readCurrent()).snapshot).toMatchObject({
+        runState: "running", activeBackendTurnId: codexBackendTurnId("thread-1", "turn-12"),
+      });
+      unsubscribe();
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    },
+  );
+
+  it.each(["same", "replacement"] as const)(
+    "rejects a held older page after history is reestablished in the %s daemon generation",
+    async (generation) => {
+      const harness = new RpcHarness();
+      const handle = await attachIdle(harness);
+      const initialIndexes = Array.from({ length: 10 }, (_, index) => 11 - index);
+      const enqueueEstablishment = () => {
+        harness.enqueue("thread/read", { thread: paginatedThread() });
+        harness.enqueue("thread/resume", paginatedResumeResult({
+          shells: initialIndexes.map(notLoadedTurn), nextCursor: "older-page",
+        }));
+        harness.enqueue("thread/turns/list", {
+          data: [notLoadedTurn(1)], nextCursor: null, backwardsCursor: "older-head",
+        });
+        harness.enqueue("thread/items/list", ...initialIndexes.map(paginatedItems), paginatedItems(1));
+      };
+      enqueueEstablishment();
+      const established = await handle.establishProjection({ signal: new AbortController().signal });
+      let release!: (value: unknown) => void;
+      harness.enqueue("thread/turns/list", () => new Promise(resolve => { release = resolve; }));
+      const older = handle.history({ cursor: established.history.previousCursor, limit: 1 });
+      const rejected = expect(older).rejects.toMatchObject({
+        category: "unavailable", retryable: true, backendCode: "codex_history_reconciliation_required",
+      });
+      await vi.waitFor(() => expect(release).toBeDefined());
+      harness.lifecycle("reconciling");
+      harness.lifecycle("ready", generation === "same" ? 1 : 2);
+      enqueueEstablishment();
+      const replacement = await handle.establishProjection({ signal: new AbortController().signal });
+      harness.enqueue("thread/items/list", paginatedItems(1));
+      release({ data: [notLoadedTurn(1)], nextCursor: null, backwardsCursor: "older-head" });
+      await rejected;
+      expect((await handle.readCurrent()).snapshot).toEqual(replacement.snapshot);
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    },
+  );
+
   it("suppresses a paginated previous cursor after exhausting hidden-only older turns", async () => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
@@ -12534,6 +12624,115 @@ describe("CodexConversationHandle", () => {
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });
+
+  it.each(["same", "replacement"] as const)(
+    "rejects an older page when artifact capture outlives reestablishment in the %s daemon generation",
+    async (generation) => {
+      const harness = new RpcHarness();
+      const artifacts = createInMemoryOutputArtifactPublisher();
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const capture = vi.fn(async (input: import("../../src/server/output-artifacts/viewed-image-capture.js").ViewedImageCaptureInput) => {
+        await gate;
+        return artifacts.publishImage({ scope: input.scope, threadId: input.binding.applicationThreadId,
+          publicationKey: input.publicationKey, mediaType: "image/png", bytes: Buffer.from(generatedPngBase64, "base64") });
+      });
+      const handle = await attachIdle(harness, driverWithOutputArtifacts(harness, artifacts, { capture }));
+      const initialIndexes = Array.from({ length: 10 }, (_, index) => 11 - index);
+      const enqueueEstablishment = () => {
+        harness.enqueue("thread/read", { thread: paginatedThread() });
+        harness.enqueue("thread/resume", paginatedResumeResult({
+          shells: initialIndexes.map(notLoadedTurn), nextCursor: "older-page",
+        }));
+        harness.enqueue("thread/turns/list", {
+          data: [notLoadedTurn(1)], nextCursor: null, backwardsCursor: "older-head",
+        });
+        harness.enqueue("thread/items/list", ...initialIndexes.map(paginatedItems), paginatedItems(1));
+      };
+      enqueueEstablishment();
+      const established = await handle.establishProjection({ signal: new AbortController().signal });
+      harness.enqueue("thread/turns/list", { data: [notLoadedTurn(1)], nextCursor: null, backwardsCursor: "older-head" });
+      harness.enqueue("thread/items/list", {
+        data: [...nativeTurn(1).items, { type: "imageView", id: "older-view", path: "/workspace/older.png" }]
+          .map(item => ({ startedAtMs: null, completedAtMs: null, turnId: "turn-1", item })),
+        nextCursor: null, backwardsCursor: "item-head",
+      });
+      const older = handle.history({ limit: 1, cursor: established.history.previousCursor });
+      const rejected = expect(older).rejects.toMatchObject({
+        category: "unavailable", retryable: true, backendCode: "codex_history_reconciliation_required",
+      });
+      await vi.waitFor(() => expect(capture).toHaveBeenCalledOnce());
+      harness.lifecycle("reconciling");
+      harness.lifecycle("ready", generation === "same" ? 1 : 2);
+      enqueueEstablishment();
+      const replacement = await handle.establishProjection({ signal: new AbortController().signal });
+      release();
+      await rejected;
+      expect((await handle.readCurrent()).snapshot).toEqual(replacement.snapshot);
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    },
+  );
+
+  it.each(["same", "replacement"] as const)(
+    "does not restore paginated authority after lifecycle invalidation during terminal image publication in the %s generation",
+    async (generation) => {
+      const harness = new RpcHarness();
+      const stored = createInMemoryOutputArtifactPublisher();
+      let releasePublication!: () => void;
+      const publicationGate = new Promise<void>(resolve => { releasePublication = resolve; });
+      const artifacts = { findImage: stored.findImage, publishImage: vi.fn(async (input: Parameters<OutputArtifactPublisher["publishImage"]>[0]) => {
+        await publicationGate;
+        return stored.publishImage(input);
+      }) };
+      const handle = await attachIdle(harness, driverWithOutputArtifacts(harness, artifacts));
+      const initialIndexes = Array.from({ length: 10 }, (_, index) => 11 - index);
+      harness.enqueue("thread/read", { thread: paginatedThread() });
+      harness.enqueue("thread/resume", paginatedResumeResult({ shells: initialIndexes.map(notLoadedTurn), nextCursor: "older-page" }));
+      harness.enqueue("thread/turns/list", { data: [notLoadedTurn(1)], nextCursor: null, backwardsCursor: "older-head" });
+      harness.enqueue("thread/items/list", ...initialIndexes.map(paginatedItems), paginatedItems(1));
+      const established = await handle.establishProjection({ signal: new AbortController().signal });
+      harness.notify("turn/started", { threadId: "thread-1", turn: {
+        ...nativeTurn(12), status: "inProgress", completedAt: null,
+      } });
+      await vi.waitFor(async () => expect((await handle.readCurrent()).snapshot.runState).toBe("running"));
+
+      let releaseOlder!: (value: unknown) => void;
+      harness.enqueue("thread/turns/list", () => new Promise(resolve => { releaseOlder = resolve; }));
+      const older = handle.history({ limit: 1, cursor: established.history.previousCursor })
+        .then(page => ({ page }), error => ({ error }));
+      await vi.waitFor(() => expect(releaseOlder).toBeDefined());
+      const completed = { ...nativeTurn(12), items: [...nativeTurn(12).items, nativeGeneratedImage()] };
+      const refreshedIndexes = Array.from({ length: 10 }, (_, index) => 12 - index);
+      harness.enqueue("thread/turns/list", {
+        data: refreshedIndexes.map(notLoadedTurn), nextCursor: "older-refresh", backwardsCursor: "refreshed-head",
+      }, { data: [notLoadedTurn(2)], nextCursor: "still-older", backwardsCursor: "older-refresh-head" });
+      harness.enqueue("thread/items/list", {
+        ...paginatedItems(12), data: completed.items.map(item => ({ startedAtMs: null, completedAtMs: null, turnId: completed.id, item })),
+      }, ...refreshedIndexes.slice(1).map(paginatedItems), paginatedItems(2));
+      harness.notify("turn/completed", { threadId: "thread-1", turn: completed });
+      await vi.waitFor(() => expect(artifacts.publishImage).toHaveBeenCalledOnce());
+      harness.lifecycle("reconciling");
+      harness.lifecycle("ready", generation === "same" ? 1 : 2);
+      const invalidated = (await handle.readCurrent()).snapshot;
+      releasePublication();
+      // This read waits for notification work, proving the terminal publisher
+      // settled before checking the live snapshot or releasing the older page.
+      const anchor = await handle.captureSubmissionRetryAnchor().then(value => ({ value }), error => ({ error }));
+      const afterPublication = (await handle.readCurrent()).snapshot;
+      harness.enqueue("thread/items/list", paginatedItems(1));
+      releaseOlder({ data: [notLoadedTurn(1)], nextCursor: null, backwardsCursor: "older-head" });
+      const outcome = await older;
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+
+      expect(anchor).toMatchObject({ error: { backendCode: generation === "same"
+        ? "codex_submission_anchor_thread_active" : "codex_submission_anchor_reconciliation_required" } });
+      expect(afterPublication).toEqual(invalidated);
+      expect(outcome).toMatchObject({ error: { category: "unavailable", retryable: true,
+        backendCode: "codex_history_reconciliation_required" } });
+    },
+  );
 
   it("releases viewed-image reservations instead of resnapshotting when streaming text fills the page", async () => {
     const harness = new RpcHarness();

@@ -974,15 +974,16 @@ export class CodexConversationHandle implements ConversationHandle {
         );
       }
       try {
-        const expectedInstallEpoch = this.#projectionInstallEpoch;
-        let fetchedPageCurrent = false;
-        const assertPageCurrent = (includingInstalls: boolean) => {
+        const expectedGeneration = this.#establishedGeneration;
+        const assertPageCurrent = () => {
+          this.#assertOpen();
+          const lifecycle = this.#client.lifecycleSnapshot();
           if (
             this.#projectionInvalidated ||
-            (includingInstalls &&
-              this.#projectionInstallEpoch !== expectedInstallEpoch) ||
-            this.#client.lifecycleSnapshot().generation !==
-              this.#establishedGeneration
+            this.#paginatedHistoryAdapter !== adapter ||
+            this.#establishedGeneration !== expectedGeneration ||
+            lifecycle.state !== "ready" ||
+            lifecycle.generation !== expectedGeneration
           ) {
             throw codexError(
               "unavailable",
@@ -997,21 +998,20 @@ export class CodexConversationHandle implements ConversationHandle {
           input.limit,
           input.signal,
         );
-        // The fetched page must match current authority. Ordinary installs
-        // during a bounded capture wait only enrich that page's own items.
+        // Older provider cursors retain their authority while the live tail
+        // advances. Only replacement of that authority or its daemon generation
+        // invalidates this request; ordinary live projection installs do not.
+        assertPageCurrent();
         const projection = await this.#projectNativeHistorySliceDurably(
           page.thread,
           page.thread.turns.length,
           input.limit, new Map(), {
             signal: input.signal,
-            beforeCapture: () => {
-              assertPageCurrent(true);
-              fetchedPageCurrent = true;
-            },
+            beforeCapture: assertPageCurrent,
           },
           page.itemTimestamps,
         );
-        assertPageCurrent(!fetchedPageCurrent);
+        assertPageCurrent();
         return historyPage(
           projection.snapshot,
           projection.snapshot.orderedBackendTurnIds,
@@ -5507,6 +5507,7 @@ export class CodexConversationHandle implements ConversationHandle {
       this.#streamingNativeItems.clear();
       this.#liveProjectionOverlay.dispose();
       this.#projectionInvalidated = true;
+      this.#projectionInstallEpoch += 1;
       this.#terminalErrorRecoveryGeneration = undefined;
       this.#terminalErrorFallbackThread = undefined;
       this.#failureFencedGeneration = undefined;
@@ -5519,6 +5520,7 @@ export class CodexConversationHandle implements ConversationHandle {
       this.#streamingNativeItems.clear();
       this.#liveProjectionOverlay.dispose();
       this.#projectionInvalidated = true;
+      this.#projectionInstallEpoch += 1;
       this.#terminalErrorRecoveryGeneration = undefined;
       this.#terminalErrorFallbackThread = undefined;
       this.#failureFencedGeneration = undefined;
