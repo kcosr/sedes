@@ -1832,6 +1832,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
       // parent timeline and are not evidence of ambiguous parent correlation.
       return;
     }
+    // A retained result can be replayed while a later provider turn runs.
+    // Its UUID belongs to the already-settled scoped turn, never the new one.
+    if (message.type === "result" && (this.#providerTurn || claudeResultUserMessageIds(message).length === 0)) {
+      const prior = this.#settings.findTerminalResult(this.#scope, this.binding.applicationThreadId, message.uuid);
+      if (prior && (prior.backendTurnId !== this.#activeBackendTurnId() || this.#providerTurn?.ownsTurn === false)) return;
+      // The same owner may have persisted its receipt before publication failed;
+      // allow that replay to finish projection and the run-state transition.
+    }
     const lifecycle = claudeCommandLifecycle(message);
     if (lifecycle) {
       this.#consumeCommandLifecycle(lifecycle);
@@ -2300,11 +2308,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#captureResultUsage(message);
     const correlatedIds = claudeResultUserMessageIds(message);
     // A turn Claude started itself carries no Sedes input identity. Its result
-    // ends that turn without writing a receipt for any application turn.
+    // ends only its own confirmed boundary, never an earlier application turn.
     if (this.#providerTurn && correlatedIds.every(id => this.#providerTurn?.inputUuids?.has(id))) {
       // Coalesced notification drains emit empty zero-turn receipts first.
       const expected = [...(this.#providerTurn.inputUuids?.keys() ?? [])];
-      if (!claudeResultIsUnrelated(message, expected)) this.#endProviderTurn(message.origin);
+      if (!claudeResultIsUnrelated(message, expected)) this.#endProviderTurn(message);
       return;
     }
     const activeId = this.#activeBackendTurnId();
@@ -2348,42 +2356,36 @@ export class ClaudeConversationHandle implements ConversationHandle {
       let settledStatus: ClaudeTerminalStatus = terminalStatus;
       if (backendTurnId) {
         const previous = this.#projection;
-        const terminalAt = this.#now();
-        try {
-          settledStatus = this.#settings.writeTerminalReceipt(
-            this.#scope,
-            this.binding.applicationThreadId,
-            {
-              backendTurnId,
-              status: terminalStatus,
-              ...(terminalStatus === "failed" ? {
-                failureMessage: turnFailure(terminalFailureMessage(message)).message.text,
-              } : {}),
-              providerTerminalReason: message.terminal_reason ?? message.subtype,
-              providerResultUuid: message.uuid,
-              terminalAt,
-              now: terminalAt,
-            },
-          ).status;
-        } catch (error) {
-          if (!(error instanceof Error) || error.message !== "claude_terminal_receipt_status_conflict") throw error;
-          // Receipts are write-once. A contradictory later result for the same
-          // turn keeps the first outcome and must not end the live query.
-          const existing = this.#settings.findTerminalReceipt(this.#scope, {
-            applicationThreadId: this.binding.applicationThreadId,
-            backendTurnId,
-          });
-          if (!existing) throw error;
-          settledStatus = existing.status;
-          console.warn("claude_terminal_receipt_conflict_kept_first", {
-            keptStatus: existing.status, conflictingStatus: terminalStatus,
-          });
-          this.#onError(error);
-        }
+        settledStatus = this.#writeTerminalResult(backendTurnId, message);
         this.#refreshProjection();
         this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot, backendTurnId);
       }
       if (settlesRun) this.#setRunState(settledStatus === "failed" ? "failed" : "idle");
+    }
+  }
+
+  #writeTerminalResult(backendTurnId: string, message: SDKResultMessage): ClaudeTerminalStatus {
+    const status = terminalReceiptStatus(message);
+    const terminalAt = this.#now();
+    try {
+      return this.#settings.writeTerminalReceipt(this.#scope, this.binding.applicationThreadId, {
+        backendTurnId, status,
+        ...(status === "failed" ? { failureMessage: turnFailure(terminalFailureMessage(message)).message.text } : {}),
+        providerTerminalReason: message.terminal_reason ?? message.subtype,
+        providerResultUuid: message.uuid, terminalAt, now: terminalAt,
+      }).status;
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "claude_terminal_receipt_status_conflict") throw error;
+      // Receipts are write-once, including when a retained result is replayed.
+      const existing = this.#settings.findTerminalReceipt(this.#scope, {
+        applicationThreadId: this.binding.applicationThreadId, backendTurnId,
+      });
+      if (!existing) throw error;
+      console.warn("claude_terminal_receipt_conflict_kept_first", {
+        keptStatus: existing.status, conflictingStatus: status,
+      });
+      this.#onError(error);
+      return existing.status;
     }
   }
 
@@ -2548,15 +2550,28 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#setRunState("running");
   }
 
-  #endProviderTurn(origin?: unknown): void {
+  #endProviderTurn(result?: SDKResultMessage): void {
     const turn = this.#providerTurn;
-    // Publish the settled turn before idle, as a Sedes turn result does.
     const previous = this.#projection.snapshot;
-    this.#refreshProjection();
-    this.#emitProjectionDelta(previous, this.#projection.snapshot, this.#activeBackendTurnId());
+    // Exact result provenance can add or remove the inferred boundary. Decide
+    // that first, so a receipt cannot land on the previous application turn.
+    const boundaryChanged = turn ? this.#settleProviderBoundary(turn, result?.origin) : false;
+    this.#refreshProjection(boundaryChanged);
+    const activeId = this.#activeBackendTurnId();
+    const ownedId = turn?.ownsTurn && activeId &&
+      !this.#projection.snapshot.turnsById[activeId]?.completionCorrelations?.length ? activeId : undefined;
+    let status = result ? terminalReceiptStatus(result) : undefined;
+    if (result) this.#terminalResultRevision++;
+    if (result && ownedId) {
+      status = this.#writeTerminalResult(ownedId, result);
+      this.#refreshProjection();
+    }
+    // Publish the exact terminal outcome before idle/failed, as for a Sedes
+    // input. A drain with no result never creates completion evidence.
+    if (boundaryChanged) this.#emit({ type: "resnapshot_required", reason: "history_changed" });
+    else this.#emitProjectionDelta(previous, this.#projection.snapshot, ownedId);
     this.#providerTurn = undefined;
-    this.#setRunState("idle");
-    if (turn) this.#settleProviderBoundary(turn, origin);
+    this.#setRunState(status === "failed" ? "failed" : "idle");
   }
 
   /**
@@ -2591,8 +2606,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   /** Exact result provenance confirms a boundary inferred from notification
    * frames. A visible external input already supplies its native boundary. */
-  #settleProviderBoundary(turn: ProviderTurn, origin: unknown): void {
-    if (turn.startIndex === undefined || turn.inputUuids !== undefined) return;
+  #settleProviderBoundary(turn: ProviderTurn, origin: unknown): boolean {
+    if (turn.startIndex === undefined || turn.inputUuids !== undefined) return false;
     const notification = typeof origin === "object" && origin !== null && !Array.isArray(origin)
       ? Reflect.get(origin, "kind") === "task-notification" : undefined;
     const boundaryUuid = turn.boundaryUuid;
@@ -2603,17 +2618,19 @@ export class ClaudeConversationHandle implements ConversationHandle {
       const index = this.#messages.findIndex(({ uuid }) => uuid === boundaryUuid);
       if (index >= 0) this.#messages.splice(index, 1);
       this.#providerTurnBoundaries.delete(boundaryUuid);
+      turn.boundaryUuid = undefined;
+      turn.ownsTurn = false;
       revised = true;
     } else if (boundaryUuid === undefined && notification === true && turn.responded && turn.messageId !== undefined) {
       const inserted = randomUUID();
       this.#providerTurnBoundaries.set(inserted, turn.messageId);
+      turn.boundaryUuid = inserted;
       this.#messages.splice(Math.min(turn.startIndex, this.#messages.length), 0, this.#providerBoundaryMarker(inserted));
+      turn.ownsTurn = true;
       revised = true;
     }
-    if (!revised) return;
-    this.#historyCursorNonce = randomBytes(16).toString("base64url");
-    this.#refreshProjection(true);
-    this.#emit({ type: "resnapshot_required", reason: "history_changed" });
+    if (revised) this.#historyCursorNonce = randomBytes(16).toString("base64url");
+    return revised;
   }
 
   #providerBoundaryMarker(uuid: string): SessionMessage {
@@ -2648,9 +2665,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
         // launch's startup message is not a turn; output still starts one.
         if (previous === "idle" && this.#startupSettled && this.#runState !== "running" && this.#runState !== "stopping" &&
             !this.#hasSubmissionAwaitingStart(true)) this.#beginProviderTurn();
-      } else if (this.#providerTurn) {
-        // Claude finished work that produced no result, for example a drain
-        // that did not query the model.
+      } else if (this.#providerTurn && this.#providerTurn.messageId === undefined &&
+          !this.#providerTurn.responded && !this.#providerTurn.ownsTurn) {
+        // Only an empty drain can finish without a result. Once native output
+        // or history establishes a turn, idle cannot discard its result owner.
         this.#endProviderTurn();
 
       }

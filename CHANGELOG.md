@@ -255,6 +255,9 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Claude replies triggered by background task completion settle their own turn,
+  restoring response controls when the session becomes idle.
+
 - Embedded Page previews initialize while browser painting is paused, preventing
   valid offscreen previews from failing until **Retry preview** is tapped.
   ([#118](https://github.com/kcosr/sedes/pull/118))
