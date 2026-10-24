@@ -2560,7 +2560,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const activeId = this.#activeBackendTurnId();
     const ownedId = turn?.ownsTurn && activeId &&
       !this.#projection.snapshot.turnsById[activeId]?.completionCorrelations?.length ? activeId : undefined;
-    let status = result ? terminalReceiptStatus(result) : undefined;
+    // A continuation without its own turn cannot fail the older settled turn.
+    // Only a receipt for a confirmed owner supplies the normalized outcome.
+    let status: ClaudeTerminalStatus | undefined;
     if (result) this.#terminalResultRevision++;
     if (result && ownedId) {
       status = this.#writeTerminalResult(ownedId, result);

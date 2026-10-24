@@ -5934,6 +5934,43 @@ describe("Claude native run state without prompt echoes", () => {
     await handle.close();
   });
 
+  it.each([false, true])("keeps a failed peer continuation idle without a separate turn (notification observed: %s)", async (observed) => {
+    const settings = repository();
+    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+    const turnId = projectClaudeHistory(settledTurn).snapshot.orderedBackendTurnIds[0]!;
+    const originalReceipt = settings.writeTerminalReceipt(scope, BINDING.applicationThreadId, {
+      backendTurnId: turnId, status: "completed", providerResultUuid: crypto.randomUUID(), terminalAt: 100, now: 100,
+    });
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { settings, initialMessages: settledTurn, resumeSession: true });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const writeTerminal = vi.spyOn(settings, "writeTerminalReceipt");
+    if (observed) provider.messages.push(nativeFrames.taskNotification("task-peer-continuation"));
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.start("msg-peer-continuation"));
+    const answer = nativeFrames.text("msg-peer-continuation", "Peer follow-up before its later failure.");
+    provider.messages.push(answer);
+    await vi.waitFor(async () => expect(JSON.stringify(await projectionSnapshot(handle))).toContain("Peer follow-up before its later failure."));
+    provider.messages.push(nativeFrames.result([], { origin: { kind: "peer" },
+      subtype: "error_during_execution", is_error: true, terminal_reason: "error", errors: ["Peer follow-up failed."] }));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).not.toBe("running"));
+    const live = await projectionSnapshot(handle);
+    expect(live.runState).toBe("idle");
+    expect(live.orderedBackendTurnIds).toEqual([turnId]);
+    expect(live.turnsById[turnId]).toMatchObject({ status: "completed", completionCorrelations: [OPERATION_ID] });
+    expect(writeTerminal).not.toHaveBeenCalled();
+    expect(settings.listTerminalReceipts(scope, BINDING.applicationThreadId)).toEqual([originalReceipt]);
+    await handle.close();
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, resumeSession: true,
+      initialMessages: [...settledTurn, { ...answer, parent_agent_id: null } as SessionMessage] }).handle;
+    const restored = await projectionSnapshot(reloaded);
+    expect(restored.runState).toBe(live.runState);
+    expect(restored.turnsById).toEqual(live.turnsById);
+    expect(restored.itemsById).toEqual(live.itemsById);
+    expect(settings.listTerminalReceipts(scope, BINDING.applicationThreadId)).toEqual([originalReceipt]);
+    await reloaded.close();
+  });
+
   it("stops a turn Claude started itself", async () => {
     const provider = fixture();
     const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
