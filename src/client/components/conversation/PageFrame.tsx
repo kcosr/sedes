@@ -97,9 +97,7 @@ export function PageFrame({
   const ready =
     enabled && admitted && state.status === "ready" && state.recoveryKey === recoveryKey ? state : undefined;
   const loadGuard = useRef(new PageFrameLoadGuard());
-  const handshakeAcknowledged = useRef(false);
-  const wrapperAcknowledged = useRef(false);
-  const handshakeTimeout = useRef<number | undefined>(undefined);
+  const frameLoadHandlers = useRef<{ loaded: () => void; fail: () => void } | undefined>(undefined);
 
   useEffect(() => {
     const element = host.current;
@@ -190,17 +188,34 @@ export function PageFrame({
       onReady: setResponseReady,
     });
     responseBridge.current = bridge;
-    handshakeAcknowledged.current = false;
-    wrapperAcknowledged.current = false;
+    let failed = false;
+    let loaded = false;
+    let measured = false;
+    let wrapperAcknowledged = false;
+    let handshakeTimeout: number | undefined;
     const fail = () => {
+      if (failed) return;
+      failed = true;
+      window.clearTimeout(handshakeTimeout);
       bridge.dispose();
       ready.recovery.fail();
       setNeedsActivation(true);
       setState({ status: "error" });
     };
+    const finishHandshake = () => {
+      if (!failed && (measured || (loaded && wrapperAcknowledged))) {
+        window.clearTimeout(handshakeTimeout);
+        handshakeTimeout = undefined;
+      }
+    };
+    frameLoadHandlers.current = {
+      loaded: () => { loaded = true; finishHandshake(); },
+      fail,
+    };
     // Transport can take longer than bootstrap execution for a large document.
-    handshakeTimeout.current = window.setTimeout(fail, 60_000);
+    handshakeTimeout = window.setTimeout(fail, 60_000);
     const receive = (event: MessageEvent) => {
+      if (failed) return;
       bridge.handleMessage(event);
       const message = pageFrameMessage(
         event,
@@ -209,20 +224,26 @@ export function PageFrame({
       );
       if (message === undefined) return;
       if (message.kind === "wrapper-ready") {
-        if (!handshakeAcknowledged.current && !wrapperAcknowledged.current) {
-          wrapperAcknowledged.current = true;
-          window.clearTimeout(handshakeTimeout.current);
-          handshakeTimeout.current = window.setTimeout(fail, 10_000);
+        if (!wrapperAcknowledged) {
+          wrapperAcknowledged = true;
+          if (!measured) {
+            window.clearTimeout(handshakeTimeout);
+            handshakeTimeout = window.setTimeout(fail, 10_000);
+          }
         }
+        // The trusted wrapper and its srcdoc child finish loading without
+        // requiring animation frames, which offscreen WebViews can suppress.
+        finishHandshake();
         return;
       }
-      window.clearTimeout(handshakeTimeout.current);
-      handshakeTimeout.current = undefined;
       if (message.kind === "error") {
         fail();
         return;
       }
-      handshakeAcknowledged.current = true;
+      // Keep interrupted-render recovery pending until the first measured
+      // animation frame, even after the independent load handshake completes.
+      measured = true;
+      finishHandshake();
       ready.recovery.complete();
       setNeedsActivation(false);
       if (page.viewport.height === undefined) setHeight(message.height);
@@ -231,9 +252,9 @@ export function PageFrame({
     return () => {
       bridge.dispose();
       responseBridge.current = undefined;
+      frameLoadHandlers.current = undefined;
       setResponseReady(false);
-      window.clearTimeout(handshakeTimeout.current);
-      handshakeTimeout.current = undefined;
+      window.clearTimeout(handshakeTimeout);
       window.removeEventListener("message", receive);
     };
   }, [page.viewport.height, ready]);
@@ -367,15 +388,12 @@ export function PageFrame({
                 // its WindowProxy and remains disallowed.
                 const admission = loadGuard.current.accept(context);
                 if (admission === "rejected") {
-                  responseBridge.current?.dispose();
-                  ready.recovery.fail();
-                  setNeedsActivation(true);
-                  setState({ status: "error" });
+                  frameLoadHandlers.current?.fail();
                 } else if (admission === "replacement") {
                   // Reparenting can reload a token long after it expired.
                   // Renew exact document authority for the new context.
                   setAttempt((value) => value + 1);
-                }
+                } else frameLoadHandlers.current?.loaded();
               }}
             />
           ) : (
