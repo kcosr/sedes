@@ -24,6 +24,21 @@ describe("default thread shortcut", () => {
     expect(openDefaultThread({ resolving: false })).toBe(true);
     expect(navigate).toHaveBeenCalledExactlyOnceWith("/settings/general");
   });
+  it("opens a settled default thread", () => {
+    const thread = { id: "settled", available: true, inventoryState: "settled" } as NormalizedApplicationThreadSummary;
+    expect(openDefaultThread({ thread })).toBe(true);
+    expect(openThreadRoute).toHaveBeenCalledExactlyOnceWith("settled");
+    expect(navigate).not.toHaveBeenCalled();
+  });
+  it.each([
+    { available: false, inventoryState: "active" },
+    { available: true, inventoryState: "archived" },
+  ] as const)("opens General settings for an unusable default (%o)", (state) => {
+    const thread = { id: "unavailable", ...state } as NormalizedApplicationThreadSummary;
+    expect(openDefaultThread({ thread, resolving: false })).toBe(true);
+    expect(openThreadRoute).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("/settings/general");
+  });
   it.each([{ ctrlKey: true }, { ctrlKey: false, metaKey: true }])("opens using either primary modifier (%o)", (modifier) => {
     const open = vi.fn(); cleanups.push(installDefaultThreadShortcut(window, open));
     expect(press(document.body, modifier).defaultPrevented).toBe(true);
