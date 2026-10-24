@@ -65,6 +65,7 @@ User-facing changes are collected here before release. See the
 - A Home button beside Notifications opens the configured default thread and
   reveals Chat. The connection indicator now follows these buttons in reserved
   space, keeping the toolbar steady when connection status changes.
+  ([#120](https://github.com/kcosr/sedes/pull/120))
 
 - Client data reads and thread/application event streams now negotiate gzip,
   reducing transfer size while flushing live events promptly. Operators can
