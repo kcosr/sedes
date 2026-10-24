@@ -540,10 +540,111 @@ describe("published page preview", () => {
     await act(async () => {});
     const frame = container.querySelector("iframe")!;
     sendFrameMessage(frame, "sedes:page-size", { height: 100 });
-    fireEvent.load(frame);
     sendFrameMessage(frame, "sedes:page-wrapper-ready");
     act(() => vi.advanceTimersByTime(65_000));
     expect(container.querySelector("iframe")).toBe(frame);
+  });
+
+  it("accepts a measured document while its outer load is still pending", async () => {
+    vi.useFakeTimers();
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    await act(async () => {});
+    const frame = container.querySelector("iframe")!;
+    sendFrameMessage(frame, "sedes:page-wrapper-ready");
+    act(() => vi.advanceTimersByTime(8_000));
+    sendFrameMessage(frame, "sedes:page-size", { height: 100 });
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(localStorage.getItem("sedes-page-preview-pending")).toBeNull();
+    fireEvent.load(frame);
+    act(() => vi.advanceTimersByTime(65_000));
+    expect(container.querySelector("iframe")).toBe(frame);
+  });
+
+  it.each(["wrapper first", "load first"])("finishes loading without paint and retains crash recovery: %s", async (order) => {
+    vi.useFakeTimers();
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    await act(async () => {});
+    const frame = container.querySelector("iframe")!;
+    const pendingRecovery = localStorage.getItem("sedes-page-preview-pending");
+    expect(pendingRecovery).not.toBeNull();
+    if (order === "wrapper first") {
+      sendFrameMessage(frame, "sedes:page-wrapper-ready");
+      fireEvent.load(frame);
+    } else {
+      fireEvent.load(frame);
+      sendFrameMessage(frame, "sedes:page-wrapper-ready");
+    }
+    act(() => vi.advanceTimersByTime(65_000));
+    sendFrameMessage(frame, "sedes:page-wrapper-ready");
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(localStorage.getItem("sedes-page-preview-pending")).toBe(pendingRecovery);
+    sendFrameMessage(frame, "sedes:page-size", { height: 100 });
+    expect(localStorage.getItem("sedes-page-preview-pending")).toBeNull();
+  });
+
+  it("does not let a frame load or forged wrapper acknowledgement bypass the transfer deadline", async () => {
+    vi.useFakeTimers();
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    await act(async () => {});
+    const frame = container.querySelector("iframe")!;
+    fireEvent.load(frame);
+    const channel = new URLSearchParams(new URL(frame.src).hash.slice(1)).get("channel");
+    act(() => window.dispatchEvent(new MessageEvent("message", {
+      source: window, data: { type: "sedes:page-wrapper-ready", channel },
+    })));
+    sendFrameMessage(frame, "sedes:page-wrapper-ready", { channel: "other-channel" });
+    act(() => vi.advanceTimersByTime(59_999));
+    expect(container.querySelector("iframe")).toBe(frame);
+    act(() => vi.advanceTimersByTime(1));
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent("Page preview unavailable.");
+  });
+
+  it("rejects navigation after loading and ignores messages queued behind failure", async () => {
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    const frame = await waitForFrame(container);
+    sendFrameMessage(frame, "sedes:page-wrapper-ready");
+    fireEvent.load(frame);
+    sendFrameMessage(frame, "sedes:page-size", { height: 100 });
+    expect(localStorage.getItem("sedes-page-preview-pending")).toBeNull();
+    act(() => {
+      fireEvent.load(frame);
+      sendFrameMessage(frame, "sedes:page-size", { height: 100 });
+      sendFrameMessage(frame, "sedes:page-wrapper-ready");
+    });
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent("Page preview unavailable.");
+    expect(localStorage.getItem("sedes-page-preview-pending")).not.toBeNull();
+  });
+
+  it("accepts an authenticated error after loading without letting late sizing clear recovery", async () => {
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    const frame = await waitForFrame(container);
+    sendFrameMessage(frame, "sedes:page-wrapper-ready");
+    fireEvent.load(frame);
+    act(() => {
+      sendFrameMessage(frame, "sedes:page-error");
+      sendFrameMessage(frame, "sedes:page-size", { height: 100 });
+    });
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(localStorage.getItem("sedes-page-preview-pending")).not.toBeNull();
+  });
+
+  it("cancels unpainted recovery when a successfully loaded frame deliberately releases", async () => {
+    vi.useFakeTimers();
+    const visible = makePreviewsVisible();
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    await act(async () => {});
+    const frame = container.querySelector("iframe")!;
+    sendFrameMessage(frame, "sedes:page-wrapper-ready");
+    fireEvent.load(frame);
+    expect(localStorage.getItem("sedes-page-preview-pending")).not.toBeNull();
+    visible(false);
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(localStorage.getItem("sedes-page-preview-pending")).toBeNull();
   });
 
   it("expires a transfer that never acknowledges its wrapper", async () => {

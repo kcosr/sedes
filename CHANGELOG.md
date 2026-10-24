@@ -255,6 +255,9 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Embedded Page previews initialize while browser painting is paused, preventing
+  valid offscreen previews from failing until **Retry preview** is tapped.
+
 - Usage combines redundant refreshes, avoids repeated aggregation scans, and
   loads only the requested report sections or filter choices.
   ([#115](https://github.com/kcosr/sedes/pull/115))
