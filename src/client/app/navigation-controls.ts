@@ -16,6 +16,8 @@ export const MOBILE_DRAWER_CONTENT_ID = "mobile-navigation-drawer";
 
 export interface NavigationControls {
   readonly notifications?: NotificationSettingsStore;
+  /** Present when this device's current connection has a default thread. */
+  readonly openDefaultThread?: () => void;
   /** Opens the mobile drawer for flows that must return to navigation. */
   readonly openDrawer: () => void;
   /** Toggles the mobile navigation drawer from the persistent workbench bar. */

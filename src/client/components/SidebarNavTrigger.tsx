@@ -1,6 +1,6 @@
 import { NotificationSilenceButton } from "./NotificationSilenceButton.js";
 import { useCallback, useContext, useRef } from "react";
-import { Menu, X } from "lucide-react";
+import { House, Menu, X } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import {
   MOBILE_DRAWER_CONTENT_ID,
@@ -103,10 +103,24 @@ export function SidebarNavTrigger(): React.JSX.Element | null {
           <Menu size={20} strokeWidth={1.8} />
         )}
       </Button>
-      <ApplicationConnectionStatus connection={controls.connection} />
       {controls.notifications ? (
         <NotificationSilenceButton store={controls.notifications} />
       ) : null}
+      {controls.openDefaultThread ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="default-thread-home-button"
+          aria-label="Home"
+          title="Open default thread"
+          onClick={controls.openDefaultThread}
+        >
+          <House size={20} strokeWidth={1.8} />
+        </Button>
+      ) : null}
+      <span className="sidebar-connection-status-slot">
+        <ApplicationConnectionStatus connection={controls.connection} />
+      </span>
     </span>
   );
 }

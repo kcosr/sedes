@@ -1,7 +1,7 @@
 import { useDefaultThread, DefaultThreadResolutionProvider, defaultThreadChoices } from "../app/default-thread.js";
 import { installDefaultThreadShortcut, openDefaultThread } from "../app/default-thread-shortcut.js";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   ApplicationClientState,
   ApplicationClientStore,
@@ -125,15 +125,21 @@ function ApplicationShellContent({
     };
   }, [applicationStore, state.status]);
   const defaultThread = useDefaultThread();
-  useEffect(() => installDefaultThreadShortcut(window, () => {
-    if (openDefaultThread(defaultThread)) setDrawerOpen(false);
-  }), [defaultThread?.thread, defaultThread?.resolving]);
   const route = useRoute();
   // An automation's route names only the automation; its page says the thread.
   const automationThreadId = useAutomationThreadId(
     route.name === "automation" ? route.automationId : undefined,
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const handleOpenDefaultThread = useCallback(() => {
+    if (openDefaultThread({ thread: defaultThread?.thread, resolving: defaultThread?.resolving })) {
+      setDrawerOpen(false);
+    }
+  }, [defaultThread?.thread, defaultThread?.resolving]);
+  useEffect(
+    () => installDefaultThreadShortcut(window, handleOpenDefaultThread),
+    [handleOpenDefaultThread],
+  );
   // Drawer contents unmount on close; retain this client-session UI state here.
   const drawerScrollPosition = useRef(0);
   // Keep the thread tree at the same React position and dimensions while Settings
@@ -228,6 +234,7 @@ function ApplicationShellContent({
   const navigationControls = useMemo(
     () => ({
       notifications: applicationStore.notifications,
+      openDefaultThread: defaultThread?.threadId ? handleOpenDefaultThread : undefined,
       openDrawer: () => setDrawerOpen(true),
       toggleDrawer: () => setDrawerOpen((open) => !open),
       toggleSidebar: () =>
@@ -239,7 +246,7 @@ function ApplicationShellContent({
     }),
     // Reattach the foreground trigger when Settings mounts/unmounts beside the
     // retained workspace; its old ref must not leave the shared target null.
-    [applicationStore, drawerOpen, sidebarCollapsed, state.connection, settingsActive],
+    [applicationStore, defaultThread?.threadId, handleOpenDefaultThread, drawerOpen, sidebarCollapsed, state.connection, settingsActive],
   );
 
   useEffect(

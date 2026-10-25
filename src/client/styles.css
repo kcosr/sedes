@@ -2442,6 +2442,7 @@ textarea:disabled {
    to 16px unless they carry a size-* class, so the glyphs are set here. */
 .sidebar-nav-trigger,
 .notification-silence-button,
+.default-thread-home-button,
 .workbench-panel-toggle,
 .workspace-panel-open-trigger,
 .thread-find-trigger,
@@ -2457,6 +2458,7 @@ textarea:disabled {
 
 .sidebar-nav-trigger svg,
 .notification-silence-button svg,
+.default-thread-home-button svg,
 .workbench-panel-toggle svg,
 .thread-find-trigger svg,
 .thread-tools-shell > button svg,
@@ -4159,6 +4161,7 @@ textarea:disabled {
 }
 
 .sidebar-nav-trigger,
+.default-thread-home-button,
 .application-workspace [data-slot="button"] {
   /* Inherited visibility changes when Settings reveals the retained workspace.
      Never animate it: the return-focus target must be focusable immediately. */
@@ -4170,6 +4173,15 @@ textarea:disabled {
   flex: 0 0 auto;
   align-items: center;
   gap: 5px;
+}
+
+.sidebar-connection-status-slot {
+  display: inline-flex;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  align-items: center;
+  justify-content: center;
 }
 
 .sidebar-connection-status {
