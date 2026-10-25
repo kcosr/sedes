@@ -446,14 +446,17 @@ globals; mediated native tools retain the same research filesystem policy.
 The launch sets `agents.enabled=false` and disables project instructions and
 host skill discovery. It ignores native user configuration while retaining
 host-managed authentication and sessions. It is a Sedes read with model execution and no
-durable external side effect. If the executable or native authentication fails
-its startup check, configuration screens show the exact tool disabled and
-runtime catalogs omit it.
+durable external side effect. If the executable fails its startup/version check,
+configuration screens show the exact tool disabled and runtime catalogs omit it.
+Native authentication is checked on each search, so signing in repairs an
+authentication failure without restarting or editing the research configuration.
 
 Each request invokes `codex exec --json`. Sedes buffers bounded stdout and
 stderr, waits for process exit, and then parses the JSONL events to obtain the
 answer and exact native session ID. Failed, cancelled, timed-out, and malformed
-runs do not become successful search results. A fresh query must complete a
+runs do not become successful search results. Recovered native stream errors do
+not discard an answer when exec exits successfully and the turn completes.
+A fresh query must complete a
 web lookup; a follow-up may use the saved search results. The calling tool receives one
 text result with ordinary Markdown source links, not the provider event stream
 or native session identifier. Unresolved provider citation markers are rejected.

@@ -31,7 +31,9 @@ export function convertLegacyConfiguration(input: LegacyConfigurationImport): {
     })),
     targets: configuration.targets,
     defaultTargetId: configuration.defaultTargetId,
-    webSearch: configuration.webSearch ?? null,
+    // Schema 10 describes the retired Grok provider. Import its other settings
+    // without adopting its research selection, credentials, or native home.
+    webSearch: null,
   });
   return {
     document,

@@ -6,6 +6,7 @@ import {
   CodexCliWebSearchProvider, buildCodexArguments, parseCodexJsonl, runCodexProcess,
   type CodexProcessResult,
 } from "../../src/server/web-search/codex-cli-web-search-provider.js";
+import { WebSearchService } from "../../src/server/web-search/web-search-service.js";
 
 const sessionId = "019196f7-a0a8-7bc4-a89b-8cf013978405";
 const answer = "Current answer. [Source](https://example.com/research)";
@@ -35,8 +36,7 @@ describe("Codex research boundary", () => {
   it.each(["0.162.1", "0.163.0", "0.164.0"])("uses the normal Codex runtime policy for %s with a curated environment and configured home", async (release) => {
     const root = await mkdtemp(path.join(tmpdir(), "sedes-search-provider-"));
     const runProcess = vi.fn<typeof runCodexProcess>()
-      .mockResolvedValueOnce(success(`codex-cli ${release}\n`))
-      .mockResolvedValueOnce(success(""));
+      .mockResolvedValueOnce(success(`codex-cli ${release}\n`));
     try {
       const provider = new CodexCliWebSearchProvider({
         workDirectory: path.join(root, "work"), codexHome: path.join(root, "auth"), runProcess,
@@ -46,7 +46,7 @@ describe("Codex research boundary", () => {
         },
       });
       await expect(provider.checkAvailability()).resolves.toEqual({ available: true });
-      expect(runProcess.mock.calls.map(([input]) => input.arguments)).toEqual([["--version"], ["login", "status"]]);
+      expect(runProcess.mock.calls.map(([input]) => input.arguments)).toEqual([["--version"]]);
       for (const [input] of runProcess.mock.calls) {
         expect(input.environment).toEqual({ HOME: "/operator-home", PATH: "/bin", CODEX_HOME: path.join(root, "auth"), NO_COLOR: "1", TERM: "dumb" });
       }
@@ -63,14 +63,22 @@ describe("Codex research boundary", () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it("keeps missing native authentication unavailable without exposing diagnostics", async () => {
+  it("allows native login to repair authentication without reconfiguring the service", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sedes-search-auth-"));
     const runProcess = vi.fn<typeof runCodexProcess>()
       .mockResolvedValueOnce(success("codex-cli 0.163.0"))
-      .mockResolvedValueOnce({ ...success(), exitCode: 1, stderr: "private-token" });
+      .mockResolvedValueOnce({ ...success(), exitCode: 1, stderr: "Unauthorized private-token" })
+      .mockResolvedValueOnce(success());
     try {
       const provider = new CodexCliWebSearchProvider({ workDirectory: root, environment: {}, runProcess });
-      await expect(provider.checkAvailability()).resolves.toEqual({ available: false, reason: "Codex research is not authenticated. Sign in using its configured home." });
+      const availability = await provider.checkAvailability();
+      expect(availability).toEqual({ available: true });
+      const service = new WebSearchService(provider, availability);
+      const request = { subject: { tenantId: "tenant", principalId: "principal", kind: "thread" as const, id: "thread" }, query: "Research", continue: false, signal: new AbortController().signal };
+      await expect(service.search(request)).rejects.toMatchObject({ code: "failed", message: "Codex web search failed. Check its authentication and research sandbox configuration." });
+      // Native authentication succeeds on the next exec after the user signs in.
+      await expect(service.search(request)).resolves.toEqual({ text: answer, continued: false, continuationFallback: false });
+      expect(runProcess.mock.calls).toHaveLength(3);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
@@ -146,12 +154,18 @@ describe("buffered Codex JSONL", () => {
     expect(parseCodexJsonl(jsonl([warning, ...events]))).toEqual({ text: answer, sessionId });
   });
 
+  it("accepts a recovered stream reconnect before a completed research answer", () => {
+    const reconnect = { type: "error", message: "Reconnecting… 1/5" };
+    expect(parseCodexJsonl(jsonl([...events.slice(0, 2), reconnect, ...events.slice(2)]), { requireWebSearch: true }))
+      .toEqual({ text: answer, sessionId });
+  });
+
   it.each([
     ["empty", ""],
     ["invalid JSON", "startup notice\n" + jsonl(events)],
     ["truncated", jsonl(events.slice(0, -1))],
     ["failed turn", jsonl([...events.slice(0, -1), { type: "turn.failed", error: { message: "failed" } }])],
-    ["top-level error", jsonl([{ type: "error", message: "failed" }, ...events])],
+    ["error without completion", jsonl([...events.slice(0, -1), { type: "error", message: "failed" }])],
     ["no session", jsonl(events.slice(1))],
     ["invalid session", jsonl([{ type: "thread.started", thread_id: "not-a-session" }, ...events.slice(1)])],
     ["output after completion", jsonl([...events, { type: "item.completed", item: { type: "agent_message", text: "late" } }])],

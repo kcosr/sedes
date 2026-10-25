@@ -103,14 +103,9 @@ export class CodexCliWebSearchProvider implements WebSearchProvider {
       const match = /^codex-cli (\S+)$/u.exec(version.stdout.trim());
       if (!match) return unavailable("The Codex CLI returned an invalid version.");
       verifyCodexRuntimeVersion(match[1]!);
-      const login = await this.#runProcess({
-        executable: this.#executable, arguments: ["login", "status"],
-        cwd: this.#workDirectory, environment: this.#processEnvironment(),
-        timeoutMilliseconds: AVAILABILITY_TIMEOUT_MILLISECONDS, signal,
-      });
-      return processSucceeded(login)
-        ? Object.freeze({ available: true })
-        : unavailable("Codex research is not authenticated. Sign in using its configured home.");
+      // Authentication is checked by each native exec, rather than cached in
+      // tool admission. Signing in must repair research without reconfiguration.
+      return Object.freeze({ available: true });
     } catch (error) {
       if (error instanceof Error && error.message === "codex_web_search_home_not_absolute") {
         return unavailable("The Codex research home must be an absolute path.");
@@ -208,8 +203,10 @@ export function parseCodexJsonl(stdout: string, options: { readonly requireWebSe
         break;
       case "turn.started": started = true; break;
       case "turn.completed": completed = true; break;
-      case "turn.failed":
-      case "error": failed = true; break;
+      case "turn.failed": failed = true; break;
+      // Exec also emits top-level errors for stream reconnects that recover.
+      // The caller checks exit 0; a completed turn is authoritative here.
+      case "error": break;
       case "item.completed":
         if (isRecord(event.item) && event.item.type === "web_search") searched = true;
         if (isRecord(event.item) && event.item.type === "agent_message") {

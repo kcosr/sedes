@@ -555,16 +555,17 @@ for research execution while host-managed authentication and sessions are
 retained. Sedes buffers the JSONL output and parses it after the process exits;
 research results are not streamed into the calling conversation. Subprocesses
 receive a curated environment without unrelated provider credentials or Sedes
-authority. Failed executable or
-native authentication checks make research unavailable without stopping the
-management UI. See
+authority. Failed executable/version checks make research unavailable without
+stopping the management UI. Native exec checks authentication on each search;
+after signing in, retry the search without restarting Sedes or changing Settings. See
 [research tool behavior](../internals/agent-tools.md#research-web-search) for
 continuation and result handling.
 
 Upgrading from Grok research disables the old provider selection. After the
 upgrade, authenticate Codex and enable **Codex CLI research** in Settings.
 The upgrade does not transfer the Grok home, credentials, or research sessions,
-and searches never fall back to Grok.
+and searches never fall back to Grok. Explicit schema-10 imports still accept
+the historical Grok research block and import it as disabled research.
 
 ### Application terminal policy
 

@@ -2,7 +2,7 @@
   "schemaVersion": 10,
   "packagedClients": [],
   "webSearch": {
-    "provider": "codex_cli"
+    "provider": "grok_cli"
   },
   "executionEnvironments": [
     {

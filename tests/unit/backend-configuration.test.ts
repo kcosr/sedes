@@ -156,18 +156,18 @@ describe("backend operator configuration", () => {
     ).toThrow();
   });
 
-  it("accepts an optional canonical Codex home for provider-neutral web search", () => {
+  it("parses the historical Grok research block only for schema-10 import", () => {
     expect(
       parseBackendConfiguration({
         ...validConfiguration,
         webSearch: {
-          provider: "codex_cli",
-          codexHome: "/var/lib/sedes/codex-web-search",
+          provider: "grok_cli",
+          grokHome: "/var/lib/sedes/grok-web-search",
         },
       }).webSearch,
     ).toEqual({
-      provider: "codex_cli",
-      codexHome: "/var/lib/sedes/codex-web-search",
+      provider: "grok_cli",
+      grokHome: "/var/lib/sedes/grok-web-search",
     });
     expect(
       parseBackendConfiguration(validConfiguration).webSearch,
@@ -175,16 +175,16 @@ describe("backend operator configuration", () => {
     expect(() =>
       parseBackendConfiguration({
         ...validConfiguration,
-        webSearch: { provider: "codex_cli", codexHome: "relative" },
+        webSearch: { provider: "grok_cli", grokHome: "relative" },
       }),
     ).toThrow(/canonical absolute/i);
   });
 
   it.each([
-    { provider: "grok_cli" },
-    { provider: "grok_cli", grokHome: "/var/lib/sedes/grok-web-search" },
-    { provider: "codex_cli", grokHome: "/var/lib/sedes/grok-web-search" },
-  ])("rejects obsolete research provider configuration: %j", webSearch => {
+    { provider: "codex_cli" },
+    { provider: "codex_cli", codexHome: "/var/lib/sedes/codex-web-search" },
+    { provider: "grok_cli", codexHome: "/var/lib/sedes/codex-web-search" },
+  ])("rejects nonhistorical research shapes in schema-10 import: %j", webSearch => {
     expect(() => parseBackendConfiguration({ ...validConfiguration, webSearch })).toThrow();
   });
 

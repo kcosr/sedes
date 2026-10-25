@@ -14,15 +14,30 @@ import { loadBootstrapConfigurationFile } from "../../src/server/config/bootstra
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 async function state() { const root = await mkdtemp(path.join(os.tmpdir(), "sedes-config-bootstrap-")); roots.push(root); return root; }
-function legacy() {
+function legacy(webSearch?: { provider: "grok_cli"; grokHome?: string }) {
   return compiledBackendModuleCatalog.resolveConfiguration(parseBackendConfiguration({ schemaVersion: 10,
     executionEnvironments: [{ id: "019196f7-a0a8-7bc4-a89b-8cf013978405", kind: "local", label: "Local" }],
     backends: [{ id: "pi-custom", kind: "pi", label: "My Pi", enabled: true, modelPolicy: { type: "catalog" } }],
     targets: [{ id: "custom-target", kind: "pi_sdk", label: "My target", backendInstanceId: "pi-custom", executionEnvironmentId: "019196f7-a0a8-7bc4-a89b-8cf013978405", enabled: true }],
     defaultTargetId: "custom-target",
+    ...(webSearch ? { webSearch } : {}),
   }));
 }
 describe("database configuration bootstrap", () => {
+  it.each([{ provider: "grok_cli" as const }, { provider: "grok_cli" as const, grokHome: "/retired/grok" }])("imports historical Grok research as disabled without losing other settings: %j", async webSearch => {
+    const stateDirectory = await state();
+    const configuration = legacy(webSearch);
+    const opened = await prepareBackendNormalizedDatabase({ stateDirectory, locksHeld: true, quiescentCutoverConfirmed: false,
+      legacyImport: { configuration, localWorkspaceRoots: [stateDirectory], sourceLabel: "historical Grok configuration" } });
+    try {
+      const scope = new SingleUserIdentityProvider(opened.database).getScope();
+      const imported = new ConfigurationRepository(opened.database).get(scope).configuration;
+      expect(imported.webSearch).toBeNull();
+      expect(imported.backends[0]?.label).toBe("My Pi");
+      expect(imported.defaultTargetId).toBe("custom-target");
+      expect(imported.executionEnvironments[0]?.workspaceRoots).toEqual([stateDirectory]);
+    } finally { opened.database.close(); }
+  });
   it("reports bootstrap filename and issue paths without echoing rejected values", async () => {
     const filename = path.join(await state(), "server.json");
     await writeFile(filename, JSON.stringify({ schemaVersion: 12, listen: { port: "private-value" }, packagedClients: ["private-client"] }));
