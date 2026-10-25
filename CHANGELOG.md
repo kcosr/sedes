@@ -12,6 +12,7 @@ User-facing changes are collected here before release. See the
   research** in Settings to use it again. Grok credentials and search sessions
   are not transferred, and this tool no longer provides Grok's dedicated X
   search. See [Web search provider](docs/operator/configuration.md#web-search-provider).
+  ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade server and browser/packaged clients together for client protocol
   **173**. Research settings now select Codex CLI. Remote environment
