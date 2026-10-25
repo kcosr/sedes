@@ -60,6 +60,23 @@ function remoteDocument(): ConfigurationDocument {
 }
 
 describe("database-owned configuration", () => {
+  it("persists the Codex research home and removes it when research is disabled", () => {
+    const current = fixture();
+    const webSearch = { provider: "codex_cli" as const, codexHome: "/var/lib/sedes/codex-research" };
+    const saved = current.repository.save(current.scope, {
+      mutationId: randomUUID(), expectedRevision: 0,
+      configuration: { ...current.document, webSearch },
+    });
+    expect(saved.configuration.webSearch).toEqual(webSearch);
+    const reloaded = new ConfigurationRepository(current.database);
+    expect(reloaded.get(current.scope).configuration.webSearch).toEqual(webSearch);
+    reloaded.save(current.scope, {
+      mutationId: randomUUID(), expectedRevision: saved.revision,
+      configuration: { ...saved.configuration, webSearch: null },
+    });
+    expect(current.repository.get(current.scope).configuration.webSearch).toBeNull();
+  });
+
   it("requires a boolean compression policy only on remote environments", () => {
     const remote = remoteDocument().executionEnvironments[1]!;
     const { connectionCompression: _compression, ...missing } = remote as Extract<typeof remote, { kind: "ssh" }>;
@@ -631,6 +648,15 @@ describe("configuration lifecycle receipts", () => {
 });
 
 describe("configuration validation", () => {
+  it.each([
+    { provider: "grok_cli" },
+    { provider: "grok_cli", grokHome: "/native/grok" },
+    { provider: "codex_cli", grokHome: "/native/grok" },
+    { provider: "codex_cli", codexHome: "relative" },
+  ])("rejects unsupported research configuration: %j", webSearch => {
+    expect(() => validateConfigurationDocument({ ...initialDocument(), webSearch })).toThrow();
+  });
+
   it("accepts zero backends but rejects unknown config and incompatible remote topologies", () => {
     expect(validateConfigurationDocument({ executionEnvironments: [], backends: [], targets: [], defaultTargetId: null, webSearch: null }).backends).toEqual([]);
     expect(() => validateConfigurationDocument({ ...initialDocument(), arbitraryAuthority: true })).toThrow();

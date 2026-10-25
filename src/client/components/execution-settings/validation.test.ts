@@ -118,6 +118,7 @@ describe("validation path mapping", () => {
     expect(describePath([])).toBeUndefined();
     expect(describeDocumentPath(["executionEnvironments", 5, "workspaceRoots", 0], document())).toBe("Environment (new) › Workspace roots › entry 1");
     expect(describeDocumentPath(["defaultTargetId"], document())).toBe("Default connection");
+    expect(describeDocumentPath(["webSearch", "codexHome"], document())).toBe("Research provider › Codex home directory");
   });
 
   it("finds errors under a subtree and treats an empty map as no errors", () => {

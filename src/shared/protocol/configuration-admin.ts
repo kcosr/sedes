@@ -117,7 +117,7 @@ export const configurationDocumentSchema = z.strictObject({
   backends: z.array(configurationBackendSchema).max(64),
   targets: z.array(configurationTargetSchema).max(64),
   defaultTargetId: configurationIdSchema.nullable(),
-  webSearch: z.strictObject({ provider: z.literal("grok_cli"), grokHome: absolutePath.optional() }).nullable(),
+  webSearch: z.strictObject({ provider: z.literal("codex_cli"), codexHome: absolutePath.optional() }).nullable(),
 }).superRefine((document, context) => {
   requireSerializedByteLimit(document, context, 512 * 1024, "Configuration exceeds its byte limit.");
   for (const field of ["executionEnvironments", "backends", "targets"] as const) {

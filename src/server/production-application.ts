@@ -164,7 +164,8 @@ import { AgentToolEnvironmentAuthorityResolver } from "./agent-tools/environment
 import { PolicyCheckedAgentToolHttpService } from "./agent-tools/http/agent-tool-http-service.js";
 import { AutomationAgentToolService } from "./agent-tools/tools/automation-agent-tool-service.js";
 import { ThreadWorktreeAgentToolService } from "./agent-tools/tools/thread-worktree-agent-tool-service.js";
-import { GrokCliWebSearchProvider } from "./web-search/grok-cli-web-search-provider.js";
+import { CodexCliWebSearchProvider } from "./web-search/codex-cli-web-search-provider.js";
+import type { WebSearchProviderAvailability } from "./web-search/web-search-provider.js";
 import { WebSearchService } from "./web-search/web-search-service.js";
 import { AutomationService } from "./domain/automation-service.js";
 import { DurableScheduler } from "./domain/durable-scheduler.js";
@@ -583,14 +584,14 @@ export async function startProductionApplication(
       source => resolveSourceAccessDecisionAuthority(source),
     );
     let webSearchConfiguration = backendConfigurationFile.webSearch;
-    const webSearchProvider = new GrokCliWebSearchProvider({
+    const webSearchProvider = new CodexCliWebSearchProvider({
       workDirectory: path.join(
         config.stateDirectory,
         "web-search",
         "workspace",
       ),
-      ...(webSearchConfiguration?.grokHome
-        ? { grokHome: webSearchConfiguration.grokHome }
+      ...(webSearchConfiguration?.codexHome
+        ? { codexHome: webSearchConfiguration.codexHome }
         : {}),
       environment,
     });
@@ -601,7 +602,7 @@ export async function startProductionApplication(
       webSearchProvider,
       webSearchAvailability,
     );
-    const agentToolRuntimeAvailability = new Map([
+    const agentToolRuntimeAvailability = new Map<string, WebSearchProviderAvailability>([
       ["research.web_search", webSearchAvailability] as const,
     ]);
     const agentToolPolicyDependencies = createThreadAgentToolPolicyDependencies(
@@ -2015,11 +2016,8 @@ export async function startProductionApplication(
         workspaceFiles,
         inventory,
       ),
-      unavailableToolIds: new Set(
-        [...agentToolRuntimeAvailability]
-          .filter(([, availability]) => !availability.available)
-          .map(([toolId]) => toolId),
-      ),
+      isToolAvailable: (toolId) =>
+        agentToolRuntimeAvailability.get(toolId)?.available ?? true,
     });
     deferAgentToolAutomationShutdown(resources, {
       closeCanonical: () => canonicalAgentTools.close(),
@@ -2673,9 +2671,9 @@ export async function startProductionApplication(
       }
       if (configurationFingerprint(webSearchConfiguration ?? null) !== configurationFingerprint(backendConfigurationFile.webSearch ?? null)) {
         webSearchConfiguration = backendConfigurationFile.webSearch;
-        const provider = new GrokCliWebSearchProvider({
+        const provider = new CodexCliWebSearchProvider({
           workDirectory: path.join(config.stateDirectory, "web-search", "workspace"),
-          ...(webSearchConfiguration?.grokHome ? {grokHome: webSearchConfiguration.grokHome} : {}), environment,
+          ...(webSearchConfiguration?.codexHome ? {codexHome: webSearchConfiguration.codexHome} : {}), environment,
         });
         const availability = webSearchConfiguration ? await provider.checkAvailability() : {available: false, reason: "Web search is not configured."};
         webSearch.reconfigure(provider, availability);

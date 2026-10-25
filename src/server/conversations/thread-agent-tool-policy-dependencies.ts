@@ -85,14 +85,6 @@ export function createThreadAgentToolPolicyDependencies(
         description: definition.description,
         order: definition.catalog.order,
         effects: definition.effects,
-        available:
-          runtimeAvailability.get(definition.id)?.available !== false,
-        ...(runtimeAvailability.get(definition.id)?.reason
-          ? {
-              unavailableReason: runtimeAvailability.get(definition.id)!
-                .reason,
-            }
-          : {}),
       }));
     return tools.length === 0 ? [] : [{ ...group, tools }];
   });
@@ -101,7 +93,21 @@ export function createThreadAgentToolPolicyDependencies(
       eligibleToolIds,
       presentationOptions: presentationOptionsForBackend,
     }),
-    catalog: Object.freeze({ list: () => ({ groups }) }),
+    catalog: Object.freeze({
+      list: () => ({
+        groups: groups.map(group => ({
+          ...group,
+          tools: group.tools.map(tool => {
+            const availability = runtimeAvailability.get(tool.id);
+            return {
+              ...tool,
+              available: availability?.available !== false,
+              ...(availability?.reason ? { unavailableReason: availability.reason } : {}),
+            };
+          }),
+        })),
+      }),
+    }),
   });
 }
 

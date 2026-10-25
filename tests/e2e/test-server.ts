@@ -3677,7 +3677,7 @@ async function main(): Promise<void> {
     executionEnvironments: [{ id: configuredTarget.executionEnvironmentId, kind: "local", label: "Local", workspaceRoots: fixtureWorkspaceRoots,
       workspaceIsolation: { kind: "bubblewrap", networkProfiles: ["isolated", "execution_host"] } }],
     defaultTargetId: configuredTarget.id,
-    webSearch: { provider: "grok_cli" },
+    webSearch: { provider: "codex_cli" },
     backends: [
       { id: "pi-local", kind: "pi", label: "Pi SDK", enabled: true, modelPolicy: { type: "catalog" } },
       {

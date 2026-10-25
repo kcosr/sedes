@@ -156,18 +156,18 @@ describe("backend operator configuration", () => {
     ).toThrow();
   });
 
-  it("accepts an optional canonical Grok home for provider-neutral web search", () => {
+  it("accepts an optional canonical Codex home for provider-neutral web search", () => {
     expect(
       parseBackendConfiguration({
         ...validConfiguration,
         webSearch: {
-          provider: "grok_cli",
-          grokHome: "/var/lib/sedes/grok-web-search",
+          provider: "codex_cli",
+          codexHome: "/var/lib/sedes/codex-web-search",
         },
       }).webSearch,
     ).toEqual({
-      provider: "grok_cli",
-      grokHome: "/var/lib/sedes/grok-web-search",
+      provider: "codex_cli",
+      codexHome: "/var/lib/sedes/codex-web-search",
     });
     expect(
       parseBackendConfiguration(validConfiguration).webSearch,
@@ -175,9 +175,17 @@ describe("backend operator configuration", () => {
     expect(() =>
       parseBackendConfiguration({
         ...validConfiguration,
-        webSearch: { provider: "grok_cli", grokHome: "relative" },
+        webSearch: { provider: "codex_cli", codexHome: "relative" },
       }),
     ).toThrow(/canonical absolute/i);
+  });
+
+  it.each([
+    { provider: "grok_cli" },
+    { provider: "grok_cli", grokHome: "/var/lib/sedes/grok-web-search" },
+    { provider: "codex_cli", grokHome: "/var/lib/sedes/grok-web-search" },
+  ])("rejects obsolete research provider configuration: %j", webSearch => {
+    expect(() => parseBackendConfiguration({ ...validConfiguration, webSearch })).toThrow();
   });
 
   it("defaults local Bubblewrap authority to isolated networking only", () => {

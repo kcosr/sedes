@@ -59,7 +59,7 @@ const keyLabels: Record<string, string> = {
   networkAccess: "Default network access", approvalPolicy: "Default approval policy", approvalReviewer: "Default approval reviewer",
   permissionPolicy: "Permission policy", allowedModes: "Allowed permission modes", permissionMode: "Default permission mode",
   initializationTimeoutMs: "Initialization timeout", configDirectory: "Claude configuration directory",
-  webSearch: "Research provider", grokHome: "Grok home directory", defaultTargetId: "Default connection",
+  webSearch: "Research provider", defaultTargetId: "Default connection",
 };
 /** Structural keys that name no user-facing part of the form. */
 const silentKeys = new Set(["moduleConfiguration", "channel"]);

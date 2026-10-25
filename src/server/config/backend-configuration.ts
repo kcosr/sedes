@@ -148,8 +148,8 @@ const localAbsolutePathSchema = z
 
 const webSearchConfigurationSchema = z
   .object({
-    provider: z.literal("grok_cli"),
-    grokHome: localAbsolutePathSchema.optional(),
+    provider: z.literal("codex_cli"),
+    codexHome: localAbsolutePathSchema.optional(),
   })
   .strict();
 

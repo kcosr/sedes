@@ -166,9 +166,15 @@ bindings remain fixed.
 
 Above the backend list, **Defaults** holds two account-wide settings: **Default
 connection for new threads**, whose choices read Environment / Backend /
-Connection, and **Grok CLI research**, the local research tool on Sedes, which
+Connection, and **Codex CLI research**, the local research tool on Sedes, which
 is configured separately from environment backends. On a narrow page they fold
 into one summary line; select it to change them, then choose **Save defaults**.
+The research switch is off by default. Its optional **Codex home** must be an
+absolute path; a supported Codex CLI must already be installed and
+authenticated on the Sedes host. Research follows the same minimum version as
+normal Codex threads. Existing Grok research selections are disabled
+on upgrade; configure Codex to use research again. See
+[Web search provider](../operator/configuration.md#web-search-provider).
 
 Provider executables and authentication must already be installed for their
 execution account. Pi's SDK and provider connection run on Sedes; a remote Pi

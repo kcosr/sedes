@@ -98,7 +98,7 @@ export function createWebSearchToolDefinition(
         name: "sedes_research_web_search",
         label: "Search the web",
         promptSnippet:
-          "Search the public web, fetch relevant pages, and search public X when useful.",
+          "Search the current public web and open relevant pages.",
         promptGuidelines: [
           "Use continue only for a direct follow-up to the most recent successful search in this Sedes thread.",
           "Start a new search for a different or unrelated question.",

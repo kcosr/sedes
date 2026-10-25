@@ -151,8 +151,10 @@ installation boundary:
   through a loopback server-to-server proxy. Configure `SEDES_PROVIDER_PULSE_URL`, or set it to
   `off`. The browser does not contact Pulse directly.
 - **Web search** exposes the provider-neutral `research.web_search` agent tool
-  through a local Grok CLI. Configure the server JSON `webSearch` block and
-  authenticate its normal or dedicated `GROK_HOME` as the service account.
+  through a local Codex CLI. Enable **Codex CLI research** under **Defaults**
+  on **Settings → Backends** and authenticate its normal or dedicated
+  `CODEX_HOME` as the service account. This is principal-owned database
+  configuration; see [Web search provider](configuration.md#web-search-provider).
 - **Outbound hosts** pair an account-local connector to this server over HTTP or
   HTTPS. They share sidecar execution, Files, tools, and runtime recovery with SSH;
   see [Outbound hosts](outbound-hosts.md) for setup and platform prerequisites.

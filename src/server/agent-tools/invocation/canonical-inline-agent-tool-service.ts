@@ -296,7 +296,7 @@ export class CanonicalInlineAgentToolService {
   readonly registry: AgentToolRegistry;
   readonly #invocationId: () => string;
   readonly #mutationId: () => string;
-  readonly #unavailableToolIds: ReadonlySet<string>;
+  readonly #isToolAvailable: (toolId: string) => boolean;
   readonly #executions = new Set<{
     readonly operation: Promise<unknown>;
     readonly abort: (reason: unknown) => void;
@@ -318,7 +318,7 @@ export class CanonicalInlineAgentToolService {
     readonly webSearch?: import("../tools/web-search-tool.js").WebSearchExecutor;
     readonly threadWorktrees?: AgentThreadWorktreeService;
     readonly additionalDefinitions?: readonly AgentToolDefinition[];
-    readonly unavailableToolIds?: ReadonlySet<string>;
+    readonly isToolAvailable?: (toolId: string) => boolean;
     readonly invocationId?: () => string;
     readonly mutationId?: () => string;
   }) {
@@ -328,7 +328,7 @@ export class CanonicalInlineAgentToolService {
     }
     this.#invocationId = input.invocationId ?? randomUUID;
     this.#mutationId = input.mutationId ?? randomUUID;
-    this.#unavailableToolIds = new Set(input.unavailableToolIds ?? []);
+    this.#isToolAvailable = input.isToolAvailable ?? (() => true);
   }
 
   catalog(
@@ -341,7 +341,7 @@ export class CanonicalInlineAgentToolService {
         .filter(
           (definition) =>
             definition.deployment?.eligible === true &&
-            !this.#unavailableToolIds.has(definition.id) &&
+            this.#isToolAvailable(definition.id) &&
             definition.callerEligibility.includes(callerKind) &&
             definition.exposure.adapters.includes(adapter),
         )
@@ -417,7 +417,7 @@ export class CanonicalInlineAgentToolService {
     }
     if (
       definition.deployment?.eligible !== true ||
-      this.#unavailableToolIds.has(definition.id) ||
+      !this.#isToolAvailable(definition.id) ||
       !definition.callerEligibility.includes(callerKind) ||
       !definition.exposure.adapters.includes(adapter) ||
       definition.execution.form !== "inline" ||

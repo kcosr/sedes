@@ -74,13 +74,13 @@ export function BackendDefaults({ configuration, value, onChange, dirty, saving,
           options={[{ value: "", label: "No default — choose a connection" }, ...options.map(target => ({ value: target.id, label: connectionLabel(configuration, target.id) }))]}
           onChange={defaultTargetId => onChange({ ...value, defaultTargetId })} />
         <div className="execution-defaults-research">
-          <SwitchField label="Grok CLI research" description="A local research tool on the Sedes host. Authentication stays host-managed."
+          <SwitchField label="Codex CLI research" description="A local research tool on the Sedes host. Authentication stays host-managed."
             checked={value.webSearch !== null} disabled={disabled || saving}
-            onCheckedChange={enabled => onChange({ ...value, webSearch: enabled ? { provider: "grok_cli" } : null })} />
-          {value.webSearch ? <AdvancedGroup summary="Grok home directory" defaultOpen={Boolean(value.webSearch.grokHome)} forceOpen={Boolean(errors.fields.under("webSearch"))}>
-            <TextField label="Grok home directory" layout="stacked" mono disabled={disabled || saving} value={value.webSearch.grokHome ?? ""} error={errors.fields.under("webSearch")}
+            onCheckedChange={enabled => onChange({ ...value, webSearch: enabled ? { provider: "codex_cli" } : null })} />
+          {value.webSearch ? <AdvancedGroup summary="Codex home directory" defaultOpen={Boolean(value.webSearch.codexHome)} forceOpen={Boolean(errors.fields.under("webSearch"))}>
+            <TextField label="Codex home directory" layout="stacked" mono disabled={disabled || saving} value={value.webSearch.codexHome ?? ""} error={errors.fields.under("webSearch")}
               description="Optional native configuration directory on the Sedes host."
-              onChange={grokHome => onChange({ ...value, webSearch: { provider: "grok_cli", grokHome: grokHome || undefined } })} />
+              onChange={codexHome => onChange({ ...value, webSearch: { provider: "codex_cli", codexHome: codexHome || undefined } })} />
           </AdvancedGroup> : null}
         </div>
       </div>

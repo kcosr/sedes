@@ -430,20 +430,45 @@ A failed client result from any client control is an `unavailable` error, or
 IDs, so a thread that enabled the earlier client controls does not gain
 `client.replay_turn` until the user enables it under Agent tools.
 
-`research.web_search` is provider-neutral. Its initial Grok CLI provider may
-use general web search, page fetch, and public X search, while Sedes removes
-local file, shell, write, image, subagent, memory, and MCP capabilities. It is
-a Sedes read with model execution and no durable external side effect. If
-the executable fails its startup check, configuration screens show the exact
-tool disabled and runtime catalogs omit it.
+### Research web search
+
+`research.web_search` is provider-neutral. Its local Codex CLI provider uses
+live hosted web search for public information, including page opening and
+searching within pages. Research runs in
+a dedicated directory under the named `research` permissions profile, extending
+`:workspace` with outside filesystem reads denied except minimal runtime files,
+temporary-directory access denied, and command networking disabled. Tool writes
+stay inside the research directory. Command execution tools are disabled and
+approvals are never requested; hosted search uses its independent connection.
+The packaged JavaScript Code Mode host remains enabled because current Codex
+models require it to invoke hosted search. It exposes no Node.js or filesystem
+globals; mediated native tools retain the same research filesystem policy.
+The launch sets `agents.enabled=false` and disables project instructions and
+host skill discovery. It ignores native user configuration while retaining
+host-managed authentication and sessions. It is a Sedes read with model execution and no
+durable external side effect. If the executable or native authentication fails
+its startup check, configuration screens show the exact tool disabled and
+runtime catalogs omit it.
+
+Each request invokes `codex exec --json`. Sedes buffers bounded stdout and
+stderr, waits for process exit, and then parses the JSONL events to obtain the
+answer and exact native session ID. Failed, cancelled, timed-out, and malformed
+runs do not become successful search results. A fresh query must complete a
+web lookup; a follow-up may use the saved search results. The calling tool receives one
+text result with ordinary Markdown source links, not the provider event stream
+or native session identifier. Unresolved provider citation markers are rejected.
+Authentication and persisted research sessions remain in the selected
+host-managed Codex home.
 
 Search continuation is deliberately narrow. Set `continue` only for a direct
 follow-up that depends on the most recent successful search by the same
 trusted Sedes thread or Tool client. Sedes resumes only the exact returned
-provider session ID—never Grok's “latest” session. The mapping is process-local;
-after restart, or when that exact session is missing, the request safely starts
-fresh and reports `continuationFallback: true`. New or unrelated questions
-should omit `continue`.
+provider session ID through `codex exec resume`, never the latest Codex session.
+Codex persists that native session, but the trusted-caller mapping is
+process-local. After Sedes restarts or the research configuration changes, or
+when that exact session is missing, the request starts fresh and reports
+`continuationFallback: true`. Other provider failures are returned as errors.
+New or unrelated questions should omit `continue`.
 
 Effects remain part of every public tool descriptor. For example, direct send
 or automation run-now can start model work, while a task file path is only
