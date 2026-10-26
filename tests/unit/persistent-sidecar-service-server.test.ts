@@ -78,15 +78,15 @@ describe("persistent sidecar management service", () => {
     expect(stop).toHaveBeenCalledWith("sidecar_service_explicit_stop", { force: true });
   });
 
-  it("admits a compatible different build for normal and recovery attachment while gating the wire version", async () => {
+  it.each([SIDECAR_WIRE_VERSION - 1, SIDECAR_WIRE_VERSION + 1])("admits a compatible different build for normal and recovery attachment while gating wire v%s", async runtimeWireVersion => {
     const { request, registry } = await setup();
     const attach = { managementVersion: 1 as const, requestId: randomUUID(), scope, operation: "attach" as const,
       expectedBuildId: "new-build", expectedArtifactSha256: "b".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
       sessionNonce: "n".repeat(32), carrierGeneration: 1, configuration };
-    expect(await request({ ...attach, mode: "normal", runtimeWireVersion: SIDECAR_WIRE_VERSION + 1 })).toMatchObject({ outcome: "error", code: "sidecar_runtime_upgrade_required" });
+    expect(await request({ ...attach, mode: "normal", runtimeWireVersion })).toMatchObject({ outcome: "error", code: "sidecar_runtime_upgrade_required" });
     // The service reports its own build; the runtime handshake verifies it.
     expect(await request({ ...attach, mode: "normal" })).toMatchObject({ outcome: "ok", status: { buildId: "build-a", attachmentMode: "normal" } });
-    expect(await request({ ...attach, mode: "recovery", runtimeWireVersion: SIDECAR_WIRE_VERSION + 1 })).toMatchObject({ outcome: "error", code: "sidecar_runtime_upgrade_required" });
+    expect(await request({ ...attach, mode: "recovery", runtimeWireVersion })).toMatchObject({ outcome: "error", code: "sidecar_runtime_upgrade_required" });
     expect(await request({ ...attach, mode: "recovery" })).toMatchObject({ outcome: "ok", status: { buildId: "build-a", attachmentMode: "recovery" } });
     expect(() => registry.assertAdmission(registry.controllerEpoch)).toThrow();
   });

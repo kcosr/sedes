@@ -16,7 +16,7 @@ const assistant = (id = "msg_assistant", changes: Record<string, unknown> = {}):
 })));
 const user = (id = "msg_user") => parseOpenCodeNativeMessage({ type: "user", id, text: "Question", time: { created: 1 } });
 const compact = (status = "completed") => parseOpenCodeNativeMessage({ type: "compaction", id: "msg_compact", status, reason: "auto",
-  time: { created: 3 }, ...(status === "failed" ? { error: { type: "unknown", message: "Failed" } } : { summary: "Summary", recent: "" }),
+  time: { created: 3 }, ...(status === "failed" ? { error: { type: "unknown", message: "Failed" } } : { summary: "Summary" }),
   ...(status === "running" ? {} : { tokens: { ...tokens, input: 900 } }) });
 const project = (messages: OpenCodeNativeMessage[]) => usageSnapshotSchema.parse(projectOpenCodeCurrentUsage({ messages, session: { model }, catalog }));
 

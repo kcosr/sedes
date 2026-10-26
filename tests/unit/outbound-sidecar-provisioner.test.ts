@@ -33,7 +33,7 @@ describe('outbound lifecycle provisioning', () => {
     await expect(rejected.provisioner.inspect(signal())).rejects.not.toBeInstanceOf(SidecarConnectionError);
   });
 
-  it.each([8, SIDECAR_WIRE_VERSION + 1])('keeps management while refusing wire v%s with live work', async runtimeWireVersion => {
+  it.each([8, SIDECAR_WIRE_VERSION - 1, SIDECAR_WIRE_VERSION + 1])('keeps management while refusing wire v%s with live work', async runtimeWireVersion => {
     const observed = status({ runtimeWireVersion, resources: [{ resourceId: 'terminal', kind: 'terminal', state: 'active', revision: '1', blockers: ['live_terminal'] }] });
     const { registry, provisioner } = setup(async (_scope, _environment, _operation, raw) => {
       const request = raw as SidecarManagementRequest;

@@ -57,7 +57,7 @@ it.runIf(RUN_REAL_OPENCODE)("captures persisted stock v2 usage, auxiliary title 
     const receipt = current.repository.requireOperation(scope, threadID, action.applicationOperationId, "action");
     await vi.waitFor(async () => {
       const message = await api.getMessage(session.id, receipt.nativeInputId!);
-      expect(message.type === "compaction" && message.status !== "running").toBe(true);
+      expect(message).toMatchObject({ type: "compaction", status: "completed" });
       const info = await api.getSession(session.id);
       expect(info.tokens.input).toBeGreaterThan(before.tokens.input);
       expect(captured.filter(item => item.replaceCheckpoint).at(-1)?.facts).toEqual(openCodeUsageCheckpoint(info).facts);

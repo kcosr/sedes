@@ -13,8 +13,8 @@ function event(type: string, data: Record<string, unknown>, sessionID = "ses_fix
 const retry = () => event("session.retry.scheduled", {
   assistantMessageID: "msg_assistant", attempt: 3, at: 1, error: { type: "ProviderError", message: "synthetic retry" },
 });
-const step = () => event("session.step.started", {
-  assistantMessageID: "msg_assistant", agent: "build", model: { providerID: "fixture", id: "fixture" }, started: 1,
+const step = (assistantMessageID = "msg_assistant") => event("session.step.started", {
+  assistantMessageID, agent: "build", model: { providerID: "fixture", id: "fixture" }, started: 1,
 });
 const text = (length: number, sessionID?: string) => event("session.synthetic", { text: "x".repeat(length) }, sessionID);
 
@@ -74,6 +74,23 @@ describe("live OpenCode monitor finalization", () => {
     current.emit(kind === "steps" ? step() : text(131_000));
     current.release();
     await expect(result).rejects.toThrow(kind === "steps" ? "step limit exceeded" : "event limit exceeded");
+  });
+
+  it("reports bounded finish and tool counts when extra provider attempts exceed the unchanged step limit", async () => {
+    const current = controlledObservation();
+    current.emit(step("msg_first_private_identifier"));
+    current.emit(event("session.step.ended", { assistantMessageID: "msg_first_private_identifier", finish: "length",
+      cost: 0, tokens: { input: 1, output: 256, reasoning: 200, cache: { read: 0, write: 0 } } }));
+    current.emit(step("msg_second_private_identifier"));
+    current.emit(event("session.step.ended", { assistantMessageID: "msg_second_private_identifier", finish: "length",
+      cost: 0, tokens: { input: 1, output: 256, reasoning: 200, cache: { read: 0, write: 0 } } }));
+    current.emit(step("msg_third_private_identifier"));
+    current.release();
+    await expect(current.monitor.finish()).rejects.toThrow(
+      'step limit exceeded: {"steps":3,"distinctSteps":3,"finishes":["length","length"],"toolCalls":0,"toolResults":0,"toolFailures":0}',
+    );
+    const reported = current.onFailure.mock.calls[0]![0] as Error;
+    expect(reported.message).not.toContain("private_identifier");
   });
 
   it("does not count unrelated session activity or retain a queue", async () => {

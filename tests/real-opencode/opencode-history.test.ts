@@ -123,34 +123,49 @@ describe.runIf(RUN_REAL_OPENCODE)(
       return messages;
     };
 
-    it("rejects every proposed idle filter instead of providing lightweight turn shells", async () => {
-      const session = await create("Closed filter qualification");
-      await prompt(session, "msg_filter");
-      const full = await settled(session, 1);
-      expect(full.at(-1)?.type).toBe("idle");
-
-      for (const type of [
-        "idle",
-        "user,idle",
-        "idle,user",
-        "*",
-        "execution.succeeded",
-      ]) {
+    it("pages idle boundaries in either order using the same type filter and opaque cursors", async () => {
+      const session = await create("Idle boundary filtering");
+      for (let index = 0; index < 5; index++) {
+        await prompt(session, `msg_filter_${index}`);
+        await settled(session, index + 1);
+      }
+      const full = await history(session);
+      const boundaries = full.filter(({ type }) => type === "idle");
+      expect(boundaries).toHaveLength(5);
+      for (const order of ["asc", "desc"] as const) {
+        const expected = order === "asc" ? boundaries : [...boundaries].reverse();
+        const collected: Message[] = [];
+        let next: string | null = null;
+        let previousPage: z.infer<typeof messagesPage> | undefined;
+        for (let index = 0; index < 4; index++) {
+          const current = await page(session, next
+            ? { type: "idle", cursor: next, limit: 2 }
+            : { type: "idle", order, limit: 2 });
+          expect(current.data.every(({ type }) => type === "idle")).toBe(true);
+          expect(current.data).toEqual(expected.slice(collected.length, collected.length + 2));
+          if (previousPage && current.data.length) {
+            const backwards = await page(session, {
+              type: "idle", cursor: current.cursor.previous!, limit: 2,
+            });
+            expect(backwards.data).toEqual(previousPage.data);
+          }
+          collected.push(...current.data);
+          if (!current.data.length) break;
+          previousPage = current;
+          next = current.cursor.next;
+          expect(next).not.toBeNull();
+        }
+        expect(collected).toEqual(expected);
+        expect(new Set(collected.map(({ id }) => id)).size).toBe(5);
+      }
+      const users = await page(session, { type: "user", limit: 1, order: "desc" });
+      expect(users.data.map(({ id }) => id)).toEqual(["msg_filter_4"]);
+      for (const type of ["", "user,idle", "idle,user", "*", "execution.succeeded"]) {
         const query = new URLSearchParams({ type, limit: "1" });
-        const response = await native!.api(
-          "GET",
-          `/api/session/${session}/message?${query}`,
-        );
+        const response = await native!.api("GET", `/api/session/${session}/message?${query}`);
         expect(response.status, type).toBe(400);
       }
-      // A legal filter returns complete native message payloads, not turn shells.
-      const users = await page(session, {
-        type: "user",
-        limit: 1,
-        order: "desc",
-      });
-      expect(users.data.map(({ id }) => id)).toEqual(["msg_filter"]);
-    }, 30_000);
+    }, 45_000);
 
     it("reads a stable opening after an idle with one opaque cursor request, including settings", async () => {
       const session = await create("Boundary cursors");

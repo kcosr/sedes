@@ -54,6 +54,25 @@ function liveProgress(events: SequencedBackendEvent[]) {
 }
 
 describe("OpenCode conversation authority and finite discovery", () => {
+  it("retains archive event density without refreshing the transcript", async () => {
+    const current = await attached([user(), assistant(), idle()]);
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    const events: SequencedBackendEvent[] = []; baseline.subscribeFromNext(value => events.push(value));
+    const before = current.wire.requests.length;
+    const cursor = () => (current.database.prepare("SELECT sequence FROM opencode_observation_cursors").get() as { sequence: number }).sequence;
+    const sequence = cursor();
+    current.wire.session.time.archived = 4;
+    current.wire.send(event("session.archived", {}, true));
+    delete current.wire.session.time.archived;
+    current.wire.send(event("session.unarchived", {}, true));
+    await vi.waitFor(() => expect(cursor()).toBe(sequence + 2));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(current.wire.requests).toHaveLength(before);
+    expect(events).toEqual([]);
+    expect((await current.handle.history({ limit: 10 })).orderedBackendTurnIds).toEqual(baseline.snapshot.orderedBackendTurnIds);
+    expect(current.wire.requests).toHaveLength(before);
+  });
+
   it("republishes terminal enrichment so durable completion consumers receive late materialized items", async () => {
     const current = await attached([user(), { ...assistant([{ type: "text", text: "Done" }]), time: { created: 2, completed: 3 } }, idle()]);
     const baseline = await current.handle.establishProjection({ signal: signal() });

@@ -555,7 +555,7 @@ describe("SshSidecarArtifactInstaller", () => {
     expect(control).not.toHaveBeenCalled();
   });
 
-  it.each([8, SIDECAR_WIRE_VERSION + 1])("refuses wire v%s that still owns work without minting controls", async runtimeWireVersion => {
+  it.each([8, SIDECAR_WIRE_VERSION - 1, SIDECAR_WIRE_VERSION + 1])("refuses wire v%s that still owns work without minting controls", async runtimeWireVersion => {
     const artifact = await artifactFixture(Buffer.from("new bundle"));
     const installer = new SshSidecarArtifactInstaller({ serviceScope, configuration, host: "srv", artifact,
       agentToolEndpointKey: AGENT_TOOL_ENDPOINT_KEY, spawnProcess: vi.fn() });

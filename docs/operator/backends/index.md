@@ -90,7 +90,7 @@ an unsupported action and the backend rejects it again if called directly.
 | Codex   | `0.163.0` app-server protocol   | Stable `>=0.162.1`, excluding reviewed incompatible releases             | `0.163.0`             |
 | Claude  | `0.3.296` Agent SDK             | Stable Claude Code `>=2.1.287`, excluding reviewed incompatible releases | Claude Code `2.1.296` |
 | Grok    | `1.x` ACP compatibility profile | Stable `>=1.0.4`, excluding reviewed incompatible releases               | `1.0.4`               |
-| OpenCode v2 | `2.0.32` HTTP/SSE profile | Stable stock `>=2.0.29` | `2.0.32` |
+| OpenCode v2 | `2.1.1` HTTP/SSE profile | Stable stock `>=2.1.1` | `2.1.1` |
 
 Codex, Claude, Grok, and OpenCode may admit a stable runtime newer than the release most
 recently exercised by this repository. Sedes shows an installation advisory
@@ -115,11 +115,12 @@ runtimes are not equivalent to exercised runtimes.
 | Codex | July 2026 | App-server `0.162.1` and `0.163.0` against the compiled `0.163.0` profile on Linux x64 with isolated mock providers; live qualification not repeated | `test:real-codex-agent-tools` | Local process, external UDS/TCP, persistent SSH or outbound sidecar |
 | Claude | August 2026 | Claude Code `2.1.296` with Agent SDK `0.3.296` | `test:real-claude` (native loopback and authenticated cases) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
 | Grok | August 2026 | Grok Build `1.0.4` against the compiled `1.x` ACP profile | `test:real-grok` (three files) | Local Linux x64 or macOS only |
-| OpenCode v2 | October 2026 | Stock `opencode2` 2.0.29/2.0.32 loopback fixtures; 2.0.32 AW Qwen read-only canary | `test:real-opencode` and authorized `test:live-opencode` | Owned or external HTTP/SSE on a Linux execution host; local, SSH and outbound |
+| OpenCode v2 | October 2026 | Stock `opencode2` 2.1.1 focused loopback history, mutation, compaction, image and accounting fixtures; AW Qwen live results intermittent and stable qualification inconclusive: one guard stop and two passes under unchanged limits | `test:real-opencode` and authorized `test:live-opencode` | Owned or external HTTP/SSE on a Linux execution host; local, SSH and outbound |
 
 Version-pinned qualification evidence for each external runtime is kept under
 `protocol/` beside its compiled profile. Live suites are opt-in. Pi, Codex, Claude, and Grok suites consume provider
-capacity; OpenCode uses isolated loopback fixtures; the deterministic suite exercises every backend through
+capacity; OpenCode's `test:real-opencode` uses isolated loopback fixtures and
+`test:live-opencode` requires separate provider authorization. The deterministic suite exercises every backend through
 recorded fixtures on each change.
 
 Maintainer positioning, stated as judgment rather than measurement: Pi SDK and

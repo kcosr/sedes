@@ -12,7 +12,14 @@ export function monitorLiveGate(input: {
   signal: AbortSignal;
   onFailure(error: Error): void;
 }) {
-  let bytes = 0, steps = 0, failure: Error | undefined, closing: Promise<void> | undefined;
+  let bytes = 0, steps = 0, toolCalls = 0, toolResults = 0, toolFailures = 0;
+  let failure: Error | undefined, closing: Promise<void> | undefined;
+  const stepIDs = new Set<string>();
+  const finishes: string[] = [];
+  // Report only bounded counts and protocol enums. Step identities stay private
+  // to distinct-attempt counting; no identifiers, prompts, reasoning, tool
+  // arguments/results, credentials, or native error bodies enter diagnostics.
+  const diagnostic = () => ({ steps, distinctSteps: stepIDs.size, finishes: [...finishes], toolCalls, toolResults, toolFailures });
   let closeRequested = false;
   const fail = (cause: unknown) => {
     if (failure) return;
@@ -25,7 +32,15 @@ export function monitorLiveGate(input: {
       bytes += Buffer.byteLength(JSON.stringify(event));
       if (bytes > 262_144) throw new Error("Live-gate event limit exceeded");
       if (event.type === "session.retry.scheduled") throw new Error(`Native provider retry attempt ${event.data.attempt} is outside this smoke gate`);
-      if (event.type === "session.step.started" && ++steps > 2) throw new Error("Live-gate step limit exceeded");
+      if (event.type === "session.step.ended" && finishes.length < 3) finishes.push(event.data.finish);
+      if (event.type === "session.tool.called") toolCalls++;
+      if (event.type === "session.tool.success") toolResults++;
+      if (event.type === "session.tool.failed") toolFailures++;
+      if (event.type === "session.step.started") {
+        steps++;
+        if (stepIDs.size < 3) stepIDs.add(event.data.assistantMessageID);
+        if (steps > 2) throw new Error(`Live-gate step limit exceeded: ${JSON.stringify(diagnostic())}`);
+      }
     } catch (error) { fail(error); }
     // No queued event remains for an asynchronous consumer to miss at close.
     return false;

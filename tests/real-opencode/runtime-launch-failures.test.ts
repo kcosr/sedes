@@ -6,7 +6,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { expect, it } from "vitest";
 import { startOpenCodeOwnedProcess } from "../../src/server/backends/opencode/opencode-owned-process.js";
-import { OPENCODE_PROCESS_MARKER } from "../../src/server/backends/opencode/opencode-release.js";
+import { OPENCODE_PROCESS_MARKER, OPENCODE_RELEASE } from "../../src/server/backends/opencode/opencode-release.js";
 
 const enabled = process.platform === "linux" && process.env.SEDES_RUN_REAL_OPENCODE === "1";
 async function alive(pid: number): Promise<boolean> {
@@ -15,7 +15,7 @@ async function alive(pid: number): Promise<boolean> {
     return !["Z", "X"].includes(value.slice(value.lastIndexOf(")") + 2).split(" ")[0]!);
   } catch (cause) { if (["ENOENT", "ESRCH"].includes((cause as NodeJS.ErrnoException).code ?? "")) return false; throw cause; }
 }
-async function fake(source: string, version = "2.0.29") {
+async function fake(source: string, version: string = OPENCODE_RELEASE) {
   const root = await mkdtemp(path.join(os.tmpdir(), "sedes-opencode-launch-"));
   const executablePath = path.join(root, "opencode2");
   const evidence = path.join(root, "pid.json");

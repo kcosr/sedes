@@ -92,6 +92,17 @@ of a configured target.
 Every backend-facing change must give all five an explicit implemented or
 intentionally unsupported disposition.
 
+The OpenCode 2.1.1 compatibility cutover is provider-private: use one current
+strict SDK/schema profile and its 2.1.1 runtime floor, retaining full native
+history acquisition, counters, delivery evidence, images and usage accounting.
+Native archived-session metadata does not select Sedes thread state, and native
+idle queries do not imply a different acquisition or paging contract. Pi,
+Codex, Claude and Grok retain their existing SDK/runtime admission and native
+semantics. All sidecar consumers use the current shared wire protocol 17,
+retaining negotiated compression from version 15; OpenCode's private runtime
+capability advances to major 4. No browser contract
+or client protocol change follows from this private schema update.
+
 Runtime notice retention and dismissal are shared application behavior for Pi,
 Codex, Claude, Grok, and OpenCode. The principal-scoped thread publication hub
 retains only the first notice with each exact tone and display text, discarding

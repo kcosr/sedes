@@ -356,7 +356,7 @@ it does not disconnect active work or restart a provider. The stored
 operation grants. Existing remote environments are migrated with it enabled.
 Local environments have no such setting.
 
-Runtime wire version **15** requires a matching sidecar. Follow
+Runtime wire version **17** requires a matching sidecar. Follow
 [persistent remote service upgrades](operations.md#persistent-remote-services)
 when an older service reports that an upgrade is required.
 
@@ -672,7 +672,7 @@ conversation lifecycle and fail-closed feature limits.
 
 ### OpenCode v2
 
-OpenCode requires a Linux execution host and stable stock `opencode2` 2.0.29 or newer (tested through 2.0.32) under
+OpenCode requires a Linux execution host and stable stock `opencode2` 2.1.1 or newer (tested through 2.1.1) under
 that host's sidecar account (or the Sedes account for local execution). Select
 a local, SSH, or outbound environment independently of ownership. Choose an
 owned resident process or an existing authenticated loopback HTTP server. Both exchange conversation traffic over HTTP/SSE. The

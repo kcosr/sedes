@@ -399,7 +399,7 @@ provider handshake does not grant sidecar capabilities, and sidecar success
 does not grant a provider transport. Unsupported remote operations never fall
 back to local paths.
 
-SSH and outbound carriers share runtime wire version 15 and negotiated,
+SSH and outbound carriers share runtime wire version 17 and negotiated,
 independent zstd frames. Their principal-owned environment setting defaults
 to compression and is sampled at each attachment. Compression-only edits do
 not change execution authority or retire a live runtime. Queue limits, stream

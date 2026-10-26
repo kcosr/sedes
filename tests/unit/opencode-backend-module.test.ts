@@ -60,7 +60,7 @@ function context() {
   };
   return { value, connection, resolveSecret, discard };
 }
-function nativeFactory(runtimeVersion = "2.0.29") {
+function nativeFactory(runtimeVersion = "2.1.1") {
   function native(input: OpenCodeRuntimeInput) {
     let state: OpenCodeRuntimeSnapshot["state"] = "stopped";
     const result = {
@@ -125,7 +125,7 @@ async function persistedInvocationFixture() {
   const owner: OpenCodeConversationRuntime & { close(): Promise<{ cleanup: "proved"; nativeInterrupts: "not_owned" }>; stop(): Promise<{ cleanup: "proved"; nativeInterrupts: "not_owned" }> } = {
     nativeNamespaceKey: namespace,
     start: vi.fn(async () => { state = "ready"; }), health: async () => ({ available: state === "ready", checkedAt: new Date().toISOString() }),
-    snapshot: () => ({ state, ownership: "owned", references: 0, generation: "persisted-generation", identity, runtimeVersion: "2.0.29" }),
+    snapshot: () => ({ state, ownership: "owned", references: 0, generation: "persisted-generation", identity, runtimeVersion: "2.1.1" }),
     assertCurrent: vi.fn(async () => { if (state !== "ready") throw new Error("not ready"); }),
     acquire: vi.fn(target => { const port = host.acquire(target); let released = false;
       return { client: port, generation: "persisted-generation", identity, release: () => { if (!released) { released = true; host.release(port); } } }; }),
@@ -187,15 +187,15 @@ async function persistedInvocationFixture() {
 
 describe("OpenCode compiled module", () => {
   it("publishes observed runtime compatibility advisories, refreshes on health, and clears on stop or close", async () => {
-    const factory = nativeFactory("2.0.33+vendor.1"), fixture = context();
+    const factory = nativeFactory("2.1.2+vendor.1"), fixture = context();
     const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration()).createRuntime(fixture.value);
     const changed = vi.fn(); runtime.installationAdvisories.subscribe(changed);
     expect(runtime.installationAdvisories.active()).toEqual([]);
     await runtime.start();
     expect(runtime.installationAdvisories.active()).toMatchObject([{ id: "runtime-newer-than-tested",
-      message: { text: "Running 2.0.33+vendor.1; Sedes is tested through 2.0.32." } }]);
+      message: { text: "Running 2.1.2+vendor.1; Sedes is tested through 2.1.1." } }]);
     const owner = factory.instances[0]!, driver = runtime.driverFactory.create(fixture.connection);
-    owner.runtimeVersion = "2.0.32";
+    owner.runtimeVersion = "2.1.1";
     await driver.health();
     expect(runtime.installationAdvisories.active()).toEqual([]);
     owner.runtimeVersion = "3.0.0";

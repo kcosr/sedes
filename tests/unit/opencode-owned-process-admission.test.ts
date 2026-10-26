@@ -10,7 +10,7 @@ import { sidecarProcessOwnership } from "../../src/server/sidecar/sidecar-proces
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const close of cleanups.splice(0).reverse()) await close(); });
-async function fixture(version = "2.0.29", stall?: "--version" | "serve") {
+async function fixture(version = "2.1.1", stall?: "--version" | "serve") {
   const root = await mkdtemp(path.join(os.tmpdir(), "oc-launch-admission-")); cleanups.push(() => rm(root, { recursive: true, force: true }));
   const nativeStorePath = path.join(root, "opencode.db");
   const lease = await createOpenCodeRuntimeOwnershipLifecycle({ authority: { tenantId: "tenant", principalId: "principal", backendInstanceId: "backend", executionEnvironmentId: "host" }, ownershipDirectory: root, label: "test", ownership: "owned", hostIncarnation: "launcher-test" }).acquire();
@@ -29,19 +29,19 @@ else { process.stdout.write(JSON.stringify({url:'http://127.0.0.1:47999'})+'\\n'
 }
 
 describe.skipIf(process.platform !== "linux")("OpenCode owned launch admission", () => {
-  it.each(["2.0.29", "2.0.32", "2.0.33+vendor.1", "3.0.0"])("admits stable executable %s before resident launch", async version => {
+  it.each(["2.1.1", "2.1.1+vendor.1", "2.1.2+vendor.1", "3.0.0"])("admits stable executable %s before resident launch", async version => {
     const f = await fixture(version);
     const owner = await startOpenCodeOwnedProcess(f.input); cleanups.push(() => owner.stop());
     expect(owner.runtimeVersion).toBe(version);
     expect((await readFile(f.log, "utf8")).includes('"serve"')).toBe(true);
   });
-  it.each(["1.18.30", "2.0.18", "2.0.28", "2.0.29-rc.1", "02.0.29"])("rejects incompatible executable %s before resident launch", async version => {
+  it.each(["1.18.30", "2.0.32", "2.1.0", "2.1.0+build.1", "2.1.1-rc.1", "02.1.1"])("rejects incompatible executable %s before resident launch", async version => {
     const f = await fixture(version);
     await expect(startOpenCodeOwnedProcess(f.input)).rejects.toThrow("opencode_release_incompatible");
     expect((await readFile(f.log, "utf8")).includes('"serve"')).toBe(false);
   });
   it.each(["--version", "serve"] as const)("cancels the pending %s launch and proves process cleanup before rejecting", async phase => {
-    const f = await fixture("2.0.29", phase), controller = new AbortController();
+    const f = await fixture("2.1.1", phase), controller = new AbortController();
     const started = startOpenCodeOwnedProcess({ ...f.input, signal: controller.signal });
     const rejected = expect(started).rejects.toThrow("opencode_request_aborted");
     let pid = 0;

@@ -72,7 +72,7 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
       this.nativeHost.close(); this.state = "stopped";
       return { cleanup: "proved", nativeInterrupts: ownership === "owned" ? "complete" : "not_owned" }; });
     async assertCurrent() { if (this.state !== "ready") throw new Error("not ready"); }
-    snapshot(): OpenCodeRuntimeSnapshot { return { state: this.state, runtimeVersion: "2.0.29", ownership, generation: this.generation, references: 0,
+    snapshot(): OpenCodeRuntimeSnapshot { return { state: this.state, runtimeVersion: OPENCODE_RELEASE, ownership, generation: this.generation, references: 0,
       identity: { pid: process.pid, startTime: "1", uid: process.getuid!(), executablePath: "/native/opencode2", executable: { device: "1", inode: "2" },
         nativeStorePath: actualNativeStorePath, store: { device: "1", inode: "3" }, storeObservation: "open_file" } }; }
   }

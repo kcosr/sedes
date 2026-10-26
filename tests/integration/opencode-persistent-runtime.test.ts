@@ -4,8 +4,14 @@ import { openCodeRuntimeDiagnostic } from "../../src/server/backends/opencode/op
 import { recoverOpenCodeRuntimeAdministration } from "../../src/server/backends/opencode/opencode-runtime-administration.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPersistentOpenCodeFixture } from "../helpers/persistent-opencode-fixture.js";
+import { createOpenCodeConversationFixture, scope as conversationScope, threadID } from "../support/opencode-conversation-fixture.js";
+import { openCodeRuntimeTarget } from "../../src/server/backends/opencode/opencode-conversation-context.js";
+import { OpenCodeInputObserver } from "../../src/server/backends/opencode/opencode-input-observer.js";
+import { OpenCodeInputEvidenceRepository } from "../../src/server/backends/opencode/opencode-input-evidence.js";
+import { OpenCodeObservationCursorRepository } from "../../src/server/backends/opencode/opencode-observation-cursor-repository.js";
 import { callOpenCodeRemoteRuntime } from "../../src/server/backends/opencode/opencode-remote-runtime.js";
 import { openCodeRuntimeExecuteOperation, openCodeRuntimeResponseSchema, openCodeRuntimeCommandSchema, openCodePortAdmissionSchema } from "../../src/server/backends/opencode/opencode-runtime-wire.js";
+import type { OpenCodeNativeMessage } from "../../src/server/backends/opencode/opencode-native-api.js";
 import type { OpenCodeMutationControl, OpenCodeObservationRecord } from "../../src/server/backends/opencode/opencode-native-port.js";
 
 const fixtures: ReturnType<typeof createPersistentOpenCodeFixture>[] = [];
@@ -230,6 +236,31 @@ describe("OpenCode resident runtime over shared sidecar framing", () => {
     expect((await Promise.all(encodeResponse.mock.results.map(result => result.value))).some(body => body.type === "stream")).toBe(true);
   });
 
+  it("preserves 2.1 native replay fields and archive observations across the private runtime contract", async () => {
+    const f = fixture(); await f.attach();
+    const client = f.client(); await client.start();
+    const scope = client.acquire(f.target);
+    const messages: OpenCodeNativeMessage[] = [
+      { id: "msg_native", type: "assistant" as const, agent: "build", model: { providerID: "fixture", id: "fixture" },
+        native: { responseId: "response-native" }, time: { created: 1, completed: 2 },
+        content: [{ type: "text" as const, text: "answer", native: { replay: "text-native" } }] },
+      { id: "msg_compacted", type: "compaction" as const, status: "completed" as const, reason: "manual" as const,
+        summary: "compacted", native: { messages: [{ role: "assistant", content: "provider checkpoint" }] }, time: { created: 3 } },
+    ];
+    f.wire.messages.push(...messages);
+    const page = await scope.client.read("getHistoryPage", { sessionID: f.wire.sessionID, order: "asc" });
+    expect(page.data).toEqual(messages);
+    const observation = scope.client.observe({ purpose: "presentation" }); await observation.ready;
+    f.wire.send(nativeEvent(1, "session.archived", {}));
+    const records: OpenCodeObservationRecord[] = [];
+    await vi.waitFor(() => {
+      records.push(...observation.drain());
+      expect(records).toHaveLength(1);
+    });
+    expect(records[0]).toMatchObject({ kind: "native", event: { type: "session.archived", data: { sessionID: f.wire.sessionID } } });
+    await observation.close(); scope.release();
+  });
+
   it("admits a fresh Stop and evidence scope on control while ordinary history requests fill the carrier", async () => {
     const f = fixture(), carrier = await f.attach(), client = f.client(); await client.start();
     const calls = vi.spyOn(carrier.mainChannel, "call"), scope = client.acquire(f.target), held = f.wire.hold(`/api/session/${f.wire.sessionID}/message`);
@@ -273,6 +304,90 @@ describe("OpenCode resident runtime over shared sidecar framing", () => {
     await replacement.client.acknowledgeOperation({ applicationOperationId: "send", operationKind: "submit" });
     expect(f.promptCount()).toBe(1); expect(f.owners).toHaveLength(1);
     await client.close(); expect(f.owners[0]!.close).not.toHaveBeenCalled();
+  });
+
+  it.each(["owned", "external"] as const)("resets a persisted %s observer cursor after native runtime replacement without resending uncertain input", async ownership => {
+    const f = fixture(ownership), carrier = await f.attach(), initial = f.client(); await initial.start();
+    const application = createOpenCodeConversationFixture({ wire: f.wire,
+      native: { runtime: initial, sessionID: f.wire.sessionID, directory: f.wire.directory } });
+    const lifetime = new AbortController(), observed = vi.fn();
+    const target = openCodeRuntimeTarget(application.target);
+    const firstLease = initial.acquire(target);
+    const first = new OpenCodeInputObserver(application.context, { ...application.target, onSubmissionObserved: observed },
+      initial, firstLease, lifetime.signal);
+    let recovered: OpenCodeInputObserver | undefined;
+    let releaseRecovered: (() => void) | undefined;
+    try {
+      const retainedMessages: OpenCodeNativeMessage[] = [
+        { id: "msg_previous", type: "user", text: "Preserved native history", time: { created: 1 } },
+        { id: "msg_previous_idle", type: "idle", outcome: "succeeded", time: { created: 2 } },
+      ];
+      f.wire.messages.push(...retainedMessages);
+      await first.start(AbortSignal.timeout(2_000));
+      const cursors = new OpenCodeObservationCursorRepository(application.database, firstLease.client.authority, initial.nativeNamespaceKey);
+      f.wire.send(nativeEvent(1, "session.renamed", { title: "Before replacement" }));
+      await vi.waitFor(() => expect(cursors.read()?.sequence).toBe(1));
+      const persisted = cursors.read()!;
+
+      // This durable state represents main losing the admission response after
+      // dispatch. Neither native history nor the inbox proves consumption.
+      application.repository.reserveOperation(conversationScope, {
+        applicationThreadId: threadID, connectionProfileId: application.target.binding.connectionProfileId,
+        executionEnvironmentId: application.target.binding.executionEnvironmentId, nativeSessionId: f.wire.sessionID,
+        applicationOperationId: "uncertain-before-replacement", operationKind: "submit", nativeInputId: "msg_uncertain",
+        requestFingerprint: "a".repeat(64), requestSource: { kind: "user" }, deadlineAt: null,
+      }, Date.now());
+      const evidence = new OpenCodeInputEvidenceRepository(application.repository);
+      first.track(evidence.begin(conversationScope, threadID, "uncertain-before-replacement", "submit", first.trackerId, "queue"));
+      application.repository.markDispatched(conversationScope, threadID, "uncertain-before-replacement", "submit", Date.now());
+      const originalReceipt = application.repository.requireOperation(conversationScope, threadID, "uncertain-before-replacement", "submit");
+      first.close(); firstLease.release();
+      await initial.stop();
+      const replacement = f.client(); await replacement.start();
+      expect(f.owners).toHaveLength(2);
+      const replacementLease = replacement.acquire(target); releaseRecovered = replacementLease.release;
+      const replacementCursors = new OpenCodeObservationCursorRepository(application.database, replacementLease.client.authority, replacement.nativeNamespaceKey);
+      expect(replacementCursors.read()).toEqual(persisted);
+      const calls = vi.spyOn(carrier.mainChannel, "call");
+      const observationOpens = () => calls.mock.calls.flatMap(([, body]) => {
+        const parsed = sidecarRuntimeBodySchema.safeParse(body);
+        const command = parsed.success && parsed.data.type === "inline" ? openCodeRuntimeCommandSchema.safeParse(parsed.data.value) : undefined;
+        return command?.success && command.data.action === "observe_open" ? [command.data] : [];
+      });
+      recovered = new OpenCodeInputObserver(application.context, { ...application.target, onSubmissionObserved: observed },
+        replacement, replacementLease, lifetime.signal);
+      await recovered.start(AbortSignal.timeout(2_000));
+      expect(observationOpens()).toEqual([
+        expect.objectContaining({ purpose: "evidence", after: { journalId: persisted.journalId, sequence: persisted.sequence } }),
+        expect.objectContaining({ purpose: "evidence" }),
+      ]);
+      expect(observationOpens()[1]).not.toHaveProperty("after");
+      const reset = replacementCursors.read()!;
+      expect(reset).toMatchObject({ runtimeId: replacement.runtimeId, nativeGeneration: replacementLease.generation, sequence: 0 });
+      expect(reset.journalId).not.toBe(persisted.journalId);
+      expect(reset.nativeContinuity).not.toBe(persisted.nativeContinuity);
+      await recovered.start(AbortSignal.timeout(2_000));
+      expect(observationOpens()).toHaveLength(2);
+
+      expect(await recovered.reconcile("uncertain-before-replacement", "submit", AbortSignal.timeout(2_000)))
+        .toMatchObject({ status: "failed_unknown" });
+      expect(evidence.get(conversationScope, threadID, "uncertain-before-replacement", "submit")).toMatchObject({
+        consumedFingerprint: null, withdrawnFingerprint: null, terminalLostAt: expect.any(Number),
+        receipt: { ...originalReceipt, disposition: "unknown", updatedAt: expect.any(Number) },
+      });
+      expect(recovered.correlations().size).toBe(0); expect(observed).not.toHaveBeenCalled();
+      expect(f.wire.messages).toEqual(retainedMessages); expect(f.promptCount()).toBe(0);
+
+      const stale = replacementLease.client.observe({ purpose: "evidence", after: { journalId: persisted.journalId, sequence: persisted.sequence } });
+      try { await expect(stale.ready).rejects.toMatchObject({ code: "opencode_observation_continuity_lost" }); }
+      finally { await stale.close(); }
+      f.wire.send(nativeEvent(2, "session.renamed", { title: "After recovery" }));
+      await vi.waitFor(() => expect(replacementCursors.read()).toMatchObject({ journalId: reset.journalId, sequence: 1 }));
+      expect(observationOpens()).toHaveLength(3); // one explicit stale-cursor probe, no stale retry loop
+    } finally {
+      lifetime.abort(); first.close(); recovered?.close(); firstLease.release(); releaseRecovered?.();
+      await application.dispose();
+    }
   });
 
   it("keeps Stop on the control lane while a history read is blocked", async () => {

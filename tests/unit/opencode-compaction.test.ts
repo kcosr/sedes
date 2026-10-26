@@ -119,7 +119,7 @@ describe("OpenCode manual compaction", () => {
     await expect(f.actions.perform(f.input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
     f.state.pending = [];
     f.wire.messages.push({ id: f.receipt().nativeInputId!, type: "compaction", status, reason: "manual", time: { created: 2 },
-      ...(status === "failed" ? { error: { type: "unknown", message: "Nothing to compact yet" } } : { summary: "", recent: "" }) } as never);
+      ...(status === "failed" ? { error: { type: "unknown", message: "Nothing to compact yet" } } : { summary: "" }) } as never);
     await expect(f.actions.reconcile(f.input)).resolves.toEqual({ outcome: "accepted" });
     expect(f.posts()).toHaveLength(1);
   });

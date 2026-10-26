@@ -191,7 +191,7 @@ describe("OpenCode complete retained native history acquisition", () => {
 
   it.each([50, 1_000])("refreshes only mutable records and the head in an open period with %i settled steps", async steps => {
     const shell = parseOpenCodeNativeMessage({ id: "msg_background", type: "shell", shellID: "sh_background", status: "running", command: "background", time: { created: 200 } });
-    const compaction = parseOpenCodeNativeMessage({ id: "msg_compaction", type: "compaction", status: "running", reason: "manual", summary: "", recent: "", time: { created: 200 } });
+    const compaction = parseOpenCodeNativeMessage({ id: "msg_compaction", type: "compaction", status: "running", reason: "manual", summary: "", time: { created: 200 } });
     const settled = Array.from({ length: steps }, (_, index) => [
       user(`msg_user_${index}`),
       assistant(`msg_answer_${index}`, { time: { created: 200, streamed: 220, completed: 250 }, content: [
@@ -205,7 +205,7 @@ describe("OpenCode complete retained native history acquisition", () => {
     api.getHistoryPage.mockClear(); api.getMessage.mockClear();
     state.messages[0] = parseOpenCodeNativeMessage({ ...shell, status: "exited", exit: 0, time: { created: 200, completed: 500 } });
     state.messages[state.messages.length - 3] = assistant("msg_mutable", { content: [{ type: "text", text: "full answer" }], time: { created: 200, completed: 500 } });
-    state.messages[state.messages.length - 2] = parseOpenCodeNativeMessage({ ...compaction, status: "completed", summary: "summary", recent: "recent" });
+    state.messages[state.messages.length - 2] = parseOpenCodeNativeMessage({ ...compaction, status: "completed", summary: "summary" });
     const refreshed = await refreshOpenCodeHistory(api, restartOpenCodeHistoryAcquisition(before), { sessionId });
     expect(refreshed.messages).toEqual(state.messages);
     expect(api.getHistoryPage.mock.calls.map(([, options]) => ({ order: options?.order, limit: options?.limit }))).toEqual([{ order: "desc", limit: 1 }]);
@@ -434,7 +434,7 @@ describe("OpenCode normalized retained history", () => {
       { type: "text", text: "Answer" },
     ] }),
     parseOpenCodeNativeMessage({ id: "msg_shell", type: "shell", shellID: "sh_one", command: "echo output", status: "exited", exit: 0, output: { output: "output", cursor: 6, size: 6, truncated: false }, time: { created: 205, completed: 206 } }),
-    parseOpenCodeNativeMessage({ id: "msg_compact", type: "compaction", status: "completed", reason: "manual", summary: "summary", recent: "recent", time: { created: 207 } }),
+    parseOpenCodeNativeMessage({ id: "msg_compact", type: "compaction", status: "completed", reason: "manual", summary: "summary", time: { created: 207 } }),
     parseOpenCodeNativeMessage({ id: "msg_agent", type: "agent-switched", agent: "review", time: { created: 208 } }), idle("msg_idle")];
     const result = projection(messages); const page = result.history({ limit: 10 });
     expect(Object.values(page.itemsById).map(item => item.semanticKind)).toEqual(["user_message", "reasoning", "tool", "tool", "assistant_message", "command", "compaction", "notice"]);

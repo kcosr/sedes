@@ -8,6 +8,7 @@ import { usageSubagentsMigration } from "../../src/server/db/migrations/112-usag
 import { usageTimelineMigration } from "../../src/server/db/migrations/113-usage-timeline.js";
 import { usageSubagentRecoveryIndexesMigration } from "../../src/server/db/migrations/114-usage-subagent-recovery-indexes.js";
 import { OpenCodeUsageAccounting, openCodeUsageAllocations, openCodeUsageCheckpoint } from "../../src/server/backends/opencode/opencode-usage-accounting.js";
+import { parseOpenCodeNativeMessage } from "../../src/server/backends/opencode/opencode-native-api.js";
 import { openCodeHistoryTurnId } from "../../src/server/backends/opencode/opencode-history-projection.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
 import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
@@ -55,6 +56,24 @@ function canonical(fixture: ReturnType<typeof setup>) {
 }
 
 describe("OpenCode usage evidence", () => {
+  it("preserves usage observation identities and normalization across native replay metadata changes", async () => {
+    const f = setup(); const { accounting, sink } = recorder();
+    const messages = history();
+    const compact = { id: "msg_compact", type: "compaction", reason: "manual", status: "completed", summary: "Summary",
+      model: { providerID: "fixture", id: "model-actual" }, cost: 0.01, tokens: counts(), time: { created: 3 } };
+    const before = [...messages.slice(0, -1), parseOpenCodeNativeMessage(compact), messages.at(-1)!];
+    const after = before.map(message => message.type === "assistant" || message.type === "compaction"
+      ? parseOpenCodeNativeMessage({ ...message, native: { fixture: { replay: "provider-private" } } }) : message);
+    const ids = new Set(turns(f.wire.sessionID).map(turn => turn.backendTurnId));
+    expect(openCodeUsageAllocations(f.wire.sessionID, after, ids)).toEqual(openCodeUsageAllocations(f.wire.sessionID, before, ids));
+    const lease = accounting.acquire(f.context, f.target, f.runtime, f.port);
+    lease.record(after, turns(f.wire.sessionID)); await lease.settled();
+    expect(sink.open).toHaveBeenCalledWith(expect.objectContaining({
+      epoch: "native-session-counter-v1", normalizationVersion: "opencode-2.0.18-usage-v1",
+    }));
+    lease.release();
+  });
+
   it("preserves native absence, SDK zeros, disjoint token buckets and tiny estimated costs", () => {
     const { wire } = setup(); wire.session.tokens = counts(); wire.session.cost = 1e-9;
     const fact = openCodeUsageCheckpoint(wire.session).facts[0]!;

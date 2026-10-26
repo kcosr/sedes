@@ -808,8 +808,11 @@ restarts. **Stop** requests service shutdown and persists stop preference even
 if the host is unreachable; only confirmed cleanup is displayed as stopped.
 **Connect** or **Start** explicitly resumes an intentionally suppressed runtime.
 
-Runtime wire version **15** adds negotiated sidecar traffic compression and
-requires upgrading older runtime services with the server. An incompatible
+Runtime wire version **17** preserves OpenCode observation-continuity failures
+for recovery after a sidecar journal changes. It retains the OpenCode 2.1.1
+schema cutover from version 16 and negotiated traffic compression from version
+15. Upgrade both server and sidecar. Wire 17 does not change browser or Android
+client protocols. An incompatible
 service cannot attach through an older framing mode. Idle services follow the
 existing automatic upgrade path; active or unreconciled work still blocks
 automatic replacement. Inspect the interruption impact before using **Upgrade

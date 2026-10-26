@@ -1,7 +1,7 @@
 # OpenCode v2
 
-Sedes supports stable stock OpenCode **2.0.29 or newer**, tested through
-**2.0.32**, on a Linux execution host, locally or
+Sedes supports stable stock OpenCode **2.1.1 or newer**, tested through
+**2.1.1**, on a Linux execution host, locally or
 through the persistent SSH or outbound HTTP(S) sidecar. The Sedes server may run
 on another machine or OS. OpenCode and its sidecar use the same host account.
 Sedes finds `opencode2` on the execution account’s PATH by default; an
@@ -14,12 +14,16 @@ from that environment. The older `opencode` v1 executable is not an alternative.
 authentication, native project configuration, plugins, permissions, and model
 definitions remain in the selected native OpenCode environment.
 
-The compiled SDK/schema profile remains pinned to **2.0.32** independently of
+The compiled SDK/schema profile remains pinned to **2.1.1** independently of
 this runtime minimum. Newer stable runtimes are admitted with an active
 installation advisory when they exceed the tested-through release; passing the
 version check does not enable new features or bypass protocol validation.
-Prereleases and releases below 2.0.29 are rejected. Upgrade execution sidecars
-with the server for private OpenCode runtime protocol **3**.
+Prereleases and releases below 2.1.1 are rejected. Upgrade the native executable
+on every OpenCode execution host, including external daemon hosts, and restart
+those daemons at the upgraded version. Upgrade execution sidecars with the
+server for sidecar wire protocol **17** and private OpenCode runtime protocol
+**4**. The adapter uses one strict current schema; older message formats are
+not accepted through a compatibility parser.
 
 ## Connections
 
@@ -111,6 +115,10 @@ Unknown/custom variants remain readable and stoppable but require an explicit
 supported selection before new work. Only reviewed reasoning-effort variants
 appear in Sedes; arbitrary native variants are not treated as effort settings.
 
+OpenCode's native archived-session metadata does not change a thread's Sedes
+Active, Snoozed, Parked or Archived state. Sedes keeps its own thread state and
+does not synchronize native OpenCode archival.
+
 Send, conversation-scoped Steer, Sedes Queue, Stop, rename, model/effort changes,
 saved Agents, skills, manual compaction, and expressible native permissions/forms
 are supported. Queue
@@ -135,6 +143,9 @@ native history after a stream
 disconnect, including final full-text repairs for incomplete streaming deltas.
 Initial history acquisition can be expensive: it is bounded to 100,000 records,
 96 MiB of acquisition/projection data, and 60 seconds. Limits fail explicitly.
+Although OpenCode 2.1.1 supports idle-boundary queries, Sedes still reads the
+complete native history within those bounds. History paging, session counters,
+image evidence and usage attribution retain their existing behavior.
 
 An HTTP prompt acknowledgment proves inbox admission, not consumption. Sedes
 tracks each submitted input independently. Lost replies never trigger a second
@@ -245,6 +256,8 @@ general composer limits. A completed native image read can show
 proves that image's inclusion. If context pruning, a checkpoint, missing bytes,
 or another proof gap prevents that conclusion, the child image is unavailable;
 Sedes does not reread a path and present a later file as the original input.
+GIF tool reads are unavailable as viewed images for a model resolved to xAI,
+because the stock runtime excludes those bytes from the model request.
 Operator plugins can replace native tools, so this relies on the admitted
 stock runtime and trusted local configuration, rather than cryptographic tool
 producer attestation. Native generated-image artifacts are unavailable.

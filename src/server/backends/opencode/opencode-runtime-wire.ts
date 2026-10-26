@@ -49,7 +49,7 @@ export type OpenCodeRuntimeCommand = z.infer<typeof openCodeRuntimeCommandSchema
 export type OpenCodeRuntimeCommandInput = OpenCodeRuntimeCommand extends infer Command
   ? Command extends OpenCodeRuntimeCommand ? Omit<Command, "serviceIncarnation" | "controllerEpoch"> : never : never;
 
-const capability = { capabilityId: "opencode_runtime", majorVersion: 3 } as const;
+const capability = { capabilityId: "opencode_runtime", majorVersion: 4 } as const;
 export const openCodeRuntimeExecuteOperation = { ...capability, operation: "runtime.execute",
   requestSchema: sidecarRuntimeBodySchema, responseSchema: sidecarRuntimeBodySchema,
   lane: "operation", maximumDeadlineMilliseconds: 600_000,

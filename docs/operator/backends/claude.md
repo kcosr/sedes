@@ -220,7 +220,7 @@ remote query, and the archive is refused while that query still has running
 work. The sidecar holds at most 32 Claude sessions, fork launches included.
 Beyond that, opening a thread or forking fails with a message naming the limit
 and asking you to archive or close idle Claude threads in that environment.
-These rules require sidecar runtime protocol 14.
+These rules require sidecar runtime protocol 17.
 
 A long-lived query keeps answering permission requests and accepting input
 indefinitely. It retains exact replay receipts for its newest 16,384 inputs and
@@ -254,7 +254,7 @@ and the old protocol is rejected. Upgrade the sidecar through its supported
 lifecycle controls; active-work protection still applies. After that upgrade,
 compatible main restarts can reattach to the surviving query as usual.
 Reading history through the transcript's true tip requires sidecar runtime
-protocol 14, which upgrades an older sidecar the same way.
+protocol 17, which upgrades an older sidecar the same way.
 
 **Disconnect** detaches main Sedes and preserves remote work. **Stop**,
 **Restart**, and **Upgrade and restart** act on the owning runtime/service and
@@ -383,7 +383,7 @@ steer Claude had already started stays with the stopped turn. Stop does not
 withdraw Claude's own queued work: a background task that finished during the
 stopped turn can still start a turn of its own afterwards. Remote hosts need a
 sidecar built from this version, which performs the withdrawal (runtime
-protocol 14).
+protocol 17).
 
 Queue is Sedes-owned next-turn work. It is not SDK stream injection and is not
 relabeled as Steer. An unconfirmed delivery pauses subsequent dispatch and shows
@@ -533,9 +533,9 @@ workspace, and do not use sensitive files merely to validate connectivity.
 | A permission mode is missing                                 | Compare it with the backend `allowedModes`. `bypassPermissions` must be explicitly allowed and can never be the target default.                                                                                                                                                                                         |
 | Plan-mode tools appear or a reset command is selected        | Use a reviewed CLI/profile and keep those commands disabled. Sedes rejects `EnterPlanMode`, `ExitPlanMode`, and other reset-producing forms.                                                                                                                                                                                       |
 | An ordinary file is visible but its contents were not used   | Sedes sends the authenticated staged path, not the file body. Ask Claude to read it explicitly; native images use a separate SDK image-block path.                                                                                                                                                                                 |
-| History ends at an older tool call, or a fork cannot be verified | Earlier versions read history with the SDK's leaf heuristic. It stops at a parallel tool call once Sedes' startup message is the newest transcript row. Upgrade main and any SSH or outbound sidecar to runtime protocol 14, then reload the thread. |
+| History ends at an older tool call, or a fork cannot be verified | Earlier versions read history with the SDK's leaf heuristic. It stops at a parallel tool call once Sedes' startup message is the newest transcript row. Upgrade main and any SSH or outbound sidecar to runtime protocol 17, then reload the thread. |
 | Reopening a thread that was never sent to fails with "Session ID … is already in use" | Earlier versions launched a new session because the SDK reports no metadata for a transcript holding only the startup message. The current version resumes any existing transcript. |
-| Earlier turns disappeared, or a "This session is being continued…" message appeared as a prompt | Claude compacted the conversation automatically. Earlier versions stopped reading at the compaction. Upgrade main and any SSH or outbound sidecar to runtime protocol 14, then reload the thread. |
+| Earlier turns disappeared, or a "This session is being continued…" message appeared as a prompt | Claude compacted the conversation automatically. Earlier versions stopped reading at the compaction. Upgrade main and any SSH or outbound sidecar to runtime protocol 17, then reload the thread. |
 | A turn shows "Claude Code stopped before this turn finished" | The Claude process running that turn was lost, and a fresh launch found the turn unfinished. Check the server, worker, or sidecar logs for the stop; resend the prompt if its work is still needed. |
 | Fork is missing                                              | The source must be idle and the boundary must be an exact successfully completed ordinary turn. Attachment-ended structured-output boundaries, turns before Claude's latest compaction, and active sources are unforkable. The fork action's reason names the cause. |
 | Fork is unavailable while background work runs               | Claude reported background agents or commands still running in the source thread, or has not reported them yet. Wait for them to finish, or stop them, then fork. |

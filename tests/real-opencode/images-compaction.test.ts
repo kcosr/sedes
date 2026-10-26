@@ -1,6 +1,6 @@
 import { createOpenCodeNativePortFixture, openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 import { createHash, randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { ConversationHandle, SubmitTurnInput } from "../../src/server/backends/contracts.js";
@@ -69,22 +69,46 @@ it.runIf(RUN_REAL_OPENCODE)("qualifies stock v2 canonical image input, exact rea
       expect(Object.values(snapshot.itemsById).some(item => item.semanticKind === "image" && item.origin.kind === "viewed" && item.origin.capture === "provider_input")).toBe(true);
     }, { timeout: 20_000, interval: 100 });
     expect(published).toHaveLength(1); expect(Buffer.from(published[0]!.bytes)).toEqual(png);
+    const beforeCompact = (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
+    const capturedImage = Object.values(beforeCompact.itemsById).find(item => item.semanticKind === "image");
+    expect(capturedImage).toBeDefined();
+    // Later history and compaction must use native evidence and the retained
+    // artifact association, without rereading an old agent filesystem path.
+    await rm(file);
     expect(model.requests.filter(request => request.images.some(image => image.sha256 === sha256)).length).toBeGreaterThanOrEqual(2);
     await vi.waitFor(async () => expect((await api.getActive())[session.id]).toBeUndefined(), { timeout: 20_000, interval: 25 });
     const compact = { action: "compact", applicationOperationId: "manual-compact" } as const;
     await expect(handle.perform(compact)).resolves.toEqual({ accepted: true });
     const receipt = current.repository.requireOperation(scope, threadID, compact.applicationOperationId, "action");
     expect(receipt.nativeInputId).toMatch(/^msg_/u);
-    let nativeCompactStatus: "completed" | "failed" | undefined;
     await vi.waitFor(async () => {
       const message = await api.getMessage(session.id, receipt.nativeInputId!);
-      expect(message).toMatchObject({ type: "compaction", reason: "manual" });
-      expect(message.type === "compaction" && message.status !== "running").toBe(true);
-      if (message.type === "compaction" && message.status !== "running") nativeCompactStatus = message.status;
+      expect(message).toMatchObject({ type: "compaction", reason: "manual", status: "completed" });
+      if (message.type === "compaction" && message.status === "completed") {
+        expect(message.summary).toContain("## Objective");
+      }
     }, { timeout: 20_000, interval: 100 });
     await expect(handle.reconcileAction(compact)).resolves.toEqual({ outcome: "accepted" });
-    expect(Object.values((await handle.establishProjection({ signal: new AbortController().signal })).snapshot.itemsById).find(item => item.semanticKind === "compaction"))
-      .toMatchObject({ status: nativeCompactStatus });
+    const compacted = (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
+    expect(Object.values(compacted.itemsById).find(item => item.semanticKind === "compaction"))
+      .toMatchObject({ status: "completed", summary: { text: expect.stringContaining("## Objective") } });
+    expect(compacted.itemsById[capturedImage!.backendItemId]).toEqual(capturedImage);
+    expect(published).toHaveLength(1);
+    await vi.waitFor(async () => expect((await api.getActive())[session.id]).toBeUndefined(), { timeout: 20_000, interval: 25 });
+
+    // A successful local summary compaction starts a qualified context for
+    // subsequent image reads as well as preserving already captured history.
+    await writeFile(file, png);
+    const laterTool = model.callToolNextStream("read after compaction", "read", { path: file });
+    await handle.submit(input("image-read-after-compaction", "read after compaction"));
+    await laterTool.called;
+    await vi.waitFor(async () => {
+      const snapshot = (await handle!.establishProjection({ signal: new AbortController().signal })).snapshot;
+      expect(Object.values(snapshot.itemsById).filter(item => item.semanticKind === "image"
+        && item.origin.kind === "viewed" && item.origin.capture === "provider_input")).toHaveLength(2);
+    }, { timeout: 20_000, interval: 100 });
+    expect(published).toHaveLength(2);
+    expect(Buffer.from(published[1]!.bytes)).toEqual(png);
   } finally {
     await handle?.close();
     try { await current?.dispose(); } finally { client?.close(); try { await native?.stop(); } finally { await model.stop(); } }

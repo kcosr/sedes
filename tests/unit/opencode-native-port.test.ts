@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { OpenCodeNativeApi, type OpenCodeNativeEvent } from "../../src/server/backends/opencode/opencode-native-api.js";
+import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import { OpenCodeNativeLogError, OpenCodeNativeMutationDeliveryError, OpenCodeNativeMutationInputError,
   OpenCodeNativeProtocolError, OpenCodeNativeReadLimitError, OPENCODE_NATIVE_RESULT_BYTES,
   encodeOpenCodeNativeFailure, decodeOpenCodeNativeFailure, parseOpenCodeReadOutput,
@@ -138,6 +139,19 @@ it("round-trips classified failures without exception text or credential materia
   }
   expect(encodeOpenCodeNativeFailure(new Error("private credential value"), true)).toEqual({ kind: "mutation_unknown", delivery: "sent_outcome_unknown", code: "opencode_request_failed" });
   expect(decodeOpenCodeNativeFailure({ kind: "runtime", code: "arbitrary private value" })).toBeInstanceOf(OpenCodeNativeProtocolError);
+});
+
+it.each([
+  "opencode_observation_continuity_lost",
+  "opencode_observation_retention_full",
+  "opencode_observation_controller_superseded",
+  "opencode_observation_cursor_conflict",
+])("round-trips observation recovery failure %s through the closed wire contract", code => {
+  const encoded = encodeOpenCodeNativeFailure(new OpenCodeRuntimeError(code), false);
+  expect(encoded).toEqual({ kind: "runtime", code });
+  const decoded = decodeOpenCodeNativeFailure(JSON.parse(JSON.stringify(encoded)));
+  expect(decoded).toBeInstanceOf(OpenCodeRuntimeError);
+  expect(decoded.code).toBe(code);
 });
 
 it("uses explicit JSON-safe empty values and validates result scope and aggregate bounds", () => {

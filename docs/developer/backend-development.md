@@ -8,7 +8,7 @@ and workflow summary, not a replacement for it.
 
 ## The boundary
 
-Sedes compiles Pi, Codex, Claude, and Grok behind normalized contracts. A
+Sedes compiles Pi, Codex, Claude, Grok and OpenCode behind normalized contracts. A
 backend owns its SDK/protocol types, native IDs, history interpretation,
 correlation, settings conversion, transports, and provider process topology.
 The browser consumes only normalized shared protocol types or a closed,
@@ -77,7 +77,7 @@ representation.
 A change to shared backend contracts, conversation lifecycle, settings,
 attachments, artifacts, forks, interactions, agent tools, or browser feature
 selection requires an explicit audit of every compiled backend. For Pi, Codex,
-Claude, and Grok, record:
+Claude, Grok and OpenCode, record:
 
 - implemented behavior and capability;
 - intentionally unsupported behavior and its fail-closed result;
