@@ -327,6 +327,24 @@ prefix or owner invalidates it. Missing active execution alone cannot settle an
 unfinished period: an orphan remains disconnected/in-progress until native
 terminal evidence arrives. Settings-only suffixes do not claim running ownership.
 
+Response phases are classified only at native idle settlement, before the
+authoritative completion snapshot. The last assistant after any input, system,
+skill, synthetic, shell, compaction or location-change boundary is Final only
+when the period succeeded, its native finish is `stop`, its completed timestamp
+is present, it is not a provider pause (`rawFinish: "pause_turn"`), and it has
+no error or retry. It must have no tools other than
+completed provider-hosted tools (`executed: true`). Pure model/agent selection
+notices do not displace that response. All text blocks of that message share
+the phase; reasoning and tool output remain excluded. Completed, error-free,
+retry-free `tool-calls` messages with actual completed/errored tools are
+Provisional. Active and ambiguous messages remain Unclassified, including
+truncated prefixes before synthetic continuation prompts. No live progress
+notification is produced. Per-message cache reuse includes the selected phase,
+so terminal reclassification and retained-history enrichment agree with a fresh
+projection. Existing frozen completion observations are never backfilled;
+re-observation preserves their classification without suppressing ordinary
+completion replay follow-ups.
+
 Text and reasoning use separate native ordinal counters. Observed deltas are
 disposable overlays; final native values replace them, including empty text.
 After prefix loss, the final value repairs the transcript. Native inputs receive Sedes delivery provenance only from an exact private

@@ -15,6 +15,8 @@ import { openCodeHistoryTurnId } from "../../src/server/backends/opencode/openco
 import { parseLiveInput, liveConfiguration, settledCanaryPeriod, within, cleanupLiveGate, assertLiveGateBudget, LIVE_GATE_LIMITS, LIVE_GATE_PROVIDER_ID } from "./opencode-live-gate.js";
 import { monitorLiveGate } from "./opencode-live-monitor.js";
 import { createOpenCodeConversationFixture, scope, threadID } from "./opencode-conversation-fixture.js";
+import { projectClassifiedAssistantResult } from "../../src/server/conversations/completion-result-projection.js";
+import { selectAssistantResult } from "../../src/server/domain/assistant-result-selection.js";
 
 const { deadlineMs, outputBytes } = LIVE_GATE_LIMITS;
 
@@ -133,6 +135,9 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
           const snapshot = await handle!.establishProjection({ signal: lifetime.signal });
           const turnId = openCodeHistoryTurnId(session.id, period.openingId);
           expect(snapshot.snapshot.turnsById[turnId]).toMatchObject({ status: "completed", completionCorrelations: expect.arrayContaining([operation.applicationOperationId]) });
+          const classified = projectClassifiedAssistantResult(snapshot.snapshot.turnsById[turnId]!.orderedBackendItemIds
+            .map(id => snapshot.snapshot.itemsById[id]!).filter(item => item.semanticKind === "assistant_message"));
+          expect(selectAssistantResult(classified, ["final"])?.final?.text).toContain(canary);
           break;
         }
         await delay(50, undefined, { signal: lifetime.signal });
@@ -145,6 +150,9 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
       const archivedTurn = Object.values(archived.snapshot.turnsById).find(turn =>
         turn.status === "completed" && turn.completionCorrelations?.includes(operation.applicationOperationId));
       expect(archivedTurn).toBeDefined();
+      const archivedResult = projectClassifiedAssistantResult(archivedTurn!.orderedBackendItemIds
+        .map(id => archived.snapshot.itemsById[id]!).filter(item => item.semanticKind === "assistant_message"));
+      expect(selectAssistantResult(archivedResult, ["final"])?.final?.text).toContain(canary);
       const archivedPage = await wait(historyReader.history({ limit: 10, signal: lifetime.signal }));
       expect(archivedPage.turnsById[archivedTurn!.backendTurnId]).toEqual(archivedTurn);
       expect(await wait(historyReader.locateTurn({ maximumTurnCandidates: 10, signal: lifetime.signal,

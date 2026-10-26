@@ -268,6 +268,12 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- OpenCode's confirmed replies now arrive under Final and completed tool-call
+  commentary under Provisional. Select Final for replies and Provisional for
+  commentary instead of relying on Unclassified alone; notification scripts
+  should read those sections too. See [response selection](docs/operator/configuration.md#notification-scripts)
+  and [voice playback](docs/operator/clients/voice.md).
+
 - Claude replies triggered by background task completion settle their own turn,
   restoring response controls when the session becomes idle. ([#119](https://github.com/kcosr/sedes/pull/119))
 

@@ -95,6 +95,61 @@ async function fixture(observeNotifications = true) {
 }
 
 describe("live completion notification provenance", { timeout: 30_000 }, () => {
+  it("reobserves a newly classified actor reply without changing its frozen completion or blocking follow-ups", async () => {
+    const current = await fixture();
+    const { harness } = current;
+    const emitted = vi.spyOn(harness.driver, "emit");
+    const dispatch = vi.spyOn(harness.queueDispatcher, "onAuthoritativeCompletion");
+    const recover = vi.spyOn(harness.mutations, "recoverThread");
+    const wake = vi.spyOn(harness.inventory, "wakeForRuntimeSignal");
+    try {
+      const threadId = await current.send();
+      const original = current.observations[0]!.observation;
+      expect(original.classifiedResult).toEqual({ partial: null, provisional: null, final: null, unclassified: original.assistantResult });
+      const record = emitted.mock.calls[0]![0];
+      await harness.runtimes.runWithRuntimeRetired(harness.scope, threadId, async () => {
+        // Model a newer backend projector reading the same native messages:
+        // only classification changes; turn identity and reply text stay fixed.
+        for (const item of Object.values(record.snapshot.itemsById)) {
+          if (item.semanticKind === "assistant_message") record.snapshot.itemsById[item.backendItemId] = { ...item, responsePhase: "final" };
+        }
+      });
+      dispatch.mockClear(); recover.mockClear(); wake.mockClear();
+      const before = current.observations.length;
+      const runtime = await harness.runtimes.acquire(harness.scope, threadId);
+      try {
+        const actorEvents: ConversationActorEvent[] = [];
+        const unsubscribe = runtime.actor.subscribe(event => actorEvents.push(event));
+        try {
+          expect(actorEvents).toContainEqual(expect.objectContaining({ type: "authoritative_completion",
+            classifiedResult: { partial: null, provisional: null, final: original.assistantResult, unclassified: null },
+          }));
+          await vi.waitFor(() => expect(current.observations.length).toBeGreaterThan(before));
+          await Promise.all(harness.completionFollowUps.splice(0));
+          expect(dispatch.mock.calls[0]![2].classifiedResult).toEqual({ partial: null, provisional: null, final: original.assistantResult, unclassified: null });
+          expect(await dispatch.mock.results[0]!.value).toEqual({ changed: false, record: original });
+          for (const { observation } of current.observations.slice(before)) expect(observation).toEqual(original);
+          expect(current.completions.get(harness.scope, threadId, original.operationId)).toEqual(original);
+          expect(recover).toHaveBeenCalledWith(harness.scope, threadId);
+          expect(wake).toHaveBeenCalledWith(harness.scope, threadId, "completion");
+          expect(current.executor).toHaveBeenCalledOnce();
+
+          const writes = () => (harness.database.prepare("SELECT total_changes() AS count").get() as { count: number }).count;
+          const stable = writes();
+          const observations = current.observations.length;
+          await runtime.actor.replayAuthoritativeCompletions();
+          await vi.waitFor(() => expect(current.observations.length).toBeGreaterThan(observations));
+          await Promise.all(harness.completionFollowUps.splice(0));
+          expect(writes()).toBe(stable);
+          expect(current.executor).toHaveBeenCalledOnce();
+        } finally { unsubscribe(); }
+      } finally { runtime.release(); }
+    } finally {
+      emitted.mockRestore(); dispatch.mockRestore(); recover.mockRestore(); wake.mockRestore();
+      await current.close();
+    }
+  });
+
   it("replays several completed turns without more authoritative captures or inventory publications", async () => {
     const current = await fixture();
     const { harness } = current;

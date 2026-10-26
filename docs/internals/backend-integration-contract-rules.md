@@ -2598,8 +2598,22 @@ Classify all text blocks of one native message together. Codex preserves native
 phase labels (`commentary` → `provisional`, `partial_answer` → `partial`,
 `final_answer` → `final`); Pi uses settled native assistant-message evidence; Claude uses
 native message groups and terminal evidence/receipts. Grok intentionally remains
-unclassified because ACP chunks do not establish a final-message boundary;
-OpenCode also intentionally remains unclassified. Only Codex currently emits
+unclassified because ACP chunks do not establish a final-message boundary.
+OpenCode classifies retrospectively at native idle settlement: a successful
+period's last assistant after any input/control boundary is final only with a
+completed timestamp, `finish: "stop"`, no error/retry, and no local or unfinished
+tools. Completed provider-hosted tools (`executed: true`) may accompany that
+answer. Completed error-free, retry-free `tool-calls` messages with actual
+settled tools are provisional; ambiguous messages remain unclassified. Apply
+each native message's phase before bounding, event publication and cache reuse;
+include that phase in per-message cache identity. Later ambiguous messages must
+not promote an earlier answer; native provider pauses (`rawFinish: "pause_turn"`)
+remain unclassified even with a normalized stop. Existing frozen completion
+observations are not rewritten. Across all compiled backends, re-observing the
+same completion identity, turn, outcome and aggregate reply preserves its
+original classification, including unavailable classification, and continues
+normal replay follow-ups; differing primary completion evidence still conflicts.
+Only Codex currently emits
 `partial`: stable substantive answer content while work may continue. Pi and
 Claude retain their existing provisional/final/unclassified dispositions; Grok
 and OpenCode do not manufacture partial evidence. A partial message is neither

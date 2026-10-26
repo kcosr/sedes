@@ -205,7 +205,11 @@ continues working and cannot trigger Auto-listen. **Turn progress** controls
 provisional updates separately. Codex emits both kinds; Pi and Claude emit only
 provisional progress. Hydrated history and text classified only at settlement
 do not produce either event. Grok and OpenCode do not advertise these live
-signals; their unclassified completion text remains available. Selected Partial
+signals. OpenCode classifies a confirmed final reply and completed tool-call
+commentary when the turn settles, so Final-only completion speech reads the
+final reply. Ambiguous OpenCode text and Grok completion text remain
+Unclassified. Already stored completion replies keep their original
+classification. Selected Partial
 text is also available in completion notifications and explicit reply playback.
 
 Automatic completion voice follows live completion changes. Loading completed

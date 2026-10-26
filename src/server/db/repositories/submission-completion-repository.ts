@@ -214,16 +214,15 @@ export class SubmissionCompletionRepository {
         (current.applicationTurnId !== finalized.applicationTurnId ||
           current.completionOutcome !== finalized.outcome ||
           JSON.stringify(current.assistantResult) !==
-            JSON.stringify(finalized.result) ||
-          (current.classifiedResult !== null &&
-            JSON.stringify(current.classifiedResult) !==
-              JSON.stringify(finalized.classifiedResult)))
+            JSON.stringify(finalized.result))
       ) {
         throw new DomainError(
           "conflict",
           "The accepted operation already has a different finalized completion snapshot.",
         );
       }
+      // Classification is derived metadata. A newer projector can partition the
+      // same reply differently; the first finalized snapshot remains authoritative.
       if (
         current.lastCompletionIdentity !== null &&
         current.completionObservedAt !== null &&

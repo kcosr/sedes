@@ -9,6 +9,34 @@ function writes(database: ReturnType<typeof applicationSummaryFixture>["database
 }
 
 describe("backend-neutral completion observation work", () => {
+  it.each(["unclassified", "unavailable"] as const)("preserves a frozen %s classification when a newer projector repartitions the same reply", classification => {
+    const f = applicationSummaryFixture(1);
+    try {
+      const threadId = f.ids[0]!;
+      f.bindings.bindDiscoveredConversation(f.scope, threadId, { backendConversationId: "native", now: 400 });
+      f.completion.recordAccepted(f.scope, threadId, { operationId: "submit", acceptedAt: 500, backendCorrelation: "submit" });
+      const result = { text: "Inspecting the source.\n\nThe fix is ready." };
+      const terminal = { backendCorrelation: "submit", completionIdentity: "native-turn:completed", observedAt: 600,
+        applicationTurnId: "application-turn", outcome: "completed" as const, result,
+        classifiedResult: classification === "unavailable" ? null : { partial: null, provisional: null, final: null, unclassified: result },
+      };
+      const original = f.completion.observeBackendCompletion(f.scope, threadId, terminal)!.record;
+      const stable = writes(f.database);
+      const replacement = new SubmissionCompletionRepository(f.database);
+      const reclassified = { partial: null, provisional: { text: "Inspecting the source." }, final: { text: "The fix is ready." }, unclassified: null };
+      for (let replay = 0; replay < 3; replay += 1) {
+        expect(replacement.observeBackendCompletion(f.scope, threadId, { ...terminal, observedAt: 700 + replay, classifiedResult: reclassified }))
+          .toEqual({ changed: false, record: original });
+        expect(replacement.observeCompletion(f.scope, threadId, "submit", {
+          completionIdentity: terminal.completionIdentity, observedAt: 700 + replay, createAttention: true,
+          finalized: { applicationTurnId: terminal.applicationTurnId, outcome: terminal.outcome, result, classifiedResult: reclassified },
+        })).toEqual(original);
+      }
+      expect(replacement.get(f.scope, threadId, "submit")).toEqual(original);
+      expect(writes(f.database)).toBe(stable);
+    } finally { f.database.close(); }
+  });
+
   it("records each accepted input on one native turn, enriches once, and rejects conflicting replay", () => {
     const f = applicationSummaryFixture(2);
     try {

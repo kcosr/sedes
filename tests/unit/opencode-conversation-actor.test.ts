@@ -4,6 +4,7 @@ import type { SessionMessageInfo } from "@opencode/client";
 import { RuntimeBackedQueuedInputConversationGateway } from "../../src/server/conversations/queued-input-conversation-gateway.js";
 import type { ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
 import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
+import { selectAssistantResult } from "../../src/server/domain/assistant-result-selection.js";
 import { createOpenCodeExecutionFixture } from "../support/opencode-execution-fixture.js";
 import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
 
@@ -25,6 +26,53 @@ function completedMessages(turns: number): SessionMessageInfo[] {
 }
 
 describe("OpenCode driver through the shared conversation actor", () => {
+  it("selects the final reply for completion speech while retaining tool commentary in the callback aggregate", async () => {
+    const current = fixture({ messages: [
+      { id: "msg_question", type: "user", text: "Check the source", time: { created: 1 } },
+      { id: "msg_commentary", type: "assistant", agent: "build", model: { providerID: "fixture", id: "fixture" },
+        finish: "tool-calls", time: { created: 2, completed: 3 }, content: [
+          { type: "text", text: "Inspecting the source." },
+          { type: "tool", id: "tool_inspect", name: "inspect", state: { status: "completed", input: {},
+            content: [{ type: "text", text: "Tool output is not reply text." }] }, time: { created: 2, completed: 3 } },
+        ] },
+      { id: "msg_final", type: "assistant", agent: "build", model: { providerID: "fixture", id: "fixture" },
+        content: [{ type: "reasoning", text: "" }, { type: "text", text: "" }, { type: "text", text: "" }], time: { created: 4 } },
+    ] });
+    current.wire.setResponse("/api/session/active", 200, { data: { [current.wire.sessionID]: { type: "running" } } });
+    const acquired = await current.acquire();
+    try {
+      expect(acquired.actor.timeline.runState).toBe("running");
+      const events: ConversationActorEvent[] = [];
+      acquired.actor.subscribe(event => events.push(event));
+      events.length = 0;
+      const answer = current.wire.messages[2]!;
+      if (answer.type !== "assistant") throw new Error("assistant_fixture_required");
+      current.wire.messages[2] = { ...answer, finish: "stop", time: { created: 4, completed: 5 }, content: [
+        { type: "reasoning", text: "Private reasoning.", time: { created: 4, completed: 5 } },
+        { type: "text", text: "The fix is ready." }, { type: "text", text: "Restart Sedes." },
+      ] };
+      current.wire.messages.push({ id: "msg_completion", type: "idle", outcome: "succeeded", time: { created: 6 } });
+      current.wire.setResponse("/api/session/active", 200, { data: {} });
+      current.wire.send({ id: "evt_speech_completion", type: "session.execution.succeeded", created: 6,
+        durable: { aggregateID: current.wire.sessionID, seq: 1, version: 1 }, data: { sessionID: current.wire.sessionID } });
+
+      await vi.waitFor(() => expect(events.filter(event => event.type === "authoritative_completion")).toHaveLength(1));
+      const completion = events.find(event => event.type === "authoritative_completion");
+      if (completion?.type !== "authoritative_completion" || !completion.classifiedResult) throw new Error("completion_required");
+      expect(completion).toMatchObject({ outcome: "completed", provenance: "live",
+        result: { text: "Inspecting the source.\n\nThe fix is ready.\n\nRestart Sedes." },
+        classifiedResult: { provisional: { text: "Inspecting the source." }, partial: null,
+          final: { text: "The fix is ready.\n\nRestart Sedes." }, unclassified: null },
+      });
+      expect(selectAssistantResult(completion.classifiedResult, ["final"]))
+        .toEqual({ final: { text: "The fix is ready.\n\nRestart Sedes." } });
+      expect(events.filter(event => event.type === "live_progress")).toEqual([]);
+      const assistantItems = Object.values(acquired.actor.timeline.itemsById).filter(item => item.kind === "assistant_message");
+      expect(assistantItems).toHaveLength(3);
+      for (const item of assistantItems) expect(item).not.toHaveProperty("responsePhase");
+    } finally { acquired.release(); }
+  });
+
   it("keeps terminal enrichment available to durable consumers without classifying it as a live completion", async () => {
     const current = fixture({ messages: completedMessages(1) });
     const acquired = await current.acquire();

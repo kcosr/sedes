@@ -25,7 +25,7 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
     images: { mime: string; sha256: string }[];
   }> = [];
   let nextHold: StreamHold | undefined;
-  let nextTool: { promptMarker: string; name: string; arguments: Record<string, unknown>; started: () => void } | undefined;
+  let nextTool: { promptMarker: string; name: string; arguments: Record<string, unknown>; commentary?: string; started: () => void } | undefined;
   const holds = new Set<StreamHold>();
   const handlers = new Set<Promise<void>>();
   const server = createServer((request, response) => {
@@ -171,7 +171,7 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
       );
     };
     if (tool) {
-      send({ role: "assistant", tool_calls: [{ index: 0, id: `call_fixture_${requestCount}`, type: "function",
+      send({ role: "assistant", ...(tool.commentary ? { content: tool.commentary } : {}), tool_calls: [{ index: 0, id: `call_fixture_${requestCount}`, type: "function",
         function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] }, null);
       send({}, "tool_calls"); response.end("data: [DONE]\n\n"); tool.started(); return;
     }
@@ -222,11 +222,11 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
     get requests() {
       return requests.slice();
     },
-    callToolNextStream(promptMarker: string, name: string, args: Record<string, unknown>) {
+    callToolNextStream(promptMarker: string, name: string, args: Record<string, unknown>, commentary?: string) {
       if (nextTool || !promptMarker || !name) throw new Error("Invalid or overlapping fixture tool request");
       let started!: () => void;
       const called = new Promise<void>(resolve => { started = resolve; });
-      nextTool = { promptMarker, name, arguments: structuredClone(args), started };
+      nextTool = { promptMarker, name, arguments: structuredClone(args), ...(commentary ? { commentary } : {}), started };
       return { called };
     },
     holdNextStream(promptMarker: string) {

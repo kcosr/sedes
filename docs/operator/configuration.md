@@ -1102,8 +1102,10 @@ Partial result section. `turn.progress` requires `progress.phase: "provisional"`
 completion sections. Update consumer scripts with the server. The repository's Assistant hook
 speaks each supplied nonempty section in **Provisional → Partial → Unclassified → Final**
 order, matching the checkbox row. Missing, null, empty, or whitespace-only
-sections add no speech. Select Unclassified to hear Grok and OpenCode responses; they may
-include progress commentary. With no selected text, only the normal completion
+sections add no speech. OpenCode's confirmed final reply is available under
+Final; completed tool-call commentary is Provisional. Select Unclassified for
+Grok responses and ambiguous OpenCode text, which may include commentary.
+With no selected text, only the normal completion
 announcement is spoken. Reinstall any separately installed copy of the hook.
 
 The setting applies across your clients and takes effect on save. Deselecting

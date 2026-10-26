@@ -878,19 +878,28 @@ describe("OpenCode SSE and native history composition", () => {
     const content: [{ type: "text"; text: string }] = [{ type: "text", text: "read result" }];
     const read = { status: "completed" as const, input: {}, content };
     current.wire.messages[1] = { ...assistant([{ type: "text", text: "Inspecting now" }, { ...tool, state: read, time: { created: 2, completed: 3 } }]),
-      time: { created: 2, completed: 4 } };
+      finish: "tool-calls", time: { created: 2, completed: 4 } };
     const success = event("session.tool.success", { assistantMessageID: "msg_assistant", id: "tool_progress", executed: true, content }, true);
     current.wire.send({ ...success, durable: { ...success.durable, version: 2 } });
     await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ type: "item_completed",
       item: expect.objectContaining({ semanticKind: "tool", status: "completed" }) }) })));
-    current.wire.messages.push(idle()); current.wire.setResponse("/api/session/active", 200, { data: {} });
+    // OpenCode publishes response phases only after the turn settles.
+    expect(events.filter(({ event: value }) => "item" in value && value.item.semanticKind === "assistant_message" &&
+      value.item.responsePhase !== undefined)).toEqual([]);
+    current.wire.messages.push({ ...assistant([{ type: "text", text: "The source is correct." }]), id: "msg_final",
+      finish: "stop", time: { created: 5, completed: 6 } }, { ...idle(), time: { created: 7 } });
+    current.wire.setResponse("/api/session/active", 200, { data: {} });
     current.wire.send(event("session.execution.succeeded", {}, true));
     await vi.waitFor(() => expect(events.some(({ event: value }) => value.type === "turn_completed")).toBe(true));
     expect(events).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ type: "item_completed",
       item: expect.objectContaining({ semanticKind: "assistant_message", markdown: { text: "Inspecting now" } }) }) }));
-    // OpenCode has no live phase evidence: its completion text stays unclassified.
-    expect(events.filter(({ event: value }) => "item" in value && value.item.semanticKind === "assistant_message" &&
-      value.item.responsePhase !== undefined)).toEqual([]);
+    const terminalIndex = events.findIndex(({ event: value }) => value.type === "turn_completed");
+    const phaseUpdates = events.slice(0, terminalIndex).flatMap(({ event: value }) =>
+      "item" in value && value.item.semanticKind === "assistant_message" && value.item.responsePhase !== undefined ? [value.item] : []);
+    expect(phaseUpdates).toEqual([
+      expect.objectContaining({ markdown: { text: "Inspecting now" }, responsePhase: "provisional" }),
+      expect.objectContaining({ markdown: { text: "The source is correct." }, responsePhase: "final" }),
+    ]);
     expect(events.filter(({ event: value }) => "liveProgress" in value)).toEqual([]);
     expect(events.some(({ event: value }) => value.type === "resnapshot_required")).toBe(false);
   });

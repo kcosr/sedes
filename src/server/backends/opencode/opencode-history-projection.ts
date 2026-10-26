@@ -91,11 +91,38 @@ interface CachedMessage {
   readonly native: OpenCodeNativeMessage;
   readonly turnId: string;
   readonly turnStatus: BackendTurn["status"];
+  readonly responsePhase: ResponsePhase;
   readonly sourceOrder: number;
   readonly nextSourceOrder: number;
   readonly items: readonly BackendItem[];
   readonly bytes: number;
 }
+type ResponsePhase = Extract<BackendItem, { semanticKind: "assistant_message" }>["responsePhase"];
+
+/** Native step completion alone is not evidence that a response finished the turn. */
+function assistantResponsePhases(messages: readonly OpenCodeNativeMessage[], status: BackendTurn["status"]): ReadonlyMap<string, ResponsePhase> {
+  const phases = new Map<string, ResponsePhase>();
+  if (status === "in_progress") return phases;
+  let last: Extract<OpenCodeNativeMessage, { type: "assistant" }> | undefined;
+  for (const message of messages) {
+    if (message.type !== "assistant") {
+      // Input, compaction and workspace changes may require a further response.
+      if (message.type !== "agent-switched" && message.type !== "model-switched") last = undefined;
+      continue;
+    }
+    last = message;
+    if (message.time.completed === undefined || message.error || message.retry) continue;
+    const tools = message.content.filter(part => part.type === "tool");
+    if (message.finish === "tool-calls" && tools.length > 0 && tools.every(tool =>
+      tool.state.status === "completed" || tool.state.status === "error")) phases.set(message.id, "provisional");
+  }
+  if (status === "completed" && last && last.time.completed !== undefined && !last.error && !last.retry && last.finish === "stop" && last.rawFinish !== "pause_turn" &&
+      last.content.every(part => part.type !== "tool" || part.executed === true && part.state.status === "completed")) {
+    phases.set(last.id, "final");
+  }
+  return phases;
+}
+
 function immutableMessage(message: OpenCodeNativeMessage): boolean {
   if (message.type === "assistant") return message.time.completed !== undefined && message.content.every(part =>
     part.type === "tool" ? part.state.status === "completed" || part.state.status === "error" : openCodeNativePartEnded(message, part));
@@ -185,6 +212,7 @@ export class OpenCodeHistoryProjection {
         this.#periods.set(opening.id, cached);
       } else {
         const beforeBytes = projectedBytes;
+        const responsePhases = assistantResponsePhases(period, status);
         const orderedBackendItemIds: string[] = [];
         let sourceCursor = 0;
         const builtItems: Record<string, BackendItem> = Object.create(null);
@@ -201,8 +229,9 @@ export class OpenCodeHistoryProjection {
           check();
           const sourceOrder = sourceCursor, visibleStart = orderedBackendItemIds.length;
           const deliveryOperationId = message.type === "user" ? input.deliveryCorrelations?.get(message.id) : undefined;
+          const responsePhase = responsePhases.get(message.id);
           const old = previous ? previous.#messages.get(message.id) : undefined;
-          if (old && old.imageFingerprint === imageFingerprint && old.deliveryOperationId === deliveryOperationId && old.native === message && old.turnId === backendTurnId && old.turnStatus === status && old.sourceOrder === sourceOrder) {
+          if (old && old.imageFingerprint === imageFingerprint && old.deliveryOperationId === deliveryOperationId && old.responsePhase === responsePhase && old.native === message && old.turnId === backendTurnId && old.turnStatus === status && old.sourceOrder === sourceOrder) {
             if (orderedBackendItemIds.length + old.items.length > MAXIMUM_BACKEND_ITEMS_PER_TURN) throw new OpenCodeHistoryError("turn_items");
             for (const item of old.items) {
               if (items[item.backendItemId] || builtItems[item.backendItemId]) throw new OpenCodeHistoryError("invalid");
@@ -212,9 +241,9 @@ export class OpenCodeHistoryProjection {
             sourceCursor = old.nextSourceOrder;
           } else {
             const beforeMessageBytes = projectedBytes;
-            projectMessage(message, backendTurnId, status, input.observedParts, add, () => sourceCursor++, deliveryOperationId, input.attachmentProvenanceKey, input.viewedImages);
+            projectMessage(message, backendTurnId, status, input.observedParts, add, () => sourceCursor++, deliveryOperationId, input.attachmentProvenanceKey, input.viewedImages, responsePhase);
             if (immutableMessage(message)) this.#messages.set(message.id, { native: message, turnId: backendTurnId, turnStatus: status,
-              sourceOrder, nextSourceOrder: sourceCursor, imageFingerprint, ...(deliveryOperationId ? { deliveryOperationId } : {}),
+              sourceOrder, nextSourceOrder: sourceCursor, imageFingerprint, responsePhase, ...(deliveryOperationId ? { deliveryOperationId } : {}),
               items: orderedBackendItemIds.slice(visibleStart).map(id => builtItems[id]!), bytes: projectedBytes - beforeMessageBytes });
           }
         }
@@ -301,7 +330,7 @@ export class OpenCodeHistoryProjection {
       if (!old) throw new OpenCodeHistoryError("invalid");
       const item = projectAssistantTextPart(message, part, this.turnsById[turnId]!.status, input.observedParts.get(key), {
         backendItemId: old.backendItemId, backendTurnId: turnId, sourceOrder: old.sourceOrder!, startedAt: timestamp(message.time.created),
-      });
+      }, old.semanticKind === "assistant_message" ? old.responsePhase : undefined);
       if (serializedUtf8Bytes(item) > MAXIMUM_MESSAGE_ITEM_BYTES) throw new OpenCodeHistoryError("turn_bytes");
       const value = parsed(backendItemSchema, item);
       if (JSON.stringify(old) === JSON.stringify(value)) continue;
@@ -417,7 +446,7 @@ export class OpenCodeHistoryProjection {
 
 function projectMessage(message: OpenCodeNativeMessage, backendTurnId: string, turnStatus: BackendTurn["status"],
   observed: ReadonlyMap<string, OpenCodeObservedPart> | undefined, add: (item: BackendItem) => void, nextOrder: () => number,
-  deliveryOperationId?: string, attachmentProvenanceKey?: Uint8Array, viewedImages?: ReadonlyMap<string, OpenCodeViewedImage>): void {
+  deliveryOperationId?: string, attachmentProvenanceKey?: Uint8Array, viewedImages?: ReadonlyMap<string, OpenCodeViewedImage>, responsePhase?: ResponsePhase): void {
   const base = (part: string | number = "message", status: BackendItem["status"] = "completed") => ({
     backendItemId: openCodeHistoryItemId(message.id, part), backendTurnId, status, sourceOrder: nextOrder(), startedAt: timestamp(message.time.created),
   });
@@ -448,7 +477,7 @@ function projectMessage(message: OpenCodeNativeMessage, backendTurnId: string, t
       message.content.forEach((part, index) => {
         if (part.type === "text" || part.type === "reasoning") {
           const live = observed?.get(openCodeHistoryPartKey(message.id, part.type, ordinals[part.type]++));
-          add(projectAssistantTextPart(message, part, turnStatus, live, base(index)));
+          add(projectAssistantTextPart(message, part, turnStatus, live, base(index), responsePhase));
           return;
         }
         const status: BackendItem["status"] = part.state.status === "completed" ? "completed" : part.state.status === "error" ? "failed" : unfinishedStatus();
@@ -513,12 +542,13 @@ function projectAssistantTextPart(
   part: Extract<Extract<OpenCodeNativeMessage, { type: "assistant" }>["content"][number], { type: "text" | "reasoning" }>,
   turnStatus: BackendTurn["status"], live: OpenCodeObservedPart | undefined,
   base: { backendItemId: string; backendTurnId: string; sourceOrder: number; startedAt: string },
+  responsePhase?: ResponsePhase,
 ): BackendItem {
   const nativeEnded = openCodeNativePartEnded(message, part);
   const ended = nativeEnded || live?.completed;
   const text = nativeEnded ? part.text : live?.text ?? "";
   const unfinished: BackendItem["status"] = turnStatus === "interrupted" ? "interrupted" : turnStatus === "failed" ? "failed" : "streaming";
   const status: BackendItem["status"] = ended ? "completed" : message.error ? (turnStatus === "interrupted" ? "interrupted" : "failed") : unfinished;
-  return part.type === "text" ? { ...base, status, semanticKind: "assistant_message", markdown: messageText(text) }
+  return part.type === "text" ? { ...base, status, semanticKind: "assistant_message", markdown: messageText(text), ...(responsePhase ? { responsePhase } : {}) }
     : { ...base, status, semanticKind: "reasoning", markdown: boundText(text, 65_536) };
 }
