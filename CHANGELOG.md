@@ -273,6 +273,7 @@ User-facing changes are collected here before release. See the
   commentary instead of relying on Unclassified alone; notification scripts
   should read those sections too. See [response selection](docs/operator/configuration.md#notification-scripts)
   and [voice playback](docs/operator/clients/voice.md).
+  ([#122](https://github.com/kcosr/sedes/pull/122))
 
 - Claude replies triggered by background task completion settle their own turn,
   restoring response controls when the session becomes idle. ([#119](https://github.com/kcosr/sedes/pull/119))
