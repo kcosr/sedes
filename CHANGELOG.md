@@ -28,15 +28,14 @@ User-facing changes are collected here before release. See the
   identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
   ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112), [#116](https://github.com/kcosr/sedes/pull/116))
 
-- Upgrade execution sidecars with the server for runtime wire version **16**
+- Upgrade execution sidecars with the server for runtime wire version **17**
   and negotiated traffic compression. Incompatible active services retain the
   existing interruption checks; see
   [persistent service upgrades](docs/operator/operations.md#persistent-remote-services).
-  ([#116](https://github.com/kcosr/sedes/pull/116))
+  ([#116](https://github.com/kcosr/sedes/pull/116), [#123](https://github.com/kcosr/sedes/pull/123))
 
-- Upgrade OpenCode to stable stock **2.1.1 or newer** on every execution host,
-  and upgrade execution sidecars with the server for sidecar wire protocol
-  **16** and private OpenCode runtime protocol **4**. See
+- Upgrade OpenCode to stable stock **2.1.1 or newer** on every execution host.
+  OpenCode's private runtime protocol is now **4**. See
   [OpenCode setup](docs/operator/backends/opencode.md).
   ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123))
 
@@ -269,6 +268,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- OpenCode remote threads recover promptly when the sidecar observation journal
+  changes, preserving uncertain input outcomes. Update server and sidecar
+  together; see [OpenCode recovery](docs/operator/backends/opencode.md#recovery-and-limits).
+  ([#123](https://github.com/kcosr/sedes/pull/123))
 
 - OpenCode viewed-image checks recognize image-prefixed model modalities and
   honor the resolved xAI provider's GIF exclusion, preventing omitted GIFs from

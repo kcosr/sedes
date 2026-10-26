@@ -98,7 +98,7 @@ history acquisition, counters, delivery evidence, images and usage accounting.
 Native archived-session metadata does not select Sedes thread state, and native
 idle queries do not imply a different acquisition or paging contract. Pi,
 Codex, Claude and Grok retain their existing SDK/runtime admission and native
-semantics. All sidecar consumers use the current shared wire protocol 16,
+semantics. All sidecar consumers use the current shared wire protocol 17,
 retaining negotiated compression from version 15; OpenCode's private runtime
 capability advances to major 4. No browser contract
 or client protocol change follows from this private schema update.

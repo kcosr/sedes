@@ -44,6 +44,11 @@ thread has a bounded evidence journal, dense sequence, continuity token and
 compact native proof baseline. Main commits receipt evidence and its observation
 cursor in one transaction before acknowledging the host. Carrier loss does not
 end native observation; native SSE loss explicitly invalidates continuity.
+A saved cursor from a replaced runtime journal is rejected with
+`opencode_observation_continuity_lost`, which the sidecar failure codec must
+preserve. Main reopens once without a cursor and transactionally commits the
+reset cursor; dispatched inputs without sufficient native evidence become
+`failed_unknown`, without resending inputs or deleting receipts.
 Main acknowledges once per committed replay batch. Evidence retains full input,
 execution-terminal, step-boundary, deletion and revert events; other durable
 payloads become compact sequence/fingerprint facts. Native presentation still
@@ -75,7 +80,7 @@ critical evidence prevents new ordinary work while preserving the independent
 control path.
 
 The persistent sidecar advertises major 4 of the private `opencode_runtime`
-capability under sidecar wire protocol 16 on Linux. Its registry owns the same
+capability under sidecar wire protocol 17 on Linux. Its registry owns the same
 runtime/host used locally; SSH and outbound
 carriers share typed operations and the bounded runtime body channel. Carrier
 detach releases ports and subscribers, preserving the native owner and evidence.

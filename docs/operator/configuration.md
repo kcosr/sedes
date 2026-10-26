@@ -356,7 +356,7 @@ it does not disconnect active work or restart a provider. The stored
 operation grants. Existing remote environments are migrated with it enabled.
 Local environments have no such setting.
 
-Runtime wire version **16** requires a matching sidecar. Follow
+Runtime wire version **17** requires a matching sidecar. Follow
 [persistent remote service upgrades](operations.md#persistent-remote-services)
 when an older service reports that an upgrade is required.
 

@@ -21,7 +21,7 @@ version check does not enable new features or bypass protocol validation.
 Prereleases and releases below 2.1.1 are rejected. Upgrade the native executable
 on every OpenCode execution host, including external daemon hosts, and restart
 those daemons at the upgraded version. Upgrade execution sidecars with the
-server for sidecar wire protocol **16** and private OpenCode runtime protocol
+server for sidecar wire protocol **17** and private OpenCode runtime protocol
 **4**. The adapter uses one strict current schema; older message formats are
 not accepted through a compatibility parser.
 

@@ -12,9 +12,11 @@
 - Newer-than-tested versions publish an active installation advisory and use
   this same compiled profile; protocol and behavioral checks remain required.
 - Private sidecar capability: `opencode_runtime` major **4**, including the
-  observed runtime version, under sidecar wire protocol **16**, retaining
-  negotiated traffic compression. Upgrade older sidecars with the server and
-  the native runtime on each execution host.
+  observed runtime version, under sidecar wire protocol **17**, retaining
+  negotiated traffic compression and the version 16 schema cutover. Version 17
+  preserves observation-continuity failures for journal-change recovery.
+  Upgrade both server and sidecar, plus the native runtime on each execution
+  host. Wire 17 does not change browser or Android client protocols.
 - Transport: authenticated HTTP plus SSE; owned `serve --stdio` supplies startup
   endpoint discovery and process lifetime, not conversation JSON-RPC.
 
