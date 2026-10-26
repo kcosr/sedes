@@ -3805,7 +3805,7 @@ describe("passive lifecycle notification sources", () => {
       const observe = () => completion.observeCompletion(current.scope, current.threadId, "classified", input);
       expect(observe().classifiedResult).toEqual(finalized.classifiedResult);
       finalized.classifiedResult.final.text = "Changed";
-      expect(() => observe()).toThrow("different finalized completion snapshot");
+      expect(observe().classifiedResult?.final?.text).toBe("Done");
       expect(completion.get(current.scope, current.threadId, "classified").classifiedResult?.final?.text).toBe("Done");
       finalized.classifiedResult.final.text = "Done";
       expect(() => completion.get({ ...current.scope, principalId: "other" }, current.threadId, "classified")).toThrow();

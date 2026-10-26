@@ -25,7 +25,7 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
     images: { mime: string; sha256: string }[];
   }> = [];
   let nextHold: StreamHold | undefined;
-  let nextTool: { promptMarker: string; name: string; arguments: Record<string, unknown>; started: () => void } | undefined;
+  let nextTool: { promptMarker: string; name: string; arguments: Record<string, unknown>; commentary?: string; started: () => void } | undefined;
   const holds = new Set<StreamHold>();
   const handlers = new Set<Promise<void>>();
   const server = createServer((request, response) => {
@@ -148,11 +148,14 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
       nextTool = undefined;
     }
     // Native title generation may use a streamed request too. Hold only the
-    // explicitly selected user prompt, never whichever request happens first.
-    const hold =
-      nextHold?.promptMarker === lastText && lastRole === "user"
-        ? nextHold
-        : undefined;
+    // selected prompt or its tool-result continuation, never the first request.
+    const pendingHold = nextHold;
+    const hold = pendingHold && (pendingHold.afterToolCall
+      ? lastRole === "tool" && messages.some(message => typeof message === "object" && message !== null && message.role === "user" &&
+        (typeof message.content === "string" ? message.content.includes(pendingHold.promptMarker) : Array.isArray(message.content) &&
+          message.content.some((part: unknown) => typeof part === "object" && part !== null && "type" in part && part.type === "text" &&
+            "text" in part && typeof part.text === "string" && part.text.includes(pendingHold.promptMarker))))
+      : pendingHold.promptMarker === lastText && lastRole === "user") ? pendingHold : undefined;
     if (hold) nextHold = undefined;
     response.writeHead(200, { "content-type": "text/event-stream" });
     const send = (
@@ -171,7 +174,7 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
       );
     };
     if (tool) {
-      send({ role: "assistant", tool_calls: [{ index: 0, id: `call_fixture_${requestCount}`, type: "function",
+      send({ role: "assistant", ...(tool.commentary ? { content: tool.commentary } : {}), tool_calls: [{ index: 0, id: `call_fixture_${requestCount}`, type: "function",
         function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] }, null);
       send({}, "tool_calls"); response.end("data: [DONE]\n\n"); tool.started(); return;
     }
@@ -222,19 +225,19 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
     get requests() {
       return requests.slice();
     },
-    callToolNextStream(promptMarker: string, name: string, args: Record<string, unknown>) {
+    callToolNextStream(promptMarker: string, name: string, args: Record<string, unknown>, commentary?: string) {
       if (nextTool || !promptMarker || !name) throw new Error("Invalid or overlapping fixture tool request");
       let started!: () => void;
       const called = new Promise<void>(resolve => { started = resolve; });
-      nextTool = { promptMarker, name, arguments: structuredClone(args), started };
+      nextTool = { promptMarker, name, arguments: structuredClone(args), ...(commentary ? { commentary } : {}), started };
       return { called };
     },
-    holdNextStream(promptMarker: string) {
+    holdNextStream(promptMarker: string, options: { readonly afterToolCall?: boolean } = {}) {
       if (nextHold)
         throw new Error("A fixture stream hold is already pending.");
       if (!promptMarker || promptMarker.length > 1024)
         throw new Error("Invalid fixture hold marker.");
-      const hold = createStreamHold(promptMarker);
+      const hold = createStreamHold(promptMarker, options.afterToolCall);
       nextHold = hold;
       holds.add(hold);
       return { started: hold.started, release: () => {
@@ -258,13 +261,14 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
 
 interface StreamHold {
   readonly promptMarker: string;
+  readonly afterToolCall?: boolean;
   readonly started: Promise<void>;
   readonly released: Promise<void>;
   readonly markStarted: () => void;
   readonly release: () => void;
 }
 
-function createStreamHold(promptMarker: string): StreamHold {
+function createStreamHold(promptMarker: string, afterToolCall?: boolean): StreamHold {
   let markStarted!: () => void;
   let release!: () => void;
   let rejectStarted!: (error: Error) => void;
@@ -290,6 +294,7 @@ function createStreamHold(promptMarker: string): StreamHold {
   }, 20_000);
   return {
     promptMarker,
+    ...(afterToolCall ? { afterToolCall } : {}),
     started,
     released,
     markStarted,

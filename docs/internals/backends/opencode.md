@@ -327,11 +327,41 @@ prefix or owner invalidates it. Missing active execution alone cannot settle an
 unfinished period: an orphan remains disconnected/in-progress until native
 terminal evidence arrives. Settings-only suffixes do not claim running ownership.
 
+Confirmed completed tool-call steps are Provisional while the turn continues.
+Final response selection waits for native idle settlement, before the
+authoritative completion snapshot. The last assistant after any input, system,
+skill, synthetic, shell, compaction or location-change boundary is Final only
+when the period succeeded, its native finish is `stop`, its completed timestamp
+is present, it is not a provider pause (`rawFinish: "pause_turn"`), and it has
+no error or retry. It must have no tools other than
+completed provider-hosted tools (`executed: true`). Pure model/agent selection
+notices do not displace that response. All text blocks of that message share
+the phase; reasoning and tool output remain excluded. Completed, error-free,
+retry-free `tool-calls` messages with actual completed/errored tools are
+Provisional. Unfinished and ambiguous messages remain Unclassified, including
+truncated prefixes before synthetic continuation prompts. A fresh same-session
+`session.step.ended` with `finish: "tool-calls"` qualifies the completed text
+of that exact Provisional message for live progress while its turn is running.
+Native tools have settled by this step boundary; text-ended events alone do
+not qualify. Publish the live annotation after installing turn correlations
+and running ownership, even when an earlier tool event already refreshed the
+same completed text. Consume step evidence per finite acquisition revision,
+deduplicate by native message and stable normalized item identity, and bound
+pending evidence. Initial/re-established snapshots, recovery, history reads,
+settled turns, reasoning and tool output never create progress. OpenCode does
+not emit Partial. Per-message cache reuse includes the selected phase,
+so terminal reclassification and retained-history enrichment agree with a fresh
+projection. Existing frozen completion observations are never backfilled;
+re-observation preserves their classification without suppressing ordinary
+completion replay follow-ups.
+
 Text and reasoning use separate native ordinal counters. Observed deltas are
 disposable overlays; final native values replace them, including empty text.
 After prefix loss, the final value repairs the transcript. Native inputs receive Sedes delivery provenance only from an exact private
 input receipt and positive consumed-input evidence. External native inputs
-receive none. Observed child sessions and attributed
+receive none. Re-reading unchanged input-consumption evidence does not request
+another projection refresh; conflicting payloads still update that evidence.
+Observed child sessions and attributed
 shells refresh background counts; this is not a complete inventory of native Jobs.
 Idle client eviction releases the handle while keeping either native owner alive.
 Archive/policy residency release refreshes observed activity and refuses busy or

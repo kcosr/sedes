@@ -180,6 +180,22 @@ describe("OpenCode independent private input observation", () => {
     expect(f.wire.requests.some(request => request.pathname.endsWith("/message"))).toBe(false); held.release();
   });
 
+  it("does not request another projection for unchanged history consumption but still reports a payload conflict", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    f.observer.recordAdmission("operation", "submit", admission());
+    f.wire.messages.push(user());
+    f.observer.observeHistory(f.wire.messages);
+    expect(f.observed).toHaveBeenCalledExactlyOnceWith({ backendCorrelation: "operation" });
+    f.changed.mockClear();
+    f.observer.observeHistory(f.wire.messages);
+    f.observer.observeHistory(f.wire.messages);
+    expect(f.changed).not.toHaveBeenCalled();
+    f.observer.observeHistory([user("msg_owned", "Changed native payload")]);
+    expect(f.row().payloadConflict).toBe(true);
+    expect(f.changed).toHaveBeenCalledOnce();
+    expect(f.observed).toHaveBeenCalledOnce();
+  });
+
   it("ACK, enqueued and pending establish admission only, using the hook-prepared payload", async () => {
     const f = fixture(); await f.observer.start(); f.reserve();
     f.pending([admission("msg_owned", "hook transformed")]);
