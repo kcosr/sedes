@@ -11,6 +11,7 @@ User-facing changes are collected here before release. See the
   older servers cleanly before upgrading; leftover regular-file locks require
   explicit recovery after confirming the prior owner and its native children
   have exited. See [state and process ownership](docs/operator/operations.md#state-upgrades-and-backups).
+  ([#124](https://github.com/kcosr/sedes/pull/124))
 
 - Web research now uses the local Codex CLI with live search. Upgrades disable
   the old Grok research selection; authenticate Codex and enable **Codex CLI
@@ -81,6 +82,7 @@ User-facing changes are collected here before release. See the
   input recovery, and completed-turn forks. **Pi SDK** remains available; both
   backends can share session storage without importing duplicate threads. See
   [native Pi setup and limits](docs/operator/backends/pi-native.md).
+  ([#124](https://github.com/kcosr/sedes/pull/124))
 
 - A Home button beside Notifications opens the configured default thread and
   reveals Chat. The connection indicator now follows these buttons in reserved
