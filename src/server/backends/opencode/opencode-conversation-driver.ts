@@ -14,6 +14,8 @@ import { acquireOpenCodeInputObserver } from "./opencode-input-observer.js";
 import { createOpenCodeConversation } from "./opencode-conversation-creation.js";
 import { openCodeRuntimeDiagnostic } from "./opencode-runtime-diagnostic.js";
 import { OpenCodeConversationHistory } from "./opencode-conversation-history.js";
+import { OpenCodeInputEvidenceRepository } from "./opencode-input-evidence.js";
+import { openCodeArchiveInventoriesAreIdle } from "./opencode-archive-retirement.js";
 
 const cursorSchema = z.strictObject({ v: z.literal(1), scope: z.string().length(43), native: z.string().min(1).max(16_384) });
 
@@ -163,13 +165,16 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
       await runtime.assertCurrent(signal);
       if (session.location.directory !== input.workspace.canonicalPath) throw openCodeConversationError(
         "opencode_session_location_changed", "The OpenCode conversation moved to another workspace.", "invalid_state");
-      const [unfinished, activity, pending, interactions] = await Promise.all([
-        hasUnfinishedNativePeriod(api, sessionID, signal), api.getActivity(sessionID, input.workspace.canonicalPath, signal),
-        api.getPending(sessionID, signal), api.getInteractions(sessionID, signal),
-      ]);
+      // Archive releases Sedes residency without settling historical turns or
+      // changing native policy. Other consumers still require terminal history.
+      const unfinished = input.purpose === "archive" ? false : await hasUnfinishedNativePeriod(api, sessionID, signal);
+      const [pending, interactions] = await Promise.all([api.getPending(sessionID, signal), api.getInteractions(sessionID, signal)]);
+      // Read activity after inbox: promotion must not pair an old inactive
+      // observation with a newer empty inbox.
+      const activity = await api.getActivity(sessionID, input.workspace.canonicalPath, signal);
       await runtime.assertCurrent(signal); signal.throwIfAborted();
-      if (unfinished || activity.active || activity.activeChildren.length ||
-          activity.shells.some(shell => shell.status === "running") || pending.length || interactions.permissions.length || interactions.forms.length) return "busy";
+      if (unfinished || !openCodeArchiveInventoriesAreIdle(activity, pending, interactions) ||
+          new OpenCodeInputEvidenceRepository(this.input.repository).hasUnresolved(input.scope, input.binding.applicationThreadId)) return "busy";
       // This releases client residency only; neither ownership mode retires the daemon here.
       this.input.executionEnvironment.release(input.binding.applicationThreadId);
       this.input.tools.release(input.binding.applicationThreadId);

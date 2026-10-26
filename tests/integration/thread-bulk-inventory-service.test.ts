@@ -111,6 +111,7 @@ function fixture(nativeArchive?: {
   const questions = new QuestionRequestRepository(database, inventory);
   const tasks = new TaskRepository(database);
   const runtimeStates = new Map<string, ThreadRunState>();
+  const archiveSafe = new Set<string>();
   const publishCommitted = vi.fn(async () => undefined);
   const publishTaskChange = vi.fn(async () => undefined);
   const runWithRuntimeRetired = vi.fn(
@@ -175,7 +176,7 @@ function fixture(nativeArchive?: {
     runtimes: {
       captureLoadedState: async (_requestedScope, threadId) => {
         const runState = runtimeStates.get(threadId);
-        return runState ? { runState } : undefined;
+        return runState ? { runState, archiveRetirementSafe: archiveSafe.has(threadId) } : undefined;
       },
       runWithRuntimeRetired:
         runWithRuntimeRetired as unknown as ArchivedThreadRuntimeRetirement["runWithRuntimeRetired"],
@@ -194,6 +195,7 @@ function fixture(nativeArchive?: {
     inventory,
     tasks,
     runtimeStates,
+    archiveSafe,
     publishCommitted,
     publishTaskChange,
     runWithRuntimeRetired,
@@ -258,6 +260,23 @@ describe("thread bulk inventory service", () => {
         expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe(action === "archive" ? "archived" : "settled");
         expect(current.inventory.getThread(current.scope, id).thread.availability).toBe(availability);
       }
+    } finally { current.database.close(); }
+  });
+
+  it("uses native quiescence only for archive, preserving strict settlement of incomplete history", async () => {
+    const current = fixture();
+    try {
+      const ids = current.ids.slice(0, 2);
+      for (const id of ids) { current.runtimeStates.set(id, "disconnected"); current.archiveSafe.add(id); }
+      const settled = await current.service.impact(current.scope, { action: "settle", threadIds: ids });
+      expect(settled).toMatchObject({ available: false, blockers: { total: 2 } });
+      const impact = await current.service.impact(current.scope, { action: "archive", threadIds: ids });
+      expect(impact).toMatchObject({ available: true, blockers: { total: 0 } });
+      await current.service.transition(current.scope, {
+        action: "archive", targets: impact.targets, mutationId: "bulk-archive-incomplete",
+        expectedStashedPromptCount: 0, expectedOpenTaskCount: 0,
+      });
+      for (const id of ids) expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("archived");
     } finally { current.database.close(); }
   });
 

@@ -2334,8 +2334,18 @@ as an automatic-retirement blocker; `client_detach` allows an idle presentation
 to detach while its independently owned native runtime remains resident.
 Pi SDK, Codex, Claude and Grok require quiescence. Native Pi and OpenCode use
 `client_detach` for their independently owned runtimes. Automatic retirement uses
-`canAutomaticallyEvict`; archive, policy changes and other maintenance still
-use strict `canEvict` and reject outstanding or unknown work. Neither mode
+`canAutomaticallyEvict`; policy changes and other maintenance still
+use strict `canEvict` and reject outstanding or unknown work. Archive normally
+uses the same proof, but a backend may separately authorize archive retirement
+when historical outcome uncertainty is the only blocker and current execution
+is authoritatively quiescent. This scoped, generation-bound observation must
+not settle a historical turn or authorize input. Archive preview and retirement
+must agree; provider residency release rechecks current work inside the
+maintenance fence before the inventory commit. Pending input and interactions,
+active children or shells, unresolved delivery, failed reads and identity loss
+remain blockers. OpenCode implements this exception for incomplete native
+history. Pi SDK, native Pi, Codex, Claude and Grok do not opt in and keep their
+existing strict retirement behavior. Neither mode
 changes Send, Queue or main-turn Stop. Pending interactions, active foreground
 work, control borrowers, unresolved cleanup and failed projection recovery
 continue to block the relevant owner retirement. Client-only automatic disposal

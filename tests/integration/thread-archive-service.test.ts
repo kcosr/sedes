@@ -127,6 +127,7 @@ function fixture(nativeArchive?: {
   });
   const inventory = new InventoryRepository(database);
   const runtimeStates = new Map<string, ThreadRunState>();
+  const archiveSafe = new Set<string>();
   const publishCommitted = vi.fn(async () => undefined);
   const questions = new QuestionRequestRepository(database, inventory);
   const tasks = new TaskRepository(database);
@@ -202,7 +203,7 @@ function fixture(nativeArchive?: {
     runtimes: {
       captureLoadedState: async (_scope, threadId) => {
         const runState = runtimeStates.get(threadId);
-        return runState ? { runState } : undefined;
+        return runState ? { runState, archiveRetirementSafe: archiveSafe.has(threadId) } : undefined;
       },
       runWithRuntimeRetired:
         runWithRuntimeRetired as unknown as ArchivedThreadRuntimeRetirement["runWithRuntimeRetired"],
@@ -250,6 +251,7 @@ function fixture(nativeArchive?: {
     inventory,
     lineage,
     runtimeStates,
+    archiveSafe,
     publishCommitted,
     publishTaskChange,
     deleteExecutionWorkspace,
@@ -329,6 +331,27 @@ describe("thread family archive service", () => {
         expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe(
           includeDescendants || id === current.rootId ? "archived" : "active",
         );
+      }
+    } finally { current.database.close(); }
+  });
+
+  it("archives an incomplete historical family only with explicit runtime quiescence", async () => {
+    const current = fixture();
+    try {
+      for (const id of [current.rootId, current.childId]) {
+        current.runtimeStates.set(id, "disconnected"); current.archiveSafe.add(id);
+      }
+      await expect(current.service.impact(current.scope, current.rootId)).resolves.toMatchObject({
+        archiveOnly: { available: true }, archiveAll: { available: true },
+      });
+      await current.service.archive(current.scope, current.rootId, {
+        includeDescendants: true, expectedRevision: 0, mutationId: "archive-incomplete-family",
+        executionWorkspaceDisposition: { kind: "keep" },
+      });
+      for (const id of [current.rootId, current.childId, current.grandchildId]) {
+        expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("archived");
+        expect(current.runWithRuntimeRetired).toHaveBeenCalledWith(current.scope, id, expect.any(Function), { purpose: "archive" });
+        expect(current.releaseProviderResidency).toHaveBeenCalledWith(current.scope, id, { purpose: "archive" });
       }
     } finally { current.database.close(); }
   });

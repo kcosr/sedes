@@ -109,6 +109,7 @@ export class ThreadBulkInventoryService {
       scope,
       affectedThreadIds,
       input.action !== "unsettle",
+      input.action === "archive",
     );
     const blocked = inspection.blocked;
     const blockerItems = affectedThreadIds
@@ -159,6 +160,7 @@ export class ThreadBulkInventoryService {
           .filter(({ inventoryState }) => inventoryState === "archived")
           .map(({ threadId }) => threadId);
         await runWithArchivedThreadRuntimesRetired({
+          purpose: "archive",
           scope,
           threadIds: archivedThreadIds,
           runtimes: this.input.runtimes,
@@ -186,7 +188,7 @@ export class ThreadBulkInventoryService {
     const blocked =
       input.action === "unsettle"
         ? new Map<string, BulkInventoryBlockerReason>()
-        : (await this.#inspectThreads(scope, affectedThreadIds, true)).blocked;
+        : (await this.#inspectThreads(scope, affectedThreadIds, true, input.action === "archive")).blocked;
     const disposition =
       input.action === "archive"
         ? (input.openTaskDisposition ?? "keep")
@@ -228,6 +230,7 @@ export class ThreadBulkInventoryService {
     const result =
       input.action === "archive"
         ? await runWithArchivedThreadRuntimesRetired({
+            purpose: "archive",
             scope,
             threadIds: affectedThreadIds,
             runtimes: this.input.runtimes,
@@ -284,6 +287,7 @@ export class ThreadBulkInventoryService {
     scope: RequestScope,
     threadIds: readonly string[],
     checkBlockers: boolean,
+    forArchive: boolean,
   ): Promise<{
     readonly blocked: ReadonlyMap<string, BulkInventoryBlockerReason>;
     readonly stashedPromptCount: number;
@@ -311,6 +315,7 @@ export class ThreadBulkInventoryService {
           const loaded = await this.input.runtimes.captureLoadedState(
             scope,
             threadId,
+            forArchive ? { purpose: "archive" } : undefined,
           );
           const state = effectiveRunState(
             this.input.inventory.isThreadCreationForceReset(scope, threadId) &&
@@ -319,7 +324,7 @@ export class ThreadBulkInventoryService {
               : summary.backingState,
             loaded?.runState,
           );
-          if (BLOCKED_RUN_STATES.has(state)) {
+          if (BLOCKED_RUN_STATES.has(state) && !(forArchive && state === "disconnected" && loaded?.archiveRetirementSafe === true)) {
             blocked.set(threadId, state === "running" ? "running" : "active");
           }
         }),

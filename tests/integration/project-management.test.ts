@@ -142,6 +142,12 @@ describe("project registration lifecycle", () => {
     expect(f.inventory.isWorkspaceRemoved(f.scope,f.workspace.id)).toBe(false);
   });
 
+  it("keeps location removal on strict retirement instead of using archive-only permission", async () => {
+    const f = fixture();
+    await f.remove();
+    expect(f.runWithRuntimeRetired).toHaveBeenCalledWith(f.scope, f.thread.id, expect.any(Function), undefined);
+  });
+
   it("requires schedules to be paused and never resumes them when restoring", async () => {
     const f=fixture();
     const automations=new AutomationRepository(f.database);

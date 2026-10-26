@@ -501,9 +501,10 @@ export class ThreadRuntimeCoordinator {
     scope: RequestScope,
     applicationThreadId: string,
     operation: () => Promise<Result>,
+    options?: { readonly purpose: "archive" },
   ): Promise<Result> {
     return this.#runWithRuntimeMaintenance(
-      scope, applicationThreadId, { kind: "idle" }, operation,
+      scope, applicationThreadId, { kind: options?.purpose ?? "idle" }, operation,
     );
   }
 
@@ -519,13 +520,13 @@ export class ThreadRuntimeCoordinator {
   async releaseProviderResidency(
     scope: RequestScope,
     applicationThreadId: string,
-    options?: { readonly failurePolicy: "propagate" },
+    options?: { readonly failurePolicy?: "propagate"; readonly purpose?: "archive" },
   ): Promise<void> {
     let target: Awaited<ReturnType<ThreadApplicationActorTargetResolver["resolve"]>>;
     try {
       target = await this.#targets.resolve(scope, applicationThreadId);
     } catch (error) {
-      if (!options && error instanceof DomainError) return;
+      if (options?.failurePolicy !== "propagate" && error instanceof DomainError) return;
       throw error;
     }
     const release = target.driver.releaseConversationResidency;
@@ -537,6 +538,7 @@ export class ThreadRuntimeCoordinator {
         binding: target.binding,
         workspace: target.workspace,
         opaqueBindingDetail: target.opaqueBindingDetail,
+        ...(options?.purpose === "archive" ? { purpose: "archive" as const } : {}),
       });
     } catch (error) {
       if (options?.failurePolicy === "propagate") {
@@ -641,6 +643,7 @@ export class ThreadRuntimeCoordinator {
     applicationThreadId: string,
     disposition:
       | { readonly kind: "idle" }
+      | { readonly kind: "archive" }
       | {
           readonly kind: "explicit_detach";
           readonly expected: ThreadForceResetConversationRuntimeBlocker | undefined;
@@ -673,7 +676,7 @@ export class ThreadRuntimeCoordinator {
                 : unprojected === disposition.expected.generation && disposition.expected.runState === "starting"
                   ? { kind: "unprojected_detach", expectedGeneration: unprojected }
                   : { kind: "idle" }
-              : { kind: "idle" };
+              : { kind: disposition.kind === "archive" ? "archive" : "idle" };
           return await this.#actors.runWithRuntimeRetired({
             scope,
             applicationThreadId,
@@ -683,7 +686,7 @@ export class ThreadRuntimeCoordinator {
                 if (disposition.kind === "explicit_detach") {
                   await this.#releasePreviewedRuntime(key, actorDisposition.kind === "unprojected_detach" ? undefined : disposition.expected);
                 } else {
-                  await this.#releaseIdleRuntime(key);
+                  await this.#releaseIdleRuntime(key, disposition.kind);
                 }
               } catch (error) {
                 if (error instanceof ConversationActorRetirementStaleError) {
@@ -1035,10 +1038,11 @@ export class ThreadRuntimeCoordinator {
   async captureLoadedState(
     scope: RequestScope,
     applicationThreadId: string,
-    options?: { readonly presentation?: boolean },
+    options?: { readonly presentation?: boolean; readonly purpose?: "archive" },
   ): Promise<{
     readonly runState: ThreadRunState;
     readonly backgroundWork?: NormalizedApplicationThreadSummary["backgroundWork"];
+    readonly archiveRetirementSafe?: boolean;
   } | undefined> {
     const key = scopedKey(scope, applicationThreadId);
     const entry = this.#entries.get(key);
@@ -1079,6 +1083,7 @@ export class ThreadRuntimeCoordinator {
           this.#isAutomaticModelRetryPending?.(scope, applicationThreadId) === true
           ? "starting" : runState,
         ...(backgroundWork ? { backgroundWork } : {}),
+        ...(options?.purpose === "archive" ? { archiveRetirementSafe: runtime.actor.canRetireForArchive } : {}),
       };
     } finally {
       this.#release(key, entry);
@@ -1780,7 +1785,7 @@ export class ThreadRuntimeCoordinator {
     if (this.#entries.get(key) === entry) this.#entries.delete(key);
   }
 
-  async #releaseIdleRuntime(key: string): Promise<void> {
+  async #releaseIdleRuntime(key: string, purpose: "idle" | "archive" = "idle"): Promise<void> {
     while (true) {
       const entry = this.#entries.get(key);
       if (!entry) return;
@@ -1806,7 +1811,7 @@ export class ThreadRuntimeCoordinator {
         if (this.#entries.get(key) === entry) this.#entries.delete(key);
         continue;
       }
-      if (!runtime.actor.canEvict) throw new ThreadRuntimeNotIdleError();
+      if (!(purpose === "archive" ? runtime.actor.canRetireForArchive : runtime.actor.canEvict)) throw new ThreadRuntimeNotIdleError();
       await this.#dispose(runtime);
       if (this.#entries.get(key) === entry) this.#entries.delete(key);
     }

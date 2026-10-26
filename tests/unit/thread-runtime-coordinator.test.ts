@@ -74,10 +74,11 @@ function runtimeTarget(
 
 function resettableActor(input: {
   generation: string;
-  runState?: "idle" | "running" | "failed";
+  runState?: "idle" | "running" | "failed" | "disconnected";
   activeTurnId?: string;
   closeFailure?: Error;
   canEvict?: boolean;
+  canRetireForArchive?: boolean;
   canAutomaticallyEvict?: boolean;
   automaticEviction?: "requires_quiescence" | "client_detach";
 }) {
@@ -107,10 +108,15 @@ function resettableActor(input: {
       return closed && !input.closeFailure;
     },
     canEvict: input.canEvict ?? false,
+    get canRetireForArchive(): boolean { return input.canRetireForArchive ?? input.canEvict ?? false; },
     get canAutomaticallyEvict(): boolean { return input.canAutomaticallyEvict ?? input.canEvict ?? false; },
     automaticEviction: input.automaticEviction ?? "requires_quiescence",
     close,
     closeIfIdle,
+    closeIfSafeForArchive: vi.fn(async () => {
+      if (!(input.canRetireForArchive ?? input.canEvict ?? false)) return false;
+      await close(); return true;
+    }),
     ensureProjectionCurrent: vi.fn(async () => undefined),
     subscribe: vi.fn(() => () => undefined),
     onClosed: vi.fn(() => () => undefined),
@@ -153,9 +159,9 @@ function resetCoordinator(
         await input.detachCoordinatorRuntime();
         const actor = actorsByThreadId.get(input.applicationThreadId);
         if (actor) {
-          if (!actor.canEvict) throw new ConversationActorRetirementBusyError();
+          if (!(input.disposition.kind === "archive" ? actor.canRetireForArchive : actor.canEvict)) throw new ConversationActorRetirementBusyError();
           try {
-            const closed = await actor.closeIfIdle();
+            const closed = await (input.disposition.kind === "archive" ? actor.closeIfSafeForArchive() : actor.closeIfIdle());
             if (!closed) throw new ConversationActorRetirementBusyError();
             if (!actor.replacementSafe) {
               throw new ConversationActorRetirementUnprovenError(
@@ -1112,6 +1118,31 @@ describe("ThreadRuntimeCoordinator", () => {
       stderr.mockRestore();
       await coordinator.close();
     }
+  });
+
+  it("passes archive-only proof and provider recheck through the same fenced retirement", async () => {
+    const current = resettableActor({ generation: "archive-generation", runState: "disconnected", canRetireForArchive: true });
+    const release = vi.fn(async (_input: unknown) => "released" as const);
+    const { coordinator } = resetCoordinator([current.actor], 60_000, threadId => ({
+      ...runtimeTarget(threadId), driver: { releaseConversationResidency: release },
+    } as unknown as AcquireConversationActorInput));
+    const acquired = await coordinator.acquire(scope, "archive-incomplete");
+    try {
+      expect(await coordinator.captureLoadedState(scope, "archive-incomplete")).toEqual({ runState: "disconnected" });
+      expect(await coordinator.captureLoadedState(scope, "archive-incomplete", { purpose: "archive" }))
+        .toEqual({ runState: "disconnected", archiveRetirementSafe: true });
+      await expect(coordinator.runWithRuntimeRetired(scope, "archive-incomplete", async () => undefined))
+        .rejects.toBeInstanceOf(ThreadRuntimeNotIdleError);
+      const commit = vi.fn(async () => {
+        expect(current.close).toHaveBeenCalledOnce();
+        expect(release).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ purpose: "archive" }));
+        return "archived";
+      });
+      await expect(runWithArchivedThreadRuntimesRetired({ scope, threadIds: ["archive-incomplete"], runtimes: coordinator, purpose: "archive",
+        operation: commit })).resolves.toBe("archived");
+      await coordinator.releaseProviderResidency(scope, "archive-incomplete", { failurePolicy: "propagate" });
+      expect(release.mock.calls.at(-1)?.[0]).not.toHaveProperty("purpose");
+    } finally { acquired.release(); await coordinator.close(); }
   });
 
   it.each([

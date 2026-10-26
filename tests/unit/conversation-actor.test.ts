@@ -161,6 +161,7 @@ class FakeHandle {
   automaticEviction: ConversationHandle["automaticEviction"] = "requires_quiescence";
   readonly binding = binding;
   retirementBlocked = false;
+  archiveRetirementSafe = false;
   readonly close = vi.fn(async () => undefined);
   readonly submit = vi.fn(async (_input: SubmitTurnInput) => ({
     accepted: true as const,
@@ -1007,6 +1008,51 @@ describe("turn throughput capability admission", () => {
 });
 
 describe("ConversationActorManager", () => {
+  it("retires incomplete history for archive only when the backend proves current quiescence", async () => {
+    const { manager, handle, driver } = fixture(undefined, undefined, 60_000);
+    handle.establishmentSnapshots[0] = snapshot("disconnected");
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      expect(acquired.actor.canRetireForArchive).toBe(false);
+      handle.archiveRetirementSafe = true;
+      expect(acquired.actor.canRetireForArchive).toBe(true);
+      expect(acquired.actor.authoritativelySettled).toBe(false);
+      expect(acquired.actor.canEvict).toBe(false);
+      expect(acquired.actor.canAutomaticallyEvict).toBe(false);
+      expect(await acquired.actor.closeIfIdle()).toBe(false);
+      expect(acquired.actor.timeline.runState).toBe("disconnected");
+      expect(acquired.actor.timeline.turnsById[projectedTurnId]?.status).toBe("in_progress");
+      acquired.release();
+      await expect(manager.runWithRuntimeRetired({ scope, applicationThreadId: binding.applicationThreadId,
+        disposition: { kind: "idle" }, detachCoordinatorRuntime: async () => undefined,
+        operation: async () => "strict",
+      })).rejects.toThrow();
+      await expect(manager.runWithRuntimeRetired({ scope, applicationThreadId: binding.applicationThreadId,
+        disposition: { kind: "archive" }, detachCoordinatorRuntime: async () => undefined,
+        operation: async () => "archived",
+      })).resolves.toBe("archived");
+      expect(handle.close).toHaveBeenCalledOnce();
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it.each(["running", "reconciling", "background", "pending_outcome", "proof_revoked"] as const)(
+    "keeps archive retirement blocked by %s despite the archive opt-in", async blocker => {
+      const { manager, handle, driver } = fixture(undefined, undefined, 60_000);
+      handle.archiveRetirementSafe = true;
+      handle.establishmentSnapshots[0] = {
+        ...snapshot(blocker === "running" || blocker === "reconciling" ? blocker : "disconnected"),
+        ...(blocker === "background" ? { backgroundActivity: { state: "known" as const, agents: 1, commands: 0, other: 0 } } : {}),
+      };
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      try {
+        if (blocker === "pending_outcome") handle.retirementBlocked = true;
+        if (blocker === "proof_revoked") handle.archiveRetirementSafe = false;
+        expect(acquired.actor.canRetireForArchive).toBe(false);
+        expect(await acquired.actor.closeIfSafeForArchive()).toBe(false);
+        expect(handle.close).not.toHaveBeenCalled();
+      } finally { acquired.release(); await manager.close(); }
+    });
+
   it.each([
     { state: "known" as const, agents: 0, commands: 1, other: 0 },
     { state: "unknown" as const, agents: 0, commands: 0, other: 0 },

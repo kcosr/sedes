@@ -443,6 +443,11 @@ export class ConversationActor {
     return this.#canRetire(false);
   }
 
+  /** Archive alone can use explicit native quiescence without completing history. */
+  get canRetireForArchive(): boolean {
+    return this.#canRetire(false, true);
+  }
+
   /** A resident native owner may allow idle presentation detachment only. */
   get initialProjectionUnavailable(): boolean {
     return this.#started && !this.#closing && !this.#closed && !this.#snapshotState && this.#projectionRecoveryRequired;
@@ -455,7 +460,7 @@ export class ConversationActor {
     return this.#canRetire(this.#handle.automaticEviction === "client_detach");
   }
 
-  #canRetire(clientDetach: boolean): boolean {
+  #canRetire(clientDetach: boolean, archive = false): boolean {
     if (!this.#started || this.#closing || this.#closed) return false;
     // A retained transcript may record an interrupted or externally active
     // provider. This reader owns no such work and is always safe to close.
@@ -468,7 +473,8 @@ export class ConversationActor {
       !this.#handle.retirementBlocked &&
       this.#pendingInteractions.size === 0 &&
       (clientDetach || !hasOutstandingBackgroundActivity(timeline.backgroundActivity)) &&
-      (timeline.runState === "idle" || timeline.runState === "failed")
+      (timeline.runState === "idle" || timeline.runState === "failed" ||
+        archive && timeline.runState === "disconnected" && this.#handle.archiveRetirementSafe === true)
     );
   }
 
@@ -1325,6 +1331,10 @@ export class ConversationActor {
 
   async closeIfIdle(): Promise<boolean> {
     return this.#closeConditionally(() => this.canEvict, true);
+  }
+
+  async closeIfSafeForArchive(): Promise<boolean> {
+    return this.#closeConditionally(() => this.canRetireForArchive, true);
   }
 
   async #closeConditionally(predicate: () => boolean, evicted = false): Promise<boolean> {

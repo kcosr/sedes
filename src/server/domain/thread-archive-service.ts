@@ -222,6 +222,7 @@ export class ThreadArchiveService {
         .filter(({ inventoryState }) => inventoryState === "archived")
         .map(({ threadId: replayThreadId }) => replayThreadId);
       await runWithArchivedThreadRuntimesRetired({
+        purpose: "archive",
         scope,
         threadIds: archivedThreadIds,
         runtimes: this.input.runtimes,
@@ -265,6 +266,7 @@ export class ThreadArchiveService {
     }
     const blocked = await this.#blockedThreads(scope, threadIds);
     const result = await runWithArchivedThreadRuntimesRetired({
+      purpose: "archive",
       scope,
       threadIds,
       runtimes: this.input.runtimes,
@@ -419,6 +421,7 @@ export class ThreadArchiveService {
           const loaded = await this.input.runtimes.captureLoadedState(
             scope,
             threadId,
+            { purpose: "archive" },
           );
           const state = runState(
             this.input.inventory.isThreadCreationForceReset(scope, threadId) &&
@@ -427,7 +430,7 @@ export class ThreadArchiveService {
               : summary.backingState,
             loaded?.runState,
           );
-          if (!BLOCKED_RUN_STATES.has(state)) return;
+          if (!BLOCKED_RUN_STATES.has(state) || state === "disconnected" && loaded?.archiveRetirementSafe === true) return;
           blocked.set(threadId, state === "running" ? "running" : "active");
         }),
       );

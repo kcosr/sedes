@@ -712,8 +712,17 @@ export interface ConversationHandle {
   /** Whether idle client eviction can detach while native background work remains resident. */
   readonly automaticEviction: "requires_quiescence" | "client_detach";
 
-  /** Provider outcomes still settling after live work ends; blocks automatic eviction only. */
+  /** Provider outcomes still settling after live work ends; blocks ordinary retirement. */
   readonly retirementBlocked?: boolean;
+
+  /**
+   * Current native quiescence permits archive-only retirement despite an
+   * incomplete historical turn. This never proves completion or admits input.
+   * Omission keeps ordinary strict retirement; providers invalidate this proof
+   * when observations change or fail. Archive rechecks provider residency after
+   * retiring the handle under the application admission fence.
+   */
+  readonly archiveRetirementSafe?: boolean;
 
   /**
    * Captures a replacement baseline only after the caller has detached the
@@ -852,6 +861,8 @@ export interface ReleaseConversationResidencyInput {
   readonly binding: ConversationBinding;
   readonly workspace: ValidatedWorkspace;
   readonly opaqueBindingDetail: string;
+  /** Archive may distinguish current native work from incomplete history. */
+  readonly purpose?: "archive";
 }
 
 export interface BackendErrorShape {

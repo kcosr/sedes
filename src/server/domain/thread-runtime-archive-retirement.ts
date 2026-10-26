@@ -11,6 +11,7 @@ export interface ArchivedThreadRuntimeRetirement {
     scope: RequestScope,
     applicationThreadId: string,
     operation: () => Promise<Result>,
+    options?: { readonly purpose: "archive" },
   ): Promise<Result>;
   /**
    * Within the retired fence, release provider residency that outlives the
@@ -21,6 +22,7 @@ export interface ArchivedThreadRuntimeRetirement {
   releaseProviderResidency(
     scope: RequestScope,
     applicationThreadId: string,
+    options?: { readonly purpose: "archive" },
   ): Promise<void>;
 }
 
@@ -34,6 +36,8 @@ export async function runWithArchivedThreadRuntimesRetired<Result>(input: {
   readonly scope: RequestScope;
   readonly threadIds: readonly string[];
   readonly runtimes: ArchivedThreadRuntimeRetirement;
+  /** Only inventory archival may relax incomplete-history retirement. */
+  readonly purpose?: "archive";
   readonly operation: () => Promise<Result>;
 }): Promise<Result> {
   const threadIds = [...new Set(input.threadIds)].sort();
@@ -47,9 +51,11 @@ export async function runWithArchivedThreadRuntimesRetired<Result>(input: {
         async () => {
           // An archived thread must not keep a remote query resident, or
           // keep its background work running unseen.
-          await input.runtimes.releaseProviderResidency(input.scope, threadId);
+          await input.runtimes.releaseProviderResidency(input.scope, threadId,
+            input.purpose === "archive" ? { purpose: "archive" } : undefined);
           return retire(index + 1);
         },
+        input.purpose === "archive" ? { purpose: "archive" } : undefined,
       );
     } catch (error) {
       if (error instanceof ThreadRuntimeNotIdleError) {

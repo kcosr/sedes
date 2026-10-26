@@ -119,6 +119,14 @@ OpenCode's native archived-session metadata does not change a thread's Sedes
 Active, Snoozed, Parked or Archived state. Sedes keeps its own thread state and
 does not synchronize native OpenCode archival.
 
+An imported transcript without a native completion marker can still be archived
+when OpenCode confirms there is no current execution, pending input, approval,
+form, running child or shell, and Sedes holds no unresolved input delivery.
+Archive preserves the transcript and its uncertain historical outcome; it does
+not mark the old turn successful or enable new input. Unavailable or changing
+runtime evidence still blocks archival. Restoring the thread retains the same
+history and binding.
+
 Send, conversation-scoped Steer, Sedes Queue, Stop, rename, model/effort changes,
 saved Agents, skills, manual compaction, and expressible native permissions/forms
 are supported. Queue
