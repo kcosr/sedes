@@ -7,8 +7,16 @@ User-facing changes are collected here before release. See the
 
 ### Breaking Changes
 
+- Web research now uses the local Codex CLI with live search. Upgrades disable
+  the old Grok research selection; authenticate Codex and enable **Codex CLI
+  research** in Settings to use it again. Grok credentials and search sessions
+  are not transferred, and this tool no longer provides Grok's dedicated X
+  search. See [Web search provider](docs/operator/configuration.md#web-search-provider).
+  ([#121](https://github.com/kcosr/sedes/pull/121))
+
 - Upgrade server and browser/packaged clients together for client protocol
-  **172**. Remote environment configuration adds the required connection
+  **173**. Research settings now select Codex CLI. Remote environment
+  configuration adds the required connection
   compression setting. Usage requests now select report sections and load filter choices
   through a separate endpoint; see [Usage accounting](docs/internals/usage-accounting.md#analytics-read).
   Provider-feature mutations now require explicit mutation revisions;
@@ -45,7 +53,7 @@ User-facing changes are collected here before release. See the
   [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
   ([#85](https://github.com/kcosr/sedes/pull/85), [#112](https://github.com/kcosr/sedes/pull/112))
 
-- Client protocol **172** also includes account-wide automatic model retry settings
+- This client protocol also includes account-wide automatic model retry settings
   and automatic follow-up attribution, explicit skill-catalog refresh intent,
   dismissible runtime notices, Page
   responses, HTML page downloads and shared download metadata,

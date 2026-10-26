@@ -530,17 +530,42 @@ never edit the Sedes server's global environment.
 ### Web search provider
 
 Sedes exposes one provider-neutral `research.web_search` agent tool. Its local
-Grok CLI configuration is principal-owned database state, managed with
-execution settings as **Grok CLI research** under **Defaults** on **Settings →
+Codex CLI configuration is principal-owned database state, managed with
+execution settings as **Codex CLI research** under **Defaults** on **Settings →
 Backends**. A null provider selection (the switch off) disables it. When
-configured, optional `grokHome` is an absolute provider home; native
-authentication remains outside Sedes's database. This auxiliary provider does not create a Grok conversation
-backend or gain another environment's authority.
+configured, the provider is `codex_cli`; optional `codexHome` is an absolute
+provider home. Install a Codex CLI supported by the normal
+[Codex runtime version policy](backends/codex.md#version-compatibility), including its packaged
+JavaScript Code Mode host, and authenticate it as the Sedes service account,
+using its normal home, inherited `CODEX_HOME`, or the
+selected `codexHome`. Native authentication and search sessions remain in
+Codex's host-managed store, outside Sedes's database.
+Settings does not sign in to Codex or copy another provider's credentials.
+This auxiliary provider does not create a conversation backend or gain another
+environment's authority.
 
-Research subprocesses receive a curated environment. They never receive
-unrelated provider credentials or Sedes authority. Missing executable or native
-authentication makes the tool unavailable without stopping the management UI.
-Provider executables and authentication are separately installed by the operator.
+Each request runs `codex exec --json` in a dedicated research directory, with
+live hosted web search and a named research sandbox profile. Tool filesystem
+access permits writes in that directory and denies outside reads apart from
+minimal runtime files. Shell tools and command networking are disabled; hosted
+web search uses its independent connection. The required Code Mode host stays
+enabled with no Node.js or filesystem globals, and its mediated tool calls
+retain the research sandbox policy. The native user config is ignored
+for research execution while host-managed authentication and sessions are
+retained. Sedes buffers the JSONL output and parses it after the process exits;
+research results are not streamed into the calling conversation. Subprocesses
+receive a curated environment without unrelated provider credentials or Sedes
+authority. Failed executable/version checks make research unavailable without
+stopping the management UI. Native exec checks authentication on each search;
+after signing in, retry the search without restarting Sedes or changing Settings. See
+[research tool behavior](../internals/agent-tools.md#research-web-search) for
+continuation and result handling.
+
+Upgrading from Grok research disables the old provider selection. After the
+upgrade, authenticate Codex and enable **Codex CLI research** in Settings.
+The upgrade does not transfer the Grok home, credentials, or research sessions,
+and searches never fall back to Grok. Explicit schema-10 imports still accept
+the historical Grok research block and import it as disabled research.
 
 ### Application terminal policy
 

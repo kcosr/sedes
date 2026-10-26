@@ -322,12 +322,12 @@ describe("AgentToolRegistry", () => {
   });
 
   it("keeps a runtime-unavailable tool visible for management but out of execution catalogs", () => {
-    const availability = new Map([
+    const availability = new Map<string, { available: boolean; reason?: string }>([
       [
         "research.web_search",
         {
           available: false,
-          reason: "The Grok CLI executable was not found.",
+          reason: "The Codex CLI executable was not found.",
         },
       ] as const,
     ]);
@@ -338,13 +338,13 @@ describe("AgentToolRegistry", () => {
       .find(({ id }) => id === "research.web_search");
     expect(research).toMatchObject({
       available: false,
-      unavailableReason: "The Grok CLI executable was not found.",
+      unavailableReason: "The Codex CLI executable was not found.",
     });
 
     const canonical = new CanonicalInlineAgentToolService({
       application: { readThreadStatus: async () => undefined },
       webSearch,
-      unavailableToolIds: new Set(["research.web_search"]),
+      isToolAvailable: toolId => availability.get(toolId)?.available ?? true,
     });
     expect(
       canonical
@@ -359,6 +359,48 @@ describe("AgentToolRegistry", () => {
         input: { query: "Current news" },
       }),
     ).toThrowError(expect.objectContaining({ code: "permission_denied" }));
+  });
+
+  it.each(["pi_sdk", "mcp", "http", "cli"] as const)("refreshes %s catalogs and invocation admission when research is enabled, disabled, and reenabled", adapter => {
+    let available = false;
+    const canonical = new CanonicalInlineAgentToolService({
+      application: { readThreadStatus: async () => undefined },
+      webSearch,
+      isToolAvailable: toolId => toolId !== "research.web_search" || available,
+    });
+    const request = {
+      toolId: "research.web_search", schemaVersion: 1,
+      requestId: "research-availability", input: { query: "Current news" },
+    };
+    for (const nextAvailability of [false, true, false, true]) {
+      available = nextAvailability;
+      expect(canonical.catalogSummaries(adapter, "thread_agent").some(({ id }) => id === request.toolId)).toBe(available);
+      const prepare = () => canonical.prepareInlineInvocation(adapter, "thread_agent", request);
+      if (available) expect(prepare().id).toBe(request.toolId);
+      else expect(prepare).toThrowError(expect.objectContaining({ code: "permission_denied" }));
+      expect(canonical.catalogSummaries(adapter, "thread_agent").some(({ id }) => id === "agent.context")).toBe(true);
+    }
+  });
+
+  it("refreshes management availability without changing tool metadata or earlier snapshots", () => {
+    const toolId = "research.web_search";
+    const availability = new Map<string, { available: boolean; reason?: string }>([
+      [toolId, { available: false, reason: "Research is disabled." }],
+    ]);
+    const policy = createThreadAgentToolPolicyDependencies(availability);
+    const research = () => policy.catalog.list().groups.flatMap(group => group.tools).find(tool => tool.id === toolId)!;
+    const original = research();
+    const { available: _available, unavailableReason: _unavailableReason, ...metadata } = original;
+    expect(original).toMatchObject({ available: false, unavailableReason: "Research is disabled." });
+    for (const current of [{ available: true }, { available: false, reason: "Codex is unavailable." }]) {
+      availability.set(toolId, current);
+      const { available, unavailableReason, ...currentMetadata } = research();
+      expect(available).toBe(current.available);
+      expect(unavailableReason).toBe(current.reason);
+      expect(currentMetadata).toEqual(metadata);
+      expect(policy.eligibility.eligibleToolIds.has(toolId)).toBe(true);
+    }
+    expect(original).toMatchObject({ available: false, unavailableReason: "Research is disabled." });
   });
 
   it("marks every write timeout-indeterminate and every read determinate", () => {

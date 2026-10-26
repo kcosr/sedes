@@ -652,7 +652,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     id: "research.web_search",
     schemaVersion: 1,
     description:
-      "Searches the current public web, fetches relevant pages, and searches public X when useful. Pass a complete natural-language request. Set continue only for a direct follow-up that relies on the most recent successful search by this same Sedes caller; use a new search for a different question. Continuation is best-effort and safely becomes a fresh search when the exact prior session is unavailable.",
+      "Searches the current public web and opens relevant pages. Pass a complete natural-language request. Set continue only for a direct follow-up that relies on the most recent successful search by this same Sedes caller; use a new search for a different question. Continuation is best-effort and safely becomes a fresh search when the exact prior session is unavailable.",
     catalog: {
       groupId: "research",
       label: "Web search",

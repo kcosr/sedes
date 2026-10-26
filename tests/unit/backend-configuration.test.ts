@@ -156,7 +156,7 @@ describe("backend operator configuration", () => {
     ).toThrow();
   });
 
-  it("accepts an optional canonical Grok home for provider-neutral web search", () => {
+  it("parses the historical Grok research block only for schema-10 import", () => {
     expect(
       parseBackendConfiguration({
         ...validConfiguration,
@@ -178,6 +178,14 @@ describe("backend operator configuration", () => {
         webSearch: { provider: "grok_cli", grokHome: "relative" },
       }),
     ).toThrow(/canonical absolute/i);
+  });
+
+  it.each([
+    { provider: "codex_cli" },
+    { provider: "codex_cli", codexHome: "/var/lib/sedes/codex-web-search" },
+    { provider: "grok_cli", codexHome: "/var/lib/sedes/codex-web-search" },
+  ])("rejects nonhistorical research shapes in schema-10 import: %j", webSearch => {
+    expect(() => parseBackendConfiguration({ ...validConfiguration, webSearch })).toThrow();
   });
 
   it("defaults local Bubblewrap authority to isolated networking only", () => {

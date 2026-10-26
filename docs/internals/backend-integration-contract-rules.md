@@ -3827,6 +3827,12 @@ Backend → Agent → Thread selections resolve to independent creation snapshot
 for all five compiled backends. Preserve exact flags, IDs, presentation and
 the current applied-set association across forks and same-settings copies.
 
+Auxiliary tool runtime availability must be read when building execution
+catalogs and admitting invocations, rather than copied at server startup.
+Enabling, disabling, or repairing research in Settings must update both paths
+without a restart. Pi, Codex, Claude, Grok, and OpenCode use the same canonical
+availability check; an existing grant does not override an unavailable runtime.
+
 Model-visible tool media is a separate closed `modelContent` array on a
 completed canonical invocation, never an oversized base64 string in ordinary
 JSON output. Validate the canonical `AgentToolOutput` class, declared output

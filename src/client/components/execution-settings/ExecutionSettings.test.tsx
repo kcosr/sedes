@@ -1170,16 +1170,32 @@ describe("execution configuration administration", () => {
     const defaults = await screen.findByRole("form", { name: "Backend defaults" });
     expect(within(defaults).queryByRole("button", { name: "Save defaults" })).toBeNull();
     fireEvent.change(within(defaults).getByLabelText("Default connection for new threads"), { target: { value: "local-target" } });
-    fireEvent.click(within(defaults).getByLabelText("Grok CLI research"));
+    fireEvent.click(within(defaults).getByLabelText("Codex CLI research"));
+    fireEvent.click(within(defaults).getByRole("button", { name: /^Advanced\s*Codex home directory$/u }));
+    fireEvent.change(within(defaults).getByLabelText("Codex home directory"), { target: { value: "/native/codex-research" } });
     act(() => navigate("/settings/environments"));
     expect(screen.getByRole("dialog", { name: "Discard unsaved changes?" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     fireEvent.click(within(defaults).getByRole("button", { name: "Save defaults" }));
     await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledOnce());
-    expect(api.saveConfiguration.mock.calls[0]![0].configuration).toMatchObject({ defaultTargetId: "local-target", webSearch: { provider: "grok_cli" } });
+    expect(api.saveConfiguration.mock.calls[0]![0].configuration).toMatchObject({ defaultTargetId: "local-target", webSearch: { provider: "codex_cli", codexHome: "/native/codex-research" } });
     expect(await within(defaults).findByText("Saved")).toBeVisible();
     act(() => navigate("/settings/environments"));
     expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull();
+  });
+
+  it("disables Codex research without retaining its configured home", async () => {
+    const document = configuration();
+    document.webSearch = { provider: "codex_cli", codexHome: "/native/codex-research" };
+    const api = renderAt("/settings/backends", controls(document));
+    const defaults = await screen.findByRole("form", { name: "Backend defaults" });
+    expect(within(defaults).getByLabelText("Codex CLI research")).toBeChecked();
+    expect(within(defaults).getByLabelText("Codex home directory")).toHaveValue("/native/codex-research");
+    fireEvent.click(within(defaults).getByLabelText("Codex CLI research"));
+    expect(within(defaults).queryByLabelText("Codex home directory")).toBeNull();
+    fireEvent.click(within(defaults).getByRole("button", { name: "Save defaults" }));
+    await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledOnce());
+    expect(api.saveConfiguration.mock.calls[0]![0].configuration.webSearch).toBeNull();
   });
 });
 
