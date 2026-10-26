@@ -29,6 +29,23 @@ const scope = Object.freeze({
 });
 
 describe("owned NDJSON stdio transport diagnostics", () => {
+  it("preserves native exit metadata and cleanup when an observational callback throws", async () => {
+    const channels = new LocalEnvironmentChannelProvider({ scope, executionEnvironmentId: scope.executionEnvironmentId });
+    const prepared = await channels.prepareOwnedProcess(scope, { executablePath: process.execPath, workingDirectory: repositoryRoot });
+    const onProcessClosed = vi.fn(() => { throw new Error("diagnostic sink unavailable"); });
+    const factory = new OwnedNdjsonStdioTransportFactory({ scope, channels, process: prepared,
+      environment: {}, commandArguments: ["-e", "process.exitCode = 37"],
+      assuranceDiagnosticPrefix: "provider_test_assurance", transportDiagnosticPrefix: "provider_test_stdio", onProcessClosed });
+    const transport = await factory.open(scope, 1, new AbortController().signal);
+    try {
+      await expect(transport.closed).resolves.toMatchObject({ reason: "process_exit" });
+      expect(onProcessClosed).toHaveBeenCalledExactlyOnceWith({ reason: "exit", exitCode: 37, signal: null });
+      expect(transport.diagnostics()).toMatchObject({ processExitDisposition: "nonzero_exit", streamsDrained: true });
+      await expect(transport.close("test_complete")).resolves.toBeUndefined();
+      expect(isValidFramedTransportAssurance(transport.assurance)).toBe(false);
+    } finally { await transport.close("test_complete"); await channels.close(); }
+  });
+
   it("continuously drains stderr while retaining only bounded redacted text", async () => {
     const transport = await openRedactionFixture("stderr", {
       limits: { maximumStderrTailBytes: 80 },

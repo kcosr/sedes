@@ -10,6 +10,20 @@ it("retains Claude machine codes while excluding provider exception text", () =>
     .toEqual([{ name: "Error" }]);
 });
 
+it("correlates native Pi handles and preserves machine errors without provider text", () => {
+  vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  const cause = Object.assign(new Error("secret prompt and /private/session"), { name: "PiRpcCallError", code: "pi_rpc_invalid_response" });
+  const failure = Object.assign(new Error("private native error", { cause }), { name: "PiNativeError", code: "pi_native_session_ended" });
+  attachmentDiagnostic("pi_native_read_failed", { applicationThreadId: "thread", runtimeId: "runtime", handleId: "handle",
+    handleGeneration: "generation", diagnosticCode: "pi_managed_frame_invalid" }, failure);
+  expect(JSON.parse(String(log.mock.calls[0]![0]).replace("[delivery-attachment] ", ""))).toMatchObject({
+    applicationThreadId: "thread", runtimeId: "runtime", handleId: "handle", handleGeneration: "generation", diagnosticCode: "pi_managed_frame_invalid",
+    errors: [{ name: "PiNativeError", code: "pi_native_session_ended" }, { name: "PiRpcCallError", code: "pi_rpc_invalid_response" }],
+  });
+  expect(log.mock.calls[0]![0]).not.toMatch(/secret|private|prompt/u);
+});
+
 it("does not inspect diagnostic fields while disabled", () => {
   vi.stubEnv("SEDES_DEBUG_DELIVERY", "");
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -88,3 +102,11 @@ it("admits machine-only SSH diagnostics and bounded event pressure", () => {
   expect(log.mock.calls[1]![0]).toContain('"diagnosticCode":"redacted"');
   expect(log.mock.calls[1]![0]).not.toContain("private_account_name");
 });
+
+it.each(["process_exit", "orphaned_process_group", "process_cleanup_failed", "invalid_inbound_frame"])(
+  "retains the owned transport's %s closure reason", reason => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    attachmentDiagnostic("pi_rpc_transport_closed", { reason });
+    expect(JSON.parse(String(log.mock.calls[0]![0]).replace("[delivery-attachment] ", ""))).toMatchObject({ reason });
+  });

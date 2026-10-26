@@ -240,6 +240,7 @@ alone do not carry that private authority.
 | Missing MCP tools | Native `mcp.json`, project trust, MCP startup/authentication, and tool-access mode. Read-only deliberately denies third-party calls. |
 | Session locked | Another cooperating SDK/native writer or an unproven surviving Pi child; inspect ownership before cleanup. |
 | Input outcome unknown | Preserve the thread and let exact operation evidence reconcile. Do not resend based on matching prompt text. |
+| Thread disconnected while the backend is connected | Check the individual Pi process, then correlate main and sidecar [native Pi lifecycle diagnostics](../../developer/diagnostics.md#native-pi-lifecycle-and-recovery-capture). Enable remote capture before restarting the sidecar; main's logging flag alone is insufficient. |
 
 Deterministic tests cover configuration, the RPC companion, process ownership,
 durable operations, native history, and sidecar reconnect behavior. Those

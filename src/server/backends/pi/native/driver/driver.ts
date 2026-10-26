@@ -42,6 +42,8 @@ import { PiNativeError } from "../port.js";
 import { piManagedEventSchema } from "../rpc/pi-managed-protocol.js";
 import { piNativeOutcomeSchema } from "../sidecar/wire.js";
 import { parsePiRpcState } from "../rpc/pi-rpc-wire.js";
+import { attachmentDiagnostic, type AttachmentDiagnosticFields } from "../../../../diagnostics/attachment-diagnostics.js";
+import { PiNativeReadDiagnostics } from "../diagnostics.js";
 
 export interface PiNativeSettings {
   readonly modelProvider: string | null;
@@ -125,6 +127,11 @@ function unavailableControl(cause: unknown): boolean {
   const code = cause instanceof PiNativeError ? cause.code : cause instanceof BackendError ? cause.backendCode : undefined;
   return code !== undefined && ["pi_native_observation_control_unavailable", "pi_native_observation_control_changed", "pi_native_session_ended",
     "pi_native_session_unknown", "pi_native_cleanup_unproven"].includes(code);
+}
+function diagnosticContext(binding: ConversationBinding, attachment?: PiNativeAttachment): AttachmentDiagnosticFields {
+  return { applicationThreadId: binding.applicationThreadId, backendInstanceId: binding.backendInstanceId,
+    executionEnvironmentId: binding.executionEnvironmentId,
+    ...(attachment ? { handleId: attachment.handleId, handleGeneration: attachment.generation } : {}) };
 }
 
 export class PiNativeConversationDriver implements ConversationBackendDriver {
@@ -228,10 +235,12 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
     try { return await this.#attach(input); }
     catch (cause) {
       if (cause instanceof PiNativeError && ["pi_native_session_ended", "pi_native_session_configuration_conflict", "pi_native_observation_continuity_lost"].includes(cause.code)) {
+        attachmentDiagnostic("pi_native_recovery_started", diagnosticContext(input.binding), cause);
         const observationGap = cause.code === "pi_native_observation_continuity_lost";
         let retired: Awaited<ReturnType<PiNativeConversationDriver["releaseConversationResidency"]>>;
         try { retired = await this.releaseConversationResidency(input); }
         catch (recovery) {
+          attachmentDiagnostic("pi_native_recovery_release_failed", diagnosticContext(input.binding), recovery);
           if (observationGap && recovery instanceof BackendError && recovery.backendCode === "pi_native_observation_recovery_busy")
             return this.#attachControl(input);
           throw recovery;
@@ -273,6 +282,7 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
     this.#attaching.add(native.sessionId);
     let attachment: PiNativeAttachment | undefined;
     let handle: PiNativeConversationHandle | undefined;
+    attachmentDiagnostic("pi_native_attach_started", { ...diagnosticContext(input.binding), role: controlOnly ? "control" : "observer" });
     try {
       if (controlOnly) {
         attachment = await this.options.port.attachForControl(native) ?? undefined;
@@ -294,12 +304,15 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
         if (this.#recoveryNotices.get(native.sessionId) === recoveryNotice) this.#recoveryNotices.delete(native.sessionId);
       });
       this.#handles.set(native.sessionId, handle);
+      attachmentDiagnostic("pi_native_attach_ready", { ...diagnosticContext(input.binding, attachment), role: controlOnly ? "control" : "observer" });
       return handle;
     } catch (cause) {
+      attachmentDiagnostic("pi_native_attach_failed", { ...diagnosticContext(input.binding, attachment), role: controlOnly ? "control" : "observer" }, cause);
       try {
         if (handle) await handle.close();
         else if (attachment) await this.options.port.release({ handleId: attachment.handleId });
       } catch (cleanup) {
+        attachmentDiagnostic("pi_native_attach_cleanup_failed", diagnosticContext(input.binding, attachment), cleanup);
         if (handle) this.#handles.set(native.sessionId, handle);
         else if (attachment) this.#releasePending.set(native.sessionId, attachment);
         throw new AggregateError([cause, cleanup], "Pi attach failed and native release is unconfirmed.");
@@ -367,15 +380,28 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
   }
   async releaseConversationResidency(input: ReleaseConversationResidencyInput): Promise<"released" | "busy" | "undelivered"> {
     const native = this.assertBinding(input);
-    if (this.#handles.has(native.sessionId) || this.#attaching.has(native.sessionId) || this.#releasePending.has(native.sessionId)) return "busy";
-    let outcome = await nativeCall(() => this.options.port.retireSession(native));
-    if (outcome === "undelivered") {
-      // Apply and acknowledge retained native output before retrying retirement.
-      // Failed drain or cleanup leaves admission closed and must remain observable.
-      await this.#drain(input);
-      outcome = await nativeCall(() => this.options.port.retireSession(native));
+    if (this.#handles.has(native.sessionId) || this.#attaching.has(native.sessionId) || this.#releasePending.has(native.sessionId)) {
+      attachmentDiagnostic("pi_native_residency_release", { ...diagnosticContext(input.binding), stage: "local", outcome: "busy" });
+      return "busy";
     }
-    return outcome === "retired" || outcome === "absent" ? "released" : outcome;
+    let stage = "retire";
+    try {
+      let outcome = await nativeCall(() => this.options.port.retireSession(native));
+      attachmentDiagnostic("pi_native_residency_release", { ...diagnosticContext(input.binding), stage, outcome });
+      if (outcome === "undelivered") {
+        // Apply and acknowledge retained native output before retrying retirement.
+        // Failed drain or cleanup leaves admission closed and must remain observable.
+        stage = "drain";
+        await this.#drain(input);
+        stage = "retire_after_drain";
+        outcome = await nativeCall(() => this.options.port.retireSession(native));
+        attachmentDiagnostic("pi_native_residency_release", { ...diagnosticContext(input.binding), stage, outcome });
+      }
+      return outcome === "retired" || outcome === "absent" ? "released" : outcome;
+    } catch (cause) {
+      attachmentDiagnostic("pi_native_residency_release_failed", { ...diagnosticContext(input.binding), stage }, cause);
+      throw cause;
+    }
   }
   async #drain(input: ReleaseConversationResidencyInput): Promise<void> {
     const native = this.assertBinding(input);
@@ -587,10 +613,12 @@ class PiNativeConversationHandle implements ConversationHandle {
   #recoveryReplacementRequested = false;
   readonly #retainedOperationIds: Set<string>;
   readonly #eventCheckpoint: PiNativeEventCheckpoint;
+  readonly #readDiagnostics: PiNativeReadDiagnostics;
   readonly control;
   constructor(readonly driver: PiNativeConversationDriver, readonly input: AttachConversationInput,
     readonly attachment: PiNativeAttachment, readonly release: (released: boolean) => void, controlOnly = false) {
     this.binding = input.binding; this.#afterSequence = attachment.retainedAfterSequence;
+    this.#readDiagnostics = new PiNativeReadDiagnostics(diagnosticContext(input.binding, attachment));
     this.#controlOnly = controlOnly;
     this.#controlAttached = controlOnly;
     this.#retainedOperationIds = new Set(attachment.retainedOperationIds);
@@ -880,17 +908,19 @@ class PiNativeConversationHandle implements ConversationHandle {
       await this.port.acknowledge({ handleId: this.attachment.handleId, throughSequence }, this.#lifetime.signal);
       this.#eventCheckpoint.acknowledge(throughSequence);
     }
-    if (page.closed && !this.#draining) { this.#emit({ type: "resnapshot_required", reason: "provider_handle_closed" }); this.#lifetime.abort(); }
+    if (page.closed && !this.#draining) { this.#requestReplacement("observer_closed"); this.#lifetime.abort(); }
     return page;
   }
   async #observe(): Promise<void> {
     while (!this.#closed) {
       try {
         const page = await this.#observePage();
+        this.#readDiagnostics.succeeded("observe");
         if (page.closed) return;
         if (!page.events.length) await delay(50, undefined, { signal: this.#lifetime.signal });
       } catch (cause) {
         if (this.#closed || this.#lifetime.signal.aborted) return;
+        this.#readDiagnostics.failed("observe", cause);
         if (cause instanceof PiNativeError && cause.code === "pi_native_observation_continuity_lost") {
           this.#throughput.invalidate();
           this.#controlOnly = true;
@@ -940,8 +970,10 @@ class PiNativeConversationHandle implements ConversationHandle {
       if (nativeIdle) this.#replaceRecoveredControl();
       if (!this.#recoveryReplacementRequested && this.#warnControlOnly(this.#state.isIdle === true))
         this.#emit({ type: "resnapshot_required", reason: "sequence_gap" });
+      this.#readDiagnostics.succeeded("control");
     } catch (cause) {
       if (this.#closed || this.#lifetime.signal.aborted) return;
+      this.#readDiagnostics.failed("control", cause);
       this.#emit({ type: "run_state_changed", state: "disconnected" });
       this.#replaceUnavailableControl(cause);
     }
@@ -955,7 +987,11 @@ class PiNativeConversationHandle implements ConversationHandle {
     }
   }
   async #consume(kind: string, event: Record<string, unknown>): Promise<boolean> {
-    if (kind === "failure") { this.#throughput.invalidate(); this.#emit({ type: "run_state_changed", state: "disconnected" }); return false; }
+    if (kind === "failure") {
+      attachmentDiagnostic("pi_native_failure_observed", { ...diagnosticContext(this.binding, this.attachment),
+        ...(typeof event.code === "string" ? { diagnosticCode: event.code } : {}) });
+      this.#throughput.invalidate(); this.#emit({ type: "run_state_changed", state: "disconnected" }); return false;
+    }
     if (kind === "stream") { this.#stream(event); return false; }
     if (this.#providerClosed) {
       // The disk snapshot is authoritative for completed output. Retain only a
@@ -1413,14 +1449,15 @@ class PiNativeConversationHandle implements ConversationHandle {
     }, idle);
     if (!idle || (!changed && !confirmedStop)) return;
     if (confirmedStop) for (const id of this.#interactions.keys()) this.#settleInteraction(id);
-    this.#requestControlReplacement();
+    this.#requestReplacement("control_settled");
   }
   #replaceUnavailableControl(cause: unknown): void {
     if (!this.#controlOnly || !unavailableControl(cause) || this.#recoveryReplacementRequested) return;
-    this.#requestControlReplacement();
+    this.#requestReplacement("control_unavailable");
   }
-  #requestControlReplacement(): void {
+  #requestReplacement(stage: "observer_closed" | "control_settled" | "control_unavailable"): void {
     this.#recoveryReplacementRequested = true;
+    attachmentDiagnostic("pi_native_replacement_requested", { ...diagnosticContext(this.binding, this.attachment), stage });
     this.#emit({ type: "resnapshot_required", reason: "provider_handle_closed" });
   }
   async reconcileInterrupt(input: InterruptConversationInput): Promise<BackendMutationReconciliation> {
@@ -1619,6 +1656,8 @@ class PiNativeConversationHandle implements ConversationHandle {
       this.#cleanupComplete = true;
     })();
     this.#closing = operation;
-    try { await operation; } finally { if (this.#closing === operation) this.#closing = undefined; }
+    try { await operation; }
+    catch (cause) { attachmentDiagnostic("pi_native_handle_release_failed", diagnosticContext(this.binding, this.attachment), cause); throw cause; }
+    finally { if (this.#closing === operation) this.#closing = undefined; }
   }
 }

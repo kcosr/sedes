@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { attachmentDiagnostic, type AttachmentDiagnosticFields } from "../../../../diagnostics/attachment-diagnostics.js";
 import {
   FrameWriteError,
   isValidFramedTransportAssurance,
@@ -36,6 +37,8 @@ type Pending = {
   delivery: "not_sent" | "sent_outcome_unknown";
   cleanup(): void;
 };
+export type PiNativeDiagnosticContext = Pick<AttachmentDiagnosticFields,
+  "attachmentId" | "runtimeId" | "handleId" | "handleGeneration" | "backendInstanceId" | "executionEnvironmentId" | "role">;
 
 /** A native, non-JSON-RPC protocol over an already assured owned channel.
  * Reads continuously, independently of consumers, and never resends mutations.
@@ -47,10 +50,12 @@ export class PiRpcClient {
   readonly #retired = new Set<string>();
   readonly #listeners = new Set<(event: PiRpcEvent | PiRpcExtensionUIRequest) => void>();
   readonly #resolveClosed: (closure: FramedTransportClosure) => void;
+  readonly #diagnostic: PiNativeDiagnosticContext;
   #closure?: FramedTransportClosure;
   #closing?: Promise<void>;
+  #requestedClose = false;
 
-  constructor(input: { readonly transport: FramedMessageTransport; readonly scope: ProviderTransportScope; readonly connectionGeneration: number }) {
+  constructor(input: { readonly transport: FramedMessageTransport; readonly scope: ProviderTransportScope; readonly connectionGeneration: number; readonly diagnostic?: PiNativeDiagnosticContext }) {
     if (!isValidFramedTransportAssurance(input.transport.assurance) ||
       input.transport.assurance.kind !== "owned_process" ||
       !sameProviderTransportScope(input.scope, input.transport.assurance.scope) ||
@@ -58,9 +63,16 @@ export class PiRpcClient {
       throw new PiRpcCallError("pi_rpc_transport_assurance_invalid", "not_sent");
     }
     this.#transport = input.transport;
+    this.#diagnostic = { ...input.diagnostic, backendInstanceId: input.scope.backendInstanceId,
+      executionEnvironmentId: input.scope.executionEnvironmentId, attachmentId: input.diagnostic?.attachmentId ?? randomUUID() };
     let resolveClosed!: (closure: FramedTransportClosure) => void;
     this.closed = new Promise((resolve) => { resolveClosed = resolve; });
     this.#resolveClosed = resolveClosed;
+    // Process cleanup can settle after an earlier protocol failure. Preserve
+    // the carrier's own closure independently of the client admission state.
+    void this.#transport.closed.then(closure => attachmentDiagnostic("pi_rpc_transport_closed", {
+      ...this.#diagnostic, reason: closure.reason, requestedClose: this.#requestedClose,
+    }, closure.cause), error => attachmentDiagnostic("pi_rpc_transport_failed", this.#diagnostic, error));
     void this.#read();
   }
 
@@ -118,10 +130,15 @@ export class PiRpcClient {
   }
 
   close(reason = "pi_rpc_client_closed"): Promise<void> {
+    if (!this.#requestedClose) {
+      attachmentDiagnostic("pi_rpc_close_requested", { ...this.#diagnostic, reason, pendingRequestCount: this.#pending.size });
+      this.#requestedClose = true;
+    }
     this.#closing ??= this.#transport.close(reason).then(() => this.#finish({ reason }), (error: unknown) => {
       // A failed cleanup permanently ends protocol admission, but callers may
       // explicitly retry process cleanup while retaining the writer lease.
       this.#closing = undefined;
+      attachmentDiagnostic("pi_rpc_cleanup_failed", { ...this.#diagnostic, reason }, error);
       this.#finish({ reason });
       throw error;
     });
@@ -129,14 +146,17 @@ export class PiRpcClient {
   }
 
   async #read(): Promise<void> {
+    let stage = "transport_read";
     try {
       for await (const frame of this.#transport.frames) {
+        stage = "record_validation";
         const record = parsePiRpcRecord(frame.text);
         if (record.type === "response") {
+          stage = "response_correlation";
           if (!record.id) throw new Error("pi_rpc_uncorrelated_response");
           const pending = this.#pending.get(record.id);
           if (!pending) {
-            if (this.#retired.has(record.id)) continue;
+            if (this.#retired.has(record.id)) { stage = "transport_read"; continue; }
             throw new Error("pi_rpc_response_id_unknown");
           }
           if (pending.command !== record.command) throw new Error("pi_rpc_response_command_mismatch");
@@ -146,13 +166,18 @@ export class PiRpcClient {
           if (record.success) pending.resolve(record.data);
           else pending.reject(new PiRpcCallError("pi_rpc_command_rejected", "rejected", { cause: new Error(record.error) }));
         } else {
+          stage = "listener";
           for (const listener of [...this.#listeners]) listener(record);
         }
+        stage = "transport_read";
       }
       // Drain every already-admitted response before observing process exit.
       // The carrier may close while its final frames are still in the queue.
       this.#finish(await this.#transport.closed);
     } catch (cause) {
+      attachmentDiagnostic("pi_rpc_protocol_failed", { ...this.#diagnostic,
+        stage: stage === "record_validation" && cause instanceof SyntaxError ? "json_decode" : stage,
+        pendingRequestCount: this.#pending.size }, cause);
       const error = cause instanceof Error ? cause : new Error("pi_rpc_protocol_failed");
       this.#finish({ reason: "pi_rpc_protocol_failed", cause: error });
       void this.close("pi_rpc_protocol_failed").catch(() => undefined);
@@ -165,6 +190,8 @@ export class PiRpcClient {
   }
   #finish(closure: FramedTransportClosure): void {
     if (this.#closure) return;
+    attachmentDiagnostic("pi_rpc_closed", { ...this.#diagnostic, reason: closure.reason,
+      requestedClose: this.#requestedClose, pendingRequestCount: this.#pending.size }, closure.cause);
     this.#closure = closure;
     for (const pending of this.#pending.values()) {
       pending.cleanup();

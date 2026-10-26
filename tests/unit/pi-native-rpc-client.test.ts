@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEnvironmentOwnedProcessIdentity } from "../../src/server/execution/environment-channel.js";
 import { createOwnedProcessAssurance, FrameWriteError, type FramedMessageTransport, type FramedTransportClosure } from "../../src/server/provider-protocol/transport/assured-framed-transport.js";
 import { MAXIMUM_PROVIDER_FRAME_BYTES } from "../../src/server/provider-protocol/transport/framed-message-limits.js";
@@ -18,10 +18,13 @@ function fixture() {
     frames, closed, async send(text) { writes.push(text); return { disposition: "sent" }; },
     async close(reason) { frames.push(null); resolveClosed({ reason }); },
   };
-  const client = new PiRpcClient({ transport, scope, connectionGeneration: 1 });
+  const client = new PiRpcClient({ transport, scope, connectionGeneration: 1,
+    diagnostic: { attachmentId: "attachment", runtimeId: "runtime", handleId: "handle", handleGeneration: "generation" } });
   function emit(value: unknown) { const text = JSON.stringify(value); frames.push({ text, byteLength: Buffer.byteLength(text) }); }
-  return { client, transport, writes, emit };
+  return { client, transport, writes, emit, frames };
 }
+
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe("Pi native RPC client", () => {
   it("correlates interleaved events and responses and drains final responses before process exit", async () => {
@@ -88,5 +91,60 @@ describe("Pi native RPC client", () => {
     await expect(f.client.request({ type: "abort" })).rejects.toMatchObject({ delivery: "not_sent" });
     await f.client.close();
     expect(attempts).toBe(2);
+  });
+
+  it("keeps diagnostics off by default", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "");
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const f = fixture();
+    f.frames.push({ text: "private invalid record", byteLength: 22 });
+    await f.client.closed;
+    await f.client.close();
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["json_decode", "private invalid JSON"],
+    ["record_validation", JSON.stringify({ type: "agent_start", secret: "private payload" })],
+  ])("correlates %s failures without recording provider content", async (stage, text) => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const f = fixture();
+    const pending = f.client.request({ type: "prompt", message: "private prompt" });
+    f.frames.push({ text, byteLength: Buffer.byteLength(text) });
+    await expect(pending).rejects.toMatchObject({ code: "pi_rpc_protocol_failed", delivery: "sent_outcome_unknown" });
+    await f.client.close();
+    const records = log.mock.calls.map(([line]) => JSON.parse(String(line).replace("[delivery-attachment] ", "")));
+    expect(records).toContainEqual(expect.objectContaining({ event: "pi_rpc_protocol_failed", stage, attachmentId: "attachment",
+      runtimeId: "runtime", handleId: "handle", handleGeneration: "generation", backendInstanceId: "backend", pendingRequestCount: 1 }));
+    expect(records).toContainEqual(expect.objectContaining({ event: "pi_rpc_closed", reason: "pi_rpc_protocol_failed", requestedClose: false }));
+    expect(JSON.stringify(records)).not.toContain("private");
+    expect(JSON.stringify(records)).not.toContain("/usr/bin");
+  });
+
+  it("records listener failures separately and cannot turn a failing diagnostic sink into cleanup failure", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const f = fixture();
+    f.client.subscribe(() => { throw new Error("secret listener details"); });
+    f.emit({ type: "agent_start" });
+    await f.client.closed;
+    await f.client.close();
+    expect(log.mock.calls.some(([line]) => String(line).includes('"stage":"listener"'))).toBe(true);
+    expect(JSON.stringify(log.mock.calls)).not.toContain("secret");
+    log.mockImplementation(() => { throw new Error("sink unavailable"); });
+    const g = fixture();
+    await expect(g.client.close()).resolves.toBeUndefined();
+    await expect(g.client.request({ type: "abort" })).rejects.toMatchObject({ code: "pi_rpc_closed", delivery: "not_sent" });
+  });
+
+  it("marks explicit closure as requested without exposing arbitrary close reasons", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const f = fixture();
+    await f.client.close("/private/session.jsonl");
+    const records = log.mock.calls.map(([line]) => JSON.parse(String(line).replace("[delivery-attachment] ", "")));
+    expect(records).toContainEqual(expect.objectContaining({ event: "pi_rpc_closed", reason: "redacted", requestedClose: true }));
+    expect(JSON.stringify(records)).not.toContain("/private");
   });
 });

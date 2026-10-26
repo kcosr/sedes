@@ -150,6 +150,7 @@ export class PiNativeHost implements PiNativePort {
       owner.directory = await mkdtemp(path.join(tmpdir(), "sedes-pi-"));
       this.#admit(authority, signal);
       owner.process = await this.#launch({ runtime: this.#runtime, cwd: input.cwd,
+        diagnostic: { runtimeId: this.runtimeId, handleId: owner.id },
         channels: this.input.channels, environment: this.input.environment, bridgeDirectory: owner.directory,
         authenticationKey: this.input.authenticationKey, ...(signal ? { signal } : {}) });
       const [models, commands, state] = await Promise.all([
@@ -302,6 +303,7 @@ export class PiNativeHost implements PiNativePort {
       }
       this.#admit(authority, signal);
       session.process = await this.#launch({ runtime: this.#runtime, session: session.identity,
+        diagnostic: { runtimeId: this.runtimeId, handleId: session.handleId, handleGeneration: session.generation },
         cwd: session.identity.cwd, channels: this.input.channels, environment: this.input.environment,
         executionEnvironment, bridgeDirectory: session.directory,
         authenticationKey: this.input.authenticationKey, ...(signal ? { signal } : {}),

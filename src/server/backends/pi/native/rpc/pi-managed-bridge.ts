@@ -4,7 +4,8 @@ import { lstatSync } from "node:fs";
 import { chmod, lstat, open, unlink } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { PiRpcCallError, type PiRpcRequestOptions } from "./pi-rpc-client.js";
+import { PiRpcCallError, type PiRpcRequestOptions, type PiNativeDiagnosticContext } from "./pi-rpc-client.js";
+import { attachmentDiagnostic } from "../../../../diagnostics/attachment-diagnostics.js";
 import { PI_RPC_MAXIMUM_BYTES, piBoundedJson } from "./pi-rpc-wire.js";
 import { PI_MANAGED_PROTOCOL_VERSION, parsePiManagedCommand, parsePiManagedResult, piManagedEventSchema, piManagedStateSchema, type PiManagedCommand, type PiManagedEvent, type PiManagedState } from "./pi-managed-protocol.js";
 
@@ -32,13 +33,15 @@ export class PiManagedBridge {
   readonly #resolveReady: (state: PiManagedState) => void;
   readonly #rejectReady: (error: unknown) => void;
   readonly #resolveClosed: (closure: { reason: string }) => void;
+  readonly #diagnostic: PiNativeDiagnosticContext;
   #socket?: Socket;
   #authenticated = false;
   #ready = false;
   #reason?: string;
   #closing?: Promise<void>;
 
-  private constructor(directory: string, authenticationKey: Uint8Array) {
+  private constructor(directory: string, authenticationKey: Uint8Array, diagnostic: PiNativeDiagnosticContext) {
+    this.#diagnostic = { ...diagnostic, attachmentId: diagnostic.attachmentId ?? randomUUID() };
     this.socketPath = process.platform === "win32" ? `\\\\.\\pipe\\sedes-pi-${randomUUID()}` : path.join(directory, "bridge.sock");
     this.bootstrapPath = path.join(directory, `bootstrap-${randomUUID()}.json`);
     this.#authenticationKey = Buffer.from(authenticationKey);
@@ -51,24 +54,24 @@ export class PiManagedBridge {
     this.#server = createServer((socket) => this.#accept(socket));
   }
 
-  static async listen(directory: string, authenticationKey: Uint8Array): Promise<PiManagedBridge> {
+  static async listen(directory: string, authenticationKey: Uint8Array, diagnostic: PiNativeDiagnosticContext = {}): Promise<PiManagedBridge> {
     if (authenticationKey.byteLength < 32 || authenticationKey.byteLength > 4096) throw new Error("pi_managed_key_invalid");
     const info = await lstat(directory);
     if (!info.isDirectory() || info.isSymbolicLink() || (process.platform !== "win32" && ((info.mode & 0o077) !== 0 || info.uid !== process.getuid?.()))) throw new Error("pi_managed_directory_insecure");
-    const bridge = new PiManagedBridge(directory, authenticationKey);
+    const bridge = new PiManagedBridge(directory, authenticationKey, diagnostic);
     if (process.platform !== "win32" && Buffer.byteLength(bridge.socketPath) > 103) throw new Error("pi_managed_socket_path_too_long");
     try {
       await new Promise<void>((resolve, reject) => {
         bridge.#server.once("error", reject);
         bridge.#server.listen(bridge.socketPath, () => { bridge.#server.removeListener("error", reject); resolve(); });
       });
-      bridge.#server.on("error", () => { void bridge.close("pi_managed_server_failed").catch(() => undefined); });
+      bridge.#server.on("error", (error) => { void bridge.#close("pi_managed_server_failed", false, error).catch(() => undefined); });
       if (process.platform !== "win32") await chmod(bridge.socketPath, 0o600);
       const file = await open(bridge.bootstrapPath, "wx", 0o600);
       try { await file.writeFile(JSON.stringify({ version: PI_MANAGED_PROTOCOL_VERSION, socketPath: bridge.socketPath, token: bridge.#token })); }
       finally { await file.close(); }
       return bridge;
-    } catch (error) { await bridge.close("pi_managed_bootstrap_failed"); throw error; }
+    } catch (error) { await bridge.#close("pi_managed_bootstrap_failed", false, error); throw error; }
   }
 
   subscribe(listener: (event: PiManagedEvent) => void): () => void {
@@ -93,12 +96,17 @@ export class PiManagedBridge {
       const cleanup = () => { clearTimeout(timer); options.signal?.removeEventListener("abort", fail); };
       this.#pending.set(id, { command: parsed, resolve, reject, cleanup });
       options.signal?.addEventListener("abort", fail, { once: true });
-      this.#socket!.write(frame, (error) => { if (error) void this.close("pi_managed_write_failed").catch(() => undefined); });
+      this.#socket!.write(frame, (error) => { if (error) void this.#close("pi_managed_write_failed", false, error).catch(() => undefined); });
     });
   }
 
   close(reason = "pi_managed_closed"): Promise<void> {
+    return this.#close(reason, true);
+  }
+
+  #close(reason: string, requestedClose: boolean, error?: unknown): Promise<void> {
     if (this.#closing) return this.#closing;
+    attachmentDiagnostic("pi_companion_closed", { ...this.#diagnostic, reason, requestedClose, pendingRequestCount: this.#pending.size }, error);
     this.#reason = reason;
     this.#rejectReady(new Error(reason));
     for (const pending of this.#pending.values()) { pending.cleanup(); pending.reject(new PiRpcCallError(reason, "sent_outcome_unknown")); }
@@ -109,7 +117,10 @@ export class PiManagedBridge {
         unlink(this.bootstrapPath).catch(error => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }),
       ]);
       const failed = results.find(result => result.status === "rejected");
-      if (failed?.status === "rejected") throw failed.reason;
+      if (failed?.status === "rejected") {
+        attachmentDiagnostic("pi_companion_cleanup_failed", { ...this.#diagnostic, reason }, failed.reason);
+        throw failed.reason;
+      }
     })();
     return this.#closing;
   }
@@ -118,16 +129,23 @@ export class PiManagedBridge {
     if (this.#socket || this.#reason) { socket.destroy(); return; }
     this.#socket = socket;
     let buffered = Buffer.alloc(0);
-    const timer = setTimeout(() => { void this.close("pi_managed_handshake_timeout").catch(() => undefined); }, 5_000);
+    const timer = setTimeout(() => { void this.#close("pi_managed_handshake_timeout", false).catch(() => undefined); }, 5_000);
     socket.on("data", (chunk: Buffer) => {
+      let stage = "framing";
       try {
         if (buffered.length + chunk.length > PI_RPC_MAXIMUM_BYTES) throw new Error("pi_managed_frame_limit");
         buffered = Buffer.concat([buffered, chunk]);
         let index: number;
         while ((index = buffered.indexOf(10)) >= 0) {
           const frame = buffered.subarray(0, index); buffered = buffered.subarray(index + 1);
-          const decoded = envelope.parse(piBoundedJson(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(frame))));
+          stage = "utf8_decode";
+          const text = new TextDecoder("utf-8", { fatal: true }).decode(frame);
+          stage = "json_decode";
+          const json: unknown = JSON.parse(text);
+          stage = "schema_validation";
+          const decoded = envelope.parse(piBoundedJson(json));
           if (!this.#authenticated) {
+            stage = "authentication";
             if (decoded.type !== "hello") throw new Error("pi_managed_hello_missing");
             const expected = Buffer.from(this.#token); const received = Buffer.from(decoded.token);
             if (expected.length !== received.length || !timingSafeEqual(expected, received)) throw new Error("pi_managed_authentication_failed");
@@ -140,24 +158,30 @@ export class PiManagedBridge {
               authenticationKey: this.#authenticationKey.toString("base64url") }) + "\n");
             continue;
           }
+          stage = "protocol_state";
           if (decoded.type === "hello") throw new Error("pi_managed_duplicate_hello");
           if (decoded.type === "ready") {
             if (this.#ready) throw new Error("pi_managed_duplicate_ready");
             this.#ready = true; this.#resolveReady(decoded.state); continue;
           }
           if (!this.#ready) throw new Error("pi_managed_not_ready");
-          if (decoded.type === "event") { for (const listener of [...this.#listeners]) listener(decoded.event); continue; }
+          if (decoded.type === "event") { stage = "listener"; for (const listener of [...this.#listeners]) listener(decoded.event); continue; }
+          stage = "response_correlation";
           const pending = this.#pending.get(decoded.id);
           if (!pending) { if (this.#retired.has(decoded.id)) continue; throw new Error("pi_managed_response_unknown"); }
+          stage = "response_validation";
           const value = decoded.success ? parsePiManagedResult(pending.command, decoded.data) : undefined;
           this.#pending.delete(decoded.id); pending.cleanup();
           this.#retired.add(decoded.id); if (this.#retired.size > 1024) this.#retired.delete(this.#retired.values().next().value!);
           if (decoded.success) pending.resolve(value);
           else pending.reject(new PiRpcCallError(decoded.code, "rejected"));
         }
-      } catch { void this.close("pi_managed_protocol_failed").catch(() => undefined); }
+      } catch (error) {
+        attachmentDiagnostic("pi_companion_protocol_failed", { ...this.#diagnostic, stage, pendingRequestCount: this.#pending.size }, error);
+        void this.#close("pi_managed_protocol_failed", false).catch(() => undefined);
+      }
     });
-    socket.on("error", () => { void this.close("pi_managed_socket_failed").catch(() => undefined); });
-    socket.on("close", () => { clearTimeout(timer); void this.close("pi_managed_socket_closed").catch(() => undefined); });
+    socket.on("error", (error) => { void this.#close("pi_managed_socket_failed", false, error).catch(() => undefined); });
+    socket.on("close", () => { clearTimeout(timer); void this.#close("pi_managed_socket_closed", false).catch(() => undefined); });
   }
 }

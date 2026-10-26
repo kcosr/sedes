@@ -126,7 +126,10 @@ function setup(extra: Partial<PiNativeDriverOptions> = {}) {
     modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "provider_model_effort"), ...extra });
   drivers.push(driver); return { fixture, driver };
 }
-afterEach(async () => { for (const driver of drivers.splice(0)) await driver.close(); });
+afterEach(async () => {
+  try { for (const driver of drivers.splice(0)) await driver.close(); }
+  finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); }
+});
 
 describe("native Pi driver", () => {
   it("claims the execution-host store identity before publishing a create or fork", async () => {
@@ -2312,5 +2315,62 @@ describe("native Pi driver", () => {
     await vi.waitFor(() => expect(fixture.port.outcome).toHaveBeenCalled());
     expect(timeout).not.toHaveBeenCalled(); controller.abort();
     await result; timeout.mockRestore();
+  });
+});
+
+describe("native Pi closure recovery", () => {
+  it("logs a repeated observer failure once, its recovery, and no cancellation failure", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const records = () => log.mock.calls.map(([line]) => JSON.parse(String(line).replace("[delivery-attachment] ", "")));
+    const { driver, fixture } = setup();
+    const observe = fixture.port.observe;
+    let calls = 0;
+    fixture.port.observe = async (input, signal) => {
+      if (++calls <= 2) throw new PiNativeError("pi_native_observation_failed", "not_sent", { cause: new Error("private native content") });
+      return observe(input, signal);
+    };
+    const handle = await driver.attach(conversation);
+    await vi.waitFor(() => expect(records().filter(record => record.event === "pi_native_read_recovered")).toHaveLength(1));
+    await handle.close();
+    expect(records().filter(record => record.event === "pi_native_read_failed")).toEqual([
+      expect.objectContaining({ applicationThreadId: "thread", handleId: "handle", handleGeneration: "generation", stage: "observe",
+        errors: [{ name: "PiNativeError", code: "pi_native_observation_failed" }, { name: "Error" }] }),
+    ]);
+    expect(records().filter(record => record.event === "pi_native_read_recovered")[0]).toMatchObject({ stage: "observe" });
+    expect(JSON.stringify(records())).not.toContain("private");
+    expect(fixture.commands.some(command => ["prompt", "steer"].includes(command.type))).toBe(false);
+  });
+
+  it("correlates an ended-session recovery through retirement and replacement attach", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { driver, fixture } = setup();
+    fixture.port.attach = vi.fn().mockRejectedValueOnce(new PiNativeError("pi_native_session_ended")).mockResolvedValue(attachment);
+    await driver.attach(conversation);
+    const records = log.mock.calls.map(([line]) => JSON.parse(String(line).replace("[delivery-attachment] ", "")));
+    expect(records.map(record => record.event)).toEqual([
+      "pi_native_attach_started", "pi_native_attach_failed", "pi_native_recovery_started",
+      "pi_native_residency_release", "pi_native_attach_started", "pi_native_attach_ready",
+    ]);
+    expect(records[2]).toMatchObject({ applicationThreadId: "thread", errors: [{ code: "pi_native_session_ended" }] });
+    expect(records[3]).toMatchObject({ stage: "retire", outcome: "retired" });
+    expect(records[5]).toMatchObject({ applicationThreadId: "thread", handleId: "handle", handleGeneration: "generation" });
+    expect(fixture.commands.some(command => ["prompt", "steer"].includes(command.type))).toBe(false);
+  });
+
+  it("replays ordinary provider closure to late raw and sequenced subscribers", async () => {
+    const { driver, fixture } = setup();
+    fixture.port.observe = vi.fn(async () => ({ events: [], throughSequence: 0, retainedAfterSequence: 0, closed: true }));
+    let lifetime!: AbortSignal;
+    const handle = await driver.attach({ ...conversation, onControlReady: control => { lifetime = control.lifetime; } });
+    await vi.waitFor(() => expect(lifetime.aborted).toBe(true));
+    const raw: BackendConversationEvent[] = [];
+    const sequenced: BackendConversationEvent[] = [];
+    handle.subscribe(event => raw.push(event));
+    await subscribeProjection(handle, event => sequenced.push(event));
+    expect(raw, "late raw subscriber must receive permanent closure").toContainEqual({ type: "resnapshot_required", reason: "provider_handle_closed" });
+    expect(sequenced, "late projection subscriber must receive permanent closure").toContainEqual({ type: "resnapshot_required", reason: "provider_handle_closed" });
+    expect(fixture.commands.some(command => ["prompt", "steer"].includes(command.type))).toBe(false);
   });
 });

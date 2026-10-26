@@ -79,7 +79,9 @@ User-facing changes are collected here before release. See the
 - Add a separate **Pi** backend for the installed Pi 1.4.0 CLI on local or
   persistent SSH/outbound Linux/macOS hosts. It uses native configuration, MCP
   servers, code mode, and session history, with tool-access controls, durable
-  input recovery, and completed-turn forks. **Pi SDK** remains available; both
+  input recovery, completed-turn forks, and opt-in
+  [lifecycle diagnostics](docs/developer/diagnostics.md#native-pi-lifecycle-and-recovery-capture)
+  on the server and sidecar. **Pi SDK** remains available; both
   backends can share session storage without importing duplicate threads. See
   [native Pi setup and limits](docs/operator/backends/pi-native.md).
   ([#124](https://github.com/kcosr/sedes/pull/124))
@@ -285,7 +287,8 @@ User-facing changes are collected here before release. See the
 
 - Empty and blocked input queues avoid unnecessary provider history reads.
   Native Pi verifies model and thinking changes against fresh state and preserves
-  healthy sidecar connections during cleanup. Backend Stop/Restart can recover
+  healthy sidecar connections during cleanup. Early process exits remain
+  visible to reconnecting observers. Backend Stop/Restart can recover
   failed cleanup while retaining ownership safeguards. Inactive imported
   OpenCode threads can be archived even when old history lacks a completion
   marker. See [native Pi controls](docs/operator/backends/pi-native.md#conversation-controls-and-history)

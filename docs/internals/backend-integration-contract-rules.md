@@ -982,7 +982,11 @@ only in an explicitly UUID-validated diagnostic field. Installation-owned
 worker launchers propagate only the effective operator diagnostics opt-in and
 separate per-PID file destinations; capture failure never changes cleanup or
 provider lifecycle semantics. Claude implements worker/session lifecycle
-capture. Shared managed-worker launch/exit records apply to all callers; Pi,
+capture. Native Pi captures its owned child exit, RPC/companion failure stage,
+and main-side observer/recovery transitions, correlated by Sedes handle and
+generation instead of native paths. Suppress repeated identical polling
+failures; diagnostic callback failures must not affect transport cleanup.
+Shared managed-worker launch/exit records apply to all callers; Pi SDK,
 Codex, Grok, and OpenCode retain their existing provider-specific behavior and
 introduce no new session diagnostics or capability changes here.
 
@@ -990,8 +994,9 @@ Shared carrier diagnostics must retain process exit evidence and capture the
 first bounded forwarding failure before detaching an attachment. Log only
 code-owned stages, machine codes, and queue sizes; never provider payloads or
 raw stderr. Capture remains operator-gated and observational. Codex and Claude
-implement persistent runtime event forwarding capture. Pi and OpenCode use the
-shared carrier exit evidence without new provider event diagnostics; Grok has
+implement persistent runtime event forwarding capture. Native Pi additionally
+retains its process and protocol failure evidence; Pi SDK and OpenCode use the
+shared carrier exit evidence without new provider event diagnostics. Grok has
 no remote runtime and is intentionally unsupported on this surface.
 
 Runtime diagnostics may declare the server-only `recoveryAction: "stop"` when

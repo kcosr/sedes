@@ -1,11 +1,13 @@
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
+import { attachmentDiagnostic } from "../../../../diagnostics/attachment-diagnostics.js";
 import { mergeResolvedEnvironment, resolveEnvironmentVariables, type ResolvedEnvironmentVariables } from "../../../../environment-variables/runtime-environment.js";
 import type { EnvironmentOwnedProcessChannel, ExecutionEnvironmentChannelProvider, PreparedEnvironmentOwnedProcess } from "../../../../execution/environment-channel.js";
 import { OwnedNdjsonStdioTransportFactory } from "../../../../provider-protocol/transport/owned-ndjson-stdio-transport.js";
 import type { PiNativeRuntimeConfiguration, PiNativeSessionIdentity } from "../port.js";
 import { PiNativeError } from "../port.js";
-import { PiRpcClient } from "./pi-rpc-client.js";
+import { PiRpcClient, type PiNativeDiagnosticContext } from "./pi-rpc-client.js";
 import { PI_RPC_VERSION } from "./pi-rpc-wire.js";
 import { PiManagedBridge } from "./pi-managed-bridge.js";
 import { installPiManagedExtension } from "./pi-managed-extension.js";
@@ -26,6 +28,7 @@ export interface PiNativeLaunchInput {
   readonly bridgeDirectory: string;
   readonly authenticationKey: Uint8Array;
   readonly signal?: AbortSignal;
+  readonly diagnostic?: Pick<PiNativeDiagnosticContext, "runtimeId" | "handleId" | "handleGeneration">;
   readonly onEvent?: (event: { kind: "rpc" | "companion"; payload: Readonly<Record<string, unknown>> }) => void;
 }
 
@@ -40,6 +43,15 @@ export function buildPiNativeChildEnvironment(environment: Readonly<Record<strin
 }
 
 export async function createPiNativeSessionProcess(input: PiNativeLaunchInput): Promise<PiNativeSessionProcess> {
+  const diagnostic: PiNativeDiagnosticContext = { ...input.diagnostic, attachmentId: randomUUID(),
+    backendInstanceId: input.runtime.backendInstanceId, executionEnvironmentId: input.runtime.executionEnvironmentId,
+    role: input.session ? "session" : "catalog" };
+  attachmentDiagnostic("pi_native_launch_started", diagnostic);
+  try { return await launch(input, diagnostic); }
+  catch (error) { attachmentDiagnostic("pi_native_launch_failed", diagnostic, error); throw error; }
+}
+
+async function launch(input: PiNativeLaunchInput, diagnostic: PiNativeDiagnosticContext): Promise<PiNativeSessionProcess> {
   const scope = input.runtime;
   if (input.authenticationKey.byteLength < 32 || input.channels.scope.tenantId !== scope.tenantId || input.channels.scope.principalId !== scope.principalId || input.channels.executionEnvironmentId !== scope.executionEnvironmentId) throw new Error("pi_native_launch_scope_invalid");
   if (!input.channels.resolveOwnedProcessExecutable) throw new Error("pi_native_executable_resolution_unsupported");
@@ -53,7 +65,7 @@ export async function createPiNativeSessionProcess(input: PiNativeLaunchInput): 
   await verifyVersion(input, prepared, environment);
   if (before !== await executableIdentity(executable.canonicalPath)) throw new Error("pi_native_executable_changed");
   const extension = await installPiManagedExtension(input.bridgeDirectory);
-  const bridge = await PiManagedBridge.listen(input.bridgeDirectory, input.authenticationKey);
+  const bridge = await PiManagedBridge.listen(input.bridgeDirectory, input.authenticationKey, diagnostic);
   let rpc: PiRpcClient | undefined;
   try {
     const timeout = AbortSignal.timeout(scope.initializationTimeoutMs);
@@ -63,9 +75,11 @@ export async function createPiNativeSessionProcess(input: PiNativeLaunchInput): 
         SEDES_PI_BOOTSTRAP_FILE: bridge.bootstrapPath },
       commandArguments: ["--mode", "rpc", "--no-extensions", "-e", extension, scope.projectTrusted ? "--approve" : "--no-approve", ...(input.session ? ["--session", input.session.sessionFile] : ["--no-session"])],
       retainStderr: false, assuranceDiagnosticPrefix: "pi_native", transportDiagnosticPrefix: "pi_native",
+      onProcessClosed: closure => attachmentDiagnostic("pi_native_process_exited", { ...diagnostic,
+        reason: closure.reason, exitCode: closure.exitCode, signal: closure.signal }, closure.cause),
     });
     const transport = await factory.open(scope, 1, signal);
-    rpc = new PiRpcClient({ transport, scope, connectionGeneration: 1 });
+    rpc = new PiRpcClient({ transport, scope, connectionGeneration: 1, diagnostic });
     rpc.subscribe((payload) => input.onEvent?.({ kind: "rpc", payload }));
     bridge.subscribe((payload) => input.onEvent?.({ kind: "companion", payload }));
     const abort = new Promise<never>((_, reject) => { if (signal.aborted) reject(signal.reason); else signal.addEventListener("abort", () => reject(signal.reason), { once: true }); });
@@ -74,6 +88,7 @@ export async function createPiNativeSessionProcess(input: PiNativeLaunchInput): 
     const client = rpc;
     void bridge.closed.then(() => client.close("pi_native_companion_closed")).catch(() => undefined);
     void rpc.closed.then(() => bridge.close("pi_native_process_closed")).catch(() => undefined);
+    attachmentDiagnostic("pi_native_launch_ready", diagnostic);
     return { rpc, bridge, version: PI_RPC_VERSION, async close(reason = "pi_native_closed") {
       const results = await Promise.allSettled([client.close(reason), bridge.close(reason)]);
       const failure = results.find((result) => result.status === "rejected");
