@@ -726,6 +726,7 @@ class PiNativeConversationHandle implements ConversationHandle {
       const state = piManagedStateSchema.parse(closedHistory ? { sessionId: closedHistory.sessionId, sessionFile: closedHistory.sessionFile,
         entries: closedHistory.entries, leafId: closedHistory.leafId, operations: closedHistory.operations, toolCalls: closedHistory.toolCalls,
         toolResults: closedHistory.toolResults, tools: [], activeTools: [], isIdle: true } : await companion(this.port, this.attachment, { type: "snapshot" }, undefined, signal));
+      signal.throwIfAborted();
       if (state.sessionId !== this.attachment.sessionId || !Array.isArray(state.entries) || !(state.leafId === null || typeof state.leafId === "string")) throw reject("pi_native_snapshot_identity_mismatch");
       const history: PiNativeHistory = { ...this.attachment, entries: state.entries.map(object), leafId: state.leafId as string | null, operations: state.operations, toolCalls: state.toolCalls, toolResults: state.toolResults,
         inheritedEntryIds: this.#historyMetadata?.inheritedEntryIds ?? [], inheritance: this.#historyMetadata?.inheritance ?? "unknown",
@@ -859,11 +860,13 @@ class PiNativeConversationHandle implements ConversationHandle {
   }
   async #observePage() {
     const page = await this.port.observe({ handleId: this.attachment.handleId, afterSequence: this.#afterSequence }, this.#lifetime.signal);
+    this.#lifetime.signal.throwIfAborted();
     if (page.retainedAfterSequence > this.#afterSequence) {
       await this.#refresh(true); this.#emit({ type: "resnapshot_required", reason: "sequence_gap" });
       this.#eventCheckpoint.acknowledge(page.retainedAfterSequence);
     }
     for (const event of page.events) {
+      this.#lifetime.signal.throwIfAborted();
       if (event.sequence <= this.#afterSequence) continue;
       this.#eventCheckpoint.observe(event);
       if (await this.#consume(event.kind, event.payload)) this.#eventCheckpoint.applied(event.sequence, this.#checkpointState);
@@ -920,6 +923,7 @@ class PiNativeConversationHandle implements ConversationHandle {
         this.#controlAttached = true;
       }
       const state = parsePiRpcState(await rpc(this.port, this.attachment, { type: "get_state" }, undefined, signal));
+      signal.throwIfAborted();
       if (state.sessionId !== this.attachment.sessionId || state.sessionFile !== this.attachment.sessionFile)
         throw reject("pi_native_snapshot_identity_mismatch");
       const contextIdle = !state.isStreaming && !state.isCompacting;

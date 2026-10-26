@@ -284,8 +284,9 @@ User-facing changes are collected here before release. See the
 ### Fixed
 
 - Empty and blocked input queues avoid unnecessary provider history reads.
-  Native Pi verifies model and thinking changes against fresh state, and
-  explicit Stop can recover failed cleanup while retaining ownership safeguards. See [native Pi controls](docs/operator/backends/pi-native.md#conversation-controls-and-history).
+  Native Pi verifies model and thinking changes against fresh state and preserves
+  healthy sidecar connections during cleanup. Backend Stop/Restart can recover
+  failed cleanup while retaining ownership safeguards. See [native Pi controls](docs/operator/backends/pi-native.md#conversation-controls-and-history).
   ([#124](https://github.com/kcosr/sedes/pull/124))
 
 - OpenCode remote threads recover promptly when the sidecar observation journal

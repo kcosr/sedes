@@ -113,9 +113,11 @@ outcome stays in recovery rather than being retried automatically.
 
 Settings verification reads a fresh snapshot after applying the requested model
 and thinking level, so an older observation cannot falsely reject a Send.
-If handle cleanup failed, an explicit Stop can retry release of that same native
-owner. New work stays blocked until cleanup is proven; this never discards
-uncertain input outcomes or starts a competing process.
+If handle cleanup failed, **Stop** or **Restart** in the backend controls can
+retry release of that same native owner. New work stays blocked until cleanup is proven; this never discards
+uncertain input outcomes or starts a competing process. Closing a handle lets
+already-started remote reads drain briefly, keeping a healthy shared sidecar
+connection available for other threads.
 
 Native history is read from the execution host's JSONL store. Opening detached
 history does not start a model turn or attach a writable Pi session. Discovery

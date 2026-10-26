@@ -2113,6 +2113,24 @@ describe("native Pi driver", () => {
     await expect(driver.attach(conversation)).rejects.toThrow();
     await driver.close(); expect(attempts).toBe(2);
   });
+  it("discards an observation page that finishes after handle close starts", async () => {
+    const { driver, fixture } = setup();
+    let started!: () => void, finish!: (page: Awaited<ReturnType<PiNativePort["observe"]>>) => void;
+    const observing = new Promise<void>(resolve => { started = resolve; });
+    const page = new Promise<Awaited<ReturnType<PiNativePort["observe"]>>>(resolve => { finish = resolve; });
+    fixture.port.observe = vi.fn(async () => { started(); return page; });
+    const acknowledge = vi.spyOn(fixture.port, "acknowledge");
+    const handle = await driver.attach(conversation);
+    await observing;
+    const commandsBeforeClose = fixture.commands.length;
+    const closing = handle.close();
+    finish({ events: [{ sequence: 1, kind: "rpc", payload: { type: "extension_error", error: "late" } }],
+      throughSequence: 1, retainedAfterSequence: 0, closed: false });
+    await closing;
+    expect(fixture.commands).toHaveLength(commandsBeforeClose);
+    expect(acknowledge).not.toHaveBeenCalled();
+    expect(fixture.releaseCount).toBe(1);
+  });
   it("retries native handle cleanup after explicit Stop until release is proven", async () => {
     const { driver, fixture } = setup(); const handle = await driver.attach(conversation);
     const release = vi.fn<NativeFixture["port"]["release"]>()

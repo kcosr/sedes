@@ -83,7 +83,7 @@ async function attachment(f: Awaited<ReturnType<typeof fixture>>, mode: "normal"
     detach(); f.services.detach(epoch); channel.close(); hostChannel.close(); await sedes.close("test_complete");
   };
   cleanup.push(disconnect);
-  return { lease, channel, disconnect, release, epoch };
+  return { lease, channel, disconnect, release, epoch, transport: left };
 }
 function proxy(lease: SidecarRuntimeLease, existingOnly = false) {
   const runtime = { acquire: vi.fn(async () => lease), acquireExisting: vi.fn(async () => lease) } satisfies SidecarRuntimeProvider;
@@ -104,6 +104,87 @@ function recoveryContext(lease: SidecarRuntimeLease): BackendRuntimeRecoveryCont
 }
 
 describe("native Pi persistent sidecar", () => {
+  it.each(["observe", "acknowledge", "state", "snapshot", "outcome", "acknowledge_operation", "abandon_observation"] as const)("drains an admitted %s frame before cancelling its observer and releasing the handle", async action => {
+    const f = await fixture(), connection = await attachment(f), { port } = proxy(connection.lease);
+    const session = await port.attach(identity), operation = { handleId: session.handleId, operationId: "observed-read" };
+    if (["outcome", "acknowledge_operation", "abandon_observation"].includes(action)) {
+      await port.request({ ...operation, retainOutcome: action !== "abandon_observation", command: { channel: "rpc", command: { type: "get_state" } } });
+      if (action !== "abandon_observation") await vi.waitFor(async () => expect((await port.outcome(operation)).status).toBe("completed"));
+    }
+    const held = holdNextWrite(connection.transport), cancellation = new AbortController();
+    const pending = action === "observe" ? port.observe({ handleId: session.handleId, afterSequence: 0 }, cancellation.signal)
+      : action === "acknowledge" ? port.acknowledge({ handleId: session.handleId, throughSequence: 0 }, cancellation.signal)
+      : action === "state" || action === "snapshot" ? port.request({ ...operation, retainOutcome: false,
+        command: action === "state" ? { channel: "rpc", command: { type: "get_state" } } : { channel: "companion", command: { type: "snapshot" } } }, cancellation.signal)
+      : action === "outcome" ? port.outcome(operation, cancellation.signal)
+      : action === "acknowledge_operation" ? port.acknowledgeOperation(operation, cancellation.signal)
+      : port.abandonObservation(operation, cancellation.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ code: "pi_native_sidecar_unavailable", delivery: "sent_outcome_unknown" });
+    const writing = await held.started;
+    cancellation.abort(new PiNativeError("pi_native_caller_cancelled", "not_sent"));
+    expect(writing.signal?.aborted).toBe(false);
+    held.finish();
+    await rejected;
+    await expect(port.release({ handleId: session.handleId })).resolves.toBeUndefined();
+    await expect(port.inspect()).resolves.toMatchObject({ runtimeId: expect.any(String) });
+  });
+
+  it("bounds a cancelled observation's stalled frame drain and leaves carrier failure unproven", async () => {
+    const f = await fixture(), connection = await attachment(f), { port } = proxy(connection.lease);
+    const { handleId } = await port.attach(identity), held = holdNextWrite(connection.transport), cancellation = new AbortController();
+    const pending = port.observe({ handleId, afterSequence: 0 }, cancellation.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ code: "pi_native_sidecar_unavailable", delivery: "sent_outcome_unknown" });
+    const writing = await held.started;
+    vi.useFakeTimers();
+    try {
+      cancellation.abort(new Error("observer_closed"));
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(writing.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await rejected;
+      expect(writing.signal?.aborted).toBe(true);
+      await expect(connection.transport.closed).resolves.toMatchObject({ reason: "sidecar_active_write_aborted" });
+      await expect(port.release({ handleId })).rejects.toThrow("sidecar_protocol_peer_closed");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not admit already cancelled observations and preserves mutation cancellation", async () => {
+    const f = await fixture(), connection = await attachment(f), { port } = proxy(connection.lease);
+    const { handleId } = await port.attach(identity), cancellation = new AbortController();
+    cancellation.abort(new Error("already_closed"));
+    const send = vi.spyOn(connection.transport, "send");
+    await expect(port.observe({ handleId, afterSequence: 0 }, cancellation.signal)).rejects.toThrow("already_closed");
+    expect(send).not.toHaveBeenCalled();
+    send.mockRestore();
+    const held = holdNextWrite(connection.transport), mutation = new AbortController();
+    const pending = port.request({ handleId, operationId: "mutation", retainOutcome: true,
+      command: { channel: "rpc", command: { type: "abort" } } }, mutation.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ delivery: "sent_outcome_unknown" });
+    const writing = await held.started;
+    mutation.abort(new Error("mutation_cancelled"));
+    expect(writing.signal?.aborted).toBe(true);
+    await rejected;
+  });
+
+  it("bounds response decoding after cancellation without losing the shared carrier", async () => {
+    const f = await fixture(), connection = await attachment(f), { port } = proxy(connection.lease);
+    const { handleId } = await port.attach(identity), started = deferred<void>(), finish = deferred<void>(), cancellation = new AbortController();
+    const decode = connection.channel.decodeBody.bind(connection.channel);
+    vi.spyOn(connection.channel, "decodeBody").mockImplementationOnce(async body => {
+      started.resolve(); await finish.promise; return decode(body);
+    });
+    const pending = port.observe({ handleId, afterSequence: 0 }, cancellation.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ code: "pi_native_sidecar_unavailable", delivery: "sent_outcome_unknown" });
+    await started.promise;
+    vi.useFakeTimers();
+    try {
+      cancellation.abort(new PiNativeError("pi_native_caller_cancelled", "not_sent"));
+      await vi.advanceTimersByTimeAsync(5_000);
+      await rejected;
+      await expect(port.release({ handleId })).resolves.toBeUndefined();
+    } finally { finish.resolve(); vi.useRealTimers(); }
+  });
+
   it("releases timed-out remote observations only after settlement and preserves Stop admission", async () => {
     const f = await fixture({ maximumOperations: 5 }), first = await attachment(f), { port } = proxy(first.lease);
     const { handleId } = await port.attach(identity);
@@ -787,6 +868,25 @@ class Queue implements AsyncIterable<SidecarFrame> {
     return { next: async () => { const value = this.values.shift(); return value ? { value, done: false } : this.ended ? { value: undefined, done: true } : await new Promise(resolve => this.waiters.push(resolve)); } };
   }
 }
+function holdNextWrite(transport: Transport) {
+  const started = deferred<SidecarFrameSendOptions>(), finish = deferred<void>();
+  const send = transport.send.bind(transport);
+  vi.spyOn(transport, "send").mockImplementationOnce(async (bytes, options) => {
+    started.resolve(options);
+    let rejectAbort!: (error: Error) => void;
+    const failure = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
+    const abort = () => {
+      void transport.close("sidecar_active_write_aborted");
+      rejectAbort(new SidecarFrameWriteError("sidecar_frame_send_aborted", "sent_outcome_unknown"));
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+    try { await Promise.race([finish.promise, failure]); return await send(bytes, options); }
+    finally { options.signal?.removeEventListener("abort", abort); }
+  });
+  return { started: started.promise, finish: () => finish.resolve() };
+}
+
 class Transport implements SidecarFrameTransport {
   readonly assurance = { kind: "memory", carrierGeneration: 1 };
   readonly frames = new Queue();

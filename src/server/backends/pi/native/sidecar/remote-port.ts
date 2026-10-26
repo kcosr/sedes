@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isSidecarRevisionChanged, type SidecarRuntimeLease, type SidecarRuntimeProvider } from "../../../../sidecar/runtime-channel.js";
 import { PiNativeError, type PiNativePort, type PiNativeRuntimeConfiguration, type PiNativeInspection, type PiNativeSessionIdentity, type PiNativeAttachment } from "../port.js";
+import { piNativeCommandIsReadOnly } from "../command-policy.js";
 import {
   piNativeHostCommandSchema, piNativeHostCommandLane, piNativeRuntimeOperations,
   piNativeExecuteOperation, piNativeControlOperation, piNativeHostResponseSchema,
@@ -269,13 +270,51 @@ async function call(lease: SidecarRuntimeLease, input: PiNativeHostCommandInput,
     const body = await lease.channel.encodeBody(command);
     signal?.throwIfAborted();
     crossed = true;
-    const encoded = await lease.channel.call(piNativeHostCommandLane(command) === "control" ? piNativeControlOperation : piNativeExecuteOperation, body, signal ? { signal } : undefined);
-    const response = piNativeHostResponseSchema.parse(await lease.channel.decodeBody(encoded));
+    const invoke = async (wireSignal?: AbortSignal) => {
+      const encoded = await lease.channel.call(piNativeHostCommandLane(command) === "control" ? piNativeControlOperation : piNativeExecuteOperation, body, wireSignal ? { signal: wireSignal } : undefined);
+      return piNativeHostResponseSchema.parse(await lease.channel.decodeBody(encoded));
+    };
+    const observation = ["observe", "acknowledge", "outcome", "acknowledge_operation", "abandon_observation"].includes(command.action) ||
+      (command.action === "request" && !command.input.retainOutcome && piNativeCommandIsReadOnly(command.input.command));
+    const response = observation && signal ? await drainObservation(signal, invoke) : await invoke(signal);
     if (response.status === "failed") throw new PiNativeError(response.failure.code, response.failure.delivery);
     return response.value;
   } catch (error) {
     if (error instanceof PiNativeError) throw error;
     const delivery = (error as { delivery?: unknown } | null)?.delivery;
     throw new PiNativeError("pi_native_sidecar_unavailable", delivery === "not_sent" || !crossed ? "not_sent" : "sent_outcome_unknown", { cause: error });
+  }
+}
+
+/** Cancelling an active frame write destroys the shared carrier. Let admitted
+ * observation traffic finish before ending its caller's wait; the host poll is
+ * bounded to one second. A stalled frame still fails closed after five seconds.
+ * Mutation requests retain their ordinary cancellation and delivery contract. */
+async function drainObservation<T>(signal: AbortSignal, invoke: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  signal.throwIfAborted();
+  const wire = new AbortController();
+  const cancelled = () => new PiNativeError("pi_native_sidecar_unavailable", "sent_outcome_unknown", { cause: signal.reason });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let expire!: (reason: unknown) => void;
+  const expired = new Promise<never>((_resolve, reject) => { expire = reject; });
+  const abort = () => {
+    if (timer) return;
+    timer = setTimeout(() => {
+      wire.abort(signal.reason);
+      // Include response decoding in the bound. A body already offered stays
+      // owned and drained by the runtime body channel after this caller leaves.
+      expire(cancelled());
+    }, 5_000);
+    timer.unref();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
+  try {
+    const result = await Promise.race([invoke(wire.signal), expired]);
+    if (signal.aborted) throw cancelled();
+    return result;
+  } finally {
+    signal.removeEventListener("abort", abort);
+    clearTimeout(timer);
   }
 }

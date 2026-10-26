@@ -459,6 +459,15 @@ implements it; Pi SDK, Codex, Claude, Grok, and OpenCode intentionally do not,
 so failed handle cleanup on those backends remains fenced. This does not
 prevent explicit Stop from reaching their host controls.
 
+Native Pi's main-side remote observation and read-only bookkeeping calls drain
+already-admitted frames when their caller cancels, with a five-second grace
+bound. This avoids closing a healthy shared carrier mid-frame. Cancellation
+before admission still sends nothing, mutation cancellation is unchanged, and
+a cancelled read never publishes late state or claims a not-sent outcome after
+dispatch. Expired drains retain failure and ownership evidence; they do not
+prove successful cleanup. Other backends retain their existing transport
+cancellation contracts.
+
 A provider's optional `nativeArchive` seam synchronizes its own durable archive
 after the application commit, inside the same maintenance fences and before
 publication. Recheck current scoped inventory on receipt replay and synchronize
