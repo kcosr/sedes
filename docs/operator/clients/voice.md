@@ -202,12 +202,12 @@ Provisional and Partial completion text are optional and can repeat their live
 notifications. **Partial** has independent Script and Voice controls in
 Notifications, initially off. It delivers a substantive answer while the agent
 continues working and cannot trigger Auto-listen. **Turn progress** controls
-provisional updates separately. Codex emits both kinds; Pi and Claude emit only
+provisional updates separately. Codex emits both kinds; Pi, Claude and OpenCode emit only
 provisional progress. Hydrated history and text classified only at settlement
-do not produce either event. Grok and OpenCode do not advertise these live
-signals. OpenCode classifies a confirmed final reply and completed tool-call
-commentary when the turn settles, so Final-only completion speech reads the
-final reply. Ambiguous OpenCode text and Grok completion text remain
+do not produce either event. Grok does not advertise these live signals.
+OpenCode announces confirmed tool-call commentary after its tools settle while
+the turn continues. Its final reply is classified when the turn settles, so
+Final-only completion speech reads the final reply. Ambiguous OpenCode text and Grok completion text remain
 Unclassified. Already stored completion replies keep their original
 classification. Selected Partial
 text is also available in completion notifications and explicit reply playback.

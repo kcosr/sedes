@@ -356,7 +356,7 @@ Available events are **Turn progress**, **Partial**, **Turn completed**, **Turn 
 **Turn interrupted**, **Snooze wake**, **Automation started**, **Automation
 failed before starting**, **Approval requested**, **Input requested**, and
 **Nonblocking questions**. Turn progress is a completed provisional update from
-Codex, Pi, or Claude. Partial is a completed substantive answer from Codex while
+Codex, Pi, Claude, or OpenCode. Partial is a completed substantive answer from Codex while
 the turn continues. Completion, failure, and interruption notifications
 require an authoritative terminal outcome; a pause in output or a disconnected
 backend does not count. Snooze wake means its deadline was reached. A completion

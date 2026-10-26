@@ -48,6 +48,19 @@ describe("OpenCode completion response phases", () => {
     expect(result(project([...messages, idle()], running))).toMatchObject({ final: { text: "Final reply" }, unclassified: null });
   });
 
+  it("classifies a completed tool-call step while the turn continues without promoting a stopped answer", () => {
+    const messages = [user(), assistant("msg_tools", { finish: "tool-calls", content: [text("Inspecting files"), tool()] }),
+      assistant("msg_answer")];
+    const retained = { sessionId: "ses_phases", messages, headId: messages.at(-1)!.id,
+      frontier: openCodeHistoryFingerprint(messages), decodedBytes: Buffer.byteLength(JSON.stringify(messages)), records: messages.length };
+    const running = new OpenCodeHistoryProjection({ ...retained, retainedDecodedBytes: retained.decodedBytes }, { ...identity, activity: "running" });
+    expect(running.runState).toBe("running");
+    expect(result(running)).toEqual({ provisional: { text: "Inspecting files" }, partial: null,
+      final: null, unclassified: { text: "Final reply" } });
+    expect(result(project([...messages, idle()], running))).toEqual({ provisional: { text: "Inspecting files" }, partial: null,
+      final: { text: "Final reply" }, unclassified: null });
+  });
+
   it.each([
     { finish: undefined }, { finish: "length" }, { finish: "unknown" }, { finish: "error" }, { finish: "content-filter" },
     { time: { created: 200, streamed: 250 } },

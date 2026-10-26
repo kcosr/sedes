@@ -137,7 +137,14 @@ describe("ConversationProjector", () => {
     expect(projector.timeline().itemsById[browserItem.id]).toBe(browserItem);
     expect(projector.assistantItemsForTurn(item.backendTurnId)).toMatchObject([{ responsePhase: "final" }]);
 
-    const changedText = projector.apply({ handleSequence: 1, event: {
+    const repeated = projector.apply({ handleSequence: 1, event: {
+      type: "item_updated", item: { ...item, responsePhase: "final" },
+    } });
+    expect(repeated).toEqual({ kind: "events", events: [] });
+    expect(projector.timeline()).toEqual(initial);
+    expect(projector.timeline().itemsById[browserItem.id]).toBe(browserItem);
+
+    const changedText = projector.apply({ handleSequence: 2, event: {
       type: "item_updated", item: { ...item, responsePhase: "provisional", markdown: { text: "Changed answer" } },
     } });
     expect(changedText).toMatchObject({ kind: "events", events: [{ type: "item_upsert", item: {

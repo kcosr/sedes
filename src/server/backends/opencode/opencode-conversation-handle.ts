@@ -17,7 +17,7 @@ import { openCodeConversationError, requireOpenCodeBinding, type OpenCodeConvers
 import { OpenCodeNativeApi, OpenCodeNativeProtocolError, OpenCodeNativeReadLimitError, type OpenCodeNativeActivity, type OpenCodeNativeEvent, type OpenCodeNativeInboxItem, type OpenCodeNativeObservation } from "./opencode-native-api.js";
 import { OpenCodeHistoryError, OPENCODE_HISTORY_LIMITS, openCodeHistoryFingerprint, readOpenCodeHistory,
   refreshOpenCodeHistory, restartOpenCodeHistoryAcquisition, type OpenCodeRetainedHistory } from "./opencode-history-reader.js";
-import { OpenCodeHistoryProjection, openCodeHistoryPartKey, openCodeNativePartEnded, type OpenCodeObservedPart } from "./opencode-history-projection.js";
+import { OpenCodeHistoryProjection, openCodeHistoryItemId, openCodeHistoryPartKey, openCodeNativePartEnded, type OpenCodeObservedPart } from "./opencode-history-projection.js";
 import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
 import { acquireOpenCodeInputObserver } from "./opencode-input-observer.js";
 import { OpenCodeExecutionSettings, type OpenCodeObservedSettings } from "./opencode-execution-settings.js";
@@ -77,6 +77,10 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   readonly #shellIds = new Set<string>();
   readonly #dirtyParts = new Set<string>();
   readonly #dirtyMessages = new Map<string, number>();
+  readonly #liveProgressSteps = new Map<string, number>();
+  readonly #announcedProgressSteps = new Set<string>();
+  readonly #baselineCompletedSteps = new Set<string>();
+  #progressTurnId?: string;
   readonly #shellMessageIds = new Map<string, string>();
   #latestAssistantMessageId?: string;
   #latestCompactionMessageId?: string;
@@ -142,7 +146,16 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       this.#assertOpen();
       await this.#inputObservation.observer.start(signal);
       await this.#startObservation(signal);
-      const projection = await this.#refresh(signal);
+      const projection = await this.#refresh(signal, false);
+      // Establishing a cut, including re-establishment on the same handle, is
+      // history observation. Steps encountered during it must stay silent.
+      this.#liveProgressSteps.clear();
+      this.#baselineCompletedSteps.clear();
+      const messages = this.#retained!.messages;
+      for (let index = messages.findLastIndex(message => message.type === "idle") + 1; index < messages.length; index++) {
+        const message = messages[index]!;
+        if (message.type === "assistant" && message.time.completed !== undefined) this.#baselineCompletedSteps.add(message.id);
+      }
       this.#assertOpen(); signal.throwIfAborted();
       const result = projection.snapshot({ signal });
       this.#invalidated = false;
@@ -360,6 +373,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     this.#retained = undefined; this.#projection = undefined;
     this.#usageSession = undefined; this.#usageCatalog = undefined; this.#liveUsage = {};
     this.#dirtyMessages.clear(); this.#shellMessageIds.clear();
+    this.#liveProgressSteps.clear(); this.#announcedProgressSteps.clear(); this.#baselineCompletedSteps.clear(); this.#progressTurnId = undefined;
   }
 
   readonly #ownerLost = () => {
@@ -413,6 +427,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     this.#usageSession = undefined; this.#usageCatalog = undefined; this.#liveUsage = {};
     this.#dirtyParts.clear(); this.#projectedRevision = this.#structuralRevision;
     this.#dirtyMessages.clear(); this.#shellMessageIds.clear();
+    this.#liveProgressSteps.clear(); this.#announcedProgressSteps.clear(); this.#baselineCompletedSteps.clear(); this.#progressTurnId = undefined;
     this.#latestAssistantMessageId = undefined; this.#latestCompactionMessageId = undefined;
     this.#observedActivityRevision = this.#activityRevision;
     const observation = this.#api.observe({ signal: this.#lifetime, include: event => {
@@ -450,7 +465,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     await waitOpenCode(observation.ready, signal);
   }
 
-  async #refresh(parent: AbortSignal): Promise<OpenCodeHistoryProjection> {
+  async #refresh(parent: AbortSignal, allowLiveProgress = true): Promise<OpenCodeHistoryProjection> {
     const started = Date.now();
     const timeout = AbortSignal.timeout(OPENCODE_HISTORY_LIMITS.milliseconds);
     const signal = AbortSignal.any([parent, timeout]);
@@ -476,6 +491,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       await this.runtime.assertCurrent(signal); check();
       const revision = this.#structuralRevision, activityRevision = this.#activityRevision;
       const dirtyMessages = new Map(this.#dirtyMessages);
+      const liveProgressSteps = new Map(this.#liveProgressSteps);
       const readInput = { sessionId: this.binding.backendConversationId, signal, assertCurrent: check, additionalUsage: extra,
         dirtyMessageIds: new Set(dirtyMessages.keys()) };
       // Install one finite native cut. Work observed during acquisition remains
@@ -569,7 +585,12 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       // this same native record was already selected for an earlier reread.
       for (const [id, dirtyRevision] of dirtyMessages) if (this.#dirtyMessages.get(id) === dirtyRevision) this.#dirtyMessages.delete(id);
       this.#dirtyParts.clear();
-      if (prior && !this.#invalidated) this.#diff(prior, projection);
+      if (prior && !this.#invalidated) {
+        this.#diff(prior, projection);
+        if (allowLiveProgress && !this.#invalidated) this.#publishLiveProgress(projection, liveProgressSteps);
+      }
+      // Events arriving during this finite read remain pending for its next cut.
+      for (const [id, stepRevision] of liveProgressSteps) if (this.#liveProgressSteps.get(id) === stepRevision) this.#liveProgressSteps.delete(id);
       if (this.context.usage.enabled) this.#usage.record(this.#retained.messages, Object.values(projection.turnsById));
       return projection;
     } catch (error) {
@@ -613,6 +634,11 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       }
       if ("sessionID" in event.data && event.data.sessionID === this.binding.backendConversationId) {
         if ("durable" in event) { this.#structuralRevision++; this.#markNativeChanges(event); }
+        if (event.type === "session.step.ended" && event.data.finish === "tool-calls" && this.#projection && !this.#invalidated &&
+            !this.#baselineCompletedSteps.has(event.data.assistantMessageID)) {
+          if (!this.#liveProgressSteps.has(event.data.assistantMessageID) && this.#liveProgressSteps.size >= JOURNAL_RECORDS) throw new OpenCodeHistoryError("records");
+          this.#liveProgressSteps.set(event.data.assistantMessageID, this.#structuralRevision);
+        }
         if (event.type === "session.model.selected") void this.#refreshSettings().then(() => {
           if (!this.#closed && !this.#lifetime.aborted) this.#emit({ type: "capabilities_changed", capabilities: this.#capabilities() });
         });
@@ -775,10 +801,33 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     this.#emit({ type: "background_activity_changed", activity: this.#background });
   }
 
+  #publishLiveProgress(projection: OpenCodeHistoryProjection, steps: ReadonlyMap<string, number>): void {
+    const turnId = projection.activeBackendTurnId;
+    if (this.#progressTurnId !== turnId) {
+      this.#progressTurnId = turnId; this.#announcedProgressSteps.clear();
+    }
+    if (!steps.size || !turnId || projection.runState !== "running" || projection.turnsById[turnId]?.status !== "in_progress") return;
+    for (const message of this.#retained!.messages) {
+      if (message.type !== "assistant" || !steps.has(message.id) || this.#announcedProgressSteps.has(message.id)) continue;
+      this.#announcedProgressSteps.add(message.id);
+      if (this.#announcedProgressSteps.size > JOURNAL_RECORDS) this.#announcedProgressSteps.delete(this.#announcedProgressSteps.values().next().value!);
+      for (let index = 0; index < message.content.length; index++) {
+        const item = projection.itemsById[openCodeHistoryItemId(message.id, index)];
+        if (item?.backendTurnId !== turnId || item.semanticKind !== "assistant_message" || item.status !== "completed" ||
+            item.responsePhase !== "provisional" || !item.markdown.text.trim()) continue;
+        // Publish after #diff installs turn correlations and running ownership.
+        // The exact step event can follow a refresh that already closed this
+        // text, so an unchanged item still needs its one live annotation.
+        this.#emit({ type: "item_updated", item, liveProgress: true });
+      }
+    }
+  }
+
   #invalidate(reason: Extract<BackendConversationEvent, { type: "resnapshot_required" }>["reason"]): void {
     if (this.#invalidated && reason !== "provider_handle_closed") return;
     this.#usage.gap("capture_gap");
     this.#invalidated = true; this.#activity = "unknown"; this.#background = unknownActivity;
+    this.#liveProgressSteps.clear();
     this.#liveUsage = {}; this.#usageSession = undefined;
     clearTimeout(this.#startupRecheckTimer); this.#startupRecheckTimer = undefined;
     this.#emit({ type: "resnapshot_required", reason });

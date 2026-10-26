@@ -1521,8 +1521,8 @@ Equality checks that suppress redundant projection work must include
 server-private authority metadata such as turn completion correlations. Retain
 metadata-only changes before deciding whether the browser needs a delta; an
 unchanged visible transcript does not make its admission evidence unchanged.
-Pi, Codex, Claude, Grok, and OpenCode use this shared projector rule. It does not
-enable live progress for Grok or OpenCode, whose producers remain unsupported.
+Pi, Codex, Claude, Grok, and OpenCode use this shared projector rule. Live
+progress also requires explicit backend provenance; Grok has no producer.
 
 A validated provider notification with no transcript or authority effect may
 have an explicit advisory-only disposition. Classify exact supported methods
@@ -2599,7 +2599,8 @@ phase labels (`commentary` → `provisional`, `partial_answer` → `partial`,
 `final_answer` → `final`); Pi uses settled native assistant-message evidence; Claude uses
 native message groups and terminal evidence/receipts. Grok intentionally remains
 unclassified because ACP chunks do not establish a final-message boundary.
-OpenCode classifies retrospectively at native idle settlement: a successful
+OpenCode classifies completed tool-call messages as provisional while active;
+final selection waits for native idle settlement: a successful
 period's last assistant after any input/control boundary is final only with a
 completed timestamp, `finish: "stop"`, no error/retry, and no local or unfinished
 tools. Completed provider-hosted tools (`executed: true`) may accompany that
@@ -2626,9 +2627,15 @@ must attach `liveProgress: true` to the qualifying live `item_completed` or
 Codex qualifies native commentary or partial-answer completion, Pi qualifies a native assistant
 message-end that contains a tool call and stopped for tool use (`toolUse`), and
 Claude qualifies a live tool-use message group, including earlier closed text
-reclassified by a later block of that same group. A message that ends aborted
+reclassified by a later block of that same group. OpenCode qualifies a fresh
+same-session `session.step.ended` with `finish: "tool-calls"` and a matching
+completed, error-free, retry-free provisional message with settled tools.
+Its exact step provenance survives only the finite incremental read it
+belongs to; baseline/recovery cuts discard it. Publish the annotation after
+turn correlations and running ownership, including when earlier tool events
+already projected the completed text. A message that ends aborted
 or errored is not progress even when it contains a tool call, because its tools
-never run. Grok and OpenCode intentionally do not produce live progress.
+never run. Grok intentionally does not produce live progress.
 History, snapshots, terminal retrospective classification, reasoning, tool
 output, and provider-only turns never create progress. The annotation is
 server-private and does not enter normalized browser items or sidecar native
@@ -2636,6 +2643,8 @@ protocols. The actor emits only after successful projection, and the observer
 requires a principal-scoped accepted submission correlation. Deduplicate by the
 stable normalized thread, turn, and item identity; no text matching or partial
 delta notification is allowed.
+An annotation on an unchanged completed assistant item retains its public revision;
+server-only evidence must not manufacture a terminal browser item update.
 
 Live commentary emits `turn.progress` with `progress.phase: "provisional"`;
 live partial answers emit `turn.partial` with `progress.phase: "partial"`.

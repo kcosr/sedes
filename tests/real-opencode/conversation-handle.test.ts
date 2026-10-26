@@ -1,9 +1,11 @@
 import { createOpenCodeNativePortFixture } from "../helpers/opencode-native-port-fixture.js";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { SessionMessageInfo } from "@opencode/client";
 import type { BackendConversationEvent } from "../../src/shared/protocol/backend.js";
-import type { ConversationActor } from "../../src/server/conversations/conversation-actor.js";
+import type { ConversationActor, ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
 import { boundedOpenCodeProcessFile } from "../../src/server/backends/opencode/opencode-native-identity.js";
@@ -141,6 +143,82 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
     expect(Object.values(actor.timeline.itemsById).filter(item => item.kind === "user_message").every(item => item.deliveryOperationId === undefined)).toBe(true);
   } finally {
     for (const hold of holds) hold.release();
+    acquired?.release();
+    try { await current?.dispose(); } finally {
+      client?.close();
+      try { await native?.stop(); } finally { await model.stop(); }
+    }
+  }
+}, 90_000);
+
+it.runIf(RUN_REAL_OPENCODE)("announces stock native tool commentary on an accepted turn before its held final response settles", async () => {
+  const model = await startOpencodeModelFixture();
+  let native: Awaited<ReturnType<typeof startOpencodeNativeFixture>> | undefined;
+  let current: ReturnType<typeof createOpenCodeConversationFixture> | undefined;
+  let client: OpenCodeHttpClient | undefined;
+  let acquired: Awaited<ReturnType<ReturnType<typeof createOpenCodeConversationFixture>["acquire"]>> | undefined;
+  let hold: ReturnType<typeof model.holdNextStream> | undefined;
+  try {
+    native = await startOpencodeNativeFixture({ config: { ...model.config, permissions: [
+      { action: "*", resource: "*", effect: "deny" }, { action: "read", resource: "canary.txt", effect: "allow" },
+    ] } });
+    const canaryFile = path.join(native.workspace, "canary.txt");
+    await writeFile(canaryFile, "Offline progress canary");
+    const environment = (await boundedOpenCodeProcessFile(`/proc/${native.pid}/environ`, 1_048_576)).toString("utf8");
+    const password = environment.split("\0").find(entry => entry.startsWith("OPENCODE_PASSWORD="))?.slice("OPENCODE_PASSWORD=".length);
+    if (!password) throw new Error("isolated fixture password unavailable");
+    client = new OpenCodeHttpClient({ endpoint: native.url, password });
+    const created = await native.api("POST", "/api/session", { title: "Interim progress qualification", location: { directory: native.workspace },
+      model: { providerID: "probe", id: "probe-model" } });
+    expect(created.status).toBe(200);
+    const sessionID = z.object({ data: z.object({ id: z.string() }) }).parse(created.body).data.id;
+    current = createOpenCodeConversationFixture({ native: { client, sessionID, directory: native.workspace } });
+    current.context.settings.updateDesired(scope, threadID, { expectedRevision: 0,
+      desired: { providerID: "probe", id: "probe-model" }, now: Date.now() });
+    acquired = await current.acquire();
+    const actor = acquired.actor;
+    const nativeEvents: BackendConversationEvent[] = [];
+    (await current.handle()).subscribe(event => nativeEvents.push(event));
+    const events: ConversationActorEvent[] = [];
+    actor.subscribe(event => events.push(event));
+    const marker = "inspect the progress canary";
+    const tool = model.callToolNextStream(marker, "read", { path: canaryFile }, "Inspecting the canary.");
+    hold = model.holdNextStream(marker, { afterToolCall: true });
+    await actor.submit({ applicationOperationId: "stock-progress-submission", mutationId: "stock-progress-submission",
+      reconciliationToken: "stock-progress-submission", source: { kind: "user" }, text: marker,
+      contextExcerpts: [], taskContexts: [], attachments: [] });
+    await tool.called;
+    await hold.started;
+    await vi.waitFor(() => {
+      expect(nativeEvents.filter(event => event.type === "resnapshot_required")).toEqual([]);
+      expect(nativeEvents.filter(event => "liveProgress" in event)).toHaveLength(1);
+      expect(events.filter(event => event.type === "live_progress")).toHaveLength(1);
+    }, { timeout: 15_000, interval: 25 });
+    const progress = events.find(event => event.type === "live_progress");
+    expect(progress).toMatchObject({ type: "live_progress", phase: "provisional", text: { text: "Inspecting the canary." },
+      backendCorrelations: ["stock-progress-submission"] });
+    expect(nativeEvents.filter(event => "liveProgress" in event)).toHaveLength(1);
+    expect(actor.timeline.runState).toBe("running");
+    const turnId = actor.timeline.activeTurnId!;
+    expect(actor.timeline.turnsById[turnId]!.status).toBe("in_progress");
+    expect(events.filter(event => event.type === "authoritative_completion")).toEqual([]);
+    expect(model.requests.some(request => request.lastRole === "tool" && request.toolResults.some(result => result.includes("Offline progress canary")))).toBe(true);
+
+    hold.release();
+    await vi.waitFor(() => {
+      expect(actor.timeline.runState).toBe("idle");
+      expect(actor.timeline.turnsById[turnId]!.status).toBe("completed");
+      expect(events.filter(event => event.type === "authoritative_completion")).toHaveLength(1);
+    }, { timeout: 15_000, interval: 25 });
+    expect(events.filter(event => event.type === "live_progress")).toHaveLength(1);
+    expect(nativeEvents.filter(event => "liveProgress" in event)).toHaveLength(1);
+    expect(events.find(event => event.type === "authoritative_completion")).toMatchObject({
+      classifiedResult: { provisional: { text: "Inspecting the canary." }, final: { text: "PREFIXSUFFIX" } },
+    });
+    expect(actor.projectionRecoveryRequired).toBe(false);
+    expect(nativeEvents.filter(event => event.type === "resnapshot_required")).toEqual([]);
+  } finally {
+    hold?.release();
     acquired?.release();
     try { await current?.dispose(); } finally {
       client?.close();

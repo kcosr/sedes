@@ -696,9 +696,12 @@ answers at completion-notice priority and only evicts provisional progress. A pa
 answer never supplies authoritative turn completion or callback evidence. Pi marks a completed assistant message that
 contains a tool call and ended for tool use; an aborted or errored message is
 not progress because its tools never run. Claude marks the completed tool-use
-group or its later live classification. History replay, replacement snapshots,
-and terminal backfill do not carry this provenance. Grok and OpenCode
-intentionally have no live-progress producer.
+group or its later live classification. OpenCode marks completed tool-call
+commentary after a fresh native step-ended event confirms its tools have
+settled, while the turn is still running. Delayed events for steps already
+completed in the baseline stay silent. History replay, replacement snapshots,
+and terminal backfill do not carry this provenance. Grok intentionally has no
+live-progress producer.
 
 ## Foreground composer handoff
 

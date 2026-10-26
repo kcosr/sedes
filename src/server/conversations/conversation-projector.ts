@@ -928,12 +928,13 @@ export class ConversationProjector {
     if (
       prior?.semanticKind === "assistant_message" &&
       backendItem.semanticKind === "assistant_message" &&
-      prior.responsePhase !== backendItem.responsePhase &&
+      (prior.responsePhase !== backendItem.responsePhase || backendItem.status === "completed") &&
       priorItem &&
       isDeepStrictEqual({ ...item, revision: priorItem.revision }, priorItem)
     ) {
-      // Server-only evidence may change after a message is complete. Retain it
-      // without inventing a public revision that violates terminal immutability.
+      // Server-only evidence or a live-progress annotation can arrive after
+      // a message is complete. Retain the evidence without inventing a public
+      // revision for unchanged content that violates terminal immutability.
       this.#backendItems.set(backendItem.backendItemId, backendItem);
       return { kind: "events", events: [] };
     }

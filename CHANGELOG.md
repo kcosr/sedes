@@ -269,9 +269,11 @@ User-facing changes are collected here before release. See the
 ### Fixed
 
 - OpenCode's confirmed replies now arrive under Final and completed tool-call
-  commentary under Provisional. Select Final for replies and Provisional for
-  commentary instead of relying on Unclassified alone; notification scripts
-  should read those sections too. See [response selection](docs/operator/configuration.md#notification-scripts)
+  commentary under Provisional. **Turn progress** can announce that commentary
+  after its tools settle, while the turn continues. Select Final for completion
+  replies and Provisional to include commentary there too, instead of relying
+  on Unclassified alone; notification scripts should read those sections too.
+  See [response selection](docs/operator/configuration.md#notification-scripts)
   and [voice playback](docs/operator/clients/voice.md).
   ([#122](https://github.com/kcosr/sedes/pull/122))
 

@@ -102,7 +102,6 @@ type ResponsePhase = Extract<BackendItem, { semanticKind: "assistant_message" }>
 /** Native step completion alone is not evidence that a response finished the turn. */
 function assistantResponsePhases(messages: readonly OpenCodeNativeMessage[], status: BackendTurn["status"]): ReadonlyMap<string, ResponsePhase> {
   const phases = new Map<string, ResponsePhase>();
-  if (status === "in_progress") return phases;
   let last: Extract<OpenCodeNativeMessage, { type: "assistant" }> | undefined;
   for (const message of messages) {
     if (message.type !== "assistant") {

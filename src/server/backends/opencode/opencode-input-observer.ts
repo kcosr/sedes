@@ -340,9 +340,11 @@ export class OpenCodeInputObserver {
     if (proofKey(before) !== proofKey(evidence)) this.#proofChanged(evidence);
   }
   #consumeMessage(tracked: Tracked, message: Extract<OpenCodeNativeMessage, { type: "user" }>): void {
+    const before = this.#evidence(tracked);
     const payload = openCodePreparedPayloadFingerprint(message);
-    this.#proofChanged(this.#repository.consume(this.context.scope, this.#threadID, tracked.operationId, tracked.kind,
-      openCodeOperationFingerprint({ kind: "native_user", sessionID: this.#sessionID, id: message.id, payload }), payload));
+    const evidence = this.#repository.consume(this.context.scope, this.#threadID, tracked.operationId, tracked.kind,
+      openCodeOperationFingerprint({ kind: "native_user", sessionID: this.#sessionID, id: message.id, payload }), payload);
+    if (proofKey(before) !== proofKey(evidence)) this.#proofChanged(evidence);
   }
   #event(event: OpenCodeNativeEvent | OpenCodeNativeDurableEvent, live: boolean): void {
     this.#assertAuthority();
