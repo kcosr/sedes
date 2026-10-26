@@ -783,6 +783,13 @@ export interface ConversationHandle {
    */
   subscribe(listener: (event: BackendConversationEvent) => void): Unsubscribe;
   close(options?: { readonly reason: "evicted" }): Promise<void>;
+  /**
+   * Retries an already failed handle cleanup after an explicit scoped Stop
+   * attempt. Success must prove release of the original owned resources;
+   * merely having marked the handle closed is insufficient. Absence keeps
+   * failed handle cleanup fenced. Never starts a replacement provider owner.
+   */
+  retryCloseAfterStop?(): Promise<void>;
 }
 
 export interface ConversationBackendDriver {

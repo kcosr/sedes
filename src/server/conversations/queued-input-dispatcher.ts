@@ -1338,6 +1338,24 @@ export class QueuedInputDispatcher {
       this.#scheduleRequestedSteer(scope, activeHead);
       return;
     }
+    // Settlement can be replayed without any sendable input. Do not acquire
+    // a provider or capture its history just to discover that claimHead will
+    // refuse an empty queue, a blocked head, or a retry whose timer is not due.
+    if (
+      !activeHead ||
+      (activeHead.state !== "pending" && activeHead.state !== "retry_wait") ||
+      (activeHead.state === "retry_wait" &&
+        (activeHead.nextAttemptAt === null || activeHead.nextAttemptAt > this.#clock.now()))
+    ) {
+      if (activeHead?.state === "retry_wait") {
+        if (!this.#retryTimers.has(threadKey(scope, applicationThreadId))) {
+          this.#scheduleRetry(scope, activeHead);
+        }
+      } else {
+        this.#cancelRetryTimer(scope, applicationThreadId);
+      }
+      return;
+    }
     // TEMPORARY DIAGNOSTIC (SEDES_DEBUG_DELIVERY): dispatch timings.
     const debugDispatch = process.env.SEDES_DEBUG_DELIVERY
       ? (step: string, since: number) =>

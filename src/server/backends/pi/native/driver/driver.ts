@@ -715,7 +715,12 @@ class PiNativeConversationHandle implements ConversationHandle {
   }
   async #refresh(publish: boolean, signal = this.#lifetime.signal): Promise<void> {
     signal.throwIfAborted();
-    if (this.#refreshing) { await this.#refreshing; if (publish) return this.#refresh(true, signal); return; }
+    if (this.#refreshing) {
+      await this.#refreshing;
+      // The pending snapshot may predate this caller's completed mutations.
+      // Publication is optional; a fresh observation is required either way.
+      return this.#refresh(publish, signal);
+    }
     const operation = (async () => {
       const closedHistory = this.#providerClosed ? await nativeCall(() => this.port.readHistory(this.attachment)) : undefined;
       const state = piManagedStateSchema.parse(closedHistory ? { sessionId: closedHistory.sessionId, sessionFile: closedHistory.sessionFile,
@@ -1589,6 +1594,7 @@ class PiNativeConversationHandle implements ConversationHandle {
     for (const interaction of this.#interactions.values()) listener({ type: "interaction_opened", interaction });
     return () => this.#listeners.delete(listener);
   }
+  retryCloseAfterStop(): Promise<void> { return this.close(); }
   async close(): Promise<void> {
     if (this.#cleanupComplete) return;
     if (this.#closing) return this.#closing;

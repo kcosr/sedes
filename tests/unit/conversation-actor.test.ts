@@ -19,6 +19,7 @@ import {
 } from "../../src/server/backends/contracts.js";
 import {
   ConversationActorManager,
+  ConversationActorRetirementUnprovenError,
   ConversationRuntimeReclamationRaceError,
   type AcquireConversationActorInput,
   type AcquireConversationActorOptions,
@@ -1056,8 +1057,9 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
-  function detachFixture(onBridgeRelease = async () => undefined) {
+  function detachFixture(onBridgeRelease: () => Promise<void> = async () => undefined) {
     const current = fixture(undefined, undefined, 60_000, undefined, 2);
+    Object.assign(current.handle, { retryCloseAfterStop: () => current.handle.close() });
     current.handle.establishmentSnapshots[0] = snapshot("running");
     const target: AcquireConversationActorInput = {
       scope, binding, workspace, opaqueBindingDetail: "opaque", driver: current.driver,
@@ -1164,6 +1166,221 @@ describe("ConversationActorManager", () => {
     runtime.release();
     await current.coordinator.close();
     await expect(current.manager.close()).rejects.toThrow();
+  });
+
+  it.each(["handle", "lease"] as const)("recovers failed archive %s cleanup through explicit Stop without admitting concurrent work", async resource => {
+    const current = detachFixture();
+    current.handle.establishmentSnapshots[0] = snapshot("idle");
+    const runtime = await current.coordinator.acquire(scope, binding.applicationThreadId);
+    runtime.release();
+    const cleanup = vi.mocked(resource === "handle" ? current.handle.close : current.lease.release);
+    cleanup.mockRejectedValueOnce(new Error("archive cleanup unproven"));
+    const archive = vi.fn(async () => undefined);
+    await expect(current.coordinator.runWithRuntimeRetired(scope, binding.applicationThreadId, archive))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    expect(archive).not.toHaveBeenCalled();
+    expect(runtime.actor.closed).toBe(true);
+    expect(runtime.actor.replacementSafe).toBe(false);
+    await expect(current.manager.acquire(current.target)).rejects.toBeInstanceOf(ConversationActorRetirementUnprovenError);
+
+    let finishStop!: () => void;
+    const hostStopped = new Promise<void>(resolve => { finishStop = resolve; });
+    const stopOwnedResources = vi.fn(async () => hostStopped);
+    const retireLocalRuntime = vi.fn(async () => undefined);
+    const stopping = current.coordinator.runWithRuntimesStopped(scope, [binding.applicationThreadId], stopOwnedResources, retireLocalRuntime);
+    await vi.waitFor(() => expect(stopOwnedResources).toHaveBeenCalledOnce());
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(retireLocalRuntime).not.toHaveBeenCalled();
+    let reopened = false;
+    const reopening = current.coordinator.acquire(scope, binding.applicationThreadId).then(value => { reopened = true; return value; });
+    const directReopening = expect(current.manager.acquire(current.target))
+      .rejects.toMatchObject({ backendCode: "conversation_actor_admission_invalidated" });
+    await Promise.resolve();
+    expect(reopened).toBe(false);
+    expect(current.driver.attach).toHaveBeenCalledOnce();
+
+    finishStop();
+    await stopping;
+    await directReopening;
+    expect(runtime.actor.replacementSafe).toBe(true);
+    expect(cleanup).toHaveBeenCalledTimes(2);
+    expect(resource === "handle" ? current.lease.release : current.handle.close).toHaveBeenCalledOnce();
+    expect(retireLocalRuntime).toHaveBeenCalledOnce();
+    const replacement = await reopening;
+    expect(replacement.actor).not.toBe(runtime.actor);
+    expect(current.handle.submit).not.toHaveBeenCalled();
+    replacement.release();
+    await current.coordinator.close();
+    await current.manager.close();
+  });
+
+  it("keeps failed recovery Stop fenced until a later attempt proves actor cleanup", async () => {
+    const current = detachFixture();
+    current.handle.establishmentSnapshots[0] = snapshot("idle");
+    const runtime = await current.coordinator.acquire(scope, binding.applicationThreadId);
+    runtime.release();
+    current.handle.close.mockRejectedValueOnce(new Error("archive cleanup unproven"))
+      .mockRejectedValueOnce(new Error("stop cleanup still unproven"));
+    await expect(current.coordinator.runWithRuntimeRetired(scope, binding.applicationThreadId, async () => undefined))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    const stopOwnedResources = vi.fn(async () => undefined);
+    const retireLocalRuntime = vi.fn(async () => undefined);
+    await expect(current.coordinator.runWithRuntimesStopped(scope, [binding.applicationThreadId], stopOwnedResources, retireLocalRuntime))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    expect(stopOwnedResources).toHaveBeenCalledOnce();
+    expect(retireLocalRuntime).not.toHaveBeenCalled();
+    await expect(current.coordinator.acquire(scope, binding.applicationThreadId)).rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    await expect(current.manager.acquire(current.target)).rejects.toBeInstanceOf(ConversationActorRetirementUnprovenError);
+    expect(current.driver.attach).toHaveBeenCalledOnce();
+    await current.coordinator.runWithRuntimesStopped(scope, [binding.applicationThreadId], stopOwnedResources, retireLocalRuntime);
+    expect(current.handle.close).toHaveBeenCalledTimes(3);
+    expect(current.lease.release).toHaveBeenCalledOnce();
+    expect(retireLocalRuntime).toHaveBeenCalledOnce();
+    await current.coordinator.close();
+    await current.manager.close();
+  });
+
+  it("does not let explicit Stop overtake a still-running archive cleanup", async () => {
+    const current = detachFixture();
+    current.handle.establishmentSnapshots[0] = snapshot("idle");
+    const runtime = await current.coordinator.acquire(scope, binding.applicationThreadId);
+    runtime.release();
+    let finishArchive!: () => void;
+    const archiveCleanup = new Promise<void>(resolve => { finishArchive = resolve; });
+    current.handle.close.mockImplementationOnce(async () => { await archiveCleanup; throw new Error("archive cleanup unproven"); });
+    const archiving = expect(current.coordinator.runWithRuntimeRetired(scope, binding.applicationThreadId, async () => undefined))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    await vi.waitFor(() => expect(current.handle.close).toHaveBeenCalledOnce());
+    const stopOwnedResources = vi.fn(async () => undefined);
+    const stopping = current.coordinator.runWithRuntimesStopped(scope, [binding.applicationThreadId], stopOwnedResources, async () => undefined);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(stopOwnedResources).not.toHaveBeenCalled();
+    expect(current.handle.close).toHaveBeenCalledOnce();
+    finishArchive();
+    await archiving;
+    await stopping;
+    expect(stopOwnedResources).toHaveBeenCalledOnce();
+    expect(current.handle.close).toHaveBeenCalledTimes(2);
+    await current.coordinator.close();
+    await current.manager.close();
+  });
+
+  it.each(["tenantId", "principalId"] as const)("does not recover another %s's failed archive with explicit Stop", async dimension => {
+    const current = detachFixture();
+    current.handle.establishmentSnapshots[0] = snapshot("idle");
+    const runtime = await current.coordinator.acquire(scope, binding.applicationThreadId);
+    runtime.release();
+    current.handle.close.mockRejectedValueOnce(new Error("archive cleanup unproven"));
+    await expect(current.coordinator.runWithRuntimeRetired(scope, binding.applicationThreadId, async () => undefined))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    await current.coordinator.runWithRuntimesStopped({ ...scope, [dimension]: "other-scope" }, [binding.applicationThreadId], async () => undefined, async () => undefined);
+    expect(current.handle.close).toHaveBeenCalledOnce();
+    expect(runtime.actor.replacementSafe).toBe(false);
+    await expect(current.coordinator.acquire(scope, binding.applicationThreadId)).rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    await expect(current.manager.acquire(current.target)).rejects.toBeInstanceOf(ConversationActorRetirementUnprovenError);
+    await current.coordinator.runWithRuntimesStopped(scope, [binding.applicationThreadId], async () => undefined, async () => undefined);
+    expect(current.handle.close).toHaveBeenCalledTimes(2);
+    await current.coordinator.close();
+    await current.manager.close();
+  });
+
+  it.each(["coordinator", "manager"] as const)("does not start recovery Stop after %s shutdown while waiting on archive", async owner => {
+    const current = detachFixture();
+    current.handle.establishmentSnapshots[0] = snapshot("idle");
+    const runtime = await current.coordinator.acquire(scope, binding.applicationThreadId);
+    runtime.release();
+    let finishArchive!: () => void;
+    const archiveCleanup = new Promise<void>(resolve => { finishArchive = resolve; });
+    current.handle.close.mockImplementationOnce(async () => { await archiveCleanup; throw new Error("archive cleanup unproven"); });
+    const archiving = expect(current.coordinator.runWithRuntimeRetired(scope, binding.applicationThreadId, async () => undefined))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    await vi.waitFor(() => expect(current.handle.close).toHaveBeenCalledOnce());
+    const stopOwnedResources = vi.fn(async () => undefined);
+    const stopping = owner === "coordinator"
+      ? current.coordinator.runWithRuntimesStopped(scope, [binding.applicationThreadId], stopOwnedResources, async () => undefined)
+      : current.actorManager.runWithRuntimesStopped({ scope, applicationThreadIds: [binding.applicationThreadId], stopOwnedResources,
+        detachCoordinatorRuntimes: async () => undefined, retireLocalRuntime: async () => undefined });
+    const stopped = expect(stopping).rejects.toThrow(owner === "coordinator" ? "thread_runtime_coordinator_closed" : "conversation_actor_manager_closing");
+    const shutdown = owner === "coordinator" ? current.coordinator.close()
+      : expect(current.manager.close()).rejects.toThrow();
+    finishArchive();
+    await archiving;
+    await shutdown;
+    await stopped;
+    expect(stopOwnedResources).not.toHaveBeenCalled();
+    expect(current.handle.close).toHaveBeenCalledOnce();
+    await current.coordinator.close();
+    await expect(current.manager.close()).rejects.toThrow();
+  });
+
+  it("does not mistake a failed binding release for proven cleanup during recovery Stop", async () => {
+    const release = vi.fn(async () => { throw new Error("bridge cleanup unproven"); });
+    const current = detachFixture(release);
+    current.handle.establishmentSnapshots[0] = snapshot("idle");
+    const runtime = await current.coordinator.acquire(scope, binding.applicationThreadId);
+    runtime.release();
+    await expect(current.coordinator.runWithRuntimeRetired(scope, binding.applicationThreadId, async () => undefined))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    const stopOwnedResources = vi.fn(async () => undefined);
+    const retireLocalRuntime = vi.fn(async () => undefined);
+    await expect(current.coordinator.runWithRuntimesStopped(scope, [binding.applicationThreadId], stopOwnedResources, retireLocalRuntime))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    expect(stopOwnedResources).toHaveBeenCalledOnce();
+    expect(retireLocalRuntime).not.toHaveBeenCalled();
+    await expect(current.coordinator.acquire(scope, binding.applicationThreadId)).rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    await expect(current.coordinator.runWithRuntimesStopped(scope, [binding.applicationThreadId], stopOwnedResources, retireLocalRuntime))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    expect(stopOwnedResources).toHaveBeenCalledTimes(2);
+    expect(retireLocalRuntime).not.toHaveBeenCalled();
+    await expect(current.coordinator.close()).rejects.toBeInstanceOf(AggregateError);
+    await current.manager.close();
+  });
+
+  it("keeps failed handle cleanup fenced when the backend does not support explicit cleanup retry", async () => {
+    const current = detachFixture();
+    Reflect.deleteProperty(current.handle, "retryCloseAfterStop");
+    current.handle.establishmentSnapshots[0] = snapshot("idle");
+    const runtime = await current.coordinator.acquire(scope, binding.applicationThreadId);
+    runtime.release();
+    current.handle.close.mockRejectedValueOnce(new Error("archive cleanup unproven"));
+    await expect(current.coordinator.runWithRuntimeRetired(scope, binding.applicationThreadId, async () => undefined))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    const stopOwnedResources = vi.fn(async () => undefined);
+    const retireLocalRuntime = vi.fn(async () => undefined);
+    await expect(current.coordinator.runWithRuntimesStopped(scope, [binding.applicationThreadId], stopOwnedResources, retireLocalRuntime))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    expect(stopOwnedResources).toHaveBeenCalledOnce();
+    expect(current.handle.close).toHaveBeenCalledOnce();
+    expect(retireLocalRuntime).not.toHaveBeenCalled();
+    await expect(current.coordinator.acquire(scope, binding.applicationThreadId)).rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    await current.coordinator.close();
+    await expect(current.manager.close()).rejects.toThrow();
+  });
+
+  it("waits for an actor's in-flight binding disposal before completing explicit Stop", async () => {
+    let finishRelease!: () => void;
+    const releaseGate = new Promise<void>(resolve => { finishRelease = resolve; });
+    const release = vi.fn(async () => releaseGate);
+    const current = detachFixture(release);
+    const runtime = await current.coordinator.acquire(scope, binding.applicationThreadId);
+    const retireLocalRuntime = vi.fn(async () => undefined);
+    const stopping = current.coordinator.runWithRuntimesStopped(scope, [binding.applicationThreadId], async () => undefined, retireLocalRuntime);
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+    expect(runtime.actor.closed).toBe(true);
+    expect(retireLocalRuntime).not.toHaveBeenCalled();
+    let reopened = false;
+    const reopening = current.coordinator.acquire(scope, binding.applicationThreadId).then(value => { reopened = true; return value; });
+    await Promise.resolve();
+    expect(reopened).toBe(false);
+    finishRelease();
+    await stopping;
+    expect(retireLocalRuntime).toHaveBeenCalledOnce();
+    const replacement = await reopening;
+    replacement.release();
+    runtime.release();
+    await current.coordinator.close();
+    await current.manager.close();
   });
 
   it("rejects queued actor operations that have not reached the provider when explicit Stop begins", async () => {
@@ -2623,7 +2840,7 @@ describe("ConversationActorManager", () => {
     });
     expect(current.driver.attach).toHaveBeenCalledOnce();
 
-    await coordinator.close();
+    await expect(coordinator.close()).rejects.toBeInstanceOf(AggregateError);
     await current.manager.close();
   });
 

@@ -111,6 +111,12 @@ turn. Queue is the shared Sedes queue and sends only after authoritative turn
 settlement. Stop reconciles accepted and cleared native inputs; an unknown
 outcome stays in recovery rather than being retried automatically.
 
+Settings verification reads a fresh snapshot after applying the requested model
+and thinking level, so an older observation cannot falsely reject a Send.
+If handle cleanup failed, an explicit Stop can retry release of that same native
+owner. New work stays blocked until cleanup is proven; this never discards
+uncertain input outcomes or starts a competing process.
+
 Native history is read from the execution host's JSONL store. Opening detached
 history does not start a model turn or attach a writable Pi session. Discovery
 is restricted to the canonical workspace directory. Native history reads and

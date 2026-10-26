@@ -275,6 +275,7 @@ export class ThreadRuntimeCoordinator {
   readonly #maintenance = new Map<string, Promise<unknown>>();
   readonly #shutdownController = new AbortController();
   readonly #detached = new WeakSet<object>();
+  readonly #disposals = new WeakMap<object, Promise<void>>();
   #closed = false;
   #closePromise: Promise<void> | undefined;
 
@@ -575,8 +576,16 @@ export class ThreadRuntimeCoordinator {
     const keys = ids.map(id => scopedKey(scope, id));
     while (true) {
       if (this.#closed) throw new Error("thread_runtime_coordinator_closed");
-      const existing = keys.flatMap(key => this.#maintenance.get(key) ?? []);
-      if (existing.length) { await Promise.all(existing); continue; }
+      const previous = new Map(keys.map(key => [key, this.#maintenance.get(key)]));
+      const existing = [...previous.values()].filter(value => value !== undefined);
+      if (existing.length) {
+        // Explicit Stop can recover a completed failed retirement. Keep its
+        // fence installed while waiting; a still-running owner must finish
+        // before this control attempt can replace it atomically.
+        await Promise.allSettled(existing);
+        if (this.#closed) throw new Error("thread_runtime_coordinator_closed");
+        if (keys.some(key => this.#maintenance.get(key) !== previous.get(key))) continue;
+      }
       let begin!: () => void;
       const gate = new Promise<void>(resolve => { begin = resolve; });
       let retirementProven = false;
@@ -1595,7 +1604,7 @@ export class ThreadRuntimeCoordinator {
     if (!entry || entry.runtime !== runtime) return;
     if (entry.evictionTimer) clearTimeout(entry.evictionTimer);
     entry.evictionTimer = undefined;
-    entry.eviction ??= this.#dispose(runtime).finally(() => {
+    entry.eviction ??= this.#dispose(runtime).then(() => {
       if (this.#entries.get(key) === entry) this.#entries.delete(key);
     });
     void entry.eviction.catch(() => undefined);
@@ -1840,7 +1849,17 @@ export class ThreadRuntimeCoordinator {
     if (this.#entries.get(key) === entry) this.#entries.delete(key);
   }
 
-  async #dispose(runtime: EstablishedRuntime, automatic = false): Promise<void> {
+  #dispose(runtime: EstablishedRuntime, automatic = false): Promise<void> {
+    const existing = this.#disposals.get(runtime);
+    if (existing) return existing;
+    const disposal = this.#disposeBindings(runtime, automatic);
+    // Actor closure and explicit maintenance can reach the same bindings.
+    // Share their actual cleanup result, including an unproven failure.
+    this.#disposals.set(runtime, disposal);
+    return disposal;
+  }
+
+  async #disposeBindings(runtime: EstablishedRuntime, automatic: boolean): Promise<void> {
     if (this.#detached.has(runtime)) return;
     this.#detached.add(runtime);
     // Publish after fencing reads, before asynchronous teardown. A late old

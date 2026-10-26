@@ -840,6 +840,87 @@ describe("native Pi driver", () => {
     expect(operations.getOperation(conversation.scope, "thread", "preflight")?.state).toBe(kind === "submit" ? undefined : "prepared");
     expect(fixture.commands.some(command => command.type === "prompt" || command.type === "compact")).toBe(false);
   });
+  it.each(["model", "thinking"] as const)("verifies applied settings after an older %s snapshot finishes", async stale => {
+    const settings = { modelProvider: "provider", modelId: "model", thinkingLevel: "medium", toolMode: "full" as const, revision: 1 };
+    const { driver, fixture } = setup({ settings: { getSettings: () => settings } });
+    const handle = await driver.attach(conversation);
+    fixture.commands.length = 0;
+    const deferred = () => {
+      let resolve!: () => void;
+      const promise = new Promise<void>(accept => { resolve = accept; });
+      return { promise, resolve };
+    };
+    const snapshotStarted = deferred();
+    const releaseSnapshot = deferred();
+    const settingsApplied = deferred();
+    const request = fixture.port.request;
+    let captureSnapshot = false;
+    let oldSnapshot: PiManagedState | undefined;
+    const admitted: { model: PiManagedState["model"]; thinkingLevel: string | undefined }[] = [];
+    fixture.port.request = async (input, signal) => {
+      const type = input.command.command.type;
+      if (type === "set_model") {
+        // Stock Pi reapplies its native thinking default even for the same model.
+        // Also cover a read captured before a different model finishes applying.
+        fixture.state = { ...fixture.state, ...(stale === "thinking" ? { thinkingLevel: "xhigh" }
+          : { model: { provider: "old-provider", id: "old-model" } }) };
+        captureSnapshot = true;
+        fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+        await snapshotStarted.promise;
+      }
+      if (type === "snapshot" && captureSnapshot && !oldSnapshot) {
+        oldSnapshot = structuredClone(fixture.state);
+        const result = await request(input, signal);
+        snapshotStarted.resolve();
+        await releaseSnapshot.promise;
+        return result;
+      }
+      if (type === "prepare_submission") admitted.push({ model: fixture.state.model, thinkingLevel: fixture.state.thinkingLevel });
+      const result = await request(input, signal);
+      if (type === "set_thinking_level") settingsApplied.resolve();
+      return result;
+    };
+    const submitting = handle.submit(submission("fresh-settings"));
+    void submitting.catch(() => undefined);
+    try {
+      await settingsApplied.promise;
+      // Drain the completed settings RPC's continuations while the older read
+      // remains held, so verification must encounter that in-flight snapshot.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(fixture.state).toMatchObject({ model: { provider: "provider", id: "model" }, thinkingLevel: "medium" });
+      expect(oldSnapshot).toMatchObject(stale === "thinking" ? { thinkingLevel: "xhigh" }
+        : { model: { provider: "old-provider", id: "old-model" } });
+      expect(admitted).toEqual([]);
+      releaseSnapshot.resolve();
+      await expect(submitting).resolves.toMatchObject({ backendTurnId: "user:fresh-settings" });
+      expect(admitted).toEqual([{ model: { provider: "provider", id: "model" }, thinkingLevel: "medium" }]);
+      expect(fixture.commands.filter(command => command.type === "prompt")).toHaveLength(1);
+    } finally {
+      snapshotStarted.resolve(); releaseSnapshot.resolve();
+      await submitting.catch(() => undefined);
+    }
+  });
+  it.each(["model", "thinking"] as const)("rejects a genuine applied %s mismatch before admitting a prompt", async mismatch => {
+    const operations = operationStore();
+    const { driver, fixture } = setup({ operations });
+    const handle = await driver.attach(conversation);
+    fixture.commands.length = 0;
+    const request = fixture.port.request;
+    fixture.port.request = async (input, signal) => {
+      const result = await request(input, signal);
+      if (mismatch === "model" && input.command.command.type === "set_model")
+        fixture.state = { ...fixture.state, model: { provider: "other-provider", id: "other-model" } };
+      if (mismatch === "thinking" && input.command.command.type === "set_thinking_level")
+        fixture.state = { ...fixture.state, thinkingLevel: "off" };
+      return result;
+    };
+    await expect(handle.submit(submission("settings-mismatch"))).rejects.toMatchObject({
+      backendCode: "pi_native_settings_not_applied", crossedSubmissionBoundary: false,
+    });
+    expect(operations.getOperation(conversation.scope, "thread", "settings-mismatch"))
+      .toMatchObject({ state: "prepared", dispatchStarted: false });
+    expect(fixture.commands.some(command => command.type === "prepare_submission" || command.type === "prompt")).toBe(false);
+  });
   it.each([
     { kind: "submit", type: "snapshot" },
     { kind: "submit", type: "set_policy" },
@@ -2031,6 +2112,25 @@ describe("native Pi driver", () => {
     await expect(driver.close()).rejects.toThrow("could not all be released");
     await expect(driver.attach(conversation)).rejects.toThrow();
     await driver.close(); expect(attempts).toBe(2);
+  });
+  it("retries native handle cleanup after explicit Stop until release is proven", async () => {
+    const { driver, fixture } = setup(); const handle = await driver.attach(conversation);
+    const release = vi.fn<NativeFixture["port"]["release"]>()
+      .mockRejectedValueOnce(new Error("release unavailable"))
+      .mockRejectedValueOnce(new Error("release still unavailable"))
+      .mockResolvedValue(undefined);
+    fixture.port.release = release;
+    await expect(handle.close()).rejects.toThrow("release unavailable");
+    await expect(handle.retryCloseAfterStop!()).rejects.toThrow("release still unavailable");
+    await expect(driver.attach(conversation)).rejects.toMatchObject({ backendCode: "pi_native_already_attached" });
+    await expect(handle.submit(submission())).rejects.toMatchObject({ backendCode: "pi_native_handle_closed" });
+    await handle.retryCloseAfterStop!();
+    expect(release).toHaveBeenCalledTimes(3);
+    await handle.retryCloseAfterStop!();
+    expect(release).toHaveBeenCalledTimes(3);
+    const replacement = await driver.attach(conversation);
+    expect(replacement).not.toBe(handle);
+    expect(fixture.attachCount).toBe(2);
   });
   it("retains unresolved extension UI events even when the native session is idle", async () => {
     const { driver, fixture } = setup(); fixture.port.acknowledge = vi.fn(async () => {});

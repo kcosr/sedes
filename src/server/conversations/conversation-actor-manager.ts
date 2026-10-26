@@ -792,8 +792,16 @@ export class ConversationActorManager {
     const keys = [...new Set(input.applicationThreadIds.map(id => scopedActorKey(input.scope, id)))].sort();
     while (true) {
       if (this.#closing) throw new Error("conversation_actor_manager_closing");
-      const existing = keys.flatMap(key => this.#maintenance.get(key)?.completion ?? []);
-      if (existing.length) { await Promise.all(existing); continue; }
+      const previous = new Map(keys.map(key => [key, this.#maintenance.get(key)]));
+      const existing = [...previous.values()].filter(value => value !== undefined);
+      if (existing.length) {
+        // A completed failed retirement still fences ordinary acquisition,
+        // but explicit Stop must be able to retry cleanup for that owner.
+        // Never overtake pending maintenance or a newer scoped fence.
+        await Promise.allSettled(existing.map(value => value.completion));
+        if (this.#closing) throw new Error("conversation_actor_manager_closing");
+        if (keys.some(key => this.#maintenance.get(key) !== previous.get(key))) continue;
+      }
       let resolve!: () => void;
       let reject!: (error: unknown) => void;
       const completion = new Promise<void>((accept, fail) => { resolve = accept; reject = fail; });

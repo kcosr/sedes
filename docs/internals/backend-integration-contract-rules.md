@@ -447,6 +447,18 @@ deletes provider-native durable conversation history. Audit this close
 disposition for Pi, Codex, Claude, Grok and OpenCode whenever archive or runtime
 ownership changes.
 
+A completed failed retirement keeps ordinary acquisition fenced, but must not
+prevent an explicit principal/thread-scoped Stop from reaching its existing
+owner. Stop waits for pending maintenance and rechecks shutdown and fence
+identity before replacing a failed fence. Release admission only after owned
+handle, lease, and binding cleanup is proven; concurrent disposal callers share
+the same completion or failure. Never interpret a second no-op `close()` as
+proof. A backend may implement `retryCloseAfterStop` to retry release of the
+original handle resources without creating a replacement owner. Native Pi
+implements it; Pi SDK, Codex, Claude, Grok, and OpenCode intentionally do not,
+so failed handle cleanup on those backends remains fenced. This does not
+prevent explicit Stop from reaching their host controls.
+
 A provider's optional `nativeArchive` seam synchronizes its own durable archive
 after the application commit, inside the same maintenance fences and before
 publication. Recheck current scoped inventory on receipt replay and synchronize
@@ -2973,6 +2985,13 @@ intact. The existing thread recovery command also reconciles an ordinary queue
 head without requiring a separate uncertain mutation receipt. Automatic checks
 may close uncertainty only on authoritative acceptance or exact nonretryable
 withdrawal proof. Absence of evidence must not cause another send.
+
+After reconciling uncertain input and routing Steer, dispatch must prove that
+the queue head is pending or its retry is due before acquiring a conversation
+or reading a provider retry anchor. Repeated settlement for an empty queue, a
+failed blocking head, or a future retry must not perform provider work. Keep
+the retry wake-up armed. Pi SDK, native Pi, Codex, Claude, Grok, and OpenCode
+share this application-owned dispatch rule.
 
 For a Sedes-authored Send or Steer, every compiled backend must project the
 authenticated application delivery operation ID on the resulting normalized
