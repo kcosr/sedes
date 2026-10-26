@@ -37,7 +37,7 @@ export const threadStatusToolContract = {
         threadId: Type.String({ minLength: 1, maxLength: 128 }),
         backend: Type.String({
           maxLength: 32,
-          enum: ["pi", "codex_app_server", "claude_agent_sdk", "grok_build", "opencode"],
+          enum: ["pi", "pi_native", "codex_app_server", "claude_agent_sdk", "grok_build", "opencode"],
         }),
         lifecycle: Type.String({
           maxLength: 8,
@@ -62,7 +62,7 @@ export const threadStatusToolContract = {
   execution: {
     form: "inline",
     adapterWaitCeilingMilliseconds: {
-      pi_sdk: 30_000,
+      pi_sdk: 30_000, pi_rpc: 30_000,
       mcp: 30_000,
       http: 30_000,
       cli: 30_000,
@@ -75,7 +75,7 @@ export const threadStatusToolContract = {
     concurrencyClass: "thread_status_read",
     uncertainExternalOutcome: false,
   },
-  exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+  exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
   adapters: {
     pi: {
       name: piThreadStatusToolName,

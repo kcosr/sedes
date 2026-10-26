@@ -128,7 +128,7 @@ function validatePresentations(
   if (adapters.http && adapters.http.invocation !== "inline") {
     throw new Error("agent_tool_http_presentation_invalid");
   }
-  if (exposure.includes("pi_sdk") !== (adapters.pi !== undefined)) {
+  if ((exposure.includes("pi_sdk") || exposure.includes("pi_rpc")) !== (adapters.pi !== undefined)) {
     throw new Error("agent_tool_pi_exposure_presentation_mismatch");
   }
   if (exposure.includes("mcp") !== (adapters.mcp !== undefined)) {
@@ -176,7 +176,7 @@ function validateExecution(
     policy.adapterWaitCeilingMilliseconds,
   )) {
     if (
-      !(["pi_sdk", "mcp", "http", "cli"] as const).includes(
+      !(["pi_sdk", "pi_rpc", "mcp", "http", "cli"] as const).includes(
         adapter as AgentToolAdapter,
       )
     ) {
@@ -314,7 +314,7 @@ function normalizedArtifact(
     ),
   );
   return deepFreeze({
-    artifactVersion: 2,
+    artifactVersion: 3,
     id: definition.id,
     schemaVersion: definition.schemaVersion,
     description: definition.description,
@@ -416,7 +416,7 @@ export class AgentToolRegistry {
       exposure.length === 0 ||
       exposure.some(
         (adapter) =>
-          !(["pi_sdk", "mcp", "http", "cli"] as const).includes(adapter),
+          !(["pi_sdk", "pi_rpc", "mcp", "http", "cli"] as const).includes(adapter),
       ) ||
       new Set(exposure).size !== exposure.length
     ) {
@@ -578,8 +578,11 @@ export class AgentToolRegistry {
     definition: AgentToolDefinition,
   ): readonly (readonly [AgentToolAdapter, string])[] {
     return [
-      ...(definition.adapters.pi
+      ...(definition.adapters.pi && definition.exposure.adapters.includes("pi_sdk")
         ? ([["pi_sdk", definition.adapters.pi.name]] as const)
+        : []),
+      ...(definition.adapters.pi && definition.exposure.adapters.includes("pi_rpc")
+        ? ([["pi_rpc", definition.adapters.pi.name]] as const)
         : []),
       ...(definition.adapters.mcp
         ? ([["mcp", definition.adapters.mcp.name]] as const)

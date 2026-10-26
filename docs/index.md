@@ -80,10 +80,12 @@ from top to bottom.
   automations from a source checkout or built CLI.
 - [Backend setup and support](operator/backends/index.md) — provider selection,
   compatibility, authentication, and capability matrix.
-  - [Pi](operator/backends/pi.md)
+  - [Pi](operator/backends/pi-native.md)
+  - [Pi SDK](operator/backends/pi.md)
   - [Codex](operator/backends/codex.md)
   - [Claude](operator/backends/claude.md)
   - [Grok](operator/backends/grok.md)
+  - [OpenCode](operator/backends/opencode.md)
 - [Preview clients](operator/clients/index.md) — shared connection and release
   status for the source-build clients.
   - [Android](operator/clients/android.md)

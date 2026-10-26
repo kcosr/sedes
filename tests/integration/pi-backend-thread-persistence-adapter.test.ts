@@ -10,6 +10,7 @@ import {
   serializePiBindingDetail,
 } from "../../src/server/backends/pi/pi-session-store.js";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
+import { importLegacyDatabaseConfigurationFixture } from "../support/database-configuration-fixture.js";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
 import {
   applyBackendNormalizationMigration,
@@ -112,6 +113,10 @@ function fixture(): Fixture {
     appliedAt: 200,
   });
   applyDatabaseMigrations(database, backendNormalizedMigrations);
+  importLegacyDatabaseConfigurationFixture(database, {
+    configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "pi-persistence-adapter",
+  }, 210);
+  new InventoryRepository(database).updateEnvironmentAvailability(scope, environment.id, { available: true, now: 210 });
   const profile = new BackendConfigurationRepository(database).listProfiles(
     scope,
   )[0]!;
@@ -1636,7 +1641,7 @@ describe("Pi backend thread persistence adapter", () => {
         second.threadId,
         serializePiBindingDetail(second.backendConversationId, sharedPath),
       ),
-    ).toThrow("already attached");
+    ).toThrow("already owned or reserved");
   });
 
   const bindPrepared = (

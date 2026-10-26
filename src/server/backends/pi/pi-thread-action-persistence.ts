@@ -43,7 +43,7 @@ export class PiThreadActionPersistence implements ThreadActionPersistenceProvide
   }
 
   constructor(
-    readonly pi: PiConversationRepository,
+    readonly pi: Pick<PiConversationRepository, "database" | "getSettings" | "updateSettings">,
     readonly preferences: ConnectionSettingPreferenceRepository,
   ) {
     if (pi.database !== preferences.database) {

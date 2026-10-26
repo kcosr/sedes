@@ -39,7 +39,7 @@ export function EnvironmentIcon({ kind }: { readonly kind: EnvironmentDefinition
 }
 
 export function backendBrand(kind: BackendDefinition["kind"]) {
-  return ({ pi: "pi", codex_app_server: "codex", claude_agent_sdk: "claude", grok_build: "grok", opencode: "opencode" } as const)[kind];
+  return ({ pi: "pi", pi_native: "pi", codex_app_server: "codex", claude_agent_sdk: "claude", grok_build: "grok", opencode: "opencode" } as const)[kind];
 }
 
 export function hostPlatform(platform: string): string {

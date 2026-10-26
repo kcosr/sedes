@@ -322,9 +322,28 @@ release-artifact contract.
 ## Live-provider suites
 
 Do not run commands matching `test:real-pi*`, `test:real-codex*`,
-`test:real-claude*`, `test:real-grok*`, or `test:live-opencode` by default.
+`test:real-claude*`, `test:real-grok*`, `test:live-pi-native`, or `test:live-opencode` by default.
 They consume live provider capacity or exercise authenticated external state
 and require explicit user authorization for the relevant backend change.
+The `test:real-pi-native` offline exception is described below; it makes no
+authenticated provider requests.
+
+The native Pi qualification suite launches an explicitly selected stock Pi
+1.4.0 executable with disposable HOME, agent, session, and workspace directories.
+It uses loopback model/MCP fixtures and passes no operator credentials or
+ambient provider configuration to the child. It exercises the production owned
+process host and normalized conversation driver, including native skills,
+code mode, nested tool policy, native MCP approvals, scoped Sedes tools,
+interruption, resume, detached history, and inclusive fork boundaries. It also
+builds the release sidecar bundle and verifies a running native session survives
+replacement of its framed carrier. Session-file interoperability checks use
+the same stock installation and the embedded SDK without calling providers.
+It is excluded from ordinary `npm test` and does not replace live provider gates:
+
+```sh
+SEDES_REAL_PI_NATIVE_EXECUTABLE=/absolute/path/to/pi \
+  env -u NODE_ENV npm run test:real-pi-native
+```
 
 OpenCode's authenticated gate is separate from both `npm test` and the entirely
 local `test:real-opencode` suite. After authorization, select an exact reviewed
@@ -399,6 +418,20 @@ The CLI-specific Pi gate also requires the explicit test opt-in:
 
 ```sh
 SEDES_RUN_REAL_PI_CLI=1 env -u NODE_ENV npm run test:real-pi-cli
+```
+
+The separate native Pi live gate uses stock Pi 1.4.0 through the production
+owned host and driver. It requires the same exact authenticated AW Qwen model,
+verifies low reasoning and the read-only tool set before prompting, and checks
+code-mode reads plus detach/resume. Its temporary agent directory references
+the native `models.json` and `auth.json` files without copying credentials;
+operator extensions, MCP servers, settings, and existing sessions are not loaded.
+Run only after explicit authorization:
+
+```sh
+SEDES_RUN_LIVE_PI_NATIVE=1 \
+  SEDES_LIVE_PI_NATIVE_EXECUTABLE=/absolute/path/to/pi \
+  env -u NODE_ENV npm run test:live-pi-native
 ```
 
 Codex live scripts include private fixture coverage and optional authenticated

@@ -1,4 +1,5 @@
 import { parseOpenCodeBackendConfiguration } from "../backends/opencode/opencode-backend-configuration.js";
+import { parsePiNativeBackendConfiguration } from "../backends/pi/native/pi-native-backend-configuration.js";
 import { mergeEnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
 import path from "node:path";
 import { configurationDocumentSchema, type ConfigurationDocument } from "../../shared/protocol/configuration-admin.js";
@@ -47,6 +48,7 @@ export function validateConfigurationDocument(value: unknown): ConfigurationDocu
           connections: input.connections.map(connection => ({ ...connection, kind: "grok_acp" as const })) }); break;
         case "opencode": parseOpenCodeBackendConfiguration(input); break;
         case "pi": compileBackendModelPolicy(backend.modelPolicy, "provider_model_effort"); break;
+        case "pi_native": parsePiNativeBackendConfiguration(input); break;
       }
     } catch {
       // Native parser exceptions may contain configuration detail. Keep the

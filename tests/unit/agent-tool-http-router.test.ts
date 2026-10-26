@@ -218,7 +218,7 @@ describe("agent tool HTTP router", () => {
       await associated(request(value.app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: `${presentationMode}-request`,
           input: {},
         })
@@ -255,7 +255,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "agent.context",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "mcp-request",
         input: {},
       })
@@ -274,7 +274,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "agent.context",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "stale-mcp-request",
         input: {},
       })
@@ -304,7 +304,7 @@ describe("agent tool HTTP router", () => {
       await associated(request(value.app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "wrong-presentation",
           input: {},
         })
@@ -394,7 +394,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "thread.status",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "request-1",
         input: { threadId: targetThreadId },
       })
@@ -410,7 +410,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "thread.status",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "request-2",
         input: { threadId: targetThreadId },
       })
@@ -435,7 +435,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "agent.context",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "request-1",
         input: {},
         principalId: "caller-selected",
@@ -444,7 +444,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "thread.status",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "request-2",
         input: {},
       })
@@ -471,7 +471,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "agent.context",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "oversized-response",
         input: {},
       })

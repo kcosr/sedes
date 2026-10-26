@@ -82,16 +82,17 @@ export function decodePiModelSetting(value: string): {
 
 export class PiThreadPresentationProvider implements ThreadBackendPresentationProvider {
   constructor(
-    readonly persistence: PiConversationRepository,
+    readonly persistence: Pick<PiConversationRepository, "database" | "getSettings">,
     readonly modelPolicy: CompiledBackendModelPolicy,
+    readonly target: { readonly backendKind: "pi" | "pi_native"; readonly connectionKind: "pi_sdk" | "pi_rpc" } = { backendKind: "pi", connectionKind: "pi_sdk" },
   ) {}
 
   async read(
     input: Parameters<ThreadBackendPresentationProvider["read"]>[0],
   ): Promise<ThreadApplicationPresentation> {
     if (
-      input.connection.kind !== "pi_sdk" ||
-      input.backend.kind !== "pi" ||
+      input.connection.kind !== this.target.connectionKind ||
+      input.backend.kind !== this.target.backendKind ||
       (input.catalog !== undefined && input.workspace === undefined)
     ) {
       throw new Error("pi_thread_presentation_target_invalid");

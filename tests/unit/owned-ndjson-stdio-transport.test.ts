@@ -147,6 +147,37 @@ describe("owned NDJSON stdio transport diagnostics", () => {
     expect(transport.diagnostics().streamsDrained).toBe(true);
   });
 
+  it("retries failed owner cleanup without reopening the closed protocol", async () => {
+    const channels = new LocalEnvironmentChannelProvider({ scope, executionEnvironmentId: scope.executionEnvironmentId });
+    const prepared = await channels.prepareOwnedProcess(scope, { executablePath: process.execPath, workingDirectory: repositoryRoot });
+    const open = channels.openOwnedProcess.bind(channels);
+    let close: ((reason: string) => Promise<void>) | undefined;
+    vi.spyOn(channels, "openOwnedProcess").mockImplementation(async (...args) => {
+      const channel = await open(...args);
+      const originalClose = channel.close.bind(channel);
+      const closeSpy = vi.fn(originalClose).mockRejectedValueOnce(new Error("process_cleanup_unconfirmed"));
+      close = closeSpy;
+      return { ...channel, writeStdin: channel.writeStdin.bind(channel), closeStdin: channel.closeStdin.bind(channel), close: closeSpy };
+    });
+    const factory = new OwnedNdjsonStdioTransportFactory({ scope, channels, process: prepared,
+      environment: { PATH: process.env.PATH ?? "/usr/bin:/bin", PROVIDER_STDIO_FIXTURE_MODE: "partial" },
+      commandArguments: [fixture], assuranceDiagnosticPrefix: "provider_test_assurance", transportDiagnosticPrefix: "provider_test_stdio" });
+    const transport = await factory.open(scope, 1, new AbortController().signal);
+    try {
+      await expect(transport.close("first_close")).rejects.toThrow("process_cleanup_failed");
+      expect(isValidFramedTransportAssurance(transport.assurance)).toBe(false);
+      await expect(transport.send("{}", {})).rejects.toThrow("provider_test_stdio_closed");
+      const initialClosure = await transport.closed;
+      expect(initialClosure.reason).toBe("process_cleanup_failed");
+      await Promise.all([transport.close("retry_close"), transport.close("concurrent_retry")]);
+      expect(close).toHaveBeenCalledTimes(2);
+      expect(transport.diagnostics().streamsDrained).toBe(true);
+      expect(await transport.closed).toBe(initialClosure);
+      await transport.close("already_closed");
+      expect(close).toHaveBeenCalledTimes(2);
+    } finally { await transport.close("test_complete"); }
+  });
+
   it("counts complete frame bytes including the delimiter and preserves frame/close behavior", async () => {
     const transport = await openFixture("frame");
     const iterator = transport.frames[Symbol.asyncIterator]();

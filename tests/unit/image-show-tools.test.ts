@@ -17,7 +17,7 @@ describe("image.show canonical tool", () => {
     expect(definition.adapters.pi?.name).toBe("sedes_image_show");
     expect(definition.adapters.mcp?.name).toBe("sedes_image_show");
     expect(definition.adapters.cli?.command).toBe("image.show");
-    expect(definition.exposure.adapters).toEqual(["pi_sdk", "mcp", "http", "cli"]);
+    expect(definition.exposure.adapters).toEqual(["pi_sdk", "pi_rpc", "mcp", "http", "cli"]);
     expect(definition.outputMediaTypes).toBeUndefined();
     expect(definition.execution.idempotency).toBe("supported");
     expect(definition.description).toContain("image");

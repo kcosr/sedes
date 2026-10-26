@@ -328,18 +328,18 @@ export function automationToolPresentations(input: {
 }
 
 export const automationToolExposure = {
-  adapters: ["pi_sdk", "mcp", "http", "cli"],
+  adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"],
 } as const;
 
 export const automationReadWaitCeilings = {
-  pi_sdk: 30_000,
+  pi_sdk: 30_000, pi_rpc: 30_000,
   mcp: 30_000,
   http: 30_000,
   cli: 30_000,
 } as const;
 
 export const automationRunWaitCeilings = {
-  pi_sdk: 90_000,
+  pi_sdk: 90_000, pi_rpc: 90_000,
   mcp: 90_000,
   http: 90_000,
   cli: 90_000,

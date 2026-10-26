@@ -87,10 +87,14 @@ export class PiCatalogService {
   read(
     workspace: ValidatedWorkspace,
     load: () => Promise<BackendCatalog>,
+    options: { readonly refresh?: boolean } = {},
   ): Promise<BackendCatalog> {
     const key = workspaceKey(this.#owner, workspace);
     let entry = this.#entries.get(key);
     const now = this.#now();
+    if (options.refresh && entry) {
+      return entry.pending ?? this.#load(key, entry, workspace, load);
+    }
     if (entry?.value && entry.expiresAt > now) {
       return Promise.resolve(entry.value);
     }

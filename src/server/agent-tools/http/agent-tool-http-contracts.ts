@@ -49,7 +49,7 @@ const toolIdSchema = z
   .min(1)
   .max(128)
   .regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/);
-const adapterSchema = z.enum(["pi_sdk", "mcp", "http", "cli"]);
+const adapterSchema = z.enum(["pi_sdk", "pi_rpc", "mcp", "http", "cli"]);
 
 function isCanonicalRootSchema(value: unknown): boolean {
   try {
@@ -65,7 +65,7 @@ const canonicalRootSchema = z.custom(
   "A canonical agent-tool JSON Schema is required.",
 );
 const agentToolContractArtifactBaseSchema = z.strictObject({
-  artifactVersion: z.literal(2),
+  artifactVersion: z.literal(3),
   id: toolIdSchema,
   schemaVersion: z.number().int().positive().max(1_000_000),
   description: z.string().min(1).max(2_000),

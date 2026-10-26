@@ -109,9 +109,9 @@ describe("Pi session discovery", () => {
     await f.branch("child-session");
     const controller = new AbortController();
     const cancellation = new Error("cancel ancestry discovery");
-    const nativeOpen = SessionManager.open;
-    const open = vi.spyOn(SessionManager, "open").mockImplementation((...args) => {
-      const manager = nativeOpen(...args);
+    const nativeLoad = SessionManager.inMemory;
+    const open = vi.spyOn(SessionManager, "inMemory").mockImplementation(function (...args) {
+      const manager = nativeLoad(...args);
       setImmediate(() => controller.abort(cancellation));
       return manager;
     });
@@ -130,16 +130,16 @@ describe("Pi session discovery", () => {
     const childIds = Array.from({ length: 12 }, (_, index) => `child-${index}`);
     for (const id of childIds) await f.branch(id);
     const list = vi.spyOn(SessionManager, "list");
-    const open = vi.spyOn(SessionManager, "open");
+    const open = vi.spyOn(SessionManager, "inMemory");
 
     const sessions = await f.store.listWithAncestry(f.workspace, installationKey);
 
     expect(list).toHaveBeenCalledOnce();
     expect(open).toHaveBeenCalledTimes(childIds.length + 2);
-    expect(open.mock.calls.map(([file]) => file).sort()).toEqual(
+    expect(open.mock.calls.map(([, , entries]) => entries?.[0]?.type === "session" ? entries[0].id : undefined).sort()).toEqual(
       [
-        ...sessions.map(({ sessionFile }) => sessionFile),
-        f.source.manager.getSessionFile()!,
+        ...sessions.map(({ backendConversationId }) => backendConversationId),
+        "source-session",
       ].sort(),
     );
     expect(sessions).toHaveLength(childIds.length + 1);

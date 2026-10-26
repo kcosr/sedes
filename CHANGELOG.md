@@ -7,6 +7,11 @@ User-facing changes are collected here before release. See the
 
 ### Breaking Changes
 
+- Process ownership locks now use directories with per-owner records. Stop
+  older servers cleanly before upgrading; leftover regular-file locks require
+  explicit recovery after confirming the prior owner and its native children
+  have exited. See [state and process ownership](docs/operator/operations.md#state-upgrades-and-backups).
+
 - Web research now uses the local Codex CLI with live search. Upgrades disable
   the old Grok research selection; authenticate Codex and enable **Codex CLI
   research** in Settings to use it again. Grok credentials and search sessions
@@ -15,7 +20,7 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **173**. Research settings now select Codex CLI. Remote environment
+  **174**. Research settings now select Codex CLI. Remote environment
   configuration adds the required connection
   compression setting. Usage requests now select report sections and load filter choices
   through a separate endpoint; see [Usage accounting](docs/internals/usage-accounting.md#analytics-read).
@@ -69,6 +74,13 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
+
+- Add a separate **Pi** backend for the installed Pi 1.4.0 CLI on local or
+  persistent SSH/outbound Linux/macOS hosts. It uses native configuration, MCP
+  servers, code mode, and session history, with tool-access controls, durable
+  input recovery, and completed-turn forks. **Pi SDK** remains available; both
+  backends can share session storage without importing duplicate threads. See
+  [native Pi setup and limits](docs/operator/backends/pi-native.md).
 
 - A Home button beside Notifications opens the configured default thread and
   reveals Chat. The connection indicator now follows these buttons in reserved

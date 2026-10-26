@@ -22,7 +22,7 @@
 > [connection guide](docs/operator/connections.md) for how the layers fit together.
 
 Sedes is a self-hosted **agent development environment (ADE)** for running,
-observing, organizing, and controlling coding agents. It brings Pi SDK, Codex,
+observing, organizing, and controlling coding agents. It brings Pi, Pi SDK, Codex,
 Claude, Grok, and OpenCode v2 conversations into one browser interface with durable drafts,
 queues, tasks, reusable configurations, file context, automations, and recovery
 when a provider operation has an uncertain outcome. Thread-associated terminal
@@ -96,7 +96,7 @@ bounded and is documented in the individual
 
 | Area              | What you can do                                                                                                                                                                              |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Conversations     | Work with Pi SDK, Codex, Claude, Grok, and OpenCode v2 through one interface.                                                                                                                                 |
+| Conversations     | Work with Pi, Pi SDK, Codex, Claude, Grok, and OpenCode v2 through one interface.                                                                                                                                 |
 | Active work       | Keep durable drafts, Send or Stop work, and use Steer or Queue when the selected backend supports them.                                                                                      |
 | Organization      | Arrange threads by project, group, pin, state, time, bookmarks, and tasks.                                                                                                                   |
 | Reuse             | Create saved Agents, thread templates, saved prompts, skills, and context excerpts.                                                                                                          |
@@ -117,6 +117,7 @@ whose repository covers model setup and operation.
 | Backend | Current integration                                                                                            | Execution boundary                                                                                                        |
 | ------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Pi SDK  | Sedes hosts the Pi SDK and uses the authenticated local Pi installation.                                       | Local runtime; an optional SSH or outbound operations sidecar can provide remote workspace tools, Files, and bounded skill discovery. |
+| Pi | Sedes owns the installed Pi 1.4.0 CLI in RPC mode, using native configuration, MCP servers, and session history. | Local or persistent SSH/outbound sidecar runtime on Linux/macOS; authenticate Pi on the execution host. |
 | Codex   | Sedes can own a local process or connect to an operator-managed local, authenticated network, or SSH/outbound sidecar endpoint. | Local or persistent-sidecar execution, depending on the configured topology.                                                             |
 | Claude  | Sedes runs a managed Claude Agent SDK worker with an independently authenticated Claude Code CLI.              | Local worker or persistent-sidecar runtime over SSH or outbound on Linux/macOS.                                  |
 | Grok    | Sedes owns a local Grok ACP process using the native installation account.                                     | Local execution environment.                                                                                              |

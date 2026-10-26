@@ -1,4 +1,5 @@
 import { opencodeModuleConfigurationSchema, opencodeConnectionDefaultsSchema } from "./opencode-configuration.js";
+import { piNativeModuleConfigurationSchema, piNativeConnectionConfigurationSchema } from "./pi-configuration.js";
 import { configuredEnvironmentVariablesSchema } from "./environment-variables.js";
 import { z } from "zod";
 import { normalizedAbsolutePath } from "../absolute-path.js";
@@ -93,6 +94,7 @@ const backendFields = { environmentVariables: configuredEnvironmentVariablesSche
 export const configurationBackendSchema = z.discriminatedUnion("kind", [
   z.strictObject({ ...backendFields, kind: z.literal("opencode"), moduleConfiguration: opencodeModuleConfigurationSchema }),
   z.strictObject({ ...backendFields, kind: z.literal("pi") }),
+  z.strictObject({ ...backendFields, kind: z.literal("pi_native"), moduleConfiguration: piNativeModuleConfigurationSchema }),
   z.strictObject({ ...backendFields, kind: z.literal("codex_app_server"), moduleConfiguration: codexModule }),
   z.strictObject({ ...backendFields, kind: z.literal("claude_agent_sdk"), moduleConfiguration: z.strictObject({
     executablePath: absolutePath.optional(), configDirectory: absolutePath.optional(), initializationTimeoutMs: z.number().int().min(1000).max(120000),
@@ -108,6 +110,7 @@ const targetFields = { id: configurationIdSchema, label, backendInstanceId: conf
 export const configurationTargetSchema = z.discriminatedUnion("kind", [
   z.strictObject({ ...targetFields, kind: z.literal("opencode_http"), moduleConfiguration: z.strictObject({ defaults: opencodeConnectionDefaultsSchema }) }),
   z.strictObject({ ...targetFields, kind: z.literal("pi_sdk") }),
+  z.strictObject({ ...targetFields, kind: z.literal("pi_rpc"), moduleConfiguration: piNativeConnectionConfigurationSchema }),
   z.strictObject({ ...targetFields, kind: z.literal("codex_app_server"), moduleConfiguration: z.strictObject({ defaults: z.strictObject({ sandboxMode: sandbox, networkAccess: network, approvalPolicy: approval, approvalReviewer: reviewer, model: catalogModel }) }) }),
   z.strictObject({ ...targetFields, kind: z.literal("claude_agent_sdk"), moduleConfiguration: z.strictObject({ defaults: z.strictObject({ permissionMode: z.enum(["default", "acceptEdits", "dontAsk", "auto"]) }) }) }),
   z.strictObject({ ...targetFields, kind: z.literal("grok_acp"), moduleConfiguration: z.strictObject({ defaults: z.strictObject({ model: catalogModel, reasoningEffort: z.discriminatedUnion("type", [ z.strictObject({ type: z.literal("modelDefault") }), z.strictObject({ type: z.literal("fixed"), effortId: opaqueId }) ]) }) }) }),
@@ -126,7 +129,7 @@ export const configurationDocumentSchema = z.strictObject({
   if (document.executionEnvironments.filter(item => item.kind === "local").length > 1) context.addIssue({ code: "custom", path: ["executionEnvironments"], message: "Only one local environment is supported." });
   const backends = new Map(document.backends.map(item => [item.id, item]));
   const environments = new Map(document.executionEnvironments.map(item => [item.id, item]));
-  const targetBackendKinds = { pi_sdk: "pi", codex_app_server: "codex_app_server", claude_agent_sdk: "claude_agent_sdk", grok_acp: "grok_build", opencode_http: "opencode" } as const;
+  const targetBackendKinds = { pi_sdk: "pi", pi_rpc: "pi_native", codex_app_server: "codex_app_server", claude_agent_sdk: "claude_agent_sdk", grok_acp: "grok_build", opencode_http: "opencode" } as const;
   for (const [index, target] of document.targets.entries()) {
     const backend = backends.get(target.backendInstanceId);
     const environment = environments.get(target.executionEnvironmentId);
@@ -143,6 +146,7 @@ export const configurationDocumentSchema = z.strictObject({
     }
     if (environment !== undefined && environment.kind !== "local" && target.kind === "grok_acp") context.addIssue({ code: "custom", path: ["targets", index], message: "Grok requires a local environment." });
     if (environment?.kind === "outbound" && environment.platform === "win32" && target.kind === "claude_agent_sdk" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "Claude requires a macOS or Linux execution host." });
+    if (environment?.kind === "outbound" && environment.platform === "win32" && target.kind === "pi_rpc" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "Pi requires a macOS or Linux execution host." });
     if (environment !== undefined && environment.kind !== "local" && target.enabled && target.kind === "pi_sdk" &&
       (environment.operations.kind !== "sidecar" || !environment.operations.enabledCapabilities.includes("workspace_tools"))) context.addIssue({ code: "custom", path: ["targets", index], message: "Remote Pi requires workspace tools and context capabilities." });
   }

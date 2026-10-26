@@ -21,6 +21,8 @@ export default defineConfig({
       "tests/e2e/**",
       "tests/real-pi/**",
       "tests/real-pi-cli/**",
+      "tests/real-pi-native/**",
+      "tests/live-pi-native/**",
       "tests/real-codex-agent-tools/**",
       "tests/real-claude/**",
       "tests/real-grok/**",

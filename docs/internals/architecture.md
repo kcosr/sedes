@@ -42,7 +42,8 @@ ConversationActorManager ── one serialized owner per active Sedes thread
         ▼
 AgentBackendRegistry ── normalized backend contracts
         │
-        ├── Pi backend ───── Pi SDK
+        ├── Pi SDK backend ─ embedded Pi SDK
+        ├── Pi backend ───── owned native RPC process, local or persistent sidecar
         ├── Codex backend ── Codex app-server
         ├── Claude backend ─ local worker or persistent SSH/outbound runtime / Claude Code CLI
         ├── Grok backend ─── Grok ACP
@@ -66,7 +67,7 @@ Provider state
 
 [`src/server/backends/compiled-module-catalog.ts`](../../src/server/backends/compiled-module-catalog.ts)
 is the sole shared production composition point that imports provider modules.
-It compiles Pi, Codex, Claude, Grok, and OpenCode. Shared services depend on normalized
+It compiles Pi SDK, Pi, Codex, Claude, Grok, and OpenCode. Shared services depend on normalized
 module and driver contracts and never import provider SDK or protocol types.
 
 ## Authority and ownership
@@ -413,10 +414,12 @@ across main-server and carrier loss; provider-native history remains canonical.
 Runtime admission grants no Files, attachment, CLI, workspace tool, or terminal
 authority. See [Claude internals](backends/claude.md).
 
-For a Pi SSH target, Pi itself still runs on the Sedes host. Only the closed
+For a Pi SDK SSH target, the SDK still runs on the Sedes host. Only the closed
 workspace tools and bounded context operations cross the sidecar. This is not
 a remote Pi runtime. See [Pi remote workspace tools](pi-remote-workspace-tools.md)
 and [workspace files](workspace-files.md).
+Native Pi instead runs its owned RPC process and native configuration on the
+selected local or persistent SSH/outbound host; see [native Pi internals](backends/pi-native.md).
 
 ## Persistence
 

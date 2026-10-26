@@ -1,3 +1,4 @@
+import { canonicalPiStoreDirectory } from "./pi-store-directory.js";
 import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
 import { createPiCancelledRetryMarker, readPiCancelledRetryMarker } from "./pi-cancelled-retry-marker.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -15,6 +16,7 @@ import {
   type SessionEntry,
   type SessionInfo,
 } from "@earendil-works/pi-coding-agent";
+import { acquirePiSessionWriterLock, type PiSessionWriterLock } from "./pi-session-writer-lock.js";
 import type { ValidatedWorkspace } from "../../execution/contracts.js";
 import { BackendError } from "../contracts.js";
 import {
@@ -197,6 +199,33 @@ export interface PiStoredConversationWithAncestry extends PiStoredConversation {
 export interface PiReservedConversation {
   readonly manager: SessionManager;
   readonly opaqueBindingDetail: string;
+}
+
+/** Native file loading repairs missing newlines even with persistence disabled.
+ * Load bounded bytes ourselves and supply the public in-memory constructor. */
+async function readOnlySessionManager(sessionFile: string, cwd: string): Promise<SessionManager> {
+  const entries = await readHistoryEntries(sessionFile, new AbortController().signal);
+  if (entries[0]?.type !== "session" || entries.slice(1).some(entry => entry.type === "session")) throw historyInvalid("pi_history_entry_invalid");
+  const manager = SessionManager.inMemory(cwd, undefined, entries);
+  // A passive manager has no backing file. Preserve the separately validated
+  // source identity through its public getter without invoking the file loader.
+  manager.getSessionFile = () => sessionFile;
+  const seen = new Set<string>();
+  for (const entry of manager.getEntries()) {
+    if (!entry.id || seen.has(entry.id) || (entry.parentId !== null && !seen.has(entry.parentId))) throw historyInvalid("pi_history_entry_invalid");
+    seen.add(entry.id);
+  }
+  return manager;
+}
+
+const sdkNativeEntryTypes = new Set(["message", "thinking_level_change", "model_change", "usage", "compaction", "branch_summary", "custom", "custom_message", "label", "session_info"]);
+const sdkNativeMessageRoles = new Set(["user", "assistant", "toolResult", "system", "bashExecution", "custom", "branchSummary", "compactionSummary"]);
+function assertSdkWritableContext(manager: SessionManager): void {
+  const branch = manager.getBranch();
+  if (manager.getHeader()?.version !== 3 || branch.some(entry => !sdkNativeEntryTypes.has(entry.type) ||
+      (entry.type === "message" && !sdkNativeMessageRoles.has(entry.message.role)))) {
+    throw backendError("rejected", "This session contains native Pi context features unsupported by the embedded SDK. Open it with the Pi native backend.", "pi_sdk_native_context_unsupported");
+  }
 }
 
 function backendError(
@@ -567,6 +596,13 @@ export class PiSessionStore {
     }
   }
 
+  async resolveSessionDirectory(workspace: ValidatedWorkspace): Promise<string> {
+    this.#assertWorkspacePath(workspace.canonicalPath);
+    const directory = this.#sessionDirectory ?? path.join(getAgentDir(), "sessions",
+      `--${workspace.canonicalPath.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
+    return canonicalPiStoreDirectory(directory);
+  }
+
   bindingDetail(backendConversationId: string, sessionFile?: string): string {
     return serializePiBindingDetail(backendConversationId, sessionFile);
   }
@@ -655,11 +691,7 @@ export class PiSessionStore {
     for (const conversation of conversations) {
       await scheduler.yield();
       controls.signal?.throwIfAborted();
-      const manager = SessionManager.open(
-        conversation.sessionFile,
-        this.#sessionDirectory,
-        workspace.canonicalPath,
-      );
+      const manager = await readOnlySessionManager(conversation.sessionFile, workspace.canonicalPath);
       const parentPath = manager.getHeader()?.parentSession;
       const canonicalParent = parentPath
         ? await realpath(parentPath).catch(() => undefined)
@@ -736,11 +768,7 @@ export class PiSessionStore {
     for (const { parent, children } of parentReferences.values()) {
       await scheduler.yield();
       controls.signal?.throwIfAborted();
-      const source = SessionManager.open(
-        parent.sessionFile,
-        this.#sessionDirectory,
-        workspace.canonicalPath,
-      );
+      const source = await readOnlySessionManager(parent.sessionFile, workspace.canonicalPath);
       const activeBranch = source.getBranch();
       const leaves = new Map<
         string,
@@ -813,11 +841,7 @@ export class PiSessionStore {
       this.#pendingCreationOperations.delete(
         `${workspace.canonicalPath}\0${backendConversationId}`,
       );
-      const manager = SessionManager.open(
-        existing.sessionFile,
-        this.#sessionDirectory,
-        workspace.canonicalPath,
-      );
+      const manager = await readOnlySessionManager(existing.sessionFile, workspace.canonicalPath);
       if (
         applicationOperationId &&
         !manager
@@ -885,6 +909,7 @@ export class PiSessionStore {
       );
     }
     await mkdir(path.dirname(sessionFile), { recursive: true, mode: 0o700 });
+    const writer = await acquirePiSessionWriterLock(sessionFile);
     try {
       await writeFile(
         sessionFile,
@@ -893,6 +918,11 @@ export class PiSessionStore {
           .join("\n")}\n`,
         { encoding: "utf8", flag: "wx", mode: 0o600 },
       );
+      const canonicalSessionFile = await realpath(sessionFile);
+      return {
+        manager: SessionManager.open(canonicalSessionFile, this.#sessionDirectory, workspace.canonicalPath),
+        opaqueBindingDetail: serializePiBindingDetail(backendConversationId, canonicalSessionFile),
+      };
     } catch (cause) {
       if ((cause as NodeJS.ErrnoException).code === "EEXIST") {
         throw backendError(
@@ -906,20 +936,9 @@ export class PiSessionStore {
         "Pi could not persist the conversation reservation.",
         "pi_session_reservation_write_failed",
       );
+    } finally {
+      await writer.release();
     }
-    const canonicalSessionFile = await realpath(sessionFile);
-    const persistedManager = SessionManager.open(
-      canonicalSessionFile,
-      this.#sessionDirectory,
-      workspace.canonicalPath,
-    );
-    return {
-      manager: persistedManager,
-      opaqueBindingDetail: serializePiBindingDetail(
-        backendConversationId,
-        canonicalSessionFile,
-      ),
-    };
   }
 
   /**
@@ -1043,11 +1062,7 @@ export class PiSessionStore {
           "pi_binding_path_mismatch",
         );
       }
-      return SessionManager.open(
-        existing.sessionFile,
-        this.#sessionDirectory,
-        workspace.canonicalPath,
-      );
+      return readOnlySessionManager(existing.sessionFile, workspace.canonicalPath);
     }
     throw backendError(
       "not_found",
@@ -1056,17 +1071,37 @@ export class PiSessionStore {
     );
   }
 
+  async openWriter(
+    workspace: ValidatedWorkspace,
+    backendConversationId: string,
+    opaqueBindingDetail: string,
+  ): Promise<{ readonly manager: SessionManager; readonly writer: PiSessionWriterLock }> {
+    const observed = await this.open(workspace, backendConversationId, opaqueBindingDetail);
+    const sessionFile = observed.getSessionFile();
+    if (!sessionFile) throw new Error("pi_session_file_missing");
+    const writer = await acquirePiSessionWriterLock(sessionFile);
+    try {
+      // Re-read after acquiring ownership, before native migration or writes.
+      const current = await readOnlySessionManager(sessionFile, workspace.canonicalPath);
+      assertSdkWritableContext(current);
+      const manager = SessionManager.open(sessionFile, this.#sessionDirectory, workspace.canonicalPath);
+      if (manager.getSessionId() !== backendConversationId) {
+        throw backendError("rejected", "The Pi conversation changed while opening it.", "pi_binding_path_mismatch");
+      }
+      return { manager, writer };
+    } catch (cause) {
+      await writer.release();
+      throw cause;
+    }
+  }
+
   async openPersisted(
     workspace: ValidatedWorkspace,
     backendConversationId: string,
   ): Promise<SessionManager | undefined> {
     const existing = await this.#findById(workspace, backendConversationId);
     return existing
-      ? SessionManager.open(
-          existing.sessionFile,
-          this.#sessionDirectory,
-          workspace.canonicalPath,
-        )
+      ? readOnlySessionManager(existing.sessionFile, workspace.canonicalPath)
       : undefined;
   }
 
@@ -1125,18 +1160,29 @@ export class PiSessionStore {
     const canonicalSource = await realpath(sourceFile);
     const inheritedSettingsFingerprint =
       branchSettingsFingerprint(inheritedSettings);
+    const replayExpectation = {
+      canonicalSource,
+      sourceBackendConversationId,
+      targetBackendConversationId: targetId,
+      sourceLeafEntryId,
+      applicationOperationId,
+      inheritedSettingsFingerprint,
+      toolProvenanceKey,
+    };
     const existing = await this.#findById(targetWorkspace, targetId);
     if (existing) {
-      return this.#validateBranchReplay(targetWorkspace, existing, {
-        canonicalSource,
-        sourceBackendConversationId,
-        targetBackendConversationId: targetId,
-        sourceLeafEntryId,
-        applicationOperationId,
-        inheritedSettingsFingerprint,
-        toolProvenanceKey,
-      });
+      return this.#validateBranchReplay(targetWorkspace, existing, replayExpectation);
     }
+    const recoverPublishedReplay = async (crossedSubmissionBoundary: boolean) => {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const raced = await this.#findById(targetWorkspace, targetId);
+        if (raced) {
+          return this.#validateBranchReplay(targetWorkspace, raced, replayExpectation, crossedSubmissionBoundary);
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+      return undefined;
+    };
 
     const target = SessionManager.create(
       targetWorkspace.canonicalPath,
@@ -1202,34 +1248,31 @@ export class PiSessionStore {
       });
     }
     await mkdir(path.dirname(targetFile), { recursive: true, mode: 0o700 });
+    let writer: PiSessionWriterLock;
+    try {
+      writer = await acquirePiSessionWriterLock(targetFile);
+    } catch {
+      // A concurrent idempotent reservation may publish the exact result. It
+      // can be read without becoming a second writer or stealing ownership.
+      const replay = await recoverPublishedReplay(false);
+      if (replay) return replay;
+      throw backendError("internal", "Pi could not acquire the branched conversation writer.", "pi_branch_write_failed");
+    }
     try {
       await writeFile(
         targetFile,
         `${[header, ...entries].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
         { encoding: "utf8", flag: "wx", mode: 0o600 },
       );
+      const canonicalFile = await realpath(targetFile);
+      return {
+        manager: SessionManager.open(canonicalFile, this.#sessionDirectory, targetWorkspace.canonicalPath),
+        opaqueBindingDetail: serializePiBindingDetail(targetId, canonicalFile),
+      };
     } catch (cause) {
       if ((cause as NodeJS.ErrnoException).code === "EEXIST") {
-        for (let attempt = 0; attempt < 10; attempt += 1) {
-          const raced = await this.#findById(targetWorkspace, targetId);
-          if (raced) {
-            return this.#validateBranchReplay(
-              targetWorkspace,
-              raced,
-              {
-                canonicalSource,
-                sourceBackendConversationId,
-                targetBackendConversationId: targetId,
-                sourceLeafEntryId,
-                applicationOperationId,
-                inheritedSettingsFingerprint,
-                toolProvenanceKey,
-              },
-              true,
-            );
-          }
-          await new Promise<void>((resolve) => setTimeout(resolve, 10));
-        }
+        const replay = await recoverPublishedReplay(true);
+        if (replay) return replay;
         throw backendError(
           "rejected",
           "The requested Pi branch ID is already in use.",
@@ -1243,18 +1286,9 @@ export class PiSessionStore {
         "pi_branch_write_failed",
         true,
       );
+    } finally {
+      await writer.release();
     }
-    return {
-      manager: SessionManager.open(
-        await realpath(targetFile),
-        this.#sessionDirectory,
-        targetWorkspace.canonicalPath,
-      ),
-      opaqueBindingDetail: serializePiBindingDetail(
-        targetId,
-        await realpath(targetFile),
-      ),
-    };
   }
 
   async #validateBranchReplay(
@@ -1271,11 +1305,7 @@ export class PiSessionStore {
     },
     crossedSubmissionBoundary = false,
   ): Promise<PiReservedConversation> {
-    const manager = SessionManager.open(
-      existing.sessionFile,
-      this.#sessionDirectory,
-      workspace.canonicalPath,
-    );
+    const manager = await readOnlySessionManager(existing.sessionFile, workspace.canonicalPath);
     const headerParent = manager.getHeader()?.parentSession;
     const canonicalParent = headerParent
       ? await realpath(headerParent).catch(() => undefined)

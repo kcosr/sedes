@@ -16,7 +16,7 @@ const descriptors = [
   {
     toolName: "sedes_agent_context",
     toolId: "agent.context",
-    schemaVersion: 3,
+    schemaVersion: 4,
     readOnly: true,
   },
   {

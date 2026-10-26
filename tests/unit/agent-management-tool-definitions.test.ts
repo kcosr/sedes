@@ -63,7 +63,8 @@ describe("agent management tool definitions", () => {
       "task.update",
     ]);
     expect(registry.get("workspace.list", 5).schemaVersion).toBe(5);
-    expect(registry.get("thread.list", 7).schemaVersion).toBe(7);
+    expect(registry.get("thread.list", 8).schemaVersion).toBe(8);
+    expect(() => registry.get("thread.list", 7)).toThrow();
     expect(registry.get("thread.create", 6).schemaVersion).toBe(6);
     expect(() => registry.get("thread.create", 5)).toThrow();
     expect(registry.get("task.list", 5).schemaVersion).toBe(5);
@@ -131,7 +132,7 @@ describe("agent management tool definitions", () => {
     ).toBe(false);
     expect(registry.validatesInput("environment.list", 1, {})).toBe(true);
     expect(
-      registry.validatesInput("thread.list", 7, {
+      registry.validatesInput("thread.list", 8, {
         scope: { kind: "all_allowed_environments" },
         query: "user docs",
         lifecycle: "active",
@@ -140,12 +141,12 @@ describe("agent management tool definitions", () => {
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("thread.list", 7, {
+      registry.validatesInput("thread.list", 8, {
         scope: { kind: "workspace" },
       }),
     ).toBe(false);
     expect(
-      registry.validatesInput("thread.list", 7, { titleFilter: "obsolete" }),
+      registry.validatesInput("thread.list", 8, { titleFilter: "obsolete" }),
     ).toBe(false);
     expect(
       registry.validatesInput("environment.list", 1, { environmentId: "x" }),

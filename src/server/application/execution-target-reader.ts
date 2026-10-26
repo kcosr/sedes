@@ -337,6 +337,7 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
             };
       }
       case "codex_app_server":
+      case "pi_native":
       case "claude_agent_sdk":
       case "grok_build":
       case "opencode":

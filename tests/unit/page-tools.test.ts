@@ -36,7 +36,7 @@ describe("HTML page canonical tools", () => {
     for (const definition of definitions) {
       registry.register(definition);
       expect(definition.callerEligibility).toEqual(["thread_agent"]);
-      expect(definition.exposure.adapters).toEqual(["pi_sdk", "mcp", "http", "cli"]);
+      expect(definition.exposure.adapters).toEqual(["pi_sdk", "pi_rpc", "mcp", "http", "cli"]);
       expect(definition.adapters.pi?.name).toBe(definition.adapters.mcp?.name);
     }
     expect(registry.validatesInput("page.publish", 1, { path: "/work/page.html", title: "Phone", viewport: { width: 390 } })).toBe(true);

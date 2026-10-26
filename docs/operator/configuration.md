@@ -23,7 +23,7 @@ builds; `npm start` sets production mode for the application.
 - [Local and SSH execution environments](#execution-environments)
 - [Backends, targets, and model policy](#backends-and-targets)
 - [Multiple targets](#multiple-backends-and-targets)
-- [Pi](#pi), [Claude](#claude), [Grok](#grok), and [Codex](#codex)
+- [Pi SDK](#pi-sdk), [Pi native](#pi-native), [Claude](#claude), [Grok](#grok), and [Codex](#codex)
 - [Web search](#web-search-provider)
 - [Application terminal policy](#application-terminal-policy)
 - [Runtime lifecycle, apply, and restart](#runtime-lifecycle-apply-and-restart)
@@ -584,7 +584,7 @@ environment. The server derives the initial CWD from the thread workspace.
 That directory is not a sandbox; the shell may leave it with the operating
 system account's normal authority.
 
-### Pi
+### Pi SDK
 
 Select **Pi SDK** in **Settings → Backends**, add a target bound to
 one environment, and choose its model policy. The internal backend and target
@@ -593,9 +593,25 @@ settings, and reasoning stay on main Sedes.
 
 A remote Pi SDK target requires the sidecar's workspace tool/context pair.
 Files, attachment staging, and bounded remote skills need their independent
-capabilities. No remote Pi reasoning runtime or Pi CLI backend is implemented.
+capabilities. The separate native Pi backend below moves the complete runtime
+to the selected execution host.
 See [Pi SDK](backends/pi.md) and
 [remote workspace tools](../internals/pi-remote-workspace-tools.md).
+
+### Pi native
+
+Select **Pi** in **Settings → Backends** for the installed Pi **1.4.0** CLI.
+Backend kind `pi_native` and target kind `pi_rpc` run locally or through a
+persistent SSH/outbound sidecar on Linux/macOS. Authenticate the execution
+host account; native configuration, MCP, and sessions stay on that host.
+
+Optional `executablePath`, `agentDirectory`, and `sessionDirectory` fields are
+canonical absolute paths on the execution host. `projectTrusted` defaults to
+false; `initializationTimeoutMs` defaults to 30000 and accepts 1000–120000.
+Target defaults accept `provider` and `model` together, plus an optional
+`thinkingLevel`; model policy still applies. See the
+[native Pi guide](backends/pi-native.md) for tool policy, native MCP setup,
+shared-store writer locks, and runtime recovery.
 
 ### Claude
 

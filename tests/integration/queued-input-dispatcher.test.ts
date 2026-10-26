@@ -10,6 +10,7 @@ import type {
   SubmitTurnResult,
 } from "../../src/server/backends/contracts.js";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
+import { importLegacyDatabaseConfigurationFixture } from "../support/database-configuration-fixture.js";
 import { serializePiBindingDetail } from "../../src/server/backends/pi/pi-session-store.js";
 import {
   type QueueDispatchScheduler,
@@ -132,6 +133,10 @@ function createFixture(): Fixture {
     appliedAt: 300,
   });
   applyDatabaseMigrations(database, backendNormalizedMigrations);
+  importLegacyDatabaseConfigurationFixture(database, {
+    configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "queue-dispatcher",
+  }, 310);
+  new InventoryRepository(database).updateEnvironmentAvailability(scope, environment.id, { available: true, now: 310 });
   const bindings = new ConversationBindingRepository(database);
   const pi = new PiConversationRepository(database);
   const automation = new AutomationRepository(database);

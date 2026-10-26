@@ -1270,7 +1270,7 @@ function composeCapabilities(input: {
       return input.backendCapabilities.actions.includes("compact");
     }
     if (operation.id === "interrupt") {
-      return backendCanSubmit || backendCanSteer;
+      return backendCanSubmit || backendCanSteer || (interactive && bound && turnControllable);
     }
     if (operation.id === "discard_fork") {
       return input.recovery?.kind === "conversation_creation" &&

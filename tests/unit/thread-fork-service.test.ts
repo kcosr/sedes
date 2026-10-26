@@ -28,6 +28,7 @@ import { DatabaseApplicationThreadSummaryReader } from "../../src/server/applica
 import { DatabaseThreadApplicationRecoveryReader } from "../../src/server/conversations/database-conversation-adapters.js";
 import type { ThreadRuntimeCoordinator } from "../../src/server/events/thread-runtime-coordinator.js";
 import { ThreadForkService } from "../../src/server/conversations/thread-fork-service.js";
+import { PiNativeThreadRepository } from "../../src/server/backends/pi/native/pi-native-thread-repository.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
 import { codexBackendTurnId } from "../../src/server/backends/codex/codex-history-projector.js";
 import { OverlayRepository } from "../support/schema9/overlay-repository.js";
@@ -1841,6 +1842,41 @@ describe("ThreadForkService", () => {
       expect(
         current.bindings.getBinding(current.scope, first.childThreadId),
       ).toMatchObject({ backendConversationId: "exact-provider-child" });
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("removes native Pi overlays when a fork is proven uncreated", async () => {
+    const current = fixture();
+    try {
+      current.database.transaction(() => {
+        current.database.pragma("defer_foreign_keys = ON");
+        current.database.prepare("UPDATE agent_backend_instances SET kind = 'pi_native' WHERE id = 'pi-primary'").run();
+        current.database.prepare("UPDATE agent_connection_profiles SET backend_kind = 'pi_native', kind = 'pi_rpc' WHERE backend_instance_id = 'pi-primary'").run();
+      })();
+      const repository = new PiNativeThreadRepository(current.database);
+      current.branchConversation.mockImplementation(async input => {
+        const attempt = current.database.prepare(`SELECT application_thread_id AS threadId, attempt_id AS attemptId
+          FROM conversation_creation_attempts WHERE backend_creation_correlation = ?`)
+          .get(input.requestedBackendConversationId) as { threadId: string; attemptId: string };
+        repository.initializeSettings(current.scope, attempt.threadId, { toolMode: "full" });
+        repository.prepareOperation(current.scope, attempt.threadId, {
+          operationId: "fork-operation", kind: "action", requestHash: "a".repeat(64),
+        });
+        repository.createSubmissionDetails(current.scope, attempt.threadId, {
+          operationId: "fork-submission", creationAttemptId: attempt.attemptId,
+        });
+        throw new BackendError({ category: "rejected", retryable: false,
+          crossedSubmissionBoundary: false, safeMessage: "provider rejected branch" });
+      });
+      const result = await current.service.forkManual(current.manual("native-proven-uncreated"));
+      expect(result.status).toBe("aborted");
+      expect(current.bindings.findThreadDefinition(current.scope, result.childThreadId)).toBeUndefined();
+      for (const table of ["pi_native_thread_settings", "pi_native_submission_details", "pi_native_operations"]) {
+        expect(current.database.prepare(`SELECT count(*) AS count FROM ${table} WHERE application_thread_id = ?`)
+          .get(result.childThreadId)).toEqual({ count: 0 });
+      }
     } finally {
       current.database.close();
     }

@@ -27,7 +27,6 @@ import {
 import { isPiToolAccessMode } from "./pi-tool-access.js";
 import { encodePiModelSetting } from "./pi-thread-presentation-provider.js";
 
-const PI_SAVED_AGENT_TYPE_ID = savedAgentBackendTypeIdSchema.parse("pi");
 const PI_SAVED_AGENT_OVERRIDE_SCHEMA_VERSION = 1;
 
 type PiResolvedValue = {
@@ -39,13 +38,9 @@ type PiResolvedValue = {
 
 /** Pi's complete compiled SavedAgent contribution. */
 export class PiSavedAgentAdapter implements SavedAgentBackendAdapter {
-  readonly typeId = PI_SAVED_AGENT_TYPE_ID;
-  readonly backendKind = "pi" as const;
-  readonly presentation = Object.freeze({
-    typeId: PI_SAVED_AGENT_TYPE_ID,
-    label: boundDisplayText("Pi SDK"),
-    brand: BACKEND_BRANDS.pi,
-  });
+  readonly typeId;
+  readonly backendKind;
+  readonly presentation;
   readonly overrideSchemaVersion = PI_SAVED_AGENT_OVERRIDE_SCHEMA_VERSION;
   readonly #configuration: PiSavedAgentConfiguration;
   readonly #persistence: PiBackendThreadPersistenceAdapter;
@@ -54,11 +49,16 @@ export class PiSavedAgentAdapter implements SavedAgentBackendAdapter {
   constructor(input: {
     readonly preferences: ConnectionSettingPreferenceRepository;
     readonly persistence: PiBackendThreadPersistenceAdapter;
+    readonly profile?: { readonly backendKind: "pi" | "pi_native"; readonly connectionKind: "pi_sdk" | "pi_rpc"; readonly label: string };
+    readonly resolveDefaults?: PiSavedAgentConfiguration["resolveDefaults"];
   }) {
+    this.backendKind = input.profile?.backendKind ?? "pi";
+    this.typeId = savedAgentBackendTypeIdSchema.parse(this.backendKind);
+    this.presentation = Object.freeze({ typeId: this.typeId, label: boundDisplayText(input.profile?.label ?? "Pi SDK"), brand: BACKEND_BRANDS.pi });
     if (input.preferences.database !== input.persistence.database) {
       throw new Error("pi_saved_agent_database_mismatch");
     }
-    this.#configuration = new PiSavedAgentConfiguration(input.preferences);
+    this.#configuration = new PiSavedAgentConfiguration(input.preferences, input.profile?.connectionKind ?? "pi_sdk", input.resolveDefaults);
     this.#persistence = input.persistence;
     this.#preferences = input.preferences;
   }
@@ -303,7 +303,7 @@ export class PiSavedAgentAdapter implements SavedAgentBackendAdapter {
 
   #assertContext(input: SavedAgentBackendContextInput): void {
     if (
-      input.connection.kind !== "pi_sdk" ||
+      input.connection.kind !== this.#configuration.connectionKind ||
       !input.connection.enabled ||
       input.connection.tenantId !== input.scope.tenantId ||
       input.connection.ownerPrincipalId !== input.scope.principalId ||

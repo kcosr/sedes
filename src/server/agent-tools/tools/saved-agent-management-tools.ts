@@ -147,7 +147,7 @@ const writeExecution = (
   uncertainExternalOutcome: true,
 });
 
-const exposure = { adapters: ["pi_sdk", "mcp", "http", "cli"] } as const;
+const exposure = { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] } as const;
 
 function scope(context: {
   readonly tenantId: string;

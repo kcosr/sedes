@@ -13,6 +13,7 @@ export function backendLifecycleActions(
         : definition.enabled ? ["connect", ...(remote ? ["disconnect" as const] : []), "start", "stop", "restart"]
           : [...(remote ? ["disconnect" as const] : []), "stop"];
     case "pi":
+    case "pi_native":
     case "codex_app_server":
     case "claude_agent_sdk":
     case "grok_build":

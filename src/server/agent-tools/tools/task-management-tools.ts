@@ -125,7 +125,7 @@ const writeExecution = (concurrencyClass: string) => ({
   maximumInputBytes: 1024 * 1024,
   uncertainExternalOutcome: true,
 });
-const exposure = { adapters: ["pi_sdk", "mcp", "http", "cli"] as const };
+const exposure = { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] as const };
 
 const taskSummaryPageSchema = Type.Object(
   {

@@ -75,6 +75,9 @@ const localPath = specification.slice(0, separator).replaceAll("%%", "%");
 const remotePath = specification.slice(separator + 1).replaceAll("%%", "%");
 const server = net.createServer((local) => {
   const remote = net.createConnection({ path: remotePath });
+  // A failed forward closes that channel, not the OpenSSH carrier process.
+  remote.on("error", () => local.destroy());
+  local.on("error", () => remote.destroy());
   local.pipe(remote).pipe(local);
 });
 server.listen(localPath, () => fs.chmodSync(localPath, 0o600));

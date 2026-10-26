@@ -74,7 +74,7 @@ function exactPiPresentation(
 ): NonNullable<AgentToolContractArtifact["adapters"]["pi"]> {
   const presentation = artifact.adapters.pi;
   if (
-    artifact.artifactVersion !== 2 ||
+    artifact.artifactVersion !== 3 ||
     !artifact.exposure.adapters.includes("pi_sdk") ||
     !presentation ||
     !reservedToolNamePattern.test(presentation.name)

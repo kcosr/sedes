@@ -1843,7 +1843,10 @@ class LocalOwnedProcessChannel implements EnvironmentOwnedProcessChannel {
   }
 
   close(_reason: string): Promise<void> {
-    this.#closePromise ??= this.#performClose();
+    this.#closePromise ??= this.#performClose().catch(error => {
+      this.#closePromise = undefined;
+      throw error;
+    });
     return this.#closePromise;
   }
 

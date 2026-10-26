@@ -1,6 +1,7 @@
 import { BackendModuleCatalog } from "./module-catalog.js";
 import { CodexBackendModule } from "./codex/codex-backend-module.js";
 import { PiBackendModule } from "./pi/pi-backend-module.js";
+import { PiNativeBackendModule } from "./pi/native/pi-native-backend-module.js";
 import { ClaudeBackendModule } from "./claude/claude-backend-module.js";
 import { GrokBackendModule } from "./grok/grok-backend-module.js";
 import { OpenCodeBackendModule } from "./opencode/opencode-backend-module.js";
@@ -11,6 +12,7 @@ import { OpenCodeBackendModule } from "./opencode/opencode-backend-module.js";
  */
 export const compiledBackendModuleCatalog = new BackendModuleCatalog([
   new PiBackendModule(),
+  new PiNativeBackendModule(),
   new CodexBackendModule(),
   new ClaudeBackendModule(),
   new GrokBackendModule(),

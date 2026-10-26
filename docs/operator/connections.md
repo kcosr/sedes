@@ -19,8 +19,9 @@ separate authority:
 - Electron's managed SSH connection forwards the Sedes HTTP port only. It does
   not start a remote Sedes daemon, and it is unrelated to an SSH execution
   environment: the two may use different hosts, accounts, and keys.
-- An SSH or outbound execution environment does not move Pi's model loop,
-  credentials, or conversation store off the Sedes host.
+- Pi SDK keeps its model loop, credentials, and conversation store on the
+  Sedes host. The separate Pi native backend runs all three on the selected
+  local, SSH, or outbound execution host.
 - Pairing a client authenticates it to the one Sedes principal. It grants no
   provider authority and does not change any execution grant.
 
@@ -61,6 +62,7 @@ each client as described in [Pairing clients](operations.md#pairing-clients).
 ```mermaid
 flowchart LR
   S[Sedes server process] --> PI[Pi SDK in-process<br/>Sedes owns]
+  S --> PIN[Native Pi RPC process<br/>Sedes owns]
   S --> GK[Grok ACP over stdio<br/>Sedes owns the process]
   S --> CXO[Codex app-server over stdio<br/>Sedes owns the process and store lock]
   S --> CXE[Codex app-server over UDS, ws, or wss<br/>operator owns the daemon]
@@ -68,6 +70,7 @@ flowchart LR
   S --> SC[Persistent sidecar on an SSH or outbound host<br/>sidecar owns its runtimes]
   SC --> RCX[Codex app-server on that host]
   SC --> RCL[Claude runtime on that host]
+  SC --> RPI[Native Pi RPC process on that host]
   S --> OCL[OpenCode v2 on local Linux<br/>owned or external HTTP/SSE]
   SC --> OCR[OpenCode v2 on Linux host<br/>owned or external HTTP/SSE]
 ```
@@ -100,7 +103,8 @@ and provider-native connections. See
 
 | Backend | Provider runtime location | Transport options | Execution environments | What the route grants |
 | --- | --- | --- | --- | --- |
-| [Pi](backends/pi.md) | Always in the Sedes server process (pinned SDK) | In-process; nothing to configure | Local (direct, or Bubblewrap isolated on Linux); SSH sidecar; outbound sidecar | Remote workspaces need the `workspace_tools` and `workspace_context` pair, with `workspace_skills` optional. No Sedes CLI on remote or isolated workspaces: only the Native agent-tool modes. No managed TUI. |
+| [Pi SDK](backends/pi.md) | Always in the Sedes server process (pinned SDK) | In-process; nothing to configure | Local (direct, or Bubblewrap isolated on Linux); SSH sidecar; outbound sidecar | Remote workspaces need the `workspace_tools` and `workspace_context` pair, with `workspace_skills` optional. No Sedes CLI on remote or isolated workspaces: only the Native agent-tool modes. No managed TUI. |
+| [Pi](backends/pi-native.md) | Sedes host or persistent sidecar host; Linux/macOS | Owned native Pi 1.4.0 RPC stdio with managed companion | Local, SSH sidecar, outbound sidecar | Native configuration, MCP and history stay on the execution host. Files, attachments, terminals and CLI tools require their own grants. No managed TUI or isolated workspace. |
 | [Codex](backends/codex.md) | Sedes host, or the persistent sidecar's host | Owned stdio; external Unix-socket WebSocket; authenticated `ws://` on literal loopback or `wss://`. A sidecar-hosted runtime uses the same three, resolved on the execution host | Local (Linux x64, macOS arm64/x64, or Windows arm64/x64 through Electron Managed Local); SSH sidecar; outbound sidecar | Managed TUI on external UDS/TCP connections with a `catalog` model policy, plus local PTY support or a sidecar that negotiated the managed-TUI operations. Never on owned stdio. Files, attachments, terminals, and agent tools (CLI or Native MCP) are separate grants. |
 | [Claude](backends/claude.md) | Managed worker on the Sedes host, or the persistent sidecar's host | Sedes-owned worker child process locally; the same runtime protocol carried over SSH stdio or the outbound connector | Local and remote on Linux/macOS only; native Windows Claude is unsupported | Provider terminals and managed TUI are unsupported for every route. Files, attachments, and the agent-tool relay (CLI or Native MCP) are separate grants. |
 | [OpenCode v2](backends/opencode.md) | Sedes host or persistent sidecar host; Linux, same native account | Owned stdio lifetime/readiness plus HTTP/SSE, or an external authenticated loopback HTTP/SSE endpoint resolved on that host | Local, SSH sidecar, outbound sidecar; stable stock `opencode2` 2.1.1 or newer (tested through 2.1.1) | Shared runtime and evidence recovery. Native Progressive MCP for admitted roots; CLI additionally requires owned mode. Remote tools, Files, and attachments require their own grants. No managed TUI. |
@@ -114,14 +118,14 @@ execution environment grants is the same for every backend that can run there:
 | --- | --- | --- |
 | Directory browsing, Files, Compare | Within the saved local workspace roots | `directory_browser` and `workspace_files` |
 | Composer attachments | Within the saved local workspace roots | `composer_attachments` |
-| Pi workspace tools and context | Built in | `workspace_tools` plus `workspace_context`; `workspace_skills` for remote skills |
-| Sedes agent-tool CLI | Eligible local Pi, Codex, Claude, and Grok threads | `agent_tools_cli`, for Codex and Claude only |
+| Pi SDK workspace tools and context | Built in | `workspace_tools` plus `workspace_context`; `workspace_skills` for remote skills |
+| Sedes agent-tool CLI | Eligible local Pi, Pi SDK, Codex, Claude, Grok, and owned OpenCode threads | `agent_tools_cli`, for Pi, Codex, Claude, and qualified owned OpenCode threads |
 | Application terminals | PTY from the service account | `interactive_terminal` plus native PTY assets on that host; see [Supported environments](terminals.md#supported-environments) |
 | Codex managed TUI | External UDS/TCP connection with PTY support | Negotiated `codex_managed_tui` operations on the sidecar |
 
 Combinations not listed above are unsupported: remote Grok, managed TUI over
-owned stdio, native Windows Claude, a remote Sedes CLI for Pi, forks of
-isolated Pi workspaces, and automatic fallback between transports.
+owned stdio, native Windows Claude or Pi, a remote Sedes CLI for Pi SDK, forks of
+isolated Pi SDK workspaces, and automatic fallback between transports.
 
 ## Recipes
 

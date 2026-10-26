@@ -1,7 +1,9 @@
 # Pi SDK backend
 
-The Pi backend embeds `@earendil-works/pi-coding-agent` 0.86.0 directly in the
-Sedes server. Sedes does not launch the Pi CLI or use Pi RPC mode.
+The Pi SDK backend embeds `@earendil-works/pi-coding-agent` 0.86.0 directly in the
+Sedes server. This backend does not launch the Pi CLI or use Pi RPC mode.
+For the separately installed Pi 1.4.0 runtime, including remote execution and
+native MCP configuration, use the [Pi native backend](pi-native.md).
 
 Pi is the most direct integration for its native provider/model catalog,
 skills, workspace tools, tool-access controls, and usage/cost reporting. The
@@ -239,6 +241,17 @@ newest images; the rest appear when it is loaded again or, for recent turns,
 as they finish.
 
 ## Operational boundaries
+
+The native Pi and SDK backends can share the v3 session store and exclude
+simultaneous Sedes writers with one session lock. Pi SDK rejects writable
+sessions whose active branch uses newer context edits or unknown record/message
+kinds. Use the [native Pi
+backend](pi-native.md) to continue those conversations; passive discovery and
+history do not rewrite them. Standalone Pi does not honor Sedes writer locks.
+Shared storage does not guarantee identical model context across versions:
+SDK 0.86 can include older retained compaction summaries that native Pi 1.4
+omits. Continue such native sessions with the native backend to preserve its
+context reconstruction.
 
 - Pi turn footers can show **tok/s** without `SEDES_EXPERIMENTAL_USAGE=1`.
   This uses output tokens, including reasoning, over measured model-request

@@ -141,10 +141,10 @@ export function createClientControlToolDefinitions(service?: ClientControlToolSe
       ...manifest, inputSchema: schema(object(fields)),
       outputSchema: schema(id === "client.list" ? object({ defaultClientId: Type.Union([str(), Type.Null()]), clients: Type.Array(client, { maxItems: 128 }) }) : result),
       requiredCapabilities: [],
-      execution: { form: "inline", adapterWaitCeilingMilliseconds: { pi_sdk: 30_000, mcp: 30_000, http: 30_000, cli: 30_000 },
+      execution: { form: "inline", adapterWaitCeilingMilliseconds: { pi_sdk: 30_000, pi_rpc: 30_000, mcp: 30_000, http: 30_000, cli: 30_000 },
         supportsCancellation: true, idempotency: "not_applicable", progress: "none", maximumInputBytes: 4096, maximumOutputBytes: 131072,
         concurrencyClass: "client_control", uncertainExternalOutcome: id !== "client.list" && id !== "client.settings.get" },
-      exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+      exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
       adapters: { pi: { name, label: manifest.catalog.label, promptSnippet: manifest.description },
         mcp: { name }, http: { invocation: "inline" }, cli: { command: id } },
       async execute(input, context) {

@@ -220,7 +220,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "ineligible-principal-client",
           input: {},
         },
@@ -238,7 +238,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "request-1",
           input: {},
         },
@@ -258,7 +258,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "request-2",
           input: { sourceThreadId: "forged" },
         },
@@ -275,7 +275,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "incoherent-authority",
           input: {},
         },
@@ -306,7 +306,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "request-3",
           input: { threadId: "target-thread" },
         },
@@ -337,7 +337,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "missing",
           input: { threadId: "missing-thread" },
         },
@@ -356,7 +356,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "cancelled",
           input: {},
         },
@@ -379,7 +379,7 @@ describe("CanonicalInlineAgentToolService", () => {
     const invocation = service.invoke(
       {
         toolId: "thread.status",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "in-flight-cancel",
         input: { threadId: "target-thread" },
       },
@@ -463,7 +463,7 @@ describe("CanonicalInlineAgentToolService", () => {
       const invocation = service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "deadline",
           input: { threadId: "target-thread" },
         },

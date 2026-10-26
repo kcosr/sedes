@@ -931,6 +931,12 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
     .getByRole("group", { name: "Stack by" })
     .getByRole("menuitemradio", { name: "Projects" })
     .click();
+  // The menu restores focus after its exit motion. Let that finish before
+  // opening a hover roster, which dismisses on focus outside its boundary.
+  await expect(
+    page.getByRole("menu", { name: "View options", exact: true, includeHidden: true }),
+  ).toHaveCount(0);
+  await expect(desktopSidebar.getByTestId("view-options-trigger")).toBeFocused();
   const projectStack = desktopSidebar.locator(
     '[data-testid="project-stack"][data-project-id]',
   );

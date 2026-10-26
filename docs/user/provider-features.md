@@ -1,27 +1,27 @@
 # Provider features
 
-Sedes gives Pi, Codex, Claude, Grok, and OpenCode v2 a common thread, composer, pending-input,
-Tasks, Files, and organization experience. Provider capabilities still differ.
+Sedes gives Pi, Pi SDK, Codex, Claude, Grok, and OpenCode v2 a common thread,
+composer, pending-input, Tasks, Files, and organization experience. Provider capabilities still differ.
 The interface hides an operation when the current backend, model, topology, or
 thread state does not support it.
 
 ## Compare providers
 
-| Capability | Pi | Codex | Claude | Grok | OpenCode v2 |
-| --- | --- | --- | --- | --- | --- |
-| Mid-turn Steer | Yes, aimed at the current turn | Yes, aimed at the current turn | Yes, delivered to the conversation | No; Queue instead | Yes, delivered to the conversation |
-| Stop | Yes | Yes | Yes | Yes | Yes; pending native inputs may remain unconfirmed |
-| Background work indicator above composer | No | No | Subagents and commands | No | Child sessions and attributed shells |
-| Manual compact | Yes | Yes | Yes; idle bound thread | No | Yes; exact native outcome |
-| Exact completed-turn fork | Yes | Yes | Yes, idle source | No | No |
-| Latest provider snapshot fork | No | Yes | No | No | No |
-| Skills | Yes | Yes | Yes, eligible skills | Not currently | Explicit native skill selection |
-| Structured questions | No | Questionnaires and MCP forms | Multiple-choice questions | Not exposed | Supported forms and questionnaires |
-| Provider permission interaction | Primitive prompts | Approvals | Permission prompts | Not exposed | Allow once or Deny and stop |
-| Native image input | Model dependent | Model dependent | PNG, JPEG, GIF, WebP | Model dependent | Model dependent |
-| Generated-image display | No native artifact | Completed in-band PNG | No native artifact | Completed local ImageGen/ImageEdit JPEG | No native artifact |
-| Remote (SSH or outbound) workspace | Managed workspace tools/context | Persistent runtime; separately granted Files/CLI | Persistent runtime; separately granted Files/CLI | No | No |
-| Managed provider terminal | No | Eligible external connections | No | No | No |
+| Capability | Pi SDK | Pi | Codex | Claude | Grok | OpenCode v2 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Mid-turn Steer | Yes, aimed at the current turn | Yes, aimed at the current turn | Yes, aimed at the current turn | Yes, delivered to the conversation | No; Queue instead | Yes, delivered to the conversation |
+| Stop | Yes | Yes | Yes | Yes | Yes | Yes; pending native inputs may remain unconfirmed |
+| Background work indicator above composer | No | No | No | Subagents and commands | No | Child sessions and attributed shells |
+| Manual compact | Yes | Yes | Yes | Yes; idle bound thread | No | Yes; exact native outcome |
+| Exact completed-turn fork | Yes | Yes | Yes | Yes, idle source | No | No |
+| Latest provider snapshot fork | No | No | Yes | No | No | No |
+| Skills | Yes | Yes | Yes | Yes, eligible skills | Not currently | Explicit native skill selection |
+| Structured questions | No | No | Questionnaires and MCP forms | Multiple-choice questions | Not exposed | Supported forms and questionnaires |
+| Provider permission interaction | Primitive prompts | Primitive prompts and tool decisions | Approvals | Permission prompts | Not exposed | Allow once or Deny and stop |
+| Native image input | Model dependent | Model dependent | Model dependent | PNG, JPEG, GIF, WebP | Model dependent | Model dependent |
+| Generated-image display | No native artifact | Native in-band raster images | Completed in-band PNG | No native artifact | Completed local ImageGen/ImageEdit JPEG | No native artifact |
+| Remote (SSH or outbound) workspace | Managed workspace tools/context | Persistent runtime; separately granted Files/CLI | Persistent runtime; separately granted Files/CLI | Persistent runtime; separately granted Files/CLI | No | Linux persistent runtime; separately granted Files/CLI |
+| Managed provider terminal | No | No | Eligible external connections | No | No | No |
 
 This table is the plain-language summary. The
 [capability matrix](../operator/backends/index.md#capability-differences) in the
@@ -130,16 +130,18 @@ to the surface or mode require an idle thread.
 Presentation has two controls:
 
 - **Surface** chooses Native tools or the generated CLI. This selector appears
-  only when the target supports more than one surface: eligible local Pi, and
-  Codex and Claude threads, plus qualified owned-local OpenCode roots.
+  only when the target supports more than one surface: eligible local Pi SDK,
+  Pi with an available CLI endpoint, and Codex and Claude threads, plus
+  qualified owned-local OpenCode roots.
 - **Mode** chooses Progressive discovery or Individual named tools/commands.
   Progressive keeps the initial surface compact and describes operations on
   demand. Individual presents each granted operation directly with typed
   parameters.
 
-Pi supports Native Progressive and Native Individual wherever native Sedes
-tools are eligible, plus both CLI modes on eligible local threads. Codex and
-Claude support both modes on both surfaces. Their Native tools come from a
+Pi SDK supports Native Progressive and Native Individual wherever native Sedes
+tools are eligible, plus both CLI modes on eligible local threads. Native Pi
+supports both Native modes and both CLI modes when its execution host has an
+admitted CLI endpoint. Codex and Claude support both modes on both surfaces. Their Native tools come from a
 Sedes MCP server that Sedes adds to the thread itself, so you do not configure
 anything in Codex or Claude; the tools appear as `mcp__sedes__…` and the
 provider's own permission settings apply to them. New Codex and Claude threads
@@ -211,9 +213,9 @@ When Sedes or a backend publishes an active installation advisory, a numbered
 and message for each warning. The control disappears when all advisories clear;
 that does not dismiss or suppress a warning manually.
 
-## Pi
+## Pi SDK
 
-Pi is the most direct option for native Pi models, tools, skills, tool-access
+Pi SDK is the embedded option for native Pi models, tools, skills, tool-access
 controls, usage, and cost reporting.
 
 Thread controls include:
@@ -227,9 +229,9 @@ Thread controls include:
 - latest-completed or selected-completed-turn forks where the workspace shape
   supports them.
 
-### Pi workspace execution
+### Pi SDK workspace execution
 
-When a Local Pi target offers workspace isolation, **New thread** adds a
+When a Local Pi SDK target offers workspace isolation, **New thread** adds a
 **Workspace execution** choice:
 
 - **Project directly** lets Pi workspace tools operate on the remembered
@@ -289,7 +291,33 @@ operations run through a managed SSH sidecar. Provider credentials and model
 calls remain local in that arrangement, and skills stay local unless the
 environment also enables bounded remote skill discovery.
 
-See the [Pi operator guide](../operator/backends/pi.md).
+See the [Pi SDK operator guide](../operator/backends/pi.md).
+
+## Pi
+
+**Pi** uses the installed Pi 1.4.0 runtime on the selected local, SSH, or
+outbound host. Its native configuration, provider login, skills, MCP servers,
+and conversation history live on that execution host. **Pi SDK** remains the
+separate embedded backend described above.
+
+Native Pi supports Send, turn-scoped Steer, Queue, Stop, rename, manual
+compact, model and thinking selection, and read-only/ask/full tool access.
+Sedes application tools are configured per thread in **Agent tools…**. Other
+MCP servers use the host's native Pi configuration. Read-only denies third-party
+MCP calls; Ask requires approval for them. These policies also cover calls
+inside native code mode.
+
+Fork a selected or latest completed turn, including while later source work
+is running. The child uses the host's current instructions. Image input depends
+on the selected model. Native Pi does not offer the SDK's isolated workspaces,
+a managed provider terminal or nonblocking structured questions. Native
+assistant/tool images are displayed when their raster content validates.
+Completed turns can show throughput when native request timing and token
+evidence is complete. Remote turns survive main-server or carrier disconnects
+while their persistent sidecar stays alive.
+
+See the [native Pi operator guide](../operator/backends/pi-native.md) for setup,
+MCP authentication, and recovery limits.
 
 ## Codex
 

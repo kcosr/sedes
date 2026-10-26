@@ -554,7 +554,7 @@ describe("Pi agent-tool adapter", () => {
     expect(set.descriptors).toContainEqual({
       toolName: "sedes_agent_context",
       toolId: "agent.context",
-      schemaVersion: 3,
+      schemaVersion: 4,
       displayName: "Sedes agent context",
       readOnly: true,
     });
@@ -588,7 +588,7 @@ describe("Pi agent-tool adapter", () => {
       adapter: "pi_sdk",
       request: {
         toolId: "agent.context",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "pi-call-1",
         input: {},
       },
@@ -633,7 +633,7 @@ describe("Pi agent-tool adapter", () => {
         toolCallId: "pi-call-1",
         toolName: "sedes_agent_context",
         toolId: "agent.context",
-        schemaVersion: 3,
+        schemaVersion: 4,
         invocationId: "invocation-1",
       },
     });

@@ -41,7 +41,7 @@ const archiveManifest = CANONICAL_AGENT_TOOL_MANIFEST["thread.archive"];
 const restoreManifest = CANONICAL_AGENT_TOOL_MANIFEST["thread.restore"];
 const MAXIMUM_THREAD_SEND_MESSAGE_BYTES = 65_536;
 const threadForkAdapters = {
-  pi_sdk: 90_000,
+  pi_sdk: 90_000, pi_rpc: 90_000,
   mcp: 90_000,
   http: 90_000,
   cli: 90_000,
@@ -344,7 +344,7 @@ export function createThreadMessagesToolDefinition(
       concurrencyClass: "thread_messages_read",
       uncertainExternalOutcome: false,
     },
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_messages",
@@ -428,7 +428,7 @@ export function createThreadSendToolDefinition(
       concurrencyClass: "thread_send_write",
       uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_send",
@@ -526,7 +526,7 @@ export function createThreadForkToolDefinition(
       concurrencyClass: "thread_fork_write",
       uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_fork",
@@ -611,7 +611,7 @@ export function createThreadArchiveToolDefinition(
       concurrencyClass: "thread_inventory_write",
       uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_archive",
@@ -677,7 +677,7 @@ export function createThreadRestoreToolDefinition(
       concurrencyClass: "thread_inventory_write",
       uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_restore",

@@ -142,4 +142,28 @@ describe("PiCatalogService", () => {
     await expect(service.read(target, load)).resolves.toEqual(catalog("fresh"));
     expect(load).toHaveBeenCalledTimes(2);
   });
+  it("coalesces explicit refreshes while passive reads retain the settled catalog", async () => {
+    let resolveRefresh!: (value: BackendCatalog) => void;
+    const load = vi.fn<() => Promise<BackendCatalog>>()
+      .mockResolvedValueOnce(catalog("old"))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveRefresh = resolve; }));
+    const service = new PiCatalogService({ owner });
+    await service.read(workspace(), load);
+    const first = service.read(workspace(), load, { refresh: true });
+    const second = service.read(workspace(), load, { refresh: true });
+    expect(load).toHaveBeenCalledTimes(2);
+    await expect(service.read(workspace(), load)).resolves.toEqual(catalog("old"));
+    resolveRefresh(catalog("new"));
+    await expect(Promise.all([first, second])).resolves.toEqual([catalog("new"), catalog("new")]);
+    await expect(service.read(workspace(), load)).resolves.toEqual(catalog("new"));
+  });
+  it("rejects failed explicit refreshes without discarding the settled catalog and permits retry", async () => {
+    const load = vi.fn<() => Promise<BackendCatalog>>().mockResolvedValueOnce(catalog("old"))
+      .mockRejectedValueOnce(new Error("temporarily_unavailable")).mockResolvedValueOnce(catalog("retried"));
+    const service = new PiCatalogService({ owner });
+    await service.read(workspace(), load);
+    await expect(service.read(workspace(), load, { refresh: true })).rejects.toThrow("temporarily_unavailable");
+    await expect(service.read(workspace(), load)).resolves.toEqual(catalog("old"));
+    await expect(service.read(workspace(), load, { refresh: true })).resolves.toEqual(catalog("retried"));
+  });
 });

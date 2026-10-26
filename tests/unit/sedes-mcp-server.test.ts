@@ -204,7 +204,7 @@ describe("sedes mcp server", () => {
       inputSchema: { type: "object", additionalProperties: false },
       outputSchema: { type: "object", required: ["activity", "backend", "lifecycle", "pinned", "threadId"] },
       annotations: { readOnlyHint: true, openWorldHint: false },
-      _meta: { "sedes/toolId": "thread.status", "sedes/schemaVersion": 3 },
+      _meta: { "sedes/toolId": "thread.status", "sedes/schemaVersion": 4 },
     });
     expect(status.inputSchema).not.toHaveProperty("$schema");
     expect(status.outputSchema).not.toHaveProperty("$schema");
@@ -245,7 +245,7 @@ describe("sedes mcp server", () => {
     expect(client.invoke).toHaveBeenCalledWith(
       {
         toolId: "thread.status",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "tool-request-1",
         input: { threadId },
       },
@@ -395,18 +395,18 @@ describe("sedes mcp server", () => {
       arguments: { action: "describe", toolIds: ["thread.status"] },
     });
     expect(described.structuredContent).toMatchObject({
-      tools: [{ id: "thread.status", schemaVersion: 3 }],
+      tools: [{ id: "thread.status", schemaVersion: 4 }],
     });
 
     const read = await mcp.callTool({
       name: "sedes_read",
-      arguments: { toolId: "thread.status", schemaVersion: 3, input: { threadId } },
+      arguments: { toolId: "thread.status", schemaVersion: 4, input: { threadId } },
     });
     expect(read.structuredContent).toMatchObject({ threadId, lifecycle: "active" });
 
     const wrongLane = await mcp.callTool({
       name: "sedes_act",
-      arguments: { toolId: "thread.status", schemaVersion: 3, input: { threadId } },
+      arguments: { toolId: "thread.status", schemaVersion: 4, input: { threadId } },
     });
     expect(wrongLane.isError).toBe(true);
     expect((wrongLane.content as { text: string }[])[0]!.text).toContain("sedes_read");

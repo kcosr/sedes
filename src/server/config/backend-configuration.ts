@@ -1,3 +1,4 @@
+import { piNativeModuleConfigurationSchema, piNativeConnectionConfigurationSchema } from "../../shared/protocol/pi-configuration.js";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -171,6 +172,8 @@ const packagedClientsSchema = z
   );
 
 const backendSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ id: configuredIdSchema, kind: z.literal("pi_native"), label: z.string().min(1).max(120),
+    enabled: z.boolean(), modelPolicy: backendModelPolicySchema, moduleConfiguration: piNativeModuleConfigurationSchema }),
   z.strictObject({ id: configuredIdSchema, kind: z.literal("opencode"), label: z.string().min(1).max(120),
     enabled: z.boolean(), modelPolicy: backendModelPolicySchema, moduleConfiguration: moduleConfigurationSchema }),
   z
@@ -216,6 +219,9 @@ const backendSchema = z.discriminatedUnion("kind", [
 ]);
 
 const targetSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ id: configuredIdSchema, kind: z.literal("pi_rpc"), label: z.string().min(1).max(120),
+    backendInstanceId: configuredIdSchema, executionEnvironmentId: executionEnvironmentIdSchema,
+    enabled: z.boolean(), moduleConfiguration: piNativeConnectionConfigurationSchema }),
   z.strictObject({ id: configuredIdSchema, kind: z.literal("opencode_http"), label: z.string().min(1).max(120),
     backendInstanceId: configuredIdSchema, executionEnvironmentId: executionEnvironmentIdSchema,
     enabled: z.boolean(), moduleConfiguration: moduleConfigurationSchema }),
@@ -351,6 +357,9 @@ const backendConfigurationFileSchema = z
         });
         continue;
       }
+      if ((target.kind === "pi_rpc") !== (backend.kind === "pi_native")) {
+        context.addIssue({ code: "custom", path: ["targets", index], message: "Native Pi requires its RPC connection kind." });
+      }
       if ((target.kind === "opencode_http") !== (backend.kind === "opencode")) {
         context.addIssue({ code: "custom", path: ["targets", index], message: "OpenCode requires its HTTP connection kind." });
       }
@@ -385,6 +394,8 @@ const backendConfigurationFileSchema = z
               path: ["targets", index, "executionEnvironmentId"],
             });
           }
+        } else if (target.kind === "pi_rpc" && backend.kind === "pi_native") {
+          // The Pi process and native store live on the selected execution host.
         } else if (target.kind === "opencode_http" && backend.kind === "opencode") {
           // Native HTTP/SSE runs on the selected host. The persistent sidecar
           // carries the same private runtime contract for owned and external.

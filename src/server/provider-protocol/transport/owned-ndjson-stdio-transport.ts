@@ -458,6 +458,14 @@ export class OwnedNdjsonStdioTransport implements FramedMessageTransport {
   }
 
   async close(reason: string): Promise<void> {
+    // Protocol closure is permanent, but a failed process cleanup is not proof
+    // that the owner exited. Let an explicit close retry cleanup on that same
+    // channel while concurrent close calls still share one attempt.
+    if (this.#finalClosure?.reason === "orphaned_process_group" ||
+      this.#finalClosure?.reason === "process_cleanup_failed") {
+      this.#finalClosure = undefined;
+      this.#shutdownPromise = undefined;
+    }
     await this.#shutdown(reason);
     const closure = this.#finalClosure ?? (await this.closed);
     if (

@@ -80,7 +80,7 @@ export function createWorkspaceOpenToolDefinition(
       concurrencyClass: "workspace_open_write",
       uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_workspace_open",

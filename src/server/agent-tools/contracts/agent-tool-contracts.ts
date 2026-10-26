@@ -10,7 +10,7 @@ import type {
 
 export type SedesCapability = string;
 
-export type AgentToolAdapter = "pi_sdk" | "mcp" | "http" | "cli";
+export type AgentToolAdapter = "pi_sdk" | "pi_rpc" | "mcp" | "http" | "cli";
 export type AgentToolCallerKind = "thread_agent" | "principal_client";
 
 export interface ToolEffects {
@@ -68,7 +68,7 @@ export interface McpToolPresentation {
 }
 
 /**
- * The one model-facing name for a native Sedes tool. Pi SDK tools and the
+ * The one model-facing name for a native Sedes tool. Pi SDK/RPC tools and the
  * `sedes mcp` server both use it; MCP clients add their own server namespace.
  * The MCP server derives names from live catalog IDs, so registration rejects
  * an MCP presentation that does not match this rule.
@@ -87,6 +87,7 @@ export interface HttpToolPresentation {
 }
 
 export interface AgentToolPresentations {
+  /** Shared Pi tool presentation; exposure selects SDK and/or RPC transport. */
   readonly pi?: PiToolPresentation;
   readonly http?: HttpToolPresentation;
   readonly mcp?: McpToolPresentation;
@@ -477,7 +478,7 @@ export interface AgentToolDefinition<
 }
 
 export interface AgentToolContractArtifact extends AgentToolContract {
-  readonly artifactVersion: 2;
+  readonly artifactVersion: 3;
 }
 
 /** Compact, policy-filtered discovery metadata safe for model consumption. */

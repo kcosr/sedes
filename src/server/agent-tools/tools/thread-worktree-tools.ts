@@ -21,7 +21,7 @@ const revisionSchema = Type.Integer({
   maximum: Number.MAX_SAFE_INTEGER,
 });
 const sharedAdapters = {
-  pi_sdk: 30_000,
+  pi_sdk: 30_000, pi_rpc: 30_000,
   mcp: 30_000,
   http: 30_000,
   cli: 30_000,
@@ -167,7 +167,7 @@ export function createThreadWorktreeListToolDefinition(
     ),
     requiredCapabilities: [],
     execution: execution("thread_worktree_list_read", false),
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_worktree_list",
@@ -206,7 +206,7 @@ export function createThreadWorktreeSetToolDefinition(
     outputSchema: preferenceOutputSchema,
     requiredCapabilities: [],
     execution: execution("thread_worktree_preference_write", true),
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_worktree_set",
@@ -251,7 +251,7 @@ export function createThreadWorktreeClearToolDefinition(
     outputSchema: preferenceOutputSchema,
     requiredCapabilities: [],
     execution: execution("thread_worktree_preference_write", true),
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_worktree_clear",
