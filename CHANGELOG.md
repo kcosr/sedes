@@ -38,7 +38,7 @@ User-facing changes are collected here before release. See the
   and upgrade execution sidecars with the server for sidecar wire protocol
   **16** and private OpenCode runtime protocol **4**. See
   [OpenCode setup](docs/operator/backends/opencode.md).
-  ([#93](https://github.com/kcosr/sedes/pull/93))
+  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123))
 
 - Automation management now uses explicit automation IDs and the
   `/api/automations` collection. Update automation agent-tool versions and
@@ -232,7 +232,7 @@ User-facing changes are collected here before release. See the
   session statistics and usage accounting. Newer-than-tested
   stable runtimes still show an active advisory. See
   [OpenCode compatibility](docs/operator/backends/opencode.md).
-  ([#93](https://github.com/kcosr/sedes/pull/93))
+  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123))
 
 - Archiving and restoring Codex threads also updates their native archive state
   by default, while preserving local archive controls when a backend is missing
@@ -273,6 +273,7 @@ User-facing changes are collected here before release. See the
 - OpenCode viewed-image checks recognize image-prefixed model modalities and
   honor the resolved xAI provider's GIF exclusion, preventing omitted GIFs from
   being shown as captured. See [OpenCode images](docs/operator/backends/opencode.md#images-and-compaction).
+  ([#123](https://github.com/kcosr/sedes/pull/123))
 
 - OpenCode's confirmed replies now arrive under Final and completed tool-call
   commentary under Provisional. **Turn progress** can announce that commentary
