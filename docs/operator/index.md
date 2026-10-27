@@ -33,8 +33,9 @@ If you only want to use an existing installation, start with
 
 Provider and packaged-client details are separate references:
 
-- [Pi](backends/pi.md), [Codex](backends/codex.md),
-  [Claude](backends/claude.md), and [Grok](backends/grok.md)
+- [Pi](backends/pi-native.md), [Pi SDK](backends/pi.md),
+  [Codex](backends/codex.md), [Claude](backends/claude.md),
+  [Grok](backends/grok.md), and [OpenCode](backends/opencode.md)
 - [Android](clients/android.md) and [Electron](clients/electron.md)
 
 ## Before installing

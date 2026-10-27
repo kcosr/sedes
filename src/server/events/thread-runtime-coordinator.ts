@@ -275,6 +275,7 @@ export class ThreadRuntimeCoordinator {
   readonly #maintenance = new Map<string, Promise<unknown>>();
   readonly #shutdownController = new AbortController();
   readonly #detached = new WeakSet<object>();
+  readonly #disposals = new WeakMap<object, Promise<void>>();
   #closed = false;
   #closePromise: Promise<void> | undefined;
 
@@ -500,9 +501,10 @@ export class ThreadRuntimeCoordinator {
     scope: RequestScope,
     applicationThreadId: string,
     operation: () => Promise<Result>,
+    options?: { readonly purpose: "archive" },
   ): Promise<Result> {
     return this.#runWithRuntimeMaintenance(
-      scope, applicationThreadId, { kind: "idle" }, operation,
+      scope, applicationThreadId, { kind: options?.purpose ?? "idle" }, operation,
     );
   }
 
@@ -518,13 +520,13 @@ export class ThreadRuntimeCoordinator {
   async releaseProviderResidency(
     scope: RequestScope,
     applicationThreadId: string,
-    options?: { readonly failurePolicy: "propagate" },
+    options?: { readonly failurePolicy?: "propagate"; readonly purpose?: "archive" },
   ): Promise<void> {
     let target: Awaited<ReturnType<ThreadApplicationActorTargetResolver["resolve"]>>;
     try {
       target = await this.#targets.resolve(scope, applicationThreadId);
     } catch (error) {
-      if (!options && error instanceof DomainError) return;
+      if (options?.failurePolicy !== "propagate" && error instanceof DomainError) return;
       throw error;
     }
     const release = target.driver.releaseConversationResidency;
@@ -536,6 +538,7 @@ export class ThreadRuntimeCoordinator {
         binding: target.binding,
         workspace: target.workspace,
         opaqueBindingDetail: target.opaqueBindingDetail,
+        ...(options?.purpose === "archive" ? { purpose: "archive" as const } : {}),
       });
     } catch (error) {
       if (options?.failurePolicy === "propagate") {
@@ -575,8 +578,16 @@ export class ThreadRuntimeCoordinator {
     const keys = ids.map(id => scopedKey(scope, id));
     while (true) {
       if (this.#closed) throw new Error("thread_runtime_coordinator_closed");
-      const existing = keys.flatMap(key => this.#maintenance.get(key) ?? []);
-      if (existing.length) { await Promise.all(existing); continue; }
+      const previous = new Map(keys.map(key => [key, this.#maintenance.get(key)]));
+      const existing = [...previous.values()].filter(value => value !== undefined);
+      if (existing.length) {
+        // Explicit Stop can recover a completed failed retirement. Keep its
+        // fence installed while waiting; a still-running owner must finish
+        // before this control attempt can replace it atomically.
+        await Promise.allSettled(existing);
+        if (this.#closed) throw new Error("thread_runtime_coordinator_closed");
+        if (keys.some(key => this.#maintenance.get(key) !== previous.get(key))) continue;
+      }
       let begin!: () => void;
       const gate = new Promise<void>(resolve => { begin = resolve; });
       let retirementProven = false;
@@ -632,6 +643,7 @@ export class ThreadRuntimeCoordinator {
     applicationThreadId: string,
     disposition:
       | { readonly kind: "idle" }
+      | { readonly kind: "archive" }
       | {
           readonly kind: "explicit_detach";
           readonly expected: ThreadForceResetConversationRuntimeBlocker | undefined;
@@ -664,7 +676,7 @@ export class ThreadRuntimeCoordinator {
                 : unprojected === disposition.expected.generation && disposition.expected.runState === "starting"
                   ? { kind: "unprojected_detach", expectedGeneration: unprojected }
                   : { kind: "idle" }
-              : { kind: "idle" };
+              : { kind: disposition.kind === "archive" ? "archive" : "idle" };
           return await this.#actors.runWithRuntimeRetired({
             scope,
             applicationThreadId,
@@ -674,7 +686,7 @@ export class ThreadRuntimeCoordinator {
                 if (disposition.kind === "explicit_detach") {
                   await this.#releasePreviewedRuntime(key, actorDisposition.kind === "unprojected_detach" ? undefined : disposition.expected);
                 } else {
-                  await this.#releaseIdleRuntime(key);
+                  await this.#releaseIdleRuntime(key, disposition.kind);
                 }
               } catch (error) {
                 if (error instanceof ConversationActorRetirementStaleError) {
@@ -1026,10 +1038,11 @@ export class ThreadRuntimeCoordinator {
   async captureLoadedState(
     scope: RequestScope,
     applicationThreadId: string,
-    options?: { readonly presentation?: boolean },
+    options?: { readonly presentation?: boolean; readonly purpose?: "archive" },
   ): Promise<{
     readonly runState: ThreadRunState;
     readonly backgroundWork?: NormalizedApplicationThreadSummary["backgroundWork"];
+    readonly archiveRetirementSafe?: boolean;
   } | undefined> {
     const key = scopedKey(scope, applicationThreadId);
     const entry = this.#entries.get(key);
@@ -1070,6 +1083,7 @@ export class ThreadRuntimeCoordinator {
           this.#isAutomaticModelRetryPending?.(scope, applicationThreadId) === true
           ? "starting" : runState,
         ...(backgroundWork ? { backgroundWork } : {}),
+        ...(options?.purpose === "archive" ? { archiveRetirementSafe: runtime.actor.canRetireForArchive } : {}),
       };
     } finally {
       this.#release(key, entry);
@@ -1595,7 +1609,7 @@ export class ThreadRuntimeCoordinator {
     if (!entry || entry.runtime !== runtime) return;
     if (entry.evictionTimer) clearTimeout(entry.evictionTimer);
     entry.evictionTimer = undefined;
-    entry.eviction ??= this.#dispose(runtime).finally(() => {
+    entry.eviction ??= this.#dispose(runtime).then(() => {
       if (this.#entries.get(key) === entry) this.#entries.delete(key);
     });
     void entry.eviction.catch(() => undefined);
@@ -1771,7 +1785,7 @@ export class ThreadRuntimeCoordinator {
     if (this.#entries.get(key) === entry) this.#entries.delete(key);
   }
 
-  async #releaseIdleRuntime(key: string): Promise<void> {
+  async #releaseIdleRuntime(key: string, purpose: "idle" | "archive" = "idle"): Promise<void> {
     while (true) {
       const entry = this.#entries.get(key);
       if (!entry) return;
@@ -1797,7 +1811,7 @@ export class ThreadRuntimeCoordinator {
         if (this.#entries.get(key) === entry) this.#entries.delete(key);
         continue;
       }
-      if (!runtime.actor.canEvict) throw new ThreadRuntimeNotIdleError();
+      if (!(purpose === "archive" ? runtime.actor.canRetireForArchive : runtime.actor.canEvict)) throw new ThreadRuntimeNotIdleError();
       await this.#dispose(runtime);
       if (this.#entries.get(key) === entry) this.#entries.delete(key);
     }
@@ -1840,7 +1854,17 @@ export class ThreadRuntimeCoordinator {
     if (this.#entries.get(key) === entry) this.#entries.delete(key);
   }
 
-  async #dispose(runtime: EstablishedRuntime, automatic = false): Promise<void> {
+  #dispose(runtime: EstablishedRuntime, automatic = false): Promise<void> {
+    const existing = this.#disposals.get(runtime);
+    if (existing) return existing;
+    const disposal = this.#disposeBindings(runtime, automatic);
+    // Actor closure and explicit maintenance can reach the same bindings.
+    // Share their actual cleanup result, including an unproven failure.
+    this.#disposals.set(runtime, disposal);
+    return disposal;
+  }
+
+  async #disposeBindings(runtime: EstablishedRuntime, automatic: boolean): Promise<void> {
     if (this.#detached.has(runtime)) return;
     this.#detached.add(runtime);
     // Publish after fencing reads, before asynchronous teardown. A late old

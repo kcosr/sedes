@@ -342,6 +342,18 @@ prefix or owner invalidates it. Missing active execution alone cannot settle an
 unfinished period: an orphan remains disconnected/in-progress until native
 terminal evidence arrives. Settings-only suffixes do not claim running ownership.
 
+Historical settlement and archive safety are separate. A synchronized handle can
+authorize archive retirement of an inactive unfinished period when its current
+native inventories are empty and no Sedes input evidence remains unresolved.
+The normalized exception is archive-only: ordinary retirement, settings and
+execution-environment preparation, submission and turn completion keep their
+existing evidence requirements. Invalidated observation, new activity, pending
+input, interactions or unknown background work revoke this proof. Within the
+archive maintenance fence, residency release performs a fresh bounded native
+check, reading inbox before activity to avoid mistaking inbox promotion for
+quiescence. Archive neither writes a native idle record nor changes the retained
+turn outcome; read failures and native identity changes fail closed.
+
 Confirmed completed tool-call steps are Provisional while the turn continues.
 Final response selection waits for native idle settlement, before the
 authoritative completion snapshot. The last assistant after any input, system,

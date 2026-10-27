@@ -8,7 +8,7 @@ import { InventoryRepository } from "../../src/server/db/repositories/inventory-
 import { BackendConfigurationRepository } from "../../src/server/db/repositories/backend-configuration-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
-import { AgentSession } from "@earendil-works/pi-coding-agent";
+import { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { type UsageObservation } from "../../src/server/usage/contracts.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { PiUsageAccounting } from "../../src/server/backends/pi/pi-usage-accounting.js";
@@ -50,12 +50,13 @@ import {
 } from "../../src/server/backends/pi/pi-sdk-session.js";
 import { PI_EXECUTOR_BUILTIN_TOOL_NAMES } from "../../src/server/backends/pi/pi-remote-workspace.js";
 import {
-  PiSessionStore,
+  PiSessionStore as ProductionPiSessionStore,
   type PiStoredConversationWithAncestry,
 } from "../../src/server/backends/pi/pi-session-store.js";
 import { WorkspaceSkillReaderError } from "../../src/server/workspace-skills/contracts.js";
 import { PiDiscoverySnapshotStore } from "../../src/server/backends/pi/pi-discovery-snapshot-store.js";
 import { PiHistoryProjector } from "../../src/server/backends/pi/pi-history-projector.js";
+import { acquirePiSessionWriterLock } from "../../src/server/backends/pi/pi-session-writer-lock.js";
 import {
   createPiAgentToolInvocationMarker,
   piAgentToolInvocationMarkerType,
@@ -131,6 +132,16 @@ const catalogModelPolicy = compileBackendModelPolicy(
 );
 const agentToolSourceCapabilities =
   createFakeAgentToolSourceCapabilities().issuer;
+
+/** These fixtures deliberately append native entries to simulate external Pi. */
+class PiSessionStore extends ProductionPiSessionStore {
+  override async openPersisted(...args: Parameters<ProductionPiSessionStore["openPersisted"]>) {
+    const observed = await super.openPersisted(...args);
+    return observed
+      ? SessionManager.open(observed.getSessionFile()!, undefined, args[0].canonicalPath)
+      : undefined;
+  }
+}
 
 class PiConversationBackendDriver extends ProductionPiConversationBackendDriver {
   constructor(options: PiDriverOptions) {
@@ -230,6 +241,106 @@ const connection: AgentConnectionProfile = {
 };
 
 const scope = { tenantId: "tenant", principalId: "principal" };
+
+describe("Pi SDK session writer lifetime", () => {
+  it("reserves the canonical store before SDK session creation and propagates claim refusal", async () => {
+    const fixture = await workspace();
+    const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+    const reserve = vi.spyOn(store, "reserve");
+    const claimNativeSession = vi.fn(() => { throw new Error("claim_refused"); });
+    const driver = new PiConversationBackendDriver({ instance, connection, usage: NO_USAGE_SINK,
+      nativeDiscoveryNamespaceKey: "claim-test", toolProvenanceKey, agentTools: noAgentTools,
+      toolAccessPolicy: fullToolAccessPolicy, store, sessionFactory: fakeSessionFactory(), claimNativeSession });
+    try {
+      await expect(driver.create({ scope, workspace: fixture.workspace, applicationThreadId: "claimed-thread",
+        applicationOperationId: "claimed-operation", requestedBackendConversationId: "claimed-native", source: { kind: "user" } }))
+        .rejects.toThrow("claim_refused");
+      expect(reserve).not.toHaveBeenCalled();
+      expect(claimNativeSession).toHaveBeenCalledExactlyOnceWith(scope, { applicationThreadId: "claimed-thread",
+        applicationOperationId: "claimed-operation", sessionId: "claimed-native", sessionDirectory: fixture.sessions });
+    } finally { await driver.close(); reserve.mockRestore(); }
+  });
+
+  async function ownedFixture(factory: PiSdkSessionFactory) {
+    const fixture = await workspace();
+    const driver = new PiConversationBackendDriver({
+      instance, connection, usage: NO_USAGE_SINK,
+      nativeDiscoveryNamespaceKey: "writer-lifetime", toolProvenanceKey,
+      agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy,
+      sessionDirectory: fixture.sessions, sessionFactory: factory,
+    });
+    const created = await driver.create({
+      scope, workspace: fixture.workspace, applicationThreadId: "writer-lifetime",
+      applicationOperationId: "writer-lifetime", source: { kind: "user" },
+    });
+    const file = (await new PiSessionStore({ sessionDirectory: fixture.sessions }).openPersisted(fixture.workspace, created.backendConversationId))!.getSessionFile()!;
+    const attach = () => driver.attach({
+      scope, workspace: fixture.workspace, binding: binding(created.backendConversationId),
+      opaqueBindingDetail: created.opaqueBindingDetail,
+    });
+    return { driver, file, attach };
+  }
+
+  it("retains ownership until asynchronous SDK disposal completes", async () => {
+    const base = fakeSessionFactory();
+    let releaseDisposal!: () => void;
+    const disposal = new Promise<void>((resolve) => { releaseDisposal = resolve; });
+    let markDisposalStarted!: () => void;
+    const disposeStarted = new Promise<void>((resolve) => { markDisposalStarted = resolve; });
+    const fixture = await ownedFixture({ async create(input) {
+      const session = await base.create(input);
+      return { ...session, async dispose() { markDisposalStarted(); await disposal; await session.dispose(); } };
+    } });
+    const handle = await fixture.attach();
+    await expect(acquirePiSessionWriterLock(fixture.file)).rejects.toThrow();
+    const closing = handle.close();
+    await disposeStarted;
+    await expect(acquirePiSessionWriterLock(fixture.file)).rejects.toThrow();
+    releaseDisposal();
+    await closing;
+    const next = await acquirePiSessionWriterLock(fixture.file);
+    await next.release();
+    await fixture.driver.close();
+  });
+
+  it("releases ownership after a failed SDK creation before runtime acquisition", async () => {
+    const fixture = await ownedFixture({ async create() { throw new Error("sdk setup failed"); } });
+    await expect(fixture.attach()).rejects.toThrow();
+    const next = await acquirePiSessionWriterLock(fixture.file);
+    await next.release();
+    await fixture.driver.close();
+  });
+
+  it("releases ownership after a failed runtime startup is disposed", async () => {
+    const base = fakeSessionFactory();
+    let disposed = false;
+    const fixture = await ownedFixture({ async create(input) {
+      const session = await base.create(input);
+      return {
+        ...session,
+        async ready() { throw new Error("sdk startup failed"); },
+        async dispose() { await session.dispose(); disposed = true; },
+      };
+    } });
+    await expect(fixture.attach()).rejects.toThrow();
+    expect(disposed).toBe(true);
+    const next = await acquirePiSessionWriterLock(fixture.file);
+    await next.release();
+    await fixture.driver.close();
+  });
+
+  it("preserves ownership when SDK disposal cannot be confirmed", async () => {
+    const base = fakeSessionFactory();
+    const fixture = await ownedFixture({ async create(input) {
+      const session = await base.create(input);
+      return { ...session, async dispose() { throw new Error("sdk cleanup failed"); } };
+    } });
+    const handle = await fixture.attach();
+    await expect(handle.close()).rejects.toThrow("sdk cleanup failed");
+    await expect(acquirePiSessionWriterLock(fixture.file)).rejects.toThrow();
+  });
+});
+
 const piWithdrawnSteer = {
   status: "not_accepted",
   retryable: false,
@@ -824,6 +935,8 @@ async function activeSteerConversation(
     );
   };
   return {
+    fixture,
+    created,
     driverFor,
     driver,
     handle,
@@ -1157,7 +1270,7 @@ describe("Pi session persistence adapter", () => {
     if (!marker || marker.type !== "custom") {
       throw new Error("missing branch marker");
     }
-    replay.manager.appendCustomEntry(piBranchMarkerType, marker.data);
+    SessionManager.open(replay.manager.getSessionFile()!).appendCustomEntry(piBranchMarkerType, marker.data);
     await expect(
       store.branch(
         fixture.workspace,
@@ -1226,7 +1339,7 @@ describe("Pi session persistence adapter", () => {
     ).toHaveLength(1);
   });
 
-  it("treats a branch write failure as uncertain and retries one reserved identity", async () => {
+  it("rejects an unavailable branch writer before submission and retries one reserved identity", async () => {
     const fixture = await workspace();
     const store = new PiSessionStore({
       sessionDirectory: fixture.sessions,
@@ -1254,7 +1367,7 @@ describe("Pi session persistence adapter", () => {
     try {
       await expect(store.branch(...branchInput)).rejects.toMatchObject({
         backendCode: "pi_branch_write_failed",
-        crossedSubmissionBoundary: true,
+        crossedSubmissionBoundary: false,
       });
     } finally {
       await chmod(fixture.sessions, 0o700);
@@ -4905,14 +5018,19 @@ describe("Pi conversation backend driver", () => {
       sessionDirectory: fixture.sessions,
       sessionFactory,
     });
+    const reconciliation = {
+      scope,
+      workspace: fixture.workspace,
+      binding: target,
+      applicationOperationId: input.applicationOperationId,
+      reconciliationToken: input.reconciliationToken,
+    };
+    await expect(restarted.reconcileSubmission(reconciliation)).resolves.toMatchObject({ status: "unresolved" });
+    // Simulate an abrupt exit without graceful close writing loss markers.
+    // Shared lock liveness/stale recovery has separate process-lock coverage.
+    await rm(`${manager!.getSessionFile()!}.sedes-writer.lock`, { recursive: true });
     await expect(
-      restarted.reconcileSubmission({
-        scope,
-        workspace: fixture.workspace,
-        binding: target,
-        applicationOperationId: input.applicationOperationId,
-        reconciliationToken: input.reconciliationToken,
-      }),
+      restarted.reconcileSubmission(reconciliation),
     ).resolves.toEqual(piWithdrawnSteer);
     expect(
       (await new PiSessionStore({
@@ -4926,7 +5044,6 @@ describe("Pi conversation backend driver", () => {
             : [];
         }),
     ).toEqual(["intent", "enqueued", "lost"]);
-    await originalHandle.close();
   });
 
   it("records proven rejection when Pi refuses a steer before enqueue", async () => {
@@ -5397,6 +5514,11 @@ describe("Pi conversation backend driver", () => {
     }
 
     const restarted = conversation.driverFor();
+    // The fake original process has exited without running its close hooks.
+    const originalManager = await new PiSessionStore({ sessionDirectory: conversation.fixture.sessions }).openPersisted(
+      conversation.fixture.workspace, conversation.created.backendConversationId,
+    );
+    await rm(`${originalManager!.getSessionFile()!}.sedes-writer.lock`, { recursive: true });
     // Out of queue order, and before any runtime is attached again.
     await expect(
       conversation.reconcile(steers[1]!, restarted),
@@ -5427,7 +5549,6 @@ describe("Pi conversation backend driver", () => {
       );
     }
     await reattached.close();
-    await conversation.handle.close();
   });
 
   it("returns the establishment history boundary without a second provider read", async () => {
@@ -9768,7 +9889,9 @@ describe("Pi conversation backend driver", () => {
 
   it("branches inclusively from a selected completed turn and excludes later turns", async () => {
     const fixture = await workspace();
+    const claimNativeSession = vi.fn();
     const driver = new PiConversationBackendDriver({
+      claimNativeSession,
       instance,
       connection,
       usage: NO_USAGE_SINK,
@@ -9858,6 +9981,8 @@ describe("Pi conversation backend driver", () => {
         toolAccess: "full",
       },
     });
+    expect(claimNativeSession).toHaveBeenLastCalledWith(scope, { applicationThreadId: "selected-child-thread",
+      applicationOperationId: "selected-branch-operation", sessionId: "selected-child-native", sessionDirectory: fixture.sessions });
     const replay = await driver.branchConversation({
       scope,
       workspace: fixture.workspace,

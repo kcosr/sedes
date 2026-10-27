@@ -37,7 +37,7 @@ export function createPageToolDefinitions(service: PageAgentToolService): readon
       execution: { form: "inline", adapterWaitCeilingMilliseconds: sharedAdapters, supportsCancellation: true,
         idempotency: "not_applicable", progress: "none", maximumInputBytes: 512 * 1024, maximumOutputBytes: 4 * 1024 * 1024 - 4096,
         concurrencyClass: `page_${operation}`, uncertainExternalOutcome: operation === "publish" },
-      exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+      exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
       adapters: { pi: { name: `sedes_page_${operation}`, label: manifest.catalog.label,
         promptSnippet: operation === "publish"
           ? "Publish one path or html with inline CSS/JS. Files capture local images; html needs data images. Update with pageId and expectedRevision; viewport optional. No network. For controls, use window.sedes?.onSubmit(() => string): return all answers synchronously as nonblank text, max 65,536 UTF-8 bytes. Optional registration lets downloads run without Sedes. Host Send captures once and sends or queues to this thread, never Steer. Unsent state is transient; tools cannot read it."

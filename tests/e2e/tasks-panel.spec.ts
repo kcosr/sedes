@@ -197,12 +197,18 @@ test.describe.serial("Tasks panel", () => {
 
     // Archived has no Tasks either; returning to the thread finds Tasks as it
     // was left.
-    await page
+    const sidebarMore = page
       .getByTestId("desktop-sidebar")
-      .getByRole("button", { name: "More" })
-      .click();
+      .getByRole("button", { name: "More" });
+    await sidebarMore.click();
     await page.getByRole("menuitem", { name: "Archived threads" }).click();
     await expect(page).toHaveURL("/archived");
+    // Finish the More menu's deferred focus restoration before navigating
+    // back to the thread, where the composer should receive the new focus.
+    await expect(
+      page.getByRole("menu", { name: "More", exact: true, includeHidden: true }),
+    ).toHaveCount(0);
+    await expect(sidebarMore).toBeFocused();
     await expect(page.getByTestId("tasks-panel-toggle")).toHaveCount(0);
     await expect(panel).toHaveCount(0);
     await page.keyboard.press("Control+Shift+L");

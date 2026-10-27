@@ -228,7 +228,7 @@ new AgentToolEnvironmentAuthorityResolver({
     const send = (id: number, method: string, params: unknown) => stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     send(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } });
     await vi.waitFor(() => expect(replies.some(reply => reply.id === 1)).toBe(true));
-    send(2, "tools/call", { name: "sedes_read", arguments: { toolId: "thread.status", schemaVersion: 3, input: { threadId: "other-thread" } },
+    send(2, "tools/call", { name: "sedes_read", arguments: { toolId: "thread.status", schemaVersion: 4, input: { threadId: "other-thread" } },
       _meta: { "ai.opencode/sessionID": f.wire.sessionID } });
     await vi.waitFor(() => {
       expect(replies.find(reply => reply.id === 2)).toBeUndefined();

@@ -244,6 +244,42 @@ files before several restarts. Main's operator-selected
 there after collecting the incident. File-output failure does not affect
 application startup or recovery.
 
+### Native Pi lifecycle and recovery capture
+
+Native Pi uses the same `[delivery-attachment]` gate on main and the execution
+host. Update both server and persistent sidecar to collect the complete chain;
+no client update is required for this diagnostic surface. Remote process records
+need the persistent-sidecar opt-in above **before daemon startup**. Main's flag
+alone does not enable remote capture.
+
+Correlate main's `applicationThreadId`, `handleId`, and `handleGeneration` with
+the execution host's matching handle, `runtimeId`, and per-launch `attachmentId`:
+
+- `pi_native_launch_started/ready/failed` and `pi_native_process_exited` record
+  launch results and the actual child exit code/signal, even when a preceding
+  protocol failure initiated cleanup.
+- `pi_rpc_protocol_failed` and `pi_companion_protocol_failed` distinguish
+  decoding/validation, response correlation, authentication, and listener
+  failures. `pi_rpc_closed`, `pi_rpc_transport_closed`, and
+  `pi_companion_closed` retain bounded closure reasons. `requestedClose` means
+  the close API was called, including cascading cleanup after another failure;
+  use the first failure in the chain to identify the trigger.
+- `pi_native_read_failed/recovered` record observer and control-read failure
+  transitions. Repeated identical polling failures are suppressed until the
+  safe error signature changes or a read succeeds. A recovered read does not
+  prove that a session is writable or its process has recovered.
+- `pi_native_failure_observed`, `pi_native_replacement_requested`,
+  `pi_native_recovery_started`, `pi_native_residency_release`, and
+  `pi_native_attach_started/ready/failed` trace retained failures, replacement,
+  draining/retirement, and reattachment. Failed release/cleanup records keep
+  their bounded machine error codes.
+
+No native session path, command, environment, prompt, payload, stderr, exception
+message, or stack is captured. These records add no retries or provider calls;
+unchanged successful polling emits no record. Collect both main's journal and
+the remote daemon's bounded files promptly after an incident. A connected host
+or backend alone does not prove that an individual Pi child is still alive.
+
 ### Claude worker lifecycle capture
 
 The existing main/sidecar delivery opt-in also reaches installation-owned

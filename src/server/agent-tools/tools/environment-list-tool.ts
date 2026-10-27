@@ -68,7 +68,7 @@ export function createEnvironmentListToolDefinition(
       concurrencyClass: "environment_list_read",
       uncertainExternalOutcome: false,
     },
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_environment_list",

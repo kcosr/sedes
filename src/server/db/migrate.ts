@@ -1,3 +1,6 @@
+import { piNativeBackendKindMigration } from "./migrations/159-pi-native-backend-kind.js";
+import { piNativePersistenceMigration } from "./migrations/160-pi-native-persistence.js";
+import { piSessionClaimsMigration } from "./migrations/161-pi-session-claims.js";
 import { automaticModelRetryMigration } from "./migrations/155-automatic-model-retry.js";
 import { modelFailureRetryStateMigration } from "./migrations/156-model-failure-retry-state.js";
 import { connectionCompressionMigration } from "./migrations/157-connection-compression.js";
@@ -330,6 +333,9 @@ export const backendNormalizedMigrations = [
   modelFailureRetryStateMigration,
   connectionCompressionMigration,
   codexWebSearchMigration,
+  piNativeBackendKindMigration,
+  piNativePersistenceMigration,
+  piSessionClaimsMigration,
 ] as const;
 
 export type DatabaseMigration = {

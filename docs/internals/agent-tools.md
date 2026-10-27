@@ -204,7 +204,7 @@ environments under [Resource scope](#resource-scope).
 - `workspace.list@5` adds each workspace's `project: { id, name }`. Its
   continuation fingerprint names the new version, so an earlier cursor is
   rejected.
-- `agent.context@3` adds `projectId`, the caller's project as admitted for
+- `agent.context@4` adds `projectId`, the caller's project as admitted for
   that call.
 - `workspace.open@3` returns the workspace's `projectId` and accepts an
   optional `projectId`. Without it, a directory Sedes does not know becomes a
@@ -283,8 +283,10 @@ Grok, and OpenCode across all supported tool presentations.
 the change retired a finished one-time reminder, so the definition they return
 has left the collection; a replay of the same mutation returns the same result.
 
-`thread.status@3` and `thread.list@6` include the current principal's read-only
-`pinned` flag. There is no thread-pin mutation tool.
+`thread.status@4` and `thread.list@8` include the current principal's read-only
+`pinned` flag. Along with `agent.context@4`, their backend
+field distinguishes native `pi_native` from embedded `pi`. There is no
+thread-pin mutation tool.
 
 `image.show@1` reads an absolute PNG, JPEG, GIF, or WebP path through the source
 thread's Files access and retains a snapshot for inline display. Its optional
@@ -483,7 +485,13 @@ Do not maintain a second static schema catalog in documentation. The
 authoritative IDs, versions, effects, labels, and eligibility rules are in
 [`canonical-agent-tool-manifest.ts`](../../src/server/agent-tools/registry/canonical-agent-tool-manifest.ts),
 with generated public contracts under
-[`schema/artifacts`](../../src/server/agent-tools/schema/artifacts/). Agents should
+[`schema/artifacts`](../../src/server/agent-tools/schema/artifacts/). Current
+artifacts use `artifactVersion: 3`, including the explicit `pi_rpc` adapter;
+`pi_sdk` remains the embedded SDK adapter. Both use the shared `adapters.pi`
+presentation metadata, but exposure, admission, and invocation identities are
+independent. A native Pi source cannot invoke through the SDK adapter or vice
+versa. Historical checksummed artifacts remain archival evidence and are not
+accepted by the current contract parser. Agents should
 discover the live catalog because enabled IDs and versions are thread-specific.
 
 ## Compiled backend presentation dispositions
@@ -522,8 +530,8 @@ Presentation has two independent dimensions:
 
 - **Surface** selects the provider-facing mechanism: `native` tools or the
   generated `cli` in an admitted shell environment. Native tools are Pi SDK
-  tools in the Sedes process for Pi, and the stdio `sedes mcp` server for
-  Codex and Claude.
+  tools in the Sedes process for Pi SDK, the managed companion extension for
+  native Pi, and the stdio `sedes mcp` server for Codex and Claude.
 - **Mode** selects disclosure: `progressive` exposes compact discovery and
   generic invocation, while `individual` exposes every granted operation as a
   named tool or command with typed parameters.
@@ -541,8 +549,9 @@ their stored presentation.
 
 | Backend/environment      | Native modes                                             | CLI modes                                                       |
 | ------------------------ | -------------------------------------------------------- | --------------------------------------------------------------- |
-| Local Pi                 | Progressive, Individual                                  | Progressive, Individual when Bash and CLI admission permit them |
-| Pi on SSH workspace      | Progressive, Individual                                  | None                                                            |
+| Local Pi SDK             | Progressive, Individual                                  | Progressive, Individual when Bash and CLI admission permit them |
+| Pi SDK on SSH workspace  | Progressive, Individual                                  | None                                                            |
+| Native Pi locally or over SSH/outbound | Progressive, Individual through the managed companion | Progressive, Individual when host CLI admission permits them |
 | Local Codex              | Progressive, Individual through MCP on eligible threads  | Progressive, Individual on eligible Sedes-created threads       |
 | Codex over SSH UDS       | Progressive, Individual through MCP with sidecar support | Progressive, Individual with sidecar capability and admission   |
 | Local Claude             | Progressive, Individual through MCP on eligible queries  | Progressive, Individual on eligible queries                     |
@@ -553,7 +562,7 @@ their stored presentation.
 
 Codex and Claude Native presentation uses exactly the eligibility and runtime
 admission of their CLI presentation, and is unavailable on Windows execution
-hosts. Grok has no Native surface. Grok SSH targets and Pi remote CLI
+hosts. Grok has no Native surface. Grok SSH targets and Pi SDK remote CLI
 presentation are intentionally unsupported.
 OpenCode v2 Native/Progressive uses a bundled stdio MCP bridge registered once
 per admitted runtime/workspace and shared across exactly admitted Sedes-created
@@ -572,9 +581,9 @@ interrupted or no-longer-observed inputs cannot borrow an older user input.
 Ordinary tools use the configured resource scope without requiring that proof.
 Native operator permission rules still govern gateway invocation independently.
 OpenCode's other configured tools and MCP servers do not grant Sedes authority.
-The shared CLI implements both CLI modes for every supported row: local Pi,
-Codex, Claude, Grok, and OpenCode, plus the admitted Codex and Claude remote relays. It does not
-add a CLI path to the intentionally unsupported Pi-SSH or Grok-SSH topologies.
+The shared CLI implements both CLI modes for every supported row: local Pi SDK,
+native Pi, Codex, Claude, Grok, and OpenCode, plus their admitted remote relays.
+Pi SDK SSH and Grok SSH CLI topologies remain unsupported.
 The owner-only local CLI frame and managed relay capability use
 `agent_tools_cli@6`, which admits the closed Images catalog group and carries
 bounded model media separately from JSON output. Stale peers fail closed and
@@ -960,8 +969,9 @@ Managed thread processes also receive `SEDES_AGENT_TOOL_CLI_MODE` as
 presentation; it is not caller identity or authorization.
 
 Eligible CLI runtimes receive their environment even when the master flag is
-off or no tool IDs are selected. This applies to local Pi, local and Sidecar
-remote Codex/Claude, and local Claude/Grok. Unsupported topologies still fail closed.
+off or no tool IDs are selected. This applies to local Pi SDK, local or
+persistent-sidecar native Pi, local and sidecar Codex/Claude, and local Grok.
+Unsupported topologies still fail closed.
 Enabling access during a turn therefore needs no new credential or environment
 injection; the next request uses live server policy. A Native Codex or Claude
 thread likewise starts `sedes mcp` while access is off; it lists no tools.
@@ -1026,13 +1036,17 @@ when main disconnects, but tool invocation still needs current main-server
 authority and fails closed while that connection is absent. Remote Grok
 execution and agent-tool relay remain unsupported.
 
-A Pi SSH target never receives the CLI in remote Bash. The Pi model loop and
+Native Pi uses the eligible host CLI endpoint locally or the independently
+admitted sidecar relay over SSH/outbound. Its resident process retains scoped
+CLI credentials while every invocation rechecks current main-server authority.
+
+A Pi SDK SSH target never receives the CLI in remote Bash. The Pi SDK model loop and
 native session stay on the Sedes host while only its seven built-in workspace
 tools execute remotely. See [Remote Pi workspace tools](pi-remote-workspace-tools.md).
 
 `thread.create@6` and `saved_agent.list/get/options/create/update@6` expose
 `toolPolicySelection` and optional `toolPresentation` in their contracts.
-Their previous v5 schemas are no longer admitted; callers must describe the
+Earlier schemas are no longer admitted; callers must describe the
 current tool before invocation. `saved_agent.delete` retains its version because
 its wire shape is unchanged.
 
@@ -1105,8 +1119,8 @@ thread-policy and Tool-client revision conflicts, token rotation/disable/
 revocation, wrong-principal and wrong-environment denial, default resolution,
 project member, non-member, empty, and removed cases for both caller classes,
 cross-project/environment scope filtering and denial, source-runtime
-cancellation, and automation fail-closed behavior. Adapter tests must exercise both modes on
-native Pi, both CLI modes for local Codex, Claude, and Grok, both Native MCP
+cancellation, and automation fail-closed behavior. Adapter tests must exercise both Native modes on
+Pi SDK and native Pi, both CLI modes for eligible local/remote native Pi and local Codex, Claude, and Grok, both Native MCP
 modes for Codex and Claude, the `sedes mcp` protocol subset against the MCP
 SDK client, presentation-bound references, remote
 Codex/Claude sidecar ingress, transport credential separation, cancellation,
@@ -1124,7 +1138,7 @@ retry. Live provider and skill gates remain separately opt-in.
   ingress, impersonate a thread, receive interactive access approvals, or
   manage other credentials through agent tools.
 - No Native Grok presentation, no Native MCP on Windows execution hosts, no
-  Grok SSH target, no Pi remote CLI, and no surface or transport fallback.
+  Grok SSH target, no Pi SDK remote CLI, and no surface or transport fallback.
 - Missing CLI or sidecar admission disables agent tools for that presentation;
   it does not disable ordinary provider conversation capabilities.
 - Native policy and surface/mode changes wait for idle. For a bound thread, Sedes retires its local runtime and releases its provider residency before

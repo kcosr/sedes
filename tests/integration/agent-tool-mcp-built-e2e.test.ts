@@ -356,7 +356,7 @@ sourceAuthority, testAgentToolExecutionAuthority),
         name: "sedes_read",
         arguments: {
           toolId: "thread.status",
-          schemaVersion: 3,
+          schemaVersion: 4,
           input: { threadId: source.thread.id },
         },
       });

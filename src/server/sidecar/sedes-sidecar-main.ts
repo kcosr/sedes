@@ -62,6 +62,8 @@ import { SidecarRuntimeChannel } from "./runtime-channel.js";
 import { LocalEnvironmentChannelProvider } from "../execution/local-environment-channel.js";
 import { OpenCodeRuntimeHostRegistry } from "../backends/opencode/opencode-runtime-host-registry.js";
 import { registerOpenCodeRuntimeHost } from "../backends/opencode/opencode-sidecar-runtime.js";
+import { PiNativeHostRegistry } from "../backends/pi/native/host/host-registry.js";
+import { registerPiNativeHost } from "../backends/pi/native/sidecar/register-host.js";
 import { openCodeToolInvokeOperation } from "../backends/opencode/opencode-tool-relay-wire.js";
 import { BackendAgentToolRequestError } from "../agent-tools/adapters/backend-facade.js";
 import { CodexRuntimeHostRegistry } from "../backends/codex/runtime/codex-runtime-host-registry.js";
@@ -88,6 +90,7 @@ const compiledSidecarCapabilities = Object.freeze([
   Object.freeze({ capabilityId: "runtime_bodies", majorVersion: 1 }),
   Object.freeze({ capabilityId: "codex_runtime", majorVersion: 1 }),
   Object.freeze({ capabilityId: "opencode_runtime", majorVersion: 4 }),
+  Object.freeze({ capabilityId: "pi_native_runtime", majorVersion: 1 }),
   Object.freeze({ capabilityId: "claude_persistent_runtime", majorVersion: 5 }),
   Object.freeze({ capabilityId: "codex_managed_tui", majorVersion: 3 }),
 ]);
@@ -141,6 +144,7 @@ async function main(): Promise<void> {
   const claudeRuntimeAvailable = supportsClaudeRuntimeHost(process.platform, process.versions.node);
   const enabledSidecarCapabilities = Object.freeze(compiledSidecarCapabilities.filter(capability =>
     (process.platform === "linux" || capability.capabilityId !== "opencode_runtime") &&
+    (process.platform !== "win32" || capability.capabilityId !== "pi_native_runtime") &&
     (claudeRuntimeAvailable || capability.capabilityId !== "claude_persistent_runtime") &&
     (nativePtyAvailable || (capability.capabilityId !== "interactive_terminal" && capability.capabilityId !== "codex_managed_tui"))));
   const paths = await preparePersistentSidecarNamespace(input.scope);
@@ -179,9 +183,11 @@ async function main(): Promise<void> {
         onDetach: () => attachment.detach(controllerEpoch) }) : () => undefined;
       const detachOpenCode = process.platform === "linux" ? registerOpenCodeRuntimeHost({ registry, channel: runtimeChannel,
         hosts: openCodeHosts, services: serviceRegistry, controllerEpoch }) : () => undefined;
+      const detachPi = process.platform !== "win32" ? registerPiNativeHost({ registry, channel: runtimeChannel,
+        hosts: piHosts, services: serviceRegistry, controllerEpoch }) : () => undefined;
       const detachTui = nativePtyAvailable ? registerCodexManagedTuiHost({ registry, channel: runtimeChannel, hosts: codexHosts.managedTui, services: serviceRegistry, controllerEpoch }) : () => undefined;
       const unsubscribe = attachment.subscribe((event) => {
-        if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { detachTui(); detachCodex(); detachClaude(); detachOpenCode(); runtimeChannel.close(); unsubscribe(); }
+        if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { detachTui(); detachCodex(); detachClaude(); detachOpenCode(); detachPi(); runtimeChannel.close(); unsubscribe(); }
       });
   registerWorkspaceFilesV8Operations(registry, workspaceFiles.handlers);
   registerWorkspaceToolsV2Operations(registry, workspaceTools.handlers);
@@ -268,6 +274,9 @@ async function main(): Promise<void> {
   });
   const codexHosts = new CodexRuntimeHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry });
+  const piHosts = new PiNativeHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
+    executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, channels: environmentChannel,
+    serviceDirectory: paths.serviceDirectory, services: serviceRegistry });
   const openCodeHosts = new OpenCodeRuntimeHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry,
     agentTools: {

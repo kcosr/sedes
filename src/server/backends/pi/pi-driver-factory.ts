@@ -51,10 +51,12 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
   readonly #isolatedWorkspaces?: PiIsolatedWorkspaceResolver;
   readonly #discoverySnapshots = new PiDiscoverySnapshotStore();
   readonly #drivers = new Map<string, PiConversationBackendDriver>();
+  readonly #claimNativeSession: PiDriverOptions["claimNativeSession"];
   readonly #modelPolicy: CompiledBackendModelPolicy;
   readonly #outputArtifacts: OutputArtifactPublisher;
 
   constructor(input: {
+    readonly claimNativeSession?: PiDriverOptions["claimNativeSession"];
     readonly usage: UsageSink;
     readonly resolveThreadEnvironment?: ThreadEnvironmentResolver;
     readonly instance: AgentBackendInstance;
@@ -76,6 +78,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
     readonly modelPolicy: CompiledBackendModelPolicy;
     readonly outputArtifacts: OutputArtifactPublisher;
   }) {
+    this.#claimNativeSession = input.claimNativeSession;
     this.#usage = input.usage;
     this.scope = input.scope;
     this.#resolveThreadEnvironment = input.resolveThreadEnvironment ?? (async () => Object.freeze({}));
@@ -120,6 +123,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
     let driver = this.#drivers.get(connection.id);
     if (!driver) {
       driver = new PiConversationBackendDriver({
+        claimNativeSession: this.#claimNativeSession,
         usage: this.#usage,
         resolveThreadEnvironment: this.#resolveThreadEnvironment,
         instance: this.instance,

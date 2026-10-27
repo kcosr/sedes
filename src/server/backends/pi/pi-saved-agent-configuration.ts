@@ -109,7 +109,9 @@ const metadata: Readonly<
 export class PiSavedAgentConfiguration {
   readonly #preferences: ConnectionSettingPreferenceRepository;
 
-  constructor(preferences: ConnectionSettingPreferenceRepository) {
+  constructor(preferences: ConnectionSettingPreferenceRepository,
+    readonly connectionKind: "pi_sdk" | "pi_rpc" = "pi_sdk",
+    readonly resolveDefaults?: (connection: AgentConnectionProfile) => { readonly modelProvider?: string; readonly modelId?: string; readonly thinkingLevel?: string }) {
     this.#preferences = preferences;
   }
 
@@ -117,7 +119,7 @@ export class PiSavedAgentConfiguration {
     scope: RequestScope,
     connection: AgentConnectionProfile,
   ): PiSavedAgentResolutionContext {
-    assertConnection(scope, connection);
+    assertConnection(scope, connection, this.connectionKind);
     const modelPreference = preferenceSnapshot(this.#preferences.find(
       scope,
       connection.id,
@@ -180,23 +182,31 @@ export class PiSavedAgentConfiguration {
     readonly context: PiSavedAgentResolutionContext;
     readonly overrides: readonly PiSavedAgentOverride[];
   }): ProjectedPiSavedAgentConfiguration {
-    assertConnection(input.scope, input.connection);
+    assertConnection(input.scope, input.connection, this.connectionKind);
     const overrides = new Map(
       this.validateOverrides(input.overrides).map((override) => [
         override.id as PiSavedAgentOverrideId,
         override.value,
       ]),
     );
-    const defaultModel = resolvePreferredModel(
-      input.context.modelPreference?.value,
-      input.catalog,
-    );
+    const defaults = this.resolveDefaults?.(input.connection);
+    const nativeDefaults = input.catalog.models.filter(model => model.isDefault);
+    const nativeDefault = nativeDefaults.length === 1 ? nativeDefaults[0] : undefined;
+    const configuredModels = defaults?.modelProvider && defaults.modelId ? input.catalog.models.filter(
+      model => model.provider === defaults.modelProvider && model.id === defaults.modelId,
+    ) : [];
+    const defaultModel = input.context.modelPreference
+      ? resolvePreferredModel(input.context.modelPreference.value, input.catalog)
+      : defaults?.modelProvider && defaults.modelId
+        ? configuredModels.length === 1 ? configuredModels[0] : undefined
+        : nativeDefault;
     const selectedModel = overrides.has("model")
       ? requireCatalogModel(overrides.get("model")!, input.catalog)
       : defaultModel;
     const defaultThinkingLevel = selectedModel
       ? resolvePreferredThinkingLevel(
-          input.context.thinkingLevelPreference?.value,
+          input.context.thinkingLevelPreference?.value ?? defaults?.thinkingLevel
+            ?? (selectedModel === nativeDefault ? nativeDefault?.defaultReasoningEffort : undefined),
           selectedModel,
         )
       : undefined;
@@ -314,9 +324,10 @@ function preferenceSnapshot(
 function assertConnection(
   scope: RequestScope,
   connection: AgentConnectionProfile,
+  connectionKind: "pi_sdk" | "pi_rpc",
 ): void {
   if (
-    connection.kind !== "pi_sdk" ||
+    connection.kind !== connectionKind ||
     !connection.enabled ||
     connection.tenantId !== scope.tenantId ||
     connection.ownerPrincipalId !== scope.principalId

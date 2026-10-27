@@ -577,7 +577,8 @@ async function persisted(
     sessionDirectory: fixture.sessions,
   }).openPersisted(fixture.workspace, backendConversationId);
   if (!manager) throw new Error("missing_persisted_session");
-  return manager;
+  // Fixture seeding represents an external Pi writer, not a detached read.
+  return SessionManager.open(manager.getSessionFile()!, undefined, fixture.workspace.canonicalPath);
 }
 
 describe("Pi viewed-image publication", () => {

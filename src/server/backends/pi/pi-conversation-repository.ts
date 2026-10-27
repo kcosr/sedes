@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { PiSessionClaims } from "./pi-session-claims.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { parsePiBindingDetail } from "./pi-session-store.js";
@@ -166,125 +167,132 @@ export class PiConversationRepository {
       readonly nativeSessionPath: string;
     },
   ): PiBindingDetailsRecord {
-    const existing = this.getBindingDetails(scope, applicationThreadId);
-    if (existing) {
-      if (existing.opaqueBindingDetail !== input.opaqueBindingDetail) {
-        // Legacy rows may carry app-authored creation fields
-        // (reservedTitle/creationOperationId) that the canonical
-        // serializer no longer emits. Binding identity is the canonical
-        // pair (backendConversationId + sessionFile); when it matches,
-        // heal the row to the canonical form instead of wedging
-        // discovery, so pre-repair databases self-recover.
-        let canonicallyEqual = false;
-        try {
-          const existingParsed = parsePiBindingDetail(
-            existing.opaqueBindingDetail,
-          );
-          const inputParsed = parsePiBindingDetail(input.opaqueBindingDetail);
-          canonicallyEqual =
-            existingParsed.backendConversationId ===
-              inputParsed.backendConversationId &&
-            existingParsed.sessionFile === inputParsed.sessionFile;
-        } catch {
-          canonicallyEqual = false;
+    return this.database.transaction(() => {
+      const claim = () => new PiSessionClaims(this.database).claimBound(scope, applicationThreadId,
+        { sessionId: input.backendConversationId, sessionFile: input.nativeSessionPath });
+      const existing = this.getBindingDetails(scope, applicationThreadId);
+      if (existing) {
+        if (existing.opaqueBindingDetail !== input.opaqueBindingDetail) {
+          // Legacy rows may carry app-authored creation fields
+          // (reservedTitle/creationOperationId) that the canonical
+          // serializer no longer emits. Binding identity is the canonical
+          // pair (backendConversationId + sessionFile); when it matches,
+          // heal the row to the canonical form instead of wedging
+          // discovery, so pre-repair databases self-recover.
+          let canonicallyEqual = false;
+          try {
+            const existingParsed = parsePiBindingDetail(
+              existing.opaqueBindingDetail,
+            );
+            const inputParsed = parsePiBindingDetail(input.opaqueBindingDetail);
+            canonicallyEqual =
+              existingParsed.backendConversationId ===
+                inputParsed.backendConversationId &&
+              existingParsed.sessionFile === inputParsed.sessionFile;
+          } catch {
+            canonicallyEqual = false;
+          }
+          if (!canonicallyEqual) {
+            throw new DomainError(
+              "conflict",
+              "The Pi binding already has different opaque binding details.",
+            );
+          }
+          claim();
+          this.database
+            .prepare(
+              `
+                UPDATE pi_binding_details
+                SET opaque_binding_detail = ?
+                WHERE tenant_id = ? AND owner_principal_id = ?
+                  AND application_thread_id = ?
+              `,
+            )
+            .run(
+              input.opaqueBindingDetail,
+              scope.tenantId,
+              scope.principalId,
+              applicationThreadId,
+            );
+          return this.getBindingDetails(scope, applicationThreadId)!;
         }
-        if (!canonicallyEqual) {
+        if (
+          existing.nativeSessionPath !== input.nativeSessionPath ||
+          existing.backendConversationId !== input.backendConversationId
+        ) {
           throw new DomainError(
             "conflict",
             "The Pi binding already has different opaque binding details.",
           );
         }
+        claim();
+        return existing;
+      }
+      const binding = this.database
+        .prepare(
+          `
+            SELECT backend_instance_id AS backendInstanceId,
+              execution_environment_id AS executionEnvironmentId,
+              backend_conversation_id AS backendConversationId
+            FROM conversation_bindings
+            WHERE tenant_id = ? AND owner_principal_id = ?
+              AND application_thread_id = ?
+          `,
+        )
+        .get(scope.tenantId, scope.principalId, applicationThreadId) as
+        | {
+            backendInstanceId: string;
+            executionEnvironmentId: string;
+            backendConversationId: string;
+          }
+        | undefined;
+      if (!binding) {
+        throw new DomainError(
+          "not_found",
+          "The conversation binding was not found.",
+        );
+      }
+      if (binding.backendConversationId !== input.backendConversationId) {
+        throw new DomainError(
+          "conflict",
+          "The Pi opaque binding identity does not match the conversation binding.",
+        );
+      }
+      claim();
+      try {
         this.database
           .prepare(
             `
-              UPDATE pi_binding_details
-              SET opaque_binding_detail = ?
-              WHERE tenant_id = ? AND owner_principal_id = ?
-                AND application_thread_id = ?
+              INSERT INTO pi_binding_details(
+                tenant_id, owner_principal_id, application_thread_id,
+                backend_instance_id, execution_environment_id,
+                opaque_binding_detail, native_session_path
+              )
+              VALUES (?, ?, ?, ?, ?, ?, ?)
             `,
           )
           .run(
-            input.opaqueBindingDetail,
             scope.tenantId,
             scope.principalId,
             applicationThreadId,
+            binding.backendInstanceId,
+            binding.executionEnvironmentId,
+            input.opaqueBindingDetail,
+            input.nativeSessionPath,
           );
-        return this.getBindingDetails(scope, applicationThreadId)!;
-      }
-      if (
-        existing.nativeSessionPath !== input.nativeSessionPath ||
-        existing.backendConversationId !== input.backendConversationId
-      ) {
-        throw new DomainError(
-          "conflict",
-          "The Pi binding already has different opaque binding details.",
-        );
-      }
-      return existing;
-    }
-    const binding = this.database
-      .prepare(
-        `
-          SELECT backend_instance_id AS backendInstanceId,
-            execution_environment_id AS executionEnvironmentId,
-            backend_conversation_id AS backendConversationId
-          FROM conversation_bindings
-          WHERE tenant_id = ? AND owner_principal_id = ?
-            AND application_thread_id = ?
-        `,
-      )
-      .get(scope.tenantId, scope.principalId, applicationThreadId) as
-      | {
-          backendInstanceId: string;
-          executionEnvironmentId: string;
-          backendConversationId: string;
+      } catch (error) {
+        if (piOwnershipConstraint(error)) {
+          throw new DomainError(
+            "conflict",
+            "This backend conversation is already attached to another thread.",
+            false,
+            { cause: error },
+          );
         }
-      | undefined;
-    if (!binding) {
-      throw new DomainError(
-        "not_found",
-        "The conversation binding was not found.",
-      );
-    }
-    if (binding.backendConversationId !== input.backendConversationId) {
-      throw new DomainError(
-        "conflict",
-        "The Pi opaque binding identity does not match the conversation binding.",
-      );
-    }
-    try {
-      this.database
-        .prepare(
-          `
-            INSERT INTO pi_binding_details(
-              tenant_id, owner_principal_id, application_thread_id,
-              backend_instance_id, execution_environment_id,
-              opaque_binding_detail, native_session_path
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-          `,
-        )
-        .run(
-          scope.tenantId,
-          scope.principalId,
-          applicationThreadId,
-          binding.backendInstanceId,
-          binding.executionEnvironmentId,
-          input.opaqueBindingDetail,
-          input.nativeSessionPath,
-        );
-    } catch (error) {
-      if (piOwnershipConstraint(error)) {
-        throw new DomainError(
-          "conflict",
-          "This backend conversation is already attached to another thread.",
-          false,
-          { cause: error },
-        );
+        throw error;
       }
-      throw error;
-    }
-    return this.getBindingDetails(scope, applicationThreadId)!;
+      return this.getBindingDetails(scope, applicationThreadId)!;
+    })();
   }
 
   getSettings(

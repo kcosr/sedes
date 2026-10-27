@@ -153,12 +153,13 @@ connector management and pairing retain their existing protocols. See
 | Workspace tools, context, and skills | Use the same remote engines and grants as SSH, including their search-tool and shell prerequisites. |
 | Terminals | Persistent sidecar-owned terminals reconnect with retained output when native PTY support is available. Missing native assets omit terminal support without disabling Files or provider connections. |
 | Codex | Provider connection and execution run through the persistent sidecar. Managed TUI additionally requires negotiated native PTY support. |
-| Pi | The Pi SDK stays on the Sedes server; the paired host supplies remote workspace operations. Pi is not installed or executed remotely by this feature. |
+| Pi SDK | The Pi SDK stays on the Sedes server; the paired host supplies remote workspace operations. Pi is not installed or executed remotely by this feature. |
+| Pi | On Linux/macOS, the installed Pi 1.4.0 CLI and native authentication, configuration, MCP servers, and sessions run on the persistent sidecar host. Files, attachments, and CLI tools require their own grants. |
 | Claude | On Linux/macOS with Node.js 24.18+, the pinned Agent SDK and authenticated Claude Code installation run through the persistent sidecar. Native Windows Claude is unsupported. Files, attachments, and CLI tools require their own grants. |
 | OpenCode v2 | On Linux, stable stock `opencode2` 2.1.1 or newer (tested through 2.1.1) runs as a Sedes-owned daemon or an external loopback HTTP/SSE server through the persistent sidecar. Native paths/authentication stay on the host. Agent tools require their explicit grant; no separate MCP helper install is needed. |
 | Grok | Remote execution remains intentionally unsupported; its current backend requires a local environment. |
 
-See the [Codex](backends/codex.md), [Claude](backends/claude.md), [OpenCode](backends/opencode.md), and [Pi](backends/pi.md) guides for provider
+See the [Codex](backends/codex.md), [Claude](backends/claude.md), [OpenCode](backends/opencode.md), [Pi](backends/pi-native.md), and [Pi SDK](backends/pi.md) guides for provider
 versions, executable/endpoint setup, tool prerequisites, and remaining limits.
 
 Windows file and image attachments preserve their native drive or UNC staging

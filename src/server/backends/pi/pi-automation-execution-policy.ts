@@ -6,7 +6,7 @@ import type { PiConversationRepository } from "./pi-conversation-repository.js";
 
 export class PiAutomationExecutionPolicy implements AutomationExecutionPolicy {
   constructor(
-    readonly settings: PiConversationRepository,
+    readonly settings: Pick<PiConversationRepository, "getSettings">,
     readonly modelPolicy: CompiledBackendModelPolicy,
   ) {}
 

@@ -147,7 +147,7 @@ describe("SourceScopedAgentToolService presentation", () => {
         adapter: "cli",
         request: {
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "archived-after-attach",
           input: {},
         },
@@ -187,7 +187,7 @@ describe("SourceScopedAgentToolService presentation", () => {
         adapter: "cli",
         request: {
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: `stale-${field}`,
           input: {},
         },
@@ -229,7 +229,7 @@ describe("SourceScopedAgentToolService presentation", () => {
           adapter: "cli" as const,
           request: {
             toolId: "agent.context",
-            schemaVersion: 3,
+            schemaVersion: 4,
             requestId: "live-policy",
             input: {},
           },
@@ -322,7 +322,7 @@ describe("SourceScopedAgentToolService presentation", () => {
         adapter: "pi_sdk",
         request: {
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "stale-native-call",
           input: {},
         },
@@ -345,7 +345,7 @@ describe("SourceScopedAgentToolService presentation", () => {
           adapter: "pi_sdk",
           request: {
             toolId: "agent.context",
-            schemaVersion: 3,
+            schemaVersion: 4,
             requestId: `native-${mode}-call`,
             input: {},
           },
@@ -371,7 +371,7 @@ describe("SourceScopedAgentToolService presentation", () => {
           adapter,
           request: {
             toolId: "agent.context",
-            schemaVersion: 3,
+            schemaVersion: 4,
             requestId: `native-${mode}-${adapter}-call`,
             input: {},
           },
@@ -397,7 +397,7 @@ describe("SourceScopedAgentToolService presentation", () => {
           adapter,
           request: {
             toolId: "agent.context",
-            schemaVersion: 3,
+            schemaVersion: 4,
             requestId: `cli-${adapter}-call`,
             input: {},
           },
@@ -436,7 +436,7 @@ describe("SourceScopedAgentToolService presentation", () => {
           adapter,
           request: {
             toolId: "agent.context",
-            schemaVersion: 3,
+            schemaVersion: 4,
             requestId: `${backendKind}-${surface}-${mode}-${adapter}`,
             input: {},
           },

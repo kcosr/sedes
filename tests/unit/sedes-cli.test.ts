@@ -524,7 +524,7 @@ describe("Sedes CLI", () => {
         ).toBe(sourceCapability);
         expect(JSON.parse(String(init?.body))).toEqual({
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "request-1",
           input: {},
         });
@@ -864,7 +864,7 @@ describe("Sedes CLI", () => {
     await expect(
       client.invoke({
         toolId: "agent.context",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "request-retried",
         input: {},
       }),
@@ -947,7 +947,7 @@ describe("Sedes CLI", () => {
       await expect(
         client.invoke({
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "request-node-http",
           input: {},
         }),
@@ -986,7 +986,7 @@ describe("Sedes CLI", () => {
     );
     await client.invoke({
       toolId: "agent.context",
-      schemaVersion: 3,
+      schemaVersion: 4,
       requestId: "request-prime",
       input: {},
     });
@@ -997,7 +997,7 @@ describe("Sedes CLI", () => {
     await expect(
       client.invoke({
         toolId: "agent.context",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "request-pre-delivery",
         input: {},
       }),

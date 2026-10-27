@@ -112,6 +112,20 @@ function definition(
 }
 
 describe("AgentToolRegistry", () => {
+  it("registers native Pi RPC independently from the SDK adapter", () => {
+    const registry = new AgentToolRegistry();
+    const rpcOnly = definition({
+      exposure: { adapters: ["pi_rpc"] },
+      execution: { ...definition().execution, adapterWaitCeilingMilliseconds: { pi_rpc: 30_000 } },
+      adapters: { pi: { name: "sedes_example_read", label: "Example read" } },
+    });
+    registry.register(rpcOnly);
+    expect(registry.resolveAdapterName("pi_rpc", "sedes_example_read").id).toBe("example.read");
+    expect(() => registry.resolveAdapterName("pi_sdk", "sedes_example_read")).toThrow("agent_tool_adapter_name_not_registered");
+    expect(() => new AgentToolRegistry().register({ ...rpcOnly, adapters: {} })).toThrow("agent_tool_pi_exposure_presentation_mismatch");
+    expect(() => new AgentToolRegistry().register({ ...rpcOnly, execution: { ...rpcOnly.execution, adapterWaitCeilingMilliseconds: { pi_sdk: 30_000 } } })).toThrow("agent_tool_adapter_wait_ceiling_missing");
+  });
+
   it("parses every committed artifact through the current HTTP contract", () => {
     for (const { id, schemaVersion } of CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES) {
       const artifact: unknown = JSON.parse(readFileSync(new URL(`../../src/server/agent-tools/schema/artifacts/${id}.v${schemaVersion}.json`, import.meta.url), "utf8"));
@@ -361,7 +375,7 @@ describe("AgentToolRegistry", () => {
     ).toThrowError(expect.objectContaining({ code: "permission_denied" }));
   });
 
-  it.each(["pi_sdk", "mcp", "http", "cli"] as const)("refreshes %s catalogs and invocation admission when research is enabled, disabled, and reenabled", adapter => {
+  it.each(["pi_sdk", "pi_rpc", "mcp", "http", "cli"] as const)("refreshes %s catalogs and invocation admission when research is enabled, disabled, and reenabled", adapter => {
     let available = false;
     const canonical = new CanonicalInlineAgentToolService({
       application: { readThreadStatus: async () => undefined },
@@ -500,13 +514,14 @@ describe("AgentToolRegistry", () => {
     expect(
       registry.resolveAdapterName("pi_sdk", "sedes_thread_status").id,
     ).toBe("thread.status");
+    expect(registry.resolveAdapterName("pi_rpc", "sedes_thread_status").id).toBe("thread.status");
     expect(registry.resolveAdapterName("http", "thread.status").id).toBe(
       "thread.status",
     );
     expect(registry.resolveAdapterName("cli", "thread.status").id).toBe(
       "thread.status",
     );
-    expect(registry.artifact("thread.status", 3)).toMatchObject({
+    expect(registry.artifact("thread.status", 4)).toMatchObject({
       deployment: { eligible: true },
       adapters: {
         http: { invocation: "inline" },
@@ -525,8 +540,8 @@ describe("AgentToolRegistry", () => {
     expect(
       registry.resolveAdapterName("mcp", "sedes_thread_status").id,
     ).toBe("thread.status");
-    expect(registry.artifact("thread.status", 3)).toMatchObject({
-      exposure: { adapters: ["cli", "http", "mcp", "pi_sdk"] },
+    expect(registry.artifact("thread.status", 4)).toMatchObject({
+      exposure: { adapters: ["cli", "http", "mcp", "pi_rpc", "pi_sdk"] },
       adapters: { mcp: { name: "sedes_thread_status" } },
       execution: { adapterWaitCeilingMilliseconds: { mcp: 30_000 } },
     });

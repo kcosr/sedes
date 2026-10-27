@@ -23,6 +23,7 @@ function fixture(options: {
   readonly reservedForkChildren?: readonly string[];
   readonly nativeArchive?: boolean;
   readonly connectionProfileIds?: readonly string[];
+  readonly sharedStoreClaimed?: boolean;
 } = {}) {
   const database = {
     transaction: <Result>(operation: () => Result) => operation,
@@ -103,6 +104,7 @@ function fixture(options: {
         "backend-1",
         {
           database,
+          isDiscoveredConversationClaimed: () => options.sharedStoreClaimed === true,
           initializeThread: () => undefined,
           saveBoundBindingDetail: () => undefined,
         },
@@ -142,6 +144,15 @@ function discoveredConversation(id: string) {
 }
 
 describe("BackendDiscoveryService scan policy", () => {
+  it("suppresses a provider-owned shared-store reservation before creating an application thread", async () => {
+    const current = fixture({ sharedStoreClaimed: true });
+    current.discover.mockResolvedValue({ conversations: [{ ...discoveredConversation("parent-reserved"), nativeAncestry: undefined }] });
+    await expect(current.service.discoverWorkspace(scope, "workspace-1", EXHAUSTIVE_DISCOVERY_SCAN,
+      neverAbortedSignal)).resolves.toMatchObject({ completion: "complete" });
+    expect(current.createUnboundThread).not.toHaveBeenCalled();
+    expect(current.onThreadChanged).not.toHaveBeenCalled();
+  });
+
   it("inspects omitted bindings through their own profile within a shared discovery namespace", async () => {
     const current = fixture({
       nativeArchive: true, connectionProfileIds: ["connection-1", "connection-2"],

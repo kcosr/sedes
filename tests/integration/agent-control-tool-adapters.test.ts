@@ -41,6 +41,7 @@ const scope: RequestScope = {
 const workspaceId = "019196f7-a0a8-7bc4-a89b-8cf013978402";
 const sourceThreadIds: Record<BackendKind, string> = {
   pi: "019196f7-a0a8-7bc4-a89b-8cf013978410",
+  pi_native: "019196f7-a0a8-7bc4-a89b-8cf013978415",
   codex_app_server: "019196f7-a0a8-7bc4-a89b-8cf013978411",
   claude_agent_sdk: "019196f7-a0a8-7bc4-a89b-8cf013978412",
   grok_build: "019196f7-a0a8-7bc4-a89b-8cf013978413",
@@ -574,7 +575,7 @@ describe("agent control tools through canonical adapters", () => {
                 : toolId === "thread.send"
                   ? 2
                 : toolId === "thread.status"
-                  ? 3
+                  ? 4
                   : 1,
           requestId,
           input,
@@ -620,7 +621,7 @@ describe("agent control tools through canonical adapters", () => {
       )
       .send({
         toolId: "thread.status",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "status-parent",
         input: { threadId: targetThreadId },
       })

@@ -135,7 +135,7 @@ const threadItemSchema = Type.Object(
       },
     ),
     backend: Type.String({
-      enum: ["pi", "codex_app_server", "claude_agent_sdk", "grok_build", "opencode"],
+      enum: ["pi", "pi_native", "codex_app_server", "claude_agent_sdk", "grok_build", "opencode"],
       maxLength: 32,
     }),
     lifecycle: Type.String({
@@ -295,7 +295,7 @@ export function createThreadListToolDefinition(
       concurrencyClass: "thread_list_read",
       uncertainExternalOutcome: false,
     },
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_list",
@@ -398,7 +398,7 @@ export function createThreadCreateToolDefinition(
       concurrencyClass: "thread_create_write",
       uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_create",

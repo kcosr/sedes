@@ -156,7 +156,7 @@ function invokeRemoteThreadStatus(
     adapter: "cli",
     request: {
       toolId: "thread.status",
-      schemaVersion: 3,
+      schemaVersion: 4,
       requestId: "cross-environment-request",
       input: { threadId: "remote-thread" },
     },
@@ -268,7 +268,7 @@ firstAuthority, testAgentToolExecutionAuthority);
         adapter: "http",
         request: {
           toolId: "thread.status",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "pre-restart-active-work",
           input: { threadId: thread.thread.id },
         },
@@ -360,7 +360,7 @@ secondAuthority, testAgentToolExecutionAuthority);
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "thread-scoped-after-restart",
           input: {},
         })
@@ -552,7 +552,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
           adapter: "pi_sdk",
           request: {
             toolId: "agent.context",
-            schemaVersion: 3,
+            schemaVersion: 4,
             requestId: "disabled-request",
             input: {},
           },
@@ -579,7 +579,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
           adapter: "pi_sdk",
           request: {
             toolId: "agent.context",
-            schemaVersion: 3,
+            schemaVersion: 4,
             requestId: "trusted-source-context",
             input: {},
           },
@@ -612,7 +612,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "native-http-request",
           input: {},
         })
@@ -645,7 +645,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "agent.context",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "context-request",
           input: {},
         })
@@ -664,7 +664,7 @@ sourceAuthority, testAgentToolExecutionAuthority);
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "thread.status",
-          schemaVersion: 3,
+          schemaVersion: 4,
           requestId: "status-request",
           input: { threadId: thread.thread.id },
         })

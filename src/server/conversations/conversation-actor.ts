@@ -293,6 +293,7 @@ export class ConversationActor {
   #replacingProjection = false;
   #handleCloseProven = false;
   #leaseReleaseProven = false;
+  #cleanupRetry: Promise<void> | undefined;
   #executionCloseBegun = false;
   #executionCloseFinished = false;
   #establishmentEpoch = 0;
@@ -442,6 +443,11 @@ export class ConversationActor {
     return this.#canRetire(false);
   }
 
+  /** Archive alone can use explicit native quiescence without completing history. */
+  get canRetireForArchive(): boolean {
+    return this.#canRetire(false, true);
+  }
+
   /** A resident native owner may allow idle presentation detachment only. */
   get initialProjectionUnavailable(): boolean {
     return this.#started && !this.#closing && !this.#closed && !this.#snapshotState && this.#projectionRecoveryRequired;
@@ -454,7 +460,7 @@ export class ConversationActor {
     return this.#canRetire(this.#handle.automaticEviction === "client_detach");
   }
 
-  #canRetire(clientDetach: boolean): boolean {
+  #canRetire(clientDetach: boolean, archive = false): boolean {
     if (!this.#started || this.#closing || this.#closed) return false;
     // A retained transcript may record an interrupted or externally active
     // provider. This reader owns no such work and is always safe to close.
@@ -467,7 +473,8 @@ export class ConversationActor {
       !this.#handle.retirementBlocked &&
       this.#pendingInteractions.size === 0 &&
       (clientDetach || !hasOutstandingBackgroundActivity(timeline.backgroundActivity)) &&
-      (timeline.runState === "idle" || timeline.runState === "failed")
+      (timeline.runState === "idle" || timeline.runState === "failed" ||
+        archive && timeline.runState === "disconnected" && this.#handle.archiveRetirementSafe === true)
     );
   }
 
@@ -1244,7 +1251,22 @@ export class ConversationActor {
   }
 
   close(beforeCleanup?: Promise<void>): Promise<void> {
-    if (this.#closed) return Promise.resolve();
+    if (this.#closed) {
+      if (!beforeCleanup || this.replacementSafe) return Promise.resolve();
+      // Only explicit Stop may retry a completed failed close. The actor
+      // remains closed, and the manager retains admission until both owned
+      // resources are positively released.
+      if (this.#cleanupRetry) return this.#cleanupRetry;
+      const retry = (async () => {
+        await beforeCleanup;
+        const failures: unknown[] = [];
+        await this.#closeExecutionResources(failures, false, true);
+        if (failures.length) throw new AggregateError(failures, "Conversation actor resources did not close cleanly.");
+      })();
+      this.#cleanupRetry = retry;
+      void retry.finally(() => { if (this.#cleanupRetry === retry) this.#cleanupRetry = undefined; }).catch(() => undefined);
+      return retry;
+    }
     if (this.#closePromise) return this.#closePromise;
     this.#closing = true;
     this.#notifyInputStateChanged();
@@ -1309,6 +1331,10 @@ export class ConversationActor {
 
   async closeIfIdle(): Promise<boolean> {
     return this.#closeConditionally(() => this.canEvict, true);
+  }
+
+  async closeIfSafeForArchive(): Promise<boolean> {
+    return this.#closeConditionally(() => this.canRetireForArchive, true);
   }
 
   async #closeConditionally(predicate: () => boolean, evicted = false): Promise<boolean> {
@@ -2098,20 +2124,29 @@ export class ConversationActor {
     } catch (error) {
       failures.push(error);
     }
-    try {
-      await this.#handle.close(evicted ? { reason: "evicted" } : undefined);
+    await this.#closeExecutionResources(failures, evicted);
+    if (!this.#executionCloseFinished) {
+      this.#executionCloseFinished = true;
+    }
+  }
+
+  async #closeExecutionResources(failures: unknown[], evicted = false, retry = false): Promise<void> {
+    if (!this.#handleCloseProven) try {
+      if (retry) {
+        if (!this.#handle.retryCloseAfterStop) throw new Error("conversation_actor_cleanup_retry_unsupported");
+        await this.#handle.retryCloseAfterStop();
+      } else {
+        await this.#handle.close(evicted ? { reason: "evicted" } : undefined);
+      }
       this.#handleCloseProven = true;
     } catch (error) {
       failures.push(error);
     }
-    try {
+    if (!this.#leaseReleaseProven) try {
       await this.#environmentLease?.release();
       this.#leaseReleaseProven = true;
     } catch (error) {
       failures.push(error);
-    }
-    if (!this.#executionCloseFinished) {
-      this.#executionCloseFinished = true;
     }
   }
 

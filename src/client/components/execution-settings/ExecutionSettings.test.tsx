@@ -805,7 +805,7 @@ describe("execution configuration administration", () => {
     for (const option of within(provider).getAllByRole("option")) expect(option).toBeDisabled();
     for (const id of [remoteId, outboundId, linuxOutboundId, localId]) {
       fireEvent.change(environment, { target: { value: id } });
-      for (const name of ["Claude", "Codex", "Pi SDK"]) expect(within(provider).getByRole("option", { name })).toBeEnabled();
+      for (const name of ["Claude", "Codex", "Pi", "Pi SDK"]) expect(within(provider).getByRole("option", { name })).toBeEnabled();
       expect(within(provider).getByRole("option", { name: "Grok" })).toHaveProperty("disabled", id !== localId);
       expect(within(provider).getByRole("option", { name: "OpenCode v2" })).toHaveProperty("disabled", id === outboundId);
     }
@@ -887,6 +887,35 @@ describe("execution configuration administration", () => {
       nativeStorePath: "/data/native.db", connection: { ownership: "external", channel: { type: "http", url: "http://127.0.0.1:4096",
         authentication: { type: "basic", username: "opencode", secret: { source: "protected_file", path: "/secrets/opencode" } } } },
     });
+  });
+
+  it.each([localId, remoteId, linuxOutboundId])("creates Pi on %s with host-local native settings", async environmentId => {
+    const api = controls(configurationWithOutbound());
+    renderAt("/settings/backends", api);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add backend" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Add backend" }));
+    fireEvent.change(screen.getByLabelText("Execution environment"), { target: { value: environmentId } });
+    fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "pi_native" } });
+    fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Native Pi" } });
+    expect(screen.getByLabelText("Trust Pi project resources")).not.toBeChecked();
+    fireEvent.click(screen.getByLabelText("Trust Pi project resources"));
+    fireEvent.click(screen.getByRole("button", { name: /^Advanced\s*Executable, native directories, start timeout$/u }));
+    fireEvent.change(screen.getByLabelText("Pi executable path"), { target: { value: "/opt/bin/pi" } });
+    fireEvent.change(screen.getByLabelText("Pi agent directory"), { target: { value: "/home/operator/.pi/agent" } });
+    fireEvent.change(screen.getByLabelText("Default model"), { target: { value: "fixed" } });
+    fireEvent.change(screen.getByLabelText("Default model provider"), { target: { value: "provider" } });
+    fireEvent.change(screen.getByLabelText("Default model identifier"), { target: { value: "model" } });
+    fireEvent.change(screen.getByLabelText("Default reasoning effort"), { target: { value: "high" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save backend" }));
+    await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledOnce());
+    const saved = api.saveConfiguration.mock.calls[0]![0].configuration;
+    expect(saved.backends[0]).toMatchObject({ kind: "pi_native", label: "Native Pi", moduleConfiguration: {
+      executablePath: "/opt/bin/pi", agentDirectory: "/home/operator/.pi/agent", initializationTimeoutMs: 30_000, projectTrusted: true,
+    } });
+    expect(saved.targets[0]).toMatchObject({ kind: "pi_rpc", executionEnvironmentId: environmentId, moduleConfiguration: {
+      defaults: { provider: "provider", model: "model", thinkingLevel: "high" },
+    } });
+    expect(api.configurationLifecycle).not.toHaveBeenCalled();
   });
 
   it.each([localId, remoteId, linuxOutboundId].flatMap(environmentId => (["process_stdio", "http"] as const).map(channel => ({ environmentId, channel }))))("creates OpenCode v2 on $environmentId using $channel", async ({ environmentId, channel }) => {

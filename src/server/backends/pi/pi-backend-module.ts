@@ -1,10 +1,11 @@
+import { PiSessionClaims } from "./pi-session-claims.js";
 import { createThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
-import { mkdir, realpath } from "node:fs/promises";
-import os from "node:os";
+import { realpathSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { ConnectionSettingPreferenceRepository } from "../../db/repositories/connection-setting-preference-repository.js";
 import { PiConversationRepository } from "./pi-conversation-repository.js";
-import { acquireNativeStoreLock, lockIdentity } from "../../security/locks.js";
+import { lockIdentity } from "../../security/locks.js";
 import {
   NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES,
   type BackendModule,
@@ -103,6 +104,7 @@ class PiBackendModuleRuntime implements BackendModuleRuntime {
         ? remoteServiceCwd
         : undefined;
     this.driverFactory = new PiBackendDriverFactory({
+      claimNativeSession: (scope, input) => new PiSessionClaims(context.database).reserve(scope, input),
       usage: context.usage,
       resolveThreadEnvironment: createThreadEnvironmentResolver(context),
       scope: context.scope,
@@ -212,7 +214,6 @@ class PreparedPiBackendModule implements PreparedBackendModule {
   readonly nativeNamespaces: PreparedBackendModule["nativeNamespaces"];
   readonly #storage: PiStorage;
   readonly #namespaceKey: string;
-  readonly #lockRuntimeRoot: string;
   readonly #executionEnvironmentId: string | undefined;
   readonly #workspacePathMode: "local_canonical" | "remote_semantic";
   readonly #modelPolicy: CompiledBackendModelPolicy;
@@ -262,36 +263,18 @@ class PreparedPiBackendModule implements PreparedBackendModule {
       executionEnvironment !== undefined && executionEnvironment.kind !== "local"
         ? "remote_semantic"
         : "local_canonical";
-    this.#namespaceKey = lockIdentity(this.#storage.sessionDirectory);
-    this.#lockRuntimeRoot = input.environment.XDG_RUNTIME_DIR
-      ? path.resolve(input.environment.XDG_RUNTIME_DIR)
-      : path.join(os.homedir(), ".local", "state");
-    this.nativeStores = input.backend.enabled
+    this.#namespaceKey = lockIdentity(canonicalPiStoreDirectory(this.#storage.sessionDirectory));
+    // Discovery ownership is distinct from writer ownership. SDK and native
+    // Pi can use different sessions in the same physical store concurrently.
+    this.nativeStores = Object.freeze([]);
+    this.nativeNamespaces = Object.freeze(input.backend.enabled
       ? [
           Object.freeze({
             sortKey: `pi\0${this.#namespaceKey}`,
             namespaceKey: this.#namespaceKey,
-            label: "Pi session store",
-            acquire: async () => {
-              await mkdir(this.#storage.sessionDirectory, {
-                mode: 0o700,
-                recursive: true,
-              });
-              const lock = await acquireNativeStoreLock(
-                await realpath(this.#storage.sessionDirectory),
-                this.#lockRuntimeRoot,
-                "Pi session store",
-              );
-              return { release: () => lock.release() };
-            },
           }),
         ]
-      : [];
-    this.nativeNamespaces = Object.freeze(
-      this.nativeStores.map(({ sortKey, namespaceKey }) =>
-        Object.freeze({ sortKey, namespaceKey }),
-      ),
-    );
+      : []);
   }
 
   createRuntime(context: BackendModuleRuntimeContext): BackendModuleRuntime {
@@ -318,6 +301,22 @@ class PreparedPiBackendModule implements PreparedBackendModule {
       this.#workspacePathMode,
       this.#modelPolicy,
     );
+  }
+}
+
+function canonicalPiStoreDirectory(directory: string): string {
+  let ancestor = directory;
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      return path.join(realpathSync(ancestor), ...missing);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) throw cause;
+      missing.unshift(path.basename(ancestor));
+      ancestor = parent;
+    }
   }
 }
 

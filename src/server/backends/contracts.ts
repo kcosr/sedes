@@ -23,9 +23,9 @@ import type {
 } from "../execution/contracts.js";
 
 export type BackendKind =
-  "pi" | "codex_app_server" | "claude_agent_sdk" | "grok_build" | "opencode";
+  "pi" | "pi_native" | "codex_app_server" | "claude_agent_sdk" | "grok_build" | "opencode";
 export type ConnectionKind =
-  "pi_sdk" | "codex_app_server" | "claude_agent_sdk" | "grok_acp" | "opencode_http";
+  "pi_sdk" | "pi_rpc" | "codex_app_server" | "claude_agent_sdk" | "grok_acp" | "opencode_http";
 
 /**
  * The single server-side mapping from a compiled backend's kind to its
@@ -37,6 +37,7 @@ export type ConnectionKind =
  */
 export const BACKEND_BRANDS: Readonly<Record<BackendKind, BackendBrand>> = {
   pi: "pi",
+  pi_native: "pi",
   codex_app_server: "codex",
   claude_agent_sdk: "claude",
   grok_build: "grok",
@@ -711,8 +712,17 @@ export interface ConversationHandle {
   /** Whether idle client eviction can detach while native background work remains resident. */
   readonly automaticEviction: "requires_quiescence" | "client_detach";
 
-  /** Provider outcomes still settling after live work ends; blocks automatic eviction only. */
+  /** Provider outcomes still settling after live work ends; blocks ordinary retirement. */
   readonly retirementBlocked?: boolean;
+
+  /**
+   * Current native quiescence permits archive-only retirement despite an
+   * incomplete historical turn. This never proves completion or admits input.
+   * Omission keeps ordinary strict retirement; providers invalidate this proof
+   * when observations change or fail. Archive rechecks provider residency after
+   * retiring the handle under the application admission fence.
+   */
+  readonly archiveRetirementSafe?: boolean;
 
   /**
    * Captures a replacement baseline only after the caller has detached the
@@ -782,6 +792,13 @@ export interface ConversationHandle {
    */
   subscribe(listener: (event: BackendConversationEvent) => void): Unsubscribe;
   close(options?: { readonly reason: "evicted" }): Promise<void>;
+  /**
+   * Retries an already failed handle cleanup after an explicit scoped Stop
+   * attempt. Success must prove release of the original owned resources;
+   * merely having marked the handle closed is insufficient. Absence keeps
+   * failed handle cleanup fenced. Never starts a replacement provider owner.
+   */
+  retryCloseAfterStop?(): Promise<void>;
 }
 
 export interface ConversationBackendDriver {
@@ -844,6 +861,8 @@ export interface ReleaseConversationResidencyInput {
   readonly binding: ConversationBinding;
   readonly workspace: ValidatedWorkspace;
   readonly opaqueBindingDetail: string;
+  /** Archive may distinguish current native work from incomplete history. */
+  readonly purpose?: "archive";
 }
 
 export interface BackendErrorShape {

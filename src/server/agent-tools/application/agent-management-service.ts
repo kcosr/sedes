@@ -404,7 +404,7 @@ export class AgentManagementService {
     ) {
       throw new Error("agent_thread_last_activity_after_invalid");
     }
-    const fingerprint = queryFingerprint("thread.list@6", [
+    const fingerprint = queryFingerprint(`${THREAD_LIST_TOOL.id}@${THREAD_LIST_TOOL.schemaVersion}`, [
       scope.tenantId,
       scope.principalId,
       requestedScope.kind,

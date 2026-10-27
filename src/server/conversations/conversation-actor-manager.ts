@@ -59,6 +59,7 @@ export interface AcquireConversationActorOptions {
 
 export type ConversationActorRetirementDisposition =
   | { readonly kind: "idle" }
+  | { readonly kind: "archive" }
   | { readonly kind: "unprojected_detach"; readonly expectedGeneration: string }
   | {
       readonly kind: "explicit_detach";
@@ -792,8 +793,16 @@ export class ConversationActorManager {
     const keys = [...new Set(input.applicationThreadIds.map(id => scopedActorKey(input.scope, id)))].sort();
     while (true) {
       if (this.#closing) throw new Error("conversation_actor_manager_closing");
-      const existing = keys.flatMap(key => this.#maintenance.get(key)?.completion ?? []);
-      if (existing.length) { await Promise.all(existing); continue; }
+      const previous = new Map(keys.map(key => [key, this.#maintenance.get(key)]));
+      const existing = [...previous.values()].filter(value => value !== undefined);
+      if (existing.length) {
+        // A completed failed retirement still fences ordinary acquisition,
+        // but explicit Stop must be able to retry cleanup for that owner.
+        // Never overtake pending maintenance or a newer scoped fence.
+        await Promise.allSettled(existing.map(value => value.completion));
+        if (this.#closing) throw new Error("conversation_actor_manager_closing");
+        if (keys.some(key => this.#maintenance.get(key) !== previous.get(key))) continue;
+      }
       let resolve!: () => void;
       let reject!: (error: unknown) => void;
       const completion = new Promise<void>((accept, fail) => { resolve = accept; reject = fail; });
@@ -1114,7 +1123,7 @@ export class ConversationActorManager {
     while (true) {
       const entry = this.#entries.get(key);
       if (!entry) {
-        if (disposition.kind !== "idle") {
+        if (disposition.kind !== "idle" && disposition.kind !== "archive") {
           throw new ConversationActorRetirementStaleError();
         }
         return;
@@ -1132,7 +1141,8 @@ export class ConversationActorManager {
         continue;
       }
       if (entry.references > 0) {
-        if (disposition.kind !== "idle" || (entry.established && entry.actor && !entry.actor.canEvict)) {
+        if ((disposition.kind !== "idle" && disposition.kind !== "archive") ||
+            (entry.established && entry.actor && !(disposition.kind === "archive" ? entry.actor.canRetireForArchive : entry.actor.canEvict))) {
           throw new ConversationActorRetirementBusyError();
         }
         // Snapshot readers borrow the same actor as mutations. Once admission
@@ -1207,10 +1217,10 @@ export class ConversationActorManager {
           throw new ConversationActorRetirementUnprovenError(error);
         }
       }
-      if (!entry.actor.canEvict) {
+      if (!(disposition.kind === "archive" ? entry.actor.canRetireForArchive : entry.actor.canEvict)) {
         throw new ConversationActorRetirementBusyError();
       }
-      const eviction = this.#beginEntryEviction(key, entry, true);
+      const eviction = this.#beginEntryEviction(key, entry, disposition.kind);
       if (!eviction) {
         if (this.#closing)
           throw new Error("conversation_actor_manager_closing");
@@ -1330,7 +1340,7 @@ export class ConversationActorManager {
   #beginEntryEviction(
     key: string,
     entry: ActorEntry,
-    strict = false,
+    disposition: "automatic" | "idle" | "archive" = "automatic",
   ): Promise<boolean> | undefined {
     const actor = entry.actor;
     if (
@@ -1339,7 +1349,7 @@ export class ConversationActorManager {
       this.#entries.get(key) !== entry ||
       entry.references > 0 ||
       entry.eviction ||
-      !(strict ? actor.canEvict : actor.canAutomaticallyEvict)
+      !(disposition === "archive" ? actor.canRetireForArchive : disposition === "idle" ? actor.canEvict : actor.canAutomaticallyEvict)
     ) {
       return undefined;
     }
@@ -1348,7 +1358,8 @@ export class ConversationActorManager {
     let eviction!: Promise<boolean>;
     eviction = (async () => {
       try {
-        closed = await (strict ? actor.closeIfIdle() : actor.closeIfAutomaticallyIdle());
+        closed = await (disposition === "archive" ? actor.closeIfSafeForArchive()
+          : disposition === "idle" ? actor.closeIfIdle() : actor.closeIfAutomaticallyIdle());
         return closed;
       } catch (error) {
         failure = error;

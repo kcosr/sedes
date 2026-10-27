@@ -79,7 +79,7 @@ export function createWebSearchToolDefinition(
     execution: {
       form: "inline",
       adapterWaitCeilingMilliseconds: {
-        pi_sdk: 105_000,
+        pi_sdk: 105_000, pi_rpc: 105_000,
         mcp: 105_000,
         http: 105_000,
         cli: 105_000,
@@ -92,7 +92,7 @@ export function createWebSearchToolDefinition(
       concurrencyClass: "web_search_model_read",
       uncertainExternalOutcome: false,
     },
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_research_web_search",

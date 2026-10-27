@@ -138,6 +138,36 @@ describe("LocalEnvironmentChannelProvider", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")("retries cleanup of the same process after a failed ownership check", async () => {
+    const provider = providerFor(scope);
+    const prepared = await provider.prepareOwnedProcess(scope, { executablePath: process.execPath, workingDirectory: process.cwd() });
+    const channel = await provider.openOwnedProcess(scope, { prepared,
+      arguments: ["-e", "process.stdin.resume(); process.stdin.on('end', () => {}); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready');"],
+      environment: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      cleanup: { gracefulCloseMilliseconds: 10, terminateMilliseconds: 10, killMilliseconds: 100 },
+    }, new AbortController().signal);
+    const identity = channel.identity.providerProcessIdentity;
+    if (identity.type !== "local_process_group") throw new Error("expected_local_process_group");
+    const iterator = channel.stdout[Symbol.asyncIterator]();
+    const ready = await iterator.next();
+    expect(Buffer.from(ready.value!).toString()).toBe("ready");
+    const originalKill = process.kill.bind(process);
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === -identity.processGroupId && (signal === "SIGTERM" || signal === "SIGKILL")) return true;
+      return originalKill(pid, signal);
+    });
+    try {
+      await expect(channel.close("first_close")).rejects.toThrow("environment_owned_process_group_survived");
+      await expect(channel.writeStdin(Buffer.from("no"))).rejects.toThrow("environment_owned_process_stdin_closed");
+      kill.mockRestore();
+      await Promise.all([channel.close("retry_close"), channel.close("concurrent_retry")]);
+      await expect(channel.closed).resolves.toMatchObject({ signal: "SIGKILL" });
+    } finally {
+      kill.mockRestore();
+      await channel.close("test_complete");
+    }
+  });
+
   it("resolves operator executables from PATH unless an explicit path is configured", async () => {
     const root = await mkdtemp(
       path.join(os.homedir(), ".sedes-executable-resolution-"),

@@ -12,6 +12,12 @@ import { DomainError } from "../domain/errors.js";
 
 export interface DiscoveredBackendThreadPersistence {
   readonly database: InventoryRepository["database"];
+  /** A shared native store may already have another bound or reserved owner. */
+  isDiscoveredConversationClaimed?(
+    scope: RequestScope,
+    connection: AgentConnectionProfile,
+    input: { readonly backendConversationId: string; readonly opaqueBindingDetail: string },
+  ): boolean;
   initializeThread(
     scope: RequestScope,
     applicationThreadId: string,
@@ -429,6 +435,7 @@ export class BackendDiscoveryService {
             return cancelledResult(pagesScanned, seen.size);
           }
           createdId = input.inventory.database.transaction(() => {
+            if (persistence.isDiscoveredConversationClaimed?.(scope, target.connection, discovered)) return undefined;
             const created = input.bindings.createUnboundThread(scope, {
               workspaceId,
               connectionProfileId: target.connection.id,
@@ -465,7 +472,7 @@ export class BackendDiscoveryService {
           );
           continue;
         }
-        changed.add(createdId);
+        if (createdId) changed.add(createdId);
       }
       if (scanFailure) break;
       cursor = page.nextCursor;

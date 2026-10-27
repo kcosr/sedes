@@ -1897,6 +1897,29 @@ describe("ThreadApplicationService", () => {
     ).toBeUndefined();
   });
 
+  it("keeps Stop available for an active control-only backend while fencing input and settings", async () => {
+    const { service } = createService({ runState: "running", deliveryModes: [], actions: [],
+      interactionKinds: [], includeInteraction: false, branchingAvailable: false, queue: [] });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(snapshot.capabilities.operations.find(({ id }) => id === "interrupt")).toMatchObject({ available: true });
+    expect(snapshot.capabilities.deliveryModes).toEqual([]);
+    expect(snapshot.capabilities.operations.some(({ id }) => id === "rename" || id === "compact")).toBe(false);
+    expect(snapshot.capabilities.settings).toEqual([expect.objectContaining({ id: "model", available: false })]);
+  });
+
+  it.each(["idle", "failed", "disconnected", "reconciling"] as const)("omits Stop for an inactive control-only backend in %s", async runState => {
+    const { service } = createService({ runState, deliveryModes: [], actions: [], includeInteraction: false, queue: [] });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(snapshot.capabilities.operations.some(({ id }) => id === "interrupt")).toBe(false);
+  });
+
+  it("does not add Stop to a read-only presentation with no input support", async () => {
+    const { service } = createService({ runState: "running", deliveryModes: [], actions: [],
+      interactionMode: "read_only", includeInteraction: false, queue: [] });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(snapshot.capabilities.operations.some(({ id }) => id === "interrupt")).toBe(false);
+  });
+
   it("offers durable Queue but no Steer for an active submit-only backend", async () => {
     const { service } = createService({
       runState: "running",

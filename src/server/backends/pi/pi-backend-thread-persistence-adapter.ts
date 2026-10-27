@@ -23,6 +23,7 @@ import {
   requirePiThinkingLevel,
 } from "./pi-thread-presentation-provider.js";
 import { isPiToolAccessMode } from "./pi-tool-access.js";
+import { PiSessionClaims } from "./pi-session-claims.js";
 
 /**
  * Pi's transactional participant in the backend-neutral conversation
@@ -36,6 +37,15 @@ export class PiBackendThreadPersistenceAdapter implements BackendThreadPersisten
   constructor(
     repository: PiConversationRepository,
     preferences: ConnectionSettingPreferenceRepository,
+    readonly profile: {
+      readonly connectionKind: "pi_sdk" | "pi_rpc";
+      readonly parseBinding: (value: string) => { readonly backendConversationId: string; readonly sessionFile: string };
+      readonly resolveDefaults?: (connection: AgentConnectionProfile) => { readonly modelProvider?: string; readonly modelId?: string; readonly thinkingLevel?: string };
+    } = { connectionKind: "pi_sdk", parseBinding: value => {
+      const parsed = parsePiBindingDetail(value);
+      return { backendConversationId: parsed.backendConversationId,
+        sessionFile: extractPiNativeSessionPath(value, parsed.backendConversationId) };
+    } },
   ) {
     if (repository.database !== preferences.database) {
       throw new Error("pi_preference_database_mismatch");
@@ -46,6 +56,16 @@ export class PiBackendThreadPersistenceAdapter implements BackendThreadPersisten
 
   get database(): Database.Database {
     return this.#pi.database;
+  }
+
+  isDiscoveredConversationClaimed(scope: RequestScope, connection: AgentConnectionProfile,
+    input: { readonly backendConversationId: string; readonly opaqueBindingDetail: string }): boolean {
+    const parsed = this.profile.parseBinding(input.opaqueBindingDetail);
+    if (parsed.backendConversationId !== input.backendConversationId) throw new DomainError("conflict", "The Pi discovery identity changed.");
+    return new PiSessionClaims(this.database).isClaimed(scope, {
+      backendInstanceId: connection.backendInstanceId, executionEnvironmentId: connection.executionEnvironmentId,
+      sessionId: parsed.backendConversationId, sessionFile: parsed.sessionFile,
+    });
   }
 
   initializeThread(
@@ -116,21 +136,24 @@ export class PiBackendThreadPersistenceAdapter implements BackendThreadPersisten
     catalog: BackendCatalog,
   ): void {
     this.#assertThreadTarget(scope, applicationThreadId, connection);
+    const defaults = this.profile.resolveDefaults?.(connection);
     const modelPreference = this.#preferences.find(
       scope,
       connection.id,
       "model",
     );
+    const nativeDefaults = catalog.models.filter(model => model.isDefault);
+    const nativeDefault = nativeDefaults.length === 1 ? nativeDefaults[0] : undefined;
     let preferredModel:
       { readonly provider: string; readonly modelId: string } | undefined;
     if (modelPreference) {
       try {
         const decoded = decodePiModelSetting(modelPreference.value);
         if (
-          catalog.models.some(
+          catalog.models.filter(
             ({ provider, id }) =>
               provider === decoded.provider && id === decoded.modelId,
-          )
+          ).length === 1
         ) {
           preferredModel = decoded;
         }
@@ -151,6 +174,22 @@ export class PiBackendThreadPersistenceAdapter implements BackendThreadPersisten
         );
       } catch {
         preferredThinkingLevel = undefined;
+      }
+    }
+    if (!modelPreference) {
+      if (defaults?.modelProvider && defaults.modelId) {
+        if (catalog.models.filter(model => model.provider === defaults.modelProvider && model.id === defaults.modelId).length === 1)
+          preferredModel = { provider: defaults.modelProvider, modelId: defaults.modelId };
+      } else if (nativeDefault) {
+        preferredModel = { provider: nativeDefault.provider, modelId: nativeDefault.id };
+      }
+    }
+    if (!thinkingPreference) {
+      const model = catalog.models.find(model => model.provider === preferredModel?.provider && model.id === preferredModel.modelId);
+      const defaultEffort = defaults?.thinkingLevel ?? (model === nativeDefault ? nativeDefault?.defaultReasoningEffort : undefined);
+      if (model && defaultEffort && (!model.supportedReasoningEfforts || model.supportedReasoningEfforts.includes(defaultEffort))) {
+        try { preferredThinkingLevel = requirePiThinkingLevel(defaultEffort); }
+        catch { preferredThinkingLevel = undefined; }
       }
     }
     this.#pi.initializeSettings(scope, applicationThreadId, {
@@ -210,7 +249,7 @@ export class PiBackendThreadPersistenceAdapter implements BackendThreadPersisten
     connection: AgentConnectionProfile,
   ): void {
     if (
-      connection.kind !== "pi_sdk" ||
+      connection.kind !== this.profile.connectionKind ||
       connection.tenantId !== scope.tenantId ||
       connection.ownerPrincipalId !== scope.principalId
     ) {
@@ -380,14 +419,11 @@ export class PiBackendThreadPersistenceAdapter implements BackendThreadPersisten
     applicationThreadId: string,
     opaqueBindingDetail: string,
   ): PiBindingDetailsRecord {
-    const parsed = parsePiBindingDetail(opaqueBindingDetail);
+    const parsed = this.profile.parseBinding(opaqueBindingDetail);
     return this.#pi.saveBindingDetails(scope, applicationThreadId, {
       backendConversationId: parsed.backendConversationId,
       opaqueBindingDetail,
-      nativeSessionPath: extractPiNativeSessionPath(
-        opaqueBindingDetail,
-        parsed.backendConversationId,
-      ),
+      nativeSessionPath: parsed.sessionFile,
     });
   }
 

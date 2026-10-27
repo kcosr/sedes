@@ -71,7 +71,7 @@ Escape closes an open editor before it leaves the page.
 ## Environments, backends, and targets
 
 **Environments** lists this machine, SSH hosts, and paired outbound hosts.
-**Backends** lists the Pi SDK, Codex, Claude, and local Grok backends, grouped
+**Backends** lists Pi, Pi SDK, Codex, Claude, local Grok, and OpenCode backends, grouped
 by environment. Both pages show a list and the selected item.
 
 ### List and detail

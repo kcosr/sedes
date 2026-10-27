@@ -3,6 +3,7 @@ import {
   EnvironmentProcessWriteError,
   validEnvironmentChannelScope,
   type EnvironmentOwnedProcessChannel,
+  type EnvironmentProcessClosure,
   type ExecutionEnvironmentChannelProvider,
   type PreparedEnvironmentOwnedProcess,
 } from "../../execution/environment-channel.js";
@@ -86,6 +87,7 @@ export class OwnedNdjsonStdioTransportFactory implements FramedTransportFactory 
   readonly #commandArguments: readonly string[];
   readonly #assuranceDiagnosticPrefix: string;
   readonly #transportDiagnosticPrefix: string;
+  readonly #onProcessClosed?: (closure: EnvironmentProcessClosure) => void;
 
   constructor(input: {
     readonly scope: ProviderTransportScope;
@@ -98,6 +100,8 @@ export class OwnedNdjsonStdioTransportFactory implements FramedTransportFactory 
     readonly retainStderr?: boolean;
     readonly assuranceDiagnosticPrefix: string;
     readonly transportDiagnosticPrefix: string;
+    /** Observational only; callback failures cannot affect process cleanup. */
+    readonly onProcessClosed?: (closure: EnvironmentProcessClosure) => void;
   }) {
     const transportDiagnosticPrefix = validatedDiagnosticPrefix(
       input.transportDiagnosticPrefix,
@@ -121,6 +125,7 @@ export class OwnedNdjsonStdioTransportFactory implements FramedTransportFactory 
     this.#sensitiveValues = Object.freeze([...(input.sensitiveValues ?? [])]);
     this.#retainStderr = input.retainStderr ?? true;
     this.#commandArguments = Object.freeze([...input.commandArguments]);
+    this.#onProcessClosed = input.onProcessClosed;
   }
 
   async open(
@@ -166,6 +171,7 @@ export class OwnedNdjsonStdioTransportFactory implements FramedTransportFactory 
         retainStderr: this.#retainStderr,
         assuranceDiagnosticPrefix: this.#assuranceDiagnosticPrefix,
         transportDiagnosticPrefix: this.#transportDiagnosticPrefix,
+        onProcessClosed: this.#onProcessClosed,
       });
     } catch (error) {
       try {
@@ -234,6 +240,7 @@ export class OwnedNdjsonStdioTransport implements FramedMessageTransport {
     readonly retainStderr?: boolean;
     readonly assuranceDiagnosticPrefix: string;
     readonly transportDiagnosticPrefix: string;
+    readonly onProcessClosed?: (closure: EnvironmentProcessClosure) => void;
   }) {
     this.#channel = input.channel;
     const assuranceDiagnosticPrefix = validatedDiagnosticPrefix(
@@ -266,6 +273,7 @@ export class OwnedNdjsonStdioTransport implements FramedMessageTransport {
     this.#stderrReader = Promise.resolve().then(async () => this.#readStderr());
     void input.channel.closed.then(
       (closure) => {
+        try { input.onProcessClosed?.(closure); } catch { /* Observational callbacks cannot affect cleanup. */ }
         this.#processExitDisposition =
           closure.reason === "spawn_error"
             ? "spawn_error"
@@ -458,6 +466,14 @@ export class OwnedNdjsonStdioTransport implements FramedMessageTransport {
   }
 
   async close(reason: string): Promise<void> {
+    // Protocol closure is permanent, but a failed process cleanup is not proof
+    // that the owner exited. Let an explicit close retry cleanup on that same
+    // channel while concurrent close calls still share one attempt.
+    if (this.#finalClosure?.reason === "orphaned_process_group" ||
+      this.#finalClosure?.reason === "process_cleanup_failed") {
+      this.#finalClosure = undefined;
+      this.#shutdownPromise = undefined;
+    }
     await this.#shutdown(reason);
     const closure = this.#finalClosure ?? (await this.closed);
     if (

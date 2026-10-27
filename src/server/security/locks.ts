@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, realpath, rm } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, opendir, realpath, rename, rm, rmdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import {
   processTableSupported,
@@ -14,8 +15,7 @@ interface LockMetadata {
   readonly ownerToken: string;
   /**
    * Opaque owner start token and boot identity, where the platform exposes
-   * them cheaply. Records written before these fields existed, and records
-   * from platforms without them, fall back to PID-only liveness.
+   * them cheaply. Platforms without them use PID-only liveness.
    */
   readonly processStartTime?: string;
   readonly bootId?: string;
@@ -23,6 +23,8 @@ interface LockMetadata {
 
 const START_TIME_PATTERN = /^[A-Za-z0-9 :]{1,64}$/u;
 const BOOT_ID_PATTERN = /^[A-Za-z0-9-]{1,80}$/u;
+const OWNER_FILE_PATTERN = /^owner-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$/u;
+const MAXIMUM_METADATA_BYTES = 16 * 1024;
 
 function isProcessRunning(pid: number): boolean {
   try {
@@ -99,6 +101,87 @@ function parseMetadata(value: string): LockMetadata | undefined {
   return undefined;
 }
 
+function errorCode(error: unknown): string | undefined {
+  return (error as NodeJS.ErrnoException).code;
+}
+
+async function readOwnerFile(filename: string): Promise<LockMetadata | undefined> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    const named = await lstat(filename);
+    if (!named.isFile()) return undefined;
+    handle = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const opened = await handle.stat();
+    if (!opened.isFile() || named.dev !== opened.dev || named.ino !== opened.ino ||
+        opened.size <= 0 || opened.size > MAXIMUM_METADATA_BYTES) return undefined;
+    const bytes = Buffer.alloc(MAXIMUM_METADATA_BYTES + 1);
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+    if (bytesRead !== opened.size || bytesRead > MAXIMUM_METADATA_BYTES) return undefined;
+    return parseMetadata(bytes.toString("utf8", 0, bytesRead));
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR", "ELOOP"].includes(errorCode(error) ?? "")) return undefined;
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
+/** Each published directory contains exactly one immutable, uniquely named
+ * owner record. A delayed stale reclaimer can remove only the old record;
+ * nonrecursive rmdir can never remove a replacement owner's populated lock.
+ */
+async function inspectLock(lockPath: string, unsafe: () => Error): Promise<{
+  readonly filename: string;
+  readonly metadata: LockMetadata;
+} | undefined> {
+  const stat = await lstat(lockPath).catch((error: unknown) => {
+    if (errorCode(error) === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!stat) return undefined;
+  // Existing regular-file locks are never migrated or removed implicitly.
+  if (!stat.isDirectory()) throw unsafe();
+  let filename: string | undefined;
+  const directory = await opendir(lockPath).catch((error: unknown) => {
+    if (errorCode(error) === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!directory) return undefined;
+  for await (const entry of directory) {
+    if (filename !== undefined || !entry.isFile() || !OWNER_FILE_PATTERN.test(entry.name)) throw unsafe();
+    filename = entry.name;
+  }
+  if (!filename) throw unsafe();
+  const metadata = await readOwnerFile(path.join(lockPath, filename));
+  if (!metadata) {
+    // Another reclaimer may have retired this exact record after our scan.
+    if (!await lstat(path.join(lockPath, filename)).catch((error: unknown) => {
+      if (["ENOENT", "ENOTDIR"].includes(errorCode(error) ?? "")) return undefined;
+      throw error;
+    })) return undefined;
+    throw unsafe();
+  }
+  if (OWNER_FILE_PATTERN.exec(filename)?.[1] !== metadata.ownerToken) throw unsafe();
+  return { filename, metadata };
+}
+
+async function removeOwner(lockPath: string, filename: string): Promise<void> {
+  try {
+    await unlink(path.join(lockPath, filename));
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR"].includes(errorCode(error) ?? "")) return;
+    throw error;
+  }
+  // Never use recursive removal. A replacement may have been published since
+  // unlink; its unique owner record makes this rmdir fail harmlessly.
+  try {
+    await rmdir(lockPath);
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR", "ENOTEMPTY", "EEXIST"].includes(errorCode(error) ?? "")) return;
+    throw error;
+  }
+}
+
 export class ExclusiveProcessLock {
   private released = false;
 
@@ -121,44 +204,45 @@ export class ExclusiveProcessLock {
       ownerToken: randomUUID(),
       ...(await currentProcessLiveness()),
     };
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    const filename = `owner-${metadata.ownerToken}.json`;
+    const candidate = `${lockPath}.candidate-${metadata.ownerToken}`;
+    const unsafe = () => new Error(`The Sedes ${resourceLabel} lock (${identityHash.slice(0, 12)}) cannot be recovered safely.`);
+    await mkdir(candidate, { mode: 0o700 });
+    try {
+      const handle = await open(path.join(candidate, filename), "wx", 0o600);
       try {
-        const handle = await open(lockPath, "wx", 0o600);
-        try {
-          await handle.writeFile(`${JSON.stringify(metadata)}\n`, "utf8");
-          await handle.sync();
-        } finally {
-          await handle.close();
-        }
-        return new ExclusiveProcessLock(
-          lockPath,
-          identityHash,
-          metadata.ownerToken,
-        );
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-          throw error;
-        }
-
-        const existing = await readFile(lockPath, "utf8")
-          .then(parseMetadata)
-          .catch(() => undefined);
-        if (!existing || existing.identityHash !== identityHash) {
-          throw new Error(
-            `The Sedes ${resourceLabel} lock (${identityHash.slice(0, 12)}) cannot be recovered safely.`,
-          );
-        }
-        if (await isLockOwnerRunning(existing)) {
-          throw new Error(
-            `Another Sedes process owns this ${resourceLabel} (lock ${identityHash.slice(0, 12)}).`,
-          );
-        }
-        await rm(lockPath);
+        await handle.writeFile(`${JSON.stringify(metadata)}\n`, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
       }
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const existing = await inspectLock(lockPath, unsafe);
+        if (existing) {
+          if (existing.metadata.identityHash !== identityHash) throw unsafe();
+          if (await isLockOwnerRunning(existing.metadata)) {
+            throw new Error(`Another Sedes process owns this ${resourceLabel} (lock ${identityHash.slice(0, 12)}).`);
+          }
+          await removeOwner(lockPath, existing.filename);
+        }
+        try {
+          // Publish only a populated directory. A live lock is never empty,
+          // so rename cannot replace another owner on any supported platform.
+          await rename(candidate, lockPath);
+          return new ExclusiveProcessLock(lockPath, identityHash, metadata.ownerToken);
+        } catch (error) {
+          if (!["EEXIST", "ENOTEMPTY", "ENOTDIR", "EISDIR", "EPERM"].includes(errorCode(error) ?? "")) throw error;
+          if (!await lstat(lockPath).catch((cause: unknown) => {
+            if (errorCode(cause) === "ENOENT") return undefined;
+            throw cause;
+          })) throw error;
+        }
+      }
+      throw new Error("Could not acquire the Sedes process lock.");
+    } finally {
+      // This unique unpublished candidate belongs only to this attempt.
+      await rm(candidate, { recursive: true, force: true });
     }
-
-    throw new Error("Could not acquire the Sedes process lock.");
   }
 
   async release(): Promise<void> {
@@ -166,21 +250,14 @@ export class ExclusiveProcessLock {
       return;
     }
 
-    const existing = await readFile(this.lockPath, "utf8").then(
-      parseMetadata,
-      (error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") {
-          return undefined;
-        }
-        throw error;
-      },
-    );
+    const filename = `owner-${this.ownerToken}.json`;
+    const existing = await readOwnerFile(path.join(this.lockPath, filename));
     if (
       existing?.pid === process.pid &&
       existing.identityHash === this.identityHash &&
       existing.ownerToken === this.ownerToken
     ) {
-      await rm(this.lockPath, { force: true });
+      await removeOwner(this.lockPath, filename);
     }
     this.released = true;
   }

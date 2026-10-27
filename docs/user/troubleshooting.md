@@ -53,7 +53,8 @@ file permissions.
 
 Check the provider guide:
 
-- [Pi](../operator/backends/pi.md#troubleshooting)
+- [Pi](../operator/backends/pi-native.md#troubleshooting-and-verification)
+- [Pi SDK](../operator/backends/pi.md#troubleshooting)
 - [Codex](../operator/backends/codex.md#troubleshooting)
 - [Claude](../operator/backends/claude.md#troubleshooting)
 - [Grok](../operator/backends/grok.md)

@@ -3,13 +3,16 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as processTable from "../../src/server/runtime/process-table.js";
 import {
   acquireStateDirectoryLock,
   lockIdentity,
@@ -33,15 +36,22 @@ async function lockFixture() {
   };
 }
 
+async function readLock(lockPath: string): Promise<Record<string, unknown>> {
+  const files = await readdir(lockPath);
+  expect(files).toHaveLength(1);
+  return JSON.parse(await readFile(path.join(lockPath, files[0]!), "utf8")) as Record<string, unknown>;
+}
+
 async function writeLock(lockPath: string, record: Record<string, unknown>) {
-  await writeFile(
-    lockPath,
-    `${JSON.stringify({ startedAt: new Date(0).toISOString(), ...record })}\n`,
-    { mode: 0o600 },
-  );
+  const ownerToken = randomUUID();
+  await rm(lockPath, { recursive: true, force: true });
+  await mkdir(lockPath);
+  await writeFile(path.join(lockPath, `owner-${ownerToken}.json`),
+    `${JSON.stringify({ startedAt: new Date(0).toISOString(), ...record, ownerToken })}\n`, { mode: 0o600 });
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
 
@@ -52,7 +62,7 @@ describe("exclusive process locks", () => {
     const stateDirectory = path.join(root, "state");
     const first = await acquireStateDirectoryLock(stateDirectory);
     const lockPath = path.join(stateDirectory, ".state.lock");
-    const metadata = JSON.parse(await readFile(lockPath, "utf8")) as {
+    const metadata = await readLock(lockPath) as {
       pid: number;
       identityHash: string;
       ownerToken: string;
@@ -78,23 +88,14 @@ describe("exclusive process locks", () => {
     await mkdir(stateDirectory);
     const identityHash = lockIdentity(await realpath(stateDirectory));
     const lockPath = path.join(stateDirectory, ".state.lock");
-    await writeFile(
-      lockPath,
-      `${JSON.stringify({
-        pid: 2_147_483_647,
-        startedAt: new Date(0).toISOString(),
-        identityHash,
-        ownerToken: "stale-owner",
-      })}\n`,
-      { mode: 0o600 },
-    );
+    await writeLock(lockPath, { pid: 2_147_483_647, identityHash });
 
     const owner = await acquireStateDirectoryLock(stateDirectory);
     const replacementMetadata = {
-      ...(JSON.parse(await readFile(lockPath, "utf8")) as Record<string, unknown>),
+      ...await readLock(lockPath),
       ownerToken: "replacement-owner",
     };
-    await writeFile(lockPath, `${JSON.stringify(replacementMetadata)}\n`);
+    await writeLock(lockPath, replacementMetadata);
     await owner.release();
     await expect(access(lockPath)).resolves.toBeUndefined();
   });
@@ -106,9 +107,7 @@ describe("exclusive process locks", () => {
       roots.push(root);
       const stateDirectory = path.join(root, "state");
       const owner = await acquireStateDirectoryLock(stateDirectory);
-      const metadata = JSON.parse(
-        await readFile(path.join(stateDirectory, ".state.lock"), "utf8"),
-      ) as Record<string, unknown>;
+      const metadata = await readLock(path.join(stateDirectory, ".state.lock"));
       const self = (await readProcessEntries([process.pid])).get(process.pid);
       expect(metadata.processStartTime).toBe(self?.startTime);
       if (process.platform === "linux") {
@@ -144,7 +143,7 @@ describe("exclusive process locks", () => {
     },
   );
 
-  it("keeps a live owner's lock, including PID-only records from older builds", async () => {
+  it("keeps live owners, including platforms with PID-only liveness", async () => {
     const { stateDirectory, lockPath, identityHash } = await lockFixture();
     await writeLock(lockPath, { pid: process.pid, identityHash, ownerToken: "legacy-owner" });
     await expect(acquireStateDirectoryLock(stateDirectory)).rejects.toThrow(
@@ -174,5 +173,69 @@ describe("exclusive process locks", () => {
     expect(lockIdentity("/secret/native/store")).not.toBe(
       lockIdentity("/another/store"),
     );
+  });
+
+  it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
+    "a delayed stale reclaimer cannot remove a replacement owner's lock",
+    async () => {
+      const { stateDirectory, lockPath, identityHash } = await lockFixture();
+      await writeLock(lockPath, { pid: process.pid, identityHash, processStartTime: "previous process" });
+      const readProcesses = processTable.readProcessEntries;
+      let reached!: () => void;
+      let resume!: () => void;
+      const reachedStaleRead = new Promise<void>(resolve => { reached = resolve; });
+      const resumeStaleRead = new Promise<void>(resolve => { resume = resolve; });
+      let reads = 0;
+      vi.spyOn(processTable, "readProcessEntries").mockImplementation(async pids => {
+        if (++reads === 2) { reached(); await resumeStaleRead; }
+        return readProcesses(pids);
+      });
+      const delayed = acquireStateDirectoryLock(stateDirectory).then(
+        lock => ({ status: "fulfilled" as const, lock }),
+        error => ({ status: "rejected" as const, error }),
+      );
+      await reachedStaleRead;
+      const replacement = await acquireStateDirectoryLock(stateDirectory);
+      const replacementMetadata = await readLock(lockPath);
+      resume();
+      const result = await delayed;
+      if (result.status === "fulfilled") await result.lock.release();
+      expect(result.status).toBe("rejected");
+      expect(await readLock(lockPath)).toEqual(replacementMetadata);
+      await expect(acquireStateDirectoryLock(stateDirectory)).rejects.toThrow("Another Sedes process");
+      await replacement.release();
+      expect(await readdir(stateDirectory)).toEqual([]);
+    },
+  );
+
+  it("admits only one concurrent stale-lock replacement", async () => {
+    const { stateDirectory, lockPath, identityHash } = await lockFixture();
+    await writeLock(lockPath, { pid: 2_147_483_647, identityHash });
+    const attempts = await Promise.allSettled(Array.from({ length: 16 }, () => acquireStateDirectoryLock(stateDirectory)));
+    const owners = attempts.filter(attempt => attempt.status === "fulfilled");
+    try {
+      expect(owners).toHaveLength(1);
+      await expect(acquireStateDirectoryLock(stateDirectory)).rejects.toThrow("Another Sedes process");
+    } finally {
+      await Promise.all(owners.map(owner => owner.value.release()));
+    }
+    expect(await readdir(stateDirectory)).toEqual([]);
+  });
+
+  it("preserves regular-file locks and malformed lock directories for explicit recovery", async () => {
+    const { stateDirectory, lockPath, identityHash } = await lockFixture();
+    for (const pid of [process.pid, 2_147_483_647]) {
+      const record = JSON.stringify({ pid, identityHash, ownerToken: randomUUID(), startedAt: new Date(0).toISOString() });
+      await writeFile(lockPath, record);
+      await expect(acquireStateDirectoryLock(stateDirectory)).rejects.toThrow("cannot be recovered safely");
+      expect(await readFile(lockPath, "utf8")).toBe(record);
+      await rm(lockPath);
+    }
+    await mkdir(lockPath);
+    await expect(acquireStateDirectoryLock(stateDirectory)).rejects.toThrow("cannot be recovered safely");
+    expect(await readdir(lockPath)).toEqual([]);
+    await writeFile(path.join(lockPath, "unknown.json"), "unrecognized owner");
+    await expect(acquireStateDirectoryLock(stateDirectory)).rejects.toThrow("cannot be recovered safely");
+    expect(await readFile(path.join(lockPath, "unknown.json"), "utf8")).toBe("unrecognized owner");
   });
 });

@@ -201,7 +201,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "agent.context": threadOnlyManifestEntry({
     environmentAuthority: { kind: "source_only" },
     id: "agent.context",
-    schemaVersion: 3,
+    schemaVersion: 4,
     description: "Returns the Sedes source thread, workspace, project, and backend.",
     catalog: { groupId: "context", label: "Agent context", order: 10 },
     effects: { application: "read", modelUsage: "none", external: "none" },
@@ -269,7 +269,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "thread.status": manifestEntry({
     environmentAuthority: { kind: "direct_resource", resource: "thread" },
     id: "thread.status",
-    schemaVersion: 3,
+    schemaVersion: 4,
     description:
       "Returns bounded lifecycle, activity, and read-only pin state for a Sedes thread.",
     catalog: { groupId: "threads", label: "Thread status", order: 10 },
@@ -278,7 +278,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "thread.list": manifestEntry({
     environmentAuthority: { kind: "scoped_query", resource: "thread" },
     id: "thread.list",
-    schemaVersion: 7,
+    schemaVersion: 8,
     description:
       "Searches admitted principal-owned Sedes threads, including read-only pin state, defaulting to the caller's configured environment with newest activity first.",
     catalog: { groupId: "threads", label: "List threads", order: 20 },

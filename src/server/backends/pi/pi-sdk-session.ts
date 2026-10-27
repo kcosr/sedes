@@ -1,7 +1,7 @@
 import { mergeResolvedEnvironment, type ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { disposePiSession } from "./pi-session-disposal.js";
+import { disposePiSession as disposeNativePiSession } from "./pi-session-disposal.js";
 import {
   createAgentSessionFromServices,
   createAgentSessionServices,
@@ -145,6 +145,22 @@ export interface PiSdkSession {
     readonly expandPromptTemplates: boolean;
   }>;
   dispose(): Promise<void>;
+}
+
+/** A failed native teardown must retain the session writer lease. */
+export class PiSdkSessionCleanupFailure extends Error {
+  constructor(cause: unknown) {
+    super("Pi session cleanup could not be confirmed.", { cause });
+    this.name = "PiSdkSessionCleanupFailure";
+  }
+}
+
+async function disposePiSession(session: AgentSession): Promise<void> {
+  try {
+    await disposeNativePiSession(session);
+  } catch (cause) {
+    throw new PiSdkSessionCleanupFailure(cause);
+  }
 }
 
 export interface PiSteerAdmission {

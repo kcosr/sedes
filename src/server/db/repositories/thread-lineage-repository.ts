@@ -843,6 +843,8 @@ export class ThreadLineageRepository {
       };
       scopedDelete("thread_lineage_placement", "child_thread_id");
       scopedDelete("thread_fork_origins", "child_thread_id");
+      scopedDelete("pi_native_submission_details", "application_thread_id");
+      scopedDelete("pi_native_operations", "application_thread_id");
       scopedDelete("conversation_creation_attempts", "application_thread_id");
       this.database
         .prepare(
@@ -853,6 +855,7 @@ export class ThreadLineageRepository {
         )
         .run(scope.tenantId, scope.principalId, origin.sourceCheckpointId);
       scopedDelete("pi_thread_settings", "application_thread_id");
+      scopedDelete("pi_native_thread_settings", "application_thread_id");
       scopedDelete("codex_thread_execution_settings", "application_thread_id");
       scopedDelete("prompt_stashes", "thread_id");
       scopedDelete("thread_drafts", "thread_id");

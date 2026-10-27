@@ -47,7 +47,7 @@ export function createImageShowToolDefinition(service: ImageShowAgentToolService
       maximumInputBytes: 32 * 1024, maximumOutputBytes: 8 * 1024,
       concurrencyClass: "image_show", uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
     adapters: {
       pi: { name: "sedes_image_show", label: manifest.catalog.label, promptSnippet: manifest.description },
       mcp: { name: "sedes_image_show", title: manifest.catalog.label },

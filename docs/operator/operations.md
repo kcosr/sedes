@@ -562,12 +562,20 @@ restart-safe agent-tool thread source references, provider-private operation,
 context, Task, attachment and history provenance, and principal Tool client
 verifiers. Losing or replacing it breaks continuity of that evidence and
 invalidates outstanding source references and Tool client credentials.
-Treat the entire directory as one backup unit. `.state.lock` is separate transient
-process-ownership metadata and is removed after a clean shutdown. State and
-native-store locks record the owner's PID, and on Linux and macOS its process
-start time and boot identity. The next start recovers a lock whose owner exited,
-including one whose PID now belongs to an unrelated process; a PID-only record
-from an older build or from Windows is recovered only once that PID is gone.
+Treat the entire directory as one backup unit. `.state.lock` is a separate
+transient process-ownership directory and is removed after a clean shutdown.
+State and native-store locks contain one uniquely named owner record with the
+owner's PID, and on Linux and macOS its process start time and boot identity.
+The next start recovers a lock whose owner exited, including one whose PID now
+belongs to an unrelated process; Windows records require that PID to be gone.
+Concurrent recovery cannot remove a replacement owner's record.
+
+Stop older servers cleanly before upgrading to directory locks. Existing
+regular-file locks and malformed lock directories are preserved for explicit
+recovery. If startup reports that a lock cannot be recovered safely, establish
+that its prior owner and any native child processes have exited before removing
+that lock. Native Pi's separate writer marker still blocks recovery when child
+cleanup is unproven; see [Pi runtime ownership](backends/pi-native.md#ownership-reconnect-and-recovery).
 
 The overlay stores Sedes-owned state: projects, inventory, drafts, stashes,
 principal execution configuration, runtime preferences and receipts, the

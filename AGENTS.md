@@ -117,7 +117,7 @@ coordinator scripts, not raw Playwright, so ports, state, artifacts, and process
 cleanup remain isolated.
 
 Do not run live-provider Pi, Codex, Claude, Grok, or OpenCode suites by default.
-These include `test:real-pi*`, `test:real-codex*`, `test:real-claude*`,
+These include `test:real-pi*`, `test:live-pi-native`, `test:real-codex*`, `test:real-claude*`,
 `test:real-grok*`, and `test:live-opencode`. They consume live provider capacity
 and may require authenticated external services. When work materially changes
 a backend's protocol handling, streaming, history, lifecycle, tools, or provider
@@ -130,11 +130,20 @@ OpenCode's separate `test:real-opencode` suite uses an isolated stock binary
 and loopback model/MCP fixtures only; it does not call authenticated providers.
 It does not replace the explicitly authorized `test:live-opencode` gate.
 
-When the user authorizes a real-Pi suite, preserve the `test:real-pi` and
-`test:real-pi-cli` self-gates on exactly one authenticated AW Qwen
+Pi's separate `test:real-pi-native` suite is also an offline exception: it uses
+an explicitly selected stock Pi 1.4.0 executable, disposable native state,
+and loopback model/MCP fixtures with no operator credentials. It does not
+replace the authorized `test:real-pi` or `test:real-pi-cli` live gates.
+
+When the user authorizes a live Pi suite, preserve the `test:real-pi`,
+`test:real-pi-cli`, and `test:live-pi-native` self-gates on exactly one authenticated AW Qwen
 `aw-qwen-3-8-27b/aw-qwen-3-8-27b` provider/model pair with low reasoning and
 read-only tools verified before
-prompting; do not weaken either gate or point it at an existing session.
+prompting; do not weaken these gates or point them at an existing session.
+The native gate also requires `SEDES_RUN_LIVE_PI_NATIVE=1` and an absolute
+`SEDES_LIVE_PI_NATIVE_EXECUTABLE` selecting isolated stock Pi 1.4.0. It uses
+temporary agent/session/workspace directories and references native auth/model
+files without copying credentials. Keep it separate from offline qualification.
 
 For live delivery or client-rendering debugging, use only the implemented,
 gated diagnostics documented in

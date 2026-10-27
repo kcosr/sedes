@@ -1,5 +1,5 @@
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -199,7 +199,7 @@ describe("Pi backend module", () => {
     closeFactory.mockRestore();
   });
 
-  it.each(["ssh", "outbound"] as const)("plans and locks an isolated %s store before runtime without starting its sidecar", async (kind) => {
+  it.each(["ssh", "outbound"] as const)("claims an isolated %s discovery namespace without locking the store or starting its sidecar", async (kind) => {
     const root = await mkdtemp(
       path.join(os.tmpdir(), "sedes-pi-remote-store-"),
     );
@@ -231,7 +231,8 @@ describe("Pi backend module", () => {
       },
     });
 
-    expect(prepared.nativeStores).toHaveLength(1);
+    expect(prepared.nativeStores).toEqual([]);
+    expect(prepared.nativeNamespaces).toHaveLength(1);
     const expectedStorage = resolveRemotePiStorage(
       {
         installationStateDirectory: stateDirectory,
@@ -240,17 +241,10 @@ describe("Pi backend module", () => {
       },
       { PI_CODING_AGENT_DIR: path.join(root, "agent") },
     );
-    expect(prepared.nativeStores[0]).toMatchObject({
+    expect(prepared.nativeNamespaces[0]).toMatchObject({
       namespaceKey: lockIdentity(expectedStorage.sessionDirectory),
       sortKey: `pi\0${lockIdentity(expectedStorage.sessionDirectory)}`,
     });
-    const lease = await prepared.nativeStores[0]!.acquire();
-    const remoteStore = path.join(
-      stateDirectory,
-      "remote-pi-native-sessions",
-      "v1",
-    );
-    expect(await realpath(remoteStore)).toBe(remoteStore);
     expect(expectedStorage.sessionDirectory).not.toBe(
       path.join(root, "local-sessions"),
     );
@@ -324,7 +318,6 @@ describe("Pi backend module", () => {
     expect(channelTouched).toBe(false);
 
     await runtime.close();
-    await lease.release();
   });
 
   it("rejects a configured local Pi store that overlaps a remote namespace before acquisition", () => {
@@ -385,5 +378,25 @@ describe("Pi backend module", () => {
     expect(() => planBackendNativeStores([remote, local])).toThrow(
       "backend_native_namespace_reused",
     );
+  });
+
+  it("rejects duplicate SDK discovery ownership through an existing parent alias", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sedes-pi-namespace-"));
+    temporaryDirectories.push(root);
+    const actual = path.join(root, "actual");
+    const alias = path.join(root, "alias");
+    await mkdir(actual);
+    await symlink(actual, alias, "dir");
+    const prepare = (id: string, directory: string) => new PiBackendModule().prepare({
+      backend: { id, kind: "pi", protocolRelease: "0.86.0", enabled: true, modelPolicy: { type: "catalog" } },
+      connections: [{ id: `${id}-connection`, kind: "pi_sdk", backendInstanceId: id, executionEnvironmentId: "local", enabled: true }],
+      executionEnvironments: [{ id: "local", kind: "local" }],
+      environment: { PI_CODING_AGENT_SESSION_DIR: path.join(directory, "new", "sessions") },
+    });
+    const first = prepare("first", actual);
+    const second = prepare("second", alias);
+    expect(first.nativeStores).toEqual([]);
+    expect(first.nativeNamespaces).toEqual(second.nativeNamespaces);
+    expect(() => planBackendNativeStores([first, second])).toThrow("backend_native_namespace_reused");
   });
 });

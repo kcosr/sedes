@@ -16,13 +16,7 @@ export function initializeDatabaseConfigurationFixture(database: Database.Databa
   const now = () => options.now ?? Date.now();
   const repository = new ConfigurationRepository(database, now);
   const catalog = compiledBackendModuleCatalog;
-  const projection = new ConfigurationProjection(database, {
-    pi: catalog.protocolReleaseForBackendKind("pi"),
-    codex_app_server: catalog.protocolReleaseForBackendKind("codex_app_server"),
-    claude_agent_sdk: catalog.protocolReleaseForBackendKind("claude_agent_sdk"),
-    grok_build: catalog.protocolReleaseForBackendKind("grok_build"),
-    opencode: catalog.protocolReleaseForBackendKind("opencode"),
-  }, now);
+  const projection = new ConfigurationProjection(database, catalog.protocolReleases(), now);
   const snapshot = repository.initialize(scope, document, {
     sourceFingerprint: configurationFingerprint(document), sourceLabel: options.sourceLabel,
   }, () => {

@@ -1,3 +1,4 @@
+import type { PiSessionReservation } from "./pi-session-claims.js";
 import { ConversationInterruptLedger } from "../conversation-interrupt.js";
 import { PiUsageAccounting } from "./pi-usage-accounting.js";
 import { TurnThroughputRecorder } from "../turn-throughput.js";
@@ -137,6 +138,7 @@ import {
   piModels,
   piSupportedThinkingLevels,
   piUsage,
+  PiSdkSessionCleanupFailure,
   type PiSdkSession,
   type PiSdkSessionFactory,
   type PiSteerAdmission,
@@ -247,6 +249,7 @@ interface RetryAnchor {
 }
 
 export interface PiDriverOptions extends PiSessionStoreOptions {
+  readonly claimNativeSession?: (scope: ExecutionScope, input: PiSessionReservation) => void;
   readonly usage: UsageSink;
   readonly resolveThreadEnvironment?: ThreadEnvironmentResolver;
   readonly instance: AgentBackendInstance;
@@ -1131,6 +1134,7 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
   readonly #discoverySnapshots: PiDiscoverySnapshotStore;
   readonly #openHandles = new Map<string, PiConversationHandle>();
   readonly #pendingAttachments = new Set<string>();
+  readonly #claimNativeSession: PiDriverOptions["claimNativeSession"];
   readonly #modelPolicy: CompiledBackendModelPolicy;
   readonly #outputArtifacts: OutputArtifactPublisher;
 
@@ -1174,6 +1178,7 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
         reason: "remote_environment" as const,
       });
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#claimNativeSession = options.claimNativeSession;
     this.#modelPolicy = options.modelPolicy;
     this.#catalogs = new PiCatalogService({
       owner: {
@@ -1394,6 +1399,11 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
       }),
     );
     try {
+      if (this.#claimNativeSession) this.#claimNativeSession(input.scope, {
+        applicationThreadId: input.applicationThreadId, applicationOperationId: input.applicationOperationId,
+        sessionId: requestedBackendConversationId,
+        sessionDirectory: await this.#store.resolveSessionDirectory(resolved.workspace),
+      });
       const reserved = await backendCall(() =>
         this.#store.reserve(
           resolved.workspace,
@@ -1448,8 +1458,16 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
         access: "active",
       }),
     );
-    const manager = await backendCall(() =>
-      this.#store.open(
+    const toolAccess = await backendCall(async () =>
+      new PiToolAccessController(
+        this.#toolAccessPolicy(input.scope, input.binding.applicationThreadId),
+      ),
+    ).catch(async (cause) => {
+      await resolvedWorkspace.release();
+      throw cause;
+    });
+    const { manager, writer } = await backendCall(() =>
+      this.#store.openWriter(
         resolvedWorkspace.workspace,
         input.binding.backendConversationId,
         input.opaqueBindingDetail,
@@ -1465,9 +1483,6 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
     let agentToolSet: ReturnType<typeof createPiAgentToolSet>;
     const agentToolTurnCorrelation = new PiAgentToolTurnCorrelation();
     let session: PiSdkSession;
-    const toolAccess = new PiToolAccessController(
-      this.#toolAccessPolicy(input.scope, input.binding.applicationThreadId),
-    );
     const agentToolSource: TrustedAgentToolSource = Object.freeze({
       scope: input.scope,
       sourceThreadId: input.binding.applicationThreadId,
@@ -1537,11 +1552,13 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
       });
     } catch (cause) {
       interactions.close();
+      if (!(cause instanceof PiSdkSessionCleanupFailure)) await writer.release();
       await resolvedWorkspace.release();
       throw mappedError(cause);
     }
     if (session.sessionId !== input.binding.backendConversationId) {
       await session.dispose();
+      await writer.release();
       interactions.close();
       await resolvedWorkspace.release();
       throw error(
@@ -1597,6 +1614,7 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
         modelPolicy: this.#modelPolicy,
         outputArtifacts: this.#outputArtifacts,
         now: this.#now,
+        releaseWriter: () => writer.release(),
         release: async () => {
           if (
             this.#openHandles.get(input.binding.backendConversationId) ===
@@ -1612,6 +1630,7 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
       return handle;
     } catch (cause) {
       await session.dispose();
+      await writer.release();
       interactions.close();
       await resolvedWorkspace.release();
       throw mappedError(cause);
@@ -1873,6 +1892,11 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
           throw modelPolicyError();
         }
       }
+      if (this.#claimNativeSession) this.#claimNativeSession(input.scope, {
+        applicationThreadId: input.childApplicationThreadId, applicationOperationId: input.applicationOperationId,
+        sessionId: requestedBackendConversationId,
+        sessionDirectory: await this.#store.resolveSessionDirectory(childWorkspace.workspace),
+      });
       const result = await backendCall(() =>
         this.#store.branch(
           sourceWorkspace.workspace,
@@ -2005,19 +2029,38 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
         if (active) {
           active.closeUnmaterializedSubmission(found);
         } else {
-          manager.appendCustomEntry(piSubmissionMarkerType, {
-            ...found.marker,
-            ...(found.marker.mode === "steer"
-              ? {
-                  phase: "lost" as const,
-                  backendTurnId:
-                    found.providerTurnId ??
-                    (() => {
+          const ownership = await this.#store.openWriter(
+            workspace,
+            candidateId,
+            this.#store.bindingDetail(candidateId, manager.getSessionFile()),
+          ).catch(() => undefined);
+          if (!ownership) {
+            return { status: "unresolved", diagnostic: {
+              text: "Pi session writer ownership could not be acquired to reconcile this submission.",
+            } };
+          }
+          try {
+            const current = findSubmission(ownership.manager.getBranch(), input.applicationOperationId);
+            if (!current || current.userEntryId || current.rejected || current.invalid ||
+              current.marker.reconciliationToken !== found.marker.reconciliationToken) {
+              return { status: "unresolved", diagnostic: {
+                text: "Pi history changed while this submission was being reconciled.",
+              } };
+            }
+            ownership.manager.appendCustomEntry(piSubmissionMarkerType, {
+              ...current.marker,
+              ...(current.marker.mode === "steer"
+                ? {
+                    phase: "lost" as const,
+                    backendTurnId: current.providerTurnId ?? (() => {
                       throw new Error("pi_submission_loss_target_missing");
                     })(),
-                }
-              : { phase: "rejected" as const }),
-          } satisfies PiSubmissionMarker);
+                  }
+                : { phase: "rejected" as const }),
+            } satisfies PiSubmissionMarker);
+          } finally {
+            await ownership.writer.release();
+          }
         }
         // No settled or retired Pi generation can still use this input. A
         // Steer Pi may have queued is withdrawn, never resent; an unpersisted
@@ -2403,6 +2446,7 @@ interface PiConversationHandleOptions {
   readonly onEffectiveSettings?: PiDriverOptions["onEffectiveSettings"];
   readonly now: () => string;
   readonly release: () => void | Promise<void>;
+  readonly releaseWriter: () => Promise<void>;
   readonly modelPolicy: CompiledBackendModelPolicy;
   readonly outputArtifacts: OutputArtifactPublisher;
 }
@@ -2423,6 +2467,7 @@ class PiConversationHandle implements ConversationHandle {
   readonly #toolIdentityAuthentication: PiToolIdentityAuthentication;
   readonly #now: () => string;
   readonly #release: () => void | Promise<void>;
+  readonly #releaseWriter: () => Promise<void>;
   readonly #onEffectiveSettings?: PiDriverOptions["onEffectiveSettings"];
   readonly #modelPolicy: CompiledBackendModelPolicy;
   readonly #identities: PiToolIdentityCatalog;
@@ -2533,6 +2578,7 @@ class PiConversationHandle implements ConversationHandle {
     };
     this.#now = options.now;
     this.#release = options.release;
+    this.#releaseWriter = options.releaseWriter;
     this.#onEffectiveSettings = options.onEffectiveSettings;
     this.#modelPolicy = options.modelPolicy;
     this.#outputArtifacts = options.outputArtifacts;
@@ -3797,6 +3843,7 @@ class PiConversationHandle implements ConversationHandle {
     this.#throughput.clear();
     let failure: unknown;
     let failed = false;
+    let idleConfirmed = true;
     const captureFailure = (cause: unknown): void => {
       if (failed) return;
       failed = true;
@@ -3813,6 +3860,7 @@ class PiConversationHandle implements ConversationHandle {
         await this.#session.abort();
       }
     } catch (cause) {
+      idleConfirmed = false;
       captureFailure(cause);
     }
     try {
@@ -3848,6 +3896,7 @@ class PiConversationHandle implements ConversationHandle {
     this.#listeners.clear();
     try {
       await this.#session.dispose();
+      if (idleConfirmed) await this.#releaseWriter();
     } catch (cause) {
       captureFailure(cause);
     }

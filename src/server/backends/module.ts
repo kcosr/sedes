@@ -90,6 +90,8 @@ export interface BackendModuleExecutionEnvironmentConfiguration {
   readonly environmentVariables?: ConfiguredEnvironmentVariables;
   readonly id: string;
   readonly kind: "local" | "ssh" | "outbound";
+  /** Known outbound host platform; local modules can inspect the server platform. */
+  readonly platform?: "linux" | "darwin" | "win32";
 }
 
 export interface BackendModuleConfigurationInput {

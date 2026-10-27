@@ -27,6 +27,7 @@ import { OpenCodeInteractions } from "./opencode-interactions.js";
 import { qualifiedOpenCodeModelId, toEffective } from "./opencode-model-selection.js";
 import { classifyOpenCodeRead, materializeOpenCodeViewedImages, type OpenCodeViewedImage } from "./opencode-viewed-images.js";
 import { OpenCodeInputEvidenceRepository, openCodeOperationFingerprint } from "./opencode-input-evidence.js";
+import { openCodeArchiveInventoriesAreIdle } from "./opencode-archive-retirement.js";
 
 const JOURNAL_BYTES = 16 * 1024 * 1024;
 const JOURNAL_RECORDS = 4096;
@@ -109,6 +110,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   #projectedRevision = 0;
   #activityRevision = 0;
   #observedActivityRevision = 0;
+  #archiveRetirementRevision = 0;
+  #archiveRetirementProof?: number;
   #observedSettings?: OpenCodeObservedSettings;
   #settingsRefreshSequence = 0;
   #proofRefreshPending = false;
@@ -270,6 +273,11 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     try { return new OpenCodeInputEvidenceRepository(this.context.repository).hasUnresolved(this.input.scope, this.binding.applicationThreadId); }
     catch { return true; }
   }
+  get archiveRetirementSafe(): boolean {
+    return this.#archiveRetirementProof !== undefined && this.#archiveRetirementProof === this.#archiveRetirementRevision &&
+      !this.#closed && !this.#lifetime.aborted && !this.#invalidated && !this.#observation?.failure &&
+      this.runtime.snapshot().generation === this.lease.generation && !this.retirementBlocked;
+  }
   async respond(input: Parameters<ConversationHandle["respond"]>[0]): Promise<void> {
     this.#assertOpen(); await this.#interactions.respond(input);
   }
@@ -403,6 +411,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     }
   }
   #readError(error: unknown) {
+    this.#invalidateArchiveRetirementProof();
     const mapped = mapOpenCodeConversationError(error);
     if (mapped.backendCode === "opencode_runtime_identity_changed") this.#ownerLost();
     return mapped;
@@ -445,20 +454,29 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         }
         // Only replayable parent changes and text overlays affect the timeline.
         // Compaction/tool fragments and progress have no durable full value yet.
-        return "durable" in event || event.type === "session.text.delta" || event.type === "session.reasoning.delta";
+        const changed = "durable" in event || event.type === "session.text.delta" || event.type === "session.reasoning.delta";
+        if (changed) this.#invalidateArchiveRetirementProof();
+        return changed;
       }
       if ((event.type === "session.created" || event.type === "session.forked") && event.data.parentID === this.binding.backendConversationId) {
+        this.#invalidateArchiveRetirementProof();
         this.#childIds.add(event.data.sessionID); return true;
       }
       if ("sessionID" in event.data && this.#childIds.has(event.data.sessionID)) {
-        return event.type === "session.execution.started" || event.type === "session.execution.succeeded" ||
+        const changed = event.type === "session.execution.started" || event.type === "session.execution.succeeded" ||
           event.type === "session.execution.failed" || event.type === "session.execution.interrupted" ||
           event.type === "session.moved" || event.type === "session.deleted";
+        if (changed) this.#invalidateArchiveRetirementProof();
+        return changed;
       }
       if (event.type === "shell.created" && event.data.info.metadata.sessionID === this.binding.backendConversationId) {
+        this.#invalidateArchiveRetirementProof();
         this.#shellIds.add(event.data.info.id); return true;
       }
-      return (event.type === "shell.exited" || event.type === "shell.deleted") && this.#shellIds.has(event.data.id);
+      if ((event.type === "shell.exited" || event.type === "shell.deleted") && this.#shellIds.has(event.data.id)) {
+        this.#invalidateArchiveRetirementProof(); return true;
+      }
+      return false;
     } });
     this.#observation = observation;
     void observation.ended.then(end => {
@@ -469,6 +487,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   }
 
   async #refresh(parent: AbortSignal, allowLiveProgress = true): Promise<OpenCodeHistoryProjection> {
+    this.#archiveRetirementProof = undefined;
     const started = Date.now();
     const timeout = AbortSignal.timeout(OPENCODE_HISTORY_LIMITS.milliseconds);
     const signal = AbortSignal.any([parent, timeout]);
@@ -493,6 +512,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     try {
       await this.runtime.assertCurrent(signal); check();
       const revision = this.#structuralRevision, activityRevision = this.#activityRevision;
+      const archiveRetirementRevision = this.#archiveRetirementRevision;
       const dirtyMessages = new Map(this.#dirtyMessages);
       const liveProgressSteps = new Map(this.#liveProgressSteps);
       const readInput = { sessionId: this.binding.backendConversationId, signal, assertCurrent: check, additionalUsage: extra,
@@ -595,6 +615,10 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       // Events arriving during this finite read remain pending for its next cut.
       for (const [id, stepRevision] of liveProgressSteps) if (this.#liveProgressSteps.get(id) === stepRevision) this.#liveProgressSteps.delete(id);
       if (this.context.usage.enabled) this.#usage.record(this.#retained.messages, Object.values(projection.turnsById));
+      if (archiveRetirementRevision === this.#archiveRetirementRevision &&
+          openCodeArchiveInventoriesAreIdle(activity, pending, interactions) && !this.retirementBlocked) {
+        this.#archiveRetirementProof = archiveRetirementRevision;
+      }
       return projection;
     } catch (error) {
       if (!parent.aborted && !this.#lifetime.aborted) this.#invalidate("history_changed");
@@ -736,6 +760,10 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   }
 
   async #refreshActivity(signal: AbortSignal): Promise<void> {
+    // An incomplete imported period may still be archive-safe after its child
+    // or shell settles. Re-establish the full inbox/interaction/activity proof;
+    // background inactivity alone must never renew it.
+    if (this.#activity === "unknown") { await this.#refresh(signal); return; }
     const revision = this.#activityRevision;
     await this.runtime.assertCurrent(signal);
     const activity = await this.#api.getActivity(this.binding.backendConversationId, this.input.workspace.canonicalPath, signal);
@@ -827,6 +855,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   }
 
   #invalidate(reason: Extract<BackendConversationEvent, { type: "resnapshot_required" }>["reason"]): void {
+    this.#invalidateArchiveRetirementProof();
     if (this.#invalidated && reason !== "provider_handle_closed") return;
     this.#usage.gap("capture_gap");
     this.#invalidated = true; this.#activity = "unknown"; this.#background = unknownActivity;
@@ -874,6 +903,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     this.#startupRecheckTimer.unref?.();
   }
   #inputProofChanged(): void {
+    this.#invalidateArchiveRetirementProof();
     this.#structuralRevision++;
     if (this.#proofRefreshPending || !this.#retained || this.#invalidated || this.#closed || this.#lifetime.aborted) return;
     this.#proofRefreshPending = true;
@@ -881,6 +911,9 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     void this.#exclusive(this.#lifetime, async signal => {
       if (!this.#invalidated && this.#observation) await this.#refresh(signal);
     }).catch(() => undefined).finally(() => { this.#proofRefreshPending = false; });
+  }
+  #invalidateArchiveRetirementProof(): void {
+    this.#archiveRetirementRevision++; this.#archiveRetirementProof = undefined;
   }
   async #refreshSettings(): Promise<void> {
     const sequence = ++this.#settingsRefreshSequence;

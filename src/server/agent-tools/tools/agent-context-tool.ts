@@ -39,7 +39,7 @@ export const agentContextToolContract = {
         }),
         backend: Type.String({
           maxLength: 32,
-          enum: ["pi", "codex_app_server", "claude_agent_sdk", "grok_build", "opencode"],
+          enum: ["pi", "pi_native", "codex_app_server", "claude_agent_sdk", "grok_build", "opencode"],
         }),
       },
       {
@@ -53,7 +53,7 @@ export const agentContextToolContract = {
   execution: {
     form: "inline",
     adapterWaitCeilingMilliseconds: {
-      pi_sdk: 30_000,
+      pi_sdk: 30_000, pi_rpc: 30_000,
       mcp: 30_000,
       http: 30_000,
       cli: 30_000,
@@ -66,7 +66,7 @@ export const agentContextToolContract = {
     concurrencyClass: "agent_context_read",
     uncertainExternalOutcome: false,
   },
-  exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+  exposure: { adapters: ["pi_sdk", "pi_rpc", "mcp", "http", "cli"] },
   adapters: {
     pi: {
       name: piAgentContextToolName,

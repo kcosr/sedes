@@ -10,6 +10,7 @@ import type {
   SubmitTurnResult,
 } from "../../src/server/backends/contracts.js";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
+import { importLegacyDatabaseConfigurationFixture } from "../support/database-configuration-fixture.js";
 import { serializePiBindingDetail } from "../../src/server/backends/pi/pi-session-store.js";
 import {
   type QueueDispatchScheduler,
@@ -132,6 +133,10 @@ function createFixture(): Fixture {
     appliedAt: 300,
   });
   applyDatabaseMigrations(database, backendNormalizedMigrations);
+  importLegacyDatabaseConfigurationFixture(database, {
+    configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "queue-dispatcher",
+  }, 310);
+  new InventoryRepository(database).updateEnvironmentAvailability(scope, environment.id, { available: true, now: 310 });
   const bindings = new ConversationBindingRepository(database);
   const pi = new PiConversationRepository(database);
   const automation = new AutomationRepository(database);
@@ -1585,6 +1590,67 @@ describe("ThreadCompletionCallbackDispatcher", () => {
 });
 
 describe("QueuedInputDispatcher", () => {
+  it("does not acquire a provider for repeated settlement of an empty queue", async () => {
+    const fixture = createFixture();
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    const acquire = vi.spyOn(gateway, "withConversation");
+    const scheduler = new ManualScheduler();
+    const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 600 }, scheduler });
+    try {
+      await dispatcher.recover(fixture.scope);
+      await Promise.all(Array.from({ length: 20 }, () =>
+        dispatcher.onAuthoritativeSettled(fixture.scope, fixture.threadIds[0])));
+      expect(acquire).not.toHaveBeenCalled();
+      expect(gateway.calls).toEqual([]);
+      expect(scheduler.scheduled).toEqual([]);
+    } finally { await dispatcher.close(); fixture.database.close(); }
+  });
+
+  it("does not acquire a provider while an unacknowledged failure blocks later input", async () => {
+    const fixture = createFixture();
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 600 } });
+    const [threadId] = fixture.threadIds;
+    try {
+      enqueueUser(fixture, repository, threadId, "failed-head", 500);
+      gateway.submitBehaviors.push(new BackendError({ category: "rejected", retryable: false,
+        crossedSubmissionBoundary: false, safeMessage: "Settings were refused." }));
+      await dispatcher.recover(fixture.scope);
+      expect(repository.get(fixture.scope, threadId, "failed-head").state).toBe("failed");
+      enqueueUser(fixture, repository, threadId, "later", 700);
+      const acquire = vi.spyOn(gateway, "withConversation");
+      gateway.calls.length = 0;
+      await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+      expect(acquire).not.toHaveBeenCalled();
+      expect(gateway.calls).toEqual([]);
+      expect(repository.get(fixture.scope, threadId, "later").state).toBe("pending");
+    } finally { await dispatcher.close(); fixture.database.close(); }
+  });
+
+  it("does not read another retry anchor after reconciliation accepts the last queue head", async () => {
+    const fixture = createFixture();
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 600 } });
+    const [threadId] = fixture.threadIds;
+    try {
+      enqueueUser(fixture, repository, threadId, "late-head", 500);
+      gateway.submitBehaviors.push(new Error("acknowledgment lost"));
+      await dispatcher.recover(fixture.scope);
+      expect(repository.get(fixture.scope, threadId, "late-head").state).toBe("uncertain");
+      gateway.reconciliationBehaviors.push({ status: "accepted" });
+      const acquire = vi.spyOn(gateway, "withConversation");
+      gateway.calls.length = 0;
+      await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+      expect(repository.get(fixture.scope, threadId, "late-head").state).toBe("accepted");
+      expect(acquire).toHaveBeenCalledTimes(1);
+      expect(gateway.calls.some(call => call.startsWith("anchor:"))).toBe(false);
+      expect(gateway.submitted).toHaveLength(1);
+    } finally { await dispatcher.close(); fixture.database.close(); }
+  });
+
   it("retains exact page text and provenance through deferred delivery, failed recovery, and explicit retry", async () => {
     const fixture = createFixture();
     const repository = new QueuedInputRepository(fixture.database);
@@ -4550,10 +4616,8 @@ describe("QueuedInputDispatcher", () => {
       });
       await dispatcher.recover(fixture.scope);
       const retryTimer = scheduler.scheduled.at(-1)!;
-      gateway.withConversationFailures.push(
-        new Error("snapshot acquisition failed"),
-        new Error("dispatch acquisition failed"),
-      );
+      const acquire = vi.spyOn(gateway, "withConversation");
+      gateway.withConversationFailures.push(new Error("snapshot acquisition failed"));
 
       await expect(
         dispatcher.cancel(fixture.scope, threadId, "cancel-later", {
@@ -4563,6 +4627,11 @@ describe("QueuedInputDispatcher", () => {
         id: "cancel-later",
         state: "cancelled",
       });
+      expect(acquire).toHaveBeenCalledTimes(1); // Cancellation publication only.
+      acquire.mockClear();
+      now.value = 600;
+      await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+      expect(acquire).not.toHaveBeenCalled();
       expect(retryTimer.cancelled).toBe(false);
       expect(
         repository.get(fixture.scope, threadId, "cancel-later").state,

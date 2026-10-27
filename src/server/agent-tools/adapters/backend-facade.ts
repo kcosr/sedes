@@ -31,16 +31,18 @@ export interface TrustedAgentToolSource {
 
 /**
  * The adapter behind each backend's Native tool surface: Pi installs SDK
- * tools in process, while Codex and Claude load the stdio `sedes mcp` server.
+ * tools in process and native Pi uses its companion RPC extension, while Codex and Claude load the stdio `sedes mcp` server.
  * Grok has no Native surface. Admission uses this so one backend's native
  * mechanism can never satisfy another backend's Native presentation.
  */
 export function nativeAgentToolAdapter(
   backendKind: BackendKind,
-): Extract<AgentToolAdapter, "pi_sdk" | "mcp"> | undefined {
+): Extract<AgentToolAdapter, "pi_sdk" | "pi_rpc" | "mcp"> | undefined {
   switch (backendKind) {
     case "pi":
       return "pi_sdk";
+    case "pi_native":
+      return "pi_rpc";
     case "codex_app_server":
     case "claude_agent_sdk":
     case "opencode":

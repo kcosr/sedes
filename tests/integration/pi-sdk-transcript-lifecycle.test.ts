@@ -15,6 +15,7 @@ import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-s
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PiHistoryProjector } from "../../src/server/backends/pi/pi-history-projector.js";
 import { PiSessionStore } from "../../src/server/backends/pi/pi-session-store.js";
+import type { PiSessionWriterLock } from "../../src/server/backends/pi/pi-session-writer-lock.js";
 import {
   DefaultPiSdkSessionFactory,
   PiInteractionBridge,
@@ -34,6 +35,7 @@ type ProviderContext = Parameters<
 
 const roots: string[] = [];
 const sessions: PiSdkSession[] = [];
+const writers: PiSessionWriterLock[] = [];
 
 afterEach(async () => {
   for (const session of sessions.splice(0)) {
@@ -41,6 +43,7 @@ afterEach(async () => {
     await session.abort();
     await session.dispose();
   }
+  for (const writer of writers.splice(0)) await writer.release();
   vi.restoreAllMocks();
   await Promise.all(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
@@ -370,11 +373,13 @@ describe("Pi 0.86 transcript and lifecycle compatibility", () => {
 
     await source.session.dispose();
     sessions.splice(sessions.indexOf(source.session), 1);
-    const reopenedManager = await f.store.open(
+    const reopened = await f.store.openWriter(
       f.workspace,
       "transcript-source",
       f.reserved.opaqueBindingDetail,
     );
+    writers.push(reopened.writer);
+    const reopenedManager = reopened.manager;
     assertLoadout(
       reopenedManager.buildSessionContext(),
       "PRIVATE_INSTRUCTIONS_RELOADED",

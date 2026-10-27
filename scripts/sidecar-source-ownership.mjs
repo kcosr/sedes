@@ -19,6 +19,26 @@ const REQUIRED_SHARED_SOURCES = Object.freeze([
 ]);
 
 const ALLOWED_REPOSITORY_SOURCES = new Set([
+  // Native Pi RPC host: provider process/store ownership, no main repositories.
+  "src/server/backends/pi/native/command-policy.ts",
+  "src/server/backends/pi/native/launch-environment.ts",
+  "src/server/backends/pi/native/host/authentication-key.ts",
+  "src/server/backends/pi/native/host/disk-store.ts",
+  "src/server/backends/pi/native/host/host-registry.ts",
+  "src/server/backends/pi/native/host/native-host.ts",
+  "src/server/backends/pi/native/port.ts",
+  "src/server/backends/pi/native/tool-provenance.ts",
+  "src/server/backends/pi/native/rpc/pi-managed-bridge.ts",
+  "src/server/backends/pi/native/rpc/pi-managed-extension.ts",
+  "src/server/backends/pi/native/rpc/pi-managed-protocol.ts",
+  "src/server/backends/pi/native/rpc/pi-native-launch.ts",
+  "src/server/backends/pi/native/rpc/pi-rpc-client.ts",
+  "src/server/backends/pi/native/rpc/pi-rpc-wire.ts",
+  "src/server/backends/pi/native/sidecar/register-host.ts",
+  "src/server/backends/pi/native/sidecar/wire.ts",
+  "src/server/backends/pi/pi-session-writer-lock.ts",
+  "src/server/backends/pi/pi-store-directory.ts",
+  "src/server/security/locks.ts",
   "src/internal/compression/async-codec-budget.ts",
   "src/cli/opencode-owner-cli.ts",
   // OpenCode execution-host implementation; no main repositories or SQL.

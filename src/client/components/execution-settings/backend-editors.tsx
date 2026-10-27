@@ -6,6 +6,8 @@ import { AdvancedGroup, CheckboxGroup, SelectField, TextField, type ChoiceOption
 import type { BackendDefinition, EnvironmentDefinition, TargetDefinition } from "./types.js";
 import type { ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
 import { FieldErrors } from "./validation.js";
+import { piNativeThinkingLevelSchema } from "../../../shared/protocol/pi-configuration.js";
+import { SwitchField } from "../settings/SettingsField.js";
 
 type BackendKind = BackendDefinition["kind"];
 type BackendOf<K extends BackendKind> = Extract<BackendDefinition, { kind: K }>;
@@ -76,6 +78,28 @@ function commonTarget(id: string, backendInstanceId: string, executionEnvironmen
 
 /** Registered administration editors are the only browser surface that understands these typed configuration settings. */
 export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
+  pi_native: {
+    label: "Pi", description: "Runs the installed Pi CLI on the selected Linux or macOS execution host, locally, over SSH, or through an outbound connection. Native Windows Pi is unsupported.",
+    supportsProviderIds: true, supportsRemoteWorkspace: true,
+    createBackend: (id) => ({ ...commonBackend(id), kind: "pi_native", moduleConfiguration: { initializationTimeoutMs: 30_000, projectTrusted: false } }),
+    createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "pi_rpc", moduleConfiguration: { defaults: {} } }),
+    renderConnection: (props) => props.value.kind === "pi_native" ? <PiNativeConnectionEditor {...props} value={props.value} /> : unsupportedEditor(),
+    renderTarget: (props) => props.value.kind === "pi_rpc" ? <PiNativeTargetEditor {...props} value={props.value} /> : unsupportedEditor(),
+    summarizeTarget: (value) => {
+      if (value.kind !== "pi_rpc") return "";
+      const defaults = value.moduleConfiguration.defaults;
+      return [defaults.model ? `${defaults.provider}/${defaults.model}` : "Native default model",
+        defaults.thinkingLevel ? `Reasoning ${defaults.thinkingLevel}` : "Native default reasoning"].join(" · ");
+    },
+    describeConnection: (value) => value.kind === "pi_native" ? [
+      { label: "Runs", value: "Pi CLI on the execution host" },
+      { label: "Executable", value: value.moduleConfiguration.executablePath ? <PathText value={value.moduleConfiguration.executablePath} /> : "pi from the execution host’s PATH" },
+      { label: "Agent directory", value: value.moduleConfiguration.agentDirectory ? <PathText value={value.moduleConfiguration.agentDirectory} /> : "The account's native Pi directory" },
+      { label: "Sessions", value: value.moduleConfiguration.sessionDirectory ? <PathText value={value.moduleConfiguration.sessionDirectory} /> : "The native Pi session store" },
+      { label: "Project resources", value: value.moduleConfiguration.projectTrusted ? "Trusted" : "Disabled" },
+      { label: "Start timeout", value: `${value.moduleConfiguration.initializationTimeoutMs / 1000} s` },
+    ] : [],
+  },
   pi: {
     label: "Pi SDK", description: "The SDK and model connection run on Sedes. A remote environment supplies workspace tools only.",
     supportsProviderIds: true, supportsRemoteWorkspace: true,
@@ -226,6 +250,7 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
 
 export function allowedEnvironments(backend: BackendDefinition, environments: readonly EnvironmentDefinition[]): EnvironmentDefinition[] {
   return environments.filter((environment) => (backendEditors[backend.kind].supportsRemoteWorkspace || environment.kind === "local")
+    && !(backend.kind === "pi_native" && environment.kind === "outbound" && environment.platform === "win32")
     && !(backend.kind === "claude_agent_sdk" && environment.kind === "outbound" && environment.platform === "win32")
     && !(backend.kind === "opencode" && environment.kind === "outbound" && environment.platform !== "linux"));
 }
@@ -332,6 +357,57 @@ function CodexTargetEditor({ value, onChange, errors, disabled }: EditorProps<Ta
     <SelectField label="Default approval policy" layout="stacked" disabled={disabled} value={defaults.approvalPolicy} options={approvalOptions} error={error("approvalPolicy")} onChange={(approvalPolicy) => update({ ...defaults, approvalPolicy })} />
     <SelectField label="Default approval reviewer" layout="stacked" disabled={disabled} value={defaults.approvalReviewer} options={reviewerOptions} error={error("approvalReviewer")} onChange={(approvalReviewer) => update({ ...defaults, approvalReviewer })} />
     <DefaultModelEditor value={defaults.model} disabled={disabled} error={error("model")} onChange={(model) => update({ ...defaults, model })} />
+  </div>;
+}
+
+function PiNativeConnectionEditor({ value, onChange, errors, disabled }: EditorProps<BackendOf<"pi_native">> & { readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {
+  const configuration = value.moduleConfiguration;
+  const update = (next: typeof configuration) => onChange({ ...value, moduleConfiguration: next });
+  const error = (field: string) => errors.under(`moduleConfiguration.${field}`);
+  return <>
+    <p className="execution-muted">Uses the execution host account's Pi authentication and native sessions. Pi and Pi SDK may use the same native store.</p>
+    <SwitchField label="Trust Pi project resources" checked={configuration.projectTrusted} disabled={disabled} error={error("projectTrusted")}
+      description="Allow Pi to load trusted project resources, including project MCP configuration. Project-configured programs run with the execution host account's permissions. Enable only for workspaces you trust."
+      onCheckedChange={(projectTrusted) => update({ ...configuration, projectTrusted })} />
+    <AdvancedGroup summary="Executable, native directories, start timeout"
+      defaultOpen={Boolean(configuration.executablePath || configuration.agentDirectory || configuration.sessionDirectory || configuration.initializationTimeoutMs !== 30_000)}
+      forceOpen={Boolean(error("executablePath") || error("agentDirectory") || error("sessionDirectory") || error("initializationTimeoutMs"))}>
+      <TextField label="Pi executable path" path disabled={disabled} value={configuration.executablePath ?? ""} error={error("executablePath")}
+        description="Optional absolute path on the execution host. Leave blank to find pi on that host's PATH."
+        onChange={(executablePath) => update({ ...configuration, executablePath: executablePath || undefined })} />
+      <TextField label="Pi agent directory" path disabled={disabled} value={configuration.agentDirectory ?? ""} error={error("agentDirectory")}
+        description="Optional native configuration, authentication, and session directory on the execution host."
+        onChange={(agentDirectory) => update({ ...configuration, agentDirectory: agentDirectory || undefined })} />
+      <TextField label="Pi session directory" path disabled={disabled} value={configuration.sessionDirectory ?? ""} error={error("sessionDirectory")}
+        description="Optional session-store override on the execution host. Leave blank to use Pi's native session store."
+        onChange={(sessionDirectory) => update({ ...configuration, sessionDirectory: sessionDirectory || undefined })} />
+      <TextField label="Initialization timeout" type="number" suffix="ms" disabled={disabled} value={String(configuration.initializationTimeoutMs)} error={error("initializationTimeoutMs")}
+        description="How long Sedes waits for Pi to start, from 1000 to 120000 ms."
+        onChange={(timeout) => update({ ...configuration, initializationTimeoutMs: Number(timeout) })} />
+    </AdvancedGroup>
+  </>;
+}
+
+function PiNativeTargetEditor({ value, onChange, errors, disabled }: EditorProps<TargetOf<"pi_rpc">> & { readonly onChange: (value: TargetDefinition) => void }): React.JSX.Element {
+  const defaults = value.moduleConfiguration.defaults;
+  const update = (next: typeof defaults) => onChange({ ...value, moduleConfiguration: { defaults: next } });
+  const error = (field: string) => errors.under(`moduleConfiguration.defaults.${field}`);
+  return <div className="execution-field-grid">
+    <SelectField label="Default model" layout="stacked" disabled={disabled} value={defaults.model === undefined ? "native" : "fixed"}
+      options={[{ value: "native", label: "Native Pi default" }, { value: "fixed", label: "Specific model" }]}
+      onChange={(selection) => {
+        const { provider: _provider, model: _model, ...remaining } = defaults;
+        update(selection === "native" ? remaining : { ...remaining, provider: "", model: "" });
+      }} />
+    {defaults.model === undefined ? null : <>
+      <TextField label="Default model provider" layout="stacked" mono required disabled={disabled} value={defaults.provider ?? ""} error={error("provider")}
+        onChange={(provider) => update({ ...defaults, provider })} />
+      <TextField label="Default model identifier" layout="stacked" mono required disabled={disabled} value={defaults.model} error={error("model")}
+        onChange={(model) => update({ ...defaults, model })} />
+    </>}
+    <SelectField label="Default reasoning effort" layout="stacked" disabled={disabled} value={defaults.thinkingLevel ?? "native"} error={error("thinkingLevel")}
+      options={[{ value: "native", label: "Native Pi default" }, ...piNativeThinkingLevelSchema.options.map(value => ({ value, label: value }))]}
+      onChange={(thinkingLevel) => update({ ...defaults, thinkingLevel: thinkingLevel === "native" ? undefined : thinkingLevel })} />
   </div>;
 }
 

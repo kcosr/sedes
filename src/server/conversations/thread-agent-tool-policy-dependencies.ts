@@ -21,6 +21,11 @@ export function presentationOptionsForBackend(
         : ([
             { surface: "native", modes: ["progressive", "individual"] },
           ]);
+    case "pi_native":
+      return [
+        { surface: "native", modes: ["progressive", "individual"] },
+        { surface: "cli", modes: ["progressive", "individual"] },
+      ];
     // Codex and Claude load Native tools through the stdio `sedes mcp`
     // server. The first surface and its first mode are the default, so they
     // default to Native/Individual; migration 115 applies it to new threads.

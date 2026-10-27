@@ -196,7 +196,7 @@ function replacement(
 
 const statusRequest = {
   toolId: "thread.status",
-  schemaVersion: 3,
+  schemaVersion: 4,
   requestId: "principal-client-status",
   input: { threadId: "target-thread" },
 } as const;
@@ -260,7 +260,7 @@ describe("principal agent-tool client persistence and admission", () => {
       ).toEqual(["workspace.list", "thread.status"]);
       expect(
         value.service().describeMany(created.credential, ["thread.status"])[0],
-      ).toMatchObject({ id: "thread.status", schemaVersion: 3 });
+      ).toMatchObject({ id: "thread.status", schemaVersion: 4 });
       expect(() =>
         value.service().describeMany(created.credential, ["agent.context"]),
       ).toThrowError(expect.objectContaining({ code: "not_found" }));
@@ -852,7 +852,7 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(() =>
         value.service().admitInvocation(created.credential, {
           toolId: "thread.list",
-          schemaVersion: 7,
+          schemaVersion: 8,
           requestId: "principal-client-default-workspace",
           input: { scope: { kind: "default_workspace" } },
         }),
@@ -887,7 +887,7 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(() =>
         value.service().admitInvocation(created.credential, {
           toolId: "thread.list",
-          schemaVersion: 7,
+          schemaVersion: 8,
           requestId: "principal-client-removed-default-workspace",
           input: { scope: { kind: "default_workspace" } },
         }),
