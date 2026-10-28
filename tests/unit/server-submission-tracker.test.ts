@@ -395,4 +395,238 @@ describe("server submission presentation", () => {
     expect(f.read).toHaveBeenCalledTimes(9);
     expect(f.tracker.getSnapshot()[0]?.phase).toBe("accepted");
   });
+
+  it("reports exhausted content reads for a retained row without declaring delivery uncertain and retries only its detail", async () => {
+    vi.useFakeTimers();
+    const f = fixture(vi.fn(async () => { throw new Error("offline"); }));
+    f.observe();
+    await vi.runAllTimersAsync();
+    expect(f.read).toHaveBeenCalledTimes(8);
+    expect(f.tracker.getSnapshot()[0]).toMatchObject({
+      phase: "sending", contentLoadError: true, operationId: "send-1", queuedInputId: "queue-1",
+    });
+    expect(f.tracker.getSnapshot()[0]?.content).toBeUndefined();
+    const sequence = f.tracker.getSnapshot()[0]!.presentationSequence;
+    const retry = deferred<QueuedInputPresentation>();
+    f.read.mockImplementation(() => retry.promise);
+    f.tracker.retryContent("unknown-operation");
+    expect(f.read).toHaveBeenCalledTimes(8);
+    f.tracker.retryContent("send-1");
+    f.tracker.retryContent("send-1");
+    expect(f.tracker.getSnapshot()[0]?.contentLoadError).toBeUndefined();
+    await flush();
+    expect(f.read).toHaveBeenCalledTimes(9);
+    expect(f.read).toHaveBeenLastCalledWith("queue-1", expect.any(AbortSignal));
+    retry.resolve(detail({ state: "accepted" }));
+    await flush();
+    expect(f.tracker.getSnapshot()[0]).toMatchObject({
+      content: detail().content, phase: "accepted", presentationSequence: sequence,
+    });
+    expect(f.tracker.getSnapshot()[0]?.contentLoadError).toBeUndefined();
+    f.tracker.retryContent("send-1");
+    await flush();
+    expect(f.read).toHaveBeenCalledTimes(9);
+  });
+
+  it("clears a content error when an exact native receipt supplies complete text", async () => {
+    vi.useFakeTimers();
+    const f = fixture(vi.fn(async () => { throw new Error("offline"); }));
+    f.observe();
+    await vi.runAllTimersAsync();
+    expect(f.tracker.getSnapshot()[0]?.contentLoadError).toBe(true);
+    f.tracker.acceptNativeSubmission(nativeReceipt(), snapshot(), new Set());
+    expect(f.tracker.getSnapshot()[0]?.content).toEqual(detail().content);
+    expect(f.tracker.getSnapshot()[0]?.contentLoadError).toBeUndefined();
+    expect(f.tracker.getSnapshot()[0]?.phase).toBe("sending");
+  });
+
+  it("does not mark available content as failed when only delivery confirmation reads exhaust", async () => {
+    vi.useFakeTimers();
+    const f = fixture(vi.fn(async () => { throw new Error("offline"); }));
+    f.observe(snapshot([]));
+    f.tracker.acceptNativeSubmission(nativeReceipt(), snapshot([]), new Set());
+    await vi.runAllTimersAsync();
+    expect(f.tracker.getSnapshot()[0]).toMatchObject({ phase: "unconfirmed", content: detail().content });
+    expect(f.tracker.getSnapshot()[0]?.contentLoadError).toBeUndefined();
+  });
+
+  it("suspends explicit content retries without authority and recovers on reconnect", async () => {
+    vi.useFakeTimers();
+    const f = fixture(vi.fn(async () => { throw new Error("offline"); }));
+    f.observe();
+    await vi.runAllTimersAsync();
+    f.observe(snapshot(), false);
+    f.tracker.retryContent("send-1");
+    await flush();
+    expect(f.read).toHaveBeenCalledTimes(8);
+    expect(f.tracker.getSnapshot()[0]?.contentLoadError).toBe(true);
+    f.read.mockResolvedValue(detail());
+    f.observe();
+    expect(f.tracker.getSnapshot()[0]?.contentLoadError).toBeUndefined();
+    await flush();
+    expect(f.read).toHaveBeenCalledTimes(9);
+    expect(f.tracker.getSnapshot()[0]?.content).toEqual(detail().content);
+  });
+
+  it("ignores a late content retry error after exact transcript materialization", async () => {
+    vi.useFakeTimers();
+    const f = fixture(vi.fn(async () => { throw new Error("offline"); }));
+    f.observe();
+    await vi.runAllTimersAsync();
+    const retry = deferred<QueuedInputPresentation>();
+    f.read.mockImplementation(() => retry.promise);
+    f.tracker.retryContent("send-1");
+    await flush();
+    const signal = f.read.mock.calls.at(-1)![1];
+    f.observe(snapshot([], 2, [userItem()]));
+    expect(signal.aborted).toBe(true);
+    retry.reject(new Error("late read failure"));
+    await flush();
+    f.tracker.retryContent("send-1");
+    await vi.runAllTimersAsync();
+    expect(f.tracker.getSnapshot()).toEqual([]);
+    expect(f.read).toHaveBeenCalledTimes(9);
+  });
+
+  it.each(["accepted", "pending"] as const)("reports stable %s content budget exhaustion and retries after materialization frees space", async state => {
+    const text = "a".repeat(256 * 1_024);
+    const content: QueuedInputPresentation["content"] = [{ kind: "text", text: { text } }];
+    const rows = Array.from({ length: 64 }, (_, index) => queued({
+      id: `queue-${index}`, deliveryOperationId: `send-${index}`, sequence: index,
+    }));
+    const f = fixture(vi.fn(async (id: string) => detail({
+      queuedInputId: id, deliveryOperationId: id.replace("queue-", "send-"), state, content,
+    })));
+    f.observe(snapshot(rows));
+    await vi.waitFor(() => expect(f.read).toHaveBeenCalledTimes(64));
+    const blocked = f.tracker.getSnapshot().find(item => item.contentLoadError)!;
+    expect(blocked).toMatchObject({ operationId: "send-63", phase: state === "accepted" ? "accepted" : "sending", contentLoadError: true });
+    expect(blocked.content).toBeUndefined();
+    expect(f.tracker.getSnapshot().filter(item => item.content)).toHaveLength(63);
+    f.observe(snapshot(rows.slice(1), 2, [userItem("send-0")]));
+    f.read.mockImplementation(async (id: string) => detail({
+      queuedInputId: id, deliveryOperationId: id.replace("queue-", "send-"),
+      state: "accepted", threadRevision: 2, content,
+    }));
+    f.tracker.retryContent(blocked.operationId);
+    await flush();
+    expect(f.read).toHaveBeenCalledTimes(65);
+    const recovered = f.tracker.getSnapshot().find(item => item.operationId === blocked.operationId)!;
+    expect(recovered.phase).toBe("accepted");
+    expect(recovered.content).toEqual(content);
+    expect(recovered.contentLoadError).toBeUndefined();
+  });
+
+  it("keeps budget-limited content loading through stale-status retries before exposing terminal read failure", async () => {
+    vi.useFakeTimers();
+    const content: QueuedInputPresentation["content"] = [{ kind: "text", text: { text: "a".repeat(256 * 1_024) } }];
+    const rows = Array.from({ length: 64 }, (_, index) => queued({
+      id: `queue-${index}`, deliveryOperationId: `send-${index}`, sequence: index,
+    }));
+    const first = deferred<QueuedInputPresentation>();
+    const second = deferred<QueuedInputPresentation>();
+    let targetReads = 0;
+    const targetDetail = detail({ queuedInputId: "queue-63", deliveryOperationId: "send-63", content });
+    const f = fixture(vi.fn(async (id: string) => {
+      if (id === "queue-63") {
+        targetReads += 1;
+        if (targetReads === 1) return first.promise;
+        if (targetReads === 2) return second.promise;
+        return targetDetail;
+      }
+      return detail({ queuedInputId: id, deliveryOperationId: id.replace("queue-", "send-"), state: "accepted", content });
+    }));
+    f.observe(snapshot(rows));
+    await vi.waitFor(() => expect(f.read).toHaveBeenCalledTimes(64));
+    expect(f.tracker.getSnapshot().filter(item => item.content)).toHaveLength(63);
+    const dispatching = rows.map(row => row.id === "queue-63"
+      ? { ...row, state: "dispatching" as const, deliveryMode: "submit" as const } : row);
+    // The first content result belongs to the observation before dispatching.
+    f.observe(snapshot(dispatching, 2));
+    first.resolve(targetDetail);
+    await flush();
+    const target = () => f.tracker.getSnapshot().find(item => item.operationId === "send-63")!;
+    expect(target().content).toBeUndefined();
+    expect(target().contentLoadError).toBeUndefined();
+    expect(targetReads).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(targetReads).toBe(2);
+    expect(target().contentLoadError).toBeUndefined();
+    // The automatic retry is in flight, so the UI must still show loading.
+    f.tracker.retryContent("send-63");
+    await flush();
+    expect(targetReads).toBe(2);
+    second.resolve(targetDetail);
+    await flush();
+    expect(target().contentLoadError).toBeUndefined();
+    await vi.runAllTimersAsync();
+    expect(targetReads).toBe(9); // One superseded read plus eight current attempts.
+    expect(target()).toMatchObject({ phase: "sending", contentLoadError: true });
+
+    f.observe(snapshot(dispatching.slice(1), 3, [userItem("send-0")]));
+    f.read.mockResolvedValue({ ...targetDetail, state: "accepted", threadRevision: 3 });
+    f.tracker.retryContent("send-63");
+    expect(target().contentLoadError).toBeUndefined();
+    await flush();
+    expect(f.read).toHaveBeenCalledTimes(73);
+    expect(target()).toMatchObject({ phase: "accepted", content });
+    expect(target().contentLoadError).toBeUndefined();
+  });
+
+  it.each([1, 8])("resumes an accepted submission's missing content after authority interrupts read attempt %s", async interruptedAttempt => {
+    vi.useFakeTimers();
+    const content: QueuedInputPresentation["content"] = [{ kind: "text", text: { text: "a".repeat(256 * 1_024) } }];
+    const rows = Array.from({ length: 64 }, (_, index) => queued({
+      id: `queue-${index}`, deliveryOperationId: `send-${index}`, sequence: index,
+    }));
+    const f = fixture(vi.fn(async (id: string) => detail({
+      queuedInputId: id, deliveryOperationId: id.replace("queue-", "send-"), state: "accepted", content,
+    })));
+    f.observe(snapshot(rows));
+    await vi.waitFor(() => expect(f.read).toHaveBeenCalledTimes(64));
+    const target = () => f.tracker.getSnapshot().find(item => item.operationId === "send-63")!;
+    expect(target()).toMatchObject({ phase: "accepted", contentLoadError: true });
+
+    const interrupted = deferred<QueuedInputPresentation>();
+    let attempts = 0;
+    f.read.mockImplementation(async () => {
+      attempts += 1;
+      if (attempts === interruptedAttempt) return interrupted.promise;
+      throw new Error("Content read temporarily unavailable");
+    });
+    f.tracker.retryContent("send-63");
+    await flush();
+    if (interruptedAttempt === 8) await vi.advanceTimersByTimeAsync(61_500);
+    expect(attempts).toBe(interruptedAttempt);
+    expect(target().contentLoadError).toBeUndefined();
+    const interruptedSignal = f.read.mock.calls.at(-1)![1];
+    f.observe(snapshot(rows), false);
+    expect(interruptedSignal.aborted).toBe(true);
+
+    const resumed = deferred<QueuedInputPresentation>();
+    f.read.mockImplementation(() => resumed.promise);
+    f.observe(snapshot(rows));
+    await flush();
+    expect(f.read).toHaveBeenCalledTimes(65 + interruptedAttempt);
+    expect(f.read.mock.calls.at(-1)![1]).not.toBe(interruptedSignal);
+    expect(target()).toMatchObject({ phase: "accepted" });
+    expect(target().contentLoadError).toBeUndefined();
+    // A late cancellation response from the aborted request cannot retire
+    // the accepted input or decide the resumed read's outcome.
+    const retained = detail({ queuedInputId: "queue-63", deliveryOperationId: "send-63", content });
+    interrupted.resolve({ ...retained, state: "cancelled" });
+    await flush();
+    expect(target().phase).toBe("accepted");
+    resumed.resolve({ ...retained, state: "accepted" });
+    await flush();
+    expect(target()).toMatchObject({ phase: "accepted", contentLoadError: true });
+
+    f.observe(snapshot(rows.slice(1), 2, [userItem("send-0")]));
+    f.read.mockResolvedValue({ ...retained, state: "accepted", threadRevision: 2 });
+    f.tracker.retryContent("send-63");
+    await flush();
+    expect(target().content).toEqual(content);
+    expect(target().contentLoadError).toBeUndefined();
+  });
 });

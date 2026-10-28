@@ -26,6 +26,7 @@ import type {
   ThreadLoadError,
   RespondToQuestionResult,
   QueuedInputSummary,
+  QueuedInputPresentation,
 } from "../../src/shared/index.js";
 import {
   clearDiagnostics,
@@ -521,6 +522,76 @@ describe("ThreadClientStore normalized operations", () => {
       await vi.waitFor(() => expect(store.getSnapshot().pendingServerSubmissions).toEqual([]));
       expect(store.getSnapshot().snapshot?.draft).toEqual(initial.draft);
     } finally { store.dispose(); }
+  });
+
+  it.each(["snapshot", "queue event"] as const)("publishes a remote submission tracker with its first %s before content arrives", async source => {
+    const readQueuedInput = vi.fn(() => new Promise(() => {}));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { readQueuedInput } as unknown as ApiClient, transport);
+    const presentations: Array<{ queued: boolean; tracked: boolean }> = [];
+    const unsubscribe = store.subscribe(() => {
+      const current = store.getSnapshot();
+      presentations.push({
+        queued: current.snapshot?.queue.some(row => row.deliveryOperationId === "voice-send") ?? false,
+        tracked: current.pendingServerSubmissions.some(item => item.operationId === "voice-send"),
+      });
+    });
+    try {
+      await store.start();
+      const initial = snapshotWithDeliveryModes("idle");
+      if (source === "snapshot") {
+        initial.queue = [serverQueueRow()];
+        initial.thread.queuedInputCount = 1;
+      }
+      installSnapshot(transport, initial);
+      if (source === "queue event") emitServerQueue(transport, 1, [serverQueueRow()]);
+      await vi.waitFor(() => expect(readQueuedInput).toHaveBeenCalledOnce());
+      expect(presentations.some(item => item.queued)).toBe(true);
+      expect(presentations.filter(item => item.queued && !item.tracked)).toEqual([]);
+      expect(store.getSnapshot().pendingServerSubmissions).toMatchObject([{
+        operationId: "voice-send", phase: "sending",
+      }]);
+      expect(store.getSnapshot().pendingServerSubmissions[0]?.content).toBeUndefined();
+      expect(store.getSnapshot().pendingComposerTransfers).toEqual([]);
+      expect(store.getSnapshot().snapshot?.draft).toEqual(initial.draft);
+    } finally { unsubscribe(); store.dispose(); }
+  });
+
+  it("retries remote submission content without sending any thread operation", async () => {
+    vi.useFakeTimers();
+    const readQueuedInput = vi.fn<() => Promise<QueuedInputPresentation>>(async () => { throw new Error("offline"); });
+    const operateThread = vi.fn();
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { readQueuedInput, operateThread } as unknown as ApiClient, transport);
+    try {
+      await store.start();
+      const initial = snapshotWithDeliveryModes("idle");
+      installSnapshot(transport, initial);
+      emitServerQueue(transport, 1, [serverQueueRow()]);
+      await vi.advanceTimersByTimeAsync(100_000);
+      expect(readQueuedInput).toHaveBeenCalledTimes(8);
+      expect(store.getSnapshot().pendingServerSubmissions[0]).toMatchObject({
+        operationId: "voice-send", phase: "sending", contentLoadError: true,
+      });
+      readQueuedInput.mockResolvedValue({
+        threadId: "thread-1", threadRevision: 8, queuedInputId: "voice-queue",
+        deliveryOperationId: "voice-send", state: "accepted", origin: "user",
+        resolvedDeliveryMode: "submit", createdAt: "2026-10-04T04:00:00.000Z",
+        content: [{ kind: "text", text: { text: "Complete remote input" } }],
+      });
+      store.retryServerSubmissionContent("voice-send");
+      store.retryServerSubmissionContent("voice-send");
+      expect(store.getSnapshot().pendingServerSubmissions[0]?.contentLoadError).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readQueuedInput).toHaveBeenCalledTimes(9);
+      expect(readQueuedInput).toHaveBeenLastCalledWith("thread-1", "voice-queue", { signal: expect.any(AbortSignal) });
+      expect(store.getSnapshot().pendingServerSubmissions[0]).toMatchObject({
+        phase: "accepted", content: [{ kind: "text", text: { text: "Complete remote input" } }],
+      });
+      expect(operateThread).not.toHaveBeenCalled();
+      expect(store.getSnapshot().pendingComposerTransfers).toEqual([]);
+      expect(store.getSnapshot().snapshot?.draft).toEqual(initial.draft);
+    } finally { store.dispose(); vi.useRealTimers(); }
   });
 
   it("keeps a failed server send in the strip after a retry within the same envelope batch", async () => {

@@ -834,18 +834,22 @@ provider call is awaited inside that transaction. Unbound threads use the
 ordinary creation coordinator; bound threads use the ordinary durable queue.
 Neither path reads, consumes, or overwrites the composer draft.
 
-For a bound thread, the browser presents an admitted ordinary user `submit`
-as a provisional transcript message once its complete content is available.
-This presentation is shared with other out-of-composer user submissions; it
-does not change delivery semantics. Incomplete queue summaries are never rendered
-as truncated transcript bubbles. The thread-scoped
+For a bound thread, the browser reserves an admitted ordinary user `submit`'s
+position in the live transcript immediately. It shows a content-loading
+placeholder until the complete message is available, without briefly exposing
+queue controls. This presentation is shared with other out-of-composer user
+submissions; it does not change delivery semantics. Incomplete queue summaries
+are never rendered as truncated transcript bubbles. The thread-scoped
 `GET /api/threads/:threadId/queued-inputs/:queuedInputId` reads immutable full
 content and retained delivery state under the authenticated principal. It is
 read-only and does not attach a runtime. A missing queue row alone does not
 establish acceptance or cancellation: the browser retains the provisional
 message until an exact delivery-operation match or authoritative retained
-state resolves it. Queue, Steer, attributed inputs, and failed or uncertain
-deliveries retain their existing presentation and controls.
+state resolves it. Exhausted content reads or unavailable content capacity show
+a content-loading error with a read-only retry; they do not report a delivery
+failure or resubmit input. Queue, Steer, attributed inputs, and failed or uncertain
+deliveries retain their existing presentation and controls. Views without the
+live transcript retain the pending-input surface.
 
 Local full-text presentation and **Seek on send** use the transient
 `inputSubmitted` bridge event.

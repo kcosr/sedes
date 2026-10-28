@@ -292,6 +292,11 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Ordinary messages sent from another device now load in the conversation
+  without briefly showing queue controls or a disabled-Steer explanation.
+  Content-loading failures offer a retry that does not resend the message.
+  ([#126](https://github.com/kcosr/sedes/pull/126))
+
 - Empty and blocked input queues avoid unnecessary provider history reads.
   Native Pi verifies model and thinking changes against fresh state and preserves
   healthy sidecar connections during cleanup. Early process exits remain

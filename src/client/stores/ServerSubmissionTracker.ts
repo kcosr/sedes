@@ -17,6 +17,8 @@ export interface PendingServerSubmission {
   readonly createdAt: string;
   readonly preview: BoundedDisplayText;
   readonly content?: readonly MessageContentPart[];
+  /** Content retrieval failed; this does not describe the input's delivery outcome. */
+  readonly contentLoadError?: true;
   readonly attachmentCount: number;
   readonly taskCount: number;
   readonly phase: "sending" | "confirming" | "accepted" | "unconfirmed";
@@ -133,7 +135,8 @@ export class ServerSubmissionTracker {
     this.#contentBytes += bytes - entry.contentBytes;
     entry.contentBytes = bytes;
     entry.submittedText = receipt.text;
-    entry.view = { ...entry.view, content };
+    const { contentLoadError: _contentLoadError, ...view } = entry.view;
+    entry.view = { ...view, content };
     if (!entry.view.queuedInputId && receipt.queuedInputId) {
       entry.view = { ...entry.view, queuedInputId: receipt.queuedInputId };
     }
@@ -221,12 +224,16 @@ export class ServerSubmissionTracker {
         this.#clearRetry(entry);
         if (!entry.accepted) {
           entry.needsRead = true;
+          this.#clearContentLoadError(entry);
           entry.view = { ...entry.view, phase: row ? "sending" : "confirming" };
         }
       }
-      if (authoritative && !wasActive && !entry.accepted) {
+      // Acceptance finishes delivery confirmation, but an interrupted content
+      // read still needs fresh authority and a fresh attempt budget to resume.
+      if (authoritative && !wasActive && (!entry.accepted || !entry.view.content)) {
         entry.needsRead = true;
         entry.attempts = 0;
+        this.#clearContentLoadError(entry);
       }
       this.#waitForIdentity(entry);
     }
@@ -263,6 +270,19 @@ export class ServerSubmissionTracker {
     // captured operation must still retire even if it never had a bubble.
     this.#retire(capturedOperationId);
     this.#publish();
+  }
+
+  /** Retry the retained content read only. Input admission and dispatch stay server-owned. */
+  retryContent(operationId: string): void {
+    const entry = this.#entries.get(operationId);
+    if (this.#disposed || !this.#active || !entry?.view.contentLoadError ||
+        entry.view.content || !entry.view.queuedInputId || entry.request) return;
+    entry.attempts = 0;
+    entry.needsRead = true;
+    this.#clearRetry(entry);
+    this.#clearContentLoadError(entry);
+    this.#publish();
+    this.#schedulePump();
   }
 
   dispose(): void {
@@ -302,6 +322,12 @@ export class ServerSubmissionTracker {
   #clearRetry(entry: Entry): void {
     if (entry.retry !== undefined) clearTimeout(entry.retry);
     entry.retry = undefined;
+  }
+
+  #clearContentLoadError(entry: Entry): void {
+    if (!entry.view.contentLoadError) return;
+    const { contentLoadError: _contentLoadError, ...view } = entry.view;
+    entry.view = view;
   }
 
   #anchors(snapshot: SubmissionSnapshot | undefined): Pick<PendingServerSubmission,
@@ -382,7 +408,13 @@ export class ServerSubmissionTracker {
       if (this.#contentBytes - entry.contentBytes + bytes <= MAXIMUM_MESSAGE_ITEM_BYTES) {
         this.#contentBytes += bytes - entry.contentBytes;
         entry.contentBytes = bytes;
+        this.#clearContentLoadError(entry);
         entry.view = { ...entry.view, content: result.content };
+      } else if (!entry.view.content) {
+        // A successful read can still exceed the bounded presentation cache.
+        // Keep the delivery outcome separate and allow another read once
+        // materialized entries have released their retained content.
+        entry.view = { ...entry.view, contentLoadError: true };
       }
       if (request.observation !== entry.observation || result.threadRevision < entry.observedRevision) {
         this.#retry(entry);
@@ -413,6 +445,13 @@ export class ServerSubmissionTracker {
 
   #retry(entry: Entry): void {
     entry.needsRead = true;
+    if (!entry.view.content && entry.attempts >= MAXIMUM_READ_ATTEMPTS) {
+      entry.view = { ...entry.view, contentLoadError: true };
+    } else if (entry.attempts < MAXIMUM_READ_ATTEMPTS) {
+      // A stale status can need another read even when its content exceeded
+      // the cache budget. Keep showing loading while that retry is pending.
+      this.#clearContentLoadError(entry);
+    }
     if (entry.signature === "absent") entry.view = {
       ...entry.view, phase: entry.attempts >= MAXIMUM_READ_ATTEMPTS ? "unconfirmed" : "confirming",
     };

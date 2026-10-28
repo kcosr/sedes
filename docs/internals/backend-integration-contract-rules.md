@@ -3039,6 +3039,15 @@ failure, and uncertainty retain their existing cards and controls. Presentation
 state is separate from composer ownership and must never clear, restore, or
 overwrite a draft.
 
+An eligible server-owned Submit reserves its live transcript position before
+its full-content read completes. Transcript selection and pending-input strip
+exclusion share one rule, so content loading never exposes a transient queue
+control card. A loading placeholder is not a message preview: only complete
+normalized content may become the message body. Bounded content-read exhaustion
+and content-capacity failures remain distinct from delivery uncertainty and
+offer only a read-only content retry. Views that cannot show the live transcript
+retain their pending-input surface.
+
 The authenticated principal/thread-scoped queued-input detail read exposes
 full normalized content and retained status with a consistent thread revision,
 without runtime attachment, mutation, or provider calls. It verifies the

@@ -76,6 +76,7 @@ class FakeTranscriptStore {
     childThreadId: "child-thread",
   }));
   clearForkAttempt = vi.fn();
+  retryServerSubmissionContent = vi.fn();
   setTurnBookmarked = vi.fn(async () => undefined);
   refreshTurnBookmarkPreview = vi.fn(async () => undefined);
   seekHistoryTurn = vi.fn(
@@ -1937,7 +1938,7 @@ describe("Transcript server-admitted submissions", () => {
     expect(screen.queryByRole("button", { name: "Bookmark response" })).not.toBeInTheDocument();
   });
 
-  it("withholds a bounded queue preview so the first bubble contains the complete submitted text", () => {
+  it("reserves a transcript position while full content loads without presenting a bounded preview as the message", () => {
     const snapshot = makeSnapshot([], false);
     const fake = new FakeTranscriptStore(snapshot);
     const submission = makeServerSubmission(snapshot, {
@@ -1953,7 +1954,12 @@ describe("Transcript server-admitted submissions", () => {
     render(<Transcript store={fake as unknown as ThreadClientStore} />);
 
     expect(screen.queryByText(/The first part of a long spoken message/)).not.toBeInTheDocument();
-    expect(document.querySelector(`[data-delivery-operation-id="${submission.operationId}"]`)).toBeNull();
+    const placeholder = document.querySelector(`[data-delivery-operation-id="${submission.operationId}"]`);
+    expect(placeholder).toHaveAttribute("data-submission-content-state", "loading");
+    expect(placeholder?.querySelector(".message-row.user")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("status")).toHaveTextContent(/^Loading message…$/);
+    expect(placeholder).not.toHaveTextContent("2 attachments");
+    expect(screen.queryByText("This thread is ready")).not.toBeInTheDocument();
 
     act(() => fake.replaceServerSubmissions([{
       ...submission,
@@ -1961,12 +1967,14 @@ describe("Transcript server-admitted submissions", () => {
     }]));
 
     const row = screen.getByText("The full spoken message, including everything after the preview.").closest(".conversation-item");
+    expect(row).toBe(placeholder);
+    expect(row).not.toHaveAttribute("data-submission-content-state");
     expect(row).not.toHaveTextContent("Message preview");
     expect(row).not.toHaveTextContent("2 attachments");
     expect(row?.querySelector('[role="status"]')).toBeNull();
   });
 
-  it("waits for complete attachment content before showing an externally submitted message", () => {
+  it("keeps a loading placeholder until the complete externally submitted attachment content is available", () => {
     const snapshot = makeSnapshot([], false);
     const fake = new FakeTranscriptStore(snapshot);
     const submission = makeServerSubmission(snapshot, { attachmentCount: 1, content: undefined });
@@ -1974,6 +1982,7 @@ describe("Transcript server-admitted submissions", () => {
     render(<Transcript store={fake as unknown as ThreadClientStore} />);
 
     expect(screen.queryByText("Spoken message")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/^Loading message…$/);
 
     act(() => fake.replaceServerSubmissions([{
       ...submission,
@@ -1988,13 +1997,14 @@ describe("Transcript server-admitted submissions", () => {
     expect(row?.querySelector('[role="status"]')).toBeNull();
   });
 
-  it("keeps the pending bubble anchored ahead of later assistant output", () => {
+  it.each([true, false])("keeps the pending message anchored ahead of later assistant output (content ready: %s)", (contentReady) => {
     const snapshot = makeSnapshot(["turn-1"], false);
     const fake = new FakeTranscriptStore(snapshot);
     fake.replaceServerSubmissions([makeServerSubmission(snapshot, {
       baselineTailTurnId: "turn-1",
       baselineTailItemId: "turn-1-message",
       baselineTailTurnItemIds: ["turn-1-message"],
+      ...(!contentReady ? { content: undefined } : {}),
     })]);
     render(<Transcript store={fake as unknown as ThreadClientStore} />);
 
@@ -2002,7 +2012,7 @@ describe("Transcript server-admitted submissions", () => {
     act(() => fake.replaceSnapshot(later));
 
     const previous = screen.getByText("Message for turn-1");
-    const pending = screen.getByText("Spoken message");
+    const pending = screen.getByText(contentReady ? "Spoken message" : "Loading message…");
     const response = screen.getByText("Message for turn-2");
     expect(previous.compareDocumentPosition(pending) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(pending.compareDocumentPosition(response) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -2056,14 +2066,167 @@ describe("Transcript server-admitted submissions", () => {
     expect(screen.getAllByText("Spoken message")).toHaveLength(2);
   });
 
-  it("preserves a delivery failure notice when full content could not be retrieved", () => {
+  it("keeps content loading failure distinct from the delivery's status and retries only the exact content read", () => {
     const snapshot = makeSnapshot([], false);
     const fake = new FakeTranscriptStore(snapshot);
-    fake.replaceServerSubmissions([makeServerSubmission(snapshot, { content: undefined, phase: "unconfirmed" })]);
+    const submission = makeServerSubmission(snapshot, { content: undefined, contentLoadError: true });
+    fake.retryServerSubmissionContent.mockImplementation(() => {
+      fake.replaceServerSubmissions([{ ...submission, contentLoadError: undefined }]);
+    });
+    fake.replaceServerSubmissions([submission]);
     render(<Transcript store={fake as unknown as ThreadClientStore} />);
-    expect(screen.getByRole("status")).toHaveTextContent(/^Delivery unconfirmed$/);
+
+    const placeholder = document.querySelector(`[data-delivery-operation-id="${submission.operationId}"]`);
+    expect(placeholder).toHaveAttribute("data-submission-content-state", "error");
+    expect(placeholder?.querySelector(".message-row.user")).toHaveAttribute("aria-busy", "false");
+    expect(screen.getByRole("status")).toHaveTextContent(/^Message content could not be loaded\.$/);
+    expect(screen.queryByText("Delivery unconfirmed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Spoken message")).not.toBeInTheDocument();
+
+    const retry = screen.getByRole("button", { name: "Retry loading" });
+    retry.focus();
+    expect(retry).toHaveFocus();
+    fireEvent.click(retry);
+    expect(fake.retryServerSubmissionContent).toHaveBeenCalledExactlyOnceWith(submission.operationId);
+    expect(placeholder).toHaveAttribute("data-submission-content-state", "loading");
+    expect(placeholder).toHaveFocus();
+    expect(screen.getByRole("status")).toHaveTextContent(/^Loading message…$/);
+    expect(screen.queryByRole("button", { name: "Retry loading" })).not.toBeInTheDocument();
+
+    act(() => fake.replaceServerSubmissions([makeServerSubmission(snapshot)]));
+    expect(screen.getByText("Spoken message").closest(".conversation-item")).toBe(placeholder);
+    expect(placeholder).toHaveFocus();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])("retains Retry loading focus through exact canonical materialization in a new turn (content read first: %s)", (contentReadFirst) => {
+    const snapshot = makeSnapshot(["turn-1"], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    const submission = makeServerSubmission(snapshot, { content: undefined, contentLoadError: true });
+    fake.retryServerSubmissionContent.mockImplementation(() => {
+      fake.replaceServerSubmissions([{ ...submission, contentLoadError: undefined }]);
+    });
+    fake.replaceServerSubmissions([submission]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+
+    const retry = screen.getByRole("button", { name: "Retry loading" });
+    retry.focus();
+    fireEvent.click(retry);
+    const provisional = document.querySelector(`[data-delivery-operation-id="${submission.operationId}"]`);
+    expect(provisional).toHaveFocus();
+    expect(provisional?.closest("[data-turn-id]")).toHaveAttribute("data-turn-id", "turn-1");
+    if (contentReadFirst) {
+      act(() => fake.replaceServerSubmissions([makeServerSubmission(snapshot)]));
+      expect(provisional).toHaveFocus();
+    }
+
+    const authoritative = makeSnapshot(["turn-1", "turn-2"], false);
+    authoritative.itemsById["turn-2-message"] = {
+      id: "turn-2-message", turnId: "turn-2", kind: "user_message", status: "completed", revision: 1,
+      deliveryOperationId: submission.operationId,
+      content: [{ kind: "text", text: { text: "Spoken message" } }],
+    };
+    act(() => fake.replaceSnapshot(authoritative));
+
+    const canonical = document.querySelector(`[data-delivery-operation-id="${submission.operationId}"]`);
+    expect(provisional).not.toBeInTheDocument();
+    expect(canonical).not.toBe(provisional);
+    expect(canonical?.closest("[data-turn-id]")).toHaveAttribute("data-turn-id", "turn-2");
+    expect(canonical).not.toHaveAttribute("data-client-provisional");
+    expect(canonical).toHaveAttribute("tabindex", "-1");
+    expect(canonical).toHaveFocus();
+  });
+
+  it.each(["another control", "the page"] as const)("does not reclaim canonical-message focus after the reader moves to %s", (destination) => {
+    const snapshot = makeSnapshot(["turn-1"], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    const submission = makeServerSubmission(snapshot, { content: undefined, contentLoadError: true });
+    fake.retryServerSubmissionContent.mockImplementation(() => {
+      fake.replaceServerSubmissions([{ ...submission, contentLoadError: undefined }]);
+    });
+    fake.replaceServerSubmissions([submission]);
+    render(<>
+      <button type="button">Other action</button>
+      <Transcript store={fake as unknown as ThreadClientStore} />
+    </>);
+
+    const retry = screen.getByRole("button", { name: "Retry loading" });
+    retry.focus();
+    fireEvent.click(retry);
+    const provisional = document.querySelector<HTMLElement>(`[data-delivery-operation-id="${submission.operationId}"]`)!;
+    expect(provisional).toHaveFocus();
+    const destinationElement = destination === "another control"
+      ? screen.getByRole("button", { name: "Other action" })
+      : document.body;
+    if (destination === "another control") destinationElement.focus();
+    else provisional.blur();
+    expect(destinationElement).toHaveFocus();
+
+    const authoritative = makeSnapshot(["turn-1", "turn-2"], false);
+    authoritative.itemsById["turn-2-message"] = {
+      id: "turn-2-message", turnId: "turn-2", kind: "user_message", status: "completed", revision: 1,
+      deliveryOperationId: submission.operationId,
+      content: [{ kind: "text", text: { text: "Spoken message" } }],
+    };
+    act(() => fake.replaceSnapshot(authoritative));
+
+    expect(provisional).not.toBeInTheDocument();
+    expect(document.querySelector(`[data-delivery-operation-id="${submission.operationId}"]`)).not.toHaveFocus();
+    expect(destinationElement).toHaveFocus();
+  });
+
+  it.each([
+    { connection: "disconnected", authoritative: true },
+    { connection: "connected", authoritative: false },
+  ] as const)("disables content retry while connection=$connection and authoritative=$authoritative", ({ connection, authoritative }) => {
+    const snapshot = makeSnapshot(["turn-1"], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    fake.replaceServerSubmissions([makeServerSubmission(snapshot, { content: undefined, contentLoadError: true })]);
+    fake.replaceConnection(connection, authoritative);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(screen.getByRole("button", { name: "Retry loading" })).toBeDisabled();
+
+    act(() => fake.replaceConnection("connected", true));
+    expect(screen.getByRole("button", { name: "Retry loading" })).toBeEnabled();
+  });
+
+  it("preserves the separate delivery uncertainty notice when full content could not be retrieved", () => {
+    const snapshot = makeSnapshot([], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    fake.replaceServerSubmissions([makeServerSubmission(snapshot, {
+      content: undefined, contentLoadError: true, phase: "unconfirmed",
+    })]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(screen.getByText("Delivery unconfirmed")).toHaveAttribute("role", "status");
+    expect(screen.getByText("Message content could not be loaded.")).toHaveAttribute("role", "status");
     expect(screen.queryByText("Spoken message")).not.toBeInTheDocument();
     expect(screen.queryByText("Message preview")).not.toBeInTheDocument();
+  });
+
+  it("announces exact authoritative content when it arrives before the pending content read", () => {
+    const snapshot = makeSnapshot([], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    const submission = makeServerSubmission(snapshot, { content: undefined });
+    fake.replaceServerSubmissions([submission]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/^Loading message…$/);
+
+    const authoritative = makeSnapshot(["turn-1"], false);
+    authoritative.itemsById["turn-1-message"] = {
+      id: "turn-1-message", turnId: "turn-1", kind: "user_message", status: "completed", revision: 1,
+      deliveryOperationId: submission.operationId,
+      content: [{ kind: "text", text: { text: "Complete authoritative message" } }],
+    };
+    act(() => fake.replaceSnapshot(authoritative));
+
+    const rows = document.querySelectorAll(`[data-delivery-operation-id="${submission.operationId}"]`);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("Complete authoritative message");
+    expect(rows[0]).not.toHaveAttribute("data-client-provisional");
+    expect(rows[0]).not.toHaveAttribute("data-local-optimistic-handoff");
+    expect(rows[0]).not.toHaveAttribute("aria-live", "off");
+    expect(screen.queryByText("Loading message…")).not.toBeInTheDocument();
+    expect(rows[0]).not.toHaveAttribute("data-submission-content-state");
   });
 
   it.each([

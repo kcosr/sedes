@@ -412,6 +412,12 @@ export class ThreadClientStore {
     );
   }
 
+  /** Reload an admitted message's content without submitting the input again. */
+  retryServerSubmissionContent(operationId: string): void {
+    if (this.#disposed || this.#paused) return;
+    this.#serverSubmissions.retryContent(operationId);
+  }
+
   get awaitingRunStateCapabilities(): boolean {
     return this.normalized.awaitingRunStateCapabilities;
   }
