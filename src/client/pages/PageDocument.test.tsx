@@ -812,6 +812,23 @@ describe("Pages document responses", () => {
 });
 
 describe("saved page HTML downloads", () => {
+  it.each(["saved", "failed"])("clears a completed download result on an automatic swap (%s)", async (result) => {
+    const api = services();
+    api.listPageRevisions.mockResolvedValue({ items: [original] });
+    downloads.packaged.mockReturnValue(true);
+    if (result === "failed") api.preparePageDownload.mockRejectedValueOnce(new Error("Old download failed."));
+    const ui = (publishedRevision: number) => <PageDocument page={original} services={api} visible onBack={() => {}} publishedRevision={publishedRevision} />;
+    const view = render(ui(1));
+    await waitForFrame(view.container);
+    fireEvent.click(screen.getByRole("button", { name: "Download HTML" }));
+    await screen.findByText(result === "saved" ? "HTML saved." : "Old download failed.");
+    api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 3 }] });
+    view.rerender(ui(3));
+    await screen.findByText("3/3");
+    expect(screen.queryByText("HTML saved.")).toBeNull();
+    expect(screen.queryByText("Old download failed.")).toBeNull();
+  });
+
   it.each([false, true])("keeps a captured download across automatic revision changes (native=%s)", async (native) => {
     const api = services();
     api.listPageRevisions.mockResolvedValue({ items: [original] });

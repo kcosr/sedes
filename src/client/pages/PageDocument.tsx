@@ -47,6 +47,8 @@ function PageDocumentView({ page, services, visible, onBack, revisionRefreshKey,
   const download = usePageDownload(
     `${pageFrameRecoveryKey(connection, page)}:${downloadVersion}`, selected, true, services.preparePageDownload, connection.profileId,
   );
+  const downloadView = useRef({ revision: selected.revision, phase: download.phase });
+  downloadView.current = { revision: selected.revision, phase: download.phase };
   const response = usePageResponseSubmission(
     pageFrameRecoveryKey(connection, selected), selected, services.pageResponse,
   );
@@ -77,6 +79,8 @@ function PageDocumentView({ page, services, visible, onBack, revisionRefreshKey,
             navigationAbort.current?.abort();
             setLoading(false);
             catchUp.current = false;
+            if (downloadView.current.phase === "idle" && downloadView.current.revision !== latestPage.current.revision)
+              setDownloadVersion((value) => value + 1);
             setSelected(latestPage.current);
           }
         },
