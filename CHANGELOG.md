@@ -76,9 +76,10 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
-- Electron supports dictation, spoken replies, and Auto-listen through your own
-  speech server while the app is running, with secure token entry and microphone
-  selection. Desktop recordings are session-only, with no background service or
+- Electron supports dictation, spoken replies, and Auto-listen through OpenAI or
+  your own speech server while the app is running, with secure credential entry,
+  microphone selection, and system certificate trust for HTTPS and secure
+  WebSockets. Desktop recordings are session-only, with no background service or
   saved-recording recovery. See [Electron voice](docs/operator/clients/electron.md#voice).
   ([#125](https://github.com/kcosr/sedes/pull/125))
 

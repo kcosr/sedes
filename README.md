@@ -108,8 +108,8 @@ bounded and is documented in the individual
 
 Android [native voice](docs/operator/clients/voice.md) connects directly to OpenAI
 for Realtime transcription and streamed speech, with credentials stored on the
-device. [Electron voice](docs/operator/clients/electron.md#voice) uses your own
-speech server for dictation, spoken replies, and automatic follow-up listening
+device. [Electron voice](docs/operator/clients/electron.md#voice) uses OpenAI or your
+own speech server for dictation, spoken replies, and automatic follow-up listening
 while the desktop app is running. For local models, connect to the
 [OpenAI-Compatible Speech Server](https://github.com/kcosr/openai-speech-server),
 whose repository covers model setup and operation.

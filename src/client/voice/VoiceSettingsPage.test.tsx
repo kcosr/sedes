@@ -565,7 +565,7 @@ describe("voice settings page", () => {
 
 
 describe("desktop voice settings", () => {
-  it("offers the direct speech server and supported desktop controls without Android background or recovery controls", async () => {
+  it("offers both speech providers and supported desktop controls without Android background or recovery controls", async () => {
     platform.electron = true;
     const { store } = await renderPage(voiceSnapshot({
       settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", headsetControls: false }),
@@ -573,8 +573,8 @@ describe("desktop voice settings", () => {
       recovery: [{ mutationId: "pending-input", threadId: "named", status: "uncertain", cancelled: false }],
     }));
     expect(screen.getByText("Own speech server")).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Provider" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "OpenAI" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Provider" })).toHaveValue("server");
+    expect(screen.getByRole("option", { name: "OpenAI" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Speech API endpoint" })).toHaveValue("https://speech.test/v1");
     expect(screen.getByRole("switch", { name: "Auto-listen" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Keep listening by default" })).toBeInTheDocument();
@@ -586,6 +586,32 @@ describe("desktop voice settings", () => {
     expect(screen.queryByRole("spinbutton", { name: "Startup pre-roll (ms)" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Saved dictation" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Pending input recovery" })).not.toBeInTheDocument();
+    store.dispose();
+  });
+  it("switches from an own server to OpenAI with a fixed endpoint and its supported preset", async () => {
+    platform.electron = true;
+    const initial = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1",
+      sttModel: "parakeet", ttsModel: "kokoro", ttsVoice: "af_heart", ttsSpeed: 1.2 }) });
+    const patch = { speechProvider: "openai" as const, speechEndpoint: "https://api.openai.com/v1",
+      sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts", ttsVoice: "coral", ttsSpeed: 1 };
+    const { fake, store } = await renderPage(initial, fake => fake.plugin.updateSettings.mockResolvedValue({ ...initial,
+      stateRevision: 2, settingsRevision: 1, settings: { ...initial.settings, ...patch } }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), { target: { value: "openai" } });
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      expectedRevision: 0, patch }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Provider" })).toHaveValue("openai"));
+    expect(screen.queryByRole("textbox", { name: "Speech API endpoint" })).not.toBeInTheDocument();
+    expect(screen.getByText("OpenAI API · https://api.openai.com/v1")).toBeInTheDocument();
+    expect(screen.getByText("Add an OpenAI API key.")).toBeInTheDocument();
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+    store.dispose();
+  });
+  it("clears OpenAI models and endpoint when choosing an own speech server", async () => {
+    platform.electron = true;
+    const { fake, store } = await renderPage(voiceSnapshot());
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), { target: { value: "server" } });
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0,
+      patch: { speechProvider: "server", speechEndpoint: "", sttModel: "", ttsModel: "", ttsVoice: "", ttsSpeed: 1 } }));
     store.dispose();
   });
   it("selects desktop microphones by their own device IDs when product names match", async () => {

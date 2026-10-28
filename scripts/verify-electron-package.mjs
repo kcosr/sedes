@@ -297,7 +297,7 @@ async function verifyPackaged() {
     throw new Error("electron_local_server_codex_version_invalid");
   }
   const speechPackage = "/node_modules/@sedes/electron-speech";
-  const speechFiles = ["plugin.mjs", "contracts.mjs", "credential-store.mjs", "credential-dialog.mjs", "credential-dialog.html", "credential-preload.cjs", "transport.mjs"];
+  const speechFiles = ["plugin.mjs", "contracts.mjs", "credential-store.mjs", "credential-dialog.mjs", "credential-dialog.html", "credential-preload.cjs", "transport.mjs", "tls-trust.mjs"];
   const speechEntries = [`${speechPackage}/package.json`, ...speechFiles.map(file => `${speechPackage}/electron/dist/${file}`)];
   for (const required of [
     "/build/main.js",

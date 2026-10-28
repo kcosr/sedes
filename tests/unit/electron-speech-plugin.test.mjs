@@ -19,8 +19,11 @@ function fixture() {
   const windows = [window];
   const application = new EventEmitter(), monitor = new EventEmitter();
   const notifyListeners = vi.fn();
-  const transport = { endpoint: "https://speech.example/v1", cancelAll: vi.fn(),
-    configure: vi.fn(async ({ endpoint }) => { transport.endpoint = endpoint; return { endpoint, credentialConfigured: true }; }),
+  const transport = { provider: "server", endpoint: "https://speech.example/v1", cancelAll: vi.fn(),
+    configure: vi.fn(async ({ provider, endpoint }) => {
+      transport.provider = provider; transport.endpoint = endpoint;
+      return { provider, endpoint, credentialConfigured: true };
+    }),
   };
   const dialogs = [];
   const dialogFactory = (input) => {
@@ -28,15 +31,49 @@ function fixture() {
     const result = new Promise((yes, no) => { resolve = yes; reject = no; });
     const dialog = { input, result, resolve, reject, close: vi.fn() }; dialogs.push(dialog); return dialog;
   };
+  const credentials = { status: vi.fn(async () => ({ credentialConfigured: true })) };
   const plugin = new ElectronSpeech({ notifyListeners }, { app: application, powerMonitor: monitor,
-    BrowserWindow: { getAllWindows: () => windows }, transport, credentials: { status: async () => ({ credentialConfigured: true }) }, dialogFactory });
-  return { plugin, transport, window, windows, application, monitor, dialogs, notifyListeners };
+    BrowserWindow: { getAllWindows: () => windows }, transport, credentials, dialogFactory });
+  return { plugin, transport, window, windows, application, monitor, dialogs, notifyListeners, credentials };
 }
 
 describe("Electron speech plugin lifecycle", () => {
   it("exposes only narrow methods and never exposes generic secret setters or getters", () => {
     expect(ElectronSpeech.__capacitorElectronPlugin.methods).toContain("openCredentialDialog");
     expect(ElectronSpeech.__capacitorElectronPlugin.methods).not.toEqual(expect.arrayContaining(["read", "save", "getCredential", "setCredential"]));
+  });
+
+  it.each([
+    { endpoint: "https://speech.example/v1" },
+    { provider: "other", endpoint: "https://speech.example/v1" },
+    { provider: "openai", endpoint: "https://speech.example/v1" },
+    { provider: "openai", endpoint: "http://api.openai.com/v1" },
+    { provider: "server", endpoint: "https://api.openai.com/v1" },
+    { provider: "server", endpoint: "https://speech.example/v1", token: "not-allowed" },
+  ])("rejects invalid provider bindings before configuration, status reads or dialog access: %j", async (binding) => {
+    const f = fixture();
+    expect(() => f.plugin.configure(binding)).toThrow();
+    expect(() => f.plugin.getCredentialStatus(binding)).toThrow();
+    await expect(f.plugin.openCredentialDialog(binding)).rejects.toThrow();
+    expect(f.transport.configure).not.toHaveBeenCalled();
+    expect(f.credentials.status).not.toHaveBeenCalled();
+    expect(f.dialogs).toHaveLength(0);
+  });
+
+  it.each([
+    { provider: "server", endpoint: "https://speech.example/v1" },
+    { provider: "openai", endpoint: "https://api.openai.com/v1" },
+  ])("passes normalized %s binding through configuration and the isolated dialog", async (binding) => {
+    const f = fixture();
+    expect(await f.plugin.configure({ ...binding, endpoint: `${binding.endpoint}/` }))
+      .toEqual({ ...binding, credentialConfigured: true });
+    expect(f.transport.configure).toHaveBeenLastCalledWith(binding);
+    expect(await f.plugin.getCredentialStatus(binding)).toEqual({ credentialConfigured: true });
+    expect(f.credentials.status).toHaveBeenLastCalledWith(binding.endpoint);
+    const opening = f.plugin.openCredentialDialog(binding);
+    expect(f.dialogs[0].input).toMatchObject(binding);
+    f.dialogs[0].resolve({ credentialConfigured: true });
+    expect(await opening).toEqual({ credentialConfigured: true });
   });
 
   it("publishes native visibility and temporarily disables throttling only for the main app window", () => {
@@ -73,10 +110,10 @@ describe("Electron speech plugin lifecycle", () => {
 
   it("fences an old endpoint's pending credential mutation from a replacement connection", async () => {
     const f = fixture();
-    const opening = f.plugin.openCredentialDialog({ endpoint: f.transport.endpoint });
+    const opening = f.plugin.openCredentialDialog({ provider: "server", endpoint: f.transport.endpoint });
     const rejected = expect(opening).rejects.toMatchObject({ code: "speech_configuration_changed" });
     expect(f.dialogs).toHaveLength(1);
-    await f.plugin.configure({ endpoint: "https://replacement.example/v1" });
+    await f.plugin.configure({ provider: "server", endpoint: "https://replacement.example/v1" });
     const cancellationCount = f.transport.cancelAll.mock.calls.length;
     expect(f.dialogs[0].close).toHaveBeenCalledOnce();
     f.dialogs[0].input.onChange();
@@ -86,13 +123,42 @@ describe("Electron speech plugin lifecycle", () => {
     expect(f.transport.endpoint).toBe("https://replacement.example/v1");
   });
 
+  it("fences a prior provider's dialog even after switching back to its endpoint", async () => {
+    const f = fixture();
+    const server = { provider: "server", endpoint: f.transport.endpoint };
+    const openai = { provider: "openai", endpoint: "https://api.openai.com/v1" };
+    const opening = f.plugin.openCredentialDialog(server);
+    const rejected = expect(opening).rejects.toMatchObject({ code: "speech_configuration_changed" });
+    await f.plugin.configure(openai);
+    expect(f.dialogs[0].close).toHaveBeenCalledOnce();
+    await expect(f.plugin.openCredentialDialog(server)).rejects.toMatchObject({ code: "speech_configuration_changed" });
+    await f.plugin.configure(server);
+    const cancellations = f.transport.cancelAll.mock.calls.length;
+    f.dialogs[0].input.onChange();
+    f.dialogs[0].resolve({ credentialConfigured: true });
+    await rejected;
+    expect(f.transport.cancelAll).toHaveBeenCalledTimes(cancellations);
+  });
+
+  it("keeps the current dialog when the provider and normalized endpoint are unchanged", async () => {
+    const f = fixture();
+    const binding = { provider: "server", endpoint: f.transport.endpoint };
+    const opening = f.plugin.openCredentialDialog(binding);
+    await f.plugin.configure({ ...binding, endpoint: `${binding.endpoint}/` });
+    expect(f.dialogs[0].close).not.toHaveBeenCalled();
+    f.dialogs[0].input.onChange();
+    expect(f.transport.cancelAll).toHaveBeenCalledTimes(2);
+    f.dialogs[0].resolve({ credentialConfigured: true });
+    expect(await opening).toEqual({ credentialConfigured: true });
+  });
+
   it("fences a dialog after renderer reload even when the endpoint is unchanged", async () => {
     const f = fixture();
-    const opening = f.plugin.openCredentialDialog({ endpoint: f.transport.endpoint });
+    const opening = f.plugin.openCredentialDialog({ provider: "server", endpoint: f.transport.endpoint });
     const rejected = expect(opening).rejects.toMatchObject({ code: "speech_configuration_changed" });
     f.window.webContents.emit("render-process-gone");
     const cancellations = f.transport.cancelAll.mock.calls.length;
-    const next = f.plugin.openCredentialDialog({ endpoint: f.transport.endpoint });
+    const next = f.plugin.openCredentialDialog({ provider: "server", endpoint: f.transport.endpoint });
     expect(f.dialogs).toHaveLength(2);
     f.dialogs[0].input.onChange(); f.dialogs[0].resolve({ credentialConfigured: true });
     await rejected;

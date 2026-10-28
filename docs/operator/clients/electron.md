@@ -407,24 +407,45 @@ disabled. Direct and SSH-forwarded connections use the remote server's setting.
 
 ## Voice
 
-Both desktop distributions connect directly to your own OpenAI-compatible
-speech server for dictation and streamed speech. The speech service is operated
-separately and must be reachable from the desktop. Its API and bearer token are
-independent of the Sedes connection. Desktop voice does not use the hosted
-OpenAI preset or install speech models.
+Both desktop distributions support **OpenAI** and **Own speech server** for
+dictation and streamed speech, matching Android's provider choices. Speech
+connects directly from the desktop, independently of the Sedes connection.
+The server option requires a separately operated, reachable OpenAI-compatible
+speech server; Sedes does not install speech models.
 
-1. Open **Settings → Voice** and enter the speech API URL, including `/v1` and
-   any reverse-proxy prefix. Use HTTPS, or HTTP on an explicitly trusted network.
-2. Select **Manage speech credential** and save the server token in the separate
-   masked credential dialog. This token stays in the main process and is
+1. Open **Settings → Voice** and choose the provider. OpenAI uses the fixed
+   `https://api.openai.com/v1` endpoint. For your own server, enter the speech API
+   URL, including `/v1` and any reverse-proxy prefix. Use HTTPS, or HTTP on an
+   explicitly trusted network.
+2. Select **Manage speech credential** and save the OpenAI API key or server
+   token in the separate masked credential dialog. It stays in the main process and is
    encrypted with the OS keyring; it is never returned to the application page.
 3. Refresh the model catalog and choose recognition and speech models and a
-   voice. The server must publish the Realtime limits required by
+   voice. OpenAI starts with `gpt-live-transcribe`, `gpt-4o-mini-tts`, and `coral`;
+   existing saved server preferences are preserved. Your own server must publish
+   the Realtime limits required by
    [the speech protocol](../../internals/native-voice.md#speech-protocol-and-capability-discovery).
 4. Choose **Input** or **Speak**, then start a recording and grant OS microphone
    access. Input suppresses automatic speech; Speak reads selected notifications.
    Both modes support eligible **Auto-listen** follow-ups. Automatic notifications
    also require your Sedes **Settings → Notifications** policy to permit voice.
+
+Direct OpenAI needs outbound TCP 443 to `api.openai.com` for `/v1/models`,
+`/v1/audio/speech`, and the secure WebSocket at
+`/v1/realtime?intent=transcription`. Its model catalog is advisory; recording
+validates the supported model and acknowledged session lifetime independently.
+This uses the same HTTP speech workflow as Android. OpenAI has announced that
+the current hosted TTS models shut down on January 6, 2027; a future update must
+change that workflow before then. See the
+[OpenAI speech guide](https://developers.openai.com/api/docs/guides/text-to-speech).
+
+Speech HTTPS and secure WebSockets trust operating-system CAs, including trusted
+private CAs on macOS, in addition to Node's bundled and configured extra roots.
+Certificate-chain and hostname validation remain enabled. This trust is set for
+Node connections in the main-process thread before speech networking starts;
+ordinary Sedes API traffic uses Chromium networking and its own platform trust.
+There is no endpoint-specific certificate exception. Restart Sedes after changing
+the operating system's trusted certificates.
 
 The voice bar supplies recording, Send, Cancel, playback, target selection, and
 Keep listening controls. A completed turn's speaker action replays that reply.

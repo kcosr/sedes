@@ -1377,9 +1377,23 @@ routing while active audio disables Chromium background throttling. Suspend,
 renderer replacement, window closure, and cancellation stop the current work.
 There is no service, tray lifetime, or automatic microphone restart on wake.
 
-The `ElectronSpeech` main-process plugin validates its IPC arguments, obtains
-fresh speech-server capabilities, and owns HTTP/WebSocket transport. Tokens
-are scoped to the complete normalized endpoint, entered in an isolated masked
+The `ElectronSpeech` main-process plugin validates its IPC arguments and owns
+HTTP/WebSocket transport. Endpoint-bearing calls require an explicit provider
+(`openai` or `server`). OpenAI is restricted to `https://api.openai.com/v1`;
+the server provider cannot use that host. Own-server recognition obtains fresh
+capabilities. Hosted recognition uses the supported-model policy and validates
+the acknowledged session expiry against the WebSocket upgrade's server Date;
+its `/models` catalog is only a picker hint. Both use GA transcription
+`session.update` with 24 kHz PCM and explicit commits. Hosted PCM synthesis accepts
+`audio/pcm` or `application/octet-stream`; own-server response validation retains
+its explicit PCM format contract.
+
+Before creating speech connections, `tls-trust.mjs` adds the operating system's
+trusted CAs to the current Node main-process thread's default CA set, preserving
+bundled and extra roots. This covers Node fetch and `ws` without disabling chain
+or hostname verification. Chromium continues to own ordinary renderer API trust.
+
+Tokens are scoped to the complete normalized endpoint, entered in an isolated masked
 dialog, and encrypted with Electron `safeStorage`; plaintext storage fails
 closed. The renderer receives credential status only. Recognition requires
 session acknowledgement before audio, correlates committed results, and bounds

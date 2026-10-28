@@ -95,7 +95,14 @@ recognition, sequential segments, cancellation, endpoint/token replacement,
 and failure after partial audio. Record both repositories' revisions.
 
 The ordinary unit suite also covers the desktop voice state machine, microphone
-conversion, playback completion, IPC credentials, and permission policy. The
+conversion, playback completion, IPC credentials, and permission policy. Hosted
+OpenAI tests use deterministic HTTP/WebSocket responses for model discovery,
+session acknowledgement and expiry, transcript correlation, streamed PCM,
+cancellation, and provider-bound credentials; they do not call the live API.
+TLS tests exercise real HTTPS and secure WebSocket handshakes with temporary
+certificate authorities, including rejection of unknown roots and wrong
+hostnames. The system-root getter is controlled for these Linux tests; macOS
+Keychain trust still requires validation on the installed target application. The
 browser E2E audio harness exercises the production AudioWorklet with real Web
 Audio resampling and playback. Synthetic browser audio does not establish OS
 microphone permissions, physical input quality, keyring behavior, Bluetooth

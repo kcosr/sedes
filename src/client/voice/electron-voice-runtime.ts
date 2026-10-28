@@ -367,27 +367,27 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
 
   async #configureSpeech(): Promise<void> {
     const generation = this.#state.connectionGeneration, request = ++this.#speechGeneration;
-    const endpoint = this.#state.settings.speechEndpoint;
+    const { speechProvider: provider, speechEndpoint: endpoint } = this.#state.settings;
     this.#catalog = undefined; this.#catalogRequest++;
     this.#state.speech = { credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null };
     if (!endpoint) { await this.#speech.cancelAll(); return; }
-    const configured = await this.#speech.configure({ endpoint });
+    const configured = await this.#speech.configure({ provider, endpoint });
     if (generation !== this.#state.connectionGeneration || request !== this.#speechGeneration) return;
     this.#state.settings.speechEndpoint = configured.endpoint;
     this.#state.speech.credentialConfigured = configured.credentialConfigured;
     if (configured.credentialConfigured) await this.#refreshCatalog();
   }
   async #refreshCatalog(): Promise<void> {
-    const endpoint = this.#state.settings.speechEndpoint;
+    const { speechProvider: provider, speechEndpoint: endpoint } = this.#state.settings;
     if (!endpoint || !this.#state.speech.credentialConfigured) return;
     const request = ++this.#catalogRequest, generation = this.#state.connectionGeneration;
     this.#state.speech.catalogStatus = "loading"; this.#publish();
     try {
-      const catalog = await this.#speech.getCapabilities({ endpoint });
+      const catalog = await this.#speech.getCapabilities({ provider, endpoint });
       if (request !== this.#catalogRequest || generation !== this.#state.connectionGeneration) return;
       this.#catalog = catalog;
       const selected = catalog.speechModels.find(model => model.id === this.#state.settings.ttsModel);
-      this.#state.speech.catalog = { source: "server", sttModels: catalog.transcriptionModels.map(model => model.id),
+      this.#state.speech.catalog = { source: provider, sttModels: catalog.transcriptionModels.map(model => model.id),
         ttsModels: catalog.speechModels.map(model => model.id), voices: selected?.voices.map(voice => voice.id) ?? [],
         speed: selected ? { min: selected.speed.min, max: selected.speed.max } : null, formats: ["pcm"] };
       this.#state.speech.catalogStatus = "ready"; this.#state.speech.error = null;
@@ -404,17 +404,19 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
   }
   async openSpeechCredentialDialog(input: Parameters<NativeVoicePlugin["openSpeechCredentialDialog"]>[0]): Promise<NativeVoiceState> {
     this.#assertGeneration(input);
-    const revision = this.#state.settingsRevision, endpoint = this.#state.settings.speechEndpoint;
+    const revision = this.#state.settingsRevision;
+    const { speechProvider: provider, speechEndpoint: endpoint } = this.#state.settings;
     if (!endpoint) throw new Error("Set the speech server API URL first.");
     await this.#initialize();
-    const result = await this.#speech.openCredentialDialog({ endpoint });
+    const result = await this.#speech.openCredentialDialog({ provider, endpoint });
     this.#assertGeneration(input);
-    if (revision !== this.#state.settingsRevision || endpoint !== this.#state.settings.speechEndpoint) throw new Error("Speech settings changed while the credential dialog was open.");
+    if (revision !== this.#state.settingsRevision || provider !== this.#state.settings.speechProvider || endpoint !== this.#state.settings.speechEndpoint)
+      throw new Error("Speech settings changed while the credential dialog was open.");
     this.#cancelActive(); this.#discardQueuedReplies();
     this.#state.speech.credentialConfigured = result.credentialConfigured;
     await this.#configureSpeech();
     this.#assertGeneration(input);
-    if (revision !== this.#state.settingsRevision || endpoint !== this.#state.settings.speechEndpoint) return this.#snapshot();
+    if (revision !== this.#state.settingsRevision || provider !== this.#state.settings.speechProvider || endpoint !== this.#state.settings.speechEndpoint) return this.#snapshot();
     if (!this.#active) this.#state.phase = this.#state.settings.audioMode === "off" ? "off" : "idle";
     this.#scheduleDrain();
     return this.#publish();
@@ -432,14 +434,14 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     if (old.pinDefaultVoiceThread !== next.pinDefaultVoiceThread || old.voiceThreadId !== next.voiceThreadId) {
       this.#state.retainedVoiceTarget = null; this.#state.idleTargetRevision++;
     }
-    const speechChanged = (["speechEndpoint", "sttModel", "ttsModel", "ttsVoice", "ttsSpeed"] as const).some(key => old[key] !== next[key]);
+    const speechChanged = (["speechProvider", "speechEndpoint", "sttModel", "ttsModel", "ttsVoice", "ttsSpeed"] as const).some(key => old[key] !== next[key]);
     if (next.audioMode === "off") {
       this.#cancelActive(); this.#clearControls(); this.#queue.items.length = 0;
       this.#state.nextRecordingTarget = null; this.#state.retainedVoiceTarget = null;
       this.#connection?.notifications(false); this.#state.phase = "off";
     } else if (old.audioMode !== next.audioMode) this.#cancelAutomatic();
     if (speechChanged) {
-      if (this.#active && !this.#active.finalized) this.#cancelActive();
+      if (this.#active && (!this.#active.finalized || old.speechProvider !== next.speechProvider)) this.#cancelActive();
       this.#discardQueuedReplies();
       await this.#configureSpeech();
       this.#assertGeneration(input);
@@ -839,7 +841,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       const output: SpeechPlayback = { active, playback, pending: Promise.resolve(), nextSequence: 0 };
       this.#playbacks.set(requestId, output);
       try {
-        await this.#speech.speak({ requestId, endpoint: settings.speechEndpoint, model: settings.ttsModel,
+        await this.#speech.speak({ requestId, provider: settings.speechProvider, endpoint: settings.speechEndpoint, model: settings.ttsModel,
           voice: settings.ttsVoice, speed: settings.ttsSpeed, text: chunk });
         await output.pending; this.#assertCurrent(active);
         await playback.finish(); this.#assertCurrent(active);

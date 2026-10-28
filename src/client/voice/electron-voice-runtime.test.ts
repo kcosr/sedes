@@ -7,13 +7,15 @@ import { nativeVoiceStateSchema, type NativeVoiceComposerHandoff } from "./nativ
 import { nativeVoiceDiagnosticsSchema } from "./native-voice-diagnostics.js";
 import type { ElectronVoiceConnectionCallbacks, ElectronVoiceConnectionLike } from "./electron-voice-connection.js";
 import type { ElectronVoiceCaptureOptions } from "./electron-voice-audio.js";
-import type { electronSpeech, ElectronSpeechAudioChunk, ElectronSpeechRecognitionError } from "./electron-speech-plugin.js";
+import type { electronSpeech, ElectronSpeechAudioChunk, ElectronSpeechBinding, ElectronSpeechCatalog, ElectronSpeechRecognitionError } from "./electron-speech-plugin.js";
 import { pcmBase64 } from "./electron-voice-recording.js";
 
 const THREAD = "109ae9ee-a06b-48df-a1e0-8c44bce72471";
 const OTHER = "08fd727c-9100-4954-b86c-76a0735c343e";
 const CLIENT = "a58d4200-6c56-430c-be89-02925f35e0ef";
 const BINDING = { profileId: "desktop", serverOrigin: "https://sedes.test", identity: "a".repeat(64) };
+const OPENAI_SETTINGS = { speechProvider: "openai" as const, speechEndpoint: "https://api.openai.com/v1",
+  sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts", ttsVoice: "coral", ttsSpeed: 1 };
 const REGISTRATION: RegisteredClient = { clientId: CLIENT, connectionToken: "b".repeat(43), resumeToken: "c".repeat(43) };
 const policy = () => ({ generation: 1, settings: { enabled: true, silenced: false, revision: 1,
   scriptPath: "", arguments: [], timeoutSeconds: 30, assistantResultPhases: ["final"], delivery: defaultNotificationDelivery() } });
@@ -41,7 +43,7 @@ function harness() {
   const handles: Array<{ remove: ReturnType<typeof vi.fn> }> = [];
   const handle = () => { const value = { remove: vi.fn(async () => {}) }; handles.push(value); return value; };
   const speech = {
-    configure: vi.fn(async ({ endpoint }: { endpoint: string }) => ({ endpoint, credentialConfigured: true })),
+    configure: vi.fn(async (binding: ElectronSpeechBinding) => ({ ...binding, credentialConfigured: true })),
     getCredentialStatus: vi.fn(async () => ({ credentialConfigured: true })), openCredentialDialog: vi.fn(async () => ({ credentialConfigured: true })),
     getCapabilities: vi.fn(async () => ({ transcriptionModels: [{ id: "stt", label: "STT", ready: true,
       realtime: { maxBufferBytes: 2_880_000, maxMessageBytes: 8192, maxOutputBytes: 524288, idleTimeoutSeconds: 60, maxSessionSeconds: 3600 } }],
@@ -93,7 +95,7 @@ function harness() {
     await runtime.setConnection(BINDING);
     const state = await runtime.getState();
     return runtime.updateSettings({ expectedConnectionGeneration: state.connectionGeneration, expectedRevision: state.settingsRevision,
-      patch: { audioMode: "input", speechEndpoint: "https://speech.test/v1", sttModel: "stt", ttsModel: "tts", ttsVoice: "voice", recognitionCues: false, ...patch } });
+      patch: { audioMode: "input", speechProvider: "server", speechEndpoint: "https://speech.test/v1", sttModel: "stt", ttsModel: "tts", ttsVoice: "voice", recognitionCues: false, ...patch } });
   };
   const foreground = async (visible = true, threadId = THREAD, composerAvailable = true, composerMode: "queue" | "steer" = "queue") => runtime.setForegroundContext({ ...await command(), visible, threadId, composerAvailable, composerMode });
   const begin = async (threadId = THREAD) => {
@@ -109,6 +111,86 @@ function harness() {
 }
 
 describe("Electron app-session voice", () => {
+  it("uses explicit OpenAI bindings for fresh settings, catalog, credentials, recognition and playback", async () => {
+    const h = harness(); await h.runtime.setConnection(BINDING);
+    const binding = { provider: "openai", endpoint: "https://api.openai.com/v1" };
+    expect(h.speech.configure).toHaveBeenCalledExactlyOnceWith(binding);
+    expect(h.speech.getCapabilities).toHaveBeenCalledExactlyOnceWith(binding);
+    expect((await h.runtime.getState()).speech.catalog?.source).toBe("openai");
+    await h.runtime.openSpeechCredentialDialog(await h.command());
+    expect(h.speech.openCredentialDialog).toHaveBeenCalledExactlyOnceWith(binding);
+    await h.runtime.updateSettings({ ...await h.command(), expectedRevision: (await h.runtime.getState()).settingsRevision,
+      patch: { audioMode: "speak", autoListen: false, recognitionCues: false } });
+    h.emitPolicy(); await h.begin();
+    expect(h.speech.startRecognition).toHaveBeenCalledExactlyOnceWith({ ...binding, requestId: expect.any(String), model: "gpt-live-transcribe" });
+    await h.runtime.stopCurrentInteraction({ ...await h.command(), interactionId: (await h.runtime.getState()).active!.id });
+    await h.runtime.speakReply({ ...await h.command(), threadId: THREAD, turnId: "openai-turn", assistantResult: { final: { text: "OpenAI reply." } } });
+    await vi.waitFor(() => expect(h.speech.speak).toHaveBeenCalledExactlyOnceWith({ ...binding, requestId: expect.any(String),
+      model: "gpt-4o-mini-tts", voice: "coral", speed: 1, text: "OpenAI reply." }));
+  });
+
+  it("cancels capture and queued replies on a provider switch and ignores the previous catalog response", async () => {
+    const h = harness(); await h.enable({ audioMode: "speak", autoListen: false }); h.emitPolicy(); await h.begin();
+    const previousRequest = h.speech.startRecognition.mock.calls[0]![0].requestId;
+    h.current().callbacks.frame("notification", notification("old-provider-queued"), h.current().voiceStreamId!);
+    expect((await h.runtime.getState()).queue.count).toBe(1);
+    const oldCatalog: ElectronSpeechCatalog = await h.speech.getCapabilities.mock.results.at(-1)!.value;
+    const stale = deferred<typeof oldCatalog>();
+    h.speech.getCapabilities.mockImplementationOnce(() => stale.promise);
+    const refresh = h.runtime.refreshSpeechCatalog({ ...await h.command(), force: true });
+    const openAiCatalog = { ...oldCatalog,
+      transcriptionModels: oldCatalog.transcriptionModels.map(model => ({ ...model, id: "gpt-live-transcribe" })),
+      speechModels: oldCatalog.speechModels.map(model => ({ ...model, id: "gpt-4o-mini-tts", voices: [{ id: "coral", label: "Coral" }] })) };
+    h.speech.getCapabilities.mockResolvedValueOnce(openAiCatalog);
+    await h.runtime.updateSettings({ ...await h.command(), expectedRevision: (await h.runtime.getState()).settingsRevision, patch: OPENAI_SETTINGS });
+    expect(h.speech.cancel).toHaveBeenCalledWith({ requestId: previousRequest });
+    expect(h.audio.stopCapture).toHaveBeenCalled();
+    expect(h.speech.configure).toHaveBeenLastCalledWith({ provider: "openai", endpoint: "https://api.openai.com/v1" });
+    expect(h.speech.getCapabilities).toHaveBeenLastCalledWith({ provider: "openai", endpoint: "https://api.openai.com/v1" });
+    stale.resolve(oldCatalog); await refresh;
+    expect(await h.runtime.getState()).toMatchObject({ active: null, queue: { count: 0 },
+      speech: { credentialConfigured: true, catalog: { source: "openai", sttModels: ["gpt-live-transcribe"], ttsModels: ["gpt-4o-mini-tts"], voices: ["coral"] } } });
+    expect(h.speech.speak).not.toHaveBeenCalled(); expect(h.speech.startRecognition).toHaveBeenCalledOnce();
+    expect(h.requests.some(request => request.path.endsWith("/inputs"))).toBe(false);
+  });
+
+  it("cancels playback from the old provider without starting its automatic follow-up", async () => {
+    const h = harness(); await h.enable({ audioMode: "speak" }); h.emitPolicy();
+    const drained = deferred<void>(); h.playback.finish.mockImplementationOnce(() => drained.promise);
+    h.current().callbacks.frame("notification", notification("old-provider-playback"), h.current().voiceStreamId!);
+    await vi.waitFor(() => expect(h.playback.finish).toHaveBeenCalledOnce());
+    await h.runtime.updateSettings({ ...await h.command(), expectedRevision: (await h.runtime.getState()).settingsRevision, patch: OPENAI_SETTINGS });
+    expect(h.playback.cancel).toHaveBeenCalled(); expect(h.speech.cancel).toHaveBeenCalled();
+    drained.resolve(); await Promise.resolve();
+    expect((await h.runtime.getState()).active).toBeNull(); expect(h.audio.startCapture).not.toHaveBeenCalled();
+  });
+
+  it("does not adopt an old provider's credential status after a later provider configuration", async () => {
+    const h = harness(); await h.enable();
+    const stale = deferred<ElectronSpeechBinding & { credentialConfigured: boolean }>();
+    h.speech.configure.mockImplementationOnce(() => stale.promise);
+    const oldUpdate = h.runtime.updateSettings({ ...await h.command(), expectedRevision: (await h.runtime.getState()).settingsRevision, patch: OPENAI_SETTINGS });
+    await vi.waitFor(() => expect(h.speech.configure).toHaveBeenLastCalledWith({ provider: "openai", endpoint: "https://api.openai.com/v1" }));
+    h.speech.configure.mockResolvedValueOnce({ provider: "server", endpoint: "https://other-speech.test/v1", credentialConfigured: false });
+    await h.runtime.updateSettings({ ...await h.command(), expectedRevision: (await h.runtime.getState()).settingsRevision,
+      patch: { speechProvider: "server", speechEndpoint: "https://other-speech.test/v1", sttModel: "stt", ttsModel: "tts", ttsVoice: "voice" } });
+    stale.resolve({ provider: "openai", endpoint: "https://api.openai.com/v1", credentialConfigured: true }); await oldUpdate;
+    expect(await h.runtime.getState()).toMatchObject({ readiness: "speechConfigurationRequired",
+      settings: { speechProvider: "server", speechEndpoint: "https://other-speech.test/v1" }, speech: { credentialConfigured: false, catalog: null } });
+  });
+
+  it("rejects a credential dialog result after switching providers without replacing the new provider's status", async () => {
+    const h = harness(); await h.enable();
+    const stale = deferred<{ credentialConfigured: boolean }>(); h.speech.openCredentialDialog.mockImplementationOnce(() => stale.promise);
+    const dialog = h.runtime.openSpeechCredentialDialog(await h.command());
+    const rejected = expect(dialog).rejects.toThrow("Speech settings changed while the credential dialog was open");
+    await vi.waitFor(() => expect(h.speech.openCredentialDialog).toHaveBeenCalledExactlyOnceWith({ provider: "server", endpoint: "https://speech.test/v1" }));
+    await h.runtime.updateSettings({ ...await h.command(), expectedRevision: (await h.runtime.getState()).settingsRevision, patch: OPENAI_SETTINGS });
+    stale.resolve({ credentialConfigured: false }); await rejected;
+    expect(await h.runtime.getState()).toMatchObject({ settings: { speechProvider: "openai" },
+      speech: { credentialConfigured: true, catalog: { source: "openai" } } });
+  });
+
   it("restores client controls while voice is Off and keeps the current foreground view", async () => {
     vi.useFakeTimers();
     const h = harness(); await h.runtime.setConnection(BINDING); await h.foreground();
@@ -220,26 +302,26 @@ describe("Electron app-session voice", () => {
 
   it("drains notifications that arrive while startup speech configuration is pending", async () => {
     const h = harness(); await h.enable({ audioMode: "speak", autoListen: false });
-    const configured = deferred<{ endpoint: string; credentialConfigured: boolean }>();
+    const configured = deferred<ElectronSpeechBinding & { credentialConfigured: boolean }>();
     h.speech.configure.mockImplementationOnce(() => configured.promise);
     const connecting = h.runtime.setConnection({ ...BINDING, reconnect: true });
-    await vi.waitFor(() => expect(h.speech.configure).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(h.speech.configure).toHaveBeenCalledTimes(3));
     h.emitPolicy(); h.current().callbacks.frame("notification", notification("during-startup"), h.current().voiceStreamId!);
     await Promise.resolve();
     expect((await h.runtime.getState()).queue.count).toBe(1); expect(h.speech.speak).not.toHaveBeenCalled();
-    configured.resolve({ endpoint: "https://speech.test/v1", credentialConfigured: true }); await connecting;
+    configured.resolve({ provider: "server", endpoint: "https://speech.test/v1", credentialConfigured: true }); await connecting;
     await vi.waitFor(() => expect(h.speech.speak).toHaveBeenCalledOnce());
     expect((await h.runtime.getState()).queue.count).toBe(0);
   });
 
   it("preserves active playback when startup catalog refresh completes", async () => {
     const h = harness(); await h.enable({ audioMode: "speak", autoListen: false });
-    const catalog = await h.speech.getCapabilities.mock.results[0]!.value;
+    const catalog = await h.speech.getCapabilities.mock.results.at(-1)!.value;
     const refreshed = deferred<typeof catalog>(), drained = deferred<void>();
     h.speech.getCapabilities.mockImplementationOnce(() => refreshed.promise);
     h.playback.finish.mockImplementationOnce(() => drained.promise);
     const connecting = h.runtime.setConnection({ ...BINDING, reconnect: true });
-    await vi.waitFor(() => expect(h.speech.getCapabilities).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(h.speech.getCapabilities).toHaveBeenCalledTimes(3));
     h.emitPolicy(); h.current().callbacks.frame("notification", notification("during-catalog-refresh"), h.current().voiceStreamId!);
     await vi.waitFor(() => expect(h.playback.finish).toHaveBeenCalledOnce());
     refreshed.resolve(catalog); await connecting;
@@ -253,14 +335,14 @@ describe("Electron app-session voice", () => {
     h.speech.configure.mockRejectedValueOnce(new Error("OS keyring is locked."));
     await h.runtime.setConnection({ ...BINDING, reconnect: true }); h.emitPolicy();
     expect((await h.runtime.getState()).phase).toBe("error");
-    const configured = deferred<{ endpoint: string; credentialConfigured: boolean }>();
+    const configured = deferred<ElectronSpeechBinding & { credentialConfigured: boolean }>();
     h.speech.configure.mockImplementationOnce(() => configured.promise);
     const recovering = h.runtime.openSpeechCredentialDialog(await h.command());
-    await vi.waitFor(() => expect(h.speech.configure).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(h.speech.configure).toHaveBeenCalledTimes(4));
     h.current().callbacks.frame("notification", notification("during-credential-recovery"), h.current().voiceStreamId!);
     await Promise.resolve();
     expect((await h.runtime.getState()).queue.count).toBe(1); expect(h.speech.speak).not.toHaveBeenCalled();
-    configured.resolve({ endpoint: "https://speech.test/v1", credentialConfigured: true });
+    configured.resolve({ provider: "server", endpoint: "https://speech.test/v1", credentialConfigured: true });
     expect((await recovering).phase).toBe("idle");
     await vi.waitFor(() => expect(h.speech.speak).toHaveBeenCalledOnce());
     expect((await h.runtime.getState()).queue.count).toBe(0);

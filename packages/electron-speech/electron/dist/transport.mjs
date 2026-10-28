@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
+import { enableSystemCertificateTrust } from "./tls-trust.mjs";
 import {
   decodePcm, MAX_AUDIO_CHUNK_BYTES, MAX_PLAYBACK_CHUNK_BYTES, MAX_RESPONSE_BYTES,
-  normalizeEndpoint, object, parseCapabilities, PCM_BYTES_PER_SECOND, REQUEST_TIMEOUT_MS,
+  httpDateSeconds, object, openAiRecognitionModel, openAiSpeechModel, parseCapabilities, parseOpenAiModels,
+  PCM_BYTES_PER_SECOND, providerBinding, REQUEST_TIMEOUT_MS,
   requestId, RESULT_TIMEOUT_MS, safeFailure, speechError, text,
 } from "./contracts.mjs";
 
@@ -36,6 +38,7 @@ async function boundedBody(response, signal) {
 export class SpeechTransport {
   constructor({ credentials, fetchImpl = globalThis.fetch, WebSocketImpl = WebSocket, notify = () => {},
     requestTimeoutMs = REQUEST_TIMEOUT_MS, resultTimeoutMs = RESULT_TIMEOUT_MS, audioAckTimeoutMs = 30_000 }) {
+    enableSystemCertificateTrust();
     this.credentials = credentials;
     this.fetch = fetchImpl;
     this.WebSocket = WebSocketImpl;
@@ -43,25 +46,26 @@ export class SpeechTransport {
     this.requestTimeoutMs = requestTimeoutMs;
     this.resultTimeoutMs = resultTimeoutMs;
     this.audioAckTimeoutMs = audioAckTimeoutMs;
+    this.provider = null;
     this.endpoint = null;
     this.operations = new Map();
   }
 
   async configure(input) {
-    object(input, ["endpoint"]);
-    const endpoint = normalizeEndpoint(input.endpoint);
-    if (this.endpoint !== endpoint) { this.cancelAll(); this.endpoint = endpoint; }
+    object(input, ["provider", "endpoint"]);
+    const { provider, endpoint } = providerBinding(input);
+    if (this.provider !== provider || this.endpoint !== endpoint) { this.cancelAll(); this.provider = provider; this.endpoint = endpoint; }
     const status = await this.credentials.status(endpoint);
-    if (this.endpoint !== endpoint) throw speechError("speech_configuration_changed", "The speech endpoint changed while it was being configured.");
-    return { endpoint, ...status };
+    if (this.provider !== provider || this.endpoint !== endpoint) throw speechError("speech_configuration_changed", "The speech connection changed while it was being configured.");
+    return { provider, endpoint, ...status };
   }
 
   begin(input, kind) {
     const id = requestId(input.requestId);
-    const endpoint = normalizeEndpoint(input.endpoint);
-    if (endpoint !== this.endpoint) throw speechError("speech_configuration_changed", "The speech endpoint changed. Start a new operation.");
+    const { provider, endpoint } = providerBinding(input);
+    if (provider !== this.provider || endpoint !== this.endpoint) throw speechError("speech_configuration_changed", "The speech connection changed. Start a new operation.");
     if (this.operations.has(id) || this.operations.size >= 4) throw speechError("speech_busy", "Another speech operation is still active.");
-    const operation = { id, endpoint, kind, controller: new AbortController(), timers: new Set(), done: false };
+    const operation = { id, provider, endpoint, kind, controller: new AbortController(), timers: new Set(), done: false };
     this.operations.set(id, operation);
     return operation;
   }
@@ -132,14 +136,15 @@ export class SpeechTransport {
     return response;
   }
   async capabilities(operation, token) {
-    const response = await this.http(operation, "/audio/capabilities", token);
+    const response = await this.http(operation, operation.provider === "openai" ? "/models" : "/audio/capabilities", token);
     if (!/^application\/json(?:\s*;|$)/iu.test(response.headers.get("content-type") ?? "")) {
       throw speechError("speech_response_invalid", "The speech server returned an unsupported capability format.");
     }
-    return parseCapabilities(await boundedBody(response, operation.controller.signal));
+    const value = await boundedBody(response, operation.controller.signal);
+    return operation.provider === "openai" ? parseOpenAiModels(value) : parseCapabilities(value);
   }
   async getCapabilities(input) {
-    object(input, ["endpoint"]);
+    object(input, ["provider", "endpoint"]);
     const operation = this.begin({ ...input, requestId: randomUUID() }, "capabilities");
     this.timer(operation, this.requestTimeoutMs);
     try { return await this.capabilities(operation, await this.token(operation)); }
@@ -148,7 +153,7 @@ export class SpeechTransport {
   }
 
   async startRecognition(input) {
-    object(input, ["requestId", "endpoint", "model"]);
+    object(input, ["requestId", "provider", "endpoint", "model"]);
     const modelId = text(input.model);
     const operation = this.begin(input, "recognition");
     operation.ready = deferred();
@@ -160,25 +165,34 @@ export class SpeechTransport {
     const startupTimer = this.timer(operation, this.requestTimeoutMs);
     try {
       const token = await this.token(operation);
-      const catalog = await this.capabilities(operation, token);
+      // Hosted /models is advisory picker data. A fresh accepted session authorizes recognition.
+      const model = operation.provider === "openai" ? openAiRecognitionModel(modelId)
+        : (await this.capabilities(operation, token)).transcriptionModels.find((candidate) => candidate.id === modelId);
       this.check(operation);
-      const model = catalog.transcriptionModels.find((candidate) => candidate.id === modelId);
       if (!model?.ready) throw speechError("speech_model_unavailable", "The selected recognition model is unavailable.");
       const limits = model.realtime;
       const maxRecordingSeconds = Math.min(60, Math.floor(limits.maxBufferBytes / PCM_BYTES_PER_SECOND));
       if (maxRecordingSeconds < 5 || limits.maxMessageBytes < 8_192 || limits.maxOutputBytes < MAX_RESPONSE_BYTES ||
-          limits.idleTimeoutSeconds < 40 || limits.maxSessionSeconds < maxRecordingSeconds + this.resultTimeoutMs / 1000 + 45) {
+          (operation.provider === "server" && limits.idleTimeoutSeconds < 40) ||
+          limits.maxSessionSeconds < maxRecordingSeconds + this.resultTimeoutMs / 1000 + 45) {
         throw speechError("speech_limits_unsupported", "The speech server limits are too small for desktop recording.");
       }
       operation.model = modelId;
       operation.limits = limits;
       operation.maxBufferBytes = maxRecordingSeconds * PCM_BYTES_PER_SECOND;
+      operation.maxRecordingSeconds = maxRecordingSeconds;
+      operation.openedAt = performance.now();
       const url = new URL(`${operation.endpoint}/realtime`);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       url.searchParams.set("intent", "transcription");
       const socket = new this.WebSocket(url, { headers: { Authorization: `Bearer ${token}` },
         followRedirects: false, perMessageDeflate: false, maxPayload: MAX_RESPONSE_BYTES, handshakeTimeout: this.requestTimeoutMs });
       operation.socket = socket;
+      socket.on("upgrade", (response) => {
+        if (operation.done || operation.provider !== "openai") return;
+        try { operation.providerDateSeconds = httpDateSeconds(response.headers.date); }
+        catch (error) { this.fail(operation, error); }
+      });
       socket.on("message", (data, binary) => {
         if (operation.done) return;
         try { this.recognitionMessage(operation, data, binary); }
@@ -192,15 +206,34 @@ export class SpeechTransport {
           : speechError("speech_transport_failed", "The speech server rejected the recognition connection."));
       });
       socket.on("close", () => this.fail(operation, speechError("speech_connection_closed", "The speech server closed the recognition session.")));
-      this.timer(operation, Math.floor(limits.maxSessionSeconds * 1000), () => this.fail(operation, speechError("speech_session_expired", "The speech recognition session expired. Start a new recording.")));
+      if (operation.provider === "server") this.sessionDeadline(operation, operation.openedAt + limits.maxSessionSeconds * 1000);
       await operation.ready.promise;
       this.clearTimer(operation, startupTimer);
       this.check(operation);
-      return { maxBufferBytes: operation.maxBufferBytes, maxRecordingSeconds, maxSessionSeconds: limits.maxSessionSeconds };
+      return { maxBufferBytes: operation.maxBufferBytes, maxRecordingSeconds,
+        maxSessionSeconds: operation.provider === "openai" ? Math.max(0, (operation.expiresAt - performance.now()) / 1000) : limits.maxSessionSeconds };
     } catch (error) {
       this.fail(operation, error);
       throw operation.failure;
     }
+  }
+
+  sessionDeadline(operation, expiresAt) {
+    // Every update may shorten the original lifetime, never extend it.
+    operation.expiresAt = Math.min(operation.expiresAt ?? Infinity, expiresAt);
+    this.clearTimer(operation, operation.sessionTimer);
+    operation.sessionTimer = this.timer(operation, Math.max(1, Math.floor(operation.expiresAt - performance.now())),
+      () => this.fail(operation, speechError("speech_session_expired", "The speech recognition session expired. Start a new recording.")));
+  }
+
+  hostedSessionLifetime(operation, session) {
+    const expires = session.expires_at, date = operation.providerDateSeconds;
+    const duration = expires - date;
+    if (!Number.isSafeInteger(expires) || !Number.isFinite(date) || duration <= 1 || duration > 3622) {
+      throw speechError("speech_session_lifetime_invalid", "OpenAI did not provide a valid recognition session lifetime.");
+    }
+    // Anchor to monotonic connection time and provider HTTP Date, independent of local clock skew.
+    this.sessionDeadline(operation, operation.openedAt + Math.min(operation.limits.maxSessionSeconds, duration - 1) * 1000);
   }
 
   send(operation, event) {
@@ -222,6 +255,7 @@ export class SpeechTransport {
       if (operation.sessionId || operation.readyResolved) throw protocolFailure();
       operation.sessionId = text(event.session?.id, 256);
       if (event.session.type !== "transcription") throw protocolFailure();
+      if (operation.provider === "openai") this.hostedSessionLifetime(operation, event.session);
       this.send(operation, { type: "session.update", event_id: `configure_${operation.id}`,
         session: { type: "transcription", audio: { input: { format: { type: "audio/pcm", rate: 24_000 },
           transcription: { model: operation.model }, noise_reduction: null, turn_detection: null } } } });
@@ -232,11 +266,22 @@ export class SpeechTransport {
       if (!operation.sessionId || operation.readyResolved || session?.id !== operation.sessionId || session.type !== "transcription" ||
           input?.format?.type !== "audio/pcm" || input.format.rate !== 24_000 || input.transcription?.model !== operation.model ||
           input.noise_reduction !== null || input.turn_detection !== null) throw protocolFailure();
+      if (operation.provider === "openai") {
+        if (Object.hasOwn(session, "expires_at")) this.hostedSessionLifetime(operation, session);
+        if (operation.expiresAt - performance.now() < (operation.maxRecordingSeconds + this.resultTimeoutMs / 1000 + 45) * 1000) {
+          throw speechError("speech_limits_unsupported", "The recognition session is too short for desktop recording.");
+        }
+      }
       operation.readyResolved = true;
       operation.ready.resolve();
       return;
     }
     if (event.type === "error") throw speechError("speech_recognition_failed", "The speech server rejected recognition. Check the selected model and server limits.");
+    if (operation.provider === "openai" && event.type === "conversation.created") {
+      if (!operation.sessionId || operation.conversationId || event.conversation?.object !== "realtime.conversation") throw protocolFailure();
+      operation.conversationId = text(event.conversation.id, 256);
+      return;
+    }
     if (!operation.readyResolved) throw protocolFailure();
     const pending = operation.pending;
     if (event.type === "input_audio_buffer.committed") {
@@ -258,8 +303,10 @@ export class SpeechTransport {
       pending.result.resolve({ transcript: event.transcript });
       return;
     }
-    // Deltas and metadata never become submitted text. This subset has no other commands.
-    if (!["conversation.item.input_audio_transcription.delta", "conversation.item.created", "rate_limits.updated"].includes(event.type)) throw protocolFailure();
+    // Deltas and metadata never become submitted text. Hosted GA and our server have explicit event contracts.
+    // https://developers.openai.com/api/reference/resources/realtime/server-events
+    const metadata = operation.provider === "openai" ? ["conversation.item.added", "conversation.item.done"] : ["conversation.item.created"];
+    if (!["conversation.item.input_audio_transcription.delta", "rate_limits.updated", ...metadata].includes(event.type)) throw protocolFailure();
   }
 
   async appendAudio(input) {
@@ -318,7 +365,7 @@ export class SpeechTransport {
   }
 
   async speak(input) {
-    object(input, ["requestId", "endpoint", "model", "voice", "speed", "text"]);
+    object(input, ["requestId", "provider", "endpoint", "model", "voice", "speed", "text"]);
     const modelId = text(input.model), voice = text(input.voice);
     if (typeof input.text !== "string" || !input.text.trim() || input.text.length > 65_536 ||
         input.text.includes("\u0000") || !Number.isFinite(input.speed) || input.speed <= 0) {
@@ -330,8 +377,8 @@ export class SpeechTransport {
     this.timer(operation, 600_000);
     try {
       const token = await this.token(operation);
-      const capabilities = await this.capabilities(operation, token);
-      const model = capabilities.speechModels.find((candidate) => candidate.id === modelId);
+      const model = operation.provider === "openai" ? openAiSpeechModel(modelId)
+        : (await this.capabilities(operation, token)).speechModels.find((candidate) => candidate.id === modelId);
       if (!model?.ready || !model.voices.some((candidate) => candidate.id === voice)) throw speechError("speech_model_unavailable", "The selected speech model or voice is unavailable.");
       if (input.text.length > model.maxTextLength || input.speed < model.speed.min || input.speed > model.speed.max) {
         throw speechError("speech_input_invalid", "Speech text or speed exceeds this model's limits.");
@@ -340,7 +387,7 @@ export class SpeechTransport {
       const firstByteTimer = this.timer(operation, this.resultTimeoutMs);
       const response = await this.http(operation, "/audio/speech", token, { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: modelId, voice, input: input.text, response_format: "pcm", speed: input.speed }) });
-      this.validatePcmType(response.headers.get("content-type"));
+      this.validatePcmType(response.headers.get("content-type"), operation.provider);
       if (!response.body) throw speechError("speech_audio_invalid", "The speech server returned no audio.");
       this.clearTimer(operation, firstByteTimer);
       const reader = response.body.getReader();
@@ -381,8 +428,10 @@ export class SpeechTransport {
     }
   }
 
-  validatePcmType(value) {
+  validatePcmType(value, provider) {
     const parts = (value ?? "").toLowerCase().split(";").map((part) => part.trim());
+    // OpenAI documents raw 24 kHz PCM without parameters. Our server advertises the full contract.
+    if (provider === "openai" && parts.length === 1 && ["audio/pcm", "application/octet-stream"].includes(parts[0])) return;
     const parameters = new Map();
     for (const part of parts.slice(1)) {
       const pair = /^([a-z]+)=([^=]+)$/u.exec(part);

@@ -4,7 +4,7 @@ Android's native voice service speaks Sedes notifications and sends recognized
 text directly to a thread. It owns its network connections, audio playback,
 microphone capture, and input recovery while the WebView displays settings and
 controls. Browser clients do not show the Voice page. Electron has a separate
-[app-session voice implementation](electron.md#voice) for your own speech server;
+[app-session voice implementation](electron.md#voice) for OpenAI or your own speech server;
 the Android service, headset routing, and saved-recording recovery described
 below do not apply to Electron.
 

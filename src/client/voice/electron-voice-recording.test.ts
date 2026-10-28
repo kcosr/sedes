@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { base64Pcm, ElectronCapturePolicy, ElectronVoiceSegmenter, MemoryVoiceRecording, VOICE_PACKET_BYTES } from "./electron-voice-recording.js";
 import { electronVoiceDefaults } from "./electron-voice-state.js";
+import type { ElectronSpeechBinding } from "./electron-speech-plugin.js";
 
 function pcm(samples = 2400, amplitude = 3000): Uint8Array {
   const bytes = new Uint8Array(samples * 2), view = new DataView(bytes.buffer);
@@ -13,7 +14,7 @@ function join(values: Uint8Array[]): Uint8Array {
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(accept => { resolve = accept; }); return { promise, resolve }; }
 function transport(hardSeconds = 60, sessionSeconds = 3600) {
-  return { startRecognition: vi.fn(async (_input: { requestId: string; endpoint: string; model: string }) => ({
+  return { startRecognition: vi.fn(async (_input: ElectronSpeechBinding & { requestId: string; model: string }) => ({
     maxBufferBytes: hardSeconds * 48_000, maxRecordingSeconds: hardSeconds, maxSessionSeconds: sessionSeconds })),
   appendAudio: vi.fn(async (_input: { requestId: string; pcm: string }) => {}),
   commitRecognition: vi.fn(async (_input: { requestId: string }) => ({ transcript: " word " })),
@@ -79,6 +80,23 @@ describe("sample-clock recording endpoints", () => {
 });
 
 describe("live recording coordinator", () => {
+  it.each(["openai", "server"] as const)("binds every recognition session explicitly to %s", async provider => {
+    let now = 0;
+    const speech = transport(5, 180);
+    const settings = { ...electronVoiceDefaults(), speechProvider: provider,
+      speechEndpoint: provider === "openai" ? "https://api.openai.com/v1" : "https://speech.test/v1", recognitionResultTimeoutMs: 1000 };
+    const recording = new MemoryVoiceRecording({ speech, settings, failed: vi.fn(), now: () => now });
+    await recording.start();
+    for (let index = 0; index < 50; index++) recording.accept(pcm());
+    await vi.waitFor(() => expect(speech.commitRecognition).toHaveBeenCalledOnce());
+    now = 160_000;
+    recording.accept(pcm()); await recording.finish();
+    expect(speech.startRecognition).toHaveBeenCalledTimes(2);
+    for (const [call] of speech.startRecognition.mock.calls)
+      expect(call).toEqual({ requestId: expect.any(String), provider, endpoint: settings.speechEndpoint, model: settings.sttModel });
+    expect(speech.startRecognition.mock.calls[0]![0].requestId).not.toBe(speech.startRecognition.mock.calls[1]![0].requestId);
+  });
+
   it("uploads while capturing, waits for every committed result, and preserves repeated words across segments", async () => {
     const speech = transport(5), failure = vi.fn();
     const recording = new MemoryVoiceRecording({ speech, settings: electronVoiceDefaults(), failed: failure });

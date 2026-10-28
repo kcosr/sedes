@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import os from "node:os";
+import vm from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SpeechCredentialStore } from "../../packages/electron-speech/electron/dist/credential-store.mjs";
 import { showCredentialDialog } from "../../packages/electron-speech/electron/dist/credential-dialog.mjs";
@@ -37,7 +38,7 @@ class FakeWindow extends EventEmitter {
   destroy() { this.close(); }
   async loadFile(filename) { this.webContents.mainFrame.url = pathToFileURL(filename).href; }
 }
-function dialogFixture(credentials) {
+function dialogFixture(credentials, binding = { provider: "server", endpoint }) {
   const windows = [], handlers = new Map();
   const isolated = new EventEmitter();
   isolated.setPermissionCheckHandler = vi.fn();
@@ -47,10 +48,27 @@ function dialogFixture(credentials) {
   const ipcMain = { handle: (channel, handler) => handlers.set(channel, handler), removeHandler: (channel) => handlers.delete(channel) };
   const session = { fromPartition: vi.fn(() => isolated) };
   const onChange = vi.fn();
-  const dialog = showCredentialDialog({ endpoint, parent: {}, credentials, BrowserWindow: Window, session, ipcMain, onChange });
+  const dialog = showCredentialDialog({ ...binding, parent: {}, credentials, BrowserWindow: Window, session, ipcMain, onChange });
   const window = windows[0];
   const invoke = (input, event = { sender: window.webContents, senderFrame: window.webContents.mainFrame }) => [...handlers.values()][0](event, input);
   return { dialog, window, handlers, invoke, isolated, session, onChange };
+}
+
+async function preloadFixture(provider, status = { credentialConfigured: false }) {
+  const elements = new Map();
+  const listeners = new Map();
+  const document = { title: "", getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, { textContent: "", disabled: false, value: "", focus: vi.fn(), addEventListener: vi.fn() });
+    return elements.get(id);
+  } };
+  const invoke = vi.fn(async () => ({ provider, endpoint: provider === "openai" ? "https://api.openai.com/v1" : endpoint, ...status }));
+  vm.runInNewContext(await readFile(new URL("../../packages/electron-speech/electron/dist/credential-preload.cjs", import.meta.url), "utf8"), {
+    require: () => ({ ipcRenderer: { invoke } }), document,
+    window: { addEventListener: (event, callback) => listeners.set(event, callback) },
+    process: { argv: ["--sedes-speech-channel=sedes-speech-credential-1234abcd", `--sedes-speech-provider=${provider}`] },
+  });
+  await listeners.get("DOMContentLoaded")();
+  return { document, elements, invoke };
 }
 
 describe("Electron speech credential storage", () => {
@@ -111,13 +129,34 @@ describe("isolated speech credential dialog", () => {
     expect(await f.invoke({ action: "save", token }, { sender: {}, senderFrame: f.window.webContents.mainFrame })).toHaveProperty("error");
     expect(await f.invoke({ action: "save", token }, { sender: f.window.webContents, senderFrame: { url: f.window.webContents.mainFrame.url } })).toHaveProperty("error");
     expect(credentials.save).not.toHaveBeenCalled();
-    expect(await f.invoke({ action: "status" })).toEqual({ endpoint, credentialConfigured: false });
+    expect(await f.invoke({ action: "status" })).toEqual({ provider: "server", endpoint, credentialConfigured: false });
     const callback = vi.fn();
     f.isolated.webRequest.onBeforeRequest.mock.calls[0][0]({ url: "https://attacker.invalid" }, callback);
     expect(callback).toHaveBeenCalledWith({ cancel: true });
     await f.invoke({ action: "cancel" });
     expect(await f.dialog.result).toEqual({ credentialConfigured: false });
     expect(f.handlers.size).toBe(0);
+  });
+
+  it("binds an OpenAI API key to the fixed endpoint and keeps it out of the returned status", async () => {
+    const { store } = await storeFixture();
+    const binding = { provider: "openai", endpoint: "https://api.openai.com/v1" };
+    const f = dialogFixture(store, binding);
+    expect(f.window.options.title).toBe("OpenAI API key — Sedes");
+    expect(f.window.options.webPreferences.additionalArguments).toContain("--sedes-speech-provider=openai");
+    expect(await f.invoke({ action: "status" })).toEqual({ ...binding, credentialConfigured: false });
+    expect(await f.invoke({ action: "save", token })).toEqual({});
+    expect(await f.dialog.result).toEqual({ credentialConfigured: true });
+    expect(await store.read(binding.endpoint)).toBe(token);
+    expect(await store.read(endpoint)).toBeNull();
+  });
+
+  it.each([
+    { endpoint },
+    { provider: "openai", endpoint },
+    { provider: "server", endpoint: "https://api.openai.com/v1" },
+  ])("rejects an invalid provider binding before creating a dialog: %j", (binding) => {
+    expect(() => dialogFixture({}, binding)).toThrow();
   });
 
   it("saves through the private handler and returns no token through dialog results", async () => {
@@ -164,7 +203,7 @@ describe("isolated speech credential dialog", () => {
     const { store } = await storeFixture();
     await store.save(endpoint, token);
     const f = dialogFixture(store);
-    expect(await f.invoke({ action: "save", token: "invalid token" })).toEqual({ error: "Enter a valid speech server bearer token." });
+    expect(await f.invoke({ action: "save", token: "invalid token" })).toEqual({ error: "Enter a valid speech API key or server bearer token." });
     expect(f.window.isDestroyed()).toBe(false);
     expect(await f.invoke({ action: "cancel" })).toEqual({});
     expect(await f.dialog.result).toEqual({ credentialConfigured: true });
@@ -189,5 +228,33 @@ describe("isolated speech credential dialog", () => {
     const result = expect(f.dialog.result).rejects.toMatchObject({ code: statusError.code, message: statusError.message });
     f.window.close();
     await result;
+  });
+});
+
+describe("credential dialog labels", () => {
+  it.each([
+    ["openai", "OpenAI API key", "API key", "An API key"],
+    ["server", "Speech server token", "Bearer token", "A token"],
+  ])("identifies the %s credential without exposing its value", async (provider, title, label, savedMessage) => {
+    const f = await preloadFixture(provider, { credentialConfigured: true });
+    expect(f.document.title).toBe(`${title} — Sedes`);
+    expect(f.elements.get("title").textContent).toBe(title);
+    expect(f.elements.get("token-label").textContent).toBe(label);
+    expect(f.elements.get("message").textContent).toContain(`${savedMessage} is saved.`);
+    expect(f.elements.get("token").value).toBe("");
+    expect(f.invoke).toHaveBeenCalledWith("sedes-speech-credential-1234abcd", { action: "status" });
+  });
+
+  it("still identifies OpenAI when the saved key cannot be read", async () => {
+    const f = await preloadFixture("openai", { error: "Secure storage unavailable." });
+    expect(f.elements.get("title").textContent).toBe("OpenAI API key");
+    expect(f.elements.get("save").textContent).toBe("Save API key");
+    expect(f.elements.get("message").textContent).toContain("The saved API key is unavailable.");
+    expect(f.elements.get("remove").disabled).toBe(false);
+  });
+
+  it("does not invoke native credential access without a valid provider argument", async () => {
+    const f = await preloadFixture("other");
+    expect(f.invoke).not.toHaveBeenCalled();
   });
 });

@@ -7,11 +7,12 @@ import type { ElectronSpeechCatalog, ElectronSpeechRecognitionReady } from "../.
 import { startOpenAiSpeechFixture, waitForSpeech } from "../support/openai-speech-fixture.js";
 
 type AudioChunk = { requestId: string; sequence: number; pcm: string };
-type RecognitionInput = { requestId: string; endpoint: string; model: string };
+type SpeechBinding = { provider: "server" | "openai"; endpoint: string };
+type RecognitionInput = SpeechBinding & { requestId: string; model: string };
 type SpeechInput = RecognitionInput & { voice: string; speed: number; text: string };
 interface Transport {
-  configure(input: { endpoint: string }): Promise<{ endpoint: string; credentialConfigured: boolean }>;
-  getCapabilities(input: { endpoint: string }): Promise<ElectronSpeechCatalog>;
+  configure(input: SpeechBinding): Promise<SpeechBinding & { credentialConfigured: boolean }>;
+  getCapabilities(input: SpeechBinding): Promise<ElectronSpeechCatalog>;
   startRecognition(input: RecognitionInput): Promise<ElectronSpeechRecognitionReady>;
   appendAudio(input: { requestId: string; pcm: string }): Promise<void>;
   commitRecognition(input: { requestId: string }): Promise<{ transcript: string }>;
@@ -76,8 +77,8 @@ describe("Electron transport against the real speech server", () => {
         if (acknowledge) transport.acknowledgeAudio({ requestId: chunk.requestId, sequence: chunk.sequence });
       },
     });
-    await expect(transport.configure({ endpoint: primary.endpoint })).resolves.toEqual({
-      endpoint: primary.endpoint, credentialConfigured: true,
+    await expect(transport.configure({ provider: "server", endpoint: primary.endpoint })).resolves.toEqual({
+      provider: "server", endpoint: primary.endpoint, credentialConfigured: true,
     });
   });
   afterEach(() => { transport?.cancelAll(); });
@@ -90,7 +91,7 @@ describe("Electron transport against the real speech server", () => {
   }
   async function startRecording(endpoint = primary.endpoint) {
     const requestId = randomUUID();
-    const ready = await transport.startRecognition({ requestId, endpoint, model: "parakeet-local" });
+    const ready = await transport.startRecognition({ provider: "server", requestId, endpoint, model: "parakeet-local" });
     expect(ready.maxBufferBytes).toBeGreaterThanOrEqual(primary.pcm.length);
     expect(ready.maxRecordingSeconds).toBeGreaterThanOrEqual(5);
     return requestId;
@@ -103,14 +104,14 @@ describe("Electron transport against the real speech server", () => {
     } finally { transport.cancel({ requestId }); }
   }
   function speak(text: string, requestId = randomUUID(), endpoint = primary.endpoint) {
-    return { requestId, result: transport.speak({ requestId, endpoint, model: "kokoro-local", voice: "af_heart", speed: 1, text }) };
+    return { requestId, result: transport.speak({ provider: "server", requestId, endpoint, model: "kokoro-local", voice: "af_heart", speed: 1, text }) };
   }
   function audioFor(requestId: string) {
     return Buffer.concat(chunks.filter(chunk => chunk.requestId === requestId).map(chunk => Buffer.from(chunk.pcm, "base64")));
   }
 
   it("discovers supported models and streams byte-exact 24 kHz mono PCM in acknowledged chunks", async () => {
-    const catalog = await transport.getCapabilities({ endpoint: primary.endpoint });
+    const catalog = await transport.getCapabilities({ provider: "server", endpoint: primary.endpoint });
     expect(catalog.transcriptionModels).toContainEqual(expect.objectContaining({ id: "parakeet-local", ready: true }));
     expect(catalog.speechModels).toContainEqual(expect.objectContaining({
       id: "kokoro-local", ready: true, sampleRate: 24_000,
@@ -154,7 +155,7 @@ describe("Electron transport against the real speech server", () => {
 
   it("fails authentication without transcription or retry and uses the replaced token on the next request", async () => {
     credentials.set(primary.endpoint, "invalid-fixture-token");
-    await expect(transport.getCapabilities({ endpoint: primary.endpoint })).rejects.toMatchObject({ code: "speech_unauthorized" });
+    await expect(transport.getCapabilities({ provider: "server", endpoint: primary.endpoint })).rejects.toMatchObject({ code: "speech_unauthorized" });
     await expect(startRecording()).rejects.toMatchObject({ code: "speech_unauthorized" });
     expect((await primary.observations()).transcriptions).toEqual([]);
     expect(otherEvents).toEqual([]);
@@ -186,11 +187,11 @@ describe("Electron transport against the real speech server", () => {
     await appendRecording(oldId);
     const oldResult = transport.commitRecognition({ requestId: oldId }).catch((error: unknown) => error);
     await waitForSpeech(async () => (await primary.observations()).transcriptions.length === 1);
-    await expect(transport.configure({ endpoint: replacement.endpoint })).resolves.toEqual({
-      endpoint: replacement.endpoint, credentialConfigured: false,
+    await expect(transport.configure({ provider: "server", endpoint: replacement.endpoint })).resolves.toEqual({
+      provider: "server", endpoint: replacement.endpoint, credentialConfigured: false,
     });
     await expect(oldResult).resolves.toMatchObject({ code: "speech_cancelled" });
-    await expect(transport.getCapabilities({ endpoint: primary.endpoint })).rejects.toMatchObject({ code: "speech_configuration_changed" });
+    await expect(transport.getCapabilities({ provider: "server", endpoint: primary.endpoint })).rejects.toMatchObject({ code: "speech_configuration_changed" });
     await expect(startRecording(replacement.endpoint)).rejects.toMatchObject({ code: "speech_credential_missing" });
     credentials.set(replacement.endpoint, primary.token);
     await expect(startRecording(replacement.endpoint)).rejects.toMatchObject({ code: "speech_unauthorized" });

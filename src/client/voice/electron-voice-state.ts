@@ -13,7 +13,7 @@ export function electronVoiceDefaults(): NativeVoiceSettings {
   return {
     audioMode: "off", speechContent: "both", autoListen: true, keepListeningByDefault: false,
     announceRecordingThread: false, ignoreOtherDevices: true, cleanSpeechText: true,
-    speechProvider: "server", speechEndpoint: "", sttModel: "", ttsModel: "", ttsVoice: "",
+    speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts", ttsVoice: "coral",
     ttsSpeed: 1, speechTextLimit: 4096, voiceThreadId: null, voiceThreadTitle: null,
     pinDefaultVoiceThread: false, onlyVoiceThread: false, followComposerMode: false, inputDevice: null,
     recognitionStartTimeoutMs: 30_000, recognitionCompletionTimeoutMs: 60_000,
@@ -23,10 +23,9 @@ export function electronVoiceDefaults(): NativeVoiceSettings {
   };
 }
 
-/** The desktop has one current contract. Android device identities and hosted providers are not aliases. */
+/** Validate desktop preferences without accepting Android-only hardware or lifecycle options. */
 export function desktopVoiceSettings(value: unknown): NativeVoiceSettings {
   const settings = nativeVoiceSettingsSchema.parse(value);
-  if (settings.speechProvider !== "server") throw new Error("Electron voice requires your own speech server.");
   if (settings.headsetControls || settings.announceRecordingThread || settings.startupPreRollMs !== 0)
     throw new Error("This voice option is not supported by the desktop client.");
   if (settings.inputDevice && (!("platform" in settings.inputDevice) || settings.inputDevice.platform !== "electron"))
@@ -41,7 +40,11 @@ export function desktopVoiceSettings(value: unknown): NativeVoiceSettings {
         rawPath.replace(/\/+$/u, "") !== path || /%(?:2f|5c)/iu.test(path))
       throw new Error("Enter an HTTP or HTTPS speech API URL ending in /v1 without credentials, query or fragment.");
     settings.speechEndpoint = `${endpoint.origin}${path}`;
+    if (settings.speechProvider === "server" && endpoint.hostname === "api.openai.com")
+      throw new Error("Choose OpenAI to use api.openai.com.");
   }
+  if (settings.speechProvider === "openai" && settings.speechEndpoint !== "https://api.openai.com/v1")
+    throw new Error("OpenAI voice uses https://api.openai.com/v1. Choose Own speech server for another endpoint.");
   for (const key of ["sttModel", "ttsModel", "ttsVoice"] as const) {
     if (settings[key] !== settings[key].trim() || /[\u0000-\u001f\u007f]/u.test(settings[key])) throw new Error("Invalid speech model or voice.");
   }

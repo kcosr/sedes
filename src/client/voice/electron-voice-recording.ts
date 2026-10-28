@@ -170,14 +170,14 @@ export class MemoryVoiceRecording {
   async #open(): Promise<void> {
     const requestId = this.#uuid(); this.#requestId = requestId;
     const started = this.#now();
-    const ready = await this.options.speech.startRecognition({ requestId,
+    const ready = await this.options.speech.startRecognition({ requestId, provider: this.options.settings.speechProvider,
       endpoint: this.options.settings.speechEndpoint, model: this.options.settings.sttModel });
     if (this.#ended || this.#requestId !== requestId) {
       await this.options.speech.cancel({ requestId }).catch(() => undefined);
       throw new Error("Recording cancelled.");
     }
     if (this.#ready && ready.maxRecordingSeconds < this.#ready.maxRecordingSeconds)
-      throw new Error("Speech server recording limits changed. Start a new recording.");
+      throw new Error("Speech recording limits changed. Start a new recording.");
     this.#ready = ready; this.#expiresAt = started + ready.maxSessionSeconds * 1000;
   }
   accept(pcm: Uint8Array): ReturnType<ElectronCapturePolicy["accept"]> {

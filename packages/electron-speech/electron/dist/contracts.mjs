@@ -4,6 +4,10 @@ export const MAX_PLAYBACK_CHUNK_BYTES = 9_600;
 export const MAX_RESPONSE_BYTES = 524_288;
 export const REQUEST_TIMEOUT_MS = 15_000;
 export const RESULT_TIMEOUT_MS = 180_000;
+export const OPENAI_ENDPOINT = "https://api.openai.com/v1";
+export const OPENAI_TRANSCRIPTION_MODELS = Object.freeze([
+  "gpt-live-transcribe", "gpt-transcribe", "gpt-4o-transcribe", "gpt-4o-mini-transcribe", "whisper-1",
+]);
 
 export function speechError(code, message) {
   return Object.assign(new Error(message), { code });
@@ -48,9 +52,70 @@ export function normalizeEndpoint(value) {
   }
 }
 
+/** Providers are explicit. The hosted key can only be used at the fixed OpenAI API base. */
+export function providerBinding(input) {
+  if (!["openai", "server"].includes(input?.provider)) throw speechError("speech_provider_invalid", "Choose OpenAI or your own speech server.");
+  const endpoint = normalizeEndpoint(input.endpoint);
+  if (input.provider === "openai" ? endpoint !== OPENAI_ENDPOINT : new URL(endpoint).hostname === "api.openai.com") {
+    throw speechError("speech_endpoint_invalid", input.provider === "openai"
+      ? "OpenAI speech uses https://api.openai.com/v1. Its endpoint cannot be changed."
+      : "Choose OpenAI to connect to the hosted OpenAI speech endpoint.");
+  }
+  return { provider: input.provider, endpoint };
+}
+
+/** Local application limits, not capability claims inferred from the hosted /models catalog. */
+export function openAiRecognitionModel(id) {
+  if (!OPENAI_TRANSCRIPTION_MODELS.includes(id)) throw speechError("speech_model_unsupported", "This OpenAI recognition model is not supported.");
+  return { id, label: id, ready: true, realtime: {
+    maxBufferBytes: 60 * PCM_BYTES_PER_SECOND, maxMessageBytes: 1_048_576, maxOutputBytes: 1_048_576,
+    idleTimeoutSeconds: 0, maxSessionSeconds: 3600,
+  } };
+}
+
+export function openAiSpeechModel(id) {
+  if (typeof id !== "string" || !/^(?:gpt-4o-mini-tts(?:-\d{4}-\d{2}-\d{2})?|tts-1(?:-hd)?(?:-\d{4})?)$/u.test(id)) return undefined;
+  // /models supplies availability hints; voices and controls follow the documented families.
+  // https://developers.openai.com/api/docs/guides/text-to-speech (reviewed 2026-10-28)
+  const voices = id.startsWith("gpt-4o-mini-tts")
+    ? ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse", "marin", "cedar"]
+    : ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"];
+  return { id, label: id, ready: true, voices: voices.map((voice) => ({ id: voice, label: voice })),
+    speed: { min: 0.25, max: 4, default: 1 }, maxTextLength: 4096, sampleRate: 24_000 };
+}
+
+export function parseOpenAiModels(value) {
+  try {
+    if (!value || value.object !== "list" || !Array.isArray(value.data) || value.data.length > 10_000) throw new Error();
+    const transcriptionModels = [], speechModels = [], seen = new Set();
+    for (const entry of value.data) {
+      const id = text(entry?.id);
+      if (seen.has(id)) throw new Error();
+      seen.add(id);
+      if (OPENAI_TRANSCRIPTION_MODELS.includes(id)) transcriptionModels.push(openAiRecognitionModel(id));
+      const speech = openAiSpeechModel(id);
+      if (speech) speechModels.push(speech);
+    }
+    return { transcriptionModels, speechModels };
+  } catch {
+    throw speechError("speech_capabilities_invalid", "OpenAI returned an invalid model catalog.");
+  }
+}
+
+export function httpDateSeconds(value) {
+  if (typeof value !== "string" || !/^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/u.test(value)) {
+    throw speechError("speech_session_lifetime_invalid", "OpenAI did not provide a valid recognition session lifetime.");
+  }
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds) || new Date(milliseconds).toUTCString() !== value) {
+    throw speechError("speech_session_lifetime_invalid", "OpenAI did not provide a valid recognition session lifetime.");
+  }
+  return milliseconds / 1000;
+}
+
 export function bearerToken(value) {
   if (typeof value !== "string" || !/^[A-Za-z0-9._~+\/-]{1,4096}={0,2}$/u.test(value)) {
-    throw speechError("speech_credential_invalid", "Enter a valid speech server bearer token.");
+    throw speechError("speech_credential_invalid", "Enter a valid speech API key or server bearer token.");
   }
   return value;
 }
@@ -120,5 +185,5 @@ export function decodePcm(value, maximum = MAX_AUDIO_CHUNK_BYTES) {
 
 export function safeFailure(error) {
   if (error?.code?.startsWith("speech_") && typeof error.message === "string") return error;
-  return speechError("speech_transport_failed", "The speech server connection failed. Check the endpoint and try again.");
+  return speechError("speech_transport_failed", "The speech service connection failed. Check the endpoint and try again.");
 }

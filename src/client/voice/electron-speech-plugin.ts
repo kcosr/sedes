@@ -5,7 +5,7 @@ const realtimeSchema = z.strictObject({
   maxBufferBytes: z.number().int().nonnegative(),
   maxMessageBytes: z.number().int().positive(),
   maxOutputBytes: z.number().int().positive(),
-  idleTimeoutSeconds: z.number().positive(),
+  idleTimeoutSeconds: z.number().nonnegative(),
   maxSessionSeconds: z.number().positive(),
 });
 const catalogSchema = z.strictObject({
@@ -35,16 +35,17 @@ export type ElectronSpeechAudioChunk = z.infer<typeof audioChunkSchema>;
 export type ElectronSpeechInterrupted = z.infer<typeof interruptedSchema>;
 export type ElectronSpeechRecognitionReady = z.infer<typeof recognitionReadySchema>;
 export type ElectronSpeechRecognitionError = z.infer<typeof recognitionErrorSchema>;
+export interface ElectronSpeechBinding { provider: "openai" | "server"; endpoint: string }
 
 interface ElectronSpeechNativePlugin {
-  configure(input: { endpoint: string }): Promise<unknown>;
-  getCredentialStatus(input: { endpoint: string }): Promise<unknown>;
-  openCredentialDialog(input: { endpoint: string }): Promise<unknown>;
-  getCapabilities(input: { endpoint: string }): Promise<unknown>;
-  startRecognition(input: { requestId: string; endpoint: string; model: string }): Promise<unknown>;
+  configure(input: ElectronSpeechBinding): Promise<unknown>;
+  getCredentialStatus(input: ElectronSpeechBinding): Promise<unknown>;
+  openCredentialDialog(input: ElectronSpeechBinding): Promise<unknown>;
+  getCapabilities(input: ElectronSpeechBinding): Promise<unknown>;
+  startRecognition(input: ElectronSpeechBinding & { requestId: string; model: string }): Promise<unknown>;
   appendAudio(input: { requestId: string; pcm: string }): Promise<void>;
   commitRecognition(input: { requestId: string }): Promise<unknown>;
-  speak(input: { requestId: string; endpoint: string; model: string; voice: string; speed: number; text: string }): Promise<void>;
+  speak(input: ElectronSpeechBinding & { requestId: string; model: string; voice: string; speed: number; text: string }): Promise<void>;
   acknowledgeAudio(input: { requestId: string; sequence: number }): Promise<void>;
   cancel(input: { requestId: string }): Promise<void>;
   cancelAll(): Promise<void>;
@@ -57,26 +58,26 @@ const native = registerPlugin<ElectronSpeechNativePlugin>("ElectronSpeech");
 
 /** Speech credentials never cross this bridge. The isolated native dialog owns them. */
 export const electronSpeech = Object.freeze({
-  async configure(input: { endpoint: string }) {
-    return z.strictObject({ endpoint: z.string(), credentialConfigured: z.boolean() }).parse(await native.configure(input));
+  async configure(input: ElectronSpeechBinding) {
+    return z.strictObject({ provider: z.enum(["openai", "server"]), endpoint: z.string(), credentialConfigured: z.boolean() }).parse(await native.configure(input));
   },
-  async getCredentialStatus(input: { endpoint: string }) {
+  async getCredentialStatus(input: ElectronSpeechBinding) {
     return credentialStatusSchema.parse(await native.getCredentialStatus(input));
   },
-  async openCredentialDialog(input: { endpoint: string }) {
+  async openCredentialDialog(input: ElectronSpeechBinding) {
     return credentialStatusSchema.parse(await native.openCredentialDialog(input));
   },
-  async getCapabilities(input: { endpoint: string }): Promise<ElectronSpeechCatalog> {
+  async getCapabilities(input: ElectronSpeechBinding): Promise<ElectronSpeechCatalog> {
     return catalogSchema.parse(await native.getCapabilities(input));
   },
-  async startRecognition(input: { requestId: string; endpoint: string; model: string }): Promise<ElectronSpeechRecognitionReady> {
+  async startRecognition(input: ElectronSpeechBinding & { requestId: string; model: string }): Promise<ElectronSpeechRecognitionReady> {
     return recognitionReadySchema.parse(await native.startRecognition(input));
   },
   appendAudio(input: { requestId: string; pcm: string }) { return native.appendAudio(input); },
   async commitRecognition(input: { requestId: string }): Promise<{ transcript: string }> {
     return z.strictObject({ transcript: z.string().max(262_144) }).parse(await native.commitRecognition(input));
   },
-  speak(input: { requestId: string; endpoint: string; model: string; voice: string; speed: number; text: string }) {
+  speak(input: ElectronSpeechBinding & { requestId: string; model: string; voice: string; speed: number; text: string }) {
     return native.speak(input);
   },
   acknowledgeAudio(input: { requestId: string; sequence: number }) { return native.acknowledgeAudio(input); },

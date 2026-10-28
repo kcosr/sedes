@@ -116,7 +116,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
     {!desktop && savedRecording(native) ? <SettingsSection title="Saved dictation" card>
       <VoiceRecordingRecovery store={store} threads={threads} />
     </SettingsSection> : null}
-    <SpeechProviderSettings store={store} native={native} pending={state.pending} recordingWork={recordingWork} desktop={desktop} />
+    <SpeechProviderSettings store={store} native={native} pending={state.pending} recordingWork={recordingWork} />
     <SettingsSection title="Speech text" card>
       <SwitchField label="Clean up formatting for speech" checked={settings.cleanSpeechText} disabled={state.pending}
         description="Read Markdown as text, including link labels and code contents. Applies to queued and future speech."
@@ -180,7 +180,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
   </SettingsPage>;
 }
 
-function SpeechProviderSettings({ store, native, pending, recordingWork, desktop }: { store: NativeVoiceStore; native: NativeVoiceState; pending: boolean; recordingWork: boolean; desktop: boolean }) {
+function SpeechProviderSettings({ store, native, pending, recordingWork }: { store: NativeVoiceStore; native: NativeVoiceState; pending: boolean; recordingWork: boolean }) {
   const settings = native.settings, speech = native.speech, catalog = speech.catalog;
   useEffect(() => {
     if (settings.speechEndpoint && speech.credentialConfigured) {
@@ -192,17 +192,17 @@ function SpeechProviderSettings({ store, native, pending, recordingWork, desktop
   const speed = catalog?.speed;
   return <SettingsSection title="Speech provider" description="Voices are AI-generated." card>
     <SettingsField label="Provider">
-      {desktop ? <p>Own speech server</p> : <NativeSelect value={settings.speechProvider} disabled={pending || recordingWork} onChange={event => {
+      <NativeSelect value={settings.speechProvider} disabled={pending || recordingWork} onChange={event => {
         const provider = event.target.value as NativeVoiceSettings["speechProvider"];
         void update(provider === "openai" ? { speechProvider: provider, speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts", ttsVoice: "coral", ttsSpeed: 1 }
           : { speechProvider: provider, speechEndpoint: "", sttModel: "", ttsModel: "", ttsVoice: "", ttsSpeed: 1 }).catch(() => undefined);
-      }}><option value="openai">OpenAI</option><option value="server">Own speech server</option></NativeSelect>}
+      }}><option value="openai">OpenAI</option><option value="server">Own speech server</option></NativeSelect>
     </SettingsField>
-    {!desktop && settings.speechProvider === "openai" ? <p className="text-sm text-muted-foreground">OpenAI API · https://api.openai.com/v1</p> :
+    {settings.speechProvider === "openai" ? <p className="text-sm text-muted-foreground">OpenAI API · https://api.openai.com/v1</p> :
       <VoiceTextSetting label="Speech API endpoint" type="url" value={settings.speechEndpoint} disabled={pending || recordingWork}
         description="API URL including /v1. Use HTTP only on a trusted network."
         onSave={speechEndpoint => update({ speechEndpoint })} />}
-    <SettingsField label="Speech credential" description={speech.credentialConfigured ? "Saved securely on this device." : !desktop && settings.speechProvider === "openai" ? "Add an OpenAI API key." : "Add your server's bearer token."}>
+    <SettingsField label="Speech credential" description={speech.credentialConfigured ? "Saved securely on this device." : settings.speechProvider === "openai" ? "Add an OpenAI API key." : "Add your server's bearer token."}>
       <Button variant="outline" disabled={pending || recordingWork || !settings.speechEndpoint} onClick={() => {
         void store.run(() => store.plugin.openSpeechCredentialDialog(store.commandContext())).catch(() => undefined);
       }}>Manage speech credential</Button>

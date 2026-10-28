@@ -2,7 +2,7 @@ import path from "node:path";
 import { app, BrowserWindow, ipcMain, powerMonitor, safeStorage, session } from "electron";
 import { SpeechCredentialStore } from "./credential-store.mjs";
 import { showCredentialDialog } from "./credential-dialog.mjs";
-import { normalizeEndpoint, object, speechError } from "./contracts.mjs";
+import { object, providerBinding, speechError } from "./contracts.mjs";
 import { SpeechTransport } from "./transport.mjs";
 
 function isAppWindow(window) {
@@ -73,28 +73,33 @@ class ElectronSpeechImpl {
     dialog?.close();
   }
   configure(input) {
-    object(input, ["endpoint"]);
-    const endpoint = normalizeEndpoint(input.endpoint);
-    if (endpoint !== this.transport.endpoint) this.invalidateDialog();
-    return this.transport.configure({ endpoint });
+    object(input, ["provider", "endpoint"]);
+    const binding = providerBinding(input);
+    if (binding.provider !== this.transport.provider || binding.endpoint !== this.transport.endpoint) this.invalidateDialog();
+    return this.transport.configure(binding);
   }
-  getCredentialStatus(input) { object(input, ["endpoint"]); return this.credentials.status(normalizeEndpoint(input.endpoint)); }
+  getCredentialStatus(input) {
+    object(input, ["provider", "endpoint"]);
+    return this.credentials.status(providerBinding(input).endpoint);
+  }
   async openCredentialDialog(input) {
-    object(input, ["endpoint"]);
-    const endpoint = normalizeEndpoint(input.endpoint);
-    if (endpoint !== this.transport.endpoint) throw speechError("speech_configuration_changed", "The speech endpoint changed. Reopen its credential dialog.");
+    object(input, ["provider", "endpoint"]);
+    const { provider, endpoint } = providerBinding(input);
+    if (provider !== this.transport.provider || endpoint !== this.transport.endpoint)
+      throw speechError("speech_configuration_changed", "The speech provider or endpoint changed. Reopen its credential dialog.");
     if (this.dialog) throw speechError("speech_credential_busy", "The speech credential dialog is already open.");
     this.getWindowState();
     if (!this.mainWindow || this.mainWindow.isDestroyed()) throw speechError("speech_credential_dialog_failed", "Open the Sedes application window before configuring speech.");
     this.transport.cancelAll();
     const generation = this.lifecycleGeneration;
-    const dialog = this.dialogFactory({ endpoint, parent: this.mainWindow, credentials: this.credentials, onChange: () => {
-      if (generation === this.lifecycleGeneration && endpoint === this.transport.endpoint) this.transport.cancelAll();
+    const dialog = this.dialogFactory({ provider, endpoint, parent: this.mainWindow, credentials: this.credentials, onChange: () => {
+      if (generation === this.lifecycleGeneration && provider === this.transport.provider && endpoint === this.transport.endpoint) this.transport.cancelAll();
     } });
     this.dialog = dialog;
     try {
       const status = await dialog.result;
-      if (generation !== this.lifecycleGeneration || endpoint !== this.transport.endpoint) throw speechError("speech_configuration_changed", "The speech connection changed while its credential dialog was open.");
+      if (generation !== this.lifecycleGeneration || provider !== this.transport.provider || endpoint !== this.transport.endpoint)
+        throw speechError("speech_configuration_changed", "The speech connection changed while its credential dialog was open.");
       return status;
     }
     finally { if (this.dialog === dialog) this.dialog = null; }

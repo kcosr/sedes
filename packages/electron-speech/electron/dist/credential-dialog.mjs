@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { normalizeEndpoint, object, safeFailure, speechError } from "./contracts.mjs";
+import { object, providerBinding, safeFailure, speechError } from "./contracts.mjs";
 
 const pagePath = fileURLToPath(new URL("./credential-dialog.html", import.meta.url));
 const preloadPath = fileURLToPath(new URL("./credential-preload.cjs", import.meta.url));
@@ -12,8 +12,8 @@ export function isCredentialSender(event, window) {
 }
 
 /** A separate session, file origin, and private IPC channel keep tokens out of the app bridge. */
-export function showCredentialDialog({ endpoint, parent, credentials, BrowserWindow, session, ipcMain, onChange = () => {} }) {
-  endpoint = normalizeEndpoint(endpoint);
+export function showCredentialDialog({ provider, endpoint, parent, credentials, BrowserWindow, session, ipcMain, onChange = () => {} }) {
+  ({ provider, endpoint } = providerBinding({ provider, endpoint }));
   const channel = `sedes-speech-credential-${randomUUID()}`;
   const isolatedSession = session.fromPartition(`speech-credential-${randomUUID()}`);
   isolatedSession.setPermissionCheckHandler(() => false);
@@ -22,9 +22,10 @@ export function showCredentialDialog({ endpoint, parent, credentials, BrowserWin
   isolatedSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: details.url !== pageUrl }));
   const window = new BrowserWindow({
     parent, modal: true, show: false, width: 560, height: 420, resizable: false, minimizable: false, maximizable: false,
-    autoHideMenuBar: true, title: "Speech server token — Sedes",
+    autoHideMenuBar: true, title: provider === "openai" ? "OpenAI API key — Sedes" : "Speech server token — Sedes",
     webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, devTools: false,
-      session: isolatedSession, preload: preloadPath, additionalArguments: [`--sedes-speech-channel=${channel}`] },
+      session: isolatedSession, preload: preloadPath,
+      additionalArguments: [`--sedes-speech-channel=${channel}`, `--sedes-speech-provider=${provider}`] },
   });
   window.setMenu(null);
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -39,7 +40,7 @@ export function showCredentialDialog({ endpoint, parent, credentials, BrowserWin
       try {
         object(input, ["action", "token"]);
         if (input.action !== "save" && Object.hasOwn(input, "token")) throw new Error();
-        if (input.action === "status") return { endpoint, ...await credentials.status(endpoint) };
+        if (input.action === "status") return { provider, endpoint, ...await credentials.status(endpoint) };
         if (input.action === "cancel") { window.close(); return {}; }
         if (!["save", "remove"].includes(input.action) || busy) throw speechError("speech_credential_busy", "The credential dialog is busy.");
         busy = true;
