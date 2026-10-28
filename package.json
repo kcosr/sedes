@@ -123,6 +123,7 @@
     "electron:clean": "node scripts/electron-distribution.mjs clean",
     "test:voice": "vitest run --config vitest.native-voice.config.ts",
     "test:speech": "node --import tsx scripts/test-speech-transport.mjs",
+    "test:electron-speech": "vitest run --config vitest.electron-speech.config.ts",
     "test:real-pi-native": "vitest run --config vitest.real-pi-native.config.ts",
     "test:live-pi-native": "vitest run --config vitest.live-pi-native.config.ts"
   },
@@ -151,6 +152,7 @@
     "@radix-ui/react-slot": "1.3.3",
     "@sedes/electron-client-credentials": "file:packages/electron-client-credentials",
     "@sedes/electron-connection-runtime": "file:packages/electron-connection-runtime",
+    "@sedes/electron-speech": "file:packages/electron-speech",
     "@sedes/electron-workspace-file-download": "file:packages/electron-workspace-file-download",
     "@shikijs/langs": "4.4.2",
     "@xterm/addon-serialize": "0.14.0",
@@ -177,8 +179,10 @@
     "react-dom": "19.2.8",
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
     "tailwind-merge": "3.6.0",
     "typebox": "1.3.7",
+    "unified": "11.0.5",
     "ws": "8.21.1",
     "yaml": "2.9.0",
     "zod": "4.4.3"

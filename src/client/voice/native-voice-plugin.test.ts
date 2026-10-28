@@ -1,15 +1,40 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const bridge = vi.hoisted(() => ({ getState: vi.fn(), disconnect: vi.fn() }));
-vi.mock("@capacitor/core", () => ({ Capacitor: { isPluginAvailable: () => true }, registerPlugin: () => bridge }));
-vi.mock("../app/client-platform.js", () => ({ isAndroidClient: () => true }));
+const platform = vi.hoisted(() => ({ android: true, electron: false, plugins: new Set(["NativeVoice"]) }));
+vi.mock("@capacitor/core", () => ({ Capacitor: { isPluginAvailable: (name: string) => platform.plugins.has(name) }, registerPlugin: () => bridge }));
+vi.mock("../app/client-platform.js", () => ({ isAndroidClient: () => platform.android, isElectronClient: () => platform.electron }));
 
-import { disconnectNativeVoice, nativeThreadTitle, nativeVoiceStateSchema } from "./native-voice-plugin.js";
+import { disconnectNativeVoice, hasNativeVoice, nativeThreadTitle, nativeVoiceStateSchema } from "./native-voice-plugin.js";
 import { recordingRecovery, voiceActions, voiceSnapshot } from "./native-voice-test-fixture.js";
 
+beforeEach(() => { platform.android = true; platform.electron = false; platform.plugins = new Set(["NativeVoice"]); });
 afterEach(() => { vi.resetAllMocks(); });
 
 describe("native voice bridge helpers", () => {
+  it("enables Android with its native voice plugin and Electron only with its native speech bridge", () => {
+    expect(hasNativeVoice()).toBe(true);
+    platform.plugins.clear();
+    expect(hasNativeVoice()).toBe(false);
+    platform.android = false; platform.electron = true;
+    platform.plugins.add("NativeVoice");
+    expect(hasNativeVoice()).toBe(false);
+    platform.plugins.add("ElectronSpeech");
+    expect(hasNativeVoice()).toBe(true);
+    platform.electron = false;
+    expect(hasNativeVoice()).toBe(false);
+  });
+  it("accepts explicit desktop microphone IDs without treating them as Android hardware identities", () => {
+    const state = voiceSnapshot();
+    const microphone = { platform: "electron", deviceId: "desktop-microphone", name: "USB microphone" };
+    expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, inputDevice: microphone } }).success).toBe(true);
+    for (const inputDevice of [
+      { deviceId: "desktop-microphone", name: "USB microphone" },
+      { ...microphone, platform: "web" }, { ...microphone, deviceId: "" },
+      { ...microphone, type: 11 }, { ...microphone, address: null },
+      { type: 11, address: null, name: "USB microphone", platform: "electron" },
+    ]) expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, inputDevice } }).success).toBe(false);
+  });
   it("sends trimmed thread titles within native's 512 UTF-16 unit limit and untitled threads as null", () => {
     expect(nativeThreadTitle("  Release review  ")).toBe("Release review");
     expect(nativeThreadTitle("")).toBeNull();

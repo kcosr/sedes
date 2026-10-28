@@ -1262,8 +1262,10 @@ describe("native voice state authority", () => {
     listeners.get("runtimeError")!(runtimeError(failure.message));
     listeners.get("stateChanged")!(ready({ stateRevision: 3, phase: "idle", errors: [failure] }));
     expect(store.getSnapshot().error).toBe("Recognition failed.");
+    expect(store.getSnapshot().uncertainInputWarning).toBeUndefined();
     listeners.get("stateChanged")!(ready({ stateRevision: 4, phase, errors: [failure] }));
     expect(store.getSnapshot().error).toBeUndefined();
+    expect(store.getSnapshot().uncertainInputWarning).toBeUndefined();
     listeners.get("runtimeError")!(runtimeError("Playback failed."));
     listeners.get("stateChanged")!(ready({ stateRevision: 5, phase: "idle" }));
     expect(store.getSnapshot().error).toBe("Playback failed.");
@@ -1301,6 +1303,82 @@ describe("native voice state authority", () => {
     await store.update(resume);
     expect(plugin.updateSettings).toHaveBeenCalledTimes(1);
     expect(store.getSnapshot()).toMatchObject({ pending: false, native: { settingsRevision: 4 } });
+    store.dispose();
+  });
+});
+
+describe("uncertain desktop input warning", () => {
+  const failure = { code: "input_submission_uncertain", message: "The send could not be confirmed. Check the thread before sending again. Nothing will be resent." };
+  const ready = (patch: Partial<NativeVoiceState> = {}) => snapshot({ ready: true, readiness: "ready", phase: "idle",
+    settings: voiceSettings({ audioMode: "speak" }), ...patch });
+
+  it("keeps the runtime warning through automatic reconnect's empty snapshot, restored error, and ready progress", async () => {
+    const { store, plugin, listeners } = fixture();
+    plugin.setConnection.mockResolvedValue(ready({ phase: "submitting" }));
+    await store.initialize();
+    listeners.get("runtimeError")!({ ...runtimeError(failure.message), code: failure.code });
+    expect(store.getSnapshot().uncertainInputWarning).toBe(failure.message);
+    listeners.get("stateChanged")!(ready({ stateRevision: 2, ready: false, readiness: "clientDisconnected", errors: [failure] }));
+    for (const state of [
+      ready({ connectionGeneration: 2, stateRevision: 1, ready: false, readiness: "starting", phase: "starting" }),
+      ready({ connectionGeneration: 2, stateRevision: 2, ready: false, readiness: "starting", phase: "starting", errors: [failure] }),
+      ready({ connectionGeneration: 2, stateRevision: 3, errors: [failure] }),
+      ready({ connectionGeneration: 2, stateRevision: 4, phase: "speaking", errors: [failure] }),
+    ]) {
+      listeners.get("stateChanged")!(state);
+      expect(store.getSnapshot().uncertainInputWarning).toBe(failure.message);
+      expect(recentVoiceErrors(store.getSnapshot())).toEqual([failure.message]);
+    }
+    expect(store.getSnapshot().error).toBeUndefined();
+    store.dispose();
+  });
+
+  it("hydrates the warning when native retained the error before this store subscribed", async () => {
+    const { store, plugin } = fixture();
+    plugin.setConnection.mockResolvedValue(ready({ errors: [failure] }));
+    await store.initialize();
+    expect(store.getSnapshot().uncertainInputWarning).toBe(failure.message);
+    expect(recentVoiceErrors(store.getSnapshot())).toEqual([failure.message]);
+    store.dispose();
+  });
+
+  it.each(["dismiss", "action"] as const)("keeps the warning acknowledged after %s across repeated snapshots and reconnects", async acknowledgement => {
+    const { store, plugin, listeners } = fixture();
+    plugin.setConnection.mockResolvedValue(ready({ errors: [failure] }));
+    await store.initialize();
+    if (acknowledgement === "dismiss") store.dismissErrors();
+    else await store.run(async () => ready({ stateRevision: 2, errors: [failure] }));
+    expect(store.getSnapshot().uncertainInputWarning).toBeUndefined();
+    for (const generation of [2, 3]) {
+      for (const state of [
+        ready({ connectionGeneration: generation, stateRevision: 1, ready: false, readiness: "starting", phase: "starting" }),
+        ready({ connectionGeneration: generation, stateRevision: 2, ready: false, readiness: "starting", phase: "starting", errors: [failure] }),
+        ready({ connectionGeneration: generation, stateRevision: 3, errors: [failure] }),
+      ]) {
+        listeners.get("stateChanged")!(state);
+        expect(store.getSnapshot().uncertainInputWarning).toBeUndefined();
+        if (acknowledgement === "dismiss") expect(recentVoiceErrors(store.getSnapshot())).toEqual([]);
+      }
+    }
+    // A separate send can fail with exactly the same message after acknowledgement.
+    listeners.get("runtimeError")!({ ...runtimeError(failure.message, 3), code: failure.code });
+    listeners.get("stateChanged")!(ready({ connectionGeneration: 3, stateRevision: 4, errors: [failure, failure] }));
+    expect(store.getSnapshot().uncertainInputWarning).toBe(failure.message);
+    expect(recentVoiceErrors(store.getSnapshot())).toEqual([failure.message]);
+    store.dispose();
+  });
+
+  it("shows a new identical runtime failure even when the bounded native error list no longer changes", async () => {
+    const { store, plugin, listeners } = fixture();
+    const errors = Array.from({ length: 16 }, () => failure);
+    plugin.setConnection.mockResolvedValue(ready({ errors }));
+    await store.initialize();
+    store.dismissErrors();
+    expect(recentVoiceErrors(store.getSnapshot())).toEqual([]);
+    listeners.get("runtimeError")!({ ...runtimeError(failure.message), code: failure.code });
+    listeners.get("stateChanged")!(ready({ stateRevision: 2, errors }));
+    expect(store.getSnapshot().uncertainInputWarning).toBe(failure.message);
+    expect(recentVoiceErrors(store.getSnapshot())).toEqual([failure.message]);
     store.dispose();
   });
 });

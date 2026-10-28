@@ -12,6 +12,7 @@ import { Input } from "../components/ui/input.js";
 import { NativeSelect } from "../components/ui/native-select.js";
 import { SearchableSelect } from "../components/ui/searchable-select.js";
 import { useTouchDensity } from "../app/use-touch-density.js";
+import { isElectronClient } from "../app/client-platform.js";
 import { useVoiceState } from "./VoiceProvider.js";
 import { recentVoiceErrors, type NativeVoiceStore } from "./NativeVoiceStore.js";
 import { nativeThreadTitle, type NativeVoiceInputDevice, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
@@ -47,6 +48,7 @@ const numbers = [
 ] as const;
 
 export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVoiceStore; applicationStore: ApplicationClientStore }): React.JSX.Element {
+  const desktop = isElectronClient();
   const state = useVoiceState(store);
   const application = useApplicationStore(applicationStore);
   const defaultThread = useDefaultThread();
@@ -111,7 +113,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
       {native.readiness === "storageUnavailable" ? <Button aria-disabled={state.pending || undefined} onClick={() => { if (!state.pending) void store.reconnect().catch(() => undefined); }}>Retry voice connection</Button>
         : !native.clientConnectionToken && <Button disabled={state.pending} onClick={() => { void store.reconnect().catch(() => undefined); }}>Retry client connection</Button>}
     </SettingsSection>
-    {savedRecording(native) ? <SettingsSection title="Saved dictation" card>
+    {!desktop && savedRecording(native) ? <SettingsSection title="Saved dictation" card>
       <VoiceRecordingRecovery store={store} threads={threads} />
     </SettingsSection> : null}
     <SpeechProviderSettings store={store} native={native} pending={state.pending} recordingWork={recordingWork} />
@@ -125,7 +127,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
         <div className="flex flex-wrap gap-2"><VoiceThreadButton disabled={state.pending} onClick={() => setPicker(true)}>{voiceThreadLabel}</VoiceThreadButton>
           {settings.voiceThreadId ? <Button variant="ghost" disabled={state.pending} onClick={() => update({ voiceThreadId: null, voiceThreadTitle: null })}>Clear</Button> : null}</div>
       </SettingsField>
-      {toggles.map(([key, label, description]) => <SwitchField key={key} label={label}
+      {toggles.filter(([key]) => !desktop || (key !== "headsetControls" && key !== "announceRecordingThread")).map(([key, label, description]) => <SwitchField key={key} label={label}
         description={key === "onlyVoiceThread" && !settings.voiceThreadId ? "Requires a default thread." : description}
         checked={settings[key]} disabled={state.pending}
         onCheckedChange={value => update({ [key]: value })} />)}
@@ -133,6 +135,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
     <SettingsSection title="Audio and timing" card>
       <SettingsField label="Microphone input" description={settings.inputDevice && !selectedDevice
         ? "Recording requires this microphone. Reconnect it or choose another input."
+        : desktop ? "Uses the selected microphone while it is available."
         : "Remembers this microphone when it reconnects. Indistinguishable inputs cannot be selected individually."}>
         <NativeSelect value={settings.inputDevice ? selectedDevice?.id ?? "unavailable" : ""} disabled={state.pending || recordingWork} onChange={event => {
           if (!event.target.value) update({ inputDevice: null });
@@ -146,13 +149,15 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
           {settings.inputDevice && !selectedDevice ? <option value="unavailable">{settings.inputDevice.name} (unavailable)</option> : null}
         </NativeSelect>
       </SettingsField>
-      <VoiceTextSetting label="Long dictation timeout (minutes)" description="Maximum time after Keep listening is first enabled. Pauses and toggling it do not restart this limit."
+      <VoiceTextSetting label="Long dictation timeout (minutes)" description={desktop
+        ? "Maximum time before Keep listening finishes and sends. Toggling it does not restart this limit."
+        : "Maximum time after Keep listening is first enabled. Pauses and toggling it do not restart this limit."}
         value={String(settings.longDictationTimeoutMs / 60_000)} min={1} max={1440} disabled={state.pending || recordingWork}
         onSave={value => store.update({ longDictationTimeoutMs: Number(value) * 60_000 })} />
-      {numbers.map(([key, label, min, max, description]) => <VoiceTextSetting key={key} label={label} description={description} value={String(settings[key])} min={min} max={max}
+      {numbers.filter(([key]) => !desktop || key !== "startupPreRollMs").map(([key, label, min, max, description]) => <VoiceTextSetting key={key} label={label} description={description} value={String(settings[key])} min={min} max={max}
         disabled={state.pending || (recordingWork && key.startsWith("recognition"))} onSave={value => store.update({ [key]: Number(value) })} />)}
     </SettingsSection>
-    {native.recovery.length ? <SettingsSection title="Pending input recovery" card>
+    {!desktop && native.recovery.length ? <SettingsSection title="Pending input recovery" card>
       {native.recovery.some(input => input.status === "prepared") && <p>Inputs waiting for a client connection send automatically when it returns.</p>}
       <p>These inputs may have reached Sedes. Resume checks delivery and retries the same input if needed.
         Discard removes the saved input from this device; it cannot withdraw input already received.</p>
@@ -292,10 +297,10 @@ const inputTypes: Record<number, string> = { 3: "Wired headset", 5: "Line in", 6
   13: "Dock", 15: "Built-in", 16: "FM tuner", 17: "TV tuner", 18: "Telephony", 19: "Aux line", 20: "IP", 21: "Bus", 22: "USB headset", 23: "Hearing aid",
   25: "Remote submix", 26: "Bluetooth LE", 31: "Dock" };
 /** Android often reports several inputs under one product name; add the input type, then a number, until each label is distinct. */
-export function inputDeviceLabels(devices: readonly { id: string; label: string; type: number }[]): Map<string, string> {
+export function inputDeviceLabels(devices: readonly ({ id: string; label: string; type: number } | { platform: "electron"; id: string; label: string })[]): Map<string, string> {
   const count = (values: readonly string[], value: string) => values.filter(entry => entry === value).length;
   const names = devices.map(device => device.label.trim() || "Microphone");
-  const typed = devices.map((device, index) => count(names, names[index]!) > 1 && inputTypes[device.type] ? `${names[index]} (${inputTypes[device.type]})` : names[index]!);
+  const typed = devices.map((device, index) => count(names, names[index]!) > 1 && "type" in device && inputTypes[device.type] ? `${names[index]} (${inputTypes[device.type]})` : names[index]!);
   const seen = new Map<string, number>();
   return new Map(devices.map((device, index) => {
     const label = typed[index]!;

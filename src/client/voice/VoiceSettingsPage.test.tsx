@@ -9,6 +9,9 @@ import type { NativeVoiceState } from "./native-voice-plugin.js";
 import { fakeVoicePlugin, recordingRecovery, VOICE_CONNECTION, voiceActions, voiceSettings, voiceSnapshot } from "./native-voice-test-fixture.js";
 import { inputDeviceLabels, VoiceSettingsPage } from "./VoiceSettingsPage.js";
 
+const platform = vi.hoisted(() => ({ electron: false }));
+vi.mock("../app/client-platform.js", () => ({ isAndroidClient: () => !platform.electron, isElectronClient: () => platform.electron }));
+
 const thread = (id: string, title: string) => ({ id, title: { text: title }, available: true, inventoryState: "active" }) as unknown as NormalizedApplicationThreadSummary;
 const application = { snapshot: { threads: [thread("long", "T".repeat(600)), thread("untitled", ""), thread("named", "Release review")] } };
 const applicationStore = { subscribe: () => () => undefined, getSnapshot: () => application } as unknown as ApplicationClientStore;
@@ -29,6 +32,7 @@ async function renderPage(state: NativeVoiceState | Error, setup?: (fake: Return
 }
 const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
 beforeEach(() => {
+  platform.electron = false;
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   Object.assign(HTMLElement.prototype, { scrollIntoView: vi.fn() });
 });
@@ -555,6 +559,73 @@ describe("voice settings page", () => {
     const select = await screen.findByRole("combobox", { name: "Microphone input" });
     await waitFor(() => expect(within(select).getAllByRole("option").map(option => option.textContent)).toEqual(
       ["System default", "Pixel 7 (Built-in) #1", "Pixel 7 (Built-in) #2", "Pixel 7 (Bluetooth)", "USB mic", "Microphone"]));
+    store.dispose();
+  });
+});
+
+
+describe("desktop voice settings", () => {
+  it("offers both speech providers and supported desktop controls without Android background or recovery controls", async () => {
+    platform.electron = true;
+    const { store } = await renderPage(voiceSnapshot({
+      settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", headsetControls: false }),
+      recordingRecovery: recordingRecovery(),
+      recovery: [{ mutationId: "pending-input", threadId: "named", status: "uncertain", cancelled: false }],
+    }));
+    expect(screen.getByText("Own speech server")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Provider" })).toHaveValue("server");
+    expect(screen.getByRole("option", { name: "OpenAI" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Speech API endpoint" })).toHaveValue("https://speech.test/v1");
+    expect(screen.getByRole("switch", { name: "Auto-listen" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Keep listening by default" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Recognition cues" })).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Long dictation timeout (minutes)" })).toHaveAccessibleDescription(
+      "Maximum time before Keep listening finishes and sends. Toggling it does not restart this limit.");
+    expect(screen.queryByRole("switch", { name: "Headset controls" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Announce recording thread" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Startup pre-roll (ms)" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Saved dictation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Pending input recovery" })).not.toBeInTheDocument();
+    store.dispose();
+  });
+  it("switches from an own server to OpenAI with a fixed endpoint and its supported preset", async () => {
+    platform.electron = true;
+    const initial = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1",
+      sttModel: "parakeet", ttsModel: "kokoro", ttsVoice: "af_heart", ttsSpeed: 1.2 }) });
+    const patch = { speechProvider: "openai" as const, speechEndpoint: "https://api.openai.com/v1",
+      sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts", ttsVoice: "coral", ttsSpeed: 1 };
+    const { fake, store } = await renderPage(initial, fake => fake.plugin.updateSettings.mockResolvedValue({ ...initial,
+      stateRevision: 2, settingsRevision: 1, settings: { ...initial.settings, ...patch } }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), { target: { value: "openai" } });
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      expectedRevision: 0, patch }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Provider" })).toHaveValue("openai"));
+    expect(screen.queryByRole("textbox", { name: "Speech API endpoint" })).not.toBeInTheDocument();
+    expect(screen.getByText("OpenAI API · https://api.openai.com/v1")).toBeInTheDocument();
+    expect(screen.getByText("Add an OpenAI API key.")).toBeInTheDocument();
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+    store.dispose();
+  });
+  it("clears OpenAI models and endpoint when choosing an own speech server", async () => {
+    platform.electron = true;
+    const { fake, store } = await renderPage(voiceSnapshot());
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), { target: { value: "server" } });
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0,
+      patch: { speechProvider: "server", speechEndpoint: "", sttModel: "", ttsModel: "", ttsVoice: "", ttsSpeed: 1 } }));
+    store.dispose();
+  });
+  it("selects desktop microphones by their own device IDs when product names match", async () => {
+    platform.electron = true;
+    const devices = [{ platform: "electron" as const, id: "microphone-a", label: "USB microphone" },
+      { platform: "electron" as const, id: "microphone-b", label: "USB microphone" }];
+    const { store, fake } = await renderPage(voiceSnapshot({ settings: voiceSettings({ speechProvider: "server" }) }),
+      fake => { fake.plugin.listInputDevices.mockResolvedValue({ devices }); });
+    const select = screen.getByRole("combobox", { name: "Microphone input" });
+    await waitFor(() => expect(within(select).getByRole("option", { name: "USB microphone #1" })).toBeEnabled());
+    expect(within(select).getByRole("option", { name: "USB microphone #2" })).toBeEnabled();
+    fireEvent.change(select, { target: { value: "microphone-b" } });
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledWith({ expectedConnectionGeneration: 1,
+      expectedRevision: 0, patch: { inputDevice: { platform: "electron", deviceId: "microphone-b", name: "USB microphone" } } }));
     store.dispose();
   });
 });

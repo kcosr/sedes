@@ -53,7 +53,8 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
   const locked = state.pending || undefined;
   const update = (patch: Partial<NativeVoiceSettings>) => { if (!state.pending) void store.update(patch).catch(() => undefined); };
   const filterWarning = settings ? voiceThreadFilterWarning(settings) : null;
-  const [status, tone] = state.error ? [state.error, "warning"] : !native ? [state.loading ? "Connecting voice to this server…" : "Voice could not connect to this server.", "warning"]
+  const message = state.uncertainInputWarning ?? state.error;
+  const [status, tone] = message ? [message, "warning"] : !native ? [state.loading ? "Connecting voice to this server…" : "Voice could not connect to this server.", "warning"]
     : native.readiness === "storageUnavailable" ? [voiceReadiness(native.readiness), "warning"]
       : native.settings.audioMode === "off" ? ["Voice off", "muted"] : native.ready
         ? filterWarning ? [filterWarning, "warning"] : ["Ready", "success"] : [voiceReadiness(native.readiness), "warning"];

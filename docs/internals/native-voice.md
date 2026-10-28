@@ -1,5 +1,10 @@
 # Native voice and direct input
 
+This reference describes the Android service and shared voice contracts. The
+[Electron runtime](#electron-runtime) uses those contracts during the desktop
+application session, with its own audio and speech transport and no durable
+recording recovery.
+
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
 Settings version 9 uses `audioMode: off | input | speak` and
@@ -1339,5 +1344,69 @@ buffered that message before delivering it to the listener. Local Next/Stop
 intent remains authoritative even if a provider completes concurrently.
 Recognition reconnection and replay follow the coordinator's bounded policy above. OkHttp may repeat a pre-upgrade WebSocket GET after HTTP 503 with
 `Retry-After: 0`; no session or audio has been sent at that point.
+
+## Electron runtime
+
+`ElectronVoiceRuntime` implements the shared `NativeVoicePlugin` surface in the
+bundled renderer. It owns notification policy, playback ordering, deferred client
+controls, target selection, recording state, and composer handoff. Its separate
+authenticated Sedes connection validates the selected profile and principal,
+registers voice capabilities, and receives live notification frames. Transient
+control-connection failures retry registration every five seconds, including
+while voice is Off. The same binding's in-memory resume token preserves its
+origin client ID until the server session expires; it is never persisted and is
+cleared on disconnect, binding changes, and authoritative session rejection.
+Each replacement clears active audio, queued playback, and
+deferred actions; failed speech and input requests are never replayed. Rejected
+credentials, identity changes, replacement by another window, and a failed
+notification stream require an explicit reconnect or Resume voice action.
+Direct input uses the same normalized request and receipt
+contracts as Android. All provider-specific speech traffic is independent of
+the selected Sedes server and uses a directly reachable speech API.
+Pi SDK, Pi, Codex, Claude, Grok, and OpenCode all use this shared application
+path. Their existing input and notification capabilities remain authoritative:
+Steer requires the current advertised target, and otherwise input queues through
+the ordinary admission contract. No provider-private adapter or history shape
+is exposed to the desktop voice runtime.
+
+`ElectronVoiceAudio` captures the selected microphone with `getUserMedia` and
+converts samples in a bundled AudioWorklet to mono 24 kHz signed PCM16.
+Playback consumes bounded PCM chunks and waits for audio to drain before
+eligible follow-up listening. Native window visibility drives foreground
+routing while active audio disables Chromium background throttling. Suspend,
+renderer replacement, window closure, and cancellation stop the current work.
+There is no service, tray lifetime, or automatic microphone restart on wake.
+
+The `ElectronSpeech` main-process plugin validates its IPC arguments and owns
+HTTP/WebSocket transport. Endpoint-bearing calls require an explicit provider
+(`openai` or `server`). OpenAI is restricted to `https://api.openai.com/v1`;
+the server provider cannot use that host. Own-server recognition obtains fresh
+capabilities. Hosted recognition uses the supported-model policy and validates
+the acknowledged session expiry against the WebSocket upgrade's server Date;
+its `/models` catalog is only a picker hint. Both use GA transcription
+`session.update` with 24 kHz PCM and explicit commits. Hosted PCM synthesis accepts
+`audio/pcm` or `application/octet-stream`; own-server response validation retains
+its explicit PCM format contract.
+
+Before creating speech connections, `tls-trust.mjs` adds the operating system's
+trusted CAs to the current Node main-process thread's default CA set, preserving
+bundled and extra roots. This covers Node fetch and `ws` without disabling chain
+or hostname verification. Chromium continues to own ordinary renderer API trust.
+
+Tokens are scoped to the complete normalized endpoint, entered in an isolated masked
+dialog, and encrypted with Electron `safeStorage`; plaintext storage fails
+closed. The renderer receives credential status only. Recognition requires
+session acknowledgement before audio, correlates committed results, and bounds
+both directions. Streamed speech waits for renderer acknowledgements so audio
+cannot accumulate without a consumer.
+
+Device preferences are persisted separately from connection-scoped default
+thread selections. Microphone identities use `{ platform: "electron", deviceId,
+name }`; Android identities retain their existing shape. Keep listening holds
+recognition segments only in memory until Send, Cancel, or its configured
+duration limit. Audio, transcripts, pending inputs, and recovery records are
+never persisted by the desktop runtime. Shared recovery actions are unavailable.
+See [Electron voice setup](../operator/clients/electron.md#voice) and
+[desktop test coverage](../developer/native-voice-testing.md#electron-speech-transport).
 
 Return to [Internals](index.md).

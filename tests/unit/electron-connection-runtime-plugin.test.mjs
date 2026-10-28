@@ -190,6 +190,21 @@ describe("Electron connection runtime", () => {
     await vi.waitFor(() => expect(application.quit).toHaveBeenCalledOnce());
   });
 
+  it("does not quit when an auxiliary credential window closes or crashes", async () => {
+    new ElectronConnectionRuntime({ notifyListeners: vi.fn() }, { app: application, manager });
+    const main = new FakeWindow();
+    const dialog = new FakeWindow();
+    application.emit("browser-window-created", {}, main);
+    application.emit("browser-window-created", {}, dialog);
+    dialog.webContents.emit("render-process-gone");
+    dialog.emit("closed");
+    expect(manager.disconnectAll).not.toHaveBeenCalled();
+    expect(application.quit).not.toHaveBeenCalled();
+    main.emit("closed");
+    await vi.waitFor(() => expect(application.quit).toHaveBeenCalledOnce());
+    expect(manager.disconnectAll).toHaveBeenCalledOnce();
+  });
+
   it("runs owned cleanup before quitting when connection state cannot be read", async () => {
     manager.getStatus.mockImplementation(() => {
       throw new TypeError("status_unavailable");

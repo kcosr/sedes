@@ -21,3 +21,21 @@ describe("persistent microphone identity", () => {
     expect(selectedInputDevice(null, [headset])).toBeUndefined();
   });
 });
+
+
+describe("desktop microphone identity", () => {
+  const microphone = { platform: "electron" as const, id: "desktop-microphone", label: "USB microphone" };
+  it("uses the exact browser device ID and permits distinct microphones with identical labels", () => {
+    const preferred = inputPreference(microphone);
+    expect(preferred).toEqual({ platform: "electron", deviceId: "desktop-microphone", name: "USB microphone" });
+    const renamed = { ...microphone, label: "Renamed microphone" };
+    expect(selectedInputDevice(preferred, [renamed, { ...microphone, id: "other-microphone" }])).toEqual(renamed);
+    expect(selectedInputDevice(preferred, [{ ...microphone, id: "other-microphone" }])).toBeUndefined();
+    expect(selectedInputDevice(preferred, [microphone, microphone])).toBeUndefined();
+  });
+  it("never substitutes Android devices or same-name desktop devices for a missing preference", () => {
+    const android = { id: microphone.id, type: 11, address: null, label: microphone.label };
+    expect(selectedInputDevice(inputPreference(microphone), [android])).toBeUndefined();
+    expect(selectedInputDevice(inputPreference(android), [microphone])).toBeUndefined();
+  });
+});

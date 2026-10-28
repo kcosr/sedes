@@ -1,0 +1,10 @@
+{
+  "name": "@sedes/electron-speech",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "capacitor": { "electron": { "src": "electron" } },
+  "files": ["electron/dist/*.mjs", "electron/dist/*.cjs", "electron/dist/*.html"],
+  "dependencies": { "ws": "8.21.1" }
+}
