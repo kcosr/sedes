@@ -3,7 +3,10 @@
 Android's native voice service speaks Sedes notifications and sends recognized
 text directly to a thread. It owns its network connections, audio playback,
 microphone capture, and input recovery while the WebView displays settings and
-controls. Browser and Electron clients do not show the Voice page.
+controls. Browser clients do not show the Voice page. Electron has a separate
+[app-session voice implementation](electron.md#voice) for your own speech server;
+the Android service, headset routing, and saved-recording recovery described
+below do not apply to Electron.
 
 Speech connects directly to OpenAI through Realtime transcription and streamed
 HTTP speech. For local Parakeet transcription and Kokoro speech, use the
@@ -44,8 +47,8 @@ and closed or replaced control connections supersede pending actions. Losing
 only the notification connection releases a wait for playback that can no
 longer arrive. A superseded source reply cancels its pending switch instead of
 starting another listen. Actions have a 24-hour turn-completion limit and a
-separate one-hour reply-playback limit after completion. Browser and Electron
-clients support navigation and report voice controls as unavailable.
+separate one-hour reply-playback limit after completion. Browser clients support
+navigation and report voice controls as unavailable.
 Retrying the client-control connection keeps a healthy notification connection,
 its policy, and current speech intact. A late acceptance of a cancelled or
 timed-out request is cancelled explicitly so it cannot reserve another listen.
@@ -64,7 +67,7 @@ learns whether the reply is playing, queued, or already queued. While Audio
 mode is Off, or voice is not ready, for example because the session needs
 **Resume** or speech setup is incomplete, nothing is queued and the agent is
 told which; this tool cannot turn voice on. A reply with nothing to speak or a
-full queue is reported as a failure. Browser and Electron clients report voice
+full queue is reported as a failure. Browser clients report voice
 as unsupported.
 
 ## Configure a session
@@ -244,7 +247,7 @@ start an eligible follow-up listen without making a speech request.
 While voice is set to Input or Speak and speech is configured, each
 finished turn's footer shows **Play response aloud**, a speaker after **Copy
 response**. It is absent while voice is Off or speech setup is incomplete, and
-in browser and Electron clients. Read-only and archived threads show it too.
+in browser clients. Read-only and archived threads show it too.
 
 The replay reads the turn's stored completion text in the phases that
 **Response text** under **Turn completed** currently selects, as a spoken

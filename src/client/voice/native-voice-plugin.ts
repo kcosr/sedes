@@ -1,14 +1,21 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import { z } from "zod";
-import { isAndroidClient } from "../app/client-platform.js";
+import { isAndroidClient, isElectronClient } from "../app/client-platform.js";
 import { directInputRequestSchema } from "../../shared/protocol/thread-input.js";
 import type { SelectedAssistantResult } from "../../shared/protocol/notification.js";
 
-export const nativeVoiceInputSchema = z.strictObject({
-  type: z.number().int().min(0).max(2147483647), address: z.string().min(1).max(512).nullable(), name: z.string().min(1).max(512),
-});
+/** Two live platform contracts: Android owns hardware type/address identity; Electron owns Chromium device IDs.
+ * Android's stored native shape is unchanged. Neither platform translates or falls back to the other's identity.
+ */
+export const nativeVoiceInputSchema = z.union([
+  z.strictObject({
+    type: z.number().int().min(0).max(2147483647), address: z.string().min(1).max(512).nullable(), name: z.string().min(1).max(512),
+  }),
+  z.strictObject({ platform: z.literal("electron"), deviceId: z.string().min(1).max(512), name: z.string().min(1).max(512) }),
+]);
 export type NativeVoiceInput = z.infer<typeof nativeVoiceInputSchema>;
-export interface NativeVoiceInputDevice { id: string; label: string; type: number; address: string | null }
+export type NativeVoiceInputDevice = { id: string; label: string; type: number; address: string | null }
+  | { platform: "electron"; id: string; label: string };
 export interface NativeVoiceInputDevices { devices: NativeVoiceInputDevice[] }
 
 export const nativeVoiceSettingsSchema = z.strictObject({
@@ -146,9 +153,13 @@ export interface NativeVoicePlugin {
   addListener(event: "inputSubmitted", listener: (event: NativeVoiceInputSubmitted) => void): Promise<PluginListenerHandle>;
   addListener(event: "composerHandoff", listener: (event: NativeVoiceComposerHandoff) => void): Promise<PluginListenerHandle>;
 }
-export const nativeVoice = registerPlugin<NativeVoicePlugin>("NativeVoice");
+export const nativeVoice = registerPlugin<NativeVoicePlugin>("NativeVoice", {
+  electron: async () => (await import("./electron-voice-runtime.js")).createElectronVoice(),
+});
 export function hasNativeVoice(): boolean {
-  return isAndroidClient() && typeof Capacitor.isPluginAvailable === "function" && Capacitor.isPluginAvailable("NativeVoice");
+  if (typeof Capacitor.isPluginAvailable !== "function") return false;
+  if (isAndroidClient()) return Capacitor.isPluginAvailable("NativeVoice");
+  return isElectronClient() && Capacitor.isPluginAvailable("ElectronSpeech");
 }
 /** Best effort: callers continue on failure. Credential writes and removals also disconnect the matching native binding. */
 export async function disconnectNativeVoice(): Promise<void> {

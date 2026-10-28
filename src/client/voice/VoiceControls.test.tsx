@@ -1036,6 +1036,58 @@ describe("voice controls card", () => {
     expect(within(card()).getByRole("button", { name: "Start voice recording" })).toBeEnabled();
     expect(within(card()).queryByRole("button", { name: "Retry voice connection" })).toBeNull();
   });
+  it("keeps an uncertain send visible through automatic reconnect and clears it on the next recording action", async () => {
+    const failure = { code: "input_submission_uncertain", message: "The send could not be confirmed. Check the thread before sending again. Nothing will be resent." };
+    voice.fake.plugin.setConnection.mockResolvedValue(ready({ phase: "submitting" }));
+    navigate(threadPath("named"), { replace: true });
+    renderControls();
+    await screen.findByRole("group", { name: "Voice controls" });
+    act(() => {
+      voice.fake.emit("runtimeError", { ...failure, connectionGeneration: 1, ...VOICE_CONNECTION });
+      voice.fake.emit("stateChanged", ready({ stateRevision: 2, ready: false, readiness: "starting", errors: [failure] }));
+    });
+    expect(within(card()).getByRole("alert")).toHaveTextContent(failure.message);
+    for (const native of [
+      ready({ connectionGeneration: 2, stateRevision: 1, ready: false, readiness: "starting", phase: "starting" }),
+      ready({ connectionGeneration: 2, stateRevision: 2, ready: false, readiness: "starting", phase: "starting", errors: [failure] }),
+      ready({ connectionGeneration: 2, stateRevision: 3, errors: [failure] }),
+    ]) {
+      act(() => voice.fake.emit("stateChanged", native));
+      expect(within(card()).getByRole("alert")).toHaveTextContent(failure.message);
+      expect(lines()).toContain(failure.message);
+    }
+    expect(lines()).toEqual([failure.message, "Needs attention"]);
+    fireEvent.click(within(card()).getByRole("button", { name: "Open voice controls" }));
+    expect(within(await screen.findByRole("dialog", { name: "Voice" })).getByRole("status")).toHaveTextContent(failure.message);
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    voice.fake.plugin.startManualListen.mockResolvedValue({ ...listening({ recognitionThreadId: "named", recognitionThreadTitle: "Release review" }),
+      connectionGeneration: 2, stateRevision: 4, errors: [failure] });
+    fireEvent.click(within(card()).getByRole("button", { name: "Start voice recording" }));
+    await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledOnce());
+    expect(within(card()).queryByRole("alert")).toBeNull();
+    expect(lines()).toEqual(["Release review", "Listening"]);
+  });
+  it.each([false, true])("shows an uncertain send while Off even when show-when-Off is %s", async showWhenOff => {
+    const failure = { code: "input_submission_uncertain", message: "The send could not be confirmed. Check the thread before sending again. Nothing will be resent." };
+    voice.fake.plugin.setConnection.mockResolvedValue(voiceSnapshot());
+    renderControls(showWhenOff);
+    await waitFor(() => expect(voice.fake.plugin.setForegroundContext).toHaveBeenCalled());
+    act(() => {
+      voice.fake.emit("runtimeError", { ...failure, connectionGeneration: 1, ...VOICE_CONNECTION });
+      voice.fake.emit("stateChanged", voiceSnapshot({ stateRevision: 2, errors: [failure] }));
+    });
+    for (const native of [
+      voiceSnapshot({ connectionGeneration: 2, stateRevision: 1 }),
+      voiceSnapshot({ connectionGeneration: 2, stateRevision: 2, errors: [failure] }),
+    ]) {
+      act(() => voice.fake.emit("stateChanged", native));
+      expect(within(card()).getByRole("alert")).toHaveTextContent(failure.message);
+      expect(lines()).toEqual([failure.message, "Needs attention"]);
+      expect(card()).not.toHaveAttribute("data-off");
+      expect(card().querySelector(".voice-card-tile")).toHaveAttribute("data-tone", "warning");
+    }
+  });
 });
 
 describe("idle target shortcut", () => {

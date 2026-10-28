@@ -139,14 +139,15 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const [targetId, targetTitle] = showingInput ? [active?.recognitionThreadId, active?.recognitionThreadTitle]
     : [active?.threadId ?? active?.recognitionThreadId, active?.threadTitle ?? active?.recognitionThreadTitle];
   const activeTitle = targetTitle ?? (targetId ? threads.find(thread => thread.id === targetId)?.title.text.trim() || "Untitled thread" : undefined);
-  // A failure stays until the next action, a reconnect or progress; the error phase falls back to native's latest report.
+  // Ordinary failures clear on reconnect/progress; an uncertain desktop send requires a user acknowledgement.
+  const actionMessage = state.uncertainInputWarning ?? state.error;
   const latest = native.errors.at(-1);
-  const message = state.error ?? (failed ? latest?.message ?? (missingRecovery && !needsStorageRetry ? "Voice storage needs attention. Open voice settings to retry." : cardReadiness(native.readiness)) : undefined);
+  const message = actionMessage ?? (failed ? latest?.message ?? (missingRecovery && !needsStorageRetry ? "Voice storage needs attention. Open voice settings to retry." : cardReadiness(native.readiness)) : undefined);
   const kind = speaking && active?.eventKind ? eventLabels.get(active.eventKind) : undefined;
-  const phaseWord: Part = state.error && !recording ? { alert: state.error, tone: "warning" }
+  const phaseWord: Part = actionMessage && !recording ? { alert: actionMessage, tone: "warning" }
     : { phase: phaseLabel(phase), tone: recording ? "destructive" : phase === "speaking" ? "info" : undefined };
   let tile: ReactNode, tone: string | undefined, line1: Line, line2: Line;
-  const errorLook = (!off || needsStorageRetry) && (failed || (!busy && message !== undefined));
+  const errorLook = (!off || needsStorageRetry || state.uncertainInputWarning !== undefined) && (failed || (!busy && message !== undefined));
   // The card's thread: the idle start target, the spoken notice's thread, or the recording target; Off and an error have none.
   const [cardThread, cardTitle] = showingRecovery ? [saved.threadId, recordingRecoveryTitle(saved, threads)]
     : off || errorLook ? [] : busy ? [targetId ?? undefined, activeTitle] : [startTarget?.threadId, startTarget && (startTarget.threadTitle?.trim() || "Untitled thread")];
@@ -156,10 +157,10 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     tile = working ? <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" /> : <MicOff strokeWidth={1.8} aria-hidden="true" />;
     tone = saved.stage === "ready" ? undefined : "warning";
     line1 = { saved: { label: recordingRecoveryLabel(saved), thread: cardTitle! } };
-    line2 = { parts: [state.error ? { alert: state.error, tone: "warning" } : failureReason ? { alert: failureReason, tone: "warning" }
+    line2 = { parts: [actionMessage ? { alert: actionMessage, tone: "warning" } : failureReason ? { alert: failureReason, tone: "warning" }
       : needsStorageRetry || (saved.hasUnrecognizedAudio && !saved.canRetryRecognition && !working && !native.ready)
         ? cardReadiness(native.readiness) : recordingRecoveryStatus(saved)] };
-  } else if (off && !needsStorageRetry) { tile = <MicOff strokeWidth={1.8} aria-hidden="true" />; tone = "muted"; line1 = { parts: ["Voice off"] }; line2 = { parts: ["Open controls to turn on"] }; }
+  } else if (off && !needsStorageRetry && !state.uncertainInputWarning) { tile = <MicOff strokeWidth={1.8} aria-hidden="true" />; tone = "muted"; line1 = { parts: ["Voice off"] }; line2 = { parts: ["Open controls to turn on"] }; }
   else if (errorLook) {
     tile = <TriangleAlert strokeWidth={1.8} aria-hidden="true" />; tone = "warning";
     // Native's start rejection asks to resume "from the visible app"; on the card that is its own Resume. The alert keeps native's words.
@@ -183,7 +184,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
       const queued = speaking && native.queue.count > 0 ? `${native.queue.count} queued` : undefined;
       // A failed action takes the phase word's place. Beside a thread's phase and queue count, the kind gives way first on a narrow card.
       // Thread-less speech puts the phase on its own line, so its kind stays visible with the queue on line 2.
-      status = state.error && !recording ? [phaseWord] : [phaseWord, ...kind ? [queued && cardTitle !== undefined ? { optional: kind } : kind] : [], ...queued ? [queued] : []];
+      status = actionMessage && !recording ? [phaseWord] : [phaseWord, ...kind ? [queued && cardTitle !== undefined ? { optional: kind } : kind] : [], ...queued ? [queued] : []];
       if (recording && capture?.reconnecting) status.push({ reconnecting: true });
     }
     if (cardTitle !== undefined) { line1 = { thread: cardTitle, reconnecting: recording && capture?.reconnecting }; line2 = { parts: status }; }
@@ -193,7 +194,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   }
   // Keep Listening and its controls in place; a failed action temporarily uses
   // the existing title line, with the full message in its tooltip and sheet.
-  if (recording && state.error) line1 = { parts: [{ alert: state.error, tone: "warning" }] };
+  if (recording && actionMessage) line1 = { parts: [{ alert: actionMessage, tone: "warning" }] };
   // Settings → Voice announces readiness and errors itself; there the card's regions stay quiet.
   const quiet = route.name === "settings" && route.page === "voice";
   const alerting = message !== undefined && !quiet;
@@ -232,9 +233,9 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     {renderLine(line2, "voice-card-sub")}
   </span>;
   return <>
-    {!off || showWhenOff || showingRecovery || needsStorageRetry ? <div className="voice-dock">
+    {!off || showWhenOff || showingRecovery || needsStorageRetry || state.uncertainInputWarning ? <div className="voice-dock">
       <div className="voice-card" role="group" aria-label="Voice controls" data-tone={recording ? "destructive" : phase === "speaking" ? "info" : undefined}
-        data-off={off && !showingRecovery ? "" : undefined} data-input-actions={inputActions ? "" : undefined} data-saved={showingRecovery ? "" : undefined}>
+        data-off={off && !showingRecovery && !state.uncertainInputWarning ? "" : undefined} data-input-actions={inputActions ? "" : undefined} data-saved={showingRecovery ? "" : undefined}>
         <button type="button" className="voice-card-tile" data-tone={tone} aria-haspopup="dialog" aria-describedby={describedBy}
           aria-label={savedElsewhere ? "Saved dictation" : "Open voice controls"} title={savedElsewhere ? "Saved dictation" : "Open voice controls"}
           data-saved-access={savedElsewhere ? "" : undefined} onClick={() => setSheet(true)}>{tile}<ChevronDown className="voice-card-menu-mark" aria-hidden="true" />

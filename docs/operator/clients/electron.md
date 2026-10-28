@@ -405,6 +405,68 @@ To enable experimental recorded usage for Managed Local, launch Electron with
 setting through unchanged for server validation; unset or `0` keeps accounting
 disabled. Direct and SSH-forwarded connections use the remote server's setting.
 
+## Voice
+
+Both desktop distributions connect directly to your own OpenAI-compatible
+speech server for dictation and streamed speech. The speech service is operated
+separately and must be reachable from the desktop. Its API and bearer token are
+independent of the Sedes connection. Desktop voice does not use the hosted
+OpenAI preset or install speech models.
+
+1. Open **Settings → Voice** and enter the speech API URL, including `/v1` and
+   any reverse-proxy prefix. Use HTTPS, or HTTP on an explicitly trusted network.
+2. Select **Manage speech credential** and save the server token in the separate
+   masked credential dialog. This token stays in the main process and is
+   encrypted with the OS keyring; it is never returned to the application page.
+3. Refresh the model catalog and choose recognition and speech models and a
+   voice. The server must publish the Realtime limits required by
+   [the speech protocol](../../internals/native-voice.md#speech-protocol-and-capability-discovery).
+4. Choose **Input** or **Speak**, then start a recording and grant OS microphone
+   access. Input suppresses automatic speech; Speak reads selected notifications.
+   Both modes support eligible **Auto-listen** follow-ups. Automatic notifications
+   also require your Sedes **Settings → Notifications** policy to permit voice.
+
+The voice bar supplies recording, Send, Cancel, playback, target selection, and
+Keep listening controls. A completed turn's speaker action replays that reply.
+The visible composer's normal delivery path is used when it can accept the
+recording; other targets use Sedes direct input. **Keep listening** can span
+pauses and recognition segments in memory. Its maximum duration finishes the
+recording and sends it through the normal completion path. Send finishes earlier;
+Cancel discards unsent speech.
+
+Spoken notifications and explicit reply playback share a bounded queue. **Next**
+skips the current item; **Stop** clears waiting playback. Recorded input follows
+the normal thread Queue/Steer rules, including the selected composer mode when
+configured. Eligible deferred thread switches and listening actions wait for
+the source turn and its queued reply playback to finish.
+
+Voice runs only while the application is open, including while minimized.
+Closing or quitting the application stops voice. Computer sleep stops the
+current interaction; waking does not automatically reopen the microphone.
+There is no background service, tray persistence, headset-button integration,
+saved-recording recovery, or recording restoration after restart. Connection
+or device failures stop the affected interaction and report an error. Failed
+speech requests and uncertain input submissions are not automatically retried.
+If a send loses its response, check the thread before starting another message.
+Transient Sedes connection failures automatically restore client controls,
+including while voice is Off. This clears queued playback and deferred actions
+and does not restart an interrupted recording or send. Authentication and
+notification-stream errors require the reconnect or Resume voice action.
+Ordinary Sedes messages and composer drafts retain their existing persistence.
+
+Voice preferences are device-owned. Default thread selections are scoped to the
+configured Sedes connection and authenticated identity. Microphone choices use
+the desktop's device IDs and never silently fall back to another input when the
+selected device is unavailable. Speech tokens are bound to the exact normalized
+speech endpoint, including its path. Changing endpoints does not copy a token
+to the new server. Linux requires a secure keyring even if Sedes pairing is off.
+
+Microphone permission is limited to the bundled application's main frame;
+generated pages, cameras, and screen capture remain denied. macOS packages carry
+a microphone usage description and audio-input entitlement. OS privacy settings
+can still deny capture; enable microphone access for Sedes and restart when the
+operating system requires it.
+
 ## Direct trusted-home-LAN mode
 
 For a deliberately trusted home LAN, Electron can use the bounded wildcard
@@ -454,9 +516,9 @@ Prefix these commands with `env -u NODE_ENV`.
 - the content-security policy retains the expected network and framing rules;
 - the renderer origin remains exactly `capacitor-electron://localhost`;
 - permission checks and permission requests remain denied except for sanitized
-  clipboard writes from the packaged main renderer;
-- the generated plugin manifest contains only the reviewed workspace-download
-  and consolidated connection-runtime plugins;
+  clipboard writes and audio-only microphone capture from the packaged main renderer;
+- the generated plugin manifest contains only the reviewed workspace-download,
+  consolidated connection-runtime, and speech plugins;
 - the actual Electron renderer connects to disposable HTTP API, SSE, and
   WebSocket endpoints with the expected Origin;
 - managed SSH uses the system client with the reviewed noninteractive,
@@ -527,8 +589,9 @@ Before handing an installer or unpacked preview to another trusted tester, run
 5. Files: browse/edit an allowed root and download empty, text, binary, and
    large files; cancel a destination selection and an active transfer; reject a
    changed revision, redirect, invalid metadata, and over-limit response.
-6. Application safety: inline code-copy writes to the clipboard while
-   clipboard reads, external navigation, popups, other permission requests,
+6. Application safety: inline code-copy writes to the clipboard and voice can
+   request microphone access while clipboard reads, camera access, screen capture,
+   external navigation, popups, other permission requests,
    cross-origin frames, and attempts to use Node APIs in the renderer remain
    blocked.
 7. Packaging: product name, application ID, version, icons, artifact names,
@@ -543,9 +606,10 @@ interactive feature checks on each supported platform.
 
 - The renderer uses context isolation and Chromium sandboxing with Node
   integration disabled.
-- Permission checks and requests are denied by default. The only exception is
-  sanitized clipboard write from the packaged application's exact main-frame
-  origin; clipboard reads remain denied.
+- Permission checks and requests are denied by default. Sanitized clipboard
+  write and audio-only microphone capture are allowed from the packaged
+  application's exact main-frame origin; clipboard reads, camera access, and
+  screen capture remain denied.
 - The Sedes window is not a general browser; preserve the platform's navigation
   and new-window guards.
 - CSP admits runtime-configured HTTP(S) API/SSE and WS/WSS endpoints, while

@@ -46,6 +46,8 @@ module.exports = {
     // Sign preview bundles even without an Apple certificate. Leaving Electron's
     // original signature makes macOS attribute Local Network access incorrectly.
     identity: '-',
+    entitlements: 'entitlements.mac.plist',
+    entitlementsInherit: 'entitlements.mac.plist',
     // These cross-platform sidecar artifacts are checksum-bound by manifest.json;
     // re-signing would change their bytes and invalidate remote installation.
     signIgnore: ['/Contents/Resources/local-server/dist/sidecar/native/'],
@@ -53,6 +55,7 @@ module.exports = {
     icon: 'assets/icon.png',
     extendInfo: {
       NSLocalNetworkUsageDescription: 'Sedes connects to the servers you choose on your local network.',
+      NSMicrophoneUsageDescription: 'Sedes records your voice when you start dictation or enable Auto-listen.',
     },
   },
   win: {

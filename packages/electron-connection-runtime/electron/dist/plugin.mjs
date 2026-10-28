@@ -109,7 +109,9 @@ class ElectronConnectionRuntimeImpl {
       event.preventDefault();
       this.#beginOwnedQuit();
     });
-    this.#app.on("browser-window-created", (_event, window) => {
+    // The platform creates its application window first. Auxiliary credential
+    // dialogs belong to that window; closing one must not terminate the app.
+    this.#app.once("browser-window-created", (_event, window) => {
       window.webContents.once("render-process-gone", () =>
         this.#beginOwnedQuit(),
       );

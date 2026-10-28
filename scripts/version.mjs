@@ -17,6 +17,7 @@ const manifests = [
   "electron/package.json",
   "packages/electron-client-credentials/package.json",
   "packages/electron-connection-runtime/package.json",
+  "packages/electron-speech/package.json",
   "packages/server-runtime/package.json",
   "packages/electron-workspace-file-download/package.json",
 ];

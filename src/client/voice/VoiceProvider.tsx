@@ -2,6 +2,7 @@ import { DefaultThreadProvider } from "../app/default-thread.js";
 import { ConnectionScopeProvider, connectionScope } from "../app/connection-scope.js";
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
+import { isAndroidClient } from "../app/client-platform.js";
 import type { RegisteredClient } from "../../shared/protocol/client-controls.js";
 import { ClientControlConnection } from "./ClientControlConnection.js";
 import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
@@ -18,16 +19,16 @@ export const useNativeVoice = () => useContext(VoiceContext);
 export const useClientOrigin = () => useContext(OriginContext);
 export const useVoiceState = (store: NativeVoiceStore) => useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 
-/** Authenticate first; the Android bridge obtains the same identity using its stored credential. */
+/** Authenticate first so voice shares the application's admitted connection and identity. */
 export function VoiceProvider({ profileId, endpoint, identity, children }: {
   profileId?: string; endpoint: SedesServerEndpoint; identity?: string; children: ReactNode;
 }): React.JSX.Element {
   const serverOrigin = endpoint.baseUrl ?? window.location.origin;
   if (!hasNativeVoice()) return <BrowserOriginProvider profileId={profileId} endpoint={endpoint} identity={identity}>{children}</BrowserOriginProvider>;
-  // Android shares exactly one origin ID with native. Without a native binding the WebView sends none rather than inventing its own.
+  // The voice runtime owns the registered origin ID. Until it connects, application requests send none.
   if (!profileId || !identity) return <>{children}</>;
-  return <AndroidVoiceProvider key={JSON.stringify([profileId, serverOrigin, identity])}
-    profileId={profileId} serverOrigin={serverOrigin} identity={identity}>{children}</AndroidVoiceProvider>;
+  return <NativeVoiceProvider key={JSON.stringify([profileId, serverOrigin, identity])}
+    profileId={profileId} serverOrigin={serverOrigin} identity={identity}>{children}</NativeVoiceProvider>;
 }
 function BrowserOriginProvider({ profileId, endpoint, identity, children }: {
   profileId?: string; endpoint: SedesServerEndpoint; identity?: string; children: ReactNode;
@@ -60,7 +61,7 @@ function createStore(profileId: string, serverOrigin: string, identity: string):
   return new NativeVoiceStore(nativeVoice, { profileId, serverOrigin, identity }, id => openThreadRoute(id));
 }
 /** The application renders at once; voice hydrates beside it and the origin is absent until native connects. */
-function AndroidVoiceProvider({ profileId, serverOrigin, identity, children }: { profileId: string; serverOrigin: string; identity: string; children: ReactNode }) {
+function NativeVoiceProvider({ profileId, serverOrigin, identity, children }: { profileId: string; serverOrigin: string; identity: string; children: ReactNode }) {
   const [store, setStore] = useState(() => createStore(profileId, serverOrigin, identity));
   const active = useRef(store);
   const [origin] = useState<ClientOriginSource>(() => () => {
@@ -76,11 +77,11 @@ function AndroidVoiceProvider({ profileId, serverOrigin, identity, children }: {
     const foreground = () => { if (document.visibilityState !== "hidden") store.foreground(); };
     document.addEventListener("visibilitychange", foreground);
     window.addEventListener("online", foreground);
-    const listener = CapacitorApp.addListener("appStateChange", ({ isActive }) => { if (isActive) foreground(); });
+    const listener = isAndroidClient() ? CapacitorApp.addListener("appStateChange", ({ isActive }) => { if (isActive) foreground(); }) : undefined;
     return () => {
       document.removeEventListener("visibilitychange", foreground);
       window.removeEventListener("online", foreground);
-      void listener.then(handle => handle.remove()).catch(() => undefined);
+      void listener?.then(handle => handle.remove()).catch(() => undefined);
       store.dispose();
     };
   }, [store, profileId, serverOrigin, identity]);

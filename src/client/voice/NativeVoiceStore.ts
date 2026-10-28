@@ -9,6 +9,8 @@ export interface VoiceClientState {
   readonly pending: boolean;
   /** The latest action, connection, or runtime failure. It stays until the next user action, a reconnect, or progress. */
   readonly error?: string;
+  /** A desktop send may have reached Sedes. Automatic reconnect or progress cannot acknowledge this warning. */
+  readonly uncertainInputWarning?: string;
   /** Copying into a composer leaves the native recovery item intact. */
   readonly addedRecording?: NativeRecordingRecoveryCommandContext;
   /** Native errors the user cleared on this device; native keeps its own bounded list. */
@@ -37,6 +39,7 @@ class ComposerReturnedBeforeSave extends Error {
 const COMPOSER_HANDOFF_WAIT_MS = 30_000;
 const RETRY_BASE_MS = 2_000;
 const RETRY_MAX_MS = 60_000;
+const UNCERTAIN_INPUT_CODE = "input_submission_uncertain";
 /** Entering one of these phases means a new interaction is under way, so an earlier failure no longer describes the bar. */
 const PROGRESS_PHASES = new Set<NativeVoiceState["phase"]>(["starting", "synthesizing", "speaking", "validating", "announcing", "arming", "listening", "recognizing", "submitting"]);
 
@@ -67,6 +70,7 @@ export class NativeVoiceStore {
   #handoffControllers = new Set<AbortController>();
   #submissionComposerListeners = new Set<() => void>();
   #seenHandoffs = new Set<string>();
+  #seenUncertainInputs: readonly NativeVoiceError[] = [];
   constructor(readonly plugin: NativeVoicePlugin, readonly connection: { profileId: string; serverOrigin: string; identity: string }, readonly openThread: (threadId: string) => void) {}
   getSnapshot = (): VoiceClientState => this.#state;
   subscribe = (listener: () => void): (() => void) => { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; };
@@ -372,7 +376,9 @@ export class NativeVoiceStore {
         this.plugin.addListener("runtimeError", error => {
           if (error.connectionGeneration < this.#generation || error.profileId !== this.connection.profileId ||
             error.serverOrigin !== this.connection.serverOrigin || (error.identity !== null && error.identity !== this.connection.identity)) return;
-          this.#error(new Error(error.message));
+          if (error.code === UNCERTAIN_INPUT_CODE)
+            this.#set({ ...this.#state, error: error.message, uncertainInputWarning: error.message });
+          else this.#error(new Error(error.message));
         }),
         this.plugin.addListener("openThread", event => {
           if (this.#disposed || event.profileId !== this.connection.profileId || event.serverOrigin !== this.connection.serverOrigin ||
@@ -511,7 +517,7 @@ export class NativeVoiceStore {
     if (this.#state.pending && !interrupt) throw new Error("A voice action is already in progress.");
     const sequence = ++this.#actionSequence;
     this.#pendingActions++;
-    this.#set({ ...this.#state, pending: true, error: undefined });
+    this.#set({ ...this.#state, pending: true, error: undefined, uncertainInputWarning: undefined });
     try { this.#accept(await action()); }
     catch (error) { if (sequence === this.#actionSequence) this.#error(error); throw error; }
     finally { this.#pendingActions--; this.#set({ ...this.#state, pending: this.#pendingActions > 0 }); }
@@ -519,7 +525,7 @@ export class NativeVoiceStore {
   /** Hides the current native errors on this device until native reports a newer one. Native state is unchanged. */
   dismissErrors(): void {
     const native = this.#state.native;
-    this.#set({ ...this.#state, error: undefined, dismissedErrors: native ? { connectionGeneration: native.connectionGeneration, errors: native.errors } : undefined });
+    this.#set({ ...this.#state, error: undefined, uncertainInputWarning: undefined, dismissedErrors: native ? { connectionGeneration: native.connectionGeneration, errors: native.errors } : undefined });
   }
   dispose(): void {
     this.#disposed = true;
@@ -554,14 +560,26 @@ export class NativeVoiceStore {
     this.#revision = state.stateRevision;
     if (state.profileId !== this.connection.profileId || state.serverOrigin !== this.connection.serverOrigin || state.identity !== this.connection.identity) {
       this.#connected = false;
-      this.#set({ loading: this.#state.loading, pending: this.#state.pending, error: "Voice is disconnected. Retry the connection to use voice." });
+      this.#set({ loading: this.#state.loading, pending: this.#state.pending, uncertainInputWarning: this.#state.uncertainInputWarning,
+        error: "Voice is disconnected. Retry the connection to use voice." });
       if (!this.#connecting) this.#scheduleRetry();
       return;
     }
     const previous = this.#state.native;
     const progressed = !previous || previous.connectionGeneration !== state.connectionGeneration || (!previous.ready && state.ready) ||
       (previous.phase !== state.phase && PROGRESS_PHASES.has(state.phase));
-    this.#set({ ...this.#state, native: state, error: progressed ? undefined : this.#state.error });
+    const uncertain = state.errors.filter(error => error.code === UNCERTAIN_INPUT_CODE);
+    const newUncertain = errorsAfter(uncertain, this.#seenUncertainInputs).at(-1);
+    // Automatic re-registration first publishes an empty error list and then
+    // restores uncertain sends. Keep the observed list across that empty frame
+    // so an acknowledged warning cannot reappear just because its generation changed.
+    if (uncertain.length) this.#seenUncertainInputs = uncertain;
+    const dismissed = this.#state.dismissedErrors;
+    const dismissedErrors = dismissed && dismissed.connectionGeneration !== state.connectionGeneration
+      ? { connectionGeneration: state.connectionGeneration, errors: dismissed.errors.filter(error => error.code === UNCERTAIN_INPUT_CODE) }
+      : dismissed;
+    this.#set({ ...this.#state, native: state, error: progressed ? undefined : this.#state.error, dismissedErrors,
+      uncertainInputWarning: newUncertain?.message ?? this.#state.uncertainInputWarning });
   }
   #error(error: unknown): void {
     this.#set({ ...this.#state, error: error instanceof Error ? error.message : "Voice is unavailable." });
@@ -578,7 +596,7 @@ export function recentVoiceErrors(state: VoiceClientState, limit = 3): string[] 
   const native = state.native;
   const dismissed = native && state.dismissedErrors?.connectionGeneration === native.connectionGeneration ? state.dismissedErrors.errors : [];
   const fresh = native ? errorsAfter(native.errors, dismissed).map(error => error.message).reverse() : [];
-  return [...new Set([...(state.error ? [state.error] : []), ...fresh])].slice(0, limit);
+  return [...new Set([...(state.uncertainInputWarning ? [state.uncertainInputWarning] : []), ...(state.error ? [state.error] : []), ...fresh])].slice(0, limit);
 }
 /** Native appends to a bounded list without identities; the cleared list's longest suffix that still prefixes the current list was already seen. */
 function errorsAfter(current: readonly NativeVoiceError[], dismissed: readonly NativeVoiceError[]): readonly NativeVoiceError[] {

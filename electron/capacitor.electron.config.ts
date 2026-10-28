@@ -1,9 +1,7 @@
 import { defineConfig } from '@capawesome/capacitor-electron/config';
-import type { Session, WebContents } from 'electron';
+import type { Session } from 'electron';
 import { allowsPageFrameNavigation } from './page-frame-policy.js';
-
-const PACKAGED_RENDERER_PROTOCOL = 'capacitor-electron:';
-const PACKAGED_RENDERER_HOST = 'localhost';
+import { allowsPackagedPermission } from './media-permission-policy.js';
 
 type PermissionCheckHandler = NonNullable<
   Parameters<Session['setPermissionCheckHandler']>[0]
@@ -12,36 +10,6 @@ type PermissionCheckHandler = NonNullable<
 type PermissionRequestHandler = NonNullable<
   Parameters<Session['setPermissionRequestHandler']>[0]
 >;
-
-function isPackagedRendererUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === PACKAGED_RENDERER_PROTOCOL &&
-      url.hostname === PACKAGED_RENDERER_HOST &&
-      url.port === '' &&
-      url.username === '' &&
-      url.password === ''
-    );
-  } catch {
-    return false;
-  }
-}
-
-function allowsPackagedClipboardWrite(
-  windowWebContents: WebContents,
-  requestingWebContents: WebContents | null,
-  permission: string,
-  requestingUrl: string,
-  isMainFrame: boolean,
-): boolean {
-  return (
-    permission === 'clipboard-sanitized-write' &&
-    requestingWebContents === windowWebContents &&
-    isMainFrame &&
-    isPackagedRendererUrl(requestingUrl)
-  );
-}
 
 export default defineConfig({
   scheme: 'capacitor-electron',
@@ -75,13 +43,12 @@ export default defineConfig({
         requestingOrigin,
         details,
       ) =>
-        allowsPackagedClipboardWrite(
-          window.webContents,
-          webContents,
+        webContents === window.webContents && allowsPackagedPermission({
           permission,
-          details.requestingUrl ?? requestingOrigin,
-          details.isMainFrame,
-        );
+          requestingUrl: details.requestingUrl ?? requestingOrigin,
+          isMainFrame: details.isMainFrame,
+          mediaTypes: details.mediaType ? [details.mediaType] : undefined,
+        });
       const handlePermissionRequest: PermissionRequestHandler = (
         webContents,
         permission,
@@ -89,13 +56,12 @@ export default defineConfig({
         details,
       ) =>
         callback(
-          allowsPackagedClipboardWrite(
-            window.webContents,
-            webContents,
+          webContents === window.webContents && allowsPackagedPermission({
             permission,
-            details.requestingUrl,
-            details.isMainFrame,
-          ),
+            requestingUrl: details.requestingUrl,
+            isMainFrame: details.isMainFrame,
+            mediaTypes: 'mediaTypes' in details ? details.mediaTypes : undefined,
+          }),
         );
       session.setPermissionCheckHandler(handlePermissionCheck);
       session.setPermissionRequestHandler(handlePermissionRequest);

@@ -173,17 +173,17 @@ async function verifySynced() {
       throw new Error(`electron_synced_csp_missing:${directive}`);
     }
   }
-  const config = await readFile(
-    path.join(repositoryRoot, "electron", "capacitor.electron.config.ts"),
-    "utf8",
-  );
+  const config = (await Promise.all(["capacitor.electron.config.ts", "media-permission-policy.ts"].map(file =>
+    readFile(path.join(repositoryRoot, "electron", file), "utf8")))).join("\n");
   for (const invariant of [
     "scheme: 'capacitor-electron'",
     "hostname: 'localhost'",
     "frame-ancestors 'none'",
-    "permission === 'clipboard-sanitized-write'",
-    "requestingWebContents === windowWebContents",
-    "isPackagedRendererUrl(requestingUrl)",
+    "input.permission === 'clipboard-sanitized-write'",
+    "webContents === window.webContents",
+    "input.permission === 'media'",
+    "input.mediaTypes[0] === 'audio'",
+    "if (!input.isMainFrame) return false",
     "setPermissionCheckHandler(handlePermissionCheck)",
     "setPermissionRequestHandler(handlePermissionRequest)",
   ]) {
@@ -221,6 +221,10 @@ async function verifySynced() {
           packageName: "@sedes/electron-connection-runtime",
           specifier:
             "@sedes/electron-connection-runtime/electron/dist/plugin.mjs",
+        },
+        {
+          packageName: "@sedes/electron-speech",
+          specifier: "@sedes/electron-speech/electron/dist/plugin.mjs",
         },
         {
           packageName: "@sedes/electron-workspace-file-download",
@@ -292,6 +296,9 @@ async function verifyPackaged() {
   if (!/^\d+\.\d+\.\d+$/u.test(codexVersion ?? "")) {
     throw new Error("electron_local_server_codex_version_invalid");
   }
+  const speechPackage = "/node_modules/@sedes/electron-speech";
+  const speechFiles = ["plugin.mjs", "contracts.mjs", "credential-store.mjs", "credential-dialog.mjs", "credential-dialog.html", "credential-preload.cjs", "transport.mjs"];
+  const speechEntries = [`${speechPackage}/package.json`, ...speechFiles.map(file => `${speechPackage}/electron/dist/${file}`)];
   for (const required of [
     "/build/main.js",
     "/app/index.html",
@@ -308,6 +315,7 @@ async function verifyPackaged() {
     "/node_modules/@sedes/electron-connection-runtime/electron/dist/ssh-port-store.mjs",
     "/node_modules/@sedes/electron-workspace-file-download/package.json",
     "/node_modules/@sedes/electron-workspace-file-download/electron/dist/plugin.mjs",
+    ...speechEntries,
   ]) {
     if (!entrySet.has(required)) {
       throw new Error(`electron_packaged_entry_missing:${required}`);
@@ -315,6 +323,10 @@ async function verifyPackaged() {
   }
 
   const allowedSedesEntries = new Set([
+    speechPackage,
+    `${speechPackage}/electron`,
+    `${speechPackage}/electron/dist`,
+    ...speechEntries,
     "/node_modules/@sedes",
     "/node_modules/@sedes/electron-client-credentials",
     "/node_modules/@sedes/electron-client-credentials/electron",

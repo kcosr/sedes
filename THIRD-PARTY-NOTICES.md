@@ -4262,7 +4262,7 @@ Packages listed: 609.
 
 - License: MIT
 - URL: https://github.com/websockets/ws
-- Shipped by: sedes, @sedes/server-runtime
+- Shipped by: sedes, @sedes/electron-speech, @sedes/server-runtime
 - License text (`LICENSE`): [7adebaeee45b](#license-text-7adebaeee45b)
 
 ### yaml 2.9.0

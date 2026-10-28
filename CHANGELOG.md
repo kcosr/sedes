@@ -76,6 +76,11 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
+- Electron supports dictation, spoken replies, and Auto-listen through your own
+  speech server while the app is running, with secure token entry and microphone
+  selection. Desktop recordings are session-only, with no background service or
+  saved-recording recovery. See [Electron voice](docs/operator/clients/electron.md#voice).
+
 - Add a separate **Pi** backend for the installed Pi 1.4.0 CLI on local or
   persistent SSH/outbound Linux/macOS hosts. It uses native configuration, MCP
   servers, code mode, and session history, with tool-access controls, durable
