@@ -25,7 +25,10 @@ export function isVisibleComposerSubmit(
   );
 }
 
-/** One selection rule for transcript bubbles and the queue rows they replace. */
+/**
+ * One ownership rule for transcript messages and the queue rows they replace.
+ * An ordinary server submission owns its position while its full content loads.
+ */
 export function selectTranscriptSubmissions(
   state: Pick<
     ThreadClientState,
@@ -60,8 +63,7 @@ export function selectTranscriptSubmissions(
   const server = state.pendingServerSubmissions.filter((submission) => {
     if (
       localOperations.has(submission.operationId) ||
-      materialized.has(submission.operationId) ||
-      (!submission.content && submission.phase !== "unconfirmed")
+      materialized.has(submission.operationId)
     ) {
       return false;
     }

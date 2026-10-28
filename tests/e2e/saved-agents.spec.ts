@@ -333,9 +333,14 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       page.getByRole("combobox", { name: "Configure using" }),
       "Pi SDK",
     );
+    // Saved policy/variable values exist before the target's configuration
+    // finishes loading. Wait for its enabled controls before changing policy.
+    const configurationReady = page.getByRole("switch", { name: "Override Model" });
+    await expect(configurationReady).toBeEnabled();
     await expect(page.getByRole("combobox", { name: "Tool policy", exact: true })).toHaveValue(policyId);
     await page.getByRole("combobox", { name: "Tool policy", exact: true }).selectOption(localPolicyId);
     await page.getByLabel("Value for CI", { exact: true }).fill("updated-agent-value");
+    await expect(configurationReady).toBeEnabled();
     const policyUpdated = page.waitForResponse(
       (updateResponse) =>
         updateResponse.request().method() === "PATCH" &&

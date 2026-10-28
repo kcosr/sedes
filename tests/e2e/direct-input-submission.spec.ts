@@ -21,9 +21,21 @@ import {
   sendCurrentDraft,
 } from "./helpers";
 
-declare global { interface Window { __directInputPresentations: string[] } }
+declare global {
+  interface Window {
+    __directInputPresentations: string[];
+    __observerInputPresentations: {
+      stripInsertions: number;
+      messages: { count: number; state: string | null; text: string }[];
+      stop(): void;
+    };
+  }
+}
 
-async function createBoundCodexThread(page: Page): Promise<string> {
+async function createBoundCodexThread(
+  page: Page,
+  initialText = "Prepare this thread for spoken input.",
+): Promise<string> {
   await openSedesWorkspace(page);
   await page
     .getByTestId("desktop-sidebar")
@@ -40,7 +52,7 @@ async function createBoundCodexThread(page: Page): Promise<string> {
   await created;
   await expect(page).toHaveURL(/\/threads\/[0-9a-f-]+$/);
   const threadId = new URL(page.url()).pathname.split("/").at(-1)!;
-  await fillAndPersistDraft(page, "Prepare this thread for spoken input.", "Message Codex");
+  await fillAndPersistDraft(page, initialText, "Message Codex");
   await sendCurrentDraft(page);
   await expect(
     page.locator('[data-item-kind="assistant_message"][data-item-status="completed"]'),
@@ -120,7 +132,8 @@ test("idle direct input becomes one complete transcript message while active que
     const observed: string[] = [];
     window.__directInputPresentations = observed;
     new MutationObserver(() => {
-      for (const message of document.querySelectorAll('[data-client-provisional="true"][data-message-role="user"]')) {
+      // Loading placeholders do not claim to contain the submitted message.
+      for (const message of document.querySelectorAll('[data-client-provisional="true"][data-message-role="user"]:not([data-submission-content-state])')) {
         const text = message.querySelector(".message-row.user .message-body")?.textContent ?? "";
         if (observed.at(-1) !== text) observed.push(text);
       }
@@ -135,7 +148,9 @@ test("idle direct input becomes one complete transcript message while active que
   const strip = page.getByRole("region", { name: "Pending inputs" });
   try {
     await expect.poll(() => detailReadEntered).toBe(true);
-    await expect(message).toHaveCount(0);
+    await expect(message).toHaveCount(1);
+    await expect(message).toHaveAttribute("data-submission-content-state", "loading");
+    await expect(strip).toHaveCount(0);
     await page.evaluate(({ threadId, operationId, queuedInputId, text }) => {
       const { profileId, serverOrigin, identity, connectionGeneration } = window.__voiceFixture.state;
       window.__voiceFixture.emitInputSubmitted({ profileId: profileId!, serverOrigin: serverOrigin!, identity: identity!,
@@ -248,4 +263,159 @@ test("idle direct input becomes one complete transcript message while active que
   await expect(composer).toHaveValue(retainedDraft);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "direct-input-materialized-mobile.png");
+});
+
+test("another device's idle input stays in the transcript while its full content loads without seeking the observer", async ({
+  page,
+}, testInfo) => {
+  // The observer has Seek on send enabled, but receives no native submission
+  // callback or composer transfer for the other registered device's send.
+  await page.addInitScript(() => localStorage.setItem("sedes-seek-on-submit", "true"));
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const initialText = Array.from({ length: 24 }, (_, index) =>
+    `Earlier deployment note ${index + 1}: keep this part of the conversation available while reading.`,
+  ).join("\n\n");
+  const threadId = await createBoundCodexThread(page, initialText);
+  const composer = page.getByRole("textbox", { name: "Message Codex" });
+  const retainedDraft = "The observing device's separate unfinished draft.";
+  await fillAndPersistDraft(page, retainedDraft, "Message Codex");
+  const session = normalizedApplicationSessionSchema.parse(
+    await (await page.request.get("/api/application/session")).json(),
+  );
+  const registration = await page.request.post("/api/client-registration", {
+    headers: { "X-CSRF-Token": session.csrfToken },
+    data: {
+      platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true },
+      state: { runtime: { foreground: true, voiceReady: false, interactionActive: false }, settings: null },
+    },
+  });
+  expect(registration.ok(), await registration.text()).toBe(true);
+  const { connectionToken } = await registration.json();
+  await expect.poll(async () => threadInputContextSchema.parse(
+    await (await page.request.get(`/api/threads/${threadId}/input-context`)).json(),
+  ).runState).toBe("idle");
+
+  const messages = page.getByRole("region", { name: "Messages" });
+  await expect.poll(() => messages.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(200);
+  await messages.press("Home");
+  await expect.poll(() => messages.evaluate(element => element.scrollTop)).toBe(0);
+  const operationId = randomUUID();
+  const spokenText = [
+    "This message was spoken on another device while the desktop reader was reviewing older notes.",
+    "Preserve the observer's draft and reading position while the full recognized text is loading.",
+    "The café deployment and Unicode details belong to this one exact submitted message.",
+    "This final sentence must appear in full after the abbreviated queue preview would have ended.",
+  ].join(" ");
+  expect(new TextEncoder().encode(spokenText).byteLength).toBeGreaterThan(240);
+  await page.getByTestId("thread-view").evaluate((scope, operationId) => {
+    const messageSelector = `[data-message-role="user"][data-delivery-operation-id="${operationId}"]`;
+    const stripSelector = `[data-queued-input-id][data-delivery-operation-id="${operationId}"]`;
+    const observed: Window["__observerInputPresentations"] = {
+      stripInsertions: 0, messages: [], stop: () => observer.disconnect(),
+    };
+    const observer = new MutationObserver(records => {
+      // Inspect added nodes as well as the current tree so a short-lived queue
+      // row cannot escape the assertion by disappearing before a later poll.
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          observed.stripInsertions += Number(node.matches(stripSelector)) + node.querySelectorAll(stripSelector).length;
+        }
+      }
+      const rows = scope.querySelectorAll(messageSelector);
+      // Ignore the initial interval before admission, then retain every absence
+      // so a disappearing and reappearing message cannot pass as continuous.
+      if (rows.length === 0 && observed.messages.length === 0) return;
+      const next = {
+        count: rows.length,
+        state: rows[0]?.getAttribute("data-submission-content-state") ?? null,
+        text: rows[0]?.querySelector(".message-row.user .message-body")?.textContent ?? "",
+      };
+      if (JSON.stringify(observed.messages.at(-1)) !== JSON.stringify(next)) observed.messages.push(next);
+    });
+    window.__observerInputPresentations = observed;
+    observer.observe(scope, { childList: true, subtree: true, characterData: true, attributes: true,
+      attributeFilter: ["data-submission-content-state", "data-client-provisional"] });
+  }, operationId);
+
+  let detailReadEntered = false;
+  let releaseDetail!: () => void;
+  const detailGate = new Promise<void>(resolve => { releaseDetail = resolve; });
+  const detailPattern = `**/api/threads/${threadId}/queued-inputs/*`;
+  const holdDetail: Parameters<Page["route"]>[1] = async route => {
+    detailReadEntered = true;
+    await detailGate;
+    await route.continue();
+  };
+  await page.route(detailPattern, holdDetail);
+  expect((await page.request.post("/__e2e/codex/submit-materialization/arm")).status()).toBe(204);
+  const message = messages.locator(`[data-message-role="user"][data-delivery-operation-id="${operationId}"]`);
+  const strip = page.getByRole("region", { name: "Pending inputs" });
+  try {
+    const response = await page.request.post(`/api/threads/${threadId}/inputs`, {
+      headers: { "X-CSRF-Token": session.csrfToken, "X-Sedes-Client": connectionToken },
+      data: { mutationId: operationId, text: spokenText, runningPolicy: { mode: "queue" } },
+    });
+    expect(response.status(), await response.text()).toBe(200);
+    const receipt = directInputReceiptSchema.parse(await response.json());
+    expect(receipt).toMatchObject({ admittedMode: "submit", operationId });
+    await expect.poll(() => detailReadEntered).toBe(true);
+    await expect(message).toHaveCount(1);
+    await expect(message).toHaveAttribute("data-submission-content-state", "loading");
+    await expect(message.getByRole("status")).toHaveText("Loading message…");
+    await expect(message.locator(".message-row.user")).toHaveAttribute("aria-busy", "true");
+    await expect(message).not.toContainText(spokenText.slice(0, 100));
+    await expect(message.getByRole("button")).toHaveCount(0);
+    await expect(strip).toHaveCount(0);
+    await expect(composer).toHaveValue(retainedDraft);
+    await expect.poll(() => messages.evaluate(element => element.scrollTop)).toBe(0);
+
+    // Acceptance removes the durable queue row before canonical history exists.
+    // The observer must retain its one loading entry through that interval.
+    await expect.poll(async () => normalizedThreadSnapshotSchema.parse(
+      await (await page.request.get(`/api/threads/${threadId}?activityDetail=full`)).json(),
+    ).queue.length).toBe(0);
+    await expect.poll(async () => (await (await page.request.get("/__e2e/codex/submit-materialization/state")).json()).held).toBe(true);
+    await expect(message).toHaveAttribute("data-submission-content-state", "loading");
+    await message.scrollIntoViewIfNeeded();
+    await capture(page, testInfo, "direct-input-observer-loading-desktop.png");
+    await messages.press("Home");
+    await expect.poll(() => messages.evaluate(element => element.scrollTop)).toBe(0);
+    releaseDetail();
+    await expect(message).not.toHaveAttribute("data-submission-content-state");
+    await expect(message).toHaveCount(1);
+    await expect(message).toHaveAttribute("data-client-provisional", "true");
+    await expect(message).toContainText(spokenText);
+    await expect(message.getByRole("status")).toHaveCount(0);
+    await expect.poll(() => messages.evaluate(element => element.scrollTop)).toBe(0);
+    await expect(composer).toHaveValue(retainedDraft);
+    await expect(strip).toHaveCount(0);
+    await message.scrollIntoViewIfNeeded();
+    await capture(page, testInfo, "direct-input-observer-in-flight-desktop.png");
+
+    expect((await page.request.post("/__e2e/codex/submit-materialization/release")).status()).toBe(204);
+    await expect(message).not.toHaveAttribute("data-client-provisional");
+    await expect(message).toHaveCount(1);
+    await expect(message).toContainText(spokenText);
+    await expect(composer).toHaveValue(retainedDraft);
+    await expect(strip).toHaveCount(0);
+    const presentations = await page.evaluate(() => {
+      const { stripInsertions, messages } = window.__observerInputPresentations;
+      return { stripInsertions, messages };
+    });
+    expect(presentations.stripInsertions).toBe(0);
+    expect(presentations.messages[0]).toEqual({ count: 1, state: "loading", text: "Loading message…" });
+    for (const presentation of presentations.messages) {
+      expect(presentation.count).toBe(1);
+      if (presentation.state !== null) {
+        expect(presentation).toEqual({ count: 1, state: "loading", text: "Loading message…" });
+      }
+    }
+    expect(presentations.messages.filter(({ state }) => state === null).map(({ text }) => text)).toEqual([spokenText]);
+    await expectNoPageOverflow(page);
+  } finally {
+    releaseDetail();
+    await page.unroute(detailPattern, holdDetail);
+    await page.evaluate(() => window.__observerInputPresentations?.stop());
+  }
 });

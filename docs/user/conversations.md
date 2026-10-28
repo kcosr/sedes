@@ -478,9 +478,12 @@ An idle voice submission also appears as a normal chat message once Sedes
 admits it. It leaves any typed draft intact and honors **Seek on send** on the
 device where you spoke. Routine sending labels stay hidden for both typed and
 spoken messages. Local voice supplies the complete recognized text for the first
-submitted bubble, without truncation or a preview label. Other server-owned
-submissions appear as bubbles once their full content is available. The provider's
-matching transcript message replaces that presentation without creating a duplicate.
+submitted bubble, without truncation or a preview label. On another device, an
+ordinary send first occupies a loading placeholder in the conversation, then
+shows its complete content. It does not briefly appear as a queued message.
+If the content cannot be loaded, retry loading it from that placeholder; this
+does not send the message again. The provider's matching transcript message
+replaces that presentation without creating a duplicate.
 Voice input admitted as Queue or Steer still uses the pending-input rows, as do
 failed or uncertain deliveries that need attention.
 

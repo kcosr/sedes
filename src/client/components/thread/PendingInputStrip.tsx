@@ -107,7 +107,7 @@ export function PendingInputStrip({
   readonly restoreAvailable: boolean;
   readonly restoreUnavailableReason: string;
   readonly onRestore: (queuedInputId: string) => Promise<void>;
-  /** Whether Transcript can currently render client-only submit bubbles. */
+  /** Whether Transcript can render provisional submits, including content loading. */
   readonly optimisticTranscriptPresentationVisible: boolean;
 }): React.JSX.Element | null {
   const state = useThreadStore(store);

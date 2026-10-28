@@ -166,6 +166,9 @@ export const Transcript = memo(function Transcript({
   findViewportRef,
 }: TranscriptProps): React.JSX.Element {
   const state = useThreadStore(store);
+  const retrySubmissionContent = useCallback((operationId: string) => {
+    store.retryServerSubmissionContent(operationId);
+  }, [store]);
   const pageResponse = usePageResponseServices(store, state);
   const openPage = useOpenPage();
   const {
@@ -184,6 +187,25 @@ export const Transcript = memo(function Transcript({
   const ownedContent = useRef<HTMLDivElement>(null);
   const viewport = findViewportRef ?? ownedViewport;
   const content = findContentRef ?? ownedContent;
+  const detachedSubmissionFocus = useRef<{
+    readonly store: ThreadClientStore;
+    readonly operationId: string;
+    readonly element: HTMLElement;
+  } | undefined>(undefined);
+  const rememberSubmissionFocus = useCallback((operationId: string, element: HTMLElement) => {
+    detachedSubmissionFocus.current = { store, operationId, element };
+  }, [store]);
+  useLayoutEffect(() => {
+    const detached = detachedSubmissionFocus.current;
+    detachedSubmissionFocus.current = undefined;
+    if (!detached || detached.store !== store || detached.element.isConnected) return;
+    const ownerDocument = detached.element.ownerDocument;
+    // A different control may have claimed focus during the same commit.
+    if (ownerDocument.activeElement && ownerDocument.activeElement !== ownerDocument.body) return;
+    content.current?.querySelector<HTMLElement>(
+      `.conversation-item[data-item-kind="user_message"][data-delivery-operation-id="${CSS.escape(detached.operationId)}"]:not([data-client-provisional])`,
+    )?.focus({ preventScroll: true });
+  });
   const presentedOptimisticOperations = useRef({
     store,
     operationIds: new Set<string>(),
@@ -335,9 +357,13 @@ export const Transcript = memo(function Transcript({
   const hasItems = presentationItemIds.length > 0;
   useLayoutEffect(() => {
     for (const transfer of optimisticTransfers) {
-      presentedOptimisticOperations.current.operationIds.add(
-        transfer.operationId,
-      );
+      // Loading the content does not announce the message itself. If provider
+      // history arrives first, its complete message still needs announcing.
+      if (!isServerSubmission(transfer) || transfer.content) {
+        presentedOptimisticOperations.current.operationIds.add(
+          transfer.operationId,
+        );
+      }
     }
   }, [optimisticTransfers]);
   useEffect(() => {
@@ -2066,6 +2092,12 @@ export const Transcript = memo(function Transcript({
                 key={`delivery:${transfer.operationId}`}
                 transfer={transfer}
                 context={itemRenderContext}
+                onProvisionalFocusDetach={rememberSubmissionFocus}
+                onRetryContent={
+                  connection === "connected" && authoritative
+                    ? retrySubmissionContent
+                    : undefined
+                }
               />
             ))}
             {turnIds.map((turnId, turnIndex) => {
@@ -2097,6 +2129,8 @@ export const Transcript = memo(function Transcript({
                   connected={connection === "connected"}
                   authoritative={authoritative}
                   store={store}
+                  onRetrySubmissionContent={retrySubmissionContent}
+                  onProvisionalFocusDetach={rememberSubmissionFocus}
                   context={itemRenderContext}
                   presentedOperationIds={
                     presentedOptimisticOperations.current.operationIds
@@ -2358,6 +2392,8 @@ type TranscriptTurnProps = {
   readonly connected: boolean;
   readonly authoritative: boolean;
   readonly store: ThreadClientStore;
+  readonly onRetrySubmissionContent: (operationId: string) => void;
+  readonly onProvisionalFocusDetach: (operationId: string, element: HTMLElement) => void;
   readonly context: ItemRenderContext | undefined;
   /** Operations already presented optimistically; grows in place. */
   readonly presentedOperationIds: ReadonlySet<string>;
@@ -2396,6 +2432,8 @@ const TranscriptTurn = memo(function TranscriptTurn({
   connected,
   authoritative,
   store,
+  onRetrySubmissionContent,
+  onProvisionalFocusDetach,
   context,
   presentedOperationIds,
 }: TranscriptTurnProps): React.JSX.Element {
@@ -2425,6 +2463,10 @@ const TranscriptTurn = memo(function TranscriptTurn({
         key={`delivery:${transfer.operationId}`}
         transfer={transfer}
         context={context}
+        onProvisionalFocusDetach={onProvisionalFocusDetach}
+        onRetryContent={
+          connected && authoritative ? onRetrySubmissionContent : undefined
+        }
       />,
     );
   };
@@ -2536,6 +2578,10 @@ const TranscriptTurn = memo(function TranscriptTurn({
             key={`delivery:${transfer.operationId}`}
             transfer={transfer}
             context={context}
+            onProvisionalFocusDetach={onProvisionalFocusDetach}
+            onRetryContent={
+              connected && authoritative ? onRetrySubmissionContent : undefined
+            }
           />
         ))}
       {placed(optimisticAfterTurnPlacement(turn.id)).map((transfer) => (
@@ -2543,6 +2589,10 @@ const TranscriptTurn = memo(function TranscriptTurn({
           key={`delivery:${transfer.operationId}`}
           transfer={transfer}
           context={context}
+          onProvisionalFocusDetach={onProvisionalFocusDetach}
+          onRetryContent={
+            connected && authoritative ? onRetrySubmissionContent : undefined
+          }
         />
       ))}
     </section>
@@ -2554,23 +2604,48 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
   transfer,
   suppressLiveAnnouncement = false,
   context = defaultItemRenderContext,
+  onRetryContent,
+  onProvisionalFocusDetach,
 }: {
   readonly item?: UserMessageItem;
   readonly transfer?: TranscriptSubmission;
   readonly suppressLiveAnnouncement?: boolean;
   readonly context?: ItemRenderContext;
+  readonly onRetryContent?: (operationId: string) => void;
+  readonly onProvisionalFocusDetach?: (operationId: string, element: HTMLElement) => void;
 }): React.JSX.Element | null {
+  const message = useRef<HTMLDivElement>(null);
+  const provisionalOperationId = transfer?.operationId;
+  useLayoutEffect(() => {
+    const element = message.current;
+    if (!element || !provisionalOperationId || !onProvisionalFocusDetach) return;
+    return () => {
+      // Capture focus before React removes this provisional row. Its canonical
+      // replacement may mount under a different turn, so the parent completes
+      // the handoff after the entire transcript's DOM update.
+      if (element.contains(element.ownerDocument.activeElement)) {
+        onProvisionalFocusDetach(provisionalOperationId, element);
+      }
+    };
+  }, [onProvisionalFocusDetach, provisionalOperationId]);
   if (!item && !transfer) return null;
   const operationId = item?.deliveryOperationId ?? transfer?.operationId;
   const provisional = transfer !== undefined;
   const serverSubmission =
     transfer && isServerSubmission(transfer) ? transfer : undefined;
+  const contentState =
+    serverSubmission && !serverSubmission.content
+      ? serverSubmission.contentLoadError
+        ? "error"
+        : "loading"
+      : undefined;
   const submissionNotices: string[] = [];
   if (serverSubmission?.phase === "unconfirmed") {
     submissionNotices.push("Delivery unconfirmed");
   }
   return (
     <div
+      ref={message}
       className="conversation-item"
       data-item-id={item?.id ?? provisionalItemId(transfer!.operationId)}
       data-item-kind="user_message"
@@ -2578,26 +2653,63 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
       data-message-role="user"
       data-delivery-operation-id={operationId}
       data-client-provisional={provisional ? "true" : undefined}
+      data-submission-content-state={contentState}
+      tabIndex={operationId ? -1 : undefined}
       data-local-optimistic-handoff={
         !provisional && suppressLiveAnnouncement ? "true" : undefined
       }
       aria-live={!provisional && suppressLiveAnnouncement ? "off" : undefined}
     >
       <div>
-        <UserMessagePresentation
-          content={item?.content ?? optimisticUserContent(transfer!)}
-          context={context}
-          origin={item?.origin}
-          {...(item
-            ? {
-                selection: {
-                  enabled: item.status !== "streaming",
-                  itemId: item.id,
-                  itemRevision: item.revision,
-                },
-              }
-            : {})}
-        />
+        {contentState ? (
+          <article
+            className="message-row user"
+            data-testid="message-row"
+            aria-busy={contentState === "loading"}
+          >
+            <header className="sr-only">You</header>
+            <div className="message-body text-sm text-muted-foreground">
+              <span role="status">
+                {contentState === "loading"
+                  ? "Loading message…"
+                  : "Message content could not be loaded."}
+              </span>
+              {contentState === "error" && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="justify-self-start"
+                  disabled={!onRetryContent}
+                  onClick={(event) => {
+                    // Retry removes this button immediately. Keep the reader
+                    // on the message through loading and full-content arrival.
+                    event.currentTarget.closest<HTMLElement>(".conversation-item")
+                      ?.focus({ preventScroll: true });
+                    onRetryContent?.(serverSubmission!.operationId);
+                  }}
+                >
+                  Retry loading
+                </Button>
+              )}
+            </div>
+          </article>
+        ) : (
+          <UserMessagePresentation
+            content={item?.content ?? optimisticUserContent(transfer!)}
+            context={context}
+            origin={item?.origin}
+            {...(item
+              ? {
+                  selection: {
+                    enabled: item.status !== "streaming",
+                    itemId: item.id,
+                    itemRevision: item.revision,
+                  },
+                }
+              : {})}
+          />
+        )}
         {submissionNotices.length > 0 && (
           <div
             className="mt-1 text-right text-xs text-muted-foreground"

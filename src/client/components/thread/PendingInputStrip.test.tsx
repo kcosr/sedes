@@ -611,11 +611,20 @@ describe("PendingInputStrip", () => {
     expect(document.querySelector('[data-queued-input-id="voice-input"]')).toHaveTextContent("Sending");
   });
 
-  it("keeps queue controls reachable until a Submit's full transcript content is available", () => {
+  it.each([undefined, true] as const)("leaves an ordinary Submit with unloaded content in the transcript (load error: %s)", (contentLoadError) => {
+    const item = queued("voice-input", 1, "pending", { resolvedDeliveryMode: "submit" });
+    const store = new FakeStripStore(snapshot([item]));
+    store.setServerSubmissions([{ ...serverSubmission(item), content: undefined, contentLoadError }]);
+    renderStrip(store);
+    expect(screen.queryByTestId("pending-input-strip")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete queued input:/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps a Submit's controls reachable when a historical view cannot show its loading placeholder", () => {
     const item = queued("voice-input", 1, "pending", { resolvedDeliveryMode: "submit" });
     const store = new FakeStripStore(snapshot([item]));
     store.setServerSubmissions([{ ...serverSubmission(item), content: undefined }]);
-    renderStrip(store);
+    renderStrip(store, false, {}, false);
     expect(document.querySelector('[data-queued-input-id="voice-input"]')).toHaveTextContent("Prompt voice-input");
     expect(screen.getByRole("button", { name: /^Delete queued input:/ })).toBeEnabled();
   });
