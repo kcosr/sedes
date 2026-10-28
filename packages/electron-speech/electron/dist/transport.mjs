@@ -18,15 +18,22 @@ function deferred() {
 function cancelled() { return speechError("speech_cancelled", "Speech was cancelled."); }
 function timeout() { return speechError("speech_timeout", "The speech server did not respond in time."); }
 function protocolFailure() { return speechError("speech_protocol_invalid", "The speech server returned an invalid recognition response."); }
+function quotaFailure() {
+  return speechError("speech_quota_exceeded", "The speech service account has no available quota. Update its billing or credits before retrying.");
+}
+function quotaError(error) {
+  return error?.code === "insufficient_quota" || error?.type === "insufficient_quota" || error?.code === "credit_balance_exhausted";
+}
+function hostedRateLimit() { return speechError("speech_busy", "OpenAI is rate limiting speech requests. Wait before trying again."); }
 
-async function boundedBody(response, signal) {
+async function boundedBody(response, signal, maximum = MAX_RESPONSE_BYTES) {
   if (!response.body) throw speechError("speech_response_invalid", "The speech server returned an empty response.");
   const chunks = [];
   let bytes = 0;
   for await (const chunk of response.body) {
     signal.throwIfAborted();
     bytes += chunk.byteLength;
-    if (bytes > MAX_RESPONSE_BYTES) throw speechError("speech_response_invalid", "The speech server response exceeded its size limit.");
+    if (bytes > maximum) throw speechError("speech_response_invalid", "The speech server response exceeded its size limit.");
     chunks.push(Buffer.from(chunk));
   }
   signal.throwIfAborted();
@@ -128,6 +135,14 @@ export class SpeechTransport {
       signal: operation.controller.signal, headers: { ...init.headers, Authorization: `Bearer ${token}` } });
     this.check(operation);
     if (!response.ok) {
+      if (operation.provider === "openai" && response.status === 429) {
+        let exhausted = false;
+        // Inspect only bounded machine-readable codes. Provider messages and bodies stay native.
+        try { exhausted = quotaError((await boundedBody(response, operation.controller.signal, 16_384))?.error); }
+        catch { /* A malformed or unreadable error body retains the safe generic rate-limit failure. */ }
+        this.check(operation);
+        throw exhausted ? quotaFailure() : hostedRateLimit();
+      }
       await response.body?.cancel().catch(() => undefined);
       if (response.status === 401 || response.status === 403) throw speechError("speech_unauthorized", "The speech server rejected this token or model permission.");
       if (response.status === 429) throw speechError("speech_busy", "The speech server is busy. Try again after the current request finishes.");
@@ -276,7 +291,13 @@ export class SpeechTransport {
       operation.ready.resolve();
       return;
     }
-    if (event.type === "error") throw speechError("speech_recognition_failed", "The speech server rejected recognition. Check the selected model and server limits.");
+    if (event.type === "error") {
+      if (operation.provider === "openai") {
+        if (quotaError(event.error)) throw quotaFailure();
+        if (event.error?.code === "rate_limit_exceeded") throw hostedRateLimit();
+      }
+      throw speechError("speech_recognition_failed", "The speech server rejected recognition. Check the selected model and server limits.");
+    }
     if (operation.provider === "openai" && event.type === "conversation.created") {
       if (!operation.sessionId || operation.conversationId || event.conversation?.object !== "realtime.conversation") throw protocolFailure();
       operation.conversationId = text(event.conversation.id, 256);

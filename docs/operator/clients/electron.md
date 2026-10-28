@@ -439,13 +439,15 @@ the current hosted TTS models shut down on January 6, 2027; a future update must
 change that workflow before then. See the
 [OpenAI speech guide](https://developers.openai.com/api/docs/guides/text-to-speech).
 
-Speech HTTPS and secure WebSockets trust operating-system CAs, including trusted
-private CAs on macOS, in addition to Node's bundled and configured extra roots.
+Speech HTTPS and secure WebSockets use the CAs that Node reads from the operating
+system's certificate store, in addition to Node's bundled and configured extra roots.
 Certificate-chain and hostname validation remain enabled. This trust is set for
 Node connections in the main-process thread before speech networking starts;
 ordinary Sedes API traffic uses Chromium networking and its own platform trust.
 There is no endpoint-specific certificate exception. Restart Sedes after changing
-the operating system's trusted certificates.
+the operating system's trusted certificates. Packaged macOS Keychain integration
+still requires validation on the target application; the automated TLS tests
+control system-root enumeration on Linux.
 
 The voice bar supplies recording, Send, Cancel, playback, target selection, and
 Keep listening controls. A completed turn's speaker action replays that reply.

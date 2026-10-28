@@ -29,7 +29,8 @@ async function fixture(options = {}) {
         { id: "gpt-4o-mini-transcribe" }, { id: "gpt-4o-mini-tts" }, { id: "tts-1-hd" }, { id: "gpt-irrelevant-model" },
       ] }));
     } else if (request.url === "/v1/audio/speech") {
-      if (options.speechStatus) { response.writeHead(options.speechStatus).end(); return; }
+      if (options.speech) { options.speech(request, response); return; }
+      if (options.speechStatus) { response.writeHead(options.speechStatus).end(options.errorBody); return; }
       response.setHeader("Content-Type", options.audioType ?? "application/octet-stream");
       response.end(Buffer.alloc(19_200, 42));
     } else response.writeHead(404).end();
@@ -213,6 +214,69 @@ describe("Electron hosted OpenAI speech", () => {
     await expect(f.transport.startRecognition(recognition())).rejects.toMatchObject({ code: "speech_unauthorized" });
     await expect(f.transport.speak(synthesis())).rejects.toMatchObject({ code: "speech_unauthorized" });
     expect(f.requests).toHaveLength(2); expect(JSON.stringify(f.notices)).not.toContain(token);
+  });
+
+  it.each([{ code: "insufficient_quota" }, { type: "insufficient_quota" }, { code: "credit_balance_exhausted" }])("distinguishes exhausted quota from transient HTTP 429 using %j", async (error) => {
+    const f = await fixture({ speechStatus: 429, errorBody: JSON.stringify({ error: { ...error, message: token } }) });
+    const failure = await f.transport.speak(synthesis()).catch((error) => error);
+    expect(failure).toMatchObject({ code: "speech_quota_exceeded", message: expect.stringContaining("billing or credits") });
+    expect(failure.message).not.toContain(token);
+    expect(f.requests).toHaveLength(1); expect(f.notices).toEqual([]);
+  });
+
+  it.each([
+    ["rate limit", JSON.stringify({ error: { code: "rate_limit_exceeded", message: token } })],
+    ["malformed", `{${token}`],
+    ["missing code", JSON.stringify({ error: { message: `insufficient_quota ${token}` } })],
+    ["oversized", JSON.stringify({ error: { code: "insufficient_quota", message: token.repeat(1000) } })],
+  ])("keeps %s HTTP 429 failures generic and never exposes their bodies", async (_label, errorBody) => {
+    const f = await fixture({ speechStatus: 429, errorBody });
+    const failure = await f.transport.speak(synthesis()).catch((error) => error);
+    expect(failure).toMatchObject({ code: "speech_busy", message: expect.stringContaining("Wait before trying again") });
+    expect(failure.message).not.toContain(token); expect(f.notices).toEqual([]);
+  });
+
+  it("keeps an unreadable HTTP 429 body generic and honors cancellation while reading it", async () => {
+    const unreadable = await fixture({ speech: (_request, response) => {
+      response.writeHead(429, { "Content-Length": 1000 }); response.write('{"error":');
+      setTimeout(() => response.destroy(), 10);
+    } });
+    await expect(unreadable.transport.speak(synthesis())).rejects.toMatchObject({ code: "speech_busy" });
+    const stalled = await fixture({ speech: (_request, response) => {
+      response.writeHead(429); response.write('{"error":');
+    } });
+    const input = synthesis();
+    const speaking = stalled.transport.speak(input);
+    const rejected = expect(speaking).rejects.toMatchObject({ code: "speech_cancelled" });
+    await vi.waitFor(() => expect(stalled.requests).toHaveLength(1));
+    stalled.transport.cancel({ requestId: input.requestId });
+    await rejected; expect(stalled.notices).toEqual([]);
+  });
+
+  it.each([{ code: "insufficient_quota" }, { type: "insufficient_quota" }, { code: "credit_balance_exhausted" }])("reports realtime quota failure %j without exposing provider details", async (error) => {
+    const f = await fixture({ message: ({ event, send }) => {
+      if (event.type !== "input_audio_buffer.commit") return;
+      send({ type: "error", error: { ...error, message: token } }); return false;
+    } });
+    const input = recognition(); await f.transport.startRecognition(input);
+    await f.transport.appendAudio({ requestId: input.requestId, pcm });
+    await expect(f.transport.commitRecognition({ requestId: input.requestId })).rejects.toMatchObject({ code: "speech_quota_exceeded" });
+    expect(f.notices).toEqual([{ event: "recognitionError", value: {
+      requestId: input.requestId, code: "speech_quota_exceeded", message: expect.stringContaining("billing or credits"),
+    } }]);
+    expect(JSON.stringify(f.notices)).not.toContain(token);
+  });
+
+  it.each([
+    ["rate limit", { code: "rate_limit_exceeded" }, "speech_busy"],
+    ["missing code", { message: "insufficient_quota" }, "speech_recognition_failed"],
+  ])("handles realtime %s without mistaking provider messages for quota codes", async (_label, error, code) => {
+    const f = await fixture({ message: ({ event, send }) => {
+      if (event.type !== "session.update") return;
+      send({ type: "error", error }); return false;
+    } });
+    await expect(f.transport.startRecognition(recognition())).rejects.toMatchObject({ code });
+    expect(f.notices).toEqual([]);
   });
 
   it("switching providers cancels active hosted work before any replacement credential is read", async () => {

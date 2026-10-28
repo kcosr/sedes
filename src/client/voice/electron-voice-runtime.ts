@@ -441,7 +441,8 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       this.#connection?.notifications(false); this.#state.phase = "off";
     } else if (old.audioMode !== next.audioMode) this.#cancelAutomatic();
     if (speechChanged) {
-      if (this.#active && (!this.#active.finalized || old.speechProvider !== next.speechProvider)) this.#cancelActive();
+      // Finalized text already belongs to its one Sedes submission, independently of the speech provider.
+      if (this.#active && !this.#active.finalized) this.#cancelActive();
       this.#discardQueuedReplies();
       await this.#configureSpeech();
       this.#assertGeneration(input);
