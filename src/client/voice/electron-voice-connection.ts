@@ -207,7 +207,7 @@ export class ElectronVoiceConnection implements ElectronVoiceConnectionLike {
     armReadTimeout();
     try {
       const response = await this.#fetch(`/api/application/events?voiceStreamId=${voiceStreamId}`, {
-        signal: stream.signal, headers: { Accept: "text/event-stream", "Cache-Control": "no-cache" },
+        signal: stream.signal, headers: { Accept: "text/event-stream" },
       }, false);
       if (!current()) { await response.body?.cancel(); return; }
       if (!response.ok || !response.body || response.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase() !== "text/event-stream") {
