@@ -80,6 +80,7 @@ User-facing changes are collected here before release. See the
   speech server while the app is running, with secure token entry and microphone
   selection. Desktop recordings are session-only, with no background service or
   saved-recording recovery. See [Electron voice](docs/operator/clients/electron.md#voice).
+  ([#125](https://github.com/kcosr/sedes/pull/125))
 
 - Add a separate **Pi** backend for the installed Pi 1.4.0 CLI on local or
   persistent SSH/outbound Linux/macOS hosts. It uses native configuration, MCP
