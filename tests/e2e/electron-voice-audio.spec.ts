@@ -1,10 +1,152 @@
 import path from "node:path";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
+import express from "express";
 import { build } from "vite";
+import type { AppConfig, PackagedClientOrigin } from "../../src/server/config/config.js";
+import { ClientControlService } from "../../src/server/domain/client-control-service.js";
+import { ApplicationEventHub } from "../../src/server/events/application-event-hub.js";
+import { serveApplicationEventStream } from "../../src/server/events/application-sse.js";
+import { SseResponseWriter } from "../../src/server/events/sse-response-writer.js";
+import { ClientResponseCompression } from "../../src/server/http/response-compression.js";
+import { csrfGuard, hostOriginGuard, packagedClientCors } from "../../src/server/security/http-security.js";
+import { SEDES_CLIENT_PROTOCOL_VERSION } from "../../src/shared/protocol/application.js";
+import { clientPollRequestSchema, registerClientSchema } from "../../src/shared/protocol/client-controls.js";
+import { defaultNotificationDelivery, notificationPolicySchema, voiceNotificationSchema } from "../../src/shared/protocol/notification.js";
 import { test, expect } from "./fixtures.js";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
+test("desktop voice receives policy and notifications through the packaged-client CORS boundary", async ({ page }) => {
+  const built = await build({
+    configFile: false, root: repositoryRoot, base: "./", logLevel: "silent",
+    build: { write: false, lib: {
+      entry: {
+        connection: path.join(repositoryRoot, "src/client/voice/electron-voice-connection.ts"),
+        authentication: path.join(repositoryRoot, "src/client/authentication/auth-transport.ts"),
+      }, formats: ["es"], fileName: (_format, name) => `${name}.mjs`,
+    } },
+  });
+  const outputs = (Array.isArray(built) ? built : [built]).flatMap(bundle => {
+    if (!("output" in bundle)) throw new Error("Expected a browser connection library build.");
+    return bundle.output;
+  });
+  const assets = new Map(outputs.map(asset => [asset.fileName, asset.type === "chunk" ? asset.code : asset.source]));
+  // Use a real second HTTP origin: Playwright request routing can suppress
+  // Chromium preflights, which are the behavior this regression must exercise.
+  const rendererServer = createServer((request, response) => {
+    const name = new URL(request.url ?? "/", "http://127.0.0.1").pathname.slice(1);
+    if (!name) { response.setHeader("Content-Type", "text/html"); response.end("<!doctype html><title>Desktop voice connection test</title>"); return; }
+    const asset = assets.get(name);
+    if (asset === undefined) { response.writeHead(404).end(); return; }
+    response.setHeader("Content-Type", "text/javascript"); response.end(typeof asset === "string" ? asset : Buffer.from(asset));
+  });
+  await new Promise<void>((resolve, reject) => { rendererServer.once("error", reject); rendererServer.listen(0, "127.0.0.1", resolve); });
+  const rendererAddress = rendererServer.address();
+  if (!rendererAddress || typeof rendererAddress === "string") throw new Error("Voice renderer fixture did not bind a loopback port.");
+  const rendererOrigin = `http://127.0.0.1:${rendererAddress.port}`;
+  const renderer = `${rendererOrigin}/`;
+
+  const scope = { tenantId: "voice-cors-test", principalId: "voice-cors-test" };
+  const identity = "a".repeat(64), token = "voice-cors-fixture-token", csrf = "voice-cors-fixture-csrf";
+  const controls = new ClientControlService();
+  const hub = new ApplicationEventHub();
+  const baseline = hub.publish({ type: "snapshot", generation: hub.generation, snapshot: {
+    environments: [], projects: [], workspaces: [], threads: [], forkOrigins: [], lineagePlacements: [], groups: [],
+    lineageFamilies: [], executionTargets: [], advisories: [], defaultNewThreadTargetId: null, tasks: [],
+  } });
+  const policy = notificationPolicySchema.parse({ generation: 1, settings: { enabled: true, silenced: false, revision: 0,
+    assistantResultPhases: ["final"], scriptPath: "", arguments: [], timeoutSeconds: 30, delivery: defaultNotificationDelivery() } });
+  const notification = voiceNotificationSchema.parse({ generation: 1, sourceEventId: "cors-notice", voice: "speak", payload: {
+    schemaVersion: 5, notificationId: "cors-notice", event: "notification.test", occurredAt: new Date().toISOString(),
+    title: "Test", message: "Cross-origin voice notification.",
+  } });
+  const config: AppConfig = { authenticationRequired: true, clientResponseCompression: true, experimentalUsageEnabled: false,
+    host: "127.0.0.1", port: 0, stateDirectory: repositoryRoot, allowedTailscaleHosts: [],
+    // Test-only exact origin substitutes for Electron's custom scheme, which
+    // standalone Chromium cannot load. Production configuration is unchanged.
+    packagedClientOrigins: [rendererOrigin as PackagedClientOrigin],
+    conversationRetentionMilliseconds: 600_000, conversationRuntimeBudget: 8 };
+  const requests: Array<{ method: string; path: string; origin?: string; requestedHeaders?: string; status?: number }> = [];
+  const app = express();
+  app.use((request, response, next) => {
+    const entry = { method: request.method, path: request.path, origin: request.header("Origin"),
+      requestedHeaders: request.header("Access-Control-Request-Headers"), status: undefined as number | undefined };
+    requests.push(entry); response.on("finish", () => { entry.status = response.statusCode; }); next();
+  });
+  app.use(hostOriginGuard(config), packagedClientCors(config));
+  app.use((request, response, next) => {
+    if (request.header("Authorization") !== `Bearer ${token}`) { response.status(401).end(); return; }
+    next();
+  });
+  app.use(express.json(), csrfGuard(csrf));
+  app.get("/api/auth/status", (_request, response) => response.json({ required: true, authenticated: true, navigationNamespace: identity }));
+  app.get("/api/application/session", (_request, response) => response.json({ csrfToken: csrf, version: "0.2.0",
+    clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION, providerPulseEnabled: false, experimentalUsageEnabled: false }));
+  app.post("/api/client-registration", (request, response) => response.json(controls.register(scope, undefined, registerClientSchema.parse(request.body))));
+  app.post("/api/client-controls/poll", async (request, response) => {
+    const abort = new AbortController(); response.once("close", () => abort.abort());
+    const result = await controls.poll(scope, request.header("X-Sedes-Client"), undefined, clientPollRequestSchema.parse(request.body), abort.signal);
+    if (!abort.signal.aborted) response.json(result);
+  });
+  app.get("/api/application/events", async (request, response) => {
+    controls.authenticate(scope, request.header("X-Sedes-Client"), undefined);
+    const writer = new SseResponseWriter(request, response, new ClientResponseCompression(true));
+    await serveApplicationEventStream(request, writer, hub, async () => ({ envelope: baseline }), {
+      subscribeTransient(listener) {
+        listener(`event: notification_policy\ndata: ${JSON.stringify(policy)}\n\n`);
+        listener(`event: notification\ndata: ${JSON.stringify(notification)}\n\n`);
+        return () => {};
+      },
+    });
+  });
+  const server = createServer(app);
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Voice connection fixture did not bind a loopback port.");
+  const baseURL = `http://127.0.0.1:${address.port}`;
+  try {
+    await page.goto(renderer);
+    const result = await page.evaluate(async ({ renderer, baseURL, identity, token }) => {
+      const { ElectronVoiceConnection } = await import(`${renderer}connection.mjs`) as typeof import("../../src/client/voice/electron-voice-connection.js");
+      const { setEndpointCredential, setEndpointProfile } = await import(`${renderer}authentication.mjs`) as typeof import("../../src/client/authentication/auth-transport.js");
+      const endpoint = { baseUrl: baseURL };
+      setEndpointCredential(endpoint, token); setEndpointProfile(endpoint, "desktop-cors");
+      const state = { runtime: { foreground: true, voiceReady: true, interactionActive: false }, settings: null };
+      const frames: Array<{ event: string; value: unknown; streamId: string }> = [];
+      const errors: string[] = [];
+      let connected = false;
+      let resolve!: () => void, reject!: (error: Error) => void;
+      const delivered = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+      void delivered.catch(() => {});
+      const connection = new ElectronVoiceConnection({ profileId: "desktop-cors", serverOrigin: baseURL, identity }, {
+        state: () => state, command: async () => ({ status: "applied", state }), registered: () => {},
+        frame(event, value, streamId) { frames.push({ event, value, streamId }); if (event === "notification") resolve(); },
+        notificationsChanged(value) { connected = value; },
+        failed(code) { errors.push(code); reject(new Error(code)); },
+      });
+      const timer = setTimeout(() => reject(new Error("Voice notification did not arrive.")), 5_000);
+      try {
+        await connection.connect(); connection.notifications(true); await delivered;
+        return { frames, errors, connected, streamId: connection.voiceStreamId, registered: connection.registration !== null };
+      } finally {
+        clearTimeout(timer); connection.close(); setEndpointCredential(endpoint, null); setEndpointProfile(endpoint, null);
+      }
+    }, { renderer, baseURL, identity, token });
+    expect(result).toMatchObject({ errors: [], connected: true, registered: true, streamId: expect.any(String) });
+    expect(result.frames).toEqual([
+      { event: "notification_policy", value: policy, streamId: result.streamId },
+      { event: "notification", value: notification, streamId: result.streamId },
+    ]);
+    const preflight = requests.find(request => request.path === "/api/application/events" && request.method === "OPTIONS");
+    expect(preflight).toMatchObject({ origin: rendererOrigin, status: 204 });
+    expect(preflight?.requestedHeaders?.split(",").sort()).toEqual(["authorization", "x-sedes-client"]);
+    expect(requests.some(request => request.path === "/api/application/events" && request.method === "GET")).toBe(true);
+  } finally {
+    hub.close(); controls.close(); server.closeAllConnections(); rendererServer.closeAllConnections();
+    await Promise.all([server, rendererServer].map(server => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))));
+  }
+});
 
 test("desktop voice resamples microphone PCM in a real worklet and drains or cancels streamed playback", async ({ page }) => {
   // Build the production module and its actual worklet, independently of app
