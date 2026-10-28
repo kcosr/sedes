@@ -43,7 +43,9 @@ export async function installVoiceFixture(page: Page): Promise<void> {
   // The isolated E2E server omits pairing. Supply its admitted-client namespace,
   // as production authentication does, so the Android voice binding can hydrate.
   await page.route("**/api/auth/status", async route => {
-    const response = await route.fetch();
+    // Each page navigation must hydrate independently of Playwright's pooled
+    // proxy socket racing the fixture server's idle keep-alive close.
+    const response = await route.fetch({ headers: { ...await route.request().allHeaders(), connection: "close" } });
     await route.fulfill({ response, json: { ...await response.json(), navigationNamespace: "e".repeat(64) } });
   });
   await page.addInitScript(({ initial, profileId }) => {
