@@ -16,6 +16,7 @@ interface PageDocumentProps {
   readonly visible: boolean;
   readonly onBack: () => void;
   readonly revisionRefreshKey?: string;
+  readonly publishedRevision?: number;
 }
 
 /** The anchor is the exact revision opened from chat or the browser. */
@@ -26,37 +27,33 @@ export function PageDocument(props: PageDocumentProps): React.JSX.Element {
 
 const ignoreInteractionChange = () => undefined;
 
-function PageDocumentView({ page, services, visible, onBack, revisionRefreshKey }: PageDocumentProps): React.JSX.Element {
+function PageDocumentView({ page, services, visible, onBack, revisionRefreshKey, publishedRevision }: PageDocumentProps): React.JSX.Element {
   const [selected, setSelected] = useState(page);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [loadedLatestRevision, setLatestRevision] = useState<number>();
   const [locked, setLocked] = useState(false);
   const lockedRef = useRef(false);
   const [revisionCheckVersion, setRevisionCheckVersion] = useState(0);
-  const openingRefreshKey = useRef(revisionRefreshKey);
+  const openingPublishedRevision = useRef(publishedRevision ?? page.revision);
   const lastCheckedRevision = useRef<number | undefined>(undefined);
   const latestPage = useRef(page);
   const catchUp = useRef(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const abort = useRef<AbortController | undefined>(undefined);
+  const navigationAbort = useRef<AbortController | undefined>(undefined);
+  const [downloadVersion, setDownloadVersion] = useState(0);
   const connection = useConnectionScope();
+  // Automatic swaps preserve a captured download; manual navigation resets it.
   const download = usePageDownload(
-    pageFrameRecoveryKey(connection, selected), selected, true, services.preparePageDownload, connection.profileId,
+    `${pageFrameRecoveryKey(connection, page)}:${downloadVersion}`, selected, true, services.preparePageDownload, connection.profileId,
   );
   const response = usePageResponseSubmission(
     pageFrameRecoveryKey(connection, selected), selected, services.pageResponse,
   );
 
   useEffect(() => {
-    if (!visible || !services.listPageRevisions) {
-      setLoading(false);
-      return;
-    }
+    if (!visible || !services.listPageRevisions) return;
     const controller = new AbortController();
-    abort.current?.abort();
-    abort.current = controller;
-    setLoading(true);
     setError("");
     void services
       .listPageRevisions(page.pageId, {
@@ -73,10 +70,12 @@ function PageDocumentView({ page, services, visible, onBack, revisionRefreshKey 
           // Opening an old chat occurrence keeps its exact revision. Later
           // publications advance even a manually browsed document unless locked.
           const updated = newest.revision > (previousRevision ?? page.revision) &&
-            (previousRevision !== undefined || revisionRefreshKey !== openingRefreshKey.current);
+            (previousRevision !== undefined || (publishedRevision ?? 0) > openingPublishedRevision.current);
           lastCheckedRevision.current = Math.max(previousRevision ?? page.revision, newest.revision);
           setLatestRevision(latestPage.current.revision);
           if (!lockedRef.current && (updated || catchUp.current)) {
+            navigationAbort.current?.abort();
+            setLoading(false);
             catchUp.current = false;
             setSelected(latestPage.current);
           }
@@ -85,11 +84,8 @@ function PageDocumentView({ page, services, visible, onBack, revisionRefreshKey 
           if (!controller.signal.aborted)
             setError("Could not load page revisions.");
         },
-      )
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => abort.current?.abort();
+      );
+    return () => controller.abort();
   }, [
     visible,
     page.pageId,
@@ -97,8 +93,17 @@ function PageDocumentView({ page, services, visible, onBack, revisionRefreshKey 
     services.listPageRevisions,
     refreshVersion,
     revisionRefreshKey,
+    publishedRevision,
     revisionCheckVersion,
   ]);
+
+  useEffect(() => {
+    if (!visible) {
+      navigationAbort.current?.abort();
+      setLoading(false);
+    }
+    return () => navigationAbort.current?.abort();
+  }, [visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -110,9 +115,10 @@ function PageDocumentView({ page, services, visible, onBack, revisionRefreshKey 
   const navigateRevision = async (direction: -1 | 1) => {
     if (!visible || loading || !services.listPageRevisions || !services.getPageRevision)
       return;
-    abort.current?.abort();
+    catchUp.current = false;
+    navigationAbort.current?.abort();
     const controller = new AbortController();
-    abort.current = controller;
+    navigationAbort.current = controller;
     setLoading(true);
     setError("");
     try {
@@ -135,7 +141,10 @@ function PageDocumentView({ page, services, visible, onBack, revisionRefreshKey 
                 wanted,
                 controller.signal,
               );
-        if (!controller.signal.aborted) setSelected(next);
+        if (!controller.signal.aborted) {
+          setDownloadVersion((value) => value + 1);
+          setSelected(next);
+        }
       }
     } catch {
       if (!controller.signal.aborted)
@@ -146,10 +155,11 @@ function PageDocumentView({ page, services, visible, onBack, revisionRefreshKey 
   };
 
   const returnToPublishedRevision = () => {
-    abort.current?.abort();
+    navigationAbort.current?.abort();
     catchUp.current = false;
     setLoading(false);
     setError("");
+    setDownloadVersion((value) => value + 1);
     setSelected(page);
   };
 
@@ -227,7 +237,7 @@ function PageDocumentView({ page, services, visible, onBack, revisionRefreshKey 
         </>
       ) : null}
       <Button
-        aria-label={locked ? "Unlock page revision" : "Lock page revision"}
+        aria-label="Lock page revision"
         title={locked ? "Unlock and load the latest revision" : "Lock this revision to pause automatic updates"}
         aria-pressed={locked}
         disabled={!visible || !services.listPageRevisions}

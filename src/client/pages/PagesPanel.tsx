@@ -116,7 +116,13 @@ function ThreadPagesPanel({ context, threadId, consumedSequence }: {
   const publications = useMemo(() => JSON.stringify(Object.values(state.snapshot?.itemsById ?? {})
     .filter((item) => item.kind === "page")
     .map((item) => item.id).sort()), [state.snapshot?.itemsById]);
-  const revisionRefreshKey = JSON.stringify([publications, state.connection]);
+  const publishedRevision = useMemo(() => Object.values(state.snapshot?.itemsById ?? {})
+    .reduce((latest, item) => item.kind === "page" && item.page.threadId === threadId && item.page.pageId === selected?.page.pageId
+      ? Math.max(latest, item.page.revision) : latest, 0), [state.snapshot?.itemsById, selected?.page.pageId, threadId]);
+  const [reconnectVersion, setReconnectVersion] = useState(0);
+  useEffect(() => {
+    if (state.connection === "connected") setReconnectVersion((value) => value + 1);
+  }, [state.connection]);
 
   useEffect(() => {
     if (!visible) { setLoading(false); return; }
@@ -175,7 +181,8 @@ function ThreadPagesPanel({ context, threadId, consumedSequence }: {
           services={services}
           visible={visible}
           onBack={back}
-          revisionRefreshKey={revisionRefreshKey}
+          revisionRefreshKey={String(reconnectVersion)}
+          publishedRevision={publishedRevision}
         />
       ) : (
         <>

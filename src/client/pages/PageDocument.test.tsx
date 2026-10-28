@@ -234,7 +234,7 @@ describe("Pages document", () => {
     const lock = screen.getByRole("button", { name: "Lock page revision" });
     expect(screen.getByRole("button", { name: "Refresh page preview" }).previousElementSibling).toBe(lock);
     fireEvent.click(lock);
-    expect(screen.getByRole("button", { name: "Unlock page revision" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Lock page revision" })).toHaveAttribute("aria-pressed", "true");
     api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 3 }] });
     view.rerender(ui("third"));
     await screen.findByLabelText("Revision 1 of 3");
@@ -243,7 +243,7 @@ describe("Pages document", () => {
     expect(screen.getByRole("button", { name: "Zoom percentage: 125%" })).toBeInTheDocument();
     expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(1);
     api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 5, title: "Latest on unlock" }] });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock page revision" }));
+    fireEvent.click(screen.getByRole("button", { name: "Lock page revision" }));
     await screen.findByText("5/5");
     await waitFor(() => expect(view.container.querySelector("iframe")?.title).toBe("Latest on unlock · Revision 5"));
     expect(screen.getByRole("button", { name: "Lock page revision" })).toHaveAttribute("aria-pressed", "false");
@@ -328,7 +328,7 @@ describe("Pages document", () => {
   it("follows a publication received before the initial revision read finishes", async () => {
     const api = services(), initial = deferredDownload<PageRevisionPage>();
     api.listPageRevisions.mockReturnValueOnce(initial.promise);
-    const ui = (revisionRefreshKey: string) => <PageDocument page={original} services={api} visible onBack={() => {}} revisionRefreshKey={revisionRefreshKey} />;
+    const ui = (revisionRefreshKey: string) => <PageDocument page={original} services={api} visible onBack={() => {}} revisionRefreshKey={revisionRefreshKey} publishedRevision={revisionRefreshKey === "first" ? 1 : 3} />;
     const view = render(ui("first"));
     const firstSignal = api.listPageRevisions.mock.calls[0]![1]!.signal!;
     api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 3 }] });
@@ -337,6 +337,76 @@ describe("Pages document", () => {
     await screen.findByText("3/3");
     await act(async () => initial.resolve({ items: [original] }));
     expect(screen.getByText("3/3")).toBeInTheDocument();
+  });
+
+  it.each(["reconnect", "focus", "other publication", "older history"])("keeps the exact opening anchor when %s happens during the initial read", async (change) => {
+    const api = services(), initial = deferredDownload<PageRevisionPage>();
+    const anchor = { ...original, revision: 2 }, newest = { ...original, revision: 5 };
+    api.listPageRevisions.mockReturnValueOnce(initial.promise).mockResolvedValue({ items: [newest] });
+    const ui = (key = "initial", publishedRevision = 2) => <PageDocument page={anchor} services={api} visible onBack={() => {}} revisionRefreshKey={key} publishedRevision={publishedRevision} />;
+    const view = render(ui());
+    if (change === "reconnect") view.rerender(ui("connected"));
+    else if (change === "focus") fireEvent(window, new Event("focus"));
+    else if (change === "older history") view.rerender(ui("initial", 1));
+    else view.rerender(ui());
+    await act(async () => initial.resolve({ items: [newest] }));
+    await screen.findByLabelText("Revision 2 of 5");
+    await waitFor(() => expect(view.container.querySelector("iframe")?.title).toBe("Phone · Revision 2"));
+  });
+
+  it("allows Next immediately after focus while the background read is pending", async () => {
+    const api = services();
+    const { container } = render(<PageDocument page={original} services={api} visible onBack={() => {}} />);
+    await screen.findByLabelText("Revision 1 of 2");
+    const background = deferredDownload<PageRevisionPage>();
+    api.listPageRevisions.mockReturnValueOnce(background.promise);
+    fireEvent(window, new Event("focus"));
+    const next = screen.getByRole("button", { name: "Next page revision" });
+    expect(next).toBeEnabled();
+    fireEvent.click(next);
+    await screen.findByText("2/2");
+    await act(async () => background.resolve({ items: [{ ...original, revision: 2 }] }));
+    expect(screen.getByText("2/2")).toBeInTheDocument();
+    await waitFor(() => expect(container.querySelector("iframe")?.title).toBe("Updated phone · Revision 2"));
+  });
+
+  it.each(["publication", "reconnect"])("keeps locked manual navigation in flight through a %s check", async (change) => {
+    const api = services(), anchor = { ...original, revision: 3 };
+    api.listPageRevisions.mockResolvedValue({ items: [anchor] });
+    const ui = (revisionRefreshKey = "initial", publishedRevision = 3) => <PageDocument page={anchor} services={api} visible onBack={() => {}} revisionRefreshKey={revisionRefreshKey} publishedRevision={publishedRevision} />;
+    const view = render(ui());
+    await screen.findByLabelText("Revision 3 of 3");
+    fireEvent.click(screen.getByRole("button", { name: "Lock page revision" }));
+    const navigation = deferredDownload<PageRevision>();
+    api.getPageRevision.mockReturnValueOnce(navigation.promise);
+    fireEvent.click(screen.getByRole("button", { name: "Previous page revision" }));
+    await waitFor(() => expect(api.getPageRevision).toHaveBeenCalledOnce());
+    const signal = api.getPageRevision.mock.calls[0]![2]!;
+    if (change === "publication") {
+      api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 4 }] });
+      view.rerender(ui("initial", 4));
+      await screen.findByLabelText("Revision 3 of 4");
+    } else view.rerender(ui("connected"));
+    expect(signal.aborted).toBe(false);
+    await act(async () => navigation.resolve({ ...original, revision: 2 }));
+    await screen.findByText(change === "publication" ? "2/4" : "2/3");
+  });
+
+  it("clears a failed unlock catch-up when the user navigates manually", async () => {
+    const api = services(), anchor = { ...original, revision: 3 };
+    api.listPageRevisions.mockResolvedValue({ items: [anchor] });
+    api.getPageRevision.mockResolvedValue({ ...original, revision: 2 });
+    render(<PageDocument page={anchor} services={api} visible onBack={() => {}} />);
+    await screen.findByLabelText("Revision 3 of 3");
+    fireEvent.click(screen.getByRole("button", { name: "Lock page revision" }));
+    api.listPageRevisions.mockRejectedValueOnce(new Error("offline"));
+    fireEvent.click(screen.getByRole("button", { name: "Lock page revision" }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Previous page revision" }));
+    await screen.findByText("2/3");
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(api.listPageRevisions).toHaveBeenCalledTimes(4));
+    expect(screen.getByText("2/3")).toBeInTheDocument();
   });
 
   it.each([false, true])("rechecks missed updates when shown while locked=%s", async (locked) => {
@@ -353,7 +423,7 @@ describe("Pages document", () => {
     expect(api.listPageRevisions).toHaveBeenCalledTimes(beforeHidden);
     view.rerender(ui(true, "third"));
     await screen.findByText(locked ? "1/3" : "3/3");
-    expect(screen.getByRole("button", { name: locked ? "Unlock page revision" : "Lock page revision" })).toHaveAttribute("aria-pressed", String(locked));
+    expect(screen.getByRole("button", { name: "Lock page revision" })).toHaveAttribute("aria-pressed", String(locked));
   });
 
   it("keeps the same frame while its available width changes", async () => {
@@ -742,6 +812,34 @@ describe("Pages document responses", () => {
 });
 
 describe("saved page HTML downloads", () => {
+  it.each([false, true])("keeps a captured download across automatic revision changes (native=%s)", async (native) => {
+    const api = services();
+    api.listPageRevisions.mockResolvedValue({ items: [original] });
+    downloads.packaged.mockReturnValue(native);
+    const prepared = await api.preparePageDownload(original);
+    api.preparePageDownload.mockClear();
+    const pending = deferredDownload<typeof prepared>();
+    api.preparePageDownload.mockReturnValueOnce(pending.promise);
+    const ui = (publishedRevision: number) => <PageDocument page={original} services={api} visible onBack={() => {}} publishedRevision={publishedRevision} />;
+    const view = render(ui(1));
+    await waitForFrame(view.container);
+    fireEvent.click(screen.getByRole("button", { name: "Download HTML" }));
+    const signal = api.preparePageDownload.mock.calls[0]![1]!;
+    api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 3 }] });
+    view.rerender(ui(3));
+    await screen.findByText("3/3");
+    expect(signal.aborted).toBe(false);
+    await act(async () => pending.resolve(prepared));
+    if (native) {
+      await screen.findByText("HTML saved.");
+      expect(downloads.native).toHaveBeenCalledWith(expect.objectContaining({ url: prepared.url, expectedRevision: original.sha256 }));
+    } else {
+      await screen.findByText("Download started.");
+      expect(downloads.browser).toHaveBeenCalledWith(expect.objectContaining({ url: prepared.url }));
+    }
+    expect(api.preparePageDownload.mock.calls[0]![0]).toBe(original);
+  });
+
   it.each(["revision", "connection", "unmount"])("aborts pending downloads and suppresses stale completion after %s", async (change) => {
     const api = services();
     const prepared = await api.preparePageDownload(original);

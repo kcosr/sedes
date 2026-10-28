@@ -76,6 +76,8 @@ Open the document in the thread's **Pages** panel and choose
 **Download HTML** to save the revision currently displayed. Web browsers start
 a file download; desktop and Android clients open their save dialog or document
 picker. You can download a saved revision even if its preview cannot load.
+An in-progress download continues with the revision captured when you clicked
+**Download HTML**, even if an automatic update displays a newer revision.
 
 The download is one `.html` file with captured images embedded as data URLs,
 including images referenced by CSS. It needs no ZIP or separate asset folder,
