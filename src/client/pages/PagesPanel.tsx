@@ -113,9 +113,10 @@ function ThreadPagesPanel({ context, threadId, consumedSequence }: {
     }
   }, [store, threadId]);
 
-  const publications = useMemo(() => visible ? JSON.stringify(Object.values(state.snapshot?.itemsById ?? {})
+  const publications = useMemo(() => JSON.stringify(Object.values(state.snapshot?.itemsById ?? {})
     .filter((item) => item.kind === "page")
-    .map((item) => item.id).sort()) : "", [state.snapshot?.itemsById, visible]);
+    .map((item) => item.id).sort()), [state.snapshot?.itemsById]);
+  const revisionRefreshKey = JSON.stringify([publications, state.connection]);
 
   useEffect(() => {
     if (!visible) { setLoading(false); return; }
@@ -174,7 +175,7 @@ function ThreadPagesPanel({ context, threadId, consumedSequence }: {
           services={services}
           visible={visible}
           onBack={back}
-          latestRevision={result.items.find((page) => page.pageId === selected.page.pageId)?.revision}
+          revisionRefreshKey={revisionRefreshKey}
         />
       ) : (
         <>

@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronLeft, ChevronRight, Download, LoaderCircle, RotateCcw } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Download, LoaderCircle, Lock, LockOpen, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { PageRevision } from "../../shared/protocol/pages.js";
 import { useConnectionScope } from "../app/connection-scope.js";
@@ -15,7 +15,7 @@ interface PageDocumentProps {
   readonly services: PageDocumentServices;
   readonly visible: boolean;
   readonly onBack: () => void;
-  readonly latestRevision?: number;
+  readonly revisionRefreshKey?: string;
 }
 
 /** The anchor is the exact revision opened from chat or the browser. */
@@ -26,10 +26,17 @@ export function PageDocument(props: PageDocumentProps): React.JSX.Element {
 
 const ignoreInteractionChange = () => undefined;
 
-function PageDocumentView({ page, services, visible, onBack, latestRevision: knownLatestRevision }: PageDocumentProps): React.JSX.Element {
+function PageDocumentView({ page, services, visible, onBack, revisionRefreshKey }: PageDocumentProps): React.JSX.Element {
   const [selected, setSelected] = useState(page);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [loadedLatestRevision, setLatestRevision] = useState<number>();
+  const [locked, setLocked] = useState(false);
+  const lockedRef = useRef(false);
+  const [revisionCheckVersion, setRevisionCheckVersion] = useState(0);
+  const openingRefreshKey = useRef(revisionRefreshKey);
+  const lastCheckedRevision = useRef<number | undefined>(undefined);
+  const latestPage = useRef(page);
+  const catchUp = useRef(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const abort = useRef<AbortController | undefined>(undefined);
@@ -59,9 +66,20 @@ function PageDocumentView({ page, services, visible, onBack, latestRevision: kno
       .then(
         (result) => {
           if (controller.signal.aborted) return;
-          setLatestRevision(
-            Math.max(page.revision, result.items[0]?.revision ?? page.revision),
-          );
+          const newest = result.items[0];
+          if (!newest) return;
+          if (newest.revision > latestPage.current.revision) latestPage.current = newest;
+          const previousRevision = lastCheckedRevision.current;
+          // Opening an old chat occurrence keeps its exact revision. Later
+          // publications advance even a manually browsed document unless locked.
+          const updated = newest.revision > (previousRevision ?? page.revision) &&
+            (previousRevision !== undefined || revisionRefreshKey !== openingRefreshKey.current);
+          lastCheckedRevision.current = Math.max(previousRevision ?? page.revision, newest.revision);
+          setLatestRevision(latestPage.current.revision);
+          if (!lockedRef.current && (updated || catchUp.current)) {
+            catchUp.current = false;
+            setSelected(latestPage.current);
+          }
         },
         () => {
           if (!controller.signal.aborted)
@@ -78,7 +96,16 @@ function PageDocumentView({ page, services, visible, onBack, latestRevision: kno
     page.revision,
     services.listPageRevisions,
     refreshVersion,
+    revisionRefreshKey,
+    revisionCheckVersion,
   ]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const check = () => setRevisionCheckVersion((value) => value + 1);
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  }, [visible]);
 
   const navigateRevision = async (direction: -1 | 1) => {
     if (!visible || loading || !services.listPageRevisions || !services.getPageRevision)
@@ -96,9 +123,8 @@ function PageDocumentView({ page, services, visible, onBack, latestRevision: kno
         })
       ).items[0];
       if (controller.signal.aborted) return;
-      setLatestRevision(
-        Math.max(page.revision, newest?.revision ?? page.revision),
-      );
+      if (newest && newest.revision > latestPage.current.revision) latestPage.current = newest;
+      setLatestRevision(latestPage.current.revision);
       const wanted = selected.revision + direction;
       if (newest && wanted >= 1 && wanted <= newest.revision) {
         const next =
@@ -121,12 +147,13 @@ function PageDocumentView({ page, services, visible, onBack, latestRevision: kno
 
   const returnToPublishedRevision = () => {
     abort.current?.abort();
+    catchUp.current = false;
     setLoading(false);
     setError("");
     setSelected(page);
   };
 
-  const latestRevision = Math.max(page.revision, selected.revision, loadedLatestRevision ?? 0, knownLatestRevision ?? 0);
+  const latestRevision = Math.max(page.revision, selected.revision, loadedLatestRevision ?? 0);
   const hasRevisions = latestRevision > 1;
 
   const headerActions = (
@@ -199,6 +226,24 @@ function PageDocumentView({ page, services, visible, onBack, latestRevision: kno
           <span className="page-preview-header-separator" aria-hidden="true" />
         </>
       ) : null}
+      <Button
+        aria-label={locked ? "Unlock page revision" : "Lock page revision"}
+        title={locked ? "Unlock and load the latest revision" : "Lock this revision to pause automatic updates"}
+        aria-pressed={locked}
+        disabled={!visible || !services.listPageRevisions}
+        onClick={() => {
+          lockedRef.current = !lockedRef.current;
+          setLocked(lockedRef.current);
+          if (!lockedRef.current) {
+            catchUp.current = true;
+            setRevisionCheckVersion((value) => value + 1);
+          }
+        }}
+        size="icon-sm"
+        variant={locked ? "secondary" : "ghost"}
+      >
+        {locked ? <Lock aria-hidden="true" /> : <LockOpen aria-hidden="true" />}
+      </Button>
       <Button
         aria-label="Refresh page preview"
         title="Refresh preview"

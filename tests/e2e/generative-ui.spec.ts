@@ -237,13 +237,17 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
       return target?.contains(active) ? "Pages" : active?.outerHTML.slice(0, 300);
     })).toBe("Pages");
     await expect(viewer.getByLabel("Revision 1 of 2")).toHaveText("1/2");
+    await expect(viewer.getByRole("button", { name: "Lock page revision", exact: true })).toHaveAttribute("aria-pressed", "false");
     const revisionFrame = pageDocument(viewer);
     await expect(revisionFrame.getByRole("heading", { name: "Inbox one" })).toBeVisible();
     await viewer.getByRole("button", { name: "Next page revision", exact: true }).click();
     await expect(revisionFrame.getByRole("heading", { name: "Inbox two" })).toBeVisible();
     await expect(viewer.getByRole("button", { name: "Return to published revision 1" })).toHaveText("2/2");
-    await revisionFrame.getByRole("button", { name: "Clicks: 0" }).click();
-    await revisionFrame.getByLabel("Draft note").fill("Preserved while arranging panels");
+    // Browsing history does not lock the document: the next publication follows
+    // the same page even when the viewer is deliberately showing an older one.
+    await viewer.getByRole("button", { name: "Previous page revision", exact: true }).click();
+    await expect(revisionFrame.getByRole("heading", { name: "Inbox one" })).toBeVisible();
+    await expect(viewer.getByRole("button", { name: "Lock page revision", exact: true })).toHaveAttribute("aria-pressed", "false");
 
     await writeFile(htmlPath, mockup("three"));
     await publish(page, threadId, {
@@ -253,13 +257,58 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
       expectedRevision: 2,
       viewport: { width: 390, height: 600 },
     });
-    await expect(viewer.getByRole("button", { name: "Return to published revision 1" })).toHaveText("2/3");
-    await expect(revisionFrame.getByRole("heading", { name: "Inbox two" })).toBeVisible();
+    await expect(viewer.getByRole("button", { name: "Return to published revision 1" })).toHaveText("3/3");
+    await expect(revisionFrame.getByRole("heading", { name: "Inbox three" })).toBeVisible();
+    await capture(page, testInfo, "generative-ui-pages-auto-update-desktop.png");
+    await revisionFrame.getByRole("button", { name: "Clicks: 0" }).click();
+    await revisionFrame.getByLabel("Draft note").fill("Preserved during revision notifications");
+    await viewer.locator(".page-frame-document").evaluate(frame => {
+      (window as unknown as { __revisionNotificationFrame?: Element }).__revisionNotificationFrame = frame;
+    });
     const refreshedList = page.waitForResponse(response => response.url().includes(`/api/threads/${threadId}/pages?`));
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     await refreshedList;
+    await expect(viewer.getByRole("button", { name: "Return to published revision 1" })).toHaveText("3/3");
+    // Rediscovering the current revision must not reload its live frame.
+    expect(await viewer.locator(".page-frame-document").evaluate(frame =>
+      (window as unknown as { __revisionNotificationFrame?: Element }).__revisionNotificationFrame === frame,
+    )).toBe(true);
+    await expect(revisionFrame.getByRole("button", { name: "Clicks: 1" })).toBeVisible();
+    await expect(revisionFrame.getByLabel("Draft note")).toHaveValue("Preserved during revision notifications");
+
+    await viewer.getByRole("button", { name: "Lock page revision", exact: true }).click();
+    await expect(viewer.getByRole("button", { name: "Unlock page revision", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await writeFile(htmlPath, mockup("four"));
+    await publish(page, threadId, {
+      path: htmlPath,
+      title: "Inbox mockup",
+      pageId: first.pageId,
+      expectedRevision: 3,
+      viewport: { width: 390, height: 600 },
+    });
+    await expect(viewer.getByRole("button", { name: "Return to published revision 1" })).toHaveText("3/4");
+    await expect(revisionFrame.getByRole("heading", { name: "Inbox three" })).toBeVisible();
+    expect(await viewer.locator(".page-frame-document").evaluate(frame =>
+      (window as unknown as { __revisionNotificationFrame?: Element }).__revisionNotificationFrame === frame,
+    )).toBe(true);
+    await expect(revisionFrame.getByLabel("Draft note")).toHaveValue("Preserved during revision notifications");
+    await capture(page, testInfo, "generative-ui-pages-locked-desktop.png");
+    await viewer.getByRole("button", { name: "Unlock page revision", exact: true }).click();
+    await expect(viewer.getByRole("button", { name: "Lock page revision", exact: true })).toHaveAttribute("aria-pressed", "false");
+    await expect(viewer.getByRole("button", { name: "Return to published revision 1" })).toHaveText("4/4");
+    await expect(revisionFrame.getByRole("heading", { name: "Inbox four" })).toBeVisible();
+
+    // Lock an older revision before checking that panel arrangement and hiding
+    // preserve the selection independently of the latest saved publication.
+    await viewer.getByRole("button", { name: "Previous page revision", exact: true }).click();
+    await expect(revisionFrame.getByRole("heading", { name: "Inbox three" })).toBeVisible();
+    await viewer.getByRole("button", { name: "Previous page revision", exact: true }).click();
     await expect(revisionFrame.getByRole("heading", { name: "Inbox two" })).toBeVisible();
-    await expect(viewer.getByRole("button", { name: "Return to published revision 1" })).toHaveText("2/3");
+    await viewer.getByRole("button", { name: "Lock page revision", exact: true }).click();
+    await expect(viewer.getByRole("button", { name: "Unlock page revision", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(viewer.getByRole("button", { name: "Return to published revision 1" })).toHaveText("2/4");
+    await revisionFrame.getByRole("button", { name: "Clicks: 0" }).click();
+    await revisionFrame.getByLabel("Draft note").fill("Preserved while arranging panels");
 
     await expect(revisionFrame.getByRole("button", { name: "Clicks: 1" })).toBeVisible();
     await expect(revisionFrame.getByLabel("Draft note")).toHaveValue("Preserved while arranging panels");
@@ -304,7 +353,8 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
     await expect(revisionFrame.getByRole("heading", { name: "Inbox two" })).toBeVisible();
     await expect(revisionFrame.getByRole("button", { name: "Clicks: 0" })).toBeVisible();
     await expect(revisionFrame.getByLabel("Draft note")).toHaveValue("Saved résumé");
-    await expect(viewer.getByRole("button", { name: "Return to published revision 1" })).toHaveText("2/3");
+    await expect(viewer.getByRole("button", { name: "Return to published revision 1" })).toHaveText("2/4");
+    await expect(viewer.getByRole("button", { name: "Unlock page revision", exact: true })).toHaveAttribute("aria-pressed", "true");
     await quickButton(page, "Pages").click();
 
     await page.setViewportSize({ width: 360, height: 900 });
@@ -314,6 +364,8 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "generative-ui-phone-on-phone.png");
     const phone = await openPage(page, firstCard);
+    await expect(phone.getByLabel("Revision 1 of 4")).toHaveText("1/4");
+    await expect(phone.getByRole("button", { name: "Lock page revision", exact: true })).toHaveAttribute("aria-pressed", "false");
     await expect(pageDocument(phone).locator("#layout")).toHaveText("Viewport 390 × 600");
     await expect(phone.locator(".page-frame-document")).not.toHaveAttribute("inert", "");
     await expect(phone.getByRole("button", { name: /interact.*preview/i })).toHaveCount(0);
@@ -332,6 +384,27 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
     await expect(pageDocument(phone).locator("#layout")).toHaveText("Viewport 390 × 600");
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "generative-ui-pages-mobile.png");
+    await phone.getByRole("button", { name: "Lock page revision", exact: true }).click();
+    await expect(phone.getByRole("button", { name: "Unlock page revision", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await writeFile(htmlPath, mockup("five"));
+    await publish(page, threadId, {
+      path: htmlPath,
+      title: "Inbox mockup",
+      pageId: first.pageId,
+      expectedRevision: 4,
+      viewport: { width: 390, height: 600 },
+    });
+    await expect(phone.getByLabel("Revision 1 of 5")).toHaveText("1/5");
+    await expect(pageDocument(phone).getByRole("heading", { name: "Inbox one" })).toBeVisible();
+    await expect(pageDocument(phone).getByRole("button", { name: "Clicks: 1" })).toBeVisible();
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "generative-ui-pages-locked-mobile.png");
+    await phone.getByRole("button", { name: "Unlock page revision", exact: true }).click();
+    await expect(phone.getByRole("button", { name: "Lock page revision", exact: true })).toHaveAttribute("aria-pressed", "false");
+    await expect(phone.getByRole("button", { name: "Return to published revision 1" })).toHaveText("5/5");
+    await expect(pageDocument(phone).getByRole("heading", { name: "Inbox five" })).toBeVisible();
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "generative-ui-pages-auto-update-mobile.png");
     // Dispatch the same cancelable requests as Android Back; panel and app
     // unit tests cover the native listener's ordering.
     expect(await page.evaluate(() => !window.dispatchEvent(new Event("sedes:close-page", { cancelable: true })))).toBe(true);
@@ -451,18 +524,20 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
       .getByRole("button", { name: "Inbox mockup", exact: true })
       .click();
     await expect(
-      pageDocument(library).getByRole("heading", { name: "Inbox three" }),
+      pageDocument(library).getByRole("heading", { name: "Inbox five" }),
     ).toBeVisible();
-    await expect(library.getByLabel("Revision 3 of 3")).toHaveText("3/3");
-    await library.getByRole("button", { name: "Previous page revision" }).click();
-    await expect(pageDocument(library).getByRole("heading", { name: "Inbox two" })).toBeVisible();
+    await expect(library.getByLabel("Revision 5 of 5")).toHaveText("5/5");
+    for (const version of ["four", "three", "two"]) {
+      await library.getByRole("button", { name: "Previous page revision" }).click();
+      await expect(pageDocument(library).getByRole("heading", { name: `Inbox ${version}` })).toBeVisible();
+    }
     const secondDownload = await downloadSavedHtml(page, library, browserDiagnostics, testInfo, 2, "inbox-revision-2.html");
     expect(secondDownload.html).toContain("Inbox two");
-    expect(secondDownload.html).not.toContain("Inbox three");
+    expect(secondDownload.html).not.toContain("Inbox five");
     expect(secondDownload.html).toContain('charset="windows-1252"');
     await expectStandaloneHtml(page, secondDownload.filePath, "Inbox two");
-    await library.getByRole("button", { name: "Return to published revision 3", exact: true }).click();
-    await expect(pageDocument(library).getByRole("heading", { name: "Inbox three" })).toBeVisible();
+    await library.getByRole("button", { name: "Return to published revision 5", exact: true }).click();
+    await expect(pageDocument(library).getByRole("heading", { name: "Inbox five" })).toBeVisible();
     await expect(library.getByRole("button", { name: "Download HTML", exact: true })).toBeVisible();
     await pageDocument(library)
       .getByRole("button", { name: "Clicks: 0" })
@@ -511,7 +586,7 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
     // Thread-following content never shows the prior thread's live document.
     await openPanel(page, "Pages");
     await library.getByRole("navigation", { name: "Published pages" }).getByRole("button", { name: "Inbox mockup", exact: true }).click();
-    await expect(pageDocument(library).getByRole("heading", { name: "Inbox three" })).toBeVisible();
+    await expect(pageDocument(library).getByRole("heading", { name: "Inbox five" })).toBeVisible();
     await createDraftThread(page, "No pages from another thread");
     await expect(library.getByText("No pages have been published.", { exact: true })).toBeVisible();
     await expect(library.locator("iframe")).toHaveCount(0);

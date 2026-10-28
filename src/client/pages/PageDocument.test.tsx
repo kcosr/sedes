@@ -205,19 +205,155 @@ describe("Pages document", () => {
     expect(back).toHaveBeenCalledOnce();
   });
 
-  it("announces newer revisions without replacing the selected document or its zoom", async () => {
+  it("loads the newest revision automatically and uses it for downloads", async () => {
     const api = services();
     api.listPageRevisions.mockResolvedValue({ items: [original] });
-    const ui = (latestRevision: number) => <PageDocument page={original} services={api} visible onBack={() => {}} latestRevision={latestRevision} />;
-    const view = render(ui(1));
+    const ui = (revisionRefreshKey: string) => <PageDocument page={original} services={api} visible onBack={() => {}} revisionRefreshKey={revisionRefreshKey} />;
+    const view = render(ui("first"));
+    const frame = await waitForFrame(view.container);
+    expect(screen.getByRole("button", { name: "Lock page revision" })).toHaveAttribute("aria-pressed", "false");
+    const newest = { ...original, revision: 3, title: "Newest phone" };
+    api.listPageRevisions.mockResolvedValue({ items: [newest] });
+    view.rerender(ui("third"));
+    await screen.findByText("3/3");
+    await waitFor(() => expect(view.container.querySelector("iframe")?.title).toBe("Newest phone · Revision 3"));
+    expect(view.container.querySelector("iframe")).not.toBe(frame);
+    expect(api.createPageRenderAdmission).toHaveBeenLastCalledWith(original.pageId, 3, expect.any(AbortSignal));
+    fireEvent.click(screen.getByRole("button", { name: "Download HTML" }));
+    await waitFor(() => expect(api.preparePageDownload).toHaveBeenCalledWith(newest, expect.any(AbortSignal)));
+  });
+
+  it("holds the locked revision and zoom while announcing new revisions, then catches up on unlock", async () => {
+    const api = services();
+    api.listPageRevisions.mockResolvedValue({ items: [original] });
+    const ui = (revisionRefreshKey: string) => <PageDocument page={original} services={api} visible onBack={() => {}} revisionRefreshKey={revisionRefreshKey} />;
+    const view = render(ui("first"));
     const frame = await waitForFrame(view.container);
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
     expect(screen.getByRole("button", { name: "Zoom percentage: 125%" })).toBeInTheDocument();
-    view.rerender(ui(3));
+    const lock = screen.getByRole("button", { name: "Lock page revision" });
+    expect(screen.getByRole("button", { name: "Refresh page preview" }).previousElementSibling).toBe(lock);
+    fireEvent.click(lock);
+    expect(screen.getByRole("button", { name: "Unlock page revision" })).toHaveAttribute("aria-pressed", "true");
+    api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 3 }] });
+    view.rerender(ui("third"));
+    await screen.findByLabelText("Revision 1 of 3");
     expect(screen.getByLabelText("Revision 1 of 3")).toHaveTextContent("1/3");
     expect(view.container.querySelector("iframe")).toBe(frame);
     expect(screen.getByRole("button", { name: "Zoom percentage: 125%" })).toBeInTheDocument();
     expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(1);
+    api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 5, title: "Latest on unlock" }] });
+    fireEvent.click(screen.getByRole("button", { name: "Unlock page revision" }));
+    await screen.findByText("5/5");
+    await waitFor(() => expect(view.container.querySelector("iframe")?.title).toBe("Latest on unlock · Revision 5"));
+    expect(screen.getByRole("button", { name: "Lock page revision" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("follows a new publication after deliberately browsing an older revision", async () => {
+    const api = services(), published = { ...original, revision: 3 };
+    api.listPageRevisions.mockResolvedValue({ items: [published] });
+    api.getPageRevision.mockImplementation(async (_id, revision) => ({ ...original, revision }));
+    const ui = (revisionRefreshKey: string) => <PageDocument page={published} services={api} visible onBack={() => {}} revisionRefreshKey={revisionRefreshKey} />;
+    const view = render(ui("third"));
+    await screen.findByLabelText("Revision 3 of 3");
+    fireEvent.click(screen.getByRole("button", { name: "Previous page revision" }));
+    await screen.findByText("2/3");
+    api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 4 }] });
+    view.rerender(ui("fourth"));
+    await screen.findByText("4/4");
+  });
+
+  it("preserves a live historical document when notifications rediscover the same revision", async () => {
+    const api = services();
+    const ui = (revisionRefreshKey: string) => <PageDocument page={original} services={api} visible onBack={() => {}} revisionRefreshKey={revisionRefreshKey} />;
+    const view = render(ui("first"));
+    await screen.findByLabelText("Revision 1 of 2");
+    const frame = await waitForFrame(view.container);
+    view.rerender(ui("unrelated-publication"));
+    await waitFor(() => expect(api.listPageRevisions).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText("Revision 1 of 2")).toBeInTheDocument();
+    expect(view.container.querySelector("iframe")).toBe(frame);
+    expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores superseded automatic revision reads even when they finish last", async () => {
+    const api = services();
+    api.listPageRevisions.mockResolvedValue({ items: [original] });
+    const ui = (revisionRefreshKey: string) => <PageDocument page={original} services={api} visible onBack={() => {}} revisionRefreshKey={revisionRefreshKey} />;
+    const view = render(ui("first"));
+    await waitForFrame(view.container);
+    const stale = deferredDownload<PageRevisionPage>();
+    api.listPageRevisions.mockReturnValueOnce(stale.promise);
+    view.rerender(ui("second"));
+    const staleSignal = api.listPageRevisions.mock.calls.at(-1)![1]!.signal!;
+    api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 4 }] });
+    view.rerender(ui("fourth"));
+    expect(staleSignal.aborted).toBe(true);
+    await screen.findByText("4/4");
+    await act(async () => stale.resolve({ items: [{ ...original, revision: 2 }] }));
+    expect(screen.getByText("4/4")).toBeInTheDocument();
+  });
+
+  it("honors a lock set while an automatic revision read is pending", async () => {
+    const api = services();
+    api.listPageRevisions.mockResolvedValue({ items: [original] });
+    const ui = (revisionRefreshKey: string) => <PageDocument page={original} services={api} visible onBack={() => {}} revisionRefreshKey={revisionRefreshKey} />;
+    const view = render(ui("first"));
+    const frame = await waitForFrame(view.container);
+    const pending = deferredDownload<PageRevisionPage>();
+    api.listPageRevisions.mockReturnValueOnce(pending.promise);
+    view.rerender(ui("second"));
+    fireEvent.click(screen.getByRole("button", { name: "Lock page revision" }));
+    await act(async () => pending.resolve({ items: [{ ...original, revision: 2 }] }));
+    expect(screen.getByLabelText("Revision 1 of 2")).toBeInTheDocument();
+    expect(view.container.querySelector("iframe")).toBe(frame);
+  });
+
+  it("retains the displayed document after a failed update and retries on focus", async () => {
+    const api = services();
+    api.listPageRevisions.mockResolvedValue({ items: [original] });
+    const ui = (revisionRefreshKey: string) => <PageDocument page={original} services={api} visible onBack={() => {}} revisionRefreshKey={revisionRefreshKey} />;
+    const view = render(ui("first"));
+    const frame = await waitForFrame(view.container);
+    api.listPageRevisions.mockRejectedValueOnce(new Error("offline"));
+    view.rerender(ui("second"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load page revisions.");
+    expect(view.container.querySelector("iframe")).toBe(frame);
+    api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 2 }] });
+    fireEvent(window, new Event("focus"));
+    await screen.findByText("2/2");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("follows a publication received before the initial revision read finishes", async () => {
+    const api = services(), initial = deferredDownload<PageRevisionPage>();
+    api.listPageRevisions.mockReturnValueOnce(initial.promise);
+    const ui = (revisionRefreshKey: string) => <PageDocument page={original} services={api} visible onBack={() => {}} revisionRefreshKey={revisionRefreshKey} />;
+    const view = render(ui("first"));
+    const firstSignal = api.listPageRevisions.mock.calls[0]![1]!.signal!;
+    api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 3 }] });
+    view.rerender(ui("third"));
+    expect(firstSignal.aborted).toBe(true);
+    await screen.findByText("3/3");
+    await act(async () => initial.resolve({ items: [original] }));
+    expect(screen.getByText("3/3")).toBeInTheDocument();
+  });
+
+  it.each([false, true])("rechecks missed updates when shown while locked=%s", async (locked) => {
+    const api = services();
+    api.listPageRevisions.mockResolvedValue({ items: [original] });
+    const ui = (visible: boolean, revisionRefreshKey = "first") => <PageDocument page={original} services={api} visible={visible} onBack={() => {}} revisionRefreshKey={revisionRefreshKey} />;
+    const view = render(ui(true));
+    await waitForFrame(view.container);
+    if (locked) fireEvent.click(screen.getByRole("button", { name: "Lock page revision" }));
+    view.rerender(ui(false));
+    const beforeHidden = api.listPageRevisions.mock.calls.length;
+    api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 3 }] });
+    view.rerender(ui(false, "third"));
+    expect(api.listPageRevisions).toHaveBeenCalledTimes(beforeHidden);
+    view.rerender(ui(true, "third"));
+    await screen.findByText(locked ? "1/3" : "3/3");
+    expect(screen.getByRole("button", { name: locked ? "Unlock page revision" : "Lock page revision" })).toHaveAttribute("aria-pressed", String(locked));
   });
 
   it("keeps the same frame while its available width changes", async () => {
@@ -447,7 +583,7 @@ describe("Pages document", () => {
     ).toBeInTheDocument();
   });
 
-  it("discovers additional revisions on refresh without changing the panel selection", async () => {
+  it("loads a newly discovered revision on refresh while unlocked", async () => {
     const api = services();
     api.listPageRevisions.mockResolvedValueOnce({ items: [original] });
     const { container } = render(
@@ -456,8 +592,8 @@ describe("Pages document", () => {
     await waitForFrame(container);
     expect(screen.queryByRole("group", { name: "Page revision controls" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Refresh page preview" }));
-    expect(await screen.findByLabelText("Revision 1 of 2")).toHaveTextContent("1/2");
-    expect((await waitForFrame(container)).title).toBe("Phone · Revision 1");
+    await screen.findByText("2/2");
+    await waitFor(() => expect(container.querySelector("iframe")?.title).toBe("Updated phone · Revision 2"));
   });
 
   it("preserves explicit retry protection in the immediate-interaction panel", async () => {
@@ -495,6 +631,7 @@ describe("Pages document", () => {
       <PageDocument visible onBack={() => {}} page={original} services={api} />,
     );
     const oldSignal = api.listPageRevisions.mock.calls[0]?.[1]?.signal;
+    fireEvent.click(screen.getByRole("button", { name: "Lock page revision" }));
     const another = {
       ...original,
       pageId: "30000000-0000-4000-8000-000000000002",
@@ -504,6 +641,7 @@ describe("Pages document", () => {
       <PageDocument visible onBack={() => {}} page={another} services={api} />,
     );
     expect(oldSignal?.aborted).toBe(true);
+    expect(screen.getByRole("button", { name: "Lock page revision" })).toHaveAttribute("aria-pressed", "false");
     await act(async () => resolveNew({ items: [{ ...another, revision: 3 }] }));
     expect(screen.getByLabelText("Revision 1 of 3")).toHaveTextContent("1/3");
     await act(async () =>
@@ -515,6 +653,29 @@ describe("Pages document", () => {
 });
 
 describe("Pages document responses", () => {
+  it("switches during a captured send without cancelling it or reusing its status for the new revision", async () => {
+    const api = responseServices(), submission = pendingSubmission(api);
+    api.listPageRevisions.mockResolvedValue({ items: [original] });
+    const ui = (revisionRefreshKey: string) => <PageDocument page={original} services={api} visible onBack={() => {}} revisionRefreshKey={revisionRefreshKey} />;
+    const view = render(ui("first"));
+    producer(await waitForFrame(view.container), () => "captured from revision one");
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    await waitFor(() => expect(api.pageResponse.submit).toHaveBeenCalledOnce());
+    const [request, signal] = api.pageResponse.submit.mock.calls[0]!;
+    expect(request.pageResponse.revision).toBe(1);
+    api.listPageRevisions.mockResolvedValue({ items: [{ ...original, revision: 3 }] });
+    view.rerender(ui("third"));
+    await screen.findByText("3/3");
+    expect(signal?.aborted).toBe(false);
+    await act(async () => submission.resolve());
+    expect(screen.queryByText("Response queued.")).toBeNull();
+    await waitFor(() => expect(view.container.querySelector("iframe")?.title).toBe("Phone · Revision 3"));
+    producer(await waitForFrame(view.container), () => "captured from revision three");
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    await screen.findByText("Response queued.");
+    expect(api.pageResponse.submit.mock.calls[1]![0]).toMatchObject({ text: "captured from revision three", pageResponse: { revision: 3 } });
+  });
+
   it("retains a captured send and its exact retry while the panel is hidden", async () => {
     const api = responseServices(), submission = pendingSubmission(api);
     const ui = (visible: boolean) => <PageDocument page={original} services={api} visible={visible} onBack={() => {}} />;
