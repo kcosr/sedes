@@ -13,13 +13,13 @@ export function voiceSettings(patch: Partial<NativeVoiceSettings> = {}): NativeV
     inputDevice: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000, recognitionEndSilenceMs: 1200, recognitionResultTimeoutMs: 60000, longDictationTimeoutMs: 3_600_000,
     recognizeStopCommand: true, recognitionCues: true, cueGain: 100, startupPreRollMs: 512, ttsGain: 100, headsetControls: true, ...patch };
 }
-export function voiceSnapshot(patch: Partial<NativeVoiceState> = {}): NativeVoiceState {
+export function voiceSnapshot(patch: Partial<Omit<NativeVoiceState, "speech">> & { speech?: Partial<NativeVoiceState["speech"]> } = {}): NativeVoiceState {
   return {
-    version: 15, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, clientConnectionToken: "a".repeat(43), settingsRevision: 0,
+    version: 16, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, clientConnectionToken: "a".repeat(43), settingsRevision: 0,
     settings: voiceSettings(), phase: "off", ready: false, readiness: "off", foreground: { visible: false, threadId: null, threadTitle: null, composerAvailable: false }, active: null,
     nextRecordingTarget: null, retainedVoiceTarget: null, idleTargetRevision: 0, queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
-    speech: { credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null },
     actions: voiceActions(), recordingRecovery: null, recovery: [], errors: [], ...patch,
+    speech: { audioQuality: "original", audioQualityRevision: 0, credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null, ...patch.speech },
   };
 }
 export function voiceActions(patch: Partial<NativeVoiceState["actions"]> = {}): NativeVoiceState["actions"] {
@@ -59,7 +59,7 @@ export function fakeVoicePlugin() {
     readRecognizedRecordingText: vi.fn(async (): Promise<Awaited<ReturnType<NativeVoicePlugin["readRecognizedRecordingText"]>>> => ({
       recordingId: "saved-recording", revision: 1, threadId: "named", text: "Recovered dictation text.",
     })),
-    resumeInput: state(), discardInput: state(), refreshSpeechCatalog: state(), openSpeechCredentialDialog: state(),
+    resumeInput: state(), discardInput: state(), refreshSpeechCatalog: state(), setSpeechAudioQuality: state(), openSpeechCredentialDialog: state(),
     listInputDevices: vi.fn(async (): Promise<Awaited<ReturnType<NativeVoicePlugin["listInputDevices"]>>> => ({ devices: [] })),
     addListener: vi.fn(async (event: string, listener: (value: unknown) => void) => {
       listeners.set(event, value => {

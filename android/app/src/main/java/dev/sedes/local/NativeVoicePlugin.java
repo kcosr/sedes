@@ -74,6 +74,7 @@ public final class NativeVoicePlugin extends Plugin {
     @PluginMethod public void resumeInput(PluginCall call) { run("resumeInput", call, true); }
     @PluginMethod public void discardInput(PluginCall call) { run("discardInput", call, true); }
     @PluginMethod public void refreshSpeechCatalog(PluginCall call) { run("refreshSpeechCatalog", call, false); }
+    @PluginMethod public void setSpeechAudioQuality(PluginCall call) { run("setSpeechAudioQuality", call, true); }
     @PluginMethod public void openSpeechCredentialDialog(PluginCall call) {
         final long generation;
         try {

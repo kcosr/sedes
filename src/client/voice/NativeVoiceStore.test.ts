@@ -968,7 +968,7 @@ describe("foreground submission to composer", () => {
   it("releases a possibly claimed offer when the claim response is malformed without adopting speech", async () => {
     const { store, plugin, listeners } = fixture();
     await store.initialize();
-    plugin.claimComposerHandoff.mockResolvedValueOnce({ version: 15 } as NativeVoiceState);
+    plugin.claimComposerHandoff.mockResolvedValueOnce({ version: 16 } as NativeVoiceState);
     const accept = vi.fn();
     store.registerSubmissionComposer("named", accept, true, {});
     listeners.get("composerHandoff")!(handoffEvent());
@@ -1014,7 +1014,7 @@ describe("foreground submission to composer", () => {
     else listeners.get("stateChanged")!(snapshot({ connectionGeneration: 2, stateRevision: 3 }));
     const before = store.getSnapshot();
     if (failure === "rejected") reject(new Error("Claim response lost."));
-    else resolve({ version: 15 } as NativeVoiceState);
+    else resolve({ version: 16 } as NativeVoiceState);
     await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       ...context, outcome: "declined", submissionPending: false, message: expect.any(String),
     })));

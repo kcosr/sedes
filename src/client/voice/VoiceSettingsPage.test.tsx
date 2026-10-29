@@ -96,6 +96,7 @@ describe("voice settings page", () => {
     expect(screen.getByRole("button", { name: "Manage speech credential" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Recognition model" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Microphone input" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Upload quality" })).toBeDisabled();
     expect(screen.getByRole("spinbutton", { name: "Long dictation timeout (minutes)" })).toBeDisabled();
     expect(screen.getByRole("spinbutton", { name: "Recognition result timeout (ms)" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Audio mode" })).toBeEnabled();
@@ -359,10 +360,109 @@ describe("voice settings page", () => {
       patch: { speechProvider: "server", speechEndpoint: "", sttModel: "", ttsModel: "", ttsVoice: "", ttsSpeed: 1 } }));
     store.dispose();
   });
+  it.each(["openai", "server"] as const)("keeps standard Original audio available without extension support for %s", async speechProvider => {
+    const native = voiceSnapshot({ settings: voiceSettings({ speechProvider,
+      speechEndpoint: speechProvider === "openai" ? "https://api.openai.com/v1" : "https://other-speech.test/v1" }) });
+    const { fake, store } = await renderPage(native);
+    const quality = screen.getByRole("combobox", { name: "Upload quality" });
+    expect(quality).toHaveValue("original");
+    expect(within(quality).getAllByRole("option")).toHaveLength(1);
+    expect(within(quality).getByRole("option", { name: "Original (PCM)" })).toBeEnabled();
+    expect(fake.plugin.setSpeechAudioQuality).not.toHaveBeenCalled();
+    store.dispose();
+  });
+  it("offers compressed quality only for the selected capable Android model and saves with its own revision", async () => {
+    const native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", sttModel: "parakeet" }),
+      speech: { audioQualityRevision: 7, credentialConfigured: true, catalogStatus: "ready",
+        catalog: { source: "server", sttModels: ["parakeet", "standard"], ttsModels: [], voices: [], speed: null, formats: ["pcm"],
+          audioInputFormats: { parakeet: { binaryPcm: true, binaryOpus: true }, standard: { binaryPcm: false, binaryOpus: false } } } } });
+    const chosen = { ...native, stateRevision: 2, speech: { ...native.speech, audioQuality: "opus_low" as const, audioQualityRevision: 8 } };
+    const { fake, store } = await renderPage(native, fake => fake.plugin.setSpeechAudioQuality.mockResolvedValue(chosen));
+    const quality = screen.getByRole("combobox", { name: "Upload quality" });
+    expect(within(quality).getByRole("option", { name: "High (Opus, 64 kbps)" })).toBeEnabled();
+    expect(within(quality).getByRole("option", { name: "Low bandwidth (Opus, 24 kbps)" })).toBeEnabled();
+    fireEvent.change(quality, { target: { value: "opus_low" } });
+    await waitFor(() => expect(fake.plugin.setSpeechAudioQuality).toHaveBeenCalledExactlyOnceWith({
+      expectedConnectionGeneration: 1, expectedAudioQualityRevision: 7, audioQuality: "opus_low" }));
+    await waitFor(() => expect(quality).toHaveValue("opus_low"));
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
+    act(() => fake.emit("stateChanged", { ...chosen, stateRevision: 3, settings: { ...chosen.settings, sttModel: "standard" } }));
+    expect(quality).toHaveAccessibleDescription(/does not advertise Opus support/);
+    expect(within(quality).queryByRole("option", { name: "High (Opus, 64 kbps)" })).toBeNull();
+    expect(within(quality).getByRole("option", { name: "Low bandwidth (unavailable)" })).toBeDisabled();
+    store.dispose();
+  });
+  it("keeps unsupported saved quality visible after changing provider until Original is explicitly selected", async () => {
+    const native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", sttModel: "parakeet" }),
+      speech: { audioQuality: "opus_high", audioQualityRevision: 3, credentialConfigured: true, catalogStatus: "ready",
+        catalog: { source: "server", sttModels: ["parakeet"], ttsModels: [], voices: [], speed: null, formats: ["pcm"],
+          audioInputFormats: { parakeet: { binaryPcm: true, binaryOpus: true } } } } });
+    const switched = { ...native, stateRevision: 2, settingsRevision: 1, settings: voiceSettings(),
+      speech: { ...native.speech, catalog: null, credentialConfigured: false, catalogStatus: "idle" as const } };
+    const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue(switched));
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), { target: { value: "openai" } });
+    const quality = screen.getByRole("combobox", { name: "Upload quality" });
+    await waitFor(() => expect(quality).toHaveAccessibleDescription(/Choose Original to record/));
+    expect(quality).toHaveValue("opus_high");
+    expect(fake.plugin.setSpeechAudioQuality).not.toHaveBeenCalled();
+    fake.plugin.getState.mockResolvedValue(switched);
+    fake.plugin.setSpeechAudioQuality.mockResolvedValue({ ...switched, stateRevision: 3,
+      speech: { ...switched.speech, audioQuality: "original", audioQualityRevision: 4 } });
+    fireEvent.change(quality, { target: { value: "original" } });
+    await waitFor(() => expect(fake.plugin.setSpeechAudioQuality).toHaveBeenCalledExactlyOnceWith({
+      expectedConnectionGeneration: 1, expectedAudioQualityRevision: 3, audioQuality: "original" }));
+    await waitFor(() => expect(quality).toHaveValue("original"));
+    store.dispose();
+  });
+  it.each(["idle", "loading", "error"] as const)("preserves stored Opus without declaring it unsupported while catalog support is unknown (%s)", async catalogStatus => {
+    const native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", sttModel: "parakeet" }),
+      speech: { audioQuality: "opus_high", audioQualityRevision: 3, credentialConfigured: true, catalogStatus,
+        catalog: null, error: catalogStatus === "error" ? "Couldn’t refresh." : null } });
+    const { fake, store } = await renderPage(native);
+    const quality = screen.getByRole("combobox", { name: "Upload quality" });
+    expect(quality).toHaveValue("opus_high");
+    expect(quality).toHaveAccessibleDescription(catalogStatus === "loading" ? /Checking this model’s Opus support/ : /Opus support is unverified/);
+    expect(quality).not.toHaveAttribute("aria-invalid", "true");
+    expect(screen.queryByText(/Choose Original to record/)).toBeNull();
+    expect(within(quality).getByRole("option", { name: catalogStatus === "loading" ? "High (checking support…)" : "High (support unverified)" })).toBeDisabled();
+    expect(within(quality).getByRole("option", { name: "Original (PCM)" })).toBeEnabled();
+    expect(fake.plugin.setSpeechAudioQuality).not.toHaveBeenCalled();
+    act(() => fake.emit("stateChanged", { ...native, stateRevision: 2, speech: { ...native.speech, catalogStatus: "ready", error: null,
+      catalog: { source: "server", sttModels: ["parakeet"], ttsModels: [], voices: [], speed: null, formats: ["pcm"],
+        audioInputFormats: { parakeet: { binaryPcm: true, binaryOpus: true } } } } }));
+    expect(quality).toHaveValue("opus_high");
+    expect(within(quality).getByRole("option", { name: "High (Opus, 64 kbps)" })).toBeEnabled();
+    expect(fake.plugin.setSpeechAudioQuality).not.toHaveBeenCalled();
+    store.dispose();
+  });
+  it("treats missing selected-model capabilities as unknown while retaining known cached support during refresh errors", async () => {
+    const native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", sttModel: "custom-model" }),
+      speech: { audioQuality: "opus_low", catalogStatus: "ready",
+        catalog: { source: "server", sttModels: ["parakeet"], ttsModels: [], voices: [], speed: null, formats: ["pcm"],
+          audioInputFormats: { parakeet: { binaryPcm: true, binaryOpus: true } } } } });
+    const { fake, store } = await renderPage(native);
+    const quality = screen.getByRole("combobox", { name: "Upload quality" });
+    expect(quality).toHaveValue("opus_low");
+    expect(quality).toHaveAccessibleDescription(/Opus support is unverified/);
+    expect(screen.queryByText(/Choose Original to record/)).toBeNull();
+    act(() => fake.emit("stateChanged", { ...native, stateRevision: 2, settings: { ...native.settings, sttModel: "parakeet" },
+      speech: { ...native.speech, catalogStatus: "error", error: "Couldn’t refresh." } }));
+    expect(quality).toHaveValue("opus_low");
+    expect(within(quality).getByRole("option", { name: "Low bandwidth (Opus, 24 kbps)" })).toBeEnabled();
+    expect(quality).toHaveAccessibleDescription(/Original preserves captured audio/);
+    expect(fake.plugin.setSpeechAudioQuality).not.toHaveBeenCalled();
+    store.dispose();
+  });
+  it("does not offer Android upload quality controls on Electron", async () => {
+    platform.electron = true;
+    const { store } = await renderPage(voiceSnapshot());
+    expect(screen.queryByRole("combobox", { name: "Upload quality" })).toBeNull();
+    store.dispose();
+  });
   it("checks catalog freshness on opening, keeps settings usable during refresh, and preserves cached options on failure", async () => {
     const native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", ttsModel: "kokoro", ttsVoice: "af_heart" }),
       speech: { credentialConfigured: true, catalogStatus: "ready", error: null,
-        catalog: { source: "server", sttModels: ["parakeet"], ttsModels: ["kokoro"], voices: ["af_heart", "af_sky"], speed: { min: 0.5, max: 2 }, formats: ["pcm"] } } });
+        catalog: { source: "server", sttModels: ["parakeet"], ttsModels: ["kokoro"], voices: ["af_heart", "af_sky"], speed: { min: 0.5, max: 2 }, formats: ["pcm"], audioInputFormats: {} } } });
     const loading = { ...native, stateRevision: 2, speech: { ...native.speech, catalogStatus: "loading" as const } };
     const { fake, store, view } = await renderPage(native, fake => fake.plugin.refreshSpeechCatalog.mockResolvedValue(loading));
     expect(fake.plugin.refreshSpeechCatalog).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, force: false });
@@ -419,7 +519,7 @@ describe("voice settings page", () => {
   it("keeps model IDs editable when catalog discovery fails and validates advertised speed limits", async () => {
     const native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", ttsModel: "custom-tts" }),
       speech: { credentialConfigured: false, catalogStatus: "ready", error: null,
-        catalog: { source: "server", sttModels: ["custom-stt"], ttsModels: ["custom-tts"], voices: ["local-voice"], speed: { min: 0.5, max: 2 }, formats: ["pcm"] } } });
+        catalog: { source: "server", sttModels: ["custom-stt"], ttsModels: ["custom-tts"], voices: ["local-voice"], speed: { min: 0.5, max: 2 }, formats: ["pcm"], audioInputFormats: {} } } });
     const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue(native));
     fireEvent.click(screen.getByRole("combobox", { name: "Recognition model" }));
     fireEvent.click(await screen.findByRole("option", { name: "Custom…" }));
@@ -444,7 +544,7 @@ describe("voice settings page", () => {
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
     let native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", ttsModel: "kokoro-local", ttsVoice: "af_heart" }),
       speech: { credentialConfigured: true, catalogStatus: "ready", error: null,
-        catalog: { source: "server", sttModels: ["parakeet-local"], ttsModels: ["kokoro-local"], voices: ["af_heart", "af_sky"], speed: { min: 0.5, max: 2 }, formats: ["pcm"] } } });
+        catalog: { source: "server", sttModels: ["parakeet-local"], ttsModels: ["kokoro-local"], voices: ["af_heart", "af_sky"], speed: { min: 0.5, max: 2 }, formats: ["pcm"], audioInputFormats: {} } } });
     const { fake, store } = await renderPage(native, fake => {
       fake.plugin.getState.mockImplementation(async () => native);
       fake.plugin.updateSettings.mockImplementation(async (input?: { patch: Partial<NativeVoiceState["settings"]> }) => {

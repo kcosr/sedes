@@ -4,7 +4,7 @@ import type { NativeVoiceComposerHandoff, NativeVoiceInputSubmitted, NativeVoice
 const profileId = "c61b5d8b-4a77-43c6-bd72-12e23fe42e38";
 export function voiceFixtureState(): NativeVoiceState {
   return {
-    version: 15, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
+    version: 16, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
     originClientId: "34612c41-0bbb-455f-a5af-725bfc7ae768", clientConnectionToken: null, settingsRevision: 0,
     settings: { audioMode: "speak", autoListen: true, keepListeningByDefault: false, announceRecordingThread: false, ignoreOtherDevices: true, speechContent: "both", cleanSpeechText: true,
       speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts",
@@ -12,7 +12,7 @@ export function voiceFixtureState(): NativeVoiceState {
       onlyVoiceThread: false, followComposerMode: false, inputDevice: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000,
       recognitionResultTimeoutMs: 60000, longDictationTimeoutMs: 3_600_000, recognitionEndSilenceMs: 1200, recognizeStopCommand: true,
       recognitionCues: true, cueGain: 100, startupPreRollMs: 512, ttsGain: 100, headsetControls: true },
-    speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null }, phase: "idle", ready: true, readiness: "ready",
+    speech: { audioQuality: "original", audioQualityRevision: 0, credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null }, phase: "idle", ready: true, readiness: "ready",
     foreground: { visible: false, threadId: null, threadTitle: null, composerAvailable: false }, nextRecordingTarget: null, retainedVoiceTarget: null, idleTargetRevision: 0, active: null,
     queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
     actions: { canStart: true, canStop: false, canSkip: false, canRecordDuringPlayback: false, canReleaseRetainedTarget: false, canRetarget: false, canResume: false,
@@ -193,7 +193,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           header("NativeVoice", ["setDiagnosticsEnabled", "readDiagnostics", "clearDiagnostics", "setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget", "releaseRetainedVoiceTarget",
             "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "stopPlayback", "skipCurrentPlayback", "recordDuringPlayback", "retryRecordingRecognition",
             "sendRecoveredRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
-            "refreshSpeechCatalog", "openSpeechCredentialDialog", "speakReply", "claimComposerHandoff", "completeComposerHandoff", "settleComposerSubmission"], true),
+            "refreshSpeechCatalog", "setSpeechAudioQuality", "openSpeechCredentialDialog", "speakReply", "claimComposerHandoff", "completeComposerHandoff", "settleComposerSubmission"], true),
         ],
         nativeCallback(plugin: string, method: string, args: { eventName: string }, callback: (value: unknown) => void) {
           if (method !== "addListener") throw new Error(`Unexpected callback: ${plugin}.${method}`);
@@ -245,7 +245,18 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             if (typeof args.handoffId !== "string" || typeof args.expectedConnectionGeneration !== "number")
               throw new Error("The composer submission identity is required.");
           } else if (method === "updateSettings") {
-            fixture.publish({ settingsRevision: current.settingsRevision + 1, settings: { ...current.settings, ...args.patch as object } });
+            const patch = args.patch as Partial<NativeVoiceState["settings"]>;
+            const changedProvider = patch.speechProvider !== undefined && patch.speechProvider !== current.settings.speechProvider;
+            fixture.publish({ settingsRevision: current.settingsRevision + 1, settings: { ...current.settings, ...patch },
+              ...(changedProvider ? { speech: { ...current.speech, catalog: null, catalogStatus: "idle" as const, credentialConfigured: false } } : {}) });
+          } else if (method === "setSpeechAudioQuality") {
+            if (args.expectedConnectionGeneration !== current.connectionGeneration || args.expectedAudioQualityRevision !== current.speech.audioQualityRevision)
+              throw new Error("Upload quality changed.");
+            const quality = args.audioQuality;
+            if (quality !== "original" && quality !== "opus_high" && quality !== "opus_low") throw new Error("Invalid upload quality.");
+            if (quality !== "original" && (current.settings.speechProvider !== "server" ||
+                !current.speech.catalog?.audioInputFormats[current.settings.sttModel]?.binaryOpus)) throw new Error("Choose Original upload quality for this server.");
+            fixture.publish({ speech: { ...current.speech, audioQuality: quality, audioQualityRevision: current.speech.audioQualityRevision + 1 } });
           } else if (method === "setNextRecordingTarget") {
             if (current.active || current.settings.audioMode === "off" || args.expectedConnectionGeneration !== current.connectionGeneration)
               throw new Error("Voice interaction changed.");

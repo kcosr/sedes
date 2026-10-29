@@ -104,6 +104,52 @@ public class NativeSpeechCatalogTest {
             () -> NativeSpeechCatalog.server(legacy, "tts")).getMessage());
     }
 
+    private static JSONObject binaryExtension(int version) {
+        return NativeVoiceJson.object("binary_audio_input", NativeVoiceJson.object("versions", new JSONArray().put(version),
+            "formats", new JSONArray().put(NativeVoiceJson.object("type", "audio/pcm", "rate", 24000))
+                .put(NativeVoiceJson.object("type", "audio/ogg", "codec", "opus"))));
+    }
+    @Test public void binaryAudioRequiresTheSelectedModelsOptionalVersionedAdvertisement() throws Exception {
+        JSONObject listing = NativeVoiceJson.object("data", new JSONArray()
+            .put(NativeVoiceJson.object("id", "standard", "task", "transcription", "realtime", NativeSpeechCapabilitiesTest.policy()))
+            .put(NativeVoiceJson.object("id", "compressed", "task", "transcription", "realtime", NativeSpeechCapabilitiesTest.policy(),
+                "realtime_extensions", binaryExtension(1)))
+            .put(NativeVoiceJson.object("id", "future", "task", "transcription", "realtime", NativeSpeechCapabilitiesTest.policy(),
+                "realtime_extensions", binaryExtension(2)))
+            .put(NativeVoiceJson.object("id", "other-extension", "task", "transcription", "realtime", NativeSpeechCapabilitiesTest.policy(),
+                "realtime_extensions", NativeVoiceJson.object("some_other_protocol", true))));
+        JSONObject catalog = NativeSpeechCatalog.server(listing, "tts");
+        NativeSpeechCapabilities supported = NativeSpeechCatalog.serverCapabilities(catalog, "compressed");
+        assertTrue(supported.binaryPcm); assertTrue(supported.binaryOpus);
+        for (String id : new String[] { "standard", "future", "other-extension" }) {
+            NativeSpeechCapabilities standard = NativeSpeechCatalog.serverCapabilities(catalog, id);
+            assertFalse(standard.binaryPcm); assertFalse(standard.binaryOpus);
+        }
+        JSONObject picker = NativeSpeechCatalog.picker(catalog);
+        assertTrue(picker.getJSONObject("audioInputFormats").getJSONObject("compressed").getBoolean("binaryOpus"));
+        assertFalse(picker.has("realtime"));
+        NativeSpeechCatalogCache restored = NativeSpeechCatalogCache.fromRecord(new NativeSpeechCatalogCache("b".repeat(64), 100, catalog).record());
+        assertTrue(NativeSpeechCatalog.serverCapabilities(restored.catalog, "compressed").binaryOpus);
+        NativeSpeechCapabilities hosted = NativeSpeechCapabilities.hosted("gpt-live-transcribe");
+        assertFalse(hosted.binaryPcm); assertFalse(hosted.binaryOpus);
+    }
+    @Test public void formatSupportIsExactAndMalformedKnownAdvertisementsFailClosed() throws Exception {
+        JSONObject extension = binaryExtension(1);
+        extension.getJSONObject("binary_audio_input").put("formats", new JSONArray()
+            .put(NativeVoiceJson.object("type", "audio/pcm", "rate", 16000))
+            .put(NativeVoiceJson.object("type", "audio/ogg", "codec", "vorbis"))
+            .put(NativeVoiceJson.object("type", "audio/future", "encoding", "future")));
+        JSONObject model = NativeVoiceJson.object("realtime_extensions", extension);
+        JSONObject formats = NativeSpeechCapabilities.audioInputFormats(model);
+        assertFalse(formats.getBoolean("binaryPcm")); assertFalse(formats.getBoolean("binaryOpus"));
+        for (Object malformed : new Object[] { JSONObject.NULL, true, NativeVoiceJson.object("binary_audio_input", true),
+            NativeVoiceJson.object("binary_audio_input", NativeVoiceJson.object("versions", new JSONArray().put("1"))),
+            NativeVoiceJson.object("binary_audio_input", NativeVoiceJson.object("versions", new JSONArray().put(1), "formats", new JSONArray().put("opus"))),
+            NativeVoiceJson.object("binary_audio_input", NativeVoiceJson.object("versions", new JSONArray().put(1), "formats", new JSONArray().put(NativeVoiceJson.object("type", "audio/ogg")))) })
+            assertEquals("speech_server_configuration_unsupported", assertThrows(IllegalArgumentException.class,
+                () -> NativeSpeechCapabilities.audioInputFormats(NativeVoiceJson.object("realtime_extensions", malformed))).getMessage());
+    }
+
     @Test public void everyServerPreflightFetchesSelectedModelLimitsAfresh() throws Exception {
         BlockingQueue<String> result = new LinkedBlockingQueue<>();
         try (ServerSocket server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {

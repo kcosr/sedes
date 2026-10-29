@@ -7,6 +7,8 @@ User-facing changes are collected here before release. See the
 
 ### Breaking Changes
 
+- Android now requires Android 10 (API 29) or newer for native Opus encoding.
+
 - Process ownership locks now use directories with per-owner records. Stop
   older servers cleanly before upgrading; leftover regular-file locks require
   explicit recovery after confirming the prior owner and its native children
@@ -75,6 +77,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
+
+- Android recording quality can use Original PCM, High Opus, or Low bandwidth
+  Opus with a supporting speech server. Binary uploads are negotiated per model;
+  servers without the extension keep standard PCM/Base64. Existing voice settings
+  are preserved. See [recording quality](docs/operator/clients/voice.md#recording-quality).
 
 - Pages automatically load new revisions while open. Use the lock beside refresh
   to hold the displayed revision; unlocking loads the latest one. See

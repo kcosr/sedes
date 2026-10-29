@@ -18,7 +18,9 @@ without an alias or migration. Client protocol 150 and client-control tool schem
 version 2 carry the audio-mode values. Notification payload version 5 carries
 Partial response sections, independent `turn.partial` delivery, and the required
 live `progress.phase` field.
-Native snapshot version 15 includes `active.recording` (ID, Keep listening and
+Native snapshot version 16 includes `speech.audioQuality`, its independent
+`audioQualityRevision`, per-model picker `audioInputFormats`, and
+`active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
 Keep listening blocked reason, and an independent `recordingRecovery` item.
 Recovery exposes identity, revision, target, stage, incomplete/unrecognized
@@ -1184,11 +1186,43 @@ provider turn detection/noise reduction. Capture starts only after the matching
 `session.updated` acknowledgment. A connection is reusable across segments and
 renews at a safe boundary before its monotonic lifetime expires.
 
+Android upload quality is a separate encrypted device record, version 1, leaving
+the settings-version-9 record and binding-specific thread selections intact.
+`setSpeechAudioQuality` uses the connection generation and expected upload
+preference revision. Changes are blocked while recording. The selection freezes
+for active capture and automatic reconnects; an explicit saved-recording Retry
+uses the current selection. It is excluded from saved semantic configuration.
+
+Original quality uses standard PCM/Base64 unless fresh selected-model discovery
+advertises `realtime_extensions.binary_audio_input` version 1 and PCM24 support.
+High and Low require advertised Ogg Opus support and encode at 64 or 24 kbit/s.
+Direct OpenAI never sends the extension. Binary modes request
+`session.extensions.binary_audio_input: {"version":1}` with format
+`{"type":"audio/pcm","rate":24000}` or
+`{"type":"audio/ogg","codec":"opus"}`. The accepted format and extension
+must match before any audio; unsupported selections fail without a codec change.
+The existing discovery contract remains required, but the new extension is optional.
+
+`NativeVoiceOpusEncoder` uses MediaCodec with a streaming Ogg writer, preserving
+the PCM journal and segmenter's upload watermark. `NativeVoiceOpusConfig`
+normalizes Android's combined `AOPUSHDR`/`AOPUSDLY`/`AOPUSPRL` encoder metadata
+and documented separate CSD buffers. The nanosecond codec delay supplies pre-skip
+on the Ogg clock, including when the embedded header uses the encoder input clock.
+Each segment has a fresh mono
+logical Ogg stream with separate OpusHead/Tags pages and a final EOS audio page.
+Messages carry complete pages, without continued packets. Granules use 48 kHz
+units, with final granule equal to codec pre-skip plus twice the source 24 kHz
+sample count. Encoder padding is trimmed, and the existing short-segment padding
+remains source audio. Queues are bounded and repeated commit attempts finalize
+the encoder only once. Server inference continues to consume normalized 16 kHz.
+
 At most one committed job and one following upload buffer exist on the provider.
 The next buffer opens only after the previous commit acknowledgment. Match
 results by connection, segment attempt and item ID, and track `previous_item_id`
 within each connection. Persist commit intent before transmission; the per-job
-result deadline includes the acknowledgment wait. Deltas never submit partial
+upload acknowledgment wait is bounded separately to five minutes and remaining
+session lifetime. The result deadline starts on commit acknowledgment, which
+confirms server receipt rather than durable storage. Deltas never submit partial
 input. The upload pump retains unsent PCM in the spool and pauses at the 512 KiB
 WebSocket queue bound. Buffer accounting resets after acknowledged commits;
 there is no ten-minute cumulative recognition cap. Synthesis keeps its separate
@@ -1330,11 +1364,10 @@ fallback `playback_failed`. Capture failures report
 `microphone_read_failed`, or the fallback `microphone_failed`. Failure to
 obtain focus (`audio_focus_unavailable`) remains an error; losing focus after
 acquiring it interrupts an adopted recording with recovery. Routing is monitored
-on every supported API (24+): allow initial establishment, validate an explicitly
+on every supported API (29+): allow initial establishment, validate an explicitly
 selected input, then freeze the actual route and interrupt on loss/change.
-On API 29+, AudioRecordingCallback plus the initial active recording configuration
-detect Android client silencing even while zero PCM continues. API 24–28 lack
-that signal and retain route/focus/read/progress checks. Quiet PCM alone is not
+AudioRecordingCallback plus the initial active recording configuration
+detect Android client silencing even while zero PCM continues. Quiet PCM alone is not
 microphone failure. Callbacks are capture-generation fenced and unregistered on
 cleanup. The service renews its bounded ten-minute wake lock every five minutes
 only during active capture/drain; a retained draft holds no wake lock.

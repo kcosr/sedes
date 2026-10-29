@@ -82,13 +82,13 @@ final class NativeSpeechCatalog {
     }
     static JSONObject empty(String source) {
         return NativeVoiceJson.object("source", source, "sttModels", new JSONArray(), "ttsModels", new JSONArray(),
-            "voices", new JSONArray(), "speed", null, "formats", new JSONArray(), "realtime", new JSONObject());
+            "voices", new JSONArray(), "speed", null, "formats", new JSONArray(), "realtime", new JSONObject(), "audioInputFormats", new JSONObject());
     }
     /** The bridge exposes choices only; recognition authority stays in the native fresh-preflight result. */
     static JSONObject picker(JSONObject catalog) {
         if (catalog == null) return null;
         JSONObject result = new JSONObject();
-        for (String key : new String[] { "source", "sttModels", "ttsModels", "voices", "speed", "formats" })
+        for (String key : new String[] { "source", "sttModels", "ttsModels", "voices", "speed", "formats", "audioInputFormats" })
             NativeVoiceJson.put(result, key, catalog.opt(key));
         return NativeVoiceJson.copy(result);
     }
@@ -103,6 +103,7 @@ final class NativeSpeechCatalog {
             String id = identifier(entry, "id");
             if (NativeSpeechCapabilities.HOSTED_MODELS.contains(id)) {
                 stt.add(id); NativeVoiceJson.put(catalog.optJSONObject("realtime"), id, NativeSpeechCapabilities.hosted(id).realtime());
+                NativeVoiceJson.put(catalog.optJSONObject("audioInputFormats"), id, NativeVoiceJson.object("binaryPcm", false, "binaryOpus", false));
             }
             if (knownSpeechModel(id)) tts.add(id);
         }
@@ -137,6 +138,7 @@ final class NativeSpeechCatalog {
                 JSONObject realtime = model.optJSONObject("realtime");
                 validateRealtime(realtime, false);
                 NativeVoiceJson.put(catalog.optJSONObject("realtime"), id, NativeVoiceJson.copy(realtime));
+                NativeVoiceJson.put(catalog.optJSONObject("audioInputFormats"), id, NativeSpeechCapabilities.audioInputFormats(model));
             }
             if (!task.equals("speech")) continue;
             tts.add(id);
@@ -163,7 +165,9 @@ final class NativeSpeechCatalog {
         JSONObject realtime = catalog == null ? null : catalog.optJSONObject("realtime");
         if (catalog == null || !"server".equals(catalog.optString("source")) || realtime == null || !realtime.has(model))
             throw new IllegalArgumentException("speech_transcription_model_unsupported");
-        return NativeSpeechCapabilities.server(model, realtime.optJSONObject(model));
+        JSONObject formats = NativeVoiceJson.requiredObject(NativeVoiceJson.requiredObject(catalog, "audioInputFormats"), model);
+        return NativeSpeechCapabilities.server(model, realtime.optJSONObject(model),
+            NativeVoiceJson.bool(formats, "binaryPcm"), NativeVoiceJson.bool(formats, "binaryOpus"));
     }
     /** Preserve truthful low limits for other picker entries; support thresholds apply to the selected model. */
     static void validateRealtime(JSONObject realtime, boolean hosted) {

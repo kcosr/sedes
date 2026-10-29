@@ -103,14 +103,17 @@ public class NativeSpeechTransportTest {
         void text(String text) throws IOException { frame(1, text.getBytes(StandardCharsets.UTF_8)); }
         void text(JSONObject value) throws IOException { text(value.toString()); }
         JSONObject json() throws Exception {
-            int first = in.readUnsignedByte(), second = in.readUnsignedByte(); assertEquals(1, first & 15);
+            return new JSONObject(new String(data(1), StandardCharsets.UTF_8));
+        }
+        byte[] data(int opcode) throws Exception {
+            int first = in.readUnsignedByte(), second = in.readUnsignedByte(); assertEquals(opcode, first & 15);
             long length = second & 127;
             if (length == 126) length = in.readUnsignedShort(); else if (length == 127) length = in.readLong();
             assertTrue("Unbounded client frame", length <= 128 * 1024);
             byte[] mask = new byte[4]; assertTrue((second & 128) != 0); in.readFully(mask);
             byte[] data = new byte[(int) length]; in.readFully(data);
             for (int i = 0; i < data.length; i++) data[i] ^= mask[i % 4];
-            return new JSONObject(new String(data, StandardCharsets.UTF_8));
+            return data;
         }
         void disconnected() throws IOException { assertEquals("Cancellation did not promptly close the socket", -1, in.read()); }
         void noNewConnection() throws IOException {
@@ -148,6 +151,7 @@ public class NativeSpeechTransportTest {
         peer.upgrade();
         JSONObject update = peer.json(); assertEquals("session.update", update.getString("type"));
         assertEquals("transcription", update.getJSONObject("session").getString("type"));
+        assertFalse("Standard peers must not receive extension negotiation", update.getJSONObject("session").has("extensions"));
         JSONObject input = update.getJSONObject("session").getJSONObject("audio").getJSONObject("input");
         assertEquals("audio/pcm", input.getJSONObject("format").getString("type"));
         assertEquals(24000, input.getJSONObject("format").getInt("rate")); assertEquals("fixture-stt", input.getJSONObject("transcription").getString("model"));
@@ -737,7 +741,8 @@ public class NativeSpeechTransportTest {
     }
     private static final class QueueSocket implements okhttp3.WebSocket {
         final okhttp3.WebSocket original;
-        long queued, audioBytes; int appends;
+        long queued, audioBytes; int appends, commits;
+        final java.util.List<byte[]> binary = new java.util.ArrayList<>();
         QueueSocket(okhttp3.WebSocket original) { this.original = original; }
         public okhttp3.Request request() { return original.request(); }
         public long queueSize() { return queued; }
@@ -745,10 +750,11 @@ public class NativeSpeechTransportTest {
             try {
                 JSONObject event = new JSONObject(value);
                 if (event.optString("type").equals("input_audio_buffer.append")) { appends++; audioBytes += Base64.getDecoder().decode(event.getString("audio")).length; }
+                if (event.optString("type").equals("input_audio_buffer.commit")) commits++;
             } catch (Exception invalid) { throw new AssertionError(invalid); }
             return true;
         }
-        public boolean send(okio.ByteString bytes) { throw new AssertionError("Unexpected binary upload"); }
+        public boolean send(okio.ByteString bytes) { binary.add(bytes.toByteArray()); return true; }
         public boolean close(int code, String reason) { return true; }
         public void cancel() {}
     }
@@ -766,6 +772,179 @@ public class NativeSpeechTransportTest {
                 assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.append("a", new byte[4800])); assertEquals(4800, socket.audioBytes);
                 assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.commit("a"));
             } finally { request.cancel(); original.cancel(); }
+        }
+    }
+    private static NativeSpeechCapabilities binaryCapabilities() {
+        return NativeSpeechCapabilities.server("fixture-stt", capabilities().realtime(), true, true);
+    }
+    private static NativeSpeechTransport.Config qualityConfig(Peer peer, String quality) {
+        return new NativeSpeechTransport.Config(peer.url(), TOKEN, "fixture-stt", "fixture-tts", "fixture-voice", 1, quality);
+    }
+    private static JSONObject binaryHandshake(Peer peer, NativeSpeechTransport.RecognitionSession request) throws Exception {
+        peer.accept(); peer.upgrade(); JSONObject update = peer.json();
+        assertEquals("session.update", update.getString("type"));
+        JSONObject session = update.getJSONObject("session"); session.put("id", "session-1");
+        assertEquals(1, session.getJSONObject("extensions").getJSONObject("binary_audio_input").getInt("version"));
+        assertEquals(NativeSpeechTransport.SendResult.WAITING, request.append("a", new byte[4800]));
+        peer.text(NativeVoiceJson.object("type", "session.created", "session", session()));
+        return session;
+    }
+    /** The codec tests verify actual Ogg framing; this adapter makes asynchronous encoder/backpressure states deterministic. */
+    private static final class Encoder implements NativeVoiceAudioEncoder {
+        final java.util.ArrayDeque<byte[]> output = new java.util.ArrayDeque<>();
+        boolean finishing, closed, releaseEos = true, eos, rejectInput;
+        int offers, finishes, closes;
+        long samples;
+        public boolean offer(byte[] pcm) {
+            if (rejectInput) return false;
+            assertFalse(finishing); offers++; samples += pcm.length / 2;
+            output.add(new byte[] { 79, 103, 103, (byte) offers }); return true;
+        }
+        public void finish() { assertFalse("Transport must finalize once", finishing); finishing = true; finishes++; }
+        public byte[] peek() {
+            if (finishing && releaseEos && !eos) { output.add(new byte[] { 79, 103, 103, 127 }); eos = true; }
+            return output.peek();
+        }
+        public void pop() { output.remove(); }
+        public boolean finished() { return finishing && eos && output.isEmpty(); }
+        public long sourceSamples() { return samples; }
+        public void close() { assertFalse("Encoder closed twice", closed); closed = true; closes++; }
+    }
+    @Test(timeout = 10000) public void advertisedBinaryPcmAndOpusWaitForExactAcknowledgementAndUseTheSameEndpoint() throws Exception {
+        for (String quality : new String[] { "original", "opus_high", "opus_low" }) {
+            Recorder recorder = new Recorder(); Encoder encoder = new Encoder(); java.util.concurrent.atomic.AtomicInteger bitrate = new java.util.concurrent.atomic.AtomicInteger();
+            try (Peer peer = new Peer(); NativeSpeechTransport transport = new NativeSpeechTransport(qualityConfig(peer, quality),
+                () -> System.nanoTime() / 1000000L, rate -> { bitrate.set(rate); return encoder; })) {
+                NativeSpeechTransport.RecognitionSession request = transport.openRecognition("stt", binaryCapabilities(), 5000, recorder);
+                JSONObject accepted = binaryHandshake(peer, request);
+                assertEquals("GET /v1/realtime?intent=transcription HTTP/1.1", peer.requestLine);
+                JSONObject format = accepted.getJSONObject("audio").getJSONObject("input").getJSONObject("format");
+                assertEquals(quality.equals("original") ? "audio/pcm" : "audio/ogg", format.getString("type"));
+                if (!quality.equals("original")) { assertEquals("opus", format.getString("codec")); assertFalse(format.has("bitrate")); }
+                peer.text(NativeVoiceJson.object("type", "session.updated", "session", accepted)); assertEquals("ready:stt", recorder.next());
+                byte[] pcm = new byte[4800]; pcm[0] = 17;
+                assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.append("a", pcm));
+                assertArrayEquals(quality.equals("original") ? pcm : new byte[] {79,103,103,1}, peer.data(2));
+                assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.commit("a"));
+                if (!quality.equals("original")) {
+                    assertArrayEquals(new byte[] {79,103,103,127}, peer.data(2)); assertEquals(1, encoder.finishes); assertEquals(1, encoder.closes);
+                    assertEquals(quality.equals("opus_high") ? 64000 : 24000, bitrate.get());
+                } else assertEquals(0, bitrate.get());
+                assertEquals("input_audio_buffer.commit", peer.json().getString("type"));
+                peer.text(NativeVoiceJson.object("type", "input_audio_buffer.committed", "item_id", "a-item", "previous_item_id", null));
+                peer.text(completed("a-item", "Transcribed")); assertEquals("transcript:stt:Transcribed", recorder.next());
+            }
+        }
+    }
+    @Test(timeout = 10000) public void missingOrMismatchedBinaryAcknowledgementNeverStartsAudio() throws Exception {
+        for (String mode : new String[] { "missing", "version", "format", "extra-format", "extra-extension" }) {
+            Recorder recorder = new Recorder(); Encoder encoder = new Encoder();
+            try (Peer peer = new Peer(); NativeSpeechTransport transport = new NativeSpeechTransport(qualityConfig(peer, "opus_low"),
+                () -> System.nanoTime() / 1000000L, rate -> encoder)) {
+                NativeSpeechTransport.RecognitionSession request = transport.openRecognition("stt", binaryCapabilities(), 5000, recorder);
+                JSONObject accepted = binaryHandshake(peer, request);
+                if (mode.equals("missing")) accepted.remove("extensions");
+                if (mode.equals("version")) accepted.getJSONObject("extensions").getJSONObject("binary_audio_input").put("version", 2);
+                if (mode.equals("extra-extension")) accepted.getJSONObject("extensions").getJSONObject("binary_audio_input").put("mode", "unknown");
+                if (mode.equals("format")) accepted.getJSONObject("audio").getJSONObject("input").put("format", NativeVoiceJson.object("type", "audio/pcm", "rate", 24000));
+                if (mode.equals("extra-format")) accepted.getJSONObject("audio").getJSONObject("input").getJSONObject("format").put("rate", 48000);
+                peer.text(NativeVoiceJson.object("type", "session.updated", "session", accepted));
+                assertEquals("failed:stt:recognition_protocol_error", recorder.next());
+                assertEquals(NativeSpeechTransport.SendResult.ENDED, request.append("a", new byte[4800])); assertEquals(0, encoder.offers);
+                peer.disconnected(); recorder.quiet();
+            }
+        }
+    }
+    @Test(timeout = 10000) public void compressedQualityRequiresExplicitCapabilitiesBeforeOpeningSocket() throws Exception {
+        for (boolean hosted : new boolean[] { false, true }) {
+            Recorder recorder = new Recorder();
+            try (Peer peer = new Peer(); NativeSpeechTransport transport = new NativeSpeechTransport(new NativeSpeechTransport.Config(peer.url(), TOKEN,
+                hosted ? "gpt-live-transcribe" : "fixture-stt", "tts", "voice", 1, "opus_low"), () -> System.nanoTime() / 1000000L, rate -> new Encoder())) {
+                transport.openRecognition("stt", hosted ? NativeSpeechCapabilities.hosted("gpt-live-transcribe") : capabilities(), 5000, recorder);
+                assertEquals("failed:stt:speech_audio_quality_unsupported", recorder.next()); assertFalse(recorder.failures.take().retryable()); peer.noNewConnection();
+            }
+        }
+    }
+    @Test(timeout = 10000) public void opusBackpressurePreservesConsumedPcmAndFinalizesExactlyOnceAcrossCommitRetries() throws Exception {
+        Recorder recorder = new Recorder(); Encoder encoder = new Encoder(); encoder.releaseEos = false;
+        try (Peer peer = new Peer(); NativeSpeechTransport transport = new NativeSpeechTransport(qualityConfig(peer, "opus_low"),
+            () -> System.nanoTime() / 1000000L, rate -> encoder)) {
+            NativeSpeechTransport.RecognitionSession request = transport.openRecognition("stt", binaryCapabilities(), 5000, recorder);
+            JSONObject accepted = binaryHandshake(peer, request); peer.text(NativeVoiceJson.object("type", "session.updated", "session", accepted)); assertEquals("ready:stt", recorder.next());
+            okhttp3.WebSocket original = (okhttp3.WebSocket) field(request, "socket").get(request);
+            QueueSocket socket = new QueueSocket(original); field(request, "socket").set(request, socket);
+            try {
+                encoder.rejectInput = true;
+                assertEquals(NativeSpeechTransport.SendResult.BACKPRESSURE, request.append("a", new byte[4800])); assertEquals(0, encoder.offers);
+                encoder.rejectInput = false; socket.queued = NativeSpeechTransport.MAX_QUEUED_BYTES;
+                assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.append("a", new byte[4800])); assertEquals(1, encoder.offers);
+                assertEquals(NativeSpeechTransport.SendResult.BACKPRESSURE, request.append("a", new byte[4800])); assertEquals(1, encoder.offers);
+                assertEquals(NativeSpeechTransport.SendResult.BACKPRESSURE, request.commit("a")); assertEquals(1, encoder.finishes);
+                socket.queued = 0;
+                assertEquals(NativeSpeechTransport.SendResult.WAITING, request.commit("a")); assertEquals(1, socket.binary.size());
+                assertEquals(NativeSpeechTransport.SendResult.WAITING, request.append("a", new byte[4800])); assertEquals(1, encoder.offers);
+                encoder.releaseEos = true; socket.queued = NativeSpeechTransport.MAX_QUEUED_BYTES;
+                assertEquals(NativeSpeechTransport.SendResult.BACKPRESSURE, request.commit("a")); assertEquals(1, encoder.finishes);
+                socket.queued = NativeSpeechTransport.MAX_QUEUED_BYTES - 4;
+                assertEquals(NativeSpeechTransport.SendResult.BACKPRESSURE, request.commit("a")); assertEquals(2, socket.binary.size());
+                assertEquals(1, encoder.closes); assertEquals(0, socket.commits);
+                socket.queued = 0;
+                assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.commit("a")); assertEquals(2, socket.binary.size());
+                assertEquals(1, socket.commits); assertEquals(1, encoder.finishes); assertEquals(1, encoder.closes); assertEquals(2400, encoder.sourceSamples());
+                assertEquals(NativeSpeechTransport.SendResult.WAITING, request.commit("a")); assertEquals(1, socket.commits); recorder.quiet();
+            } finally { request.cancel(); original.cancel(); }
+        }
+    }
+    @Test(timeout = 10000) public void cancellationClosesAnUnfinishedEncoderWithoutSendingEosOrCallbacks() throws Exception {
+        Recorder recorder = new Recorder(); Encoder encoder = new Encoder();
+        try (Peer peer = new Peer(); NativeSpeechTransport transport = new NativeSpeechTransport(qualityConfig(peer, "opus_low"),
+            () -> System.nanoTime() / 1000000L, rate -> encoder)) {
+            NativeSpeechTransport.RecognitionSession request = transport.openRecognition("stt", binaryCapabilities(), 5000, recorder);
+            JSONObject accepted = binaryHandshake(peer, request); peer.text(NativeVoiceJson.object("type", "session.updated", "session", accepted)); assertEquals("ready:stt", recorder.next());
+            assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.append("a", new byte[4800])); peer.data(2);
+            request.cancel(); request.cancel(); assertEquals(1, encoder.closes); assertEquals(0, encoder.finishes); peer.disconnected(); recorder.quiet();
+        }
+    }
+    @Test(timeout = 10000) public void pipelinedOpusSegmentsEachGetOneEncoderAndWaitForThePreviousResultBeforeEos() throws Exception {
+        Recorder recorder = new Recorder(); java.util.List<Encoder> encoders = new java.util.ArrayList<>();
+        try (Peer peer = new Peer(); NativeSpeechTransport transport = new NativeSpeechTransport(qualityConfig(peer, "opus_high"),
+            () -> System.nanoTime() / 1000000L, rate -> { Encoder encoder = new Encoder(); encoders.add(encoder); return encoder; })) {
+            NativeSpeechTransport.RecognitionSession request = transport.openRecognition("stt", binaryCapabilities(), 5000, recorder);
+            JSONObject accepted = binaryHandshake(peer, request); peer.text(NativeVoiceJson.object("type", "session.updated", "session", accepted)); assertEquals("ready:stt", recorder.next());
+            assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.append("a", new byte[4800])); peer.data(2);
+            assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.commit("a")); peer.data(2); peer.json();
+            assertEquals(NativeSpeechTransport.SendResult.WAITING, request.append("b", new byte[4800])); assertEquals(1, encoders.size());
+            peer.text(NativeVoiceJson.object("type", "input_audio_buffer.committed", "item_id", "a-item", "previous_item_id", null));
+            assertEquals("a:a-item", recorder.acknowledgements.poll(3, TimeUnit.SECONDS));
+            assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.append("b", new byte[4800])); peer.data(2); assertEquals(2, encoders.size());
+            assertEquals(NativeSpeechTransport.SendResult.WAITING, request.commit("b")); assertEquals(0, encoders.get(1).finishes);
+            peer.text(completed("a-item", "First")); assertEquals("transcript:stt:First", recorder.next());
+            assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.commit("b")); peer.data(2); peer.json();
+            peer.text(NativeVoiceJson.object("type", "input_audio_buffer.committed", "item_id", "b-item", "previous_item_id", "a-item"));
+            peer.text(completed("b-item", "Second")); assertEquals("transcript:stt:Second", recorder.next());
+            for (Encoder encoder : encoders) { assertEquals(1, encoder.finishes); assertEquals(1, encoder.closes); assertEquals(2400, encoder.sourceSamples()); }
+        }
+    }
+    @Test(timeout = 10000) public void recognitionBudgetStartsAtServerCommitReceiptAfterSlowUpload() throws Exception {
+        Recorder recorder = new Recorder(); java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(1000);
+        try (Peer peer = new Peer(); NativeSpeechTransport transport = new NativeSpeechTransport(config(peer.url()), now::get)) {
+            NativeSpeechTransport.RecognitionSession request = transport.openRecognition("stt", capabilities(), 1000, recorder); handshake(peer, recorder);
+            assertTrue(append(request, new byte[4800])); peer.json(); assertTrue(commitRequest(request)); peer.json();
+            now.addAndGet(120000); assertEquals(NativeSpeechTransport.SendResult.WAITING, request.append("b", new byte[4800]));
+            peer.text(NativeVoiceJson.object("type", "input_audio_buffer.committed", "item_id", "item-1", "previous_item_id", null));
+            assertEquals("attempt-1:item-1", recorder.acknowledgements.poll(3, TimeUnit.SECONDS));
+            now.addAndGet(999); assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.append("b", new byte[4800])); peer.json();
+            now.incrementAndGet(); assertEquals(NativeSpeechTransport.SendResult.ENDED, request.append("b", new byte[4800]));
+            assertEquals("failed:stt:recognition_result_timeout", recorder.next());
+        }
+    }
+    @Test(timeout = 10000) public void boundedUploadDeadlineDoesNotTreatDrainedSocketQueueAsServerReceipt() throws Exception {
+        Recorder recorder = new Recorder();
+        try (Peer peer = new Peer(); NativeSpeechTransport transport = new NativeSpeechTransport(config(peer.url()), new OkHttpClient(),
+            new NativeSpeechTransport.Limits(5000, 5000, 5000, NativeSpeechTransport.MAX_SPEECH_PCM_BYTES, 150), () -> System.nanoTime() / 1000000L)) {
+            NativeSpeechTransport.RecognitionSession request = transport.openRecognition("stt", capabilities(), 5000, recorder); handshake(peer, recorder);
+            assertTrue(append(request, new byte[4800])); peer.json(); assertTrue(commitRequest(request)); peer.json();
+            assertEquals("failed:stt:recognition_upload_timeout", recorder.next()); assertTrue(recorder.failures.take().retryable()); peer.disconnected(); recorder.quiet();
         }
     }
     @Test(timeout = 30000) public void recognitionHasPerBufferLimitsAndNoCumulativeTtsPcmLimit() throws Exception {
@@ -805,6 +984,7 @@ public class NativeSpeechTransportTest {
         Recorder recorder = new Recorder(); java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(1000);
         try (Peer peer = new Peer(); NativeSpeechTransport transport = new NativeSpeechTransport(config(peer.url()), now::get)) {
             NativeSpeechTransport.RecognitionSession request = transport.openRecognition("stt", capabilities(), 5000, recorder); handshake(peer, recorder); commit(peer, request);
+            assertEquals("attempt-1:item-1", recorder.acknowledgements.poll(3, TimeUnit.SECONDS));
             now.addAndGet(5001); assertEquals(NativeSpeechTransport.SendResult.ENDED, request.append("b", new byte[4800]));
             assertEquals("failed:stt:recognition_result_timeout", recorder.next()); recorder.quiet();
         }
@@ -849,7 +1029,8 @@ public class NativeSpeechTransportTest {
                 NativeSpeechTransport.RecognitionSession request = transport.openRecognition("stt", NativeSpeechCapabilities.hosted("gpt-live-transcribe"), 5000, recorder);
                 peer.accept(); peer.upgrade(mode.equals("missing-date") ? null : mode.equals("bad-date") ? "yesterday" : date);
                 if (!mode.endsWith("date")) {
-                    peer.json(); JSONObject session = session(); session.getJSONObject("audio").getJSONObject("input").getJSONObject("transcription").put("model", "gpt-live-transcribe");
+                    JSONObject update = peer.json(); assertFalse(update.getJSONObject("session").has("extensions"));
+                    JSONObject session = session(); session.getJSONObject("audio").getJSONObject("input").getJSONObject("transcription").put("model", "gpt-live-transcribe");
                     if (!mode.equals("missing-expiry")) session.put("expires_at", mode.equals("past") ? serverSeconds - 1 : mode.equals("implausible") ? serverSeconds + 3623 :
                         mode.equals("fractional") ? serverSeconds + 3599.5 : serverSeconds + 3600);
                     peer.text(NativeVoiceJson.object("type", "session.created", "session", session));

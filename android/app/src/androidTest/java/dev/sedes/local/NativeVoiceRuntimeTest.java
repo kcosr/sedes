@@ -4658,6 +4658,62 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void uploadQualityUsesItsOwnRevisionAndRejectsUnsupportedChoices() throws Exception {
+        try (Fixture f = new Fixture(false, false, true)) {
+            f.readyClientVoice("input");
+            NativeSpeechCapabilities capabilities = NativeSpeechCapabilities.server("gpt-live-transcribe", NativeVoiceJson.object(
+                "max_buffer_bytes", 2880000, "max_message_bytes", 1048576, "max_output_bytes", 1048576,
+                "idle_timeout_seconds", 60, "max_session_seconds", 3600), true, true);
+            f.onOwner(() -> {
+                JSONObject catalog = NativeSpeechCatalog.empty("server");
+                NativeVoiceJson.put(catalog.optJSONObject("realtime"), capabilities.model, capabilities.realtime());
+                NativeVoiceJson.put(catalog.optJSONObject("audioInputFormats"), capabilities.model,
+                    NativeVoiceJson.object("binaryPcm", true, "binaryOpus", true));
+                set(f.runtime, "speechCatalog", catalog);
+            });
+            long revision = f.runtime.snapshot().getLong("settingsRevision");
+            assertNull(f.command("setSpeechAudioQuality", NativeVoiceJson.object("expectedAudioQualityRevision", 0, "audioQuality", "opus_high")));
+            assertEquals(revision, f.runtime.snapshot().getLong("settingsRevision"));
+            assertEquals("opus_high", new NativeVoiceStore(f.context).uploadPreferences().audioQuality);
+            assertEquals("audio_quality_revision_conflict", f.command("setSpeechAudioQuality",
+                NativeVoiceJson.object("expectedAudioQualityRevision", 0, "audioQuality", "original")));
+            f.onOwner(() -> {
+                set(f.runtime, "settings", NativeVoiceSettings.defaults());
+                f.invoke("publish", new Class<?>[0]);
+            });
+            assertEquals("speech_audio_quality_unsupported", f.command("setSpeechAudioQuality",
+                NativeVoiceJson.object("expectedAudioQualityRevision", 1, "audioQuality", "opus_low")));
+            assertEquals("opus_high", f.runtime.snapshot().getJSONObject("speech").getString("audioQuality"));
+            assertNull(f.command("setSpeechAudioQuality", NativeVoiceJson.object("expectedAudioQualityRevision", 1, "audioQuality", "original")));
+        }
+    }
+
+    @Test public void explicitRetryUsesCurrentQualityAndFreshCapabilitiesWithoutChangingSavedConfiguration() throws Exception {
+        for (boolean supportsOpus : new boolean[] { true, false }) try (Fixture f = new Fixture(false, false, true)) {
+            NativeVoiceAudioTest.grant(f.context, "android.permission.RECORD_AUDIO");
+            NativeDictationStore.Recording saved = f.savedRecording(false, true);
+            assertFalse(saved.config.has("audioQuality"));
+            f.onOwner(() -> set(f.runtime, "uploadPreferences", NativeVoiceUploadPreferences.defaults().patch(0, "opus_low")));
+            f.recordingCapabilities = NativeSpeechCapabilities.server("gpt-live-transcribe", NativeVoiceJson.object(
+                "max_buffer_bytes", 2880000, "max_message_bytes", 1048576, "max_output_bytes", 1048576,
+                "idle_timeout_seconds", 60, "max_session_seconds", 3600), true, supportsOpus);
+            String error = f.command("retryRecordingRecognition", recoveryArgs(saved));
+            if (supportsOpus) {
+                assertNull(error);
+                assertEquals("opus_low", f.recognitionConfigs.poll(10, TimeUnit.SECONDS).audioQuality);
+                assertEquals("opus_low", field(field(f.runtime, "active"), "recordingAudioQuality"));
+                assertEquals("recording_settings_busy", f.command("setSpeechAudioQuality",
+                    NativeVoiceJson.object("expectedAudioQualityRevision", 1, "audioQuality", "original")));
+            } else {
+                assertEquals("speech_audio_quality_unsupported", error);
+                assertTrue(f.recognitionConfigs.isEmpty());
+                f.flush();
+                f.onStore(() -> assertTrue(f.dictations.get(f.binding, saved.id).durableSamples > 0));
+            }
+            assertFalse(saved.config.has("audioQuality"));
+        }
+    }
+
     @Test public void notificationCancelDuringRecognitionRetryPreservesSavedAudio() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             NativeVoiceAudioTest.grant(f.context, "android.permission.RECORD_AUDIO");
@@ -5714,7 +5770,7 @@ public class NativeVoiceRuntimeTest {
                 SpeechJob announcement = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(announcement);
                 assertEquals("Replying to Current destination.", announcement.text);
                 JSONObject state = f.runtime.snapshot(), actions = state.getJSONObject("actions");
-                assertEquals("announcing", state.getString("phase")); assertEquals(15, state.getInt("version"));
+                assertEquals("announcing", state.getString("phase")); assertEquals(16, state.getInt("version"));
                 assertEquals("Current destination", state.getJSONObject("active").getString("recognitionThreadTitle"));
                 assertFalse(actions.getBoolean("canSkip")); assertFalse(actions.getBoolean("canRecordDuringPlayback")); assertTrue(actions.getBoolean("canStop"));
                 assertNull(field(field(f.runtime, "active"), "recordingId"));
@@ -6599,6 +6655,8 @@ public class NativeVoiceRuntimeTest {
         long policyGeneration;
         volatile boolean holdRecordingPreflight, holdPlaybackValidation, holdReadyValidation;
         final BlockingQueue<NativeSpeechCatalog.PreflightResult> preflights = new LinkedBlockingQueue<>();
+        final BlockingQueue<NativeSpeechTransport.Config> recognitionConfigs = new LinkedBlockingQueue<>();
+        volatile NativeSpeechCapabilities recordingCapabilities;
 
         Fixture(boolean automatic, boolean retargeted) throws Exception { this(automatic, retargeted, false); }
         Fixture(boolean automatic, boolean retargeted, boolean ownSpeechServer) throws Exception { this(automatic, retargeted, ownSpeechServer, null); }
@@ -6607,12 +6665,13 @@ public class NativeVoiceRuntimeTest {
             runtime = new NativeVoiceRuntime(context, new NativeVoiceRuntime.RecordingBackend() {
                 public okhttp3.Call preflight(NativeVoiceSettings settings, String credential, NativeSpeechCatalog.PreflightResult result) {
                     if (holdRecordingPreflight) { preflights.add(result); return null; }
+                    if (recordingCapabilities != null) { result.done(recordingCapabilities, null); return null; }
                     NativeSpeechCapabilities capabilities = ownSpeechServer ? NativeSpeechCapabilities.server(settings.text("sttModel"), NativeVoiceJson.object(
                         "max_buffer_bytes", 2880000, "max_message_bytes", 1048576, "max_output_bytes", 1048576,
                         "idle_timeout_seconds", 60, "max_session_seconds", 3600)) : NativeSpeechCapabilities.hosted("gpt-live-transcribe");
                     result.done(capabilities, null); return null;
                 }
-                public NativeSpeechTransport open(NativeSpeechTransport.Config config) { return speech; }
+                public NativeSpeechTransport open(NativeSpeechTransport.Config config) { recognitionConfigs.add(config); return speech; }
             });
             speech.runtime = runtime;
             owner = (Handler) field(runtime, "handler"); store = (NativeVoiceStore) field(runtime, "store");

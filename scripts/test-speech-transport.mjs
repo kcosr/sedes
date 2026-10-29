@@ -1,4 +1,6 @@
 import { execFile, spawn } from "node:child_process";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +22,68 @@ let exitCode = 1;
 let counts;
 let interrupted = false;
 const began = Date.now();
+const execute = promisify(execFile);
+const hash = bytes => createHash("sha256").update(bytes).digest("hex");
+
+/** Extract actual codec packets so the JVM exercises the production streaming
+ * Ogg writer. ffmpeg supplies the encoder only; MediaCodec requires a device. */
+function opusPackets(ogg) {
+  const packets = [];
+  let pending = [];
+  for (let offset = 0; offset < ogg.length;) {
+    assert.equal(ogg.toString("ascii", offset, offset + 4), "OggS");
+    const segments = ogg[offset + 26];
+    let cursor = offset + 27 + segments;
+    for (let index = 0; index < segments; index++) {
+      const length = ogg[offset + 27 + index];
+      assert(cursor + length <= ogg.length);
+      pending.push(ogg.subarray(cursor, cursor + length)); cursor += length;
+      if (length < 255) { packets.push(Buffer.concat(pending)); pending = []; }
+    }
+    assert(cursor > offset); offset = cursor;
+  }
+  assert.equal(pending.length, 0);
+  assert.equal(packets[0].subarray(0, 8).toString(), "OpusHead");
+  assert.equal(packets[1].subarray(0, 8).toString(), "OpusTags");
+  return { opusHead: packets[0].toString("base64"), packets: packets.slice(2).map(packet => packet.toString("base64")) };
+}
+
+async function audioFixtures(pcm) {
+  const ffmpeg = process.env.OPENAI_SPEECH_FFMPEG ?? "/usr/bin/ffmpeg";
+  const fixturesDirectory = path.join(directory, "audio");
+  await mkdir(fixturesDirectory);
+  const rawArguments = ["-f", "s16le", "-ar", "24000", "-ac", "1"];
+  async function normalized(name, source, inputArguments) {
+    const target = path.join(fixturesDirectory, `${name}-normalized.pcm`);
+    await execute(ffmpeg, ["-nostdin", "-v", "error", ...inputArguments, "-i", source, "-ac", "1", "-ar", "16000", "-f", "s16le", target]);
+    const output = await readFile(target);
+    return { normalizedPcmBytes: output.length, normalizedPcmSha256: hash(output) };
+  }
+  const originalPath = path.join(fixturesDirectory, "original.pcm");
+  await writeFile(originalPath, pcm);
+  const original = { pcm: pcm.toString("base64"), ...await normalized("original", originalPath, rawArguments) };
+  const opus = [];
+  // Both endings are deliberately between codec frames. The short second
+  // recording detects leaked pre-skip, encoder state and final-page trimming.
+  for (const [index, sourceSamples] of [27287, 3331].entries()) {
+    const sourcePcm = Buffer.alloc(sourceSamples * 2);
+    for (let sample = 0; sample < sourceSamples; sample++) {
+      const signal = 4000 * Math.sin(2 * Math.PI * (index ? 733 : 431) * sample / 24000);
+      sourcePcm.writeInt16LE(Math.round(signal), sample * 2);
+    }
+    const sourcePath = path.join(fixturesDirectory, `opus-${index}.pcm`);
+    const oggPath = path.join(fixturesDirectory, `opus-${index}.ogg`);
+    await writeFile(sourcePath, sourcePcm);
+    await execute(ffmpeg, ["-nostdin", "-v", "error", ...rawArguments, "-i", sourcePath,
+      "-c:a", "libopus", "-b:a", "24000", "-vbr", "off", "-application", "voip", "-frame_duration", "20", "-f", "ogg", oggPath]);
+    const ogg = await readFile(oggPath);
+    opus.push({ pcm: sourcePcm.toString("base64"), sourceSamples, ...opusPackets(ogg),
+      ...await normalized(`opus-${index}`, oggPath, []) });
+  }
+  const manifest = path.join(fixturesDirectory, "fixtures.json");
+  await writeFile(manifest, JSON.stringify({ original, opus }));
+  return manifest;
+}
 const kill = signal => {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   try { if (process.platform === "win32") child.kill(signal); else process.kill(-child.pid, signal); }
@@ -33,6 +97,7 @@ try {
     primary = await startOpenAiSpeechFixture(path.join(directory, "primary"));
     replacement = await startOpenAiSpeechFixture(path.join(directory, "replacement"));
   }
+  const fixturePath = live ? "" : await audioFixtures(primary.pcm);
   if (interrupted) throw new Error("Speech transport verification interrupted");
   // Only the explicitly dedicated credential reaches the test worker. No ambient
   // OpenAI credential, provider config, or server runtime state is discovered.
@@ -46,6 +111,7 @@ try {
     SEDES_SPEECH_TEST_REPLACEMENT_ENDPOINT: replacement?.endpoint ?? "",
     SEDES_SPEECH_TEST_REPLACEMENT_TOKEN: replacement?.token ?? "",
     SEDES_SPEECH_TEST_PCM_SHA256: primary?.pcmSha256 ?? "",
+    SEDES_SPEECH_TEST_AUDIO_FIXTURES: fixturePath,
   };
   delete environment.NODE_ENV;
   delete environment.OPENAI_API_KEY;
@@ -69,7 +135,7 @@ try {
     const report = path.join(root, "android/app/build/test-results/testDebugUnitTest/TEST-dev.sedes.local.NativeVoiceSpeechIntegrationTest.xml");
     const xml = await readFile(report, "utf8");
     counts = Object.fromEntries(["tests", "failures", "errors", "skipped"].map(key => [key, Number(new RegExp(`\\b${key}="(\\d+)"`).exec(xml)?.[1] ?? -1)]));
-    if ((await stat(report)).mtimeMs < began || counts.tests !== 7 || counts.failures !== 0 || counts.errors !== 0 || counts.skipped !== (live ? 6 : 1)) {
+    if ((await stat(report)).mtimeMs < began || counts.tests !== 10 || counts.failures !== 0 || counts.errors !== 0 || counts.skipped !== (live ? 9 : 1)) {
       output += "\nExpected transport cases did not execute; inspect the focused JUnit XML report.\n";
     } else exitCode = 0;
   }
@@ -87,6 +153,8 @@ try {
   };
   const sources = { sedes: await revision(root), speechServer: live ? undefined : await revision(process.env.SEDES_SPEECH_SERVER_REPOSITORY) };
   await writeFile(path.join(directory, "result.json"), JSON.stringify({ lane: live ? "live-openai" : "local-server", exitCode, counts, sources,
-    elapsedMs: Date.now() - began, androidDeviceRun: false, liveProviderCalls: live ? "at most one speech and one transcription" : "none" }, null, 2) + "\n");
+    elapsedMs: Date.now() - began, androidDeviceRun: false,
+    opusEncoder: live ? undefined : "ffmpeg libopus fixture packets through native Java Ogg mux and transport; MediaCodec is not exercised",
+    liveProviderCalls: live ? "at most one speech and one transcription" : "none" }, null, 2) + "\n");
 }
 process.exitCode = exitCode;

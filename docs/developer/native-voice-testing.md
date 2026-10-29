@@ -29,7 +29,8 @@ it neither installs dependencies nor changes the checkout. Record both source
 revisions when reporting a cross-repository run.
 
 The deterministic speech workers require Python 3, `prlimit`, and ffmpeg with
-audio decoding/resampling support. Set `OPENAI_SPEECH_FFMPEG` to the absolute
+audio decoding/resampling support, an Opus decoder, and the `libopus` encoder
+used to generate host fixtures. Set `OPENAI_SPEECH_FFMPEG` to the absolute
 ffmpeg executable when it is not `/usr/bin/ffmpeg`. A missing ffmpeg is a failed
 prerequisite, not a reason to skip audio assertions. No GPU or speech model
 installation is required for the fixture workers.
@@ -55,6 +56,10 @@ This lane verifies:
 - A real Realtime transcription session and acknowledged configuration before
   audio append; explicit commit is required to start inference. The server
   normalizes the prerecorded 24 kHz PCM into 16 kHz worker input.
+- Standard Base64 PCM without extensions, negotiated binary PCM, and negotiated
+  Ogg Opus through the native streaming Ogg writer. Generated Opus fixtures
+  exercise irregular final lengths and successive independent segments; normalized
+  PCM hashes and duration are compared with ffmpeg's reference decode.
 - One final result per committed recording, separate recordings, and no
   transcript replay into a new session.
 - Cancellation after commit, suppression of a late result, cancellation of the
@@ -70,6 +75,15 @@ adversarial wire cases: session/item correlation, ignored optional events,
 malformed messages and PCM, content types, arbitrary HTTP chunk boundaries,
 timeouts, redirects, limits, and cancellation before response headers. These
 are ordinary JVM checks. They complement the real-server lane.
+
+`NativeOggOpusWriterTest` checks container framing and bounded buffering on the
+host. `NativeVoiceOpusEncoderTest` exercises the actual Android MediaCodec at
+both bitrates around codec-frame and final-segment boundaries, verifies exact
+source granules, and checks Android decoder acceptance. `android:verify` compiles
+that instrumentation; it does not execute the encoder on a device. A real-device
+run and a paired speech corpus are needed to assess encoder behavior and
+recognition accuracy. The host Opus lane uses real ffmpeg packets with the
+production Java writer and transport, not the Android encoder.
 
 The runner writes `test-results/speech-run-*` with `jvm.log`, a metadata-only
 `result.json`, and local server logs. It closes owned servers and workers on
