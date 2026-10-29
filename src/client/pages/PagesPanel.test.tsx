@@ -13,12 +13,12 @@ import { createPagesPanelIntent } from "./pages-panel-intent.js";
 
 const documentState = vi.hoisted(() => ({ services: undefined as PageDocumentServices | undefined }));
 vi.mock("./PageDocument.js", () => ({
-  PageDocument: ({ page, services, visible, onBack, latestRevision }: {
-    page: PageRevision; services: PageDocumentServices; visible: boolean; onBack: () => void; latestRevision?: number;
+  PageDocument: ({ page, services, visible, onBack, revisionRefreshKey, publishedRevision }: {
+    page: PageRevision; services: PageDocumentServices; visible: boolean; onBack: () => void; revisionRefreshKey?: string; publishedRevision?: number;
   }) => {
     const [browsed, setBrowsed] = useState(page.revision);
     documentState.services = services;
-    return <article aria-label="Page document" data-visible={String(visible)} data-anchor={page.revision} data-latest={latestRevision}>
+    return <article aria-label="Page document" data-visible={String(visible)} data-anchor={page.revision} data-refresh-key={revisionRefreshKey} data-published-revision={publishedRevision}>
       <button data-panel-autofocus onClick={onBack}>Back to pages</button>
       <h2>{page.title}</h2>
       <p>Viewing revision {browsed}</p>
@@ -63,6 +63,10 @@ function storeFixture(threadId = "thread-1") {
     store, ...methods,
     publishItems(items: readonly ConversationItem[]) {
       state = { ...state, snapshot: { itemsById: Object.fromEntries(items.map((item) => [item.id, item])) } as ThreadClientState["snapshot"] };
+      act(() => listeners.forEach((listener) => listener()));
+    },
+    connection(connection: ThreadClientState["connection"]) {
+      state = { ...state, connection };
       act(() => listeners.forEach((listener) => listener()));
     },
   };
@@ -125,7 +129,7 @@ describe("Pages panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Browse older revision" }));
     fixture.listPages.mockResolvedValue({ items: [{ ...page, revision: 3, title: "New title" }, otherPage] });
     fixture.publishItems([publication("new-revision", { ...page, revision: 3 })]);
-    await waitFor(() => expect(screen.getByRole("article")).toHaveAttribute("data-latest", "3"));
+    expect(screen.getByRole("article")).toHaveAttribute("data-published-revision", "3");
     expect(screen.getByRole("article")).toHaveAttribute("data-anchor", "2");
     expect(screen.getByText("Viewing revision 1")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
@@ -146,6 +150,31 @@ describe("Pages panel", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Refresh pages" })).not.toBeDisabled());
     expect(screen.queryByRole("article")).toBeNull();
     expect(screen.getByRole("button", { name: "New title" })).toBeInTheDocument();
+  });
+
+  it("invalidates an open document outside the loaded page list on publication and reconnect", async () => {
+    const fixture = storeFixture();
+    fixture.listPages.mockResolvedValue({ items: [otherPage], nextCursor: "older-pages" });
+    const { context } = contextFixture(fixture);
+    render(<PagesPanel context={{ ...context, intent: createPagesPanelIntent(page) }} />);
+    await waitFor(() => expect(fixture.listPages).toHaveBeenCalledOnce());
+    const document = screen.getByRole("article"), initial = document.getAttribute("data-refresh-key");
+    fixture.publishItems([publication("another-page", otherPage)]);
+    expect(document).toHaveAttribute("data-published-revision", "0");
+    expect(document.getAttribute("data-refresh-key")).toBe(initial);
+    fixture.publishItems([publication("newer-revision-outside-list", { ...page, revision: 3 })]);
+    expect(document).toHaveAttribute("data-published-revision", "3");
+    expect(document.getAttribute("data-refresh-key")).toBe(initial);
+    fixture.publishItems([publication("newer-revision-outside-list", { ...page, revision: 3 }), publication("old-history", { ...page, revision: 1 })]);
+    expect(document).toHaveAttribute("data-published-revision", "3");
+    expect(document.getAttribute("data-refresh-key")).toBe(initial);
+    const published = document.getAttribute("data-refresh-key");
+    fixture.connection("reconnecting");
+    expect(document.getAttribute("data-refresh-key")).toBe(published);
+    fixture.connection("connected");
+    expect(document.getAttribute("data-refresh-key")).not.toBe(published);
+    expect(screen.getByRole("article")).toBe(document);
+    expect(screen.getByRole("article")).toHaveAttribute("data-anchor", "2");
   });
 
   it("opens exact chat revisions once per intent and rejects foreign and stale intents", async () => {

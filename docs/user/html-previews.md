@@ -9,9 +9,9 @@ own **Send** control; it has no access to your credentials or other Sedes tools.
 Inline content appears without a permanent header or dimensions footer. Use
 **Open in Pages** at the top right to open that exact revision in the thread's
 Pages panel. Move, resize, or maximize the panel using its standard header
-controls. The document header contains the title, **Download HTML**, refresh,
-and previous/next arrows around a `1/3` revision indicator when the page has
-multiple revisions. Single-revision pages omit the revision controls.
+controls. The document header contains the title, **Download HTML**, a revision
+lock, refresh, and previous/next arrows around a `1/3` revision indicator when
+the page has multiple revisions. Single-revision pages omit the revision controls.
 Refresh reloads the selected saved revision and resets its local interaction
 state. **Back to Pages** returns to the thread's page list.
 
@@ -38,9 +38,15 @@ Use the previous and next arrows in Pages to browse a document's revisions.
 Browsing does not change the saved conversation or an inline preview. Select
 the revision indicator while browsing to return to the revision you opened.
 Opening a document from the page list starts at its latest listed revision;
-opening from chat starts at that occurrence's exact revision. Later publications
-and list refreshes update the available revisions without switching the one
-you are viewing.
+opening from chat starts at that occurrence's exact revision. By default, the
+lock icon to the left of refresh is unlocked: a new revision automatically
+replaces the displayed document, even if you have browsed to an older revision.
+Lock it to pause automatic updates while the revision count continues to update.
+Unlocking loads the latest saved revision. The arrows and refresh remain usable
+while locked. The lock belongs to this open document on this client; hiding and
+showing the panel preserves it, while reopening the document starts unlocked.
+The viewer also checks for updates when shown, on reconnect, and when the window
+regains focus.
 
 Open **Pages** from the workbench bar or **Panels** menu to find documents
 even when their original chat turn is outside loaded history or has been
@@ -59,9 +65,10 @@ desktop Pages panel preserve its live page. Hiding it, replacing it with another
 panel, leaving it on a phone, or crossing the phone/desktop boundary can release
 the frame. Showing it again restores the selected revision and zoom with a
 fresh page; unsent form values and JavaScript state are lost. Closing the panel,
-returning to its list, changing revisions, or switching threads also releases
-the document. Inline previews and the panel run separate copies. Pages belong
-to their original thread and are removed when that thread is deleted.
+returning to its list, changing revisions (including automatic updates), or
+switching threads also releases the document. Inline previews and the panel run
+separate copies. Pages belong to their original thread and are removed when that
+thread is deleted.
 
 ## Download a page
 
@@ -69,6 +76,8 @@ Open the document in the thread's **Pages** panel and choose
 **Download HTML** to save the revision currently displayed. Web browsers start
 a file download; desktop and Android clients open their save dialog or document
 picker. You can download a saved revision even if its preview cannot load.
+An in-progress download continues with the revision captured when you clicked
+**Download HTML**, even if an automatic update displays a newer revision.
 
 The download is one `.html` file with captured images embedded as data URLs,
 including images referenced by CSS. It needs no ZIP or separate asset folder,

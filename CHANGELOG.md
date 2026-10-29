@@ -76,6 +76,11 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
+- Pages automatically load new revisions while open. Use the lock beside refresh
+  to hold the displayed revision; unlocking loads the latest one. See
+  [page revisions](docs/user/html-previews.md#edit-and-compare-revisions).
+  ([#127](https://github.com/kcosr/sedes/pull/127))
+
 - Electron supports dictation, spoken replies, and Auto-listen through OpenAI or
   your own speech server while the app is running, with secure credential entry,
   microphone selection, and system certificate trust for HTTPS and secure
