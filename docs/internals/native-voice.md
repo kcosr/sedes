@@ -1212,9 +1212,13 @@ Each segment has a fresh mono
 logical Ogg stream with separate OpusHead/Tags pages and a final EOS audio page.
 Messages carry complete pages, without continued packets. Granules use 48 kHz
 units, with final granule equal to codec pre-skip plus twice the source 24 kHz
-sample count. Encoder padding is trimmed, and the existing short-segment padding
-remains source audio. Queues are bounded and repeated commit attempts finalize
-the encoder only once. Server inference continues to consume normalized 16 kHz.
+sample count. Before signaling codec EOS, the encoder supplies enough zero PCM
+to cover the declared codec delay, accounting for any partial-frame padding
+already supplied. It does not rely on Android adding a final lookahead packet.
+This padding is excluded from the source count and trimmed by the final granule;
+the existing short-segment padding remains source audio. Queues are bounded and
+repeated commit attempts finalize the encoder only once. Server inference
+continues to consume normalized 16 kHz.
 
 At most one committed job and one following upload buffer exist on the provider.
 The next buffer opens only after the previous commit acknowledgment. Match

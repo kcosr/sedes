@@ -306,6 +306,10 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Android High and Low bandwidth dictation finish correctly on codecs that do
+  not emit an extra packet at the end of a recording, including automatic
+  segment submission. ([#128](https://github.com/kcosr/sedes/pull/128))
+
 - Ordinary messages sent from another device now load in the conversation
   without briefly showing queue controls or a disabled-Steer explanation.
   Content-loading failures offer a retry that does not resend the message.

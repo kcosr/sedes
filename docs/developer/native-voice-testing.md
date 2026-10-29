@@ -77,7 +77,11 @@ timeouts, redirects, limits, and cancellation before response headers. These
 are ordinary JVM checks. They complement the real-server lane.
 
 `NativeOggOpusWriterTest` checks container framing and bounded buffering on the
-host. `NativeVoiceOpusEncoderTest` exercises the actual Android MediaCodec at
+host. `NativeVoiceOpusEncoderUnitTest` drives the production encoder through a
+controlled codec boundary, covering explicit delay padding, delayed metadata,
+backpressure, repeated finalization, and codecs with or without an extra EOS
+packet. These checks do not execute MediaCodec.
+`NativeVoiceOpusEncoderTest` exercises the actual Android MediaCodec at
 both bitrates around codec-frame and final-segment boundaries, verifies exact
 source granules, and checks Android decoder acceptance. `android:verify` compiles
 that instrumentation; it does not execute the encoder on a device. A real-device
