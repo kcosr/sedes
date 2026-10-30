@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 2,
+  "release": "0.166.0",
+  "nativeExecutableSha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+  "creationIdempotencyKey": false,
+  "clientAssignedThreadId": false,
+  "responseAndNotificationCorrelated": true,
+  "confirmedEmptyStartDurableAfterRestart": false,
+  "crashAfterResponseBeforeBindingDurableAfterRestart": false,
+  "acceptedStartResponseCapturedBeforeCrash": true,
+  "acceptedStartResponseWithheldFromCaller": true,
+  "acceptedStartCallerOutcomeAfterCrash": "response_unknown",
+  "acceptedStartDurableAfterRestart": false,
+  "fixtureBindingRecordWrittenBeforeFirstTurn": true,
+  "materializedThreadDurableAfterRestart": true,
+  "candidateCreationSequence": "persist Sedes intent; start once; correlate within generation; persist binding; only then start first turn; invalidate generation and never retry on uncertainty",
+  "gateDisposition": "requires explicit user approval of empty-orphan risk or import-only creation before C3"
+}

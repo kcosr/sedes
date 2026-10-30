@@ -49,6 +49,7 @@ type CandidateMetadata = {
   release: string;
   protocolRelease: string;
   readStateMetadata: boolean;
+  itemLocalTimestamps: boolean;
   platforms: {
     nodePlatform: string;
     nodeArch: string;
@@ -331,6 +332,13 @@ try {
       const event = await client.nextNotification(method);
       decodeCodexC2Notification(method, event.params);
       assert.equal(event.params.threadId, threadId);
+      for (const field of ["startedAtMs", "completedAtMs"] as const) {
+        assert.equal(Object.hasOwn(event.params.item, field), metadata.itemLocalTimestamps);
+      }
+      if (metadata.itemLocalTimestamps) {
+        const field = method === "item/started" ? "startedAtMs" : "completedAtMs";
+        assert.equal(event.params.item[field], event.params[field]);
+      }
       assistantSeen ||= event.params.item.type === "agentMessage";
     }
     assert(assistantSeen);
@@ -391,6 +399,12 @@ try {
     limit: 10,
   });
   assert(items.data.length > 0);
+  for (const entry of items.data) {
+    for (const field of ["startedAtMs", "completedAtMs"] as const) {
+      assert.equal(Object.hasOwn(entry.item, field), metadata.itemLocalTimestamps);
+      if (metadata.itemLocalTimestamps) assert.equal(entry.item[field], entry[field]);
+    }
+  }
   const fork = await call(resumedClient, codexThreadForkMethod, {
     threadId, model: resumed.model, config: { model_reasoning_effort: "high" },
   });
@@ -419,6 +433,7 @@ try {
         schemaDeltaVerified: true,
         experimentalGateRejected: true,
         readStateMetadataPresent: metadata.readStateMetadata,
+        itemLocalTimestampsPreserved: metadata.itemLocalTimestamps,
         readStateNotificationBeforeCompletion: metadata.readStateMetadata
           ? true
           : null,

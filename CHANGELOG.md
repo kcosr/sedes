@@ -471,12 +471,12 @@ User-facing changes are collected here before release. See the
   answered forms cannot reappear from an older interaction read.
   ([#93](https://github.com/kcosr/sedes/pull/93))
 
-- Codex 0.163.0 no longer disconnects discovery, history reads, or turn
-  completion when native read-state metadata arrives. The generated protocol
-  is refreshed while retaining Codex 0.162.1 as the runtime minimum; native
-  read/unread controls remain unsupported. See
-  [Codex compatibility](docs/operator/backends/codex.md#version-compatibility).
-  ([#91](https://github.com/kcosr/sedes/pull/91))
+- Codex 0.166.0 conversations accept native item timestamps, generated-image
+  metadata, and current account and hook values without losing streaming or
+  history. The runtime minimum remains 0.162.1; native read-state metadata stays
+  informational, and file-backed generated images are explicitly unavailable.
+  See [Codex compatibility](docs/operator/backends/codex.md#version-compatibility).
+  ([#91](https://github.com/kcosr/sedes/pull/91), [#129](https://github.com/kcosr/sedes/pull/129))
 
 - Codex threads keep model, reasoning, Speed, and permissions editable between
   runs while automations remain enabled. Same-thread automation uses current

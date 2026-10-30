@@ -152,7 +152,7 @@ describe("built Sedes MCP server", () => {
              tenant_id, id, kind, label, enabled, protocol_release,
              created_at, updated_at, owner_principal_id
            ) VALUES (?, 'codex-primary', 'codex_app_server', 'Codex', 1,
-             '0.163.0', 250, 250, ?)`,
+             '0.166.0', 250, 250, ?)`,
         )
         .run(scope.tenantId, scope.principalId);
       database

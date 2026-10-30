@@ -28,16 +28,16 @@ troubleshooting, see the [Codex operator guide](../../operator/backends/codex.md
 
 ## Protocol and release admission
 
-Sedes pins `@openai/codex` 0.163.0 as its development-time generated protocol
+Sedes pins `@openai/codex` 0.166.0 as its development-time generated protocol
 baseline. Generated TypeScript, JSON Schema, the method
 inventory, hashes, and release evidence live under
-`protocol/codex-app-server/0.163.0`.
+`protocol/codex-app-server/0.166.0`.
 
 Owned Codex processes support Linux x64 and macOS arm64/x64. External
 topologies retain their separate transport and execution-environment
 requirements.
 
-The compiled Codex backend supplies exactly one `0.163.0` generated parser
+The compiled Codex backend supplies exactly one `0.166.0` generated parser
 profile and persists that value for diagnostics and runtime-generation
 integrity. It is not operator configuration and remains separate from
 executable admission. Owned and external runtimes admit stable releases at or
@@ -45,9 +45,9 @@ above 0.162.1. Build metadata is allowed. Prereleases, malformed versions,
 versions below the floor, and explicitly excluded known-bad releases are
 rejected.
 
-Releases newer than the 0.163.0 tested-through threshold receive a
+Releases newer than the 0.166.0 tested-through threshold receive a
 provider-private `newerThanTested` assessment for the installation advisory.
-They still use only the pinned 0.163.0 stable and experimental validators and
+They still use only the pinned 0.166.0 stable and experimental validators and
 gain no capabilities from their version. Managed TUI uses the same
 operator-installed command policy in every deployment: an optional canonical
 `tuiExecutablePath` override, otherwise the first `codex` on `PATH`, with the
@@ -62,28 +62,36 @@ separately.
 The official validators own item lifecycle metadata and MCP app UI
 metadata. Sedes maps available item `startedAtMs`/`completedAtMs` into the existing
 normalized `startedAt`/`completedAt` fields for live events and loaded history.
+Item-local non-null values take precedence per field over event or page-entry
+values; both sources are validated before projection. Existing timing
+presentation consumes these same normalized fields.
 Missing timestamps stay absent, and command/MCP `durationMs` remains independent.
 If wall-clock times run backwards, Sedes retains the observed start and omits
 the inconsistent completion; it does not infer a duration.
 Timestamps are not usage evidence. MCP app UI stays provider-private.
 File-backed images are recognized without treating file IDs as URLs or paths;
-unavailable bytes remain visibly unavailable. Interrupted turns retain meaningful
+unavailable bytes remain visibly unavailable. Generated-image `generationId` and
+input-image metadata are validated and kept provider-private; a file-backed output
+is unavailable without probing a native path, treating an ID as a URL, or
+performing a network lookup. Interrupted turns retain meaningful
 native errors as bounded warning notices; an ordinary Stop adds no error notice.
 
-The runtime floor remains 0.162.1. Both 0.162.1 and 0.163.0 use the one current
-parser; the older generated tree is removed. The floor and tested-through
+The runtime floor remains 0.162.1. The qualified 0.162.1, 0.163.0, and
+0.166.0 runtimes use the one current parser; the older generated tree is removed. The floor and tested-through
 policy remain independent constants; newer stable runtimes are admitted with
 the usual advisory. Operator-owned app-servers and managed TUI commands are
 upgraded separately from Sedes.
 
-The [runtime qualification](../../../protocol/codex-app-server/0.163.0/runtime-compatibility/README.md)
-records exact reviewed exports and Linux x64 execution of both releases against a local mock model,
+The [runtime qualification](../../../protocol/codex-app-server/0.166.0/runtime-compatibility/README.md)
+records exact reviewed exports and Linux x64 execution of the minimum, previous
+baseline, and current release against a local mock model,
 including changed-settings notification, persistence after restart, explicit fork
 settings, and rejected command approval. macOS artifacts are integrity-checked
 only. Authenticated provider and topology checks are recorded separately.
 
-Sedes opts into only the contracted experimental `thread/settings/update`
-method. Unknown experimental methods are rejected. The stable, invoked
+Sedes opts into the contracted experimental `thread/settings/update` and
+`turn/settings/update` methods. Unknown experimental methods are rejected.
+The stable, invoked
 `thread/turns/list` and `thread/items/list` methods provide paginated history.
 Conversation Stop may use `thread/turns/list` with `itemsView: "notLoaded"`
 regardless of the history adapter, solely to choose the current native target
@@ -116,7 +124,7 @@ when an active conversation has no semantic disposition. Official notifications
 without an active consumer are bounded and discarded without retaining their
 payloads.
 
-Codex 0.163.0 adds native receipt metadata to `thread/list` and `thread/read`
+Codex 0.163.0 introduced native receipt metadata to `thread/list` and `thread/read`
 and the stable `thread/readState/changed` notification, which can precede
 `turn/completed`. These values are structurally validated and bounded, then
 discarded before transcript queuing or mutation accounting. Nullable or omitted

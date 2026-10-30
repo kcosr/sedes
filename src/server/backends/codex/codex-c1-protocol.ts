@@ -1,4 +1,5 @@
 import type { CodexRpcMethod } from "./rpc/codex-rpc-client.js";
+import { posix, win32 } from "node:path";
 import { MAXIMUM_PROVIDER_FRAME_BYTES } from "../../provider-protocol/transport/framed-message-limits.js";
 import {
   defineCodexAppServerMethod,
@@ -91,10 +92,10 @@ export type CodexThreadTurnsListResponse = Omit<OfficialThreadTurnsListResponse,
 };
 export type CodexThreadItemsListParams = OfficialThreadItemsListParams;
 export type CodexThreadItemEntry = OfficialThreadItemsListResponse["data"][number];
-export type CodexItemLifecycleTimestamps = Pick<
-  CodexThreadItemEntry,
-  "startedAtMs" | "completedAtMs"
->;
+export interface CodexItemLifecycleTimestamps {
+  readonly startedAtMs: number | null;
+  readonly completedAtMs: number | null;
+}
 
 /** Provider times describe lifecycle only; neither arrival time nor usage is inferred. */
 export function refineCodexItemLifecycleTimestamps(
@@ -118,6 +119,21 @@ export function refineCodexItemLifecycleTimestamps(
     return { startedAtMs: value.startedAtMs, completedAtMs: null };
   }
   return { startedAtMs: value.startedAtMs ?? null, completedAtMs: value.completedAtMs ?? null };
+}
+
+/** Recorded item times take precedence per field over live-envelope or page-entry
+ * observations. Null means no recorded evidence, so the other native observation
+ * may contribute that field. Validate both sources before resolving precedence. */
+export function resolveCodexItemLifecycleTimestamps(
+  item: Partial<CodexItemLifecycleTimestamps>,
+  observation: Partial<CodexItemLifecycleTimestamps> = {},
+): CodexItemLifecycleTimestamps {
+  refineCodexItemLifecycleTimestamps(item);
+  refineCodexItemLifecycleTimestamps(observation);
+  return refineCodexItemLifecycleTimestamps({
+    startedAtMs: item.startedAtMs ?? observation.startedAtMs,
+    completedAtMs: item.completedAtMs ?? observation.completedAtMs,
+  });
 }
 export type CodexThreadItemsListResponse = Omit<OfficialThreadItemsListResponse, "data"> & {
   readonly data: readonly CodexThreadItemEntry[];
@@ -253,9 +269,9 @@ function assertThreadItemClosed(item: OfficialThreadItem): void {
     userMessage: ["type", "id", "clientId", "content"], hookPrompt: ["type", "id", "fragments"], agentMessage: ["type", "id", "text", "phase", "memoryCitation", "delivery", "questions"], functionCallOutput: ["type", "id", "name", "namespace", "output"], plan: ["type", "id", "text"], reasoning: ["type", "id", "summary", "content"],
     commandExecution: ["type", "id", "pluginId", "scriptPath", "command", "cwd", "processId", "source", "status", "commandActions", "aggregatedOutput", "exitCode", "durationMs"], fileChange: ["type", "id", "changes", "status"],
     mcpToolCall: ["type", "id", "server", "tool", "status", "arguments", "appContext", "mcpAppResourceUri", "mcpAppUi", "pluginId", "readOnlyHint", "result", "error", "durationMs"], dynamicToolCall: ["type", "id", "namespace", "tool", "arguments", "status", "contentItems", "success", "durationMs"],
-    collabAgentToolCall: ["type", "id", "tool", "status", "senderThreadId", "receiverThreadIds", "prompt", "model", "reasoningEffort", "agentsStates"], subAgentActivity: ["type", "id", "kind", "agentThreadId", "agentPath", "model", "reasoningEffort"], webSearch: ["type", "id", "query", "action", "results"], imageView: ["type", "id", "path"], sleep: ["type", "id", "durationMs"], imageGeneration: ["type", "id", "status", "revisedPrompt", "result", "transparentBackground", "failure", "savedPath"], enteredReviewMode: ["type", "id", "review"], exitedReviewMode: ["type", "id", "review"], contextCompaction: ["type", "id"],
+    collabAgentToolCall: ["type", "id", "tool", "status", "senderThreadId", "receiverThreadIds", "prompt", "model", "reasoningEffort", "agentsStates"], subAgentActivity: ["type", "id", "kind", "agentThreadId", "agentPath", "model", "reasoningEffort"], webSearch: ["type", "id", "query", "action", "results"], imageView: ["type", "id", "path"], sleep: ["type", "id", "durationMs"], imageGeneration: ["type", "id", "status", "revisedPrompt", "result", "fileId", "transparentBackground", "failure", "savedPath", "inputImages", "generationId"], enteredReviewMode: ["type", "id", "review"], exitedReviewMode: ["type", "id", "review"], contextCompaction: ["type", "id"],
   } as const satisfies Record<OfficialThreadItem["type"], readonly string[]>;
-  assertExactKeys(item, keysByType[item.type], "thread_item");
+  assertExactKeys(item, [...keysByType[item.type], "startedAtMs", "completedAtMs"], "thread_item");
   switch (item.type) {
     case "userMessage": item.content.forEach(assertUserInputClosed); break;
     case "hookPrompt": item.fragments.forEach((fragment) => assertExactKeys(fragment, ["text", "hookRunId"], "hook_prompt_fragment")); break;
@@ -372,6 +388,7 @@ export function codexAsyncQuestionsFromAgentMessage(
 
 function assertThreadItem(item: OfficialThreadItem): void {
   assertThreadItemClosed(item);
+  refineCodexItemLifecycleTimestamps(item);
   assertNativeId(item.id, "thread_item_id");
   assertNativeValueBounds(item, "thread_item", (container, key) => {
     if (
@@ -458,6 +475,22 @@ function assertThreadItem(item: OfficialThreadItem): void {
       assertSafeCount(item.durationMs, "sleep_duration");
       break;
     case "imageGeneration":
+      if (Object.hasOwn(item, "result") === Object.hasOwn(item, "fileId")) {
+        throw new Error("image_generation_reference_invalid");
+      }
+      if ("fileId" in item) assertNativeId(item.fileId, "image_generation_file_id");
+      if (item.generationId != null) assertNativeId(item.generationId, "image_generation_id");
+      if (item.inputImages !== undefined) {
+        if (item.inputImages.length > 1_000) throw new Error("image_generation_inputs_exceeded");
+        for (const input of item.inputImages) {
+          assertExactKeys(input, ["path", "sha256"], "image_generation_input");
+          if (input.path.length > 32_768 || input.path.includes("\0") ||
+              (!posix.isAbsolute(input.path) && !win32.isAbsolute(input.path))) {
+            throw new Error("image_generation_input_path_invalid");
+          }
+          if (!/^[a-f0-9]{64}$/u.test(input.sha256)) throw new Error("image_generation_input_digest_invalid");
+        }
+      }
       if (
         item.status !== "in_progress" &&
         item.status !== "completed" &&
@@ -481,7 +514,7 @@ function assertThreadItem(item: OfficialThreadItem): void {
         assertNativeId(item.failure.limitId, "image_generation_limit_id");
         assertSafeCount(item.failure.resetsAt, "image_generation_reset_time");
       }
-      if (item.result.length > MAXIMUM_PROVIDER_FRAME_BYTES) {
+      if ("result" in item && item.result.length > MAXIMUM_PROVIDER_FRAME_BYTES) {
         throw new Error("image_generation_result_too_large");
       }
       break;
@@ -859,7 +892,7 @@ function projectThreadItemsListResponse(
   const itemIdsByTurn = new Map<string, Set<string>>();
   const data = value.data.map((entry) => {
     assertExactKeys(entry, ["turnId", "item", "startedAtMs", "completedAtMs"], "thread_item_entry");
-    const timestamps = refineCodexItemLifecycleTimestamps(entry);
+    const timestamps = resolveCodexItemLifecycleTimestamps(entry.item, entry);
     assertNativeId(entry.turnId, "turn_id");
     const item = refineCodexThreadItem(entry.item);
     const itemIds = itemIdsByTurn.get(entry.turnId) ?? new Set<string>();

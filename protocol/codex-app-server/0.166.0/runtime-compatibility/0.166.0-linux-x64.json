@@ -1,0 +1,59 @@
+{
+  "release": "0.166.0",
+  "parserRelease": "0.166.0",
+  "platform": "linux/x64",
+  "executableSha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+  "reviewedOfficialArtifactInventories": {
+    "stable/typescript": 760,
+    "stable/json-schema": 321,
+    "experimental/typescript": 921,
+    "experimental/json-schema": 467
+  },
+  "schemaDeltaVerified": true,
+  "experimentalGateRejected": true,
+  "readStateMetadataPresent": true,
+  "itemLocalTimestampsPreserved": true,
+  "readStateNotificationBeforeCompletion": true,
+  "notificationsValidated": [
+    "thread/readState/changed",
+    "thread/started",
+    "thread/settings/updated",
+    "turn/started",
+    "turn/completed",
+    "item/started",
+    "item/completed",
+    "item/agentMessage/delta"
+  ],
+  "methodsValidated": [
+    "model/list",
+    "thread/fork",
+    "thread/items/list",
+    "thread/list",
+    "thread/read",
+    "thread/resume",
+    "thread/settings/update",
+    "thread/start",
+    "thread/turns/list",
+    "turn/start"
+  ],
+  "modelIds": [
+    "gpt-6.1-sol",
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-6.1-terra",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-daybreak-blue-latest",
+    "gpt-daybreak-red-latest",
+    "gpt-5.5",
+    "codex-auto-review"
+  ],
+  "deterministicProviderRequests": 1,
+  "persistentTurnResumedAfterRestart": true,
+  "executionSettingsPreservedOnResumeAndFork": true,
+  "forkHistoryPreserved": true,
+  "rootTurnLineagePreserved": true,
+  "liveProviderVerified": false
+}

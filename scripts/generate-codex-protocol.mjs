@@ -23,7 +23,7 @@ import {
   serverRequests,
 } from "./provider-protocol/codex-adoption-inventory.mjs";
 
-const RELEASE = "0.163.0";
+const RELEASE = "0.166.0";
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const releaseRoot = path.join(
   repositoryRoot,

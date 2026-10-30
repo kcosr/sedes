@@ -61,7 +61,7 @@ describe("Codex runtime version policy", () => {
 
   it("publishes independent runtime floor and tested-through thresholds", () => {
     expect(CODEX_RUNTIME_MINIMUM_SUPPORTED_RELEASE).toBe("0.162.1");
-    expect(CODEX_RUNTIME_TESTED_THROUGH_RELEASE).toBe("0.163.0");
+    expect(CODEX_RUNTIME_TESTED_THROUGH_RELEASE).toBe("0.166.0");
   });
 
   it("accepts the exact generated runtime version", async () => {
@@ -83,13 +83,17 @@ describe("Codex runtime version policy", () => {
       "0.162.2",
       "0.163.0",
       "0.163.0+vendor.7",
+      "0.164.0",
+      "0.165.0",
+      "0.166.0",
+      "0.166.0+vendor.7",
     ]) {
       expect(verifyCodexRuntimeVersion(version)).toEqual({
         version,
         newerThanTested: false,
       });
     }
-    for (const version of ["0.163.1", "0.164.0", "0.999.999+build.1", "1.0.0"]) {
+    for (const version of ["0.166.1", "0.167.0", "0.999.999+build.1", "1.0.0"]) {
       expect(verifyCodexRuntimeVersion(version)).toEqual({
         version,
         newerThanTested: true,

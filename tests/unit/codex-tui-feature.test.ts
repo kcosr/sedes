@@ -177,7 +177,7 @@ function externalConfiguration(
       label: "Codex",
       enabled: true,
       configurationRevision: 1,
-      protocolRelease: "0.163.0",
+      protocolRelease: "0.166.0",
     },
     executionEnvironmentId: authority.executionEnvironmentId,
     connection: { ownership: "external", channel },

@@ -18,12 +18,14 @@ type ImageGenerationItem = Extract<
   CodexThreadItem,
   { readonly type: "imageGeneration" }
 >;
+type InlineImageGenerationItem = Extract<ImageGenerationItem, { readonly result: string }>;
 
 function imageGeneration(
-  overrides: Partial<ImageGenerationItem> = {},
-): ImageGenerationItem {
+  overrides: Partial<InlineImageGenerationItem> = {},
+): InlineImageGenerationItem {
   return {
     type: "imageGeneration",
+    generationId: null,
     id: "image-generation-1",
     status: "completed",
     revisedPrompt: "A tiny blue square",
@@ -35,6 +37,12 @@ function imageGeneration(
 }
 
 describe("Codex generated-image decoding", () => {
+  it("leaves provider file references unavailable without reading a saved path", () => {
+    const { result: _result, ...metadata } = imageGeneration();
+    expect(decodeCodexGeneratedImage({ ...metadata, fileId: "file-private-image" }, 1_024))
+      .toEqual({ type: "unavailable", reason: "unsupported_file_reference" });
+  });
+
   it("decodes the exact standard base64 PNG result without consulting savedPath", () => {
     const decoded = decodeCodexGeneratedImage(imageGeneration(), 1_024);
 

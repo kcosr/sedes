@@ -15,7 +15,7 @@ import {
   type CodexServerNotificationMethod,
   type CodexServerRequestMap,
   type CodexServerRequestMethod,
-} from "./generated/0.163.0/route-registry.js";
+} from "./generated/0.166.0/route-registry.js";
 import {
   BoundedJsonSnapshotError,
   snapshotBoundedJson,

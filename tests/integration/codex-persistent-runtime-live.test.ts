@@ -33,7 +33,7 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
   const scope = { tenantId: service.scope.tenantId, principalId: service.scope.principalId,
     executionEnvironmentId: service.scope.executionEnvironmentId, backendInstanceId: "codex-live" };
   const configuration = {
-    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Persistent live canary", enabled: true, configurationRevision: 0, protocolRelease: "0.163.0" as const },
+    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Persistent live canary", enabled: true, configurationRevision: 0, protocolRelease: "0.166.0" as const },
     connections: [{ id: "live-profile", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "live-template", kind: "codex_app_server" as const, backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId, label: "Live canary", enabled: true, configurationRevision: 0 }],
     connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: socketPath! } },
   };

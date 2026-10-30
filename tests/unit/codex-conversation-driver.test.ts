@@ -126,7 +126,7 @@ import {
 } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import * as codexBindingModule from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
-import { codexServerNotificationRegistry } from "../../src/server/provider-protocol/bindings/codex-app-server/generated/0.163.0/route-registry.js";
+import { codexServerNotificationRegistry } from "../../src/server/provider-protocol/bindings/codex-app-server/generated/0.166.0/route-registry.js";
 
 const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 const instance: AgentBackendInstance = {
@@ -136,7 +136,7 @@ const instance: AgentBackendInstance = {
   label: "Codex",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.163.0",
+  protocolRelease: "0.166.0",
 };
 const toolProvenanceKey = new Uint8Array(32).fill(0x43);
 const agentToolSourceCapability =
@@ -267,6 +267,7 @@ function nativeGeneratedImage(
 ) {
   return {
     type: "imageGeneration" as const,
+    generationId: null,
     id: "generated-image-1",
     status: "completed" as const,
     revisedPrompt: "A tiny blue square",
@@ -12115,7 +12116,7 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("retains observed live item timing when persisted history omits it", async () => {
+  it.each(["envelope", "item"] as const)("retains %s live item timing when persisted history omits it", async (source) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     harness.enqueue("thread/read", { thread: paginatedThread() });
@@ -12124,10 +12125,13 @@ describe("CodexConversationHandle", () => {
     const events: SequencedBackendEvent[] = [];
     established.subscribeFromNext(event => events.push(event));
     const active = { ...nativeTurn(1), items: [], status: "inProgress" as const, completedAt: null, durationMs: null };
-    const item = { type: "contextCompaction" as const, id: "live-timed-item" };
+    const item = { type: "contextCompaction" as const, id: "live-timed-item",
+      ...(source === "item" ? { startedAtMs: 2_000, completedAtMs: null } : {}) };
     harness.notify("turn/started", { threadId: "thread-1", turn: active });
-    harness.notify("item/started", { threadId: "thread-1", turnId: active.id, item, startedAtMs: 2_000 });
-    harness.notify("item/completed", { threadId: "thread-1", turnId: active.id, item, completedAtMs: 2_500 });
+    harness.notify("item/started", { threadId: "thread-1", turnId: active.id, item, startedAtMs: source === "item" ? 1_000 : 2_000 });
+    harness.notify("item/completed", { threadId: "thread-1", turnId: active.id,
+      item: source === "item" ? { ...item, completedAtMs: 2_500 } : item,
+      completedAtMs: source === "item" ? 1_500 : 2_500 });
     await handle.readCurrent();
     const untimed = { type: "plan" as const, id: "untimed-item", text: "No recorded item timing" };
     const completed = { ...active, status: "completed" as const, completedAt: 1_700_000_003, items: [item, untimed] };

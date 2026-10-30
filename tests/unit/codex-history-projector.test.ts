@@ -708,6 +708,7 @@ const stableItems = [
   {
     item: {
       type: "imageGeneration",
+      generationId: null,
       id: "image-generation-1",
       status: "completed",
       revisedPrompt: "A safe prompt",
@@ -804,7 +805,7 @@ function decodeThreadItem(item: unknown): CodexThreadItem {
   }).item;
 }
 
-describe("Codex 0.163.0 C1 protocol codecs", () => {
+describe("Codex 0.166.0 C1 protocol codecs", () => {
   it.each([
     { type: "image", fileId: "file-private-image", detail: "high" },
     { type: "image", url: "https://private.invalid/image.png", detail: "high" },
@@ -843,6 +844,66 @@ describe("Codex 0.163.0 C1 protocol codecs", () => {
       startedAtMs: 2, completedAtMs: null,
     });
     expect(wire.data[0]).toMatchObject({ startedAtMs: 2, completedAtMs: 1 });
+  });
+
+  it("accepts recorded 0.166 item times and gives them precedence over page-entry observations", () => {
+    const item = { type: "plan", id: "recorded-plan", text: "Plan", startedAtMs: 2_000, completedAtMs: 2_500 };
+    const wire = { data: [{ turnId: "turn", item, startedAtMs: 1_000, completedAtMs: 1_500 }],
+      nextCursor: null, backwardsCursor: null };
+    expect(codexThreadItemsListMethod.decodeResult(wire).data[0]).toEqual({
+      turnId: "turn", item, startedAtMs: 2_000, completedAtMs: 2_500,
+    });
+    expect(wire.data[0]).toMatchObject({ startedAtMs: 1_000, completedAtMs: 1_500 });
+    for (const method of ["item/started", "item/completed"] as const) {
+      const notification = { threadId: "thread", turnId: "turn", item,
+        [method === "item/started" ? "startedAtMs" : "completedAtMs"]: 1_000 };
+      expect(decodeCodexC2Notification(method, notification)).toEqual(notification);
+    }
+  });
+
+  it.each(["startedAtMs", "completedAtMs"] as const)("rejects invalid recorded %s even when outer timing is valid", field => {
+    for (const invalid of [-1, 0.5, 253_402_300_800_000, "private", true]) {
+      const item = { type: "plan", id: "recorded-plan", text: "Plan", [field]: invalid };
+      expect(() => codexThreadItemsListMethod.decodeResult({ data: [{ turnId: "turn", item,
+        startedAtMs: 1_000, completedAtMs: 2_000 }], nextCursor: null, backwardsCursor: null })).toThrow();
+      expect(() => decodeCodexC2Notification("item/completed", {
+        threadId: "thread", turnId: "turn", item, completedAtMs: 2_000,
+      })).toThrow();
+    }
+  });
+
+  it("keeps new generated-image metadata provider-private and file references unavailable", async () => {
+    const metadata = { type: "imageGeneration", id: "generated", status: "completed", revisedPrompt: "A square",
+      failure: null, generationId: "generation-private", savedPath: "/private/generated.png",
+      startedAtMs: null, completedAtMs: null,
+      inputImages: [{ path: "/private/source.png", sha256: "a".repeat(64) }] };
+    const inline = decodeThreadItem({ ...metadata, result: "" });
+    expect(inline).toMatchObject(metadata);
+    const referenced = decodeThreadItem({ ...metadata, fileId: "file-private" });
+    const outputArtifacts = testOutputArtifactPublisher();
+    const find = vi.spyOn(outputArtifacts, "findImage");
+    const publish = vi.spyOn(outputArtifacts, "publishImage");
+    const projection = projectCodexHistory(thread([turn("generated-turn", [referenced])]), correlationScope(), outputArtifacts);
+    expect(projection.pendingGeneratedImages).toEqual([]);
+    const projected = Object.values(projection.snapshot.itemsById);
+    expect(projected).toHaveLength(2);
+    expect(projected[1]).toMatchObject({ semanticKind: "image", image: { representation: "omitted", reason: "unavailable" } });
+    expect(find).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(JSON.stringify(projection.snapshot)).not.toMatch(/file-private|generation-private|\/private\/|a{64}/u);
+  });
+
+  it.each([
+    { fileId: "file-private", result: "" },
+    { fileId: "" },
+    { result: "", generationId: "x".repeat(513) },
+    { result: "", inputImages: [{ path: "relative.png", sha256: "a".repeat(64) }] },
+    { result: "", inputImages: [{ path: "/private/source.png", sha256: "not-a-digest" }] },
+    { result: "", inputImages: [{ path: "/private/source.png", sha256: "a".repeat(64), extra: "private" }] },
+    { result: "", inputImages: Array.from({ length: 1_001 }, () => ({ path: "/private/source.png", sha256: "a".repeat(64) })) },
+  ])("rejects ambiguous or malformed generated-image metadata", reference => {
+    expect(() => decodeThreadItem({ type: "imageGeneration", id: "generated", status: "completed",
+      revisedPrompt: null, failure: null, generationId: null, ...reference })).toThrow();
   });
 
   it.each([{}, { startedAtMs: 1 }, { completedAtMs: 2 }])(
@@ -954,7 +1015,7 @@ describe("Codex 0.163.0 C1 protocol codecs", () => {
     const generated = readFileSync(
       path.join(
         repositoryRoot,
-        "protocol/codex-app-server/0.163.0/official/stable/typescript/v2/ThreadItem.ts",
+        "protocol/codex-app-server/0.166.0/official/stable/typescript/v2/ThreadItem.ts",
       ),
       "utf8",
     );
@@ -1033,6 +1094,7 @@ describe("Codex 0.163.0 C1 protocol codecs", () => {
     expect(() =>
       refineCodexThreadItem({
         type: "imageGeneration",
+        generationId: null,
         id: "transparent-image",
         status: "completed",
         revisedPrompt: "Transparent icon",
@@ -1046,6 +1108,7 @@ describe("Codex 0.163.0 C1 protocol codecs", () => {
     expect(() =>
       refineCodexThreadItem({
         type: "imageGeneration",
+        generationId: null,
         id: "rate-limited-image",
         status: "failed",
         revisedPrompt: null,
@@ -1062,6 +1125,7 @@ describe("Codex 0.163.0 C1 protocol codecs", () => {
     expect(() =>
       refineCodexThreadItem({
         type: "imageGeneration",
+        generationId: null,
         id: "invalid-rate-limited-image",
         status: "failed",
         revisedPrompt: null,
@@ -1077,6 +1141,7 @@ describe("Codex 0.163.0 C1 protocol codecs", () => {
     expect(() =>
       refineCodexThreadItem({
         type: "imageGeneration",
+        generationId: null,
         id: "unknown-status-image",
         status: "opaque_future_status",
         revisedPrompt: null,
@@ -1772,6 +1837,7 @@ describe("Codex 0.163.0 C1 protocol codecs", () => {
     const result = "A".repeat(8 * 1024 * 1024 + 4);
     const image = {
       type: "imageGeneration" as const,
+      generationId: null,
       id: "large-generated-image",
       status: "completed",
       revisedPrompt: "A large generated image",
@@ -1837,7 +1903,30 @@ describe("Codex 0.163.0 C1 protocol codecs", () => {
   });
 });
 
-describe("Codex 0.163.0 C1 history projector", () => {
+describe("Codex 0.166.0 C1 history projector", () => {
+  it.each([
+    [{ startedAtMs: 2_000, completedAtMs: 2_500 }, { startedAtMs: 1_000, completedAtMs: 1_500 },
+      { startedAt: "1970-01-01T00:00:02.000Z", completedAt: "1970-01-01T00:00:02.500Z" }],
+    [{ startedAtMs: null, completedAtMs: 2_500 }, { startedAtMs: 2_000, completedAtMs: 3_000 },
+      { startedAt: "1970-01-01T00:00:02.000Z", completedAt: "1970-01-01T00:00:02.500Z" }],
+    [{ startedAtMs: 3_000, completedAtMs: 2_500 }, { startedAtMs: 2_000, completedAtMs: 4_000 },
+      { startedAt: "1970-01-01T00:00:03.000Z" }],
+  ])("projects recorded item times before observations and retains them across history rewrites: %j", (recorded, observed, expected) => {
+    const item = { type: "plan" as const, id: "recorded-plan", text: "Plan", ...recorded };
+    const coordinate = codexNativeItemCoordinate("timed", item.id);
+    const projection = projectCodexHistory(thread([turn("timed", [item])]), correlationScope(),
+      testOutputArtifactPublisher(), new Set(), new Map([[coordinate, observed]]));
+    const projected = Object.values(projection.snapshot.itemsById)[0]!;
+    expect(projected).toMatchObject(expected);
+    if (!("completedAt" in expected)) expect(projected).not.toHaveProperty("completedAt");
+    // Persisted history can omit item metadata on the next read. The resolved
+    // provider evidence must remain available to that projection.
+    const untimed = { type: "plan" as const, id: item.id, text: item.text };
+    const rewritten = projectCodexHistory(thread([turn("timed", [untimed])]), correlationScope(),
+      testOutputArtifactPublisher(), new Set(), projection.itemTimestamps);
+    expect(rewritten.snapshot.itemsById).toEqual(projection.snapshot.itemsById);
+  });
+
   it.each([
     "userMessage", "hookPrompt", "collabAgentToolCall", "subAgentActivity",
     "webSearch", "imageView", "sleep", "enteredReviewMode", "exitedReviewMode",
@@ -3430,6 +3519,7 @@ describe("Codex 0.163.0 C1 history projector", () => {
         turn("generated-image-turn", [
           {
             type: "imageGeneration",
+            generationId: null,
             id: "deferred-image",
             status: "completed",
             revisedPrompt: "Deferred image",
@@ -3487,6 +3577,7 @@ describe("Codex 0.163.0 C1 history projector", () => {
       turn("generated-image-turn", [
         {
           type: "imageGeneration",
+          generationId: null,
           id: "live-image-id",
           status: "completed",
           revisedPrompt: "A tiny blue square",
@@ -3569,6 +3660,7 @@ describe("Codex 0.163.0 C1 history projector", () => {
           turn("generated-image-turn", [
             {
               type: "imageGeneration",
+              generationId: null,
               id: "rewritten-live-image-id",
               status: "completed",
               revisedPrompt: "A changed image",
@@ -3609,6 +3701,7 @@ describe("Codex 0.163.0 C1 history projector", () => {
           turn("invalid-after-image", [
             {
               type: "imageGeneration",
+              generationId: null,
               id: "duplicate-native-id",
               status: "completed",
               revisedPrompt: "A valid image before an invalid tail",
@@ -3638,6 +3731,7 @@ describe("Codex 0.163.0 C1 history projector", () => {
   it("keeps streaming, malformed, and storage-failed generated images truthful without leaking native data", async () => {
     const nativeImage = {
       type: "imageGeneration",
+      generationId: null,
       id: "generated-image",
       status: "completed",
       revisedPrompt: "Generated preview",

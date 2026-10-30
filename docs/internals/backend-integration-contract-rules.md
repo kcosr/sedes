@@ -77,6 +77,14 @@ prose differ, establish the production path and tests, then update the prose.
 
 ### Current compiled backends
 
+The Codex 0.166.0 compatibility update is provider-private. It uses one exact
+generated profile, validates item lifecycle and image metadata, and retains the
+existing normalized timestamp fields. File-backed generated images are explicitly
+unavailable without reviewed byte authority. No browser capability follows from
+a new native field. Pi SDK, Pi, Claude, Grok, and OpenCode retain their existing
+parsers, capabilities, and state authority. Native Codex archive restoration and
+idle unloading do not restore application-owned inventory or change its scope.
+
 The production catalog contains exactly six backend modules. This table is a
 navigation and audit baseline, not a substitute for the capability document
 of a configured target.
