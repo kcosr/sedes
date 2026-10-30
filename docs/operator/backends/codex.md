@@ -447,7 +447,9 @@ Archiving a Codex thread in Sedes also archives its native Codex conversation
 by default, including Codex-owned subagents. Ordinary Sedes forks are separate
 threads. Codex retains archived history; Sedes reads it by the saved native ID
 without resuming the agent. Restoring in Sedes unarchives the native root before
-execution resumes. Codex does not automatically restore its subagents.
+execution resumes. Starting with Codex 0.166.0, native unarchive also restores
+spawned descendants, including children archived independently of the parent.
+Their Sedes inventory state remains independently controlled by Sedes.
 
 Set `SEDES_CODEX_ARCHIVE_SYNC=false` in the main server's environment and restart
 to disable future native archive requests. The default is `true`; these are the
