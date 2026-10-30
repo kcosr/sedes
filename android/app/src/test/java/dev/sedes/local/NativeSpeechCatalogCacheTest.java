@@ -70,7 +70,7 @@ public class NativeSpeechCatalogCacheTest {
         assertEquals(600500, NativeSpeechCatalog.serverCapabilities(restored.catalog, "selected").maxSessionMs);
         assertEquals(policy.toString(), restored.catalog.optJSONObject("realtime").optJSONObject("selected").toString());
         JSONObject picker = NativeSpeechCatalog.picker(restored.catalog);
-        assertEquals(6, picker.length()); assertFalse(picker.has("realtime"));
+        assertEquals(7, picker.length()); assertFalse(picker.has("realtime"));
         NativeVoiceJson.put(catalog, "realtime", new JSONObject());
         assertThrows(IllegalArgumentException.class, () -> new NativeSpeechCatalogCache("b".repeat(64), 100, catalog));
     }

@@ -12,7 +12,7 @@ import { Input } from "../components/ui/input.js";
 import { NativeSelect } from "../components/ui/native-select.js";
 import { SearchableSelect } from "../components/ui/searchable-select.js";
 import { useTouchDensity } from "../app/use-touch-density.js";
-import { isElectronClient } from "../app/client-platform.js";
+import { isAndroidClient, isElectronClient } from "../app/client-platform.js";
 import { useVoiceState } from "./VoiceProvider.js";
 import { recentVoiceErrors, type NativeVoiceStore } from "./NativeVoiceStore.js";
 import { nativeThreadTitle, type NativeVoiceInputDevice, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
@@ -190,6 +190,13 @@ function SpeechProviderSettings({ store, native, pending, recordingWork }: { sto
   }, [store, native.connectionGeneration, settings.speechProvider, settings.speechEndpoint, speech.credentialConfigured]);
   const update = (patch: Partial<NativeVoiceSettings>) => store.update(patch);
   const speed = catalog?.speed;
+  const android = isAndroidClient();
+  const supportsOpus = settings.speechProvider === "openai" ? false : catalog?.source === "server"
+    ? catalog.audioInputFormats[settings.sttModel]?.binaryOpus : undefined;
+  const compressedQuality = speech.audioQuality !== "original";
+  const unsupportedQuality = compressedQuality && supportsOpus === false;
+  const unknownQualitySupport = supportsOpus === undefined;
+  const pendingQualityLabel = speech.catalogStatus === "loading" ? "checking support…" : "support unverified";
   return <SettingsSection title="Speech provider" description="Voices are AI-generated." card>
     <SettingsField label="Provider">
       <NativeSelect value={settings.speechProvider} disabled={pending || recordingWork} onChange={event => {
@@ -214,6 +221,24 @@ function SpeechProviderSettings({ store, native, pending, recordingWork }: { sto
       {speech.catalogStatus === "error" ? <p role="status">{speech.error ?? "Couldn’t refresh."}</p> : null}
     </div>
     <VoiceChoiceSetting label="Recognition model" value={settings.sttModel} disabled={pending || recordingWork} options={catalog?.sttModels} onSave={sttModel => update({ sttModel })} />
+    {android ? <SettingsField label="Upload quality" error={unsupportedQuality
+      ? "This server or recognition model does not advertise Opus support. Choose Original to record, or select a supported server and model."
+      : undefined} description={unknownQualitySupport
+        ? speech.catalogStatus === "loading"
+          ? "Checking this model’s Opus support. Your saved quality is unchanged."
+          : "Opus support is unverified. Refresh models and voices to check. Your saved quality is unchanged."
+        : supportsOpus
+        ? "Saved on this device. Original preserves captured audio; Opus uses less mobile data. Applies to new recordings and explicit retries of saved audio."
+        : "Original audio works with the standard speech protocol. Compressed choices require advertised server support."}>
+      <NativeSelect value={speech.audioQuality} disabled={pending || recordingWork} onChange={event => {
+        void store.setSpeechAudioQuality(event.target.value as NativeVoiceState["speech"]["audioQuality"]).catch(() => undefined);
+      }}>
+        <option value="original">Original (PCM)</option>
+        {supportsOpus ? <><option value="opus_high">High (Opus, 64 kbps)</option><option value="opus_low">Low bandwidth (Opus, 24 kbps)</option></> : null}
+        {unsupportedQuality ? <option value={speech.audioQuality} disabled>{speech.audioQuality === "opus_high" ? "High" : "Low bandwidth"} (unavailable)</option> : null}
+        {compressedQuality && unknownQualitySupport ? <option value={speech.audioQuality} disabled>{speech.audioQuality === "opus_high" ? "High" : "Low bandwidth"} ({pendingQualityLabel})</option> : null}
+      </NativeSelect>
+    </SettingsField> : null}
     <VoiceChoiceSetting label="Speech model" value={settings.ttsModel} disabled={pending} options={catalog?.ttsModels} onSave={ttsModel => update({ ttsModel })} />
     <VoiceChoiceSetting label="Speech voice" value={settings.ttsVoice} disabled={pending} options={catalog?.voices} onSave={ttsVoice => update({ ttsVoice })} />
     <VoiceTextSetting label="Speech speed" value={String(settings.ttsSpeed)} disabled={pending} min={Math.max(0.25, speed?.min ?? 0.25)} max={Math.min(4, speed?.max ?? 4)} step={0.05}

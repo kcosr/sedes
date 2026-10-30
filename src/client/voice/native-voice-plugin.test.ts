@@ -60,6 +60,8 @@ describe("native voice bridge helpers", () => {
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 11 }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 12 }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 13 }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, version: 14 }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, version: 15 }).success).toBe(false);
     for (const audioMode of ["manual", "response"]) {
       expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, audioMode } }).success).toBe(false);
     }
@@ -79,6 +81,16 @@ describe("native voice bridge helpers", () => {
     expect(nativeVoiceStateSchema.safeParse({ ...state, settings: missingPin }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, speech: { ...state.speech, credential: "must-never-cross" } }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, adapterUrl: "https://old.test" } }).success).toBe(false);
+  });
+  it("keeps upload quality and its revision separate from the canonical voice settings contract", () => {
+    const state = voiceSnapshot();
+    for (const audioQuality of ["original", "opus_high", "opus_low"])
+      expect(nativeVoiceStateSchema.parse({ ...state, speech: { ...state.speech, audioQuality } }).speech.audioQuality).toBe(audioQuality);
+    for (const patch of [{ audioQuality: "opus" }, { audioQuality: null }, { audioQualityRevision: -1 }, { audioQualityRevision: 0.5 }])
+      expect(nativeVoiceStateSchema.safeParse({ ...state, speech: { ...state.speech, ...patch } }).success).toBe(false);
+    const { audioQuality: _quality, ...withoutQuality } = state.speech;
+    expect(nativeVoiceStateSchema.safeParse({ ...state, speech: withoutQuality }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, audioQuality: "original" } }).success).toBe(false);
   });
   it("requires persistent microphone identity and rejects transient device IDs", () => {
     const state = voiceSnapshot();

@@ -93,6 +93,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private LongSupplier composerSubmissionClock = SystemClock::elapsedRealtime;
     private ComposerSubmissionScheduler composerSubmissionScheduler;
     private NativeVoiceSettings settings = NativeVoiceSettings.defaults();
+    private NativeVoiceUploadPreferences uploadPreferences = NativeVoiceUploadPreferences.defaults();
     private String profileId, origin, identity, binding, credential, csrf, originId;
     private String phase = "off", foregroundThread, foregroundTitle, composerMode = "queue";
     /** Last viewed thread survives activity hiding so resuming the same route is not navigation. */
@@ -155,6 +156,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         NativeSpeechTransport recognitionTransport;
         NativeDictationStore.Recording record;
         NativeVoiceSettings recordingSettings;
+        String recordingAudioQuality = "original";
         RecordingStart recordingStart;
         Call preflight;
         Call inputContextRequest;
@@ -212,7 +214,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             public Call preflight(NativeVoiceSettings settings, String credential, NativeSpeechCatalog.PreflightResult result) {
                 return NativeSpeechCatalog.preflight(settings, credential, result);
             }
-            public NativeSpeechTransport open(NativeSpeechTransport.Config config) { return new NativeSpeechTransport(config, SystemClock::elapsedRealtime); }
+            public NativeSpeechTransport open(NativeSpeechTransport.Config config) {
+                return new NativeSpeechTransport(config, SystemClock::elapsedRealtime, NativeVoiceOpusEncoder::new);
+            }
         });
     }
     NativeVoiceRuntime(Context context, RecordingBackend recordingBackend) {
@@ -313,6 +317,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                     case "setConnection": setConnection(args, reply); return;
                     case "disconnect": NativeVoiceJson.keys(args); disconnect(true); break;
                     case "updateSettings": updateSettings(args, userInitiated); break;
+                    case "setSpeechAudioQuality": setSpeechAudioQuality(args); break;
                     case "refreshSpeechCatalog":
                         NativeVoiceJson.keys(args, "force");
                         if (binding == null) throw new IllegalStateException("authentication_required");
@@ -410,6 +415,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 final String owner = binding;
                 // Device preferences combine with only this authenticated binding's saved thread selection.
                 settings = record(owner, () -> store.settings(owner));
+                uploadPreferences = record(owner, store::uploadPreferences);
                 audio.configure(settings); configureSpeech(true, true); publish();
             } catch (Exception error) { connectionFailed("voice_storage_unavailable", reply); return; }
             loadSession(generation, () -> restoreDictation(generation, () -> {
@@ -666,6 +672,27 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         policyGeneration = -1;
         foregroundVisible = false; foregroundComposerAvailable = false; foregroundThread = null; foregroundTitle = null; lastViewedThread = null;
         publish();
+    }
+    private void setSpeechAudioQuality(JSONObject args) throws Exception {
+        NativeVoiceJson.keys(args, "expectedAudioQualityRevision", "audioQuality");
+        if (binding == null) throw new IllegalStateException("authentication_required");
+        if (recordingBusy()) throw new IllegalStateException("recording_settings_busy");
+        NativeVoiceUploadPreferences next = uploadPreferences.patch(
+            NativeVoiceJson.integer(args, "expectedAudioQualityRevision", 0, 9007199254740991L),
+            NativeVoiceJson.string(args, "audioQuality", 32));
+        if (!next.audioQuality.equals("original")) {
+            if (!settings.text("speechProvider").equals("server") || speechCatalog == null)
+                throw new IllegalStateException("speech_audio_quality_unsupported");
+            NativeSpeechCapabilities capabilities = NativeSpeechCatalog.serverCapabilities(speechCatalog, settings.text("sttModel"));
+            validateAudioQuality(next.audioQuality, capabilities);
+        }
+        store.uploadPreferences(next);
+        uploadPreferences = next;
+        publish(); emit("settingsChanged", snapshot());
+    }
+    private static void validateAudioQuality(String quality, NativeSpeechCapabilities capabilities) {
+        if (!quality.equals("original") && (!capabilities.provider.equals("server") || !capabilities.binaryOpus))
+            throw new IllegalArgumentException("speech_audio_quality_unsupported");
     }
     private void updateSettings(JSONObject args, boolean userInitiated) throws Exception {
         NativeVoiceJson.keys(args, "expectedRevision", "patch");
@@ -1298,7 +1325,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (!item.heldAuthorityResetPending) { clientActions.clear(); inputSubmissionContext = new Object(); }
         }
         item.recordingId = UUID.randomUUID().toString(); item.captureId = UUID.randomUUID().toString();
-        item.recordingBinding = binding; item.recordingSettings = settings; phase = "arming";
+        item.recordingBinding = binding; item.recordingSettings = settings;
+        item.recordingAudioQuality = uploadPreferences.audioQuality; phase = "arming";
         item.adopted = false; item.keepListening = false; item.reconnecting = false; item.longDictationDeadline = 0;
         item.captureStopping = false; item.captureEnded = false; item.endpointReached = false; item.endpoint = null;
         item.finishReason = null; item.finishIntentSaved = false; item.finishQueued = false; item.completionReceived = false; item.recognitionFinalized = false;
@@ -1312,6 +1340,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (!ownsRecording(item, id) || generation != connectionGeneration) return;
             item.preflight = null;
             if (error != null) { failActive(error); return; }
+            try { validateAudioQuality(item.recordingAudioQuality, capabilities); }
+            catch (IllegalArgumentException unsupported) { failActive(unsupported.getMessage()); return; }
             RecordingStart starting = new RecordingStart(); item.recordingStart = starting;
             dictationWork(() -> {
                 if (starting.cancelled) return starting;
@@ -1347,7 +1377,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void startRecordingCoordinator(Active item, NativeDictationStore.Journal journal,
         NativeSpeechCapabilities capabilities, String secret, boolean retry) {
         final String id = item.recordingId;
-        item.recognitionTransport = recordingBackend.open(item.recordingSettings.speechConfig(secret));
+        NativeVoiceSettings frozen = item.recordingSettings;
+        item.recognitionTransport = recordingBackend.open(new NativeSpeechTransport.Config(
+            frozen.text("speechEndpoint"), secret, frozen.text("sttModel"), frozen.text("ttsModel"),
+            frozen.text("ttsVoice"), frozen.decimal("ttsSpeed"), item.recordingAudioQuality));
         final NativeSpeechTransport transport = item.recognitionTransport;
         item.recording = new NativeVoiceRecording(id, journal,
             (connectionId, listener) -> transport.openRecognition(connectionId, capabilities,
@@ -2609,6 +2642,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         item.recordingId = record.id; item.recordingBinding = record.binding; item.record = record; item.adopted = true; item.recoveryRecognition = true;
         item.captureEnded = true; item.captureStopping = true; item.finishQueued = true; item.finishIntentSaved = true;
         item.recordingSettings = new NativeVoiceSettings(settings.revision, frozen);
+        item.recordingAudioQuality = uploadPreferences.audioQuality;
         item.mutationId = record.mutationId; item.finishReason = NativeVoiceRecording.FinishReason.TIMEOUT;
         activate(item); phase = "recognizing";
         final long generation = connectionGeneration; final String secret = speechCredential;
@@ -2616,6 +2650,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (!ownsRecording(item, record.id) || generation != connectionGeneration) { reply.failed("recording_changed", message("recording_changed")); return; }
             item.preflight = null;
             if (error != null) { interruptRecording(item, error); reply.failed(error, message(error)); return; }
+            try { validateAudioQuality(item.recordingAudioQuality, capabilities); }
+            catch (IllegalArgumentException unsupported) {
+                interruptRecording(item, unsupported.getMessage()); reply.failed(unsupported.getMessage(), message(unsupported.getMessage())); return;
+            }
             dictationWork(() -> dictations.journal(record.binding, record.id), (journal, failure) -> {
                 if (!ownsRecording(item, record.id)) { reply.failed("recording_changed", message("recording_changed")); return; }
                 if (failure != null) { interruptRecording(item, code(failure)); reply.failed(code(failure), message(code(failure))); return; }
@@ -2762,7 +2800,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         try { return action.run(); }
         catch (NativeVoiceStore.CorruptRecord error) {
             store.quarantine(ownerBinding, error.record);
-            if (ownerBinding.equals(binding)) report(error.record.equals(NativeVoiceStore.PREFERENCES_RECORD) ? "voice_settings_reset" : "voice_" + error.record + "_reset");
+            if (ownerBinding.equals(binding)) report(error.record.equals(NativeVoiceStore.PREFERENCES_RECORD) ? "voice_settings_reset" :
+                error.record.equals(NativeVoiceStore.UPLOAD_PREFERENCES_RECORD) ? "voice_audio_quality_reset" : "voice_" + error.record + "_reset");
             return action.run();
         }
     }
@@ -3263,10 +3302,11 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             "recognitionThreadTitle", active.targetTitle, "automatic", active.automatic, "recording", recording);
         String readiness = readiness(), blocked = keepListeningBlockedReason();
         boolean ready = readiness.equals("ready");
-        JSONObject next = NativeVoiceJson.object("version", 15, "connectionGeneration", connectionGeneration, "idleTargetRevision", idleTargetRevision,
+        JSONObject next = NativeVoiceJson.object("version", 16, "connectionGeneration", connectionGeneration, "idleTargetRevision", idleTargetRevision,
             "profileId", profileId, "serverOrigin", origin, "identity", identity, "originClientId", originId, "clientConnectionToken", clientConnectionToken,
             "settingsRevision", settings.revision, "settings", settings.value, "phase", phase, "ready", ready,
             "speech", NativeVoiceJson.object("credentialConfigured", speechCredential != null, "catalogStatus", catalogStatus,
+                "audioQuality", uploadPreferences.audioQuality, "audioQualityRevision", uploadPreferences.revision,
                 "catalog", speechCatalog == null ? null : NativeSpeechCatalog.picker(speechCatalog), "error", catalogError == null ? null : message(catalogError)),
             "readiness", readiness, "foreground", NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle,
                 "composerAvailable", foregroundComposerAvailable),
@@ -3391,6 +3431,12 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             case "dictation_finalization_conflict": return "The saved recording and its input request do not match.";
             case "speech_transcription_model_unsupported": return "This transcription model does not support Keep listening.";
             case "speech_server_configuration_unsupported": return "This speech server does not provide the recognition limits required for recording.";
+            case "speech_audio_quality_invalid": return "Choose a supported recording quality.";
+            case "speech_audio_quality_unsupported": return "This speech server or model does not support the selected recording quality. Choose Original or a server with Opus support.";
+            case "audio_quality_revision_conflict": return "Recording quality changed. Refresh settings and try again.";
+            case "speech_audio_encoder_unavailable": return "An Opus encoder is unavailable on this device. Choose Original recording quality.";
+            case "speech_audio_encoder_failed": return "Audio encoding failed. The saved recording can be retried with Original quality.";
+            case "recognition_upload_timeout": return "Uploading the recording took too long. Retry saved audio with Low bandwidth quality when supported.";
             case "recognition_session_timing_unsupported": return "The speech service session limit is too short for the selected recognition timeout.";
             case "voice_target_required": return "Choose a thread for voice input.";
             case "voice_busy": return "Stop the current voice interaction before recording.";
@@ -3407,6 +3453,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             case "credential_storage_unavailable": return "This device's secure credential storage could not be read. Retry the voice connection.";
             case "voice_storage_unavailable": return "This device's private voice storage is unavailable.";
             case "voice_settings_reset": return "Saved voice settings could not be read and were reset to defaults.";
+            case "voice_audio_quality_reset": return "Saved recording quality could not be read and was reset to Original. Other voice settings were preserved.";
             case "voice_journal_reset": return "Pending voice input recovery records could not be read and were cleared.";
             case "voice_journal_capacity": return "Too many voice inputs are awaiting recovery. Resume or discard them in Voice settings.";
             case "connection_identity_changed": return "The Sedes identity changed. Refresh the connection before using voice.";

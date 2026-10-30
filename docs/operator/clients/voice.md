@@ -227,6 +227,37 @@ clear the log, reproduce once, then **Copy log**. The bounded native log records
 stream connectivity, receipt, queue decisions, and playback without recording
 message text. See [Voice delivery diagnostics](../../developer/diagnostics.md#voice-delivery).
 
+## Recording quality
+
+On Android, **Voice settings → Upload quality** controls uploads from this
+device. The microphone and saved recording retain mono 24 kHz PCM, so changing
+upload quality does not change the saved source audio.
+
+| Choice | Upload audio | Approximate audio data per minute |
+| --- | --- | --- |
+| Original (default) | Uncompressed PCM | 2.88 MB binary, or 3.84 MB with standard Base64 |
+| High | Opus at 64 kbit/s | 0.48 MB |
+| Low bandwidth | Opus at 24 kbit/s | 0.18 MB |
+
+These figures exclude container and network overhead. Opus is lossy; recognition
+quality depends on the recording and model. Original preserves the captured
+samples. Quality selection is manual; Wi-Fi or cellular changes do not change it.
+
+High and Low bandwidth are available only when **My own speech server** and the
+selected model advertise the optional binary Opus extension. The same configured
+URL is used. Original uses binary PCM when advertised, otherwise the existing
+standard JSON/Base64 protocol. Direct OpenAI uses its standard protocol. Existing
+server discovery requirements still apply; there is no new mandatory extension.
+If the selected server or model cannot use a saved quality choice, select
+Original explicitly. The app does not silently change codecs.
+
+Finish or cancel an active recording before changing quality. Automatic retries
+keep that recording's quality. An explicit **Retry recognition** for saved audio
+uses the currently selected quality, so an interrupted upload can be retried
+with less data without recording again. This preference is stored separately
+from existing voice settings and survives profile removal. Electron continues to
+use its existing PCM protocol and does not expose Android's quality selector.
+
 ## Speech text
 
 **Settings → Voice → Clean up formatting for speech** is on by default. It reads
@@ -614,7 +645,9 @@ endpoints. Both modes divide audio at likely pauses and bounded hard cuts, usual
 at most 60 seconds, and assemble final transcripts in order. Quiet audio is kept;
 long silent thinking can still consume recognition requests. Recognition accuracy
 at forced boundaries depends on the selected model. The result timeout applies
-to each segment. Ordinary no-speech timeout ends without sending or restarting.
+to each segment after the server acknowledges receiving it. Upload acknowledgment
+has its own five-minute limit, also bounded by the remaining session lifetime.
+Ordinary no-speech timeout ends without sending or restarting.
 
 During transient recognition failures, an adopted recording keeps the microphone
 open and shows **Reconnecting**, or a spinner beside the thread title on narrow

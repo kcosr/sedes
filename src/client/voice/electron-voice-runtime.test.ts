@@ -111,6 +111,16 @@ function harness() {
 }
 
 describe("Electron app-session voice", () => {
+  it("keeps desktop PCM unchanged and explicitly rejects Android upload-quality commands", async () => {
+    const h = harness(); await h.enable();
+    const before = await h.runtime.getState();
+    expect(before.speech.audioQuality).toBe("original");
+    expect(before.speech.catalog?.audioInputFormats).toEqual({});
+    await expect(h.runtime.setSpeechAudioQuality({ ...await h.command(), expectedAudioQualityRevision: 0, audioQuality: "opus_low" }))
+      .rejects.toThrow("Upload quality selection is only supported by the Android client.");
+    expect((await h.runtime.getState()).speech).toEqual(before.speech);
+  });
+
   it("uses explicit OpenAI bindings for fresh settings, catalog, credentials, recognition and playback", async () => {
     const h = harness(); await h.runtime.setConnection(BINDING);
     const binding = { provider: "openai", endpoint: "https://api.openai.com/v1" };

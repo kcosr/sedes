@@ -91,9 +91,9 @@ export class ElectronVoicePreferences {
 
 export function emptyElectronVoiceState(settings = electronVoiceDefaults()): NativeVoiceState {
   return {
-    version: 15, stateRevision: 0, connectionGeneration: 0, profileId: null, serverOrigin: null, identity: null,
+    version: 16, stateRevision: 0, connectionGeneration: 0, profileId: null, serverOrigin: null, identity: null,
     originClientId: null, clientConnectionToken: null, settingsRevision: 0, settings,
-    speech: { credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null },
+    speech: { audioQuality: "original", audioQualityRevision: 0, credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null },
     phase: "off", ready: false, readiness: "disconnected",
     foreground: { visible: false, threadId: null, threadTitle: null, composerAvailable: false },
     nextRecordingTarget: null, retainedVoiceTarget: null, idleTargetRevision: 0, active: null,

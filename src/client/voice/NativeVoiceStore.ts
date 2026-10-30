@@ -488,6 +488,15 @@ export class NativeVoiceStore {
       return next ? this.plugin.updateSettings({ ...this.commandContext(), expectedRevision: state.settingsRevision, patch: next }) : state;
     });
   }
+  async setSpeechAudioQuality(audioQuality: NativeVoiceState["speech"]["audioQuality"]): Promise<void> {
+    await this.run(async () => {
+      await this.refresh();
+      const state = this.#state.native;
+      if (!state) throw new Error("Voice settings are unavailable. Reconnect to this server.");
+      return this.plugin.setSpeechAudioQuality({ ...this.commandContext(),
+        expectedAudioQualityRevision: state.speech.audioQualityRevision, audioQuality });
+    });
+  }
   async run(action: () => Promise<NativeVoiceState>): Promise<void> {
     return this.#perform(action, false);
   }

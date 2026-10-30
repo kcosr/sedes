@@ -19,6 +19,42 @@ public class NativeVoiceStoreTest {
     private final NativeVoiceTestContext context = new NativeVoiceTestContext();
     @org.junit.After public void closeInstallation() { context.close(); }
 
+    @Test public void uploadQualitySurvivesRestartWithoutChangingVoiceSettings() throws Exception {
+        String profile = "voice-test-" + UUID.randomUUID();
+        String binding = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);
+        NativeVoiceStore store = new NativeVoiceStore(context);
+        store.settings(binding, store.settings(binding).patch(0, NativeVoiceJson.object(
+            "autoListen", false, "voiceThreadId", "thread-kept", "voiceThreadTitle", "Kept")));
+        assertEquals("original", store.uploadPreferences().audioQuality);
+        store.uploadPreferences(store.uploadPreferences().patch(0, "opus_low"));
+        NativeVoiceStore restarted = new NativeVoiceStore(context);
+        assertEquals("opus_low", restarted.uploadPreferences().audioQuality);
+        assertEquals(1, restarted.uploadPreferences().revision);
+        assertEquals(1, restarted.settings(binding).revision);
+        assertFalse(restarted.settings(binding).flag("autoListen"));
+        assertEquals("thread-kept", restarted.settings(binding).text("voiceThreadId"));
+        restarted.removeProfile(profile);
+        assertEquals("opus_low", restarted.uploadPreferences().audioQuality);
+    }
+
+    @Test public void corruptUploadQualityIsQuarantinedIndependently() throws Exception {
+        String profile = "voice-test-" + UUID.randomUUID();
+        String binding = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);
+        NativeVoiceStore store = new NativeVoiceStore(context);
+        store.settings(binding, store.settings(binding).patch(0, NativeVoiceJson.object("autoListen", false)));
+        store.uploadPreferences(store.uploadPreferences().patch(0, "opus_high"));
+        File record = new File(store.directory(NativeVoiceStore.DEVICE_BINDING), NativeVoiceStore.UPLOAD_PREFERENCES_RECORD + ".enc");
+        Files.write(record.toPath(), new byte[] { 1, 2, 3 });
+        try { store.uploadPreferences(); fail("Corrupt upload preference must not be read as Original"); }
+        catch (NativeVoiceStore.CorruptRecord error) {
+            assertEquals(NativeVoiceStore.UPLOAD_PREFERENCES_RECORD, error.record);
+            store.quarantine(binding, error.record);
+        }
+        assertEquals("original", store.uploadPreferences().audioQuality);
+        assertFalse(store.settings(binding).flag("autoListen"));
+        assertEquals(1, store.settings(binding).revision);
+    }
+
     @Test public void devicePreferencesAndExactThreadSelectionsSurviveRestartAndProfileDeletion() throws Exception {
         String profile = "voice-test-" + UUID.randomUUID(), other = "voice-test-" + UUID.randomUUID();
         String a = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);

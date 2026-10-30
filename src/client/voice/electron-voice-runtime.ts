@@ -369,7 +369,7 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
     const generation = this.#state.connectionGeneration, request = ++this.#speechGeneration;
     const { speechProvider: provider, speechEndpoint: endpoint } = this.#state.settings;
     this.#catalog = undefined; this.#catalogRequest++;
-    this.#state.speech = { credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null };
+    this.#state.speech = { audioQuality: "original", audioQualityRevision: 0, credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null };
     if (!endpoint) { await this.#speech.cancelAll(); return; }
     const configured = await this.#speech.configure({ provider, endpoint });
     if (generation !== this.#state.connectionGeneration || request !== this.#speechGeneration) return;
@@ -389,13 +389,17 @@ export class ElectronVoiceRuntime implements NativeVoicePlugin {
       const selected = catalog.speechModels.find(model => model.id === this.#state.settings.ttsModel);
       this.#state.speech.catalog = { source: provider, sttModels: catalog.transcriptionModels.map(model => model.id),
         ttsModels: catalog.speechModels.map(model => model.id), voices: selected?.voices.map(voice => voice.id) ?? [],
-        speed: selected ? { min: selected.speed.min, max: selected.speed.max } : null, formats: ["pcm"] };
+        speed: selected ? { min: selected.speed.min, max: selected.speed.max } : null, formats: ["pcm"], audioInputFormats: {} };
       this.#state.speech.catalogStatus = "ready"; this.#state.speech.error = null;
     } catch (error) {
       if (request !== this.#catalogRequest || generation !== this.#state.connectionGeneration) return;
       this.#state.speech.catalogStatus = "error"; this.#state.speech.error = messageOf(error);
     }
     this.#publish();
+  }
+  async setSpeechAudioQuality(input: Parameters<NativeVoicePlugin["setSpeechAudioQuality"]>[0]): Promise<NativeVoiceState> {
+    this.#assertGeneration(input);
+    throw new Error("Upload quality selection is only supported by the Android client.");
   }
   async refreshSpeechCatalog(input: Parameters<NativeVoicePlugin["refreshSpeechCatalog"]>[0]): Promise<NativeVoiceState> {
     this.#assertGeneration(input);

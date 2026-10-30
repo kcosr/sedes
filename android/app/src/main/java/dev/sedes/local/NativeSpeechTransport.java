@@ -82,9 +82,12 @@ class NativeSpeechTransport implements Closeable {
         }
     }
     static final class Config {
-        final String baseUrl, bearerToken, transcriptionModel, speechModel, voice;
+        final String baseUrl, bearerToken, transcriptionModel, speechModel, voice, audioQuality;
         final double speed;
         Config(String baseUrl, String bearerToken, String transcriptionModel, String speechModel, String voice, double speed) {
+            this(baseUrl, bearerToken, transcriptionModel, speechModel, voice, speed, "original");
+        }
+        Config(String baseUrl, String bearerToken, String transcriptionModel, String speechModel, String voice, double speed, String audioQuality) {
             try {
                 if (baseUrl == null || baseUrl.length() > 2048) throw new IllegalArgumentException();
                 URI uri = new URI(baseUrl);
@@ -103,6 +106,9 @@ class NativeSpeechTransport implements Closeable {
             this.voice = configured(voice);
             if (!Double.isFinite(speed) || speed < .25 || speed > 4) throw new IllegalArgumentException("invalid_speech_speed");
             this.speed = speed;
+            if (!"original".equals(audioQuality) && !"opus_high".equals(audioQuality) && !"opus_low".equals(audioQuality))
+                throw new IllegalArgumentException("speech_audio_quality_invalid");
+            this.audioQuality = audioQuality;
         }
         private static String configured(String value) {
             if (value == null || value.isEmpty() || value.length() > 256 || value.indexOf('\0') >= 0)
@@ -112,11 +118,15 @@ class NativeSpeechTransport implements Closeable {
     }
     /** Transport limits are independent of Android settings and can be shortened in actual socket tests. */
     static final class Limits {
-        final long handshakeMs, readMs, requestMs, speechPcmBytes;
+        final long handshakeMs, readMs, requestMs, speechPcmBytes, commitAckMs;
         Limits(long handshakeMs, long readMs, long requestMs, long speechPcmBytes) {
-            if (handshakeMs <= 0 || readMs <= 0 || requestMs <= 0 || speechPcmBytes <= 0 || speechPcmBytes > MAX_SPEECH_PCM_BYTES)
+            this(handshakeMs, readMs, requestMs, speechPcmBytes, 300000);
+        }
+        Limits(long handshakeMs, long readMs, long requestMs, long speechPcmBytes, long commitAckMs) {
+            if (handshakeMs <= 0 || readMs <= 0 || requestMs <= 0 || speechPcmBytes <= 0 || speechPcmBytes > MAX_SPEECH_PCM_BYTES || commitAckMs <= 0)
                 throw new IllegalArgumentException("invalid_speech_limits");
             this.handshakeMs = handshakeMs; this.readMs = readMs; this.requestMs = requestMs; this.speechPcmBytes = speechPcmBytes;
+            this.commitAckMs = commitAckMs;
         }
         static Limits defaults() { return new Limits(20000, 30000, 11 * 60 * 1000, MAX_SPEECH_PCM_BYTES); }
     }
@@ -124,6 +134,7 @@ class NativeSpeechTransport implements Closeable {
     private final Config config;
     private final Limits limits;
     private final Clock clock;
+    private final NativeVoiceAudioEncoder.Factory encoderFactory;
     private final OkHttpClient websocketClient, httpClient;
     private final ScheduledThreadPoolExecutor deadlines = new ScheduledThreadPoolExecutor(1, work -> {
         Thread thread = new Thread(work, "sedes-speech-deadlines"); thread.setDaemon(true); return thread;
@@ -132,8 +143,15 @@ class NativeSpeechTransport implements Closeable {
     private boolean closed;
 
     NativeSpeechTransport(Config config, Clock clock) { this(config, new OkHttpClient(), Limits.defaults(), clock); }
+    NativeSpeechTransport(Config config, Clock clock, NativeVoiceAudioEncoder.Factory encoderFactory) {
+        this(config, new OkHttpClient(), Limits.defaults(), clock, encoderFactory);
+    }
     NativeSpeechTransport(Config config, OkHttpClient client, Limits limits, Clock clock) {
+        this(config, client, limits, clock, null);
+    }
+    NativeSpeechTransport(Config config, OkHttpClient client, Limits limits, Clock clock, NativeVoiceAudioEncoder.Factory encoderFactory) {
         this.config = config; this.limits = limits; this.clock = java.util.Objects.requireNonNull(clock);
+        this.encoderFactory = encoderFactory;
         deadlines.setRemoveOnCancelPolicy(true);
         // OkHttp may repeat the bodyless upgrade GET once for HTTP 503/Retry-After: 0 before a socket is open.
         // No audio is sent before the session acknowledgement. The coordinator alone owns bounded recognition retries.
@@ -156,6 +174,10 @@ class NativeSpeechTransport implements Closeable {
         if (!register(operation)) return operation;
         try {
             if (capabilities == null || !config.transcriptionModel.equals(capabilities.model)) throw new IllegalArgumentException("speech_transcription_model_unsupported");
+            if (!"original".equals(config.audioQuality) && (!"server".equals(capabilities.provider) || !capabilities.binaryOpus))
+                throw new IllegalArgumentException("speech_audio_quality_unsupported");
+            if (!"original".equals(config.audioQuality) && encoderFactory == null)
+                throw new IllegalArgumentException("speech_audio_encoder_unavailable");
             capabilities.validateTiming(resultTimeoutMs);
         } catch (IllegalArgumentException invalid) { operation.fail(Kind.CONFIGURATION, invalid.getMessage(), 0); return operation; }
         operation.start(); return operation;
@@ -296,6 +318,7 @@ class NativeSpeechTransport implements Closeable {
         private final NativeSpeechCapabilities capabilities;
         private final RecognitionListener listener;
         private final long resultTimeoutMs;
+        private final boolean opus, binary;
         private WebSocket socket;
         private String sessionId, previousItemId, failedAttemptId, sessionEventId;
         private boolean ready, awaitingAck;
@@ -305,12 +328,16 @@ class NativeSpeechTransport implements Closeable {
         private final class Buffer {
             final String attemptId;
             final Set<String> eventIds = new HashSet<>();
-            long bytes, resultDeadlineMs;
+            long bytes, resultDeadlineMs, commitAckDeadlineMs;
+            NativeVoiceAudioEncoder encoder;
+            boolean finishing;
             String itemId;
             Buffer(String attemptId) { this.attemptId = attemptId; }
         }
         Recognition(String id, NativeSpeechCapabilities capabilities, RecognitionListener listener, long resultTimeoutMs) {
             super(id); this.capabilities = capabilities; this.listener = listener; this.resultTimeoutMs = resultTimeoutMs;
+            opus = !"original".equals(config.audioQuality);
+            binary = capabilities != null && "server".equals(capabilities.provider) && (opus ? capabilities.binaryOpus : capabilities.binaryPcm);
         }
         synchronized void start() {
             if (ended) return;
@@ -327,11 +354,12 @@ class NativeSpeechTransport implements Closeable {
                             catch (IllegalArgumentException invalid) { fail(Kind.CONFIGURATION, "recognition_session_lifetime_invalid", 0); return; }
                         }
                         sessionEventId = nextEventId();
-                        JSONObject event = NativeVoiceJson.object("type", "session.update", "event_id", sessionEventId,
-                            "session", NativeVoiceJson.object("type", "transcription", "audio", NativeVoiceJson.object("input", NativeVoiceJson.object(
-                                "format", NativeVoiceJson.object("type", "audio/pcm", "rate", SAMPLE_RATE),
+                        JSONObject session = NativeVoiceJson.object("type", "transcription", "audio", NativeVoiceJson.object("input", NativeVoiceJson.object(
+                                "format", audioFormat(),
                                 "transcription", NativeVoiceJson.object("model", config.transcriptionModel),
-                                "turn_detection", null, "noise_reduction", null))));
+                                "turn_detection", null, "noise_reduction", null)));
+                        if (binary) NativeVoiceJson.put(session, "extensions", NativeVoiceJson.object("binary_audio_input", NativeVoiceJson.object("version", 1)));
+                        JSONObject event = NativeVoiceJson.object("type", "session.update", "event_id", sessionEventId, "session", session);
                         send(event, false);
                     }
                 }
@@ -365,6 +393,7 @@ class NativeSpeechTransport implements Closeable {
             if (!ready || awaitingAck) return SendResult.WAITING;
             if (pending != null && pending.attemptId.equals(attemptId) || buffered != null && !buffered.attemptId.equals(attemptId))
                 throw new IllegalArgumentException("recognition_invalid_attempt");
+            if (buffered != null && buffered.finishing) return SendResult.WAITING;
             if (pcm == null || pcm.length == 0 || pcm.length > PCM_PACKET_BYTES || (pcm.length & 1) != 0) {
                 fail(Kind.PROTOCOL, "recognition_invalid_pcm", 0); return SendResult.ENDED;
             }
@@ -373,11 +402,26 @@ class NativeSpeechTransport implements Closeable {
             if (bufferBytes + pcm.length > capabilities.hardSegmentBytes()) {
                 fail(Kind.LIMIT, "recognition_buffer_limit", 0); return SendResult.ENDED;
             }
-            String eventId = nextEventId();
-            SendResult sent = send(NativeVoiceJson.object("type", "input_audio_buffer.append", "event_id", eventId, "audio", ByteString.of(pcm).base64()), true);
+            if (opus) {
+                try {
+                    if (buffered == null) buffered = new Buffer(attemptId);
+                    if (buffered.encoder == null) buffered.encoder = encoderFactory.create("opus_high".equals(config.audioQuality) ? 64000 : 24000);
+                    SendResult flushed = flushEncoder(buffered);
+                    if (flushed != SendResult.ACCEPTED) return flushed;
+                    if (!buffered.encoder.offer(pcm)) return SendResult.BACKPRESSURE;
+                    buffered.bytes += pcm.length;
+                    // Once consumed by the encoder, PCM belongs to this buffer even if its output is backpressured.
+                    return flushEncoder(buffered) == SendResult.ENDED ? SendResult.ENDED : SendResult.ACCEPTED;
+                } catch (RuntimeException invalid) {
+                    fail(Kind.CONFIGURATION, "speech_audio_encoder_failed", 0); return SendResult.ENDED;
+                }
+            }
+            String eventId = binary ? null : nextEventId();
+            SendResult sent = binary ? sendBinary(pcm) : send(NativeVoiceJson.object("type", "input_audio_buffer.append", "event_id", eventId, "audio", ByteString.of(pcm).base64()), true);
             if (sent == SendResult.ACCEPTED) {
                 if (buffered == null) buffered = new Buffer(attemptId);
-                buffered.bytes += pcm.length; buffered.eventIds.add(eventId);
+                buffered.bytes += pcm.length;
+                if (eventId != null) buffered.eventIds.add(eventId);
             }
             return sent;
         }
@@ -387,16 +431,54 @@ class NativeSpeechTransport implements Closeable {
             if (!ready || awaitingAck || pending != null) return SendResult.WAITING;
             if (buffered == null || !buffered.attemptId.equals(attemptId) || buffered.bytes < PCM_PACKET_BYTES)
                 throw new IllegalArgumentException("recognition_invalid_commit");
+            if (!buffered.finishing) {
+                buffered.finishing = true;
+                // Includes encoder EOS draining and WebSocket backpressure. Socket queue drain is not a server receipt.
+                buffered.commitAckDeadlineMs = Math.min(expiresAtMs, clock.nowMs() + limits.commitAckMs);
+                deadline(Math.max(1, buffered.commitAckDeadlineMs - clock.nowMs()), "recognition_upload_timeout");
+                if (buffered.encoder != null) {
+                    try { buffered.encoder.finish(); }
+                    catch (RuntimeException invalid) { fail(Kind.CONFIGURATION, "speech_audio_encoder_failed", 0); return SendResult.ENDED; }
+                }
+            }
+            if (buffered.encoder != null) {
+                try {
+                    SendResult flushed = flushEncoder(buffered);
+                    if (flushed != SendResult.ACCEPTED) return flushed;
+                    if (!buffered.encoder.finished()) return SendResult.WAITING;
+                    buffered.encoder.close(); buffered.encoder = null;
+                } catch (RuntimeException invalid) { fail(Kind.CONFIGURATION, "speech_audio_encoder_failed", 0); return SendResult.ENDED; }
+            }
             String eventId = nextEventId();
             SendResult sent = send(NativeVoiceJson.object("type", "input_audio_buffer.commit", "event_id", eventId), true);
             if (sent == SendResult.ACCEPTED) {
                 pending = buffered; buffered = null; awaitingAck = true;
-                pending.eventIds.add(eventId); pending.resultDeadlineMs = clock.nowMs() + resultTimeoutMs;
-                deadline(resultTimeoutMs, "recognition_result_timeout");
+                pending.eventIds.add(eventId);
             }
             return sent;
         }
         private String nextEventId() { return "event_" + (++eventSequence); }
+        private JSONObject audioFormat() {
+            return opus ? NativeVoiceJson.object("type", "audio/ogg", "codec", "opus") : NativeVoiceJson.object("type", "audio/pcm", "rate", SAMPLE_RATE);
+        }
+        private SendResult flushEncoder(Buffer buffer) {
+            for (int count = 0; count < 32; count++) {
+                byte[] output = buffer.encoder.peek();
+                if (output == null) return SendResult.ACCEPTED;
+                SendResult sent = sendBinary(output);
+                if (sent != SendResult.ACCEPTED) return sent;
+                buffer.encoder.pop();
+            }
+            return SendResult.BACKPRESSURE;
+        }
+        private SendResult sendBinary(byte[] bytes) {
+            if (bytes.length == 0 || bytes.length > capabilities.maxMessageBytes) {
+                fail(Kind.CONFIGURATION, "speech_server_configuration_unsupported", 0); return SendResult.ENDED;
+            }
+            if (socket != null && socket.queueSize() + bytes.length > MAX_QUEUED_BYTES) return SendResult.BACKPRESSURE;
+            if (socket == null || !socket.send(ByteString.of(bytes))) { fail(Kind.NETWORK, "recognition_network_error", 0); return SendResult.ENDED; }
+            return SendResult.ACCEPTED;
+        }
         private SendResult send(JSONObject event, boolean allowBackpressure) {
             String text = event.toString();
             int bytes = text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
@@ -412,7 +494,10 @@ class NativeSpeechTransport implements Closeable {
             if (ended) return false;
             long now = clock.nowMs();
             if (!ready && now - openedAtMs >= limits.handshakeMs) { fail(Kind.TIMEOUT, "recognition_handshake_timeout", 0); return false; }
-            if (ready && pending != null && now >= pending.resultDeadlineMs) { fail(Kind.TIMEOUT, "recognition_result_timeout", 0); return false; }
+            if (ready && (pending != null && awaitingAck && now >= pending.commitAckDeadlineMs || buffered != null && buffered.finishing && now >= buffered.commitAckDeadlineMs)) {
+                fail(Kind.TIMEOUT, "recognition_upload_timeout", 0); return false;
+            }
+            if (ready && pending != null && !awaitingAck && now >= pending.resultDeadlineMs) { fail(Kind.TIMEOUT, "recognition_result_timeout", 0); return false; }
             if (ready && now >= expiresAtMs) { fail(Kind.TIMEOUT, "recognition_session_expired", 0); return false; }
             return true;
         }
@@ -453,7 +538,7 @@ class NativeSpeechTransport implements Closeable {
                         JSONObject input = session.getJSONObject("audio").getJSONObject("input");
                         JSONObject format = input.getJSONObject("format");
                         if (sessionId == null || !sessionId.equals(session.optString("id")) || !"transcription".equals(session.optString("type")) ||
-                            !"audio/pcm".equals(format.optString("type")) || NativeVoiceJson.integer(format, "rate", SAMPLE_RATE, SAMPLE_RATE) != SAMPLE_RATE ||
+                            !matchesFormat(format) || !matchesExtension(session) ||
                             !config.transcriptionModel.equals(input.getJSONObject("transcription").optString("model")) ||
                             !input.has("turn_detection") || !input.isNull("turn_detection")) throw new IllegalArgumentException();
                         if (capabilities.provider.equals("openai") && session.has("expires_at")) hostedExpiry(session);
@@ -472,6 +557,8 @@ class NativeSpeechTransport implements Closeable {
                         Object previous = event.opt("previous_item_id");
                         if (previousItemId == null ? previous != JSONObject.NULL : !previousItemId.equals(previous)) throw new IllegalArgumentException();
                         pending.itemId = itemId; previousItemId = itemId; awaitingAck = false;
+                        pending.resultDeadlineMs = clock.nowMs() + resultTimeoutMs;
+                        deadline(resultTimeoutMs, "recognition_result_timeout");
                         listener.committed(id, pending.attemptId, itemId); break;
                     }
                     case "conversation.item.input_audio_transcription.completed":
@@ -513,7 +600,30 @@ class NativeSpeechTransport implements Closeable {
         }
         @Override void stop() {
             if (lifetimeCheck != null) lifetimeCheck.cancel(false);
+            closeEncoder(buffered); closeEncoder(pending);
             if (socket != null) socket.cancel();
+        }
+        private void closeEncoder(Buffer buffer) {
+            if (buffer != null && buffer.encoder != null) {
+                try { buffer.encoder.close(); } catch (RuntimeException ignored) { /* Cancellation must close the socket too. */ }
+                buffer.encoder = null;
+            }
+        }
+        private boolean matchesFormat(JSONObject format) {
+            if (opus) {
+                NativeVoiceJson.keys(format, "type", "codec");
+                return "audio/ogg".equals(format.optString("type")) && "opus".equals(format.optString("codec"));
+            }
+            if (binary) NativeVoiceJson.keys(format, "type", "rate");
+            return "audio/pcm".equals(format.optString("type")) && NativeVoiceJson.integer(format, "rate", SAMPLE_RATE, SAMPLE_RATE) == SAMPLE_RATE;
+        }
+        private boolean matchesExtension(JSONObject session) throws org.json.JSONException {
+            JSONObject extensions = session.optJSONObject("extensions");
+            if (!binary) return extensions == null || !extensions.has("binary_audio_input");
+            if (extensions == null) return false;
+            JSONObject accepted = extensions.getJSONObject("binary_audio_input");
+            NativeVoiceJson.keys(accepted, "version");
+            return NativeVoiceJson.integer(accepted, "version", 1, 1) == 1;
         }
         @Override void failed(Failure failure) {
             String attemptId = failedAttemptId != null ? failedAttemptId : pending != null ? pending.attemptId : buffered != null ? buffered.attemptId : null;

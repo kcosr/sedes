@@ -117,7 +117,7 @@ device and revocation on the server.
 - JDK 21
 - Android SDK Platform 36 and Build Tools 36
 - Android command-line tools and platform tools
-- an Android 7.0 (API 24) or newer device or emulator
+- an Android 10 (API 29) or newer device or emulator
 - `adb` for physical-device and emulator workflows
 
 Install the repository dependencies with `NODE_ENV` unset:
@@ -326,13 +326,18 @@ limit: toggling must not reset it and expiration must leave Ready to send. Injec
 network loss while speaking; transient failures should keep capturing with
 Reconnecting, and exhausted recovery should retain the accepted audio. Exercise
 process death, Off, profile switches, audio-focus loss, device removal/rerouting,
-Android 12+ microphone privacy toggles, and concurrent-capture silencing. API
-24–28 cannot report Android's explicit silenced flag; they retain route, focus,
-read, and no-progress checks. Confirm saved dictation remains visible while Off,
+Android 12+ microphone privacy toggles, and concurrent-capture silencing. Confirm saved dictation remains visible while Off,
 Retry never opens the microphone or sends, and a new explicit Send is required
 after a failed Send. Check complete clipboard copies and injected copy failures,
 storage limits, and narrow-screen infinity/Cancel/Send controls. Real-device and
 live-model checks are separate from the build-only verification above.
+
+Exercise Original, High, and Low bandwidth recording quality on real devices,
+including irregular final segments, repeated commits, reconnects, and a throttled
+uplink. Run the Opus instrumentation tests to check the platform encoder's delay
+and end trimming. Compare recognition on the same speech corpus at each quality;
+fixture transcripts and successful package builds do not establish recognition
+accuracy or microphone quality.
 
 For an eligible Codex thread, additionally verify a complete initial terminal
 repaint, input and resize, composed Unicode text, Backspace/navigation controls,

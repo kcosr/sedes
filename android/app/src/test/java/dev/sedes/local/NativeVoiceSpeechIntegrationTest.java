@@ -2,6 +2,9 @@ package dev.sedes.local;
 
 import static org.junit.Assert.*;
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -15,6 +18,7 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.json.JSONObject;
+import org.json.JSONArray;
 import org.junit.After;
 import org.junit.Assume;
 import org.junit.Before;
@@ -93,6 +97,76 @@ public class NativeVoiceSpeechIntegrationTest {
             assertEquals(32000, audio.getInt("bytes"));
             assertEquals(64, audio.getString("sha256").length());
         }
+    }
+
+    @Test(timeout = 20000) public void localStandardBase64AndNegotiatedBinaryPcmNormalizeExactly() throws Exception {
+        localOnly();
+        JSONObject fixture = audioFixtures().getJSONObject("original");
+        byte[] pcm = decode(fixture.getString("pcm"));
+        NativeSpeechCapabilities advertised = capabilities();
+        assertTrue("The fixture advertises the versioned binary PCM extension", advertised.binaryPcm);
+        // A standard compatible server need not advertise any new capabilities.
+        NativeSpeechCapabilities standard = NativeSpeechCapabilities.server(advertised.model, advertised.realtime());
+        assertFalse(standard.binaryPcm); assertFalse(standard.binaryOpus);
+        recognize(transport(), "standard-base64", pcm, standard);
+        recognize(transport(), "negotiated-binary", pcm, advertised);
+        JSONArray transcriptions = observations().getJSONArray("transcriptions");
+        assertEquals(2, transcriptions.length());
+        for (int index = 0; index < transcriptions.length(); index++) assertNormalized(fixture, transcriptions.getJSONObject(index));
+    }
+
+    @Test(timeout = 20000) public void localOpusUsesNativeOggMuxWithIndependentTrimmedSegments() throws Exception {
+        localOnly();
+        JSONArray fixtures = audioFixtures().getJSONArray("opus");
+        FixtureEncoders encoders = new FixtureEncoders(fixtures);
+        NativeSpeechTransport transport = transport("opus_low", encoders);
+        NativeSpeechCapabilities advertised = capabilities();
+        assertTrue("The fixture advertises the versioned binary Opus extension", advertised.binaryOpus);
+        control(NativeVoiceJson.object("transcripts", new JSONArray().put("first opus").put("second opus"), "asrDelayMs", 300));
+        RecognitionRecorder recorder = new RecognitionRecorder();
+        NativeSpeechTransport.RecognitionSession session = transport.openRecognition("opus-segments", advertised, WAIT_MS, recorder);
+        recorder.expect("ready");
+        append(session, "opus-first", decode(fixtures.getJSONObject(0).getString("pcm")));
+        commit(session, "opus-first"); recorder.acknowledged("opus-first");
+        append(session, "opus-second", decode(fixtures.getJSONObject(1).getString("pcm")));
+        assertEquals("Next segment waits for previous recognition", NativeSpeechTransport.SendResult.WAITING, session.commit("opus-second"));
+        assertEquals("first opus", recorder.expect("completed").text);
+        commit(session, "opus-second"); recorder.acknowledged("opus-second");
+        assertEquals("second opus", recorder.expect("completed").text);
+        session.cancel();
+        JSONArray transcriptions = observations().getJSONArray("transcriptions");
+        assertEquals(2, transcriptions.length()); assertEquals(2, encoders.created.size());
+        long payloadBytes = 0, base64Bytes = 0;
+        for (int index = 0; index < fixtures.length(); index++) {
+            JSONObject fixture = fixtures.getJSONObject(index), audio = transcriptions.getJSONObject(index);
+            assertNormalized(fixture, audio);
+            assertTrue("Decoder preserves the exact source duration within two resampled samples",
+                Math.abs(audio.getInt("bytes") / 2.0 - fixture.getInt("sourceSamples") * 2.0 / 3) <= 2);
+            PacketFixtureEncoder encoder = encoders.created.get(index);
+            assertTrue("Each segment independently drains and closes its encoder", encoder.closed && encoder.writer.finished());
+            assertEquals(fixture.getInt("sourceSamples"), encoder.sourceSamples());
+            assertTrue("The fixture includes nonzero codec delay", encoder.writer.preSkip() > 0);
+            payloadBytes += encoder.payloadBytes;
+            base64Bytes += ((fixture.getInt("sourceSamples") * 2L + 2) / 3) * 4;
+        }
+        assertTrue("Compressed Ogg payload is at least 90% smaller than original Base64 PCM", payloadBytes * 10 < base64Bytes);
+        System.out.println("SPEECH_OPUS_FIXTURE segments=2 binaryPayloadBytes=" + payloadBytes + " originalBase64Bytes=" + base64Bytes + " mediaCodecTested=false");
+    }
+
+    @Test(timeout = 20000) public void localCompressedQualityRequiresAdvertisedSupportBeforeAudio() throws Exception {
+        localOnly();
+        NativeSpeechCapabilities advertised = capabilities();
+        NativeSpeechCapabilities standard = NativeSpeechCapabilities.server(advertised.model, advertised.realtime());
+        RecognitionRecorder recorder = new RecognitionRecorder();
+        NativeSpeechTransport transport = transport("opus_low", bitrate -> {
+            throw new AssertionError("An unsupported server must never start an encoder");
+        });
+        NativeSpeechTransport.RecognitionSession session = transport.openRecognition("unsupported-opus", standard, WAIT_MS, recorder);
+        Event failed = recorder.expect("failed");
+        assertEquals(NativeSpeechTransport.Kind.CONFIGURATION, failed.failure.kind);
+        assertEquals("speech_audio_quality_unsupported", failed.failure.code);
+        assertEquals(NativeSpeechTransport.SendResult.ENDED, session.append("unsupported", prerecordedPcm()));
+        assertEquals(0, observations().getJSONArray("transcriptions").length());
     }
 
     @Test(timeout = 20000) public void localCancelAfterCommitSuppressesLateTranscriptAndReleasesTheWorker() throws Exception {
@@ -186,15 +260,24 @@ public class NativeVoiceSpeechIntegrationTest {
     private void localOnly() { Assume.assumeFalse("Local conformance case", live); }
     private NativeSpeechTransport transport() { return transport(env("SEDES_SPEECH_TEST_ENDPOINT"), env("SEDES_SPEECH_TEST_TOKEN")); }
     private NativeSpeechTransport transport(String endpoint, String token) {
+        return transport(endpoint, token, "original", null);
+    }
+    private NativeSpeechTransport transport(String quality, NativeVoiceAudioEncoder.Factory encoders) {
+        return transport(env("SEDES_SPEECH_TEST_ENDPOINT"), env("SEDES_SPEECH_TEST_TOKEN"), quality, encoders);
+    }
+    private NativeSpeechTransport transport(String endpoint, String token, String quality, NativeVoiceAudioEncoder.Factory encoders) {
         NativeSpeechTransport transport = new NativeSpeechTransport(new NativeSpeechTransport.Config(endpoint, token,
-            env("SEDES_SPEECH_TEST_STT_MODEL"), env("SEDES_SPEECH_TEST_TTS_MODEL"), env("SEDES_SPEECH_TEST_VOICE"), 1), client,
+            env("SEDES_SPEECH_TEST_STT_MODEL"), env("SEDES_SPEECH_TEST_TTS_MODEL"), env("SEDES_SPEECH_TEST_VOICE"), 1, quality), client,
             new NativeSpeechTransport.Limits(live ? 15000 : 5000, live ? 30000 : 5000, live ? 45000 : 15000, 480000),
-            () -> TimeUnit.NANOSECONDS.toMillis(System.nanoTime()));
+            () -> TimeUnit.NANOSECONDS.toMillis(System.nanoTime()), encoders);
         transports.add(transport); return transport;
     }
     private Event recognize(NativeSpeechTransport transport, String id, byte[] pcm) throws Exception {
+        return recognize(transport, id, pcm, capabilities());
+    }
+    private Event recognize(NativeSpeechTransport transport, String id, byte[] pcm, NativeSpeechCapabilities selected) throws Exception {
         RecognitionRecorder recorder = new RecognitionRecorder();
-        NativeSpeechTransport.RecognitionSession request = transport.openRecognition(id, capabilities(), WAIT_MS, recorder);
+        NativeSpeechTransport.RecognitionSession request = transport.openRecognition(id, selected, WAIT_MS, recorder);
         recorder.expect("ready"); append(request, id + "-attempt", pcm);
         assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.commit(id + "-attempt"));
         Event completed = recorder.expect("completed"); request.cancel(); return completed;
@@ -213,6 +296,79 @@ public class NativeVoiceSpeechIntegrationTest {
         for (int offset = 0; offset < pcm.length; offset += 4800)
             assertEquals("PCM append was rejected", NativeSpeechTransport.SendResult.ACCEPTED,
                 request.append(attemptId, Arrays.copyOfRange(pcm, offset, Math.min(pcm.length, offset + 4800))));
+    }
+    private static void commit(NativeSpeechTransport.RecognitionSession request, String attemptId) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (true) {
+            NativeSpeechTransport.SendResult sent = request.commit(attemptId);
+            if (sent == NativeSpeechTransport.SendResult.ACCEPTED) return;
+            assertTrue("Commit ended before encoder EOS", sent == NativeSpeechTransport.SendResult.WAITING || sent == NativeSpeechTransport.SendResult.BACKPRESSURE);
+            assertTrue("Encoder EOS did not drain", System.nanoTime() < deadline);
+            Thread.sleep(5);
+        }
+    }
+    private static JSONObject audioFixtures() throws Exception {
+        return new JSONObject(new String(Files.readAllBytes(Paths.get(env("SEDES_SPEECH_TEST_AUDIO_FIXTURES"))), StandardCharsets.UTF_8));
+    }
+    private static byte[] decode(String value) { return java.util.Base64.getDecoder().decode(value); }
+    private static void assertNormalized(JSONObject expected, JSONObject actual) throws Exception {
+        assertEquals(16000, actual.getInt("sampleRate"));
+        assertEquals(expected.getInt("normalizedPcmBytes"), actual.getInt("bytes"));
+        assertEquals("Normalized bytes match direct ffmpeg decoding, including pre-skip and end trim",
+            expected.getString("normalizedPcmSha256"), actual.getString("sha256"));
+    }
+    /** Inject prerecorded real codec packets, while retaining the production
+     * streaming mux and transport. This is deliberately not a MediaCodec test. */
+    private static final class FixtureEncoders implements NativeVoiceAudioEncoder.Factory {
+        final JSONArray fixtures;
+        final List<PacketFixtureEncoder> created = new ArrayList<>();
+        FixtureEncoders(JSONArray fixtures) { this.fixtures = fixtures; }
+        public NativeVoiceAudioEncoder create(int bitrate) {
+            assertEquals(24000, bitrate);
+            try {
+                PacketFixtureEncoder encoder = new PacketFixtureEncoder(fixtures.getJSONObject(created.size()), created.size() + 1);
+                created.add(encoder); return encoder;
+            } catch (org.json.JSONException invalid) { throw new AssertionError(invalid); }
+        }
+    }
+    private static final class PacketFixtureEncoder implements NativeVoiceAudioEncoder {
+        final NativeOggOpusWriter writer;
+        final byte[] pcm;
+        final List<byte[]> packets = new ArrayList<>();
+        int acceptedBytes, packetIndex;
+        long payloadBytes;
+        boolean finishing, closed;
+        PacketFixtureEncoder(JSONObject fixture, int serial) throws org.json.JSONException {
+            pcm = decode(fixture.getString("pcm"));
+            writer = new NativeOggOpusWriter(decode(fixture.getString("opusHead")), null, serial);
+            JSONArray encoded = fixture.getJSONArray("packets");
+            for (int index = 0; index < encoded.length(); index++) {
+                byte[] packet = decode(encoded.getString(index));
+                assertEquals("Fixture encoder uses 20 ms packets", 960, NativeOggOpusWriter.packetSamples(packet));
+                packets.add(packet);
+            }
+        }
+        public boolean offer(byte[] next) {
+            assertFalse(finishing); assertFalse(closed);
+            assertTrue(acceptedBytes + next.length <= pcm.length);
+            assertArrayEquals(Arrays.copyOfRange(pcm, acceptedBytes, acceptedBytes + next.length), next);
+            acceptedBytes += next.length; return true;
+        }
+        public void finish() {
+            if (finishing) return;
+            assertEquals("The exact segment source reaches the encoder", pcm.length, acceptedBytes);
+            finishing = true; writer.endInput(sourceSamples());
+        }
+        public byte[] peek() {
+            int available = finishing ? packets.size() : Math.min(packets.size(), acceptedBytes / 960);
+            while (packetIndex < available && writer.canAcceptPacket()) writer.packet(packets.get(packetIndex++));
+            if (finishing && packetIndex == packets.size()) writer.finish();
+            return writer.peek();
+        }
+        public void pop() { payloadBytes += writer.peek().length; writer.pop(); }
+        public boolean finished() { return writer.finished(); }
+        public long sourceSamples() { return acceptedBytes / 2; }
+        public void close() { closed = true; }
     }
     /** A prerecorded deterministic mono PCM fixture; no host or Android audio device is opened. */
     private static byte[] prerecordedPcm() {
