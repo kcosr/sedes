@@ -2770,6 +2770,7 @@ plugins = false
           !nativeImage ||
           nativeImage.type !== "imageGeneration" ||
           nativeImage.status !== "completed" ||
+          !("result" in nativeImage) ||
           typeof nativeImage.result !== "string"
         ) {
           throw new Error("codex_live_generated_image_missing");

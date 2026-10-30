@@ -1,0 +1,20 @@
+{
+  "verifiedAt": "2026-10-30T14:10:48.512Z",
+  "fixtureOnly": true,
+  "liveProviderVerified": false,
+  "platform": "linux/x64",
+  "results": [
+    {
+      "release": "0.163.0",
+      "explicitRootTierAfterDelayedDefault": "priority",
+      "sameStreamTier": "ultrafast",
+      "defaultThenStartTier": "priority",
+      "replacementThenLateOldTier": "priority",
+      "oldStreamCallerDisconnectedBeforeNewRequest": true,
+      "delayedOldDefaultAcceptedAfterNewTurnStarted": true,
+      "commandNeverExecuted": true,
+      "limitation": "Deterministic fault relay delays old native-bound frames and native disconnect propagation. Demonstrates no cross-stream issue-order guarantee, not an observed Sedes reconnect bug. Same-stream delays are before native enqueue, not a held native handler.",
+      "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215"
+    }
+  ]
+}

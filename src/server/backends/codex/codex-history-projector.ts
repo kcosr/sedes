@@ -40,6 +40,7 @@ import {
   codexAsyncQuestionsFromAgentMessage,
   projectCodexThread,
   refineCodexItemLifecycleTimestamps,
+  resolveCodexItemLifecycleTimestamps,
   refineCodexThreadTokenUsage,
   type CodexThread,
   type CodexThreadItem,
@@ -327,7 +328,8 @@ async function resolveGeneratedImagePublications(
         replacement = backendItemSchema.parse(
           omittedGeneratedImageItem(
             publication.identity,
-            decoded.reason === "too_large" ? "byte_limit" : "invalid_data",
+            decoded.reason === "too_large" ? "byte_limit" :
+              decoded.reason === "unsupported_file_reference" ? "unavailable" : "invalid_data",
           ),
         );
         itemsById[publication.identity.backendItemId] = replacement;
@@ -591,8 +593,11 @@ export function projectCodexHistory(
         throw new CodexHistoryProjectionError("codex_history_invalid");
       }
       itemCoordinates.add(coordinate);
-      const lifecycleTimestamps = itemTimestamps.get(coordinate);
-      if (lifecycleTimestamps) retainedItemTimestamps.set(coordinate, lifecycleTimestamps);
+      const lifecycleTimestamps = resolveCodexItemLifecycleTimestamps(item, itemTimestamps.get(coordinate));
+      if (itemTimestamps.has(coordinate) || lifecycleTimestamps.startedAtMs !== null ||
+          lifecycleTimestamps.completedAtMs !== null) {
+        retainedItemTimestamps.set(coordinate, lifecycleTimestamps);
+      }
       const itemSourceOrder = sourceOrder;
       let projected = projectCodexItemSlice(
         thread.id,
@@ -1207,12 +1212,13 @@ export function projectCodexItemSlice(
         },
       ];
     case "imageGeneration": {
+      const hasInlineResult = "result" in item && item.result.length > 0;
       const state =
         item.status === "in_progress"
-          ? operationState("inProgress", item.result.length > 0)
+          ? operationState("inProgress", hasInlineResult)
           : item.status === "failed"
-            ? operationState("failed", item.result.length > 0)
-            : operationState("completed", item.result.length > 0);
+            ? operationState("failed", hasInlineResult)
+            : operationState("completed", hasInlineResult);
       const tool: BackendItem = {
         ...base(),
         semanticKind: "tool",
@@ -1247,6 +1253,9 @@ export function projectCodexItemSlice(
 
       const imageIdentity = base("image", 1);
       const publicationKey = imageIdentity.backendItemId;
+      if ("fileId" in item) {
+        return [tool, omittedGeneratedImageItem(imageIdentity, "unavailable")];
+      }
       try {
         if (generatedImages.verifiedPublicationKeys.has(publicationKey)) {
           const existing = generatedImages.outputArtifacts.findImage(

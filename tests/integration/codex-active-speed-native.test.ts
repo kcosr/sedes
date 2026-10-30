@@ -34,7 +34,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, access, stat, chmod } from "no
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { createConnection } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import path from "node:path";
 import { CodexExecutionSettingsRepositoryAdapter } from "../../src/server/backends/codex/codex-backend-module.js";
 import { CodexConversationBackendDriver } from "../../src/server/backends/codex/codex-conversation-driver.js";
@@ -67,13 +67,13 @@ const native = candidate ? it : it.skip;
 const nativeTimeout = 120_000;
 if (candidate) beforeAll(async () => {
   expect(path.isAbsolute(candidate)).toBe(true);
-  const versionHome = await mkdtemp(path.join(tmpdir(), "speed-version-"));
+  const versionHome = await mkdtemp(path.join(homedir(), ".sedes-speed-version-"));
   let version: string;
   try {
     version = execFileSync(candidate, ["--version"], { env: probeEnvironment(versionHome), encoding: "utf8", timeout: 10_000 }).trim().replace(/^codex-cli /, "");
   } finally { await rm(versionHome, { recursive: true, force: true }); }
-  expect(["0.162.1", "0.163.0"]).toContain(version);
-  const metadata = JSON.parse(await readFile(path.resolve(`protocol/codex-app-server/0.163.0/runtime-compatibility/${version}.json`), "utf8"));
+  expect(["0.162.1", "0.163.0", "0.166.0"]).toContain(version);
+  const metadata = JSON.parse(await readFile(path.resolve(`protocol/codex-app-server/0.166.0/runtime-compatibility/${version}.json`), "utf8"));
   const sha256 = createHash("sha256").update(await readFile(candidate)).digest("hex");
   expect(sha256).toBe(metadata.platforms.find((platform: { nodePlatform: string; nodeArch: string }) => platform.nodePlatform === process.platform && platform.nodeArch === process.arch).executableSha256);
   process.stdout.write(`Offline Speed qualification: ${JSON.stringify({ version, sha256, platform: process.platform, arch: process.arch, authenticatedProvider: false })}\n`);
@@ -101,7 +101,9 @@ const nativeScenarios = [
   { topology: "external" as const, scenario: "recovery-link" as const },
 ];
 native.each(nativeScenarios)("qualifies real native Speed ($topology/$scenario)", async ({ topology, scenario }) => {
-  const root = await mkdtemp(path.join(tmpdir(), "sedes-speed-native-"));
+  // Native helper aliases require a private home outside the shared system
+  // temporary directory. Keep the production version probe's stderr gate strict.
+  const root = await mkdtemp(path.join(homedir(), ".sedes-speed-native-"));
   const home = path.join(root, "home"), workspacePath = path.join(root, "workspace");
   await Promise.all([mkdir(home), mkdir(workspacePath)]);
   const provider = await startMockResponsesServer();
@@ -850,7 +852,7 @@ function fixture(
   databases.push(database);
   const scope = new SingleUserIdentityProvider(database).getScope();
   const configurations = new BackendConfigurationRepository(database);
-  importLegacyDatabaseConfigurationFixture(database, { configuration, localWorkspaceRoots: ["/tmp"], sourceLabel: "codex-persistence-fixture" }, 210);
+  importLegacyDatabaseConfigurationFixture(database, { configuration, localWorkspaceRoots: [path.dirname(workspacePath)], sourceLabel: "codex-persistence-fixture" }, 210);
 
   new InventoryRepository(database).updateEnvironmentAvailability(scope, configuration.executionEnvironments[0]!.id, { available: true, now: 210 });
   const workspace = new InventoryRepository(database).upsertWorkspace(scope, {

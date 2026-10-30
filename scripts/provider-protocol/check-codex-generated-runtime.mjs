@@ -6,7 +6,7 @@ const modulePath = path.resolve(
 );
 const binding = await import(pathToFileURL(modulePath).href);
 
-if (binding.CODEX_APP_SERVER_RELEASE !== "0.163.0") {
+if (binding.CODEX_APP_SERVER_RELEASE !== "0.166.0") {
   throw new Error("Built Codex binding selected the wrong release.");
 }
 if (binding.CODEX_CLIENT_REQUEST_METHODS.length !== 27) {
@@ -60,6 +60,20 @@ binding.encodeCodexServerRequestResult("attestation/generate", {
   token: "opaque",
 });
 binding.decodeCodexServerNotificationParams("skills/changed", {});
+for (const planType of ["sci", "sci_plus"]) {
+  binding.decodeCodexServerNotificationEnvelope("account/updated", {
+    authMode: "chatgpt", planType,
+  });
+}
+for (const item of [
+  { type: "plan", id: "item-1", text: "Plan", startedAtMs: 1, completedAtMs: null },
+  { type: "imageGeneration", id: "item-1", status: "in_progress", revisedPrompt: null,
+    result: "", failure: null, generationId: null, startedAtMs: 1, completedAtMs: null },
+]) {
+  binding.decodeCodexServerNotificationEnvelope("item/started", {
+    threadId: "thread-1", turnId: "turn-1", item, startedAtMs: 1,
+  });
+}
 binding.decodeCodexServerNotificationParams("thread/prediction/updated", {
   threadId: "thread-1",
   sourceTurnId: "turn-1",
@@ -106,5 +120,5 @@ if (!rejected) {
 }
 
 console.log(
-  "Built Codex 0.163.0 production binding executes stable and experimental profiles as ESM.",
+  "Built Codex 0.166.0 production binding executes stable and experimental profiles as ESM.",
 );

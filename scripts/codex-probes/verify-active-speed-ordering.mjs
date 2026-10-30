@@ -19,7 +19,7 @@ let release;
 try {
   release = execFileSync(binary, ['--version'], { env: probeEnvironment(versionHome), encoding: 'utf8', timeout: 10000 }).trim().replace(/^codex-cli /, '');
 } finally { await rm(versionHome, { recursive: true, force: true }); }
-assert(['0.162.1', '0.163.0'].includes(release));
+assert(['0.162.1', '0.163.0', '0.166.0'].includes(release));
 const candidates = [[release, binary]];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(test, label) {
@@ -178,7 +178,7 @@ async function run(release, binary) {
 }
 const results = [];
 for (const [release, binary] of candidates) {
-  const metadata = JSON.parse(await readFile(`${repo}/protocol/codex-app-server/0.163.0/runtime-compatibility/${release}.json`, 'utf8'));
+  const metadata = JSON.parse(await readFile(`${repo}/protocol/codex-app-server/0.166.0/runtime-compatibility/${release}.json`, 'utf8'));
   const sha256 = createHash('sha256').update(await readFile(binary)).digest('hex');
   assert.equal(sha256, metadata.platforms.find(p => p.nodePlatform === process.platform && p.nodeArch === process.arch).executableSha256);
   const result = await run(release, binary); results.push({ ...result, sha256 }); console.log(JSON.stringify(result));

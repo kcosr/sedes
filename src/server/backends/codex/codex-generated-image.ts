@@ -41,6 +41,7 @@ export type CodexGeneratedImageDecodeResult =
       readonly type: "unavailable";
       readonly reason:
         | "not_completed"
+        | "unsupported_file_reference"
         | "missing_result"
         | "invalid_base64"
         | "too_large"
@@ -51,8 +52,9 @@ export type CodexGeneratedImageDecodeResult =
  * Decodes the provider-private `ImageGenerationItem.result` contract.
  *
  * Codex's image-generation extension returns standard, padded base64
- * PNG bytes in `result`. `savedPath` is only a provider-local convenience copy
- * and is deliberately not consulted here.
+ * PNG bytes in `result`. A provider attachment-store `fileId` has no adopted
+ * content retrieval authority. Neither it nor the provider-local `savedPath`
+ * grants authority to read a file or fetch a URL.
  */
 export function decodeCodexGeneratedImage(
   item: CodexImageGenerationItem,
@@ -66,6 +68,10 @@ export function decodeCodexGeneratedImage(
     maximumBytes < PNG_SIGNATURE.length
   ) {
     throw new Error("codex_generated_image_limit_invalid");
+  }
+
+  if ("fileId" in item) {
+    return { type: "unavailable", reason: "unsupported_file_reference" };
   }
 
   const encoded = item.result.trim();

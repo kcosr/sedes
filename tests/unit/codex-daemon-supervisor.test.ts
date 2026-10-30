@@ -639,7 +639,7 @@ describe("CodexDaemonSupervisor", () => {
           initialize: {
             ...goodInitialize,
             userAgent:
-              `sedes_web/0.164.0+vendor.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
+              `sedes_web/0.167.0+vendor.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
           },
         },
       ],
@@ -649,7 +649,7 @@ describe("CodexDaemonSupervisor", () => {
     await supervisor.start();
 
     expect(onRuntimeVersionAssessment).toHaveBeenCalledWith({
-      version: "0.164.0+vendor.1",
+      version: "0.167.0+vendor.1",
       newerThanTested: true,
     });
     expect(supervisor.snapshot().state).toBe("ready");

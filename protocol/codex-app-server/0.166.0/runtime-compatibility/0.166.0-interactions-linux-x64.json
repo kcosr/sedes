@@ -1,0 +1,11 @@
+{
+  "release": "0.166.0",
+  "parserRelease": "0.166.0",
+  "platform": "linux/x64",
+  "executableSha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+  "commandApprovalDecoded": true,
+  "declineEncoded": true,
+  "declinedCommandNotExecuted": true,
+  "deterministicProviderRequests": 2,
+  "liveProviderVerified": false
+}

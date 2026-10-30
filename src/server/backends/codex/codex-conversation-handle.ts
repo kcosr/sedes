@@ -76,6 +76,7 @@ import {
   codexThreadUnsubscribeMethod,
   codexThreadUnarchiveMethod,
   refineCodexItemLifecycleTimestamps,
+  resolveCodexItemLifecycleTimestamps,
   refineCodexThreadReadState,
   type CodexThread,
   type CodexThreadItem,
@@ -5222,8 +5223,11 @@ export class CodexConversationHandle implements ConversationHandle {
         const previousTimestamps = this.#itemTimestamps.get(coordinate) ?? {
           startedAtMs: null, completedAtMs: null,
         };
-        const startedAtMs = "startedAtMs" in parsed ? parsed.startedAtMs : undefined;
-        const completedAtMs = "completedAtMs" in parsed ? parsed.completedAtMs : undefined;
+        const observedTimestamps = resolveCodexItemLifecycleTimestamps(parsed.item, {
+          startedAtMs: "startedAtMs" in parsed ? parsed.startedAtMs : undefined,
+          completedAtMs: "completedAtMs" in parsed ? parsed.completedAtMs : undefined,
+        });
+        const { startedAtMs, completedAtMs } = observedTimestamps;
         if ((startedAtMs != null && previousTimestamps.startedAtMs !== null &&
               startedAtMs !== previousTimestamps.startedAtMs) ||
             (completedAtMs != null && previousTimestamps.completedAtMs !== null &&

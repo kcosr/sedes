@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "release": "0.166.0",
+  "parserRelease": "0.166.0",
+  "profiles": {
+    "stable/typescript": {
+      "baselineFiles": 760,
+      "candidateFiles": 760,
+      "changes": []
+    },
+    "stable/json-schema": {
+      "baselineFiles": 321,
+      "candidateFiles": 321,
+      "changes": []
+    },
+    "experimental/typescript": {
+      "baselineFiles": 921,
+      "candidateFiles": 921,
+      "changes": []
+    },
+    "experimental/json-schema": {
+      "baselineFiles": 467,
+      "candidateFiles": 467,
+      "changes": []
+    }
+  }
+}

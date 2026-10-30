@@ -32,7 +32,7 @@ it("records actual Speed presentation transitions without changing capabilities 
   });
   const input: Parameters<ThreadBackendPresentationProvider["read"]>[0] = {
     scope, applicationThreadId,
-    backend: { id: "backend", tenantId: scope.tenantId, kind: "codex_app_server", label: "Codex", enabled: true, configurationRevision: 1, protocolRelease: "0.163.0" },
+    backend: { id: "backend", tenantId: scope.tenantId, kind: "codex_app_server", label: "Codex", enabled: true, configurationRevision: 1, protocolRelease: "0.166.0" },
     connection: { id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
       templateId: "codex-local", kind: "codex_app_server", backendInstanceId: "backend", executionEnvironmentId: "local",
       label: "Local", enabled: true, configurationRevision: 1 },

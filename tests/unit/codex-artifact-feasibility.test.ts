@@ -30,7 +30,7 @@ const adoptionManifest = JSON.parse(
   readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.163.0/adoption-manifest.json",
+      "protocol/codex-app-server/0.166.0/adoption-manifest.json",
     ),
     "utf8",
   ),
@@ -49,7 +49,7 @@ const stableProtocolManifest = JSON.parse(
   readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.163.0/protocol-manifest.json",
+      "protocol/codex-app-server/0.166.0/protocol-manifest.json",
     ),
     "utf8",
   ),
@@ -58,7 +58,7 @@ const experimentalProtocolManifest = JSON.parse(
   readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.163.0/protocol-manifest-experimental.json",
+      "protocol/codex-app-server/0.166.0/protocol-manifest-experimental.json",
     ),
     "utf8",
   ),
@@ -90,7 +90,7 @@ const officialServerNotificationDefinitions = new Map(
   [...readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.163.0/official/stable/typescript/ServerNotification.ts",
+      "protocol/codex-app-server/0.166.0/official/stable/typescript/ServerNotification.ts",
     ),
     "utf8",
   ).matchAll(/\{ "method": "([^"]+)", "params": ([A-Za-z0-9_]+) \}/gu)].map(
@@ -103,7 +103,7 @@ function readSchema(profile: "generated" | "generated-experimental") {
     readFileSync(
       path.join(
         repositoryRoot,
-        `protocol/codex-app-server/0.163.0/${profile}/json-schema/codex_app_server_protocol.v2.schemas.json`,
+        `protocol/codex-app-server/0.166.0/${profile}/json-schema/codex_app_server_protocol.v2.schemas.json`,
       ),
       "utf8",
     ),
@@ -222,10 +222,10 @@ describe("Codex D3 production app-server binding", () => {
   });
 
   it("keeps the manifest and generated production registries exactly aligned", () => {
-    expect(CODEX_APP_SERVER_RELEASE).toBe("0.163.0");
-    expect(adoptionManifest.productionRelease).toBe("0.163.0");
+    expect(CODEX_APP_SERVER_RELEASE).toBe("0.166.0");
+    expect(adoptionManifest.productionRelease).toBe("0.166.0");
     expect(adoptionManifest.productionRuntimeCompatibility.currentPolicy).toBe(
-      "stable releases admitted by the runtime policy using exactly the 0.163.0 parser profile",
+      "stable releases admitted by the runtime policy using exactly the 0.166.0 parser profile",
     );
     expect(adoptionManifest.routes).toHaveLength(77);
 
@@ -517,6 +517,35 @@ describe("Codex D3 production app-server binding", () => {
     ] as const) {
       expect(CODEX_ADOPTED_SERVER_NOTIFICATION_METHODS).not.toContain(method);
       expect(validateCodexServerNotificationEnvelope(method, params)).toBe(true);
+    }
+  });
+
+  it("admits the released account plans without accepting unreviewed plans", () => {
+    for (const planType of ["sci", "sci_plus"]) {
+      expect(validateCodexServerNotificationEnvelope("account/updated", {
+        authMode: "chatgpt", planType,
+      })).toBe(true);
+    }
+    expect(validateCodexServerNotificationEnvelope("account/updated", {
+      authMode: "chatgpt", planType: "unreviewed-plan",
+    })).toBe(false);
+  });
+
+  it("recognizes the released model-request hook events with strict event names", () => {
+    for (const method of ["hook/started", "hook/completed"] as const) {
+      const definition = method === "hook/started"
+        ? "HookStartedNotification" : "HookCompletedNotification";
+      const fixture = minimalOfficialFixture(
+        stableV2Schema.definitions[definition]!, stableV2Schema,
+      ) as { run: Record<string, unknown>; threadId: string };
+      for (const eventName of ["preModelRequest", "postModelRequest"]) {
+        expect(validateCodexServerNotificationEnvelope(method, {
+          ...fixture, run: { ...fixture.run, eventName },
+        })).toBe(true);
+      }
+      expect(validateCodexServerNotificationEnvelope(method, {
+        ...fixture, run: { ...fixture.run, eventName: "unreviewedHook" },
+      })).toBe(false);
     }
   });
 
