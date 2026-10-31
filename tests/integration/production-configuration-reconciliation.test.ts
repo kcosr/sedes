@@ -32,6 +32,7 @@ import { PiNativeHost } from "../../src/server/backends/pi/native/host/native-ho
 import { PiNativeHostRegistry } from "../../src/server/backends/pi/native/host/host-registry.js";
 import { registerPiNativeHost } from "../../src/server/backends/pi/native/sidecar/register-host.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
+import { openCodeRuntimeCommandSchema, openCodeRuntimeOperations, type OpenCodeRuntimeInfo } from "../../src/server/backends/opencode/opencode-runtime-wire.js";
 
 let application: RunningApplication | undefined;
 let directory: string | undefined;
@@ -234,6 +235,105 @@ describe("production configuration reconciliation", () => {
       vi.restoreAllMocks();
       await application?.close(); application = undefined;
       for (const carrier of carriers) await carrier.close();
+    }
+  }, 15_000);
+
+  it("refreshes a remote OpenCode module whose service identity was captured during deferred startup", async () => {
+    const { service, scope, snapshot } = await fixture();
+    const environmentId = randomUUID(), backendId = "background-opencode";
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Deferred provider host", hostAlias: "test-target",
+      connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    addBackgroundOpenCode(configuration, environmentId);
+    const created: BackendModuleRuntime[] = [];
+    const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
+    vi.spyOn(compiledBackendModuleCatalog, "prepare").mockImplementation(input => prepare(input).map(prepared => {
+      if (prepared.backendInstanceId !== backendId) return prepared;
+      const create = prepared.createRuntime.bind(prepared);
+      prepared.createRuntime = context => { const runtime = create(context); created.push(runtime); return runtime; };
+      return prepared;
+    }));
+    const ensures = vi.fn(), commands: string[] = [];
+    let release!: () => void;
+    const initialStartup = new Promise<void>(resolve => { release = resolve; });
+    async function createPeer(incarnation: string, deferred = false) {
+      const carrier = await createSidecarFramedCarrier();
+      const status: SidecarServiceStatus = { scope: { ...scope, installationId: "installation", executionEnvironmentId: environmentId },
+        serviceIncarnation: incarnation, buildId: "persistent-runtime-test", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
+        controllerEpoch: 1, attached: true, attachmentMode: "normal", state: "ready", configurationState: "applied",
+        desiredConfiguration: { environmentRevision: 0, operationsRevision: 0 }, effectiveConfiguration: { environmentRevision: 0, operationsRevision: 0 },
+        resources: [], resourcesFingerprint: "b".repeat(64) };
+      const store = "/workspace/opencode.db";
+      const info: OpenCodeRuntimeInfo = { runtimeId: randomUUID(), nativeNamespaceKey: openCodeRuntimeNamespaceKey(environmentId, store),
+        snapshot: { state: "ready", ownership: "owned", generation: randomUUID(), references: 0, runtimeVersion: "2.1.1",
+          identity: { pid: 123, startTime: incarnation, uid: 1000, executablePath: "/bin/opencode2", executable: { device: "1", inode: "2" },
+            nativeStorePath: store, store: { device: "1", inode: "3" }, storeObservation: "open_file" } } };
+      let present = false;
+      for (const operation of openCodeRuntimeOperations) carrier.hostRegistry.register(operation, async body => {
+        const command = openCodeRuntimeCommandSchema.parse(await carrier.hostChannel.decodeBody(body));
+        expect(command.serviceIncarnation).toBe(incarnation);
+        expect(command.controllerEpoch).toBe(status.controllerEpoch);
+        commands.push(command.action);
+        let value: unknown;
+        if (command.action === "ensure") {
+          ensures();
+          if (deferred) await initialStartup;
+          present = true; value = info;
+        } else if (["lookup", "lookup_recovery", "lookup_retained", "info"].includes(command.action)) value = present ? info : null;
+        else if (command.action === "inspect") value = { state: "idle", incarnation: info.runtimeId, revision: info.runtimeId, blockers: [], retainedThreadIds: [] };
+        else if (command.action === "assert_current") value = { ok: true };
+        else throw new Error(`Unexpected provider operation: ${command.action}`);
+        return carrier.hostChannel.encodeBody({ status: "ok", value });
+      });
+      await carrier.start();
+      return { carrier, status, lease: () => ({ session: { runtimeChannel: carrier.mainChannel, closed: carrier.mainTransport.closed,
+        negotiatedCapabilities: carrier.hostRegistry.capabilities(), close: async () => {} },
+        serviceStatus: status, carrierGeneration: 1, release() {} }) };
+    }
+    const peers: Awaited<ReturnType<typeof createPeer>>[] = [];
+    try {
+      let current = await createPeer("first-service", true); peers.push(current);
+      vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockImplementation(async () => current.status);
+      vi.spyOn(SidecarRuntimeOwner.prototype, "connect").mockImplementation(async () => current.status);
+      const acquire = vi.spyOn(SidecarRuntimeOwner.prototype, "acquireOperation").mockImplementation(async () => current.lease());
+      vi.spyOn(SidecarRuntimeOwner.prototype, "acquireRecovery").mockImplementation(async () => current.lease());
+      vi.spyOn(SidecarRuntimeOwner.prototype, "acquireExisting").mockImplementation(async () => current.lease());
+      const stop = vi.spyOn(SidecarRuntimeOwner.prototype, "controlService");
+      const reserve = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "reserveStartup");
+      await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+      await vi.waitFor(() => expect(ensures).toHaveBeenCalledOnce());
+      const collection = reserve.mock.contexts.at(-1) as PrincipalBackendRuntimeCollection;
+      expect(collection.runtimes.has(backendId)).toBe(false);
+      expect(acquire).toHaveBeenCalledOnce();
+      release();
+      await vi.waitFor(() => expect(collection.runtimes.get(backendId)).toBe(created[0]));
+      const first = created[0]!, close = vi.spyOn(first, "close");
+      const reconcile = () => service.options.runtime!.reconcile(scope, service.repository.get(scope));
+      await reconcile();
+      expect(created).toHaveLength(1);
+      expect(close).not.toHaveBeenCalled();
+      const original = current;
+      current = await createPeer("replacement-service"); peers.push(current);
+      await original.carrier.close();
+      await service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "restart",
+        expectedRevision: service.repository.get(scope).revision });
+      await reconcile();
+      await vi.waitFor(() => {
+        expect(created).toHaveLength(2);
+        expect(collection.runtimes.get(backendId)).toBe(created[1]);
+      });
+      expect(ensures).toHaveBeenCalledTimes(2);
+      expect(acquire).toHaveBeenCalledTimes(2);
+      expect(close).toHaveBeenCalledOnce();
+      await reconcile();
+      expect(created).toHaveLength(2);
+      expect(commands).not.toContain("mutate");
+      expect(commands).not.toContain("stop");
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      release(); vi.restoreAllMocks();
+      await application?.close(); application = undefined;
+      for (const peer of peers) await peer.carrier.close();
     }
   }, 15_000);
 
