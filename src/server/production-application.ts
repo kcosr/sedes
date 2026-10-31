@@ -854,6 +854,10 @@ export async function startProductionApplication(
     const appliedBackendRevisions = new Map<string, number>();
     const appliedBackendFingerprints = new Map<string, string>();
     const backendIncarnations = new Map<string, string>();
+    // Each module's remote authority is pinned by its first provider lease.
+    // Carrier/epoch changes preserve it; a replacement service needs a new
+    // module, after the ordinary actor and provider retirement checks pass.
+    const backendSidecarBindings = new WeakMap<BackendModuleRuntime, { serviceIncarnation?: string }>();
     const appliedStartupEnvironmentFingerprints = new Map<string, string>();
     const startupEnvironmentFingerprint = (id: string): string => {
       const document = desiredConfiguration.configuration;
@@ -881,6 +885,7 @@ export async function startProductionApplication(
       readonly environmentRuntime: ExecutionEnvironmentRuntime;
       readonly localProvider: boolean;
       readonly startupFingerprint: string;
+      readonly sidecarBinding: { serviceIncarnation?: string };
       completion: Promise<BackendStartupOutcome>;
       cancelled: boolean;
     };
@@ -935,6 +940,8 @@ export async function startProductionApplication(
             recordBackendStartupFailure(id, attempt.fingerprint, started.error, attempt.localProvider); outcome = "failed";
           } else {
             await attempt.handle.publish();
+            const runtime = runtimeModules.runtimes.get(id);
+            if (runtime) backendSidecarBindings.set(runtime, attempt.sidecarBinding);
             recordBackendApplied(id, attempt.revision, attempt.fingerprint, attempt.startupFingerprint);
             observationFailures.delete(`backend:${id}`); outcome = "applied";
           }
@@ -998,6 +1005,7 @@ export async function startProductionApplication(
         if (!prepared) throw new Error("backend_runtime_preparation_missing");
         const workspaceIsolation = workspaceIsolations.get(backendId);
         const owner = environmentRuntimes.get(environmentId)?.sidecarRuntime;
+        const sidecarBinding: { serviceIncarnation?: string } = {};
         const plan: BackendRuntimePlan = {
           prepared,
           context: {
@@ -1012,6 +1020,7 @@ export async function startProductionApplication(
               sidecarRuntime: {
                 async acquireExisting(signal = new AbortController().signal) {
                   const lease = await owner.acquireExisting(scope, environmentId, signal);
+                  sidecarBinding.serviceIncarnation ??= lease.serviceStatus.serviceIncarnation;
                   return {channel: lease.session.runtimeChannel,
                     controllerEpoch: lease.serviceStatus.controllerEpoch,
                     serviceIncarnation: lease.serviceStatus.serviceIncarnation,
@@ -1021,6 +1030,7 @@ export async function startProductionApplication(
                   const lease = options.existingOnly
                     ? await owner.acquireRetainedRecovery(scope, environmentId, signal)
                     : await owner.acquireOperation(scope, environmentId, signal);
+                  sidecarBinding.serviceIncarnation ??= lease.serviceStatus.serviceIncarnation;
                   return {channel: lease.session.runtimeChannel,
                     controllerEpoch: lease.serviceStatus.controllerEpoch,
                     serviceIncarnation: lease.serviceStatus.serviceIncarnation,
@@ -1037,6 +1047,7 @@ export async function startProductionApplication(
             { signal: backendStartupAbort.signal, startupTimeoutMs: 90_000 });
           const attempt: BackendStartupAttempt = { handle, fingerprint, revision, environmentId,
             environmentRuntime: environmentRuntimes.get(environmentId)!, startupFingerprint,
+            sidecarBinding,
             localProvider: inventoryRepository.getEnvironment(scope, environmentId).kind === "local",
             completion: Promise.resolve("superseded"), cancelled: false };
           backendStartups.set(backendId, attempt); clearBackendPreparationFailure(backendId);
@@ -1048,6 +1059,7 @@ export async function startProductionApplication(
         }
         const result = await runtimeModules.apply(plan, retireBackendRuntime);
         if (result.status === "failed") throw result.error;
+        backendSidecarBindings.set(result.runtime, sidecarBinding);
         recordBackendApplied(backendId, revision, fingerprint, startupFingerprint);
       } catch (error) {
         if (error instanceof ThreadRuntimeNotIdleError) { clearBackendPreparationFailure(backendId); return; }
@@ -2641,10 +2653,16 @@ export async function startProductionApplication(
           appliedEnvironmentFingerprints.get(profile.executionEnvironmentId) !== environmentRuntimeFingerprint(profile.executionEnvironmentId))) continue;
         const configured = backendConfigurationFile.backends.find(item => item.id === id)!;
         const fingerprint = backendRuntimeFingerprint(id);
-        if (fingerprint === appliedBackendFingerprints.get(id)) { appliedBackendRevisions.set(id, record.desiredRevision); continue; }
+        const existing = moduleRuntimes.get(id);
+        const boundService = existing && backendSidecarBindings.get(existing)?.serviceIncarnation;
+        const environmentId = profiles.find(profile => profile.backendInstanceId === id)?.executionEnvironmentId;
+        const observedService = environmentId ? observedServices.get(environmentId) : undefined;
+        const replacedService = backendHasRemoteProvider(id) && boundService !== undefined &&
+          observedService?.state === "ready" && observedService.configurationState === "applied" &&
+          observedService.serviceIncarnation !== boundService;
+        if (!replacedService && fingerprint === appliedBackendFingerprints.get(id)) { appliedBackendRevisions.set(id, record.desiredRevision); continue; }
         // A startup edit is desired state only. Saving must never restart a
         // running process, even when it currently has no active thread.
-        const existing = moduleRuntimes.get(id);
         if (existing && startupEnvironmentPending(id) && await existing.startupEnvironmentState?.() !== "not_started") continue;
         if (existing) {
           const observed = await captureAdministrativeResource(record, Boolean(existing.administration));

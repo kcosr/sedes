@@ -1037,6 +1037,18 @@ startup failure leaves unrelated runtimes available and records a per-backend
 failure. This shared composition applies to local Pi, Codex, Claude, Grok and OpenCode;
 it neither grants remote topology support nor changes provider protocols.
 
+Remote provider modules bind their first acquired service incarnation. A newly
+authenticated, ready service with applied configuration invalidates that local
+module generation even when saved configuration is unchanged. Replace only
+through the existing actor, provider-work, namespace and cleanup gates; retain
+uncertain operation receipts and never replay input. Carrier or controller-epoch
+changes within the same service do not invalidate the module, and unreachable
+hosts provide no replacement proof. Pi, Codex, Claude and OpenCode implement
+this shared composition rule for their remote provider runtimes. Pi SDK's
+main-owned runtime and local-only Grok do not acquire remote provider authority
+and retain their existing lifetimes. Provider-native handle identity checks
+remain authoritative across every replacement.
+
 The runtime owns everything it starts: SDK clients, daemons, sockets, SSH
 forwards, subprocesses, watchers, and temporary secrets. Startup is bounded;
 shutdown stops new work, aborts cancellable work, waits for owned

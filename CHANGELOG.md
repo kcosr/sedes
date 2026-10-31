@@ -306,6 +306,12 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Idle remote backends recover after their sidecar is replaced, allowing Pi
+  conversation history to reopen without restarting Sedes. Active work and
+  unproven cleanup still prevent automatic replacement. See
+  [Pi recovery](docs/operator/backends/pi-native.md#ownership-reconnect-and-recovery).
+  ([#130](https://github.com/kcosr/sedes/pull/130))
+
 - Android High and Low bandwidth dictation finish correctly on codecs that do
   not emit an extra packet at the end of a recording, including automatic
   segment submission. ([#128](https://github.com/kcosr/sedes/pull/128))

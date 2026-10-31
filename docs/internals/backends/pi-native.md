@@ -33,11 +33,22 @@ work. Attachments bind runtime, handle, and generation identity. Release can
 retire a session only after it is idle, has no pending interactions, and its
 operation and event evidence has been acknowledged. Runtime stop/restart uses
 an ownership/blocker revision that remains stable through streaming progress.
+
 New runs, sessions, interactions, mutation or retained-result obligations, and
 cleanup state invalidate the confirmation. Non-retained observation-only
 requests do not change the revision or add a delivery obligation. Force records
 abandonment only after confirmation is accepted,
 before cleanup.
+
+Production composition records the service incarnation of a module's first
+provider lease. If authenticated management observes a ready, applied successor
+service, it retires the idle module through the normal actor, provider, and
+cleanup gates before creating another port. Configuration equality alone cannot
+keep a port pinned to a retired service. Carrier and controller-epoch changes
+within the same service preserve the module. The old port still rejects changed
+runtime identities, so retained handles and unknown operations never cross into
+the replacement. An unavailable peer supplies no replacement authority.
+
 Failed cleanup retains ownership and reports `cleanup_unproven`.
 Live and recovered administration use the same normalization for positively
 reported stale confirmation, blocked work, and unproven cleanup. Transport loss
