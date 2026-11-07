@@ -10,7 +10,7 @@ const releaseRoot = path.join(
   repositoryRoot,
   "protocol",
   "codex-app-server",
-  "0.166.0",
+  "0.167.0",
 );
 const codexBinary = path.join(
   repositoryRoot,
@@ -23,7 +23,7 @@ function readJson(filename: string): unknown {
   return JSON.parse(readFileSync(filename, "utf8"));
 }
 
-describe("Codex 0.166.0 release contract", () => {
+describe("Codex 0.167.0 release contract", () => {
   it("pins the exact package, source release, and installed native executable", () => {
     const packageJson = readJson(path.join(repositoryRoot, "package.json")) as {
       devDependencies: Record<string, string>;
@@ -71,18 +71,18 @@ describe("Codex 0.166.0 release contract", () => {
       >;
     };
 
-    expect(packageJson.devDependencies["@openai/codex"]).toBe("0.166.0");
+    expect(packageJson.devDependencies["@openai/codex"]).toBe("0.167.0");
     expect(release).toMatchObject({
-      release: "0.166.0",
+      release: "0.167.0",
       git: {
-        tag: "rust-v0.166.0",
-        tagObject: "593389380740f7b4762771573c447ccfdc59742f",
-        commit: "6ff1e1ca3b30fc8b914720681fcf5fe62e95f856",
+        tag: "rust-v0.167.0",
+        tagObject: "cb41599ccbe371272892f156286a236aa097bada",
+        commit: "086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a",
       },
       npm: {
-        version: "0.166.0",
+        version: "0.167.0",
         tarballSha256:
-          "67ee6f4069d9328956401f54ac202c20369233159058af9f4ec1af731b87f5b7",
+          "e858522a37b85b5bbe695919190cfb0974aee5ae739d84d8d629c39735fb03a9",
       },
       generation: {
         supportedPlatforms: [
@@ -90,48 +90,48 @@ describe("Codex 0.166.0 release contract", () => {
             nodePlatform: "linux",
             nodeArch: "x64",
             nativePackage: "@openai/codex-linux-x64",
-            nativePackageVersion: "0.166.0-linux-x64",
+            nativePackageVersion: "0.167.0-linux-x64",
             nativePackageTarballSha256:
-              "cbc00a26d3d0e2ceefc4be8891f8a81ef1e349b3b175bc0ae308762bc001fd93",
+              "2dc9aa871abb513c3539d20d025f701faf1974c46ee906bda3a1e1f5026d4434",
             executableRelativePath:
               "vendor/x86_64-unknown-linux-musl/bin/codex",
             executableSha256:
-              "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+              "cdcb45aaa01d0f14e298985e09465aebccd47f64ecd298aea44814af7b62bbda",
           },
           {
             nodePlatform: "darwin",
             nodeArch: "arm64",
             nativePackage: "@openai/codex-darwin-arm64",
-            nativePackageVersion: "0.166.0-darwin-arm64",
+            nativePackageVersion: "0.167.0-darwin-arm64",
             nativePackageTarballSha256:
-              "181d2eda8addbeca0b689c996df207293947928bdd9c88a097837ae1c7e69ca5",
+              "6989512a93d5fc74cb221dd348c972bf3cd83592e471bfd9557bccb45eb6fffc",
             executableRelativePath: "vendor/aarch64-apple-darwin/bin/codex",
             executableSha256:
-              "39acf979729dd290f9a24ee38b2914e036c91b65952872e28ae2a6b88a7db7c1",
+              "030316ecfbb41f4e7946e584b0063ef333b7a36cd312ba349f2f6869e39b62cc",
           },
           {
             nodePlatform: "darwin",
             nodeArch: "x64",
             nativePackage: "@openai/codex-darwin-x64",
-            nativePackageVersion: "0.166.0-darwin-x64",
+            nativePackageVersion: "0.167.0-darwin-x64",
             nativePackageTarballSha256:
-              "588aad29a4779badc894daeb2e43757ed01d213366fd931fd9a5ec47f7e31e14",
+              "5b950f992ec8a2340c4c4c853d665639b27f618b64eede87ddf94b9ab7979360",
             executableRelativePath: "vendor/x86_64-apple-darwin/bin/codex",
             executableSha256:
-              "1361e18268866b7f9f5e8703fabcea0a2a990a439eedcce03940abb4ba9eaaeb",
+              "a3b4df639ed5808100fe9d3dacdb324c9fb50b2804d72d5ab59def67bb2d6ab6",
           },
         ],
         profiles: ["stable", "experimental"],
         rawJsonSchemaInventories: {
           stable: {
-            count: 321,
+            count: 322,
             pathSetSha256:
-              "ff92e345c67fc7dd28d1218a302a38788f33304d56c682a246a2c4927d4bb519",
+              "348b686ba4b480c272c54a6ffce2340198186c3b4f906a3df42c426e09dd3a25",
           },
           experimental: {
-            count: 467,
+            count: 470,
             pathSetSha256:
-              "b1e29d0c680598838a838c8a9fa38531d517a9c2af191ac06a4c8a1e107ed8cf",
+              "017f2a34f3be957bdb32494d1721595044bb599ae653f9c5b5b391fd91cb25ec",
           },
         },
       },
@@ -157,7 +157,7 @@ describe("Codex 0.166.0 release contract", () => {
     }
     expect(
       execFileSync(codexBinary, ["--version"], { encoding: "utf8" }).trim(),
-    ).toBe("codex-cli 0.166.0");
+    ).toBe("codex-cli 0.167.0");
 
     const platform = release.generation.supportedPlatforms.find(
       (candidate) =>
@@ -191,7 +191,7 @@ describe("Codex 0.166.0 release contract", () => {
       },
     );
     expect(output).toContain(
-      "Codex 0.166.0 stable and experimental protocol artifacts are current.",
+      "Codex 0.167.0 stable and experimental protocol artifacts are current.",
     );
   }, 15_000);
 
@@ -214,7 +214,7 @@ describe("Codex 0.166.0 release contract", () => {
     expect(manifest.treeSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(manifest.methods.clientRequests).toHaveLength(109);
     expect(manifest.methods.serverRequests).toHaveLength(10);
-    expect(manifest.methods.serverNotifications).toHaveLength(87);
+    expect(manifest.methods.serverNotifications).toHaveLength(88);
     expect(manifest.methods.clientNotifications).toEqual(["initialized"]);
     expect(manifest.methods.clientRequests).toContain("thread/start");
     expect(manifest.methods.clientRequests).toContain("turn/start");
@@ -287,7 +287,7 @@ describe("Codex 0.166.0 release contract", () => {
       officialGenerationEnvironment:
         "fresh empty temporary CODEX_HOME for each generation pass",
     });
-    expect(stable.officialArtifacts).toHaveLength(1081);
+    expect(stable.officialArtifacts).toHaveLength(1083);
     expect(stable.officialTreeSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(experimental).toMatchObject({
       profile: "experimental",
@@ -296,7 +296,7 @@ describe("Codex 0.166.0 release contract", () => {
       officialGenerationEnvironment:
         "fresh empty temporary CODEX_HOME for each generation pass",
     });
-    expect(experimental.officialArtifacts).toHaveLength(1388);
+    expect(experimental.officialArtifacts).toHaveLength(1396);
     expect(experimental.artifacts).toHaveLength(2);
     expect(experimental.officialTreeSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(experimental.methods.clientRequests).toContain(

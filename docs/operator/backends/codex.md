@@ -105,13 +105,13 @@ can apply. The detailed authority rules are in
 
 ## Version compatibility
 
-Sedes supplies the exact generated `0.166.0` app-server protocol profile from
+Sedes supplies the exact generated `0.167.0` app-server protocol profile from
 its compiled Codex backend. Operators do not select that profile in Settings. Sedes independently probes and admits stable Codex app-server
 executables at or above 0.162.1. Build metadata is allowed and does not affect
 version precedence. Prereleases, malformed versions, versions below the floor,
 and explicitly excluded known-bad releases are rejected.
 
-Releases newer than the 0.166.0 tested-through threshold are admitted with an
+Releases newer than the 0.167.0 tested-through threshold are admitted with an
 installation advisory. They do not gain capabilities merely because of their
 version. Managed TUI uses `moduleConfiguration.tuiExecutablePath` when present;
 otherwise it resolves the first `codex` on the execution environment account's `PATH`. This is
@@ -130,6 +130,12 @@ are explicitly unavailable because this integration has no native byte-retrieval
 authority. Native read-state metadata and notifications are recognized and
 discarded; they do not change Sedes's completion attention or add native
 read/unread controls.
+
+Codex 0.167.0 audio file references are accepted as native metadata; audio
+playback and audio attachment submission remain unsupported. Native section
+changes do not move Sedes threads between groups. Required human command
+approval is not advertised or accepted through Sedes.
+
 Provider executables remain separately installed. Use 0.163.0 or newer when relying
 on Codex's network proxy or brokered credentials, because that release fixes
 native hostname authorization, duplicate Host-header handling, and credential
@@ -508,6 +514,7 @@ mutation safe to repeat.
 | WebSocket URL is rejected                                    | Plain `ws://` accepts only literal loopback. `wss://` requires platform-trusted TLS, hostname verification, and TLS 1.2 or newer. Use a persistent-sidecar target for a remote execution environment.                                                                                                                        |
 | External daemon is unavailable or reports a version mismatch | Inspect the daemon independently, compare it with the admitted stable range, correct the operator-owned service, and restart it yourself. Sedes does not manage external lifecycle.                                                                                                                      |
 | Models appear but a thread cannot run or fork                | Check model/effort, service tier, sandbox, network, approval policy, and reviewer against the live catalog and configured ceiling. Sedes does not invent or substitute an unconfirmed value.                                                                                                             |
+| An unsupported-effort error persists after changing reasoning | Sedes restores the selected model and effort on cold resume, but Codex 0.167.0 can retain an invalid request-level effort in an already-loaded session. After settling active work, arrange an operator-controlled cold reload of that native session; restarting only Sedes may leave it retained by another Codex client. See [execution settings](../../internals/codex-thread-execution-settings.md#desired-effective-and-unresolved-state). |
 | Managed TUI is missing                                       | It requires an external UDS/TCP Codex connection—local, or hosted by a persistent sidecar whose runtime channel negotiated the managed-TUI operations—plus one completed first submission, healthy endpoint and PTY support on the hosting environment, a compatible operator-installed CLI there, fully representable settings, and catalog model policy. Set canonical `moduleConfiguration.tuiExecutablePath` to override normal `PATH` resolution. |
 | Sedes CLI tools are missing                                  | Check thread provenance, network policy, built CLI availability, proven isolation, and—on SSH—the `agent_tools_cli` sidecar capability.                                                                                                                                                                  |
 | A viewed image row cannot be expanded                        | Confirm the environment is local or its sidecar has `workspace_files`, the file's directory is within an allowed root, and the file is a PNG, JPEG, GIF, or WebP of at most 16 MiB with a matching extension, outside sensitive paths. Codex-native additional executors are unsupported. Automatic retries are bounded; a later history read or reattach may retry. A captured snapshot is never replaced. |

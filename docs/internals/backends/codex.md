@@ -28,16 +28,16 @@ troubleshooting, see the [Codex operator guide](../../operator/backends/codex.md
 
 ## Protocol and release admission
 
-Sedes pins `@openai/codex` 0.166.0 as its development-time generated protocol
+Sedes pins `@openai/codex` 0.167.0 as its development-time generated protocol
 baseline. Generated TypeScript, JSON Schema, the method
 inventory, hashes, and release evidence live under
-`protocol/codex-app-server/0.166.0`.
+`protocol/codex-app-server/0.167.0`.
 
 Owned Codex processes support Linux x64 and macOS arm64/x64. External
 topologies retain their separate transport and execution-environment
 requirements.
 
-The compiled Codex backend supplies exactly one `0.166.0` generated parser
+The compiled Codex backend supplies exactly one `0.167.0` generated parser
 profile and persists that value for diagnostics and runtime-generation
 integrity. It is not operator configuration and remains separate from
 executable admission. Owned and external runtimes admit stable releases at or
@@ -45,9 +45,9 @@ above 0.162.1. Build metadata is allowed. Prereleases, malformed versions,
 versions below the floor, and explicitly excluded known-bad releases are
 rejected.
 
-Releases newer than the 0.166.0 tested-through threshold receive a
+Releases newer than the 0.167.0 tested-through threshold receive a
 provider-private `newerThanTested` assessment for the installation advisory.
-They still use only the pinned 0.166.0 stable and experimental validators and
+They still use only the pinned 0.167.0 stable and experimental validators and
 gain no capabilities from their version. Managed TUI uses the same
 operator-installed command policy in every deployment: an optional canonical
 `tuiExecutablePath` override, otherwise the first `codex` on `PATH`, with the
@@ -76,13 +76,20 @@ is unavailable without probing a native path, treating an ID as a URL, or
 performing a network lookup. Interrupted turns retain meaningful
 native errors as bounded warning notices; an ordinary Stop adds no error notice.
 
-The runtime floor remains 0.162.1. The qualified 0.162.1, 0.163.0, and
-0.166.0 runtimes use the one current parser; the older generated tree is removed. The floor and tested-through
-policy remain independent constants; newer stable runtimes are admitted with
+The 0.167.0 profile accepts the exact URL-or-file-reference audio union in
+native user content. File identifiers are bounded and remain provider-private;
+the history projector does not expose audio playback or treat an identifier as
+a retrievable URL. Function-call output audio keeps its separate native shape.
+Sedes does not advertise `requiredHumanApproval`; unexpected `humanCommand`
+approval requests fail closed instead of becoming ordinary command approvals.
+
+The runtime floor remains 0.162.1. The qualified 0.162.1, 0.163.0, 0.166.0, and
+0.167.0 runtimes use the one current parser; the older generated tree is removed.
+The floor and tested-through policy remain independent constants; newer stable runtimes are admitted with
 the usual advisory. Operator-owned app-servers and managed TUI commands are
 upgraded separately from Sedes.
 
-The [runtime qualification](../../../protocol/codex-app-server/0.166.0/runtime-compatibility/README.md)
+The [runtime qualification](../../../protocol/codex-app-server/0.167.0/runtime-compatibility/README.md)
 records exact reviewed exports and Linux x64 execution of the minimum, previous
 baseline, and current release against a local mock model,
 including changed-settings notification, persistence after restart, explicit fork
@@ -114,9 +121,11 @@ RPC admission recognizes the official stable server notifications, including
 inventory records each reviewed thread-routing path for bounded resnapshot
 recovery. Adopted notification directions have explicit dispositions. The exact
 `turn/moderationMetadata`, `model/verification`, `model/safetyBuffering/updated`
-and `thread/prediction/updated` advisories are validated, including bounded
-routing identities, then ignored before transcript queuing or mutation
-accounting. They do not change transcript or completion authority. Malformed
+and `thread/prediction/updated` advisories, plus native `thread/section/changed`
+metadata, are validated, including bounded routing identities, then ignored
+before transcript queuing or mutation
+accounting. Native section changes do not alter Sedes-owned groups. These
+notifications do not change transcript or completion authority. Malformed
 scoped notifications still invalidate the projection, and history changes,
 model reroutes, generation changes and genuine sequence gaps retain recovery.
 Other notifications retain their reviewed consumers or conservative recovery

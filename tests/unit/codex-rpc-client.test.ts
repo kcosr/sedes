@@ -829,6 +829,23 @@ describe("Codex RPC client", () => {
     expect(closed).not.toHaveBeenCalled();
   });
 
+  it.each(["native-section", null])("admits section membership %j without losing concurrent requests", async (sectionId) => {
+    const { client, transport } = createClient();
+    const notifications: unknown[] = [];
+    const closed = vi.fn();
+    void client.closed.then(closed);
+    client.subscribeNotifications((notification) => notifications.push(notification));
+    const pending = client.request(echoMethod, { value: "ready" }, { timeoutMilliseconds: 1_000 });
+    await waitForWrites(transport, 1);
+    transport.emit({ method: "thread/section/changed", params: { threadId: "thread-1", sectionId } });
+    transport.emit({ id: parsedWrite(transport, 0).id, result: { value: "ready" } });
+    await expect(pending).resolves.toBe("ready");
+    expect(notifications).toMatchObject([
+      { kind: "decoded_notification", method: "thread/section/changed", params: { threadId: "thread-1", sectionId } },
+    ]);
+    expect(closed).not.toHaveBeenCalled();
+  });
+
   it("admits experimental native receipts before completion without losing concurrent requests", async () => {
     const { client, transport } = createClient();
     const notifications: unknown[] = [];

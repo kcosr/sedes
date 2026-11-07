@@ -805,7 +805,29 @@ function decodeThreadItem(item: unknown): CodexThreadItem {
   }).item;
 }
 
-describe("Codex 0.166.0 C1 protocol codecs", () => {
+describe("Codex 0.167.0 C1 protocol codecs", () => {
+  it.each([
+    { type: "audio", fileId: "file-private-audio" },
+    { type: "audio", url: "https://private.invalid/audio.wav" },
+  ])("keeps native audio references private in history: %j", (audio) => {
+    const item = decodeThreadItem({ type: "userMessage", id: "user-audio", clientId: null,
+      content: [{ type: "text", text: "Listen", text_elements: [] }, audio] });
+    const snapshot = projectCodexHistory(thread([turn("audio", [item])])).snapshot;
+    expect(JSON.stringify(snapshot)).not.toContain("private");
+    expect(Object.values(snapshot.itemsById)[0]).toMatchObject({
+      content: [{ kind: "text", text: { text: "Listen" } }, { kind: "text", text: { text: "[Audio attachment omitted]" } }],
+    });
+  });
+
+  it.each([
+    { fileId: "" }, { fileId: "x".repeat(513) }, { fileId: null }, { fileId: 123 },
+    { fileId: "file-audio", url: "https://private.invalid/audio.wav" },
+    { fileId: "file-audio", path: "/private/audio.wav" },
+  ])("rejects malformed or ambiguous audio references: %j", (reference) => {
+    expect(() => decodeThreadItem({ type: "userMessage", id: "user-audio", clientId: null,
+      content: [{ type: "audio", ...reference }] })).toThrow();
+  });
+
   it.each([
     { type: "image", fileId: "file-private-image", detail: "high" },
     { type: "image", url: "https://private.invalid/image.png", detail: "high" },
@@ -1015,7 +1037,7 @@ describe("Codex 0.166.0 C1 protocol codecs", () => {
     const generated = readFileSync(
       path.join(
         repositoryRoot,
-        "protocol/codex-app-server/0.166.0/official/stable/typescript/v2/ThreadItem.ts",
+        "protocol/codex-app-server/0.167.0/official/stable/typescript/v2/ThreadItem.ts",
       ),
       "utf8",
     );
@@ -1903,7 +1925,7 @@ describe("Codex 0.166.0 C1 protocol codecs", () => {
   });
 });
 
-describe("Codex 0.166.0 C1 history projector", () => {
+describe("Codex 0.167.0 C1 history projector", () => {
   it.each([
     [{ startedAtMs: 2_000, completedAtMs: 2_500 }, { startedAtMs: 1_000, completedAtMs: 1_500 },
       { startedAt: "1970-01-01T00:00:02.000Z", completedAt: "1970-01-01T00:00:02.500Z" }],

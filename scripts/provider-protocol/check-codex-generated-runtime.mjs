@@ -6,7 +6,7 @@ const modulePath = path.resolve(
 );
 const binding = await import(pathToFileURL(modulePath).href);
 
-if (binding.CODEX_APP_SERVER_RELEASE !== "0.166.0") {
+if (binding.CODEX_APP_SERVER_RELEASE !== "0.167.0") {
   throw new Error("Built Codex binding selected the wrong release.");
 }
 if (binding.CODEX_CLIENT_REQUEST_METHODS.length !== 27) {
@@ -15,10 +15,10 @@ if (binding.CODEX_CLIENT_REQUEST_METHODS.length !== 27) {
 if (binding.CODEX_SERVER_REQUEST_METHODS.length !== 10) {
   throw new Error("Built Codex server-request registry is incomplete.");
 }
-if (binding.CODEX_ADOPTED_SERVER_NOTIFICATION_METHODS.length !== 39) {
+if (binding.CODEX_ADOPTED_SERVER_NOTIFICATION_METHODS.length !== 40) {
   throw new Error("Built Codex adopted notification registry is incomplete.");
 }
-if (binding.CODEX_SERVER_NOTIFICATION_METHODS.length !== 87) {
+if (binding.CODEX_SERVER_NOTIFICATION_METHODS.length !== 88) {
   throw new Error(
     "Built Codex notification admission registry is incomplete.",
   );
@@ -80,6 +80,8 @@ binding.decodeCodexServerNotificationParams("thread/prediction/updated", {
   result: { type: "completed", text: null },
 });
 for (const [method, params] of [
+  ["thread/section/changed", { threadId: "thread-1", sectionId: "section-1" }],
+  ["thread/section/changed", { threadId: "thread-1", sectionId: null }],
   ["thread/readState/changed", { threadId: "thread-1", readState: { firstUnread: { type: "turn", turnId: "turn-1" }, revision: "opaque-1" } }],
   ["turn/moderationMetadata", { threadId: "thread-1", turnId: "turn-1", metadata: null }],
   ["model/verification", { threadId: "thread-1", turnId: "turn-1", verifications: [] }],
@@ -120,5 +122,5 @@ if (!rejected) {
 }
 
 console.log(
-  "Built Codex 0.166.0 production binding executes stable and experimental profiles as ESM.",
+  "Built Codex 0.167.0 production binding executes stable and experimental profiles as ESM.",
 );

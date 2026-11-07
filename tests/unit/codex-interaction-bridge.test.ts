@@ -80,6 +80,16 @@ function fixture(input?: {
 }
 
 describe("CodexInteractionBridge", () => {
+  it("does not expose unadvertised human-only approvals as ordinary decisions", async () => {
+    const current = fixture();
+    await expect(current.invoke("item/commandExecution/requestApproval", 400, {
+      threadId: "thread-1", turnId: "turn-1", itemId: "item-human-command",
+      kind: "humanCommand", startedAtMs: 1,
+      command: "echo checkpoint", availableDecisions: ["accept", "decline", "cancel"],
+    })).rejects.toThrow("codex_human_command_approval_unadvertised");
+    expect(current.events).toEqual([]);
+  });
+
   it("routes a structured MCP form through typed answers and confirmation", async () => {
     const current = fixture();
     const pending = current.invoke("mcpServer/elicitation/request", 401, {

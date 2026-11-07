@@ -12,6 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
 import {
   RawCodexAppServerClient,
   probeEnvironment,
@@ -121,12 +122,12 @@ const checkedMethods = new Set<string>();
 class QualificationClient extends RawCodexAppServerClient {
   experimental: boolean;
   readonly observedNotifications: string[];
-  constructor(experimental: boolean) {
+  constructor(experimental: boolean, home = codexHome) {
     const observedNotifications: string[] = [];
     super({
       codexBinary: candidate,
       cwd: workspace,
-      environment: probeEnvironment(codexHome),
+      environment: probeEnvironment(home),
       notificationObserver: (notification: { method: string; params: unknown }) => {
         observedNotifications.push(notification.method);
         if (notification.method === "thread/readState/changed") {
@@ -186,6 +187,144 @@ async function tree(root: string, prefix = ""): Promise<Map<string, Buffer>> {
     else result.set(relative, await readFile(path.join(root, relative)));
   }
   return result;
+}
+
+/** Exercise the request baseline fixed by session config, not only RPC readback. */
+async function verifyReasoningSessionBaseline(): Promise<{
+  omittedSessionEffortReproduced: boolean;
+  startResumeForkBaseline: string;
+  resumeSourceEffort: string;
+  forkSourceEffort: string;
+  websocketRequests: number;
+}> {
+  const home = path.join(temporaryRoot, "effort-home");
+  await mkdir(home);
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const requests: any[] = [];
+  let consumed = 0;
+  let requestArrived: (() => void) | undefined;
+  server.on("connection", (socket) => socket.on("message", (frame) => {
+    const request = JSON.parse(frame.toString());
+    requests.push(request);
+    requestArrived?.();
+    const id = `effort-response-${requests.length}`;
+    socket.send(JSON.stringify({ type: "response.created", response: { id } }));
+    if (request.generate !== false) socket.send(JSON.stringify({
+      type: "response.output_item.done", item: { type: "message", role: "assistant",
+        id: `effort-message-${requests.length}`, content: [{ type: "output_text", text: "effort fixture complete" }] },
+    }));
+    socket.send(JSON.stringify({ type: "response.completed", response: {
+      id, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    } }));
+  }));
+  const nextRequest = async () => {
+    if (requests.length === consumed) await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        requestArrived = undefined;
+        reject(new Error("reasoning_baseline_websocket_request_timeout"));
+      }, 10_000);
+      requestArrived = () => { clearTimeout(timeout); requestArrived = undefined; resolve(); };
+    });
+    return requests[consumed++];
+  };
+  const model = {
+    ...JSON.parse(await readFile(path.join(repositoryRoot, "scripts/codex-probes/speed-fixture-model.json"), "utf8")),
+    slug: "sedes-effort-fixture", default_reasoning_level: "high",
+    supported_reasoning_levels: [{ effort: "low", description: "Low" }, { effort: "high", description: "High" }],
+    supports_reasoning_effort_updates: true,
+  };
+  const catalog = path.join(home, "models.json");
+  await writeFile(catalog, JSON.stringify({ models: [model] }));
+  await writeFile(path.join(home, "config.toml"), `model = "${model.slug}"
+model_catalog_json = ${JSON.stringify(catalog)}
+model_reasoning_effort = "none"
+model_provider = "sedes_effort_fixture"
+approval_policy = "never"
+sandbox_mode = "read-only"
+[model_providers.sedes_effort_fixture]
+name = "OpenAI"
+base_url = "http://127.0.0.1:${address.port}/v1"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = true
+request_max_retries = 0
+stream_max_retries = 0
+[features]
+apps = false
+plugins = false
+reasoning_effort_override = true
+`, { mode: 0o600 });
+  const open = async () => {
+    const client = new QualificationClient(true, home);
+    clients.push(client);
+    await client.start();
+    return client;
+  };
+  const startParams = { model: model.slug, cwd: workspace, approvalPolicy: "never" as const,
+    sandbox: "read-only" as const, ephemeral: false, historyMode: "paginated" as const };
+  const sessionConfig = { model_reasoning_effort: "high" };
+  const verifyTurn = async (client: QualificationClient, threadId: string, expectedBaseline: string, effort: "high" | "low" = "high") => {
+    const warmup = await nextRequest();
+    assert.equal(warmup.generate, false);
+    assert.equal(warmup.reasoning.effort, expectedBaseline);
+    const turn = await call(client, codexTurnStartMethod, { threadId, model: model.slug, effort,
+      input: [{ type: "text", text: "Return the offline fixture response.", text_elements: [] }] });
+    const request = await nextRequest();
+    assert.notEqual(request.generate, false);
+    assert.equal(request.reasoning.effort, expectedBaseline);
+    const completed = await client.nextNotification("turn/completed");
+    assert.equal(completed.params.turn.id, turn.turn.id);
+    assert.equal(completed.params.turn.status, "completed");
+    return request;
+  };
+  const baselineClients: QualificationClient[] = [];
+  try {
+    // Negative control: turn/start selects High, but the already prewarmed
+    // request baseline remains the invalid None inherited from config.toml.
+    const omitted = await open(); baselineClients.push(omitted);
+    const stale = await call(omitted, codexThreadStartMethod, startParams);
+    const staleRequest = await verifyTurn(omitted, stale.thread.id, "none");
+    assert(staleRequest.input.some((item: any) => item.type === "configuration_update" && item.reasoning?.effort === "high"));
+    await omitted.close();
+
+    const fresh = await open(); baselineClients.push(fresh);
+    const started = await call(fresh, codexThreadStartMethod, { ...startParams, config: sessionConfig });
+    await verifyTurn(fresh, started.thread.id, "high");
+
+    // Persist independent Low sources so High on resume/fork cannot be
+    // explained by restoring an already-High source session or last turn.
+    const lowSource = async () => {
+      const source = await call(fresh, codexThreadStartMethod, {
+        ...startParams, config: { model_reasoning_effort: "low" },
+      });
+      assert.equal(source.reasoningEffort, "low");
+      await verifyTurn(fresh, source.thread.id, "low", "low");
+      return source.thread.id;
+    };
+    const resumeSource = await lowSource();
+    const forkSource = await lowSource();
+    await fresh.close();
+
+    const resumed = await open(); baselineClients.push(resumed);
+    const resume = await call(resumed, codexThreadResumeMethod, { threadId: resumeSource, model: model.slug, config: sessionConfig, excludeTurns: true });
+    assert.equal(resume.reasoningEffort, "high");
+    await verifyTurn(resumed, resumeSource, "high");
+    const fork = await call(resumed, codexThreadForkMethod, { threadId: forkSource, model: model.slug, config: sessionConfig });
+    assert.equal(fork.reasoningEffort, "high");
+    await verifyTurn(resumed, fork.thread.id, "high");
+    return { omittedSessionEffortReproduced: true, startResumeForkBaseline: "high",
+      resumeSourceEffort: "low", forkSourceEffort: "low", websocketRequests: requests.length };
+  } finally {
+    await Promise.allSettled(baselineClients.map(client => client.close()));
+    for (const socket of server.clients) socket.terminate();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
 }
 try {
   await Promise.all([mkdir(codexHome), mkdir(workspace)]);
@@ -422,6 +561,9 @@ try {
         item.type === "agentMessage" && item.text === "fixture complete",
     ),
   );
+  const reasoningSessionBaseline = release === "0.167.0"
+    ? await verifyReasoningSessionBaseline()
+    : null;
   console.log(
     JSON.stringify(
       {
@@ -454,6 +596,7 @@ try {
         executionSettingsPreservedOnResumeAndFork: true,
         forkHistoryPreserved: true,
         rootTurnLineagePreserved: true,
+        reasoningSessionBaseline,
         liveProviderVerified: false,
       },
       null,
