@@ -232,13 +232,17 @@ function refineUserInput(value: unknown): void {
     text: ["type", "text", "text_elements"],
     image: ["type", "detail", "url", "fileId"],
     localImage: ["type", "detail", "path"],
-    audio: ["type", "url"],
+    audio: ["type", "url", "fileId"],
     localAudio: ["type", "path"],
     skill: ["type", "name", "path"],
     mention: ["type", "name", "path"],
   });
   if (input.type === "image" && "fileId" in input) {
     exactKeys(input, ["type", "detail", "fileId"]);
+    assertNativeId(input.fileId as string);
+  }
+  if (input.type === "audio" && "fileId" in input) {
+    exactKeys(input, ["type", "fileId"]);
     assertNativeId(input.fileId as string);
   }
   if (input.type === "text") {
@@ -788,6 +792,11 @@ export function refineCodexC2ServerRequest<Method extends CodexServerRequestMeth
       });
     }
   } else if (method === "item/commandExecution/requestApproval") {
+    if (record.kind === "humanCommand") {
+      // This capability requires fresh human-only decisions, including reconnect
+      // replay. Sedes has not advertised requiredHumanApproval.
+      throw new Error("codex_human_command_approval_unadvertised");
+    }
     if (record.kind === "writeStdin") {
       if (!record.approvalId) throw new Error("write_stdin_approval_id_required");
       if (

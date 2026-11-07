@@ -69,6 +69,7 @@ export const serverNotifications = [
   ["model/rerouted", "ModelReroutedNotification", "live_turns", "decoded", ["route_identity"]],
   ["thread/settings/updated", "ThreadSettingsUpdatedNotification", "live_turns", "decoded", undefined, "experimental"],
   ["thread/readState/changed", "ThreadReadStateChangedNotification", "live_turns", "ignored_informational", ["route_identity"], "experimental"],
+  ["thread/section/changed", "ThreadSectionChangedNotification", "live_turns", "ignored_informational", ["route_identity"]],
   ["thread/tokenUsage/updated", "ThreadTokenUsageUpdatedNotification"],
   ["thread/compacted", "ContextCompactedNotification"],
   ["turn/started", "TurnStartedNotification"],

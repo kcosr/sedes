@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Calling `thread/guardianReview` subscribes the connection to the thread. The subscription remains after the review completes, keeping the thread loaded until the client calls `thread/unsubscribe` or disconnects.",
+  "properties": {
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "threadId"
+  ],
+  "title": "ThreadGuardianReviewParams",
+  "type": "object"
+}

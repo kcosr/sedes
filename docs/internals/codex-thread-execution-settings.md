@@ -116,16 +116,36 @@ complete and admitted.
 Once Sedes has durable service-tier intent, it replays that tier after resume
 because native rollout history may omit it. When the persistent runtime cannot
 reattach an existing subscription, the native resume request also carries the
-saved sandbox, approval policy, reviewer, and workspace-write network
-configuration after revalidating them against the current installation policy. Replacing a UDS
+saved model, reasoning effort, sandbox, approval policy, reviewer, and
+workspace-write network configuration after revalidating them against the
+current installation policy and checking the model and effort against a fresh
+catalog. Replacing a UDS
 connection can otherwise reconstruct a read-only session even while the
 external app-server process and thread inventory remain alive. Rejected saved
-security settings remain unresolved rather than being replaced with defaults.
+settings remain unresolved rather than being replaced with defaults.
 
-When a native resume would replay a rejected policy on an idle or unloaded
-thread, Sedes opens detached history without subscribing or injecting tools.
-Execution stays disabled until the user selects an admitted policy. Persisting
+Creation, fork, and cold resume send the selected model and
+`config.model_reasoning_effort` together. Sending `effort` only on `turn/start`
+does not replace every session-level setting used by Codex's inference
+transport. Replaying the pair prevents an inherited `config.toml` effort, such
+as `none`, from conflicting with the selected model. The turn still sends its
+own frozen effort. These overrides never rewrite operator configuration.
+
+An already-loaded Codex 0.167.0 session can retain its initial request-level
+effort for the same model even after `thread/settings/update` or `turn/start`
+selects another effort. Resuming that session while another native subscriber
+retains it does not rebuild the baseline. Sedes preserves that live authority;
+it does not silently unload shared sessions. An invalid baseline must be
+cleared through a cold native reload before the saved session overrides take
+effect.
+
+When a native resume would replay rejected policy or model/effort values on an
+idle or unloaded thread, Sedes opens detached history without subscribing or
+injecting tools. Execution stays disabled until the user selects admitted settings. Persisting
 that selection signals the owning handle to reestablish its subscription.
+An unavailable catalog remains a retryable read failure; it does not mark the
+saved selection unsupported. A changed selection during catalog validation
+must be checked again before native resume.
 Active or system-error threads fail with a retryable reconciliation error
 instead of installing a static history view. Native lifecycle notifications
 invalidate a detached view so it cannot remain frozen across a turn change.
@@ -134,10 +154,10 @@ The native thread configuration maps network access only for workspace-write;
 restoring a read-only thread with network enabled remains unsupported and can
 adopt the provider's network-disabled response.
 
-A retained session is reattached without replaying security settings. A native
-resume of a still-subscribed session preserves its live provider settings, and
+A retained session is reattached without replaying model, effort, or security
+settings. A native resume of a still-subscribed session preserves its live provider settings, and
 Sedes adopts the actual response. First-time imports without a desired tuple
-likewise obtain their settings from Codex. Sedes does not force saved security
+likewise obtain their settings from Codex. Sedes does not force saved settings
 onto a live session owned by another client. A compare-and-set settings revision
 protects the durable adoption write.
 

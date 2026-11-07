@@ -15,7 +15,7 @@ import {
   type CodexServerNotificationMethod,
   type CodexServerRequestMap,
   type CodexServerRequestMethod,
-} from "./generated/0.166.0/route-registry.js";
+} from "./generated/0.167.0/route-registry.js";
 import {
   BoundedJsonSnapshotError,
   snapshotBoundedJson,
@@ -592,6 +592,7 @@ export const CODEX_NOTIFICATION_THREAD_ROUTE_REGISTRY: Readonly<
   "thread/project/updated": STABLE_THREAD_ID_ROUTE,
   "thread/queue/changed": STABLE_THREAD_ID_ROUTE,
   "thread/readState/changed": EXPERIMENTAL_THREAD_ID_ROUTE,
+  "thread/section/changed": STABLE_THREAD_ID_ROUTE,
   "thread/realtime/closed": STABLE_THREAD_ID_ROUTE,
   "thread/realtime/error": STABLE_THREAD_ID_ROUTE,
   "thread/realtime/itemAdded": STABLE_THREAD_ID_ROUTE,

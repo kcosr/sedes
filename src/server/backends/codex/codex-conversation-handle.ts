@@ -474,6 +474,7 @@ export class CodexConversationHandle implements ConversationHandle {
   #policyHistory: {
     readonly reader: CodexHistoryReader;
     readonly capabilities: BackendCapabilityDocument;
+    readonly rejectedCatalogSelection?: Pick<CodexExecutionSettingsTuple, "model" | "reasoningEffort">;
     recoveryRequested: boolean;
   } | undefined;
   #snapshotWindow: BackendConversationSnapshot | undefined;
@@ -1188,6 +1189,9 @@ export class CodexConversationHandle implements ConversationHandle {
     if (!history || history.recoveryRequested || this.#closing || this.#closed) return;
     try {
       if (!this.#hasAllowedExecutionPolicy()) return;
+      const desired = this.#executionSettings.desiredSettings(this.#scope(), this.binding.applicationThreadId);
+      if (history.rejectedCatalogSelection?.model === desired?.model &&
+          history.rejectedCatalogSelection?.reasoningEffort === desired?.reasoningEffort) return;
       history.recoveryRequested = true;
       // Durable settings edits must wake a history-only projection even when
       // the mutation gateway only publishes its cached actor snapshot.
@@ -1202,6 +1206,7 @@ export class CodexConversationHandle implements ConversationHandle {
     if (!desired) return false;
     try {
       this.#executionSettings.assertExecutionPolicyAllowed(desired);
+      this.#assertModelPolicyAllowed(desired.model, desired.reasoningEffort);
       return true;
     } catch (error) {
       if (isExecutionPolicyRejected(error)) return false;
@@ -2934,6 +2939,7 @@ export class CodexConversationHandle implements ConversationHandle {
     generation: number,
     inboundSequence: number,
     signal: AbortSignal,
+    rejectedCatalogSelection?: Pick<CodexExecutionSettingsTuple, "model" | "reasoningEffort">,
   ): Promise<CodexStableResumeProjection> {
     const validateQuiescentThread = (thread: CodexThread) => {
       this.#validateThread(thread);
@@ -2952,7 +2958,7 @@ export class CodexConversationHandle implements ConversationHandle {
       project: (thread, before, limit, captureSignal, timestamps) =>
         this.#projectNativeHistorySliceDurably(thread, before, limit, new Map(), { signal: captureSignal }, timestamps),
     });
-    const policyHistory = { reader, capabilities: await reader.backendCapabilities(), recoveryRequested: false };
+    const policyHistory = { reader, capabilities: await reader.backendCapabilities(), rejectedCatalogSelection, recoveryRequested: false };
     this.#policyHistory = policyHistory;
     this.#recoverAllowedExecutionPolicy();
     try {
@@ -3064,6 +3070,7 @@ export class CodexConversationHandle implements ConversationHandle {
             if (desiredBeforeResume) {
               try {
                 this.#executionSettings.assertExecutionPolicyAllowed(desiredBeforeResume);
+                this.#assertModelPolicyAllowed(desiredBeforeResume.model, desiredBeforeResume.reasoningEffort);
               } catch (error) {
                 if (!isExecutionPolicyRejected(error)) throw error;
                 return await this.#readPolicyRejectedHistory(inspected.result.thread, inspected.generation, inspected.inboundSequence, signal);
@@ -3083,20 +3090,41 @@ export class CodexConversationHandle implements ConversationHandle {
             const executionEnvironment = await this.#resolveThreadEnvironment(this.binding.applicationThreadId);
             // A new native subscription can rebuild the thread from global
             // config even while the external app-server process stays alive.
-            // Restore the saved security selection for that reconstruction.
+            // Restore the saved model, effort and security selection for that
+            // reconstruction. A turn-level effort override alone cannot fix
+            // an invalid session baseline inherited from config.toml.
             // Codex ignores these overrides when another subscription retains
             // the live session, whose returned settings remain authoritative.
             const resumeResolution = await this.#resolveUnofferedServiceTier();
             desiredBeforeResume = resumeResolution.desired;
             serviceTierResolution = resumeResolution;
             this.#assertEstablishmentMayContinue(signal);
+            this.#assertCurrentReceipt(inspected.generation);
             if (desiredBeforeResume) {
               try {
                 this.#executionSettings.assertExecutionPolicyAllowed(desiredBeforeResume);
+                this.#assertModelPolicyAllowed(desiredBeforeResume.model, desiredBeforeResume.reasoningEffort);
               } catch (error) {
                 if (!isExecutionPolicyRejected(error)) throw error;
                 this.#releaseAgentToolCliEnvironmentLease();
                 return await this.#readPolicyRejectedHistory(inspected.result.thread, inspected.generation, inspected.inboundSequence, signal);
+              }
+              // Session prewarming validates this baseline before the first
+              // turn. Never pin an effort that the current model no longer
+              // accepts, even when the saved selection remains policy-allowed.
+              const admittedEffort = await this.#resolveImportedReasoningEffort(
+                desiredBeforeResume.model, desiredBeforeResume.reasoningEffort,
+              );
+              this.#assertEstablishmentMayContinue(signal);
+              this.#assertCurrentReceipt(inspected.generation);
+              const latestDesired = this.#executionSettings.desiredSettings(this.#scope(), this.binding.applicationThreadId);
+              if (!latestDesired || !sameExecutionSettingsTuple(desiredBeforeResume, latestDesired)) continue;
+              if (admittedEffort !== desiredBeforeResume.reasoningEffort) {
+                this.#releaseAgentToolCliEnvironmentLease();
+                return await this.#readPolicyRejectedHistory(
+                  inspected.result.thread, inspected.generation, inspected.inboundSequence, signal,
+                  { model: desiredBeforeResume.model, reasoningEffort: desiredBeforeResume.reasoningEffort },
+                );
               }
             }
             const resumePolicy = desiredBeforeResume
@@ -3104,6 +3132,7 @@ export class CodexConversationHandle implements ConversationHandle {
               : undefined;
             const resumeConfig = withCodexAgentToolCliEnvironment(
               withCodexExecutionEnvironment({ ...resumePolicy?.configOverrides,
+                ...(desiredBeforeResume ? { model_reasoning_effort: desiredBeforeResume.reasoningEffort } : {}),
                 ...(this.#executionSettings.isSedesCreated(this.#scope(), this.binding.applicationThreadId, this.binding.backendConversationId)
                   ? CODEX_STEP_MODEL_SWITCHING_CONFIG : {}),
               }, executionEnvironment),
@@ -3118,6 +3147,7 @@ export class CodexConversationHandle implements ConversationHandle {
               codexThreadResumeMethod,
               {
                 threadId: this.binding.backendConversationId,
+                ...(desiredBeforeResume ? { model: desiredBeforeResume.model } : {}),
                 ...(resumePolicy
                   ? {
                       sandbox: resumePolicy.sandbox,
@@ -3781,7 +3811,15 @@ export class CodexConversationHandle implements ConversationHandle {
   #assertMutableProjection(): CodexThread {
     if (this.#policyHistory) {
       const desired = this.#executionSettings.desiredSettings(this.#scope(), this.binding.applicationThreadId);
-      if (desired) this.#executionSettings.assertExecutionPolicyAllowed(desired);
+      if (desired) {
+        this.#executionSettings.assertExecutionPolicyAllowed(desired);
+        this.#assertModelPolicyAllowed(desired.model, desired.reasoningEffort);
+        if (this.#policyHistory.rejectedCatalogSelection?.model === desired.model &&
+            this.#policyHistory.rejectedCatalogSelection.reasoningEffort === desired.reasoningEffort) {
+          throw codexError("rejected", "The selected Codex model or reasoning effort is no longer available.",
+            "codex_execution_settings_catalog_rejected");
+        }
+      }
       throw codexError("unavailable", "Codex must restore its allowed execution settings before accepting work.",
         "codex_execution_policy_reconciliation_required", true);
     }
@@ -4601,7 +4639,8 @@ export class CodexConversationHandle implements ConversationHandle {
         notificationThreadId(notification.params) !== this.binding.backendConversationId) return true;
     try {
       // These exact official notifications carry moderation/verification,
-      // buffering UI, prediction or native read receipts, not transcript or completion facts.
+      // buffering UI, prediction, native read receipts or native section membership,
+      // not transcript or completion facts.
       // Validate admission and bounded identities before discarding them here,
       // outside the asynchronous transcript queue and mutation bookkeeping.
       let threadId: string;
@@ -4610,6 +4649,13 @@ export class CodexConversationHandle implements ConversationHandle {
         const params = assertCodexAttestedServerNotificationParams(notification.method, notification.params);
         threadId = params.threadId;
         refineCodexThreadReadState(params.readState);
+      } else if (notification.method === "thread/section/changed") {
+        const params = assertCodexAttestedServerNotificationParams(notification.method, notification.params);
+        threadId = params.threadId;
+        if (params.sectionId !== null &&
+            (params.sectionId.length === 0 || params.sectionId.length > 512)) {
+          throw new Error("codex_advisory_identity_invalid");
+        }
       } else if (notification.method === "thread/prediction/updated") {
         const params = assertCodexAttestedServerNotificationParams(notification.method, notification.params);
         threadId = params.threadId;
@@ -6831,13 +6877,14 @@ function isPaginatedTranscriptNotification(method: string): boolean {
 }
 
 function isCodexConversationAdvisoryNotification(method: string): method is
-  "turn/moderationMetadata" | "model/verification" | "model/safetyBuffering/updated" | "thread/prediction/updated" | "thread/readState/changed" {
+  "turn/moderationMetadata" | "model/verification" | "model/safetyBuffering/updated" | "thread/prediction/updated" | "thread/readState/changed" | "thread/section/changed" {
   // Exact ignored_informational dispositions in the Codex adoption inventory.
   return method === "turn/moderationMetadata" ||
     method === "model/verification" ||
     method === "model/safetyBuffering/updated" ||
     method === "thread/prediction/updated" ||
-    method === "thread/readState/changed";
+    method === "thread/readState/changed" ||
+    method === "thread/section/changed";
 }
 
 function mayCompleteGeneratedImage(
@@ -6985,7 +7032,8 @@ function isMissingPaginatedSourceRolloutError(
 }
 
 function isExecutionPolicyRejected(error: unknown): error is BackendError {
-  return error instanceof BackendError && error.backendCode === "codex_execution_policy_rejected";
+  return error instanceof BackendError &&
+    (error.backendCode === "codex_execution_policy_rejected" || error.backendCode === "model_policy_rejected");
 }
 
 /**

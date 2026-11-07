@@ -64,6 +64,35 @@ describe("Codex C2 pinned protocol", () => {
     expect(decodeCodexC2Notification("error", params)).toEqual(params);
   });
 
+  it("validates exclusive native audio references and bounds file identities", () => {
+    for (const audio of [
+      { type: "audio", fileId: "file-audio" },
+      { type: "audio", url: "data:audio/wav;base64,YQ==" },
+    ] as const) {
+      const params = { threadId: "thread-1", input: [audio] };
+      expect(codexTurnStartMethod.encodeParams(params)).toEqual(params);
+    }
+    for (const audio of [
+      { type: "audio", fileId: "" },
+      { type: "audio", fileId: "x".repeat(513) },
+      { type: "audio", fileId: "file-audio", url: "data:audio/wav;base64,YQ==" },
+      { type: "audio", fileId: "file-audio", path: "/private/audio.wav" },
+    ]) {
+      expect(() => codexTurnStartMethod.encodeParams({ threadId: "thread-1", input: [audio] } as never)).toThrow();
+    }
+  });
+
+  it("recognizes but rejects unadvertised human-only command approvals", () => {
+    const params = {
+      threadId: "thread-1", turnId: "turn-1", itemId: "item-1",
+      kind: "humanCommand", startedAtMs: 1,
+      command: "echo checkpoint", availableDecisions: ["accept", "decline", "cancel"],
+    };
+    expect(decodeCodexServerRequestParams("item/commandExecution/requestApproval", params)).toEqual(params);
+    expect(() => decodeCodexC2ServerRequest("item/commandExecution/requestApproval", params))
+      .toThrow("codex_human_command_approval_unadvertised");
+  });
+
   it("keeps native text bounds in UTF-16 code units below the wire ceiling", () => {
     const underFrameAstral = "😀".repeat(1_900_000);
     expect(

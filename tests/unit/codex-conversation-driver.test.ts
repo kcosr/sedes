@@ -126,7 +126,7 @@ import {
 } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import * as codexBindingModule from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
-import { codexServerNotificationRegistry } from "../../src/server/provider-protocol/bindings/codex-app-server/generated/0.166.0/route-registry.js";
+import { codexServerNotificationRegistry } from "../../src/server/provider-protocol/bindings/codex-app-server/generated/0.167.0/route-registry.js";
 
 const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 const instance: AgentBackendInstance = {
@@ -136,7 +136,7 @@ const instance: AgentBackendInstance = {
   label: "Codex",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.166.0",
+  protocolRelease: "0.167.0",
 };
 const toolProvenanceKey = new Uint8Array(32).fill(0x43);
 const agentToolSourceCapability =
@@ -730,6 +730,7 @@ class RpcHarness {
       | "model/safetyBuffering/updated"
       | "thread/prediction/updated"
       | "thread/readState/changed"
+      | "thread/section/changed"
       | "model/rerouted"
       | "thread/compacted"
       | "thread/goal/cleared"
@@ -6397,10 +6398,12 @@ describe("CodexConversationHandle", () => {
         method: "thread/resume",
         params: {
           threadId: "thread-1",
-                    sandbox: "read-only",
+          model: "gpt-5.6",
+          sandbox: "read-only",
           approvalPolicy: "never",
           approvalsReviewer: "user",
           config: {
+            model_reasoning_effort: "low",
             "features.step_model_switching": true,
             shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
           },
@@ -6498,10 +6501,12 @@ describe("CodexConversationHandle", () => {
         method: "thread/resume",
         params: {
           threadId: "thread-1",
-                    sandbox: "read-only",
+          model: "gpt-5.6",
+          sandbox: "read-only",
           approvalPolicy: "never",
           approvalsReviewer: "user",
           config: {
+            model_reasoning_effort: "low",
             "features.step_model_switching": true,
             shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
           },
@@ -9850,6 +9855,7 @@ describe("CodexConversationHandle", () => {
     } },
     { method: "thread/prediction/updated", metadata: { sourceTurnId: "turn-1", result: { type: "completed", text: "Predicted next input" } } },
     { method: "thread/readState/changed", metadata: { readState: { firstUnread: { type: "turn", turnId: "turn-2" }, revision: "receipt-1" } } },
+    { method: "thread/section/changed", metadata: { sectionId: "native-section" } },
   ] as const;
 
   it("covers every generated informational disposition with an advisory behavior regression", () => {
@@ -9960,6 +9966,9 @@ describe("CodexConversationHandle", () => {
     { method: "thread/prediction/updated", label: "invalid source turn identity", params: { threadId: "thread-1", sourceTurnId: "", result: { type: "failed" } }, attest: true },
     { method: "thread/readState/changed", label: "invalid unread turn identity", params: { threadId: "thread-1", readState: { firstUnread: { type: "turn", turnId: "" }, revision: "receipt-1" } }, attest: true },
     { method: "thread/readState/changed", label: "unexpected receipt field", params: { threadId: "thread-1", readState: { firstUnread: null, revision: "receipt-1", unexpected: true } }, attest: true },
+    { method: "thread/section/changed", label: "empty section identity", params: { threadId: "thread-1", sectionId: "" }, attest: true },
+    { method: "thread/section/changed", label: "oversized section identity", params: { threadId: "thread-1", sectionId: "x".repeat(513) }, attest: true },
+    { method: "thread/section/changed", label: "missing section identity", params: { threadId: "thread-1" }, attest: true },
   ] as const)("requires recovery for $method with $label", async ({ method, params, attest }) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
@@ -10252,6 +10261,227 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it.each(["legacy", "paginated"] as const)("restores the saved model and effort on cold %s resume before and after restarting Sedes", async (historyMode) => {
+    const saved = executionSettingsTuple({ model: "gpt-6.1-sol", reasoningEffort: "high" });
+    const persisted = executionSettingsPersistenceFixture(saved);
+    vi.spyOn(persisted.adapter, "freezeOperationSnapshot").mockImplementation((snapshotScope, input) => {
+      const record = persisted.repository.find(snapshotScope, input.applicationThreadId);
+      if (!record?.desired) throw new Error("expected_saved_execution_settings");
+      return {
+        tenantId: snapshotScope.tenantId,
+        ownerPrincipalId: snapshotScope.principalId,
+        applicationThreadId: input.applicationThreadId,
+        applicationOperationId: input.applicationOperationId,
+        settingsRevision: record.revision,
+        settings: record.desired,
+        createdAt: input.now,
+      };
+    });
+    try {
+      for (let restart = 0; restart < 2; restart++) {
+        const harness = new RpcHarness();
+        harness.defaultModelOverrides = { id: saved.model, model: saved.model };
+        const handle = await attachIdle(harness, driver(harness, connection,
+          new CodexConversationOwnershipRegistry(), { type: "catalog" }, persisted.adapter));
+        const thread = historyMode === "legacy" ? nativeThread() : paginatedThread();
+        harness.enqueue("thread/read", { thread });
+        harness.enqueue("thread/resume", (params: { model?: string; config?: { model_reasoning_effort?: string } }) => ({
+          ...(historyMode === "legacy" ? resumeResult(thread) : paginatedResumeResult({ shells: [] })),
+          // Model the upstream reconstruction from stale local configuration
+          // when Sedes fails to supply its durable selection at session start.
+          model: params.model ?? "old-local-model",
+          reasoningEffort: params.config?.model_reasoning_effort ?? "none",
+        }));
+        await handle.establishProjection({ signal: new AbortController().signal });
+        expect(persisted.adapter.desiredSettings(scope, "application-profile-1")).toEqual(saved);
+        harness.enqueue("turn/start", { turn: { ...nativeTurn(restart + 1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null } });
+        await handle.submit({ applicationOperationId: `saved-effort-${restart}`, source: { kind: "user" },
+          mutationId: `saved-effort-${restart}`, reconciliationToken: `saved-effort-${restart}`,
+          taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
+        expect(harness.calls.find(({ method }) => method === "thread/resume")?.params).toMatchObject({
+          model: saved.model, config: { model_reasoning_effort: saved.reasoningEffort },
+        });
+        expect(harness.calls.find(({ method }) => method === "turn/start")?.params).toMatchObject({
+          model: saved.model, effort: saved.reasoningEffort,
+        });
+        harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+        await handle.close();
+      }
+    } finally {
+      persisted.database.close();
+    }
+  });
+
+  it("keeps revoked saved effort out of native resume and wakes after a durable model-policy repair", async () => {
+    const persisted = executionSettingsPersistenceFixture(executionSettingsTuple({ reasoningEffort: "high" }));
+    vi.spyOn(persisted.adapter, "freezeOperationSnapshot").mockImplementation((snapshotScope, input) => {
+      const record = persisted.repository.find(snapshotScope, input.applicationThreadId);
+      if (!record?.desired) throw new Error("expected_saved_execution_settings");
+      return {
+        tenantId: snapshotScope.tenantId,
+        ownerPrincipalId: snapshotScope.principalId,
+        applicationThreadId: input.applicationThreadId,
+        applicationOperationId: input.applicationOperationId,
+        settingsRevision: record.revision,
+        settings: record.desired,
+        createdAt: input.now,
+      };
+    });
+    const harness = new RpcHarness();
+    const modelPolicy: BackendModelPolicy = { type: "allowlist", allowed: [{ modelIds: ["gpt-5.6"], reasoningEfforts: ["low"] }] };
+    const handle = await attachIdle(harness, driver(harness, connection,
+      new CodexConversationOwnershipRegistry(), modelPolicy, persisted.adapter));
+    const events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    try {
+      const metadata = nativeThread({ turns: [] });
+      harness.enqueue("thread/read", { thread: metadata }, { thread: metadata }, { thread: nativeThread() });
+      await handle.establishProjection({ signal: new AbortController().signal });
+      expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+      expect(persisted.adapter.desiredSettings(scope, "application-profile-1")?.reasoningEffort).toBe("high");
+      const submission = { applicationOperationId: "repaired-effort", source: { kind: "user" as const },
+        mutationId: "repaired-effort", reconciliationToken: "repaired-effort", taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" };
+      await expect(handle.submit(submission)).rejects.toMatchObject({ backendCode: "model_policy_rejected" });
+      const current = persisted.repository.find(scope, "application-profile-1")!;
+      persisted.repository.updateDesired(scope, "application-profile-1", {
+        expectedRevision: current.revision, desired: executionSettingsTuple(), now: 2,
+      });
+      persisted.adapter.notifyDesiredSettingsChanged(scope, "application-profile-1");
+      expect(events).toContainEqual({ type: "resnapshot_required", reason: "contradictory_state" });
+      await establish(harness, handle);
+      expect(harness.calls.find(({ method }) => method === "thread/resume")?.params).toMatchObject({
+        model: "gpt-5.6", config: { model_reasoning_effort: "low" },
+      });
+      harness.enqueue("turn/start", { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null } });
+      await handle.submit(submission);
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    } finally {
+      persisted.database.close();
+    }
+  });
+
+  it.each([
+    { historyMode: "legacy", rejected: { reasoningEffort: "none" } },
+    { historyMode: "paginated", rejected: { reasoningEffort: "none" } },
+    { historyMode: "legacy", rejected: { model: "retired-model" } },
+    { historyMode: "paginated", rejected: { model: "retired-model" } },
+  ] as const)("keeps $historyMode history readable for catalog-rejected $rejected and resumes after repair", async ({ historyMode, rejected }) => {
+    const saved = executionSettingsTuple(rejected);
+    const persisted = executionSettingsPersistenceFixture(saved);
+    vi.spyOn(persisted.adapter, "freezeOperationSnapshot").mockImplementation((snapshotScope, input) => {
+      const record = persisted.repository.find(snapshotScope, input.applicationThreadId);
+      if (!record?.desired) throw new Error("expected_saved_execution_settings");
+      return {
+        tenantId: snapshotScope.tenantId,
+        ownerPrincipalId: snapshotScope.principalId,
+        applicationThreadId: input.applicationThreadId,
+        applicationOperationId: input.applicationOperationId,
+        settingsRevision: record.revision,
+        settings: record.desired,
+        createdAt: input.now,
+      };
+    });
+    const observeEffective = vi.spyOn(persisted.adapter, "observeEffective");
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness, driver(harness, connection,
+      new CodexConversationOwnershipRegistry(), { type: "catalog" }, persisted.adapter));
+    const events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    try {
+      const metadata = historyMode === "legacy" ? nativeThread({ turns: [] }) : paginatedThread({ status: { type: "idle" } });
+      harness.enqueue("thread/read", { thread: metadata }, { thread: metadata });
+      if (historyMode === "legacy") harness.enqueue("thread/read", { thread: nativeThread() });
+      else {
+        harness.enqueue("thread/read", { thread: metadata });
+        harness.enqueue("thread/turns/list", { data: [notLoadedTurn(0)], nextCursor: null, backwardsCursor: "head" });
+        harness.enqueue("thread/items/list", paginatedItems(0));
+      }
+      const projection = await handle.establishProjection({ signal: new AbortController().signal });
+      expect(projection.snapshot.orderedBackendTurnIds).toEqual([codexBackendTurnId("thread-1", "turn-0")]);
+      expect((await handle.backendCapabilities()).deliveryModes).toEqual([]);
+      expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+      expect(observeEffective).not.toHaveBeenCalled();
+      expect(persisted.adapter.desiredSettings(scope, "application-profile-1")).toEqual(saved);
+      expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
+      const submission = { applicationOperationId: "repaired-catalog", source: { kind: "user" as const },
+        mutationId: "repaired-catalog", reconciliationToken: "repaired-catalog", taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" };
+      await expect(handle.submit(submission)).rejects.toMatchObject({ backendCode: "codex_execution_settings_catalog_rejected" });
+      const current = persisted.repository.find(scope, "application-profile-1")!;
+      persisted.repository.updateDesired(scope, "application-profile-1", {
+        expectedRevision: current.revision, desired: executionSettingsTuple(), now: 2,
+      });
+      persisted.adapter.notifyDesiredSettingsChanged(scope, "application-profile-1");
+      expect(events).toContainEqual({ type: "resnapshot_required", reason: "contradictory_state" });
+      harness.enqueue("thread/read", { thread: metadata });
+      if (historyMode === "legacy") harness.enqueue("thread/resume", resumeResult());
+      else {
+        harness.enqueue("thread/resume", paginatedResumeResult({ shells: [notLoadedTurn(0)] }));
+        harness.enqueue("thread/items/list", paginatedItems(0));
+      }
+      await handle.establishProjection({ signal: new AbortController().signal });
+      expect(harness.calls.find(({ method }) => method === "thread/resume")?.params).toMatchObject({
+        model: "gpt-5.6", config: { model_reasoning_effort: "low" },
+      });
+      harness.enqueue("turn/start", { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null } });
+      await handle.submit(submission);
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    } finally {
+      persisted.database.close();
+    }
+  });
+
+  it("retries a cold-resume catalog failure without rejecting the saved selection", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    harness.enqueue("thread/read", { thread: nativeThread({ turns: [] }) });
+    harness.enqueue("model/list", new CodexRpcRemoteError({ code: -32001, message: "catalog busy", generation: 1, method: "model/list" }));
+    await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toMatchObject({
+      backendCode: "codex_remote_overloaded", retryable: true,
+    });
+    expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+    await establish(harness, handle);
+    expect((await handle.backendCapabilities()).deliveryModes).toContain("submit");
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("rechecks a desired selection changed while the cold-resume catalog is read", async () => {
+    const harness = new RpcHarness();
+    let desired = executionSettingsTuple({ reasoningEffort: "none" });
+    const handle = await attachIdle(harness, driver(harness, connection,
+      new CodexConversationOwnershipRegistry(), { type: "catalog" }, executionSettingsProvider({ desiredSettings: () => desired })));
+    harness.enqueue("thread/read", { thread: nativeThread({ turns: [] }) }, { thread: nativeThread({ turns: [] }) });
+    harness.enqueue("model/list", () => {
+      desired = executionSettingsTuple();
+      return { data: [nativeModel()], nextCursor: null };
+    });
+    harness.enqueue("thread/resume", resumeResult());
+    await handle.establishProjection({ signal: new AbortController().signal });
+    expect(harness.calls.filter(({ method }) => method === "thread/resume").map(({ params }) => params)).toEqual([
+      expect.objectContaining({ model: "gpt-5.6", config: expect.objectContaining({ model_reasoning_effort: "low" }) }),
+    ]);
+    expect(harness.calls.filter(({ method }) => method === "thread/read")).toHaveLength(2);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each(["cancel", "generation"] as const)("does not resume when %s changes during the cold-resume catalog read", async (change) => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const controller = new AbortController();
+    harness.enqueue("thread/read", { thread: nativeThread({ turns: [] }) });
+    harness.enqueue("model/list", () => {
+      if (change === "cancel") controller.abort();
+      else harness.lifecycle("ready", 2);
+      return { data: [nativeModel()], nextCursor: null };
+    });
+    await expect(handle.establishProjection({ signal: controller.signal })).rejects.toBeInstanceOf(BackendError);
+    expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+    await handle.close();
+  });
+
   it.each(["legacy", "paginated"] as const)("keeps %s history readable after policy revocation and resumes after an admitted settings edit", async (historyMode) => {
     const harness = new RpcHarness();
     const rejectedDesired = executionSettingsTuple({ sandboxMode: "danger-full-access", networkAccess: "enabled" });
@@ -10531,13 +10761,13 @@ describe("CodexConversationHandle", () => {
     });
   });
 
-  it.each(["retained", "native"] as const)("preserves live provider security authority on %s reattachment", async (kind) => {
+  it.each(["retained", "native"] as const)("preserves live provider model, effort and security authority on %s reattachment", async (kind) => {
     const live = resumeResult();
     const harness = new RpcHarness(kind === "retained" ? {
       reattachThread: async () => ({ result: live, generation: 1, inboundSequence: 2 }),
       detachThread: vi.fn(async () => undefined),
     } : undefined);
-    let desired = executionSettingsTuple({ sandboxMode: "danger-full-access", networkAccess: "enabled" });
+    let desired = executionSettingsTuple({ model: "gpt-6.1-sol", reasoningEffort: "high", sandboxMode: "danger-full-access", networkAccess: "enabled" });
     const assertExecutionPolicyAllowed = vi.fn();
     const settings = executionSettingsProvider({
       desiredSettings: () => desired, assertExecutionPolicyAllowed,
@@ -10547,19 +10777,28 @@ describe("CodexConversationHandle", () => {
     const handle = await attachIdle(harness, driver(harness, connection,
       new CodexConversationOwnershipRegistry(), { type: "catalog" }, settings));
     harness.enqueue("thread/read", { thread: nativeThread() });
-    if (kind === "native") harness.enqueue("thread/resume", live);
+    if (kind === "native") {
+      harness.enqueue("model/list", { data: [nativeModel(), nativeModel({ id: "gpt-6.1-sol", model: "gpt-6.1-sol" })], nextCursor: null });
+      harness.enqueue("thread/resume", live);
+    }
     await handle.establishProjection({ signal: new AbortController().signal });
     expect(desired.sandboxMode).toBe("read-only");
+    expect(desired.model).toBe("gpt-5.6");
+    expect(desired.reasoningEffort).toBe("low");
     if (kind === "retained") {
       expect(assertExecutionPolicyAllowed).not.toHaveBeenCalled();
       expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
     } else {
-      expect(harness.calls.find(({ method }) => method === "thread/resume")?.params).toMatchObject({ sandbox: "danger-full-access" });
+      expect(harness.calls.find(({ method }) => method === "thread/resume")?.params).toMatchObject({
+        model: "gpt-6.1-sol", config: { model_reasoning_effort: "high" }, sandbox: "danger-full-access",
+      });
     }
     harness.enqueue("turn/start", { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null } });
     await handle.submit({ applicationOperationId: "live-submit", source: { kind: "user" }, mutationId: "live-mutation",
       reconciliationToken: "live-token", taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
-    expect(harness.calls.find(({ method }) => method === "turn/start")?.params).toMatchObject({ sandboxPolicy: { type: "readOnly", networkAccess: false } });
+    expect(harness.calls.find(({ method }) => method === "turn/start")?.params).toMatchObject({
+      model: "gpt-5.6", effort: "low", sandboxPolicy: { type: "readOnly", networkAccess: false },
+    });
     if (kind === "native") harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });
@@ -10601,6 +10840,8 @@ describe("CodexConversationHandle", () => {
     });
 
     expect(harness.calls.find(({ method }) => method === "thread/resume")?.params).not.toHaveProperty("sandbox");
+    expect(harness.calls.find(({ method }) => method === "thread/resume")?.params).not.toHaveProperty("model");
+    expect(harness.calls.find(({ method }) => method === "thread/resume")?.params).not.toHaveProperty("config.model_reasoning_effort");
 
     expect(desired).toEqual({
       model: "gpt-5.6",
@@ -10771,12 +11012,14 @@ describe("CodexConversationHandle", () => {
           description: id,
         })),
       };
-      const resolveUnavailableServiceTier = vi.fn(() => ({
-        ...ultrafastSettings,
-        serviceTier: "standard" as const,
-      }));
+      let desired = ultrafastSettings;
+      const resolveUnavailableServiceTier = vi.fn(() => {
+        desired = { ...desired, serviceTier: "standard" };
+        return desired;
+      });
       const settings = executionSettingsProvider({
-        desiredSettings: () => ultrafastSettings,
+        desiredSettings: () => desired,
+        // Retain a stale frozen operation to verify submission still rechecks it.
         freezeOperationSnapshot: () => ({ settings: ultrafastSettings }),
         resolveUnavailableServiceTier,
       });
@@ -11145,7 +11388,7 @@ describe("CodexConversationHandle", () => {
           ],
           nextCursor: null,
         };
-        harness.enqueue("model/list", catalog, catalog, catalog);
+        harness.enqueue("model/list", catalog, catalog, catalog, catalog);
       },
     });
     expect(otherModel.writes).toEqual([["thread/resume", undefined]]);
@@ -18328,10 +18571,12 @@ describe("CodexConversationHandle", () => {
       harness.calls.find(({ method }) => method === "thread/resume")?.params,
     ).toEqual({
       threadId: "thread-1",
-            sandbox: "read-only",
+      model: "gpt-5.6",
+      sandbox: "read-only",
       approvalPolicy: "never",
       approvalsReviewer: "user",
       config: {
+        model_reasoning_effort: "low",
         "features.step_model_switching": true,
         shell_environment_policy: {
           exclude: [
@@ -18431,6 +18676,7 @@ describe("CodexConversationHandle", () => {
     const resume = harness.calls.find(({ method }) => method === "thread/resume")
       ?.params as { config: Record<string, unknown> };
     expect(resume.config).toEqual({
+      model_reasoning_effort: "low",
       "features.step_model_switching": true,
       shell_environment_policy: {
         exclude: [
@@ -18638,10 +18884,12 @@ describe("CodexConversationHandle", () => {
       harness.calls.find(({ method }) => method === "thread/resume")?.params,
     ).toEqual({
       threadId: "thread-1",
-            sandbox: "read-only",
+      model: "gpt-5.6",
+      sandbox: "read-only",
       approvalPolicy: "never",
       approvalsReviewer: "user",
       config: {
+        model_reasoning_effort: "low",
         "features.step_model_switching": true,
         shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
       },
@@ -18690,10 +18938,12 @@ describe("CodexConversationHandle", () => {
         method: "thread/resume",
         params: {
           threadId: "thread-1",
-                    sandbox: "read-only",
+          model: "gpt-5.6",
+          sandbox: "read-only",
           approvalPolicy: "never",
           approvalsReviewer: "user",
           config: {
+            model_reasoning_effort: "low",
             "features.step_model_switching": true,
             shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
           },
@@ -19877,11 +20127,11 @@ describe("CodexConversationHandle", () => {
       backendCode: "codex_execution_settings_catalog_rejected",
       crossedSubmissionBoundary: false,
     });
-    // One catalog read resolves the import candidate during establishment;
-    // the second rechecks the frozen model before the rejected submission.
+    // Establishment checks the resume baseline and the import candidate;
+    // submission then rechecks the frozen model.
     expect(
       catalogHarness.calls.filter(({ method }) => method === "model/list"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(
       catalogHarness.calls.some(({ method }) => method === "turn/start"),
     ).toBe(false);

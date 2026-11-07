@@ -4,7 +4,8 @@ import type { VerifiedCodexRuntimeVersion } from "../codex-release-guard.js";
 import { createHash } from "node:crypto";
 import { sameProviderTransportScope, type ProviderTransportScope } from "../../../provider-protocol/transport/assured-framed-transport.js";
 import { MAXIMUM_PROVIDER_FRAME_BYTES } from "../../../provider-protocol/transport/framed-message-limits.js";
-import { CODEX_SERVER_REQUEST_METHODS, encodeCodexServerRequestResult } from "../../../provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
+import { CODEX_SERVER_REQUEST_METHODS, assertCodexAttestedServerRequestParams, encodeCodexServerRequestResult } from "../../../provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
+import { refineCodexC2ServerRequest } from "../codex-c2-protocol.js";
 import { CodexServerRequestRouter } from "../codex-server-request-router.js";
 import type { CodexSharedClientFacade } from "../codex-client-facade.js";
 import type { CodexInboundServerRequest, CodexServerRequestHandlers } from "../rpc/codex-rpc-client.js";
@@ -383,6 +384,13 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
     if (request.method === "item/tool/call") return { contentItems: [], success: false };
     if (request.method === "account/chatgptAuthTokens/refresh" || request.method === "attestation/generate") throw new Error("codex_runtime_request_unsupported");
     if (request.signal.aborted) throw new Error("codex_runtime_request_expired");
+    if (request.method === "item/commandExecution/requestApproval" &&
+        assertCodexAttestedServerRequestParams(request.method, request.params).kind === "humanCommand") {
+      // The native connection did not advertise human-only approval support.
+      // Reject here so an absent actor/controller cannot retain and replay an
+      // unsupported request indefinitely. Ordinary unowned approvals still wait.
+      refineCodexC2ServerRequest(request.method, request.params);
+    }
     if (this.#pending.size >= this.#maximumOperations) throw new Error("codex_runtime_pending_capacity_exceeded");
     const { signal, ...wire } = request;
     const bytes = Buffer.byteLength(JSON.stringify(wire), "utf8");

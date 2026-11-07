@@ -252,7 +252,8 @@ function assertUserInputClosed(input: Extract<OfficialThreadItem, { type: "userM
       assertExactKeys(input, ["type", "detail", "path"], "user_input_image");
       break;
     case "audio":
-      assertExactKeys(input, ["type", "url"], "user_input_audio");
+      assertExactKeys(input, ["type", "url" in input ? "url" : "fileId"], "user_input_audio");
+      if ("fileId" in input) assertNativeId(input.fileId, "user_input_audio_file_id");
       break;
     case "localAudio":
       assertExactKeys(input, ["type", "path"], "user_input_local_audio");

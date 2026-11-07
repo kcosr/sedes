@@ -39,6 +39,50 @@ it.each([1, 2])("reports protocol %s mismatch through the actual sidecar wire pa
   } finally { await proxy.close(); await f.close(); }
 });
 
+it("rejects unadvertised human approvals before sidecar retention while preserving unowned commands", async () => {
+  const f = await threadFixture();
+  const proxy = new CodexRuntimeClient({ connection: f.connection, authority: f.authority, generationOffset: 41,
+    receipts: { reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending: () => [], reconcileRecordedApplicationState: () => 0, compactRetiredRuntime: () => 0, releaseRejected: () => false } });
+  const controller = new AbortController();
+  const handler = f.host.serverRequests.handlersForGeneration(1)["item/commandExecution/requestApproval"]!;
+  const invoke = (id: string, kind: "command" | "humanCommand") => Promise.resolve(handler({
+    generation: 1, sequence: 1, id, method: "item/commandExecution/requestApproval", signal: controller.signal,
+    params: decodeCodexServerRequestParams("item/commandExecution/requestApproval", {
+      threadId: "thread-b", turnId: "turn", itemId: "item", kind, startedAtMs: 1,
+      command: "pwd", cwd: "/workspace", availableDecisions: ["accept", "decline", "cancel"],
+    }),
+  }));
+  let ordinary: Promise<unknown> | undefined;
+  try {
+    await proxy.start();
+    ordinary = invoke("ordinary", "command");
+    void ordinary.catch(() => {});
+    let ordinarySettled = false;
+    void ordinary.then(() => { ordinarySettled = true; }, () => { ordinarySettled = true; });
+    await expect(invoke("human-attached", "humanCommand")).rejects.toThrow("codex_human_command_approval_unadvertised");
+    expect(f.host.pendingInteractionCount()).toBe(1);
+    expect(ordinarySettled).toBe(false);
+
+    await proxy.close();
+    await expect(invoke("human-detached", "humanCommand")).rejects.toThrow("codex_human_command_approval_unadvertised");
+    const replay = await f.connection.attach(f.authority, () => {});
+    expect(replay.pendingRequests.map(({ id }) => id)).toEqual(["ordinary"]);
+    expect(ordinarySettled).toBe(false);
+    await expect(f.connection.respond({ ...f.authority, scope: { ...scope, principalId: "other" } }, {
+      generation: 1, requestId: "ordinary", result: { decision: "accept" },
+    })).rejects.toThrow();
+    expect(ordinarySettled).toBe(false);
+    await f.connection.respond(f.authority, { generation: 1, requestId: "ordinary", result: { decision: "cancel" } });
+    await expect(ordinary).resolves.toEqual({ decision: "cancel" });
+    expect(f.host.pendingInteractionCount()).toBe(0);
+  } finally {
+    controller.abort();
+    await ordinary?.catch(() => {});
+    await proxy.close();
+    await f.close();
+  }
+});
+
 it.each((["mcp", "command"] as const).flatMap(kind =>
   (["confirmed", "disconnected", "timed_out", "unanswered"] as const).map(ending => ({ kind, ending })),
 ))("handles $ending after remote $kind response settlement", async ({ kind, ending }) => {
@@ -693,7 +737,7 @@ it("recovers administration after proxy close without ensuring a provider, and d
     stop,
   });
   const runtimeConfiguration = {
-    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: false, configurationRevision: 0, protocolRelease: "0.166.0" as const },
+    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: false, configurationRevision: 0, protocolRelease: "0.167.0" as const },
     connections: [{ id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "codex_app_server" as const, backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId, label: "Codex", enabled: false, configurationRevision: 0 }],
     connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: "/provider/codex.sock" } },
   };

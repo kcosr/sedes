@@ -72,8 +72,8 @@ if (candidate) beforeAll(async () => {
   try {
     version = execFileSync(candidate, ["--version"], { env: probeEnvironment(versionHome), encoding: "utf8", timeout: 10_000 }).trim().replace(/^codex-cli /, "");
   } finally { await rm(versionHome, { recursive: true, force: true }); }
-  expect(["0.162.1", "0.163.0", "0.166.0"]).toContain(version);
-  const metadata = JSON.parse(await readFile(path.resolve(`protocol/codex-app-server/0.166.0/runtime-compatibility/${version}.json`), "utf8"));
+  expect(["0.162.1", "0.163.0", "0.166.0", "0.167.0"]).toContain(version);
+  const metadata = JSON.parse(await readFile(path.resolve(`protocol/codex-app-server/0.167.0/runtime-compatibility/${version}.json`), "utf8"));
   const sha256 = createHash("sha256").update(await readFile(candidate)).digest("hex");
   expect(sha256).toBe(metadata.platforms.find((platform: { nodePlatform: string; nodeArch: string }) => platform.nodePlatform === process.platform && platform.nodeArch === process.arch).executableSha256);
   process.stdout.write(`Offline Speed qualification: ${JSON.stringify({ version, sha256, platform: process.platform, arch: process.arch, authenticatedProvider: false })}\n`);
