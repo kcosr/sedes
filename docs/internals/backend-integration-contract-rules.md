@@ -529,7 +529,9 @@ cut rather than repeatedly using a dead transport or provider generation.
 Caller cancellation alone does not invalidate that owner. Closing a reader
 owns no native execution and must not interrupt external work. Restore replaces
 the reader and its projection generation before executing again. Open browser
-subscribers receive that replacement baseline without a reload; restoring a
+subscribers receive that replacement baseline without a reload, including when
+native-restore maintenance has already retired the passive runtime and only
+the subscribed event hub remains. Restoring a
 dormant thread does not itself attach an agent. The archived source-agent
 credential prohibition remains enforced independently of target history
 authorization; wrong owner/thread/namespace still fails closed.

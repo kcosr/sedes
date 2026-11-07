@@ -1,7 +1,8 @@
-import { Camera, Gauge, RefreshCw } from "lucide-react";
+import { Camera, Gauge, RefreshCw, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ApiClient } from "../api/ApiClient.js";
 import { useTouchDensity } from "../app/use-touch-density.js";
+import { useMinuteClock } from "../app/use-minute-clock.js";
 import { BackendBrandIcon } from "./brand-icons.js";
 import type { BackendBrand } from "../../shared/index.js";
 import type {
@@ -21,11 +22,13 @@ import {
   relativeTime,
   resetText,
   resetDayLabel,
+  resetCreditWarning,
   snapshotNote,
   usageBand,
   weekElapsedDays,
 } from "../provider-pulse/presentation.js";
 import { Button } from "@client/components/ui/button";
+import { Badge } from "@client/components/ui/badge";
 import {
   Dialog,
   DialogBody,
@@ -160,7 +163,8 @@ function UsageList({
   readonly onToggle: (accountId: string) => void;
   readonly inline?: boolean;
 }): React.JSX.Element {
-  const accounts = accountsByUpcomingReset(pulse.status?.accounts ?? []);
+  const now = useMinuteClock();
+  const accounts = accountsByUpcomingReset(pulse.status?.accounts ?? [], now);
   // In the menu, loading and empty states are non-focusable empty rows.
   const empty = (message: string, loading = false) =>
     inline ? (
@@ -182,6 +186,7 @@ function UsageList({
           <MobileAccountBlock
             key={account.id}
             account={account}
+            now={now}
             status={pulse.status}
             expanded={expandedId === account.id}
             checking={pulse.checkingIds.has(account.id)}
@@ -196,6 +201,7 @@ function UsageList({
           <DesktopAccountSubmenu
             key={account.id}
             account={account}
+            now={now}
             status={pulse.status}
             checking={pulse.checkingIds.has(account.id)}
             snapshotting={pulse.snapshotting}
@@ -225,6 +231,7 @@ function UsageList({
 
 function DesktopAccountSubmenu({
   account,
+  now,
   status,
   checking,
   snapshotting,
@@ -232,6 +239,7 @@ function DesktopAccountSubmenu({
   onSnapshot,
 }: {
   readonly account: ProviderPulseAccount;
+  readonly now: number;
   readonly status: ProviderPulseStatus | undefined;
   readonly checking: boolean;
   readonly snapshotting: boolean;
@@ -245,11 +253,12 @@ function DesktopAccountSubmenu({
         <span className="sidebar-usage-account-name">
           {accountShortLabel(account)}
         </span>
-        <AccountUsageSummary account={account} />
+        <AccountUsageSummary account={account} now={now} />
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="sidebar-usage-detail">
         <AccountDetail
           account={account}
+          now={now}
           status={status}
           checking={checking}
           snapshotting={snapshotting}
@@ -264,6 +273,7 @@ function DesktopAccountSubmenu({
 
 function MobileAccountBlock({
   account,
+  now,
   status,
   expanded,
   checking,
@@ -273,6 +283,7 @@ function MobileAccountBlock({
   onSnapshot,
 }: {
   readonly account: ProviderPulseAccount;
+  readonly now: number;
   readonly status: ProviderPulseStatus | undefined;
   readonly expanded: boolean;
   readonly checking: boolean;
@@ -294,12 +305,13 @@ function MobileAccountBlock({
         <span className="sidebar-usage-account-name">
           {accountShortLabel(account)}
         </span>
-        <AccountUsageSummary account={account} />
+        <AccountUsageSummary account={account} now={now} />
       </button>
       <div id={`usage-account-${account.id}`} hidden={!expanded}>
         {expanded ? (
           <AccountDetail
             account={account}
+            now={now}
             status={status}
             checking={checking}
             snapshotting={snapshotting}
@@ -314,16 +326,21 @@ function MobileAccountBlock({
 
 function AccountUsageSummary({
   account,
+  now,
 }: {
   readonly account: ProviderPulseAccount;
+  readonly now: number;
 }): React.JSX.Element {
   const summary = accountUsageSummary(account);
-  const dayLabel = resetDayLabel(summary.resetsAt);
+  const dayLabel = resetDayLabel(summary.resetsAt, now);
   const fullReset = dayLabel ? resetText(summary.resetsAt) : undefined;
   const accessibleReset =
     dayLabel && fullReset ? `${dayLabel}; ${fullReset}` : undefined;
   return (
     <span className="sidebar-usage-summary">
+      <span className="sidebar-usage-reset-credits">
+        <ResetCreditsBadge resetCredits={account.usage.snapshot?.resetCredits} now={now} />
+      </span>
       <span
         className="sidebar-usage-reset-day"
         aria-label={accessibleReset}
@@ -343,8 +360,38 @@ function AccountUsageSummary({
   );
 }
 
+function ResetCreditsBadge({
+  resetCredits,
+  now,
+}: {
+  readonly resetCredits: ProviderPulseResetCredits | undefined;
+  readonly now: number;
+}): React.JSX.Element | null {
+  if (!resetCredits || resetCredits.availableCount <= 0) return null;
+  const count = resetCredits.availableCount;
+  const warning = resetCreditWarning(resetCredits.nextExpiresAt, now);
+  const expiry = expiryText(resetCredits.nextExpiresAt);
+  const description = [
+    `${count} banked ${count === 1 ? "reset" : "resets"}.`,
+    warning,
+    expiry ? `${expiry}.` : undefined,
+  ].filter(Boolean).join(" ");
+  return (
+    <Badge
+      className="sidebar-usage-reset-badge"
+      tone={warning ? "danger" : "neutral"}
+      title={description}
+    >
+      <span className="sr-only">{description}</span>
+      <RotateCcw aria-hidden="true" />
+      <span aria-hidden="true">{count > 99 ? "99+" : count}</span>
+    </Badge>
+  );
+}
+
 function AccountDetail({
   account,
+  now,
   status,
   checking,
   snapshotting,
@@ -353,6 +400,7 @@ function AccountDetail({
   menuActions = false,
 }: {
   readonly account: ProviderPulseAccount;
+  readonly now: number;
   readonly status: ProviderPulseStatus | undefined;
   readonly checking: boolean;
   readonly snapshotting: boolean;
@@ -439,7 +487,7 @@ function AccountDetail({
             );
           })}
           {resetCredits ? (
-            <ResetCreditsDetail resetCredits={resetCredits} />
+            <ResetCreditsDetail resetCredits={resetCredits} now={now} />
           ) : null}
           {balances.map((balance) => (
             <BalanceDetail
@@ -467,10 +515,15 @@ function AccountDetail({
 
 function ResetCreditsDetail({
   resetCredits,
+  now,
 }: {
   readonly resetCredits: ProviderPulseResetCredits;
+  readonly now: number;
 }): React.JSX.Element {
   const expiry = expiryText(resetCredits.nextExpiresAt);
+  const warning = resetCredits.availableCount > 0
+    ? resetCreditWarning(resetCredits.nextExpiresAt, now)
+    : undefined;
   return (
     <div className="sidebar-usage-window">
       <div className="sidebar-usage-window-line">
@@ -482,6 +535,9 @@ function ResetCreditsDetail({
       </div>
       {expiry ? (
         <div className="sidebar-usage-detail-sub">{expiry}</div>
+      ) : null}
+      {warning ? (
+        <div className="sidebar-usage-detail-sub sidebar-usage-reset-warning">{warning}</div>
       ) : null}
     </div>
   );

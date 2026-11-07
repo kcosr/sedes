@@ -1004,7 +1004,11 @@ test.describe.serial("normalized Codex thread state", () => {
       return ((await response.json()) as { requests: Array<{ method: string }> }).requests.map(({ method }) => method);
     };
     const before = await readMethods();
-    await page.goto(threadPath);
+    await page.getByTestId("desktop-sidebar").getByRole("button", { name: "More" }).click();
+    await page.getByRole("menuitem", { name: "Archived threads" }).click();
+    await expect(page).toHaveURL("/archived");
+    await page.locator(`[data-testid="archive-row"][data-thread-id="${threadId}"] .archive-row-open`).click();
+    await expect(page).toHaveURL(threadPath);
     await expect(initialAbandoned).toBeVisible();
     await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
     const session = await (await page.request.get("/api/application/session")).json() as { csrfToken: string };

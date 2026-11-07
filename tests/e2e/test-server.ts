@@ -5117,6 +5117,12 @@ async function main(): Promise<void> {
     },
     (eventScope, state) =>
       notificationLifecycle.deadlineWake(eventScope, state),
+    {
+      // Match production's retirement fence. Without it, restore tests keep
+      // a loaded history actor and miss publication through a retained hub.
+      run: (eventScope, threadId, operation) =>
+        runtimes.runWithRuntimeRetired(eventScope, threadId, operation),
+    },
   );
   const tasks = new TaskService(taskRepository, applicationSnapshots);
   const workpads = new WorkpadService(new WorkpadRepository(database), applicationSnapshots);

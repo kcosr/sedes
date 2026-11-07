@@ -1994,6 +1994,10 @@ textarea:disabled {
   min-width: 232px;
 }
 
+.sidebar-usage-menu {
+  min-width: 300px;
+}
+
 .sidebar-usage-account {
   width: 100%;
 }
@@ -2009,9 +2013,27 @@ textarea:disabled {
 .sidebar-usage-summary {
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: 60px 4ch;
+  grid-template-columns: 3.5rem 60px 5ch;
   align-items: baseline;
   column-gap: 12px;
+}
+
+.sidebar-usage-reset-credits {
+  display: flex;
+  justify-content: flex-end;
+  align-self: center;
+  min-width: 0;
+}
+
+.sidebar-usage-reset-badge {
+  padding-inline: 4px;
+  border-color: var(--border);
+  border-radius: var(--radius-inline);
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-usage-reset-badge[data-tone="danger"] {
+  border-color: var(--destructive-border);
 }
 
 .sidebar-usage-reset-day {
@@ -2086,6 +2108,10 @@ textarea:disabled {
 .sidebar-usage-detail-sub {
   color: var(--muted-foreground-2);
   font-size: 11px;
+}
+
+.sidebar-usage-reset-warning {
+  color: var(--destructive);
 }
 
 .sidebar-usage-window-line {
