@@ -197,6 +197,14 @@ Open **Accounts** from the sidebar footer **More** menu to see the available
 weekly windows, balances, reset credits, reset times, and last successful check
 for configured provider accounts. Expand one account for details.
 
+Accounts with banked resets show a count badge just before the regular reset
+day, on desktop and mobile. The badge turns red when the next banked reset
+expires within 72 hours. A reported expiry that has already passed stays red
+until refreshed, so an old count does not appear safe again. Later or unknown
+expiry keeps the muted badge; zero or missing counts have no badge. Hover the
+badge or expand the account for the exact expiry. Counts above 99 display as
+**99+**, with the full count in the tooltip and account details.
+
 - **Check** asks the selected account—or all listed accounts—to run a live
   usage check through Provider Pulse; it is not merely a redraw of cached data.
 - **Snapshot** records the current usage as a comparison baseline. Later views

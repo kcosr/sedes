@@ -6,6 +6,7 @@ import {
   accountUsageSummary,
   accountsByUpcomingReset,
   expiryText,
+  resetCreditWarning,
   remainingPercent,
   resetText,
   resetDayLabel,
@@ -38,6 +39,18 @@ function account(
 }
 
 describe("provider pulse presentation", () => {
+  it("warns within exactly 72 hours and keeps passed expiries flagged", () => {
+    const now = Date.parse("2026-11-07T12:00:00Z");
+    expect(resetCreditWarning("2026-11-10T12:00:00.001Z", now)).toBeUndefined();
+    expect(resetCreditWarning("2026-11-10T12:00:00Z", now)).toBe(
+      "A banked reset expires within 3 days.",
+    );
+    expect(resetCreditWarning("2026-11-07T12:00:00Z", now)).toMatch(/expiry has passed/);
+    expect(resetCreditWarning("2026-11-06T12:00:00Z", now)).toMatch(/expiry has passed/);
+    expect(resetCreditWarning(undefined, now)).toBeUndefined();
+    expect(resetCreditWarning("invalid", now)).toBeUndefined();
+  });
+
   it("uses the first normalized weekly window", () => {
     const selected = weeklyWindow(
       account([

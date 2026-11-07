@@ -907,7 +907,30 @@ export class ThreadRuntimeCoordinator {
   ): Promise<boolean> {
     const key = scopedKey(scope, applicationThreadId);
     const entry = this.#entries.get(key);
-    if (!entry || entry.eviction) return false;
+    if (!entry || entry.eviction) {
+      // Native restore retires the passive runtime before committing. Its
+      // subscribed hub survives, so it still needs the current baseline
+      // even though there is no loaded actor left to replace.
+      const quiet = this.quiet(scope, applicationThreadId);
+      try {
+        if (
+          this.#closed || quiet.hub.subscriberCount === 0 ||
+          quiet.hub.snapshot?.thread.inventoryState !== "archived"
+        ) return false;
+        try {
+          // Ordinary acquisition rechecks authority. A still-archived or
+          // uncertain native restore opens only passive history, including
+          // the current inventory and recovery controls in its baseline.
+          const restored = await this.acquire(scope, applicationThreadId);
+          restored.release();
+        } catch (cause) {
+          throw new ThreadRuntimeRestoreFailedError(cause);
+        }
+        return true;
+      } finally {
+        quiet.release();
+      }
+    }
     if (
       (entry.access === "history" || entry.runtime?.actor.readOnly) &&
       (entry.runtime?.hub.subscriberCount ?? 0) > 0

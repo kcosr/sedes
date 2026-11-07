@@ -167,6 +167,20 @@ export function expiryText(value: string | undefined): string | undefined {
   }).format(new Date(parsed))}`;
 }
 
+export function resetCreditWarning(
+  value: string | undefined,
+  now = Date.now(),
+): string | undefined {
+  if (!value) return undefined;
+  const expiresAt = Date.parse(value);
+  if (!Number.isFinite(expiresAt) || expiresAt - now > 3 * 86_400_000) {
+    return undefined;
+  }
+  // A cached count must not look safe again when its reported expiry passes.
+  if (expiresAt <= now) return "Reported expiry has passed; check the account to refresh.";
+  return "A banked reset expires within 3 days.";
+}
+
 export function baselineFor(
   metrics: readonly ProviderPulseBaselineMetric[],
   accountId: string,

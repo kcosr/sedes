@@ -54,6 +54,7 @@ test("mobile Accounts opens as a viewport-anchored bottom sheet", async ({
             "grok",
             100,
             new Date(2099, 7, 22, 23).toISOString(),
+            { availableCount: 125, nextExpiresAt: new Date(2099, 7, 27, 12).toISOString() },
           ),
           usageAccount(
             "codex-work",
@@ -61,6 +62,7 @@ test("mobile Accounts opens as a viewport-anchored bottom sheet", async ({
             "codex",
             7,
             new Date(2099, 7, 20, 23).toISOString(),
+            { availableCount: 2, nextExpiresAt: new Date(2099, 7, 22, 12).toISOString() },
           ),
           usageAccount(
             "claude-main",
@@ -90,6 +92,20 @@ test("mobile Accounts opens as a viewport-anchored bottom sheet", async ({
   await overlaySettled(usage);
   const resetDays = usage.locator(".sidebar-usage-reset-day");
   await expect(resetDays).toHaveText(["today", "tomorrow", "Sat"]);
+  const badges = usage.locator(".sidebar-usage-reset-badge");
+  await expect(badges).toHaveCount(2);
+  await expect(badges.nth(0)).toHaveAttribute("data-tone", "danger");
+  await expect(badges.nth(0)).toHaveAttribute("title", /2 banked resets.*within 3 days/);
+  await expect(usage.locator(".sidebar-usage-account-button").first()).toHaveAccessibleName(/Next expires .*\. today;/);
+  await expect(badges.nth(1)).toHaveAttribute("data-tone", "neutral");
+  await expect(badges.nth(1)).toContainText("99+");
+  expect(await badges.nth(1).evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const badgeColumns = usage.locator(".sidebar-usage-reset-credits");
+  await expect(badgeColumns.nth(1)).toBeEmpty();
+  const badgeLefts = await badgeColumns.evaluateAll((elements) =>
+    elements.map((element) => element.getBoundingClientRect().left),
+  );
+  expect(Math.max(...badgeLefts) - Math.min(...badgeLefts)).toBeLessThan(0.5);
   const resetDayLefts = await resetDays.evaluateAll((elements) =>
     elements.map((element) => element.getBoundingClientRect().left),
   );
@@ -140,6 +156,38 @@ test("mobile Accounts opens as a viewport-anchored bottom sheet", async ({
     ),
   ).toBe(true);
   await capture(page, testInfo, "provider-pulse-usage-mobile-sheet.png");
+
+  await usage.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(usage).toBeHidden();
+  await page.getByRole("button", { name: "Close thread navigation", exact: true }).click();
+  await expect(navigation).toBeHidden();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByTestId("desktop-sidebar").getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Accounts", exact: true }).focus();
+  await page.keyboard.press("ArrowRight");
+  const desktopUsage = page.locator(".sidebar-usage-menu");
+  await expect(desktopUsage).toBeVisible();
+  await expect(desktopUsage.locator(".sidebar-usage-reset-badge")).toHaveCount(2);
+  await expect(desktopUsage.locator(".sidebar-usage-reset-badge").first()).toHaveAttribute("data-tone", "danger");
+  for (const selector of [".sidebar-usage-reset-credits", ".sidebar-usage-reset-day", ".sidebar-usage-summary > .sidebar-usage-remaining"]) {
+    const lefts = await desktopUsage.locator(selector).evaluateAll(elements =>
+      elements.map(element => element.getBoundingClientRect().left),
+    );
+    expect(Math.max(...lefts) - Math.min(...lefts)).toBeLessThan(0.5);
+  }
+  const summaryBounds = await desktopUsage.evaluate(menu => [...menu.querySelectorAll(".sidebar-usage-summary")].map(summary => ({
+    right: summary.getBoundingClientRect().right,
+    menuRight: menu.getBoundingClientRect().right,
+    scrollWidth: summary.scrollWidth,
+    clientWidth: summary.clientWidth,
+    text: summary.textContent,
+  })));
+  for (const bounds of summaryBounds) {
+    expect(bounds.right).toBeLessThanOrEqual(bounds.menuRight);
+    expect(bounds.scrollWidth, JSON.stringify(bounds)).toBeLessThanOrEqual(bounds.clientWidth);
+  }
+  expect(await desktopUsage.locator(".sidebar-usage-reset-badge").last().evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await capture(page, testInfo, "provider-pulse-usage-desktop-badges.png");
 });
 
 function usageAccount(
@@ -148,6 +196,7 @@ function usageAccount(
   brand: "codex" | "claude" | "grok",
   remainingPercent: number,
   resetsAt: string,
+  resetCredits?: { availableCount: number; nextExpiresAt: string },
 ): Record<string, unknown> {
   return {
     id,
@@ -170,6 +219,7 @@ function usageAccount(
           },
         ],
         balances: [],
+        ...(resetCredits ? { resetCredits } : {}),
       },
     },
   };
