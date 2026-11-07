@@ -483,12 +483,13 @@ User-facing changes are collected here before release. See the
   history. The runtime minimum remains 0.162.1; native read-state metadata stays
   informational, and file-backed generated images are explicitly unavailable.
   See [Codex compatibility](docs/operator/backends/codex.md#version-compatibility).
-  ([#91](https://github.com/kcosr/sedes/pull/91), [#129](https://github.com/kcosr/sedes/pull/129))
+  ([#91](https://github.com/kcosr/sedes/pull/91), [#129](https://github.com/kcosr/sedes/pull/129), [#131](https://github.com/kcosr/sedes/pull/131))
 
 - Codex cold resume restores the saved model and reasoning effort so a stale
   native configuration cannot silently replace the selected effort. Disallowed
   saved settings stay unresolved until repaired. See
   [Codex execution settings](docs/internals/codex-thread-execution-settings.md).
+  ([#131](https://github.com/kcosr/sedes/pull/131))
 
 - Codex threads keep model, reasoning, Speed, and permissions editable between
   runs while automations remain enabled. Same-thread automation uses current
