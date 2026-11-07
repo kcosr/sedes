@@ -83,6 +83,7 @@ User-facing changes are collected here before release. See the
   next expiry is within three days or the reported expiry has passed. Exact
   dates remain in the tooltip and account details. See
   [provider accounts](docs/user/provider-features.md#check-provider-accounts-and-warnings).
+  ([#132](https://github.com/kcosr/sedes/pull/132))
 
 - Android recording quality can use Original PCM, High Opus, or Low bandwidth
   Opus with a supporting speech server. Binary uploads are negotiated per model;
@@ -313,6 +314,7 @@ User-facing changes are collected here before release. See the
 
 - Restoring an archived thread while viewing it now updates the conversation
   controls without requiring a page refresh.
+  ([#132](https://github.com/kcosr/sedes/pull/132))
 
 - Idle remote backends recover after their sidecar is replaced, allowing Pi
   conversation history to reopen without restarting Sedes. Active work and
