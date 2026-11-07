@@ -1026,12 +1026,19 @@ test.describe.serial("normalized Codex thread state", () => {
     expect(archivedMethods).not.toContain("thread/resume");
     expect(archivedMethods).not.toContain("thread/start");
     expect(archivedMethods).not.toContain("turn/start");
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole("button", { name: "Thread actions" }).click();
+    await expect(page.getByTestId("thread-settings-sheet")).toBeVisible();
     const restoration = page.waitForResponse(response => response.request().method() === "PATCH" &&
       response.url().endsWith(`/api/threads/${threadId}/inventory`) && response.ok());
     await page.getByRole("menu", { name: "Thread actions" }).getByRole("menuitem", { name: "Restore to Active", exact: true }).click();
     await restoration;
     await expect(page.getByRole("textbox", { name: "Message Codex" })).toBeEnabled();
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    const restoredActions = page.getByTestId("thread-settings-sheet").getByRole("menu", { name: "Thread actions" });
+    await expect(restoredActions.getByRole("menuitem", { name: "Restore to Active", exact: true })).toHaveCount(0);
+    await expect(restoredActions.getByRole("menuitem", { name: "Park", exact: true })).toBeEnabled();
+    await page.keyboard.press("Escape");
     await fillAndPersistDraft(page, "Continue after restoring the archived transcript", "Message Codex");
     await expect(page.getByRole("button", { name: "Send message" })).toBeEnabled();
     await sendCurrentDraft(page);
