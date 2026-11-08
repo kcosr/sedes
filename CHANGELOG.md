@@ -114,7 +114,7 @@ User-facing changes are collected here before release. See the
   qualified on Linux x64; newer stable releases remain available with an installation
   warning. Remote execution requires native Pi runtime capability **2**. The
   embedded Pi SDK remains pinned separately.
-  ([#124](https://github.com/kcosr/sedes/pull/124))
+  ([#124](https://github.com/kcosr/sedes/pull/124), [#133](https://github.com/kcosr/sedes/pull/133))
 
 - A Home button beside Notifications opens the configured default thread and
   reveals Chat. The connection indicator now follows these buttons in reserved
