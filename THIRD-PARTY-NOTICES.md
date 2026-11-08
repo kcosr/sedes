@@ -658,21 +658,21 @@ Packages listed: 609.
 - Shipped by: sedes
 - License text (`LICENSE`): [4f221aee6e07](#license-text-4f221aee6e07)
 
-### @opencode/client 2.1.1
+### @opencode/client 2.2.6
 
 - License: MIT
 - URL: https://github.com/anomalyco/opencode/tree/HEAD/packages/client
 - Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
-### @opencode/protocol 2.1.1
+### @opencode/protocol 2.2.6
 
 - License: MIT
 - URL: https://github.com/anomalyco/opencode/tree/HEAD/packages/protocol
 - Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
-### @opencode/schema 2.1.1
+### @opencode/schema 2.2.6
 
 - License: MIT
 - URL: https://github.com/anomalyco/opencode/tree/HEAD/packages/schema
@@ -2368,7 +2368,7 @@ Packages listed: 609.
 - Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d68cfda21300](#license-text-d68cfda21300)
 
-### effect 4.0.1
+### effect 4.1.0
 
 - License: MIT
 - URL: https://github.com/Effect-TS/effect/tree/HEAD/packages/effect
@@ -7976,7 +7976,7 @@ THE SOFTWARE.
 
 ### License text 5f58d41e2a9d
 
-Applies to: effect 4.0.1.
+Applies to: effect 4.1.0.
 
 ```text
 MIT License

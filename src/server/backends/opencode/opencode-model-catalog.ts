@@ -30,7 +30,7 @@ export class OpenCodeModelCatalog {
       if (seen.has(identity)) throw new Error("opencode_catalog_duplicate_identity");
       seen.add(identity);
       if (!model.enabled) continue;
-      if (!model.package || !model.capabilities.input.includes("text")) { excluded = true; continue; }
+      if (!model.package || !model.capabilities.input.includes("text") || model.type !== undefined && model.type !== "chat") { excluded = true; continue; }
       let id: string;
       try { id = qualifiedOpenCodeModelId(model); } catch { excluded = true; continue; }
       if (models.length >= 511) { excluded = true; continue; }

@@ -688,7 +688,7 @@ conversation lifecycle and fail-closed feature limits.
 
 ### OpenCode v2
 
-OpenCode requires a Linux execution host and stable stock `opencode2` 2.1.1 or newer (tested through 2.1.1) under
+OpenCode requires a Linux execution host and stable stock `opencode2` 2.2.6 or newer (tested through 2.2.6) under
 that host's sidecar account (or the Sedes account for local execution). Select
 a local, SSH, or outbound environment independently of ownership. Choose an
 owned resident process or an existing authenticated loopback HTTP server. Both exchange conversation traffic over HTTP/SSE. The

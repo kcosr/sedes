@@ -53,7 +53,7 @@ export class OpenCodeBackendModule implements BackendModule {
   readonly backendKind = "opencode" as const;
   readonly connectionKinds = ["opencode_http"] as const;
   readonly protocolRelease = OPENCODE_RELEASE;
-  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "opencode_runtime", majorVersion: 4,
+  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "opencode_runtime", majorVersion: 5,
     operations: Object.freeze(openCodeRuntimeOperations.map(operation => operation.operation)) }]);
   constructor(readonly createNativeRuntime: NativeRuntimeFactory = input => new OpenCodeRuntime(input)) {}
 

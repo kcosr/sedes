@@ -43,8 +43,8 @@ User-facing changes are collected here before release. See the
   [persistent service upgrades](docs/operator/operations.md#persistent-remote-services).
   ([#116](https://github.com/kcosr/sedes/pull/116), [#123](https://github.com/kcosr/sedes/pull/123))
 
-- Upgrade OpenCode to stable stock **2.1.1 or newer** on every execution host.
-  OpenCode's private runtime protocol is now **4**. See
+- Upgrade OpenCode to stable stock **2.2.6 or newer** on every execution host.
+  OpenCode's private runtime protocol is now **5**. See
   [OpenCode setup](docs/operator/backends/opencode.md).
   ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123))
 
@@ -273,9 +273,10 @@ User-facing changes are collected here before release. See the
   [parking](docs/user/organize-work.md#park-quiet-work).
   ([#95](https://github.com/kcosr/sedes/pull/95))
 
-- OpenCode uses the **2.1.1** SDK/schema profile, retaining existing history,
-  session statistics and usage accounting. Newer-than-tested
-  stable runtimes still show an active advisory. See
+- OpenCode uses the **2.2.6** SDK/schema profile, admitting current server,
+  session, model and error metadata while retaining existing history, session
+  statistics and usage accounting. Qualification extends through **2.2.6**;
+  newer-than-tested stable runtimes still show an active advisory. See
   [OpenCode compatibility](docs/operator/backends/opencode.md).
   ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123))
 

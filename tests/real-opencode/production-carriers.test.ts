@@ -204,7 +204,7 @@ async function qualifyPersistedOutboundStartup(fixture: OpenCodeProductionFixtur
 async function qualifyTools(fixture: OpenCodeProductionFixture, threadId: string) {
   await fixture.waitFor(async () => (await fixture.thread(threadId)).runState === "idle");
   const nativeTool = fixture.model.requests.flatMap(request => request.toolNames).find(name => name.endsWith("_sedes_read"));
-  expect(nativeTool).toBeDefined();
+  expect(nativeTool, JSON.stringify([...new Set(fixture.model.requests.flatMap(request => request.toolNames))]).slice(0, 4096)).toBeDefined();
   if (!nativeTool) throw new Error("fixture_native_mcp_not_ready");
   const mcpStart = fixture.model.requests.length;
   const mcp = fixture.model.callToolNextStream("qualified-mcp", nativeTool, { toolId: "thread.status", schemaVersion: 4, input: { threadId } });

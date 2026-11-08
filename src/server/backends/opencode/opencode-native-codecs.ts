@@ -5,7 +5,6 @@ import type { FormInfo, OpenCodeEvent, PermissionRequest, SessionInfo, SessionIn
   SessionSwitchModelInput, SessionCompactInput, SessionCompactOutput, SessionEventDurable, SessionLogItem } from "@opencode/client";
 import { OpenCodeEvent as EventSchema } from "@opencode/protocol/groups/event";
 import { PublicSessionMessage } from "@opencode/protocol/groups/message";
-import { openCodeStackSafeEncodedSchema } from "./opencode-native-base64.js";
 import { Form } from "@opencode/schema/form";
 import { Location } from "@opencode/schema/location";
 import { Permission } from "@opencode/schema/permission";
@@ -91,7 +90,7 @@ export const Interrupt = Schema.Struct({ interrupted: Schema.Boolean });
 export function openCodeNativeParser<T>(schema: Schema.Constraint, json = true): (value: unknown) => T {
   // Native HTTP endpoints use Effect's JSON codec, which emits null for some
   // optional values (notably page cursors). SSE directly JSON.stringifies events.
-  const decode = Schema.decodeUnknownSync(openCodeStackSafeEncodedSchema(schema, json), { onExcessProperty: "error" });
+  const decode = Schema.decodeUnknownSync(Schema.toEncoded(json ? Schema.toCodecJson(schema) : schema), { onExcessProperty: "error" });
   return value => {
     const limits = { maximumDepth: 64, maximumObjectProperties: 100_000, maximumArrayItems: 1_000_000,
       maximumTotalNodes: 1_000_000, maximumStringBytes: 32 * 1_024 * 1_024, maximumEncodedBytes: 32 * 1_024 * 1_024 };

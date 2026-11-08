@@ -156,7 +156,7 @@ connector management and pairing retain their existing protocols. See
 | Pi SDK | The Pi SDK stays on the Sedes server; the paired host supplies remote workspace operations. Pi is not installed or executed remotely by this feature. |
 | Pi | On Linux/macOS, the installed stable Pi 1.4.0 or newer CLI and native authentication, configuration, MCP servers, and sessions run on the persistent sidecar host. Files, attachments, and CLI tools require their own grants. |
 | Claude | On Linux/macOS with Node.js 24.18+, the pinned Agent SDK and authenticated Claude Code installation run through the persistent sidecar. Native Windows Claude is unsupported. Files, attachments, and CLI tools require their own grants. |
-| OpenCode v2 | On Linux, stable stock `opencode2` 2.1.1 or newer (tested through 2.1.1) runs as a Sedes-owned daemon or an external loopback HTTP/SSE server through the persistent sidecar. Native paths/authentication stay on the host. Agent tools require their explicit grant; no separate MCP helper install is needed. |
+| OpenCode v2 | On Linux, stable stock `opencode2` 2.2.6 or newer (tested through 2.2.6) runs as a Sedes-owned daemon or an external loopback HTTP/SSE server through the persistent sidecar. Native paths/authentication stay on the host. Agent tools require their explicit grant; no separate MCP helper install is needed. |
 | Grok | Remote execution remains intentionally unsupported; its current backend requires a local environment. |
 
 See the [Codex](backends/codex.md), [Claude](backends/claude.md), [OpenCode](backends/opencode.md), [Pi](backends/pi-native.md), and [Pi SDK](backends/pi.md) guides for provider

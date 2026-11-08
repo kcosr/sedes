@@ -6,14 +6,14 @@ describe("OpenCode installation advisory source", () => {
   it("publishes admitted versions above tested evidence and clears after returning to a reviewed runtime", () => {
     const source = new OpenCodeInstallationAdvisorySource(), listener = vi.fn();
     source.subscribe(listener);
-    source.observe(assessOpenCodeRuntimeVersion("2.1.1+vendor.1"));
+    source.observe(assessOpenCodeRuntimeVersion("2.2.6+vendor.1"));
     expect(source.active()).toEqual([]);
-    source.observe(assessOpenCodeRuntimeVersion("2.1.2"));
+    source.observe(assessOpenCodeRuntimeVersion("2.2.7"));
     expect(source.active()).toEqual([{ id: "runtime-newer-than-tested", tone: "warning",
-      title: { text: "OpenCode is newer than tested" }, message: { text: "Running 2.1.2; Sedes is tested through 2.1.1." } }]);
-    source.observe(assessOpenCodeRuntimeVersion("2.1.2"));
+      title: { text: "OpenCode is newer than tested" }, message: { text: "Running 2.2.7; Sedes is tested through 2.2.6." } }]);
+    source.observe(assessOpenCodeRuntimeVersion("2.2.7"));
     expect(listener).toHaveBeenCalledOnce();
-    source.observe(assessOpenCodeRuntimeVersion("2.1.1+vendor.1"));
+    source.observe(assessOpenCodeRuntimeVersion("2.2.6+vendor.1"));
     expect(source.active()).toEqual([]);
     expect(listener).toHaveBeenCalledTimes(2);
   });

@@ -3,10 +3,10 @@ import { access, realpath, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 
-export const OPENCODE_RELEASE = "2.1.1" as const;
-export const OPENCODE_SOURCE_REVISION = "ba546ec1598a70db2570e9c6258028d955ba8f58" as const;
-export const OPENCODE_RUNTIME_MINIMUM_SUPPORTED_RELEASE = "2.1.1";
-export const OPENCODE_RUNTIME_TESTED_THROUGH_RELEASE = "2.1.1";
+export const OPENCODE_RELEASE = "2.2.6" as const;
+export const OPENCODE_SOURCE_REVISION = "dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06" as const;
+export const OPENCODE_RUNTIME_MINIMUM_SUPPORTED_RELEASE = "2.2.6";
+export const OPENCODE_RUNTIME_TESTED_THROUGH_RELEASE = "2.2.6";
 // Regressions may exclude exact stable releases, regardless of build metadata.
 const OPENCODE_RUNTIME_EXCLUDED_RELEASES: readonly string[] = Object.freeze([]);
 const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
