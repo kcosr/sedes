@@ -131,7 +131,7 @@ and loopback model/MCP fixtures only; it does not call authenticated providers.
 It does not replace the explicitly authorized `test:live-opencode` gate.
 
 Pi's separate `test:real-pi-native` suite is also an offline exception: it uses
-an explicitly selected stock Pi 1.4.0 executable, disposable native state,
+an explicitly selected stock stable Pi >=1.4.0 executable, disposable native state,
 and loopback model/MCP fixtures with no operator credentials. It does not
 replace the authorized `test:real-pi` or `test:real-pi-cli` live gates.
 
@@ -141,7 +141,7 @@ When the user authorizes a live Pi suite, preserve the `test:real-pi`,
 read-only tools verified before
 prompting; do not weaken these gates or point them at an existing session.
 The native gate also requires `SEDES_RUN_LIVE_PI_NATIVE=1` and an absolute
-`SEDES_LIVE_PI_NATIVE_EXECUTABLE` selecting isolated stock Pi 1.4.0. It uses
+`SEDES_LIVE_PI_NATIVE_EXECUTABLE` selecting isolated stock stable Pi >=1.4.0. It uses
 temporary agent/session/workspace directories and references native auth/model
 files without copying credentials. Keep it separate from offline qualification.
 

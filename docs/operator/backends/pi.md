@@ -2,7 +2,7 @@
 
 The Pi SDK backend embeds `@earendil-works/pi-coding-agent` 0.86.0 directly in the
 Sedes server. This backend does not launch the Pi CLI or use Pi RPC mode.
-For the separately installed Pi 1.4.0 runtime, including remote execution and
+For the separately installed Pi >=1.4.0 runtime, including remote execution and
 native MCP configuration, use the [Pi native backend](pi-native.md).
 
 Pi is the most direct integration for its native provider/model catalog,

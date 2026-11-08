@@ -69,14 +69,21 @@ export function registerPiNativeHost(input: {
       case "stop": await input.hosts.stop(command.runtimeId, command.input.expectedRevision, command.input.force, signal, callAuthority); attached.delete(command.runtimeId); return { ok: true };
     }
   };
+  const version = (command: PiNativeHostCommand | undefined, value?: unknown): string | null => {
+    const runtimeId = command && "runtimeId" in command ? command.runtimeId
+      : value && typeof value === "object" && "runtimeId" in value ? String(value.runtimeId) : undefined;
+    try { return runtimeId ? input.hosts.get(runtimeId).runtimeVersion : null; }
+    catch { return null; } // Successful retirement has no observed live runtime.
+  };
   for (const operation of piNativeRuntimeOperations) input.registry.register(operation, async (body, context) => {
+    let command: PiNativeHostCommand | undefined;
     try {
-      const command = piNativeHostCommandSchema.parse(await input.channel.decodeBody(body));
+      command = piNativeHostCommandSchema.parse(await input.channel.decodeBody(body));
       if (piNativeHostCommandLane(command) !== operation.lane) throw new PiNativeError("pi_native_operation_lane_invalid");
       const value = await run(command, context.signal);
-      return await input.channel.encodeBody({ status: "ok", value });
+      return await input.channel.encodeBody({ status: "ok", runtimeVersion: version(command, value), value });
     } catch (error) {
-      return await input.channel.encodeBody({ status: "failed", failure: error instanceof PiNativeError
+      return await input.channel.encodeBody({ status: "failed", runtimeVersion: version(command), failure: error instanceof PiNativeError
         ? { code: error.code, delivery: error.delivery }
         : { code: "pi_native_host_request_failed", delivery: "sent_outcome_unknown" } });
     }

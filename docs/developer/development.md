@@ -329,7 +329,7 @@ The `test:real-pi-native` offline exception is described below; it makes no
 authenticated provider requests.
 
 The native Pi qualification suite launches an explicitly selected stock Pi
-1.4.0 executable with disposable HOME, agent, session, and workspace directories.
+stable >=1.4.0 executable with disposable HOME, agent, session, and workspace directories.
 It uses loopback model/MCP fixtures and passes no operator credentials or
 ambient provider configuration to the child. It exercises the production owned
 process host and normalized conversation driver, including native skills,
@@ -420,7 +420,7 @@ The CLI-specific Pi gate also requires the explicit test opt-in:
 SEDES_RUN_REAL_PI_CLI=1 env -u NODE_ENV npm run test:real-pi-cli
 ```
 
-The separate native Pi live gate uses stock Pi 1.4.0 through the production
+The separate native Pi live gate uses stock stable Pi >=1.4.0 through the production
 owned host and driver. It requires the same exact authenticated AW Qwen model,
 verifies low reasoning and the read-only tool set before prompting, and checks
 code-mode reads plus detach/resume. Its temporary agent directory references

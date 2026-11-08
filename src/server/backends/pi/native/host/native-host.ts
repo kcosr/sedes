@@ -1,3 +1,4 @@
+import type { VerifiedPiRuntimeVersion } from "../runtime-release.js";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
@@ -64,6 +65,12 @@ const DISALLOWED_SESSION_COMMANDS = new Set(["new_session", "switch_session", "c
 /** Owns native processes and retained evidence. Carrier attachments own neither. */
 export class PiNativeHost implements PiNativePort {
   readonly runtimeId = randomUUID();
+  #runtimeVersion: string | null = null;
+  get runtimeVersion(): string | null { return this.#runtimeVersion; }
+  readonly #observeRuntimeVersion = (assessment: VerifiedPiRuntimeVersion | undefined): void => {
+    this.#runtimeVersion = assessment?.version ?? null;
+    this.input.onRuntimeVersion?.(assessment);
+  };
   readonly #sessions = new Map<string, Session>();
   readonly #byFile = new Map<string, Session>();
   readonly #releasedHandles = new Set<string>();
@@ -91,6 +98,7 @@ export class PiNativeHost implements PiNativePort {
     readonly authenticationKey: Uint8Array;
     readonly store?: Store;
     readonly launch?: PiNativeSessionLauncher;
+    readonly onRuntimeVersion?: (assessment: VerifiedPiRuntimeVersion | undefined) => void;
     readonly acquireWriter?: typeof acquirePiSessionWriterLock;
     readonly maximumSessions?: number;
     /** Per-session retained event and unfinished-message budget. */
@@ -149,7 +157,7 @@ export class PiNativeHost implements PiNativePort {
     try {
       owner.directory = await mkdtemp(path.join(tmpdir(), "sedes-pi-"));
       this.#admit(authority, signal);
-      owner.process = await this.#launch({ runtime: this.#runtime, cwd: input.cwd,
+      owner.process = await this.#launch({ onRuntimeVersion: this.#observeRuntimeVersion, runtime: this.#runtime, cwd: input.cwd,
         diagnostic: { runtimeId: this.runtimeId, handleId: owner.id },
         channels: this.input.channels, environment: this.input.environment, bridgeDirectory: owner.directory,
         authenticationKey: this.input.authenticationKey, ...(signal ? { signal } : {}) });
@@ -302,7 +310,7 @@ export class PiNativeHost implements PiNativePort {
         if (value !== undefined) executionEnvironment[name] = value;
       }
       this.#admit(authority, signal);
-      session.process = await this.#launch({ runtime: this.#runtime, session: session.identity,
+      session.process = await this.#launch({ onRuntimeVersion: this.#observeRuntimeVersion, runtime: this.#runtime, session: session.identity,
         diagnostic: { runtimeId: this.runtimeId, handleId: session.handleId, handleGeneration: session.generation },
         cwd: session.identity.cwd, channels: this.input.channels, environment: this.input.environment,
         executionEnvironment, bridgeDirectory: session.directory,
@@ -576,6 +584,7 @@ export class PiNativeHost implements PiNativePort {
     ]);
     if (outcomes.some(outcome => outcome.status === "rejected")) throw new PiNativeError("pi_native_cleanup_unproven", "sent_outcome_unknown");
     this.#closed = true;
+    this.#observeRuntimeVersion(undefined);
   }
   async #track<T>(operation: Promise<T>): Promise<T> {
     this.#inflight.set(operation, randomUUID());

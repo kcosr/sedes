@@ -303,7 +303,7 @@ See the [Pi SDK operator guide](../operator/backends/pi.md).
 
 ## Pi
 
-**Pi** uses the installed Pi 1.4.0 runtime on the selected local, SSH, or
+**Pi** uses the installed stable Pi 1.4.0 or newer runtime on the selected local, SSH, or
 outbound host. Its native configuration, provider login, skills, MCP servers,
 and conversation history live on that execution host. **Pi SDK** remains the
 separate embedded backend described above.

@@ -8,7 +8,7 @@ import { OwnedNdjsonStdioTransportFactory } from "../../../../provider-protocol/
 import type { PiNativeRuntimeConfiguration, PiNativeSessionIdentity } from "../port.js";
 import { PiNativeError } from "../port.js";
 import { PiRpcClient, type PiNativeDiagnosticContext } from "./pi-rpc-client.js";
-import { PI_RPC_VERSION } from "./pi-rpc-wire.js";
+import { decodePiRuntimeVersionProbe, type VerifiedPiRuntimeVersion } from "../runtime-release.js";
 import { PiManagedBridge } from "./pi-managed-bridge.js";
 import { installPiManagedExtension } from "./pi-managed-extension.js";
 
@@ -29,6 +29,7 @@ export interface PiNativeLaunchInput {
   readonly authenticationKey: Uint8Array;
   readonly signal?: AbortSignal;
   readonly diagnostic?: Pick<PiNativeDiagnosticContext, "runtimeId" | "handleId" | "handleGeneration">;
+  readonly onRuntimeVersion?: (assessment: VerifiedPiRuntimeVersion | undefined) => void;
   readonly onEvent?: (event: { kind: "rpc" | "companion"; payload: Readonly<Record<string, unknown>> }) => void;
 }
 
@@ -62,8 +63,22 @@ async function launch(input: PiNativeLaunchInput, diagnostic: PiNativeDiagnostic
   // particular, evidence keys and bearer tokens must not enter /proc/*/environ.
   for (const name of Object.keys(environment)) if (name.startsWith("SEDES_PI_")) delete environment[name];
   const before = await executableIdentity(executable.canonicalPath);
-  await verifyVersion(input, prepared, environment);
-  if (before !== await executableIdentity(executable.canonicalPath)) throw new Error("pi_native_executable_changed");
+  let assessment: VerifiedPiRuntimeVersion;
+  try {
+    assessment = await verifyVersion(input, prepared, environment);
+    if (before !== await executableIdentity(executable.canonicalPath)) throw new Error("pi_native_executable_changed");
+    input.signal?.throwIfAborted();
+  } catch (error) {
+    // An unfinished probe says nothing new about the last admitted runtime.
+    // Rejecting the executable or observing its replacement invalidates that
+    // evidence; cancellation and transport failures preserve it.
+    if (!input.signal?.aborted && error instanceof Error &&
+        ["pi_native_version_unsupported", "pi_native_version_output_limit", "pi_native_executable_changed"].includes(error.message)) {
+      input.onRuntimeVersion?.(undefined);
+    }
+    throw error;
+  }
+  input.onRuntimeVersion?.(assessment);
   const extension = await installPiManagedExtension(input.bridgeDirectory);
   const bridge = await PiManagedBridge.listen(input.bridgeDirectory, input.authenticationKey, diagnostic);
   let rpc: PiRpcClient | undefined;
@@ -89,7 +104,7 @@ async function launch(input: PiNativeLaunchInput, diagnostic: PiNativeDiagnostic
     void bridge.closed.then(() => client.close("pi_native_companion_closed")).catch(() => undefined);
     void rpc.closed.then(() => bridge.close("pi_native_process_closed")).catch(() => undefined);
     attachmentDiagnostic("pi_native_launch_ready", diagnostic);
-    return { rpc, bridge, version: PI_RPC_VERSION, async close(reason = "pi_native_closed") {
+    return { rpc, bridge, version: assessment.version, async close(reason = "pi_native_closed") {
       const results = await Promise.allSettled([client.close(reason), bridge.close(reason)]);
       const failure = results.find((result) => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;
@@ -106,21 +121,23 @@ async function executableIdentity(filename: string): Promise<string> {
   if (!identity.isFile()) throw new Error("pi_native_executable_invalid");
   return [identity.dev, identity.ino, identity.size, identity.mtimeNs, identity.ctimeNs, identity.mode].join(":");
 }
-async function verifyVersion(input: PiNativeLaunchInput, prepared: PreparedEnvironmentOwnedProcess, environment: Readonly<Record<string, string>>): Promise<void> {
+async function verifyVersion(input: PiNativeLaunchInput, prepared: PreparedEnvironmentOwnedProcess, environment: Readonly<Record<string, string>>): Promise<VerifiedPiRuntimeVersion> {
   const timeout = AbortSignal.timeout(Math.min(input.runtime.initializationTimeoutMs, 5_000));
   const signal = input.signal ? AbortSignal.any([input.signal, timeout]) : timeout;
   let channel: EnvironmentOwnedProcessChannel | undefined;
   async function read(source: AsyncIterable<Uint8Array>): Promise<string> {
     const chunks: Buffer[] = []; let bytes = 0;
     for await (const chunk of source) { bytes += chunk.byteLength; if (bytes > 4096) throw new Error("pi_native_version_output_limit"); chunks.push(Buffer.from(chunk)); }
-    return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
+    try { return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)); }
+    catch { throw new Error("pi_native_version_unsupported"); }
   }
   try {
     channel = await input.channels.openOwnedProcess(input.runtime, { prepared, arguments: ["--version"], environment, cleanup: { gracefulCloseMilliseconds: 250, terminateMilliseconds: 500, killMilliseconds: 500 } }, signal);
     const stdout = read(channel.stdout); const stderr = read(channel.stderr);
     const abort = new Promise<never>((_, reject) => { if (signal.aborted) reject(signal.reason); else signal.addEventListener("abort", () => reject(signal.reason), { once: true }); });
-    const [closure, output] = await Promise.race([Promise.all([channel.closed, stdout, stderr]), abort]);
-    if (closure.exitCode !== 0 || output.trim() !== PI_RPC_VERSION) throw new Error("pi_native_version_unsupported");
+    const [closure, output, errors] = await Promise.race([Promise.all([channel.closed, stdout, stderr]), abort]);
+    if (closure.exitCode !== 0) throw new Error("pi_native_version_unsupported");
+    return decodePiRuntimeVersionProbe(output, errors);
   } finally {
     try { await channel?.close("pi_native_version_probe_complete"); }
     catch (cause) { throw new PiNativeError("pi_native_cleanup_unproven", "sent_outcome_unknown", { cause }); }

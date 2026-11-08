@@ -600,7 +600,7 @@ See [Pi SDK](backends/pi.md) and
 
 ### Pi native
 
-Select **Pi** in **Settings → Backends** for the installed Pi **1.4.0** CLI.
+Select **Pi** in **Settings → Backends** for the installed stable Pi **1.4.0 or newer** CLI.
 Backend kind `pi_native` and target kind `pi_rpc` run locally or through a
 persistent SSH/outbound sidecar on Linux/macOS. Authenticate the execution
 host account; native configuration, MCP, and sessions stay on that host.
