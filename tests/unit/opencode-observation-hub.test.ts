@@ -26,6 +26,19 @@ function setup(options: ConstructorParameters<typeof OpenCodeObservationHub>[1] 
 async function drain(observation: OpenCodePortObservation) { await observation.wait(); return observation.drain(); }
 
 describe("resident OpenCode native observation journal", () => {
+  it("ignores current artifact inventory notifications without losing session observation", async () => {
+    const { wire, hub } = setup();
+    const observation = hub.subscribe(authority(), { purpose: "evidence" }); await observation.ready;
+    wire.send({ id: "evt_artifact", type: "artifact.updated", created: 1, data: {} });
+    wire.send(event(1));
+    const records = await drain(observation);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ kind: "native", event: event(1) });
+    expect(hub.retentionSnapshot()).toMatchObject({ nativeConnected: true });
+    expect(wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
+    await observation.close();
+  });
+
   it.each(["child", "shell"] as const)("fences gap-born %s settlements before the real host route knows their identity", async kind => {
     const wire = createOpenCodeApiFixture({ directory: authority().directory });
     const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: wire.fetch });

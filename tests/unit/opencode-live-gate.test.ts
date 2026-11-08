@@ -57,6 +57,7 @@ describe("live OpenCode preflight", () => {
     expect(config.model).toBe(`${LIVE_GATE_PROVIDER_ID}/exact/model`);
     expect(config.permissions).toEqual([{ action: "*", resource: "*", effect: "deny" }, { action: "read", resource: "canary.txt", effect: "allow" }]);
     expect(config.agents.build.steps).toBe(2);
+    expect(config.plugins).toEqual(["-opencode.tool.skill"]);
     expect(config.compaction.auto).toBe(false);
     expect(config.providers[LIVE_GATE_PROVIDER_ID].settings).toMatchObject({ apiKey: "{env:OPENCODE_LIVE_GATE_API_KEY}", timeout: 20_000, chunkTimeout: 10_000 });
     expect(config.providers[LIVE_GATE_PROVIDER_ID].models[input.model]!.compatibility).toEqual({ maxTokensField: tokenField });

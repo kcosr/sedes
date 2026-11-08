@@ -202,7 +202,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
         registry.capabilities(),
         agentToolCliAuthorized,
         input.authorizedRuntimeCapabilities.length > 0,
-        agentToolCliAuthorized && input.authorizedRuntimeCapabilities.some(capability => capability.capabilityId === "opencode_runtime" && capability.majorVersion === 4),
+        agentToolCliAuthorized && input.authorizedRuntimeCapabilities.some(capability => capability.capabilityId === "opencode_runtime" && capability.majorVersion === 5),
       );
       const runtimeCapabilities: readonly SidecarCapabilityInventory[] = input.authorizedRuntimeCapabilities.length === 0 ? [] : [
         ...input.authorizedRuntimeCapabilities,

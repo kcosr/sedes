@@ -42,6 +42,7 @@ export function readLiveCredential(input: ReturnType<typeof parseLiveInput>, rea
 export function liveConfiguration(input: ReturnType<typeof parseLiveInput>, canaryFile: string) {
   return {
     update: "disable", share: "disabled", snapshots: false, compaction: { auto: false },
+    plugins: ["-opencode.tool.skill"],
     model: `${LIVE_GATE_PROVIDER_ID}/${input.model}`,
     // Stock file permissions use location-relative resources for internal files.
     // The runner creates this single file directly beneath its isolated location.

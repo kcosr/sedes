@@ -46,7 +46,7 @@ it.skipIf(!RUN_REAL_OPENCODE)("stock opencode2 forwards a Playwright page previe
     command: [process.execPath, path.resolve("dist/cli/sedes-cli-main.js"), "opencode-mcp"], environment: channel.environment,
     codemode: false, protocol: "legacy", timeout: { startup: 10_000, catalog: 10_000, execution: 86_400_000 } } })).status).toBe(204);
   await vi.waitFor(async () => expect((await native.api("GET", `/api/mcp${location}`)).body.data)
-    .toContainEqual({ name: "sedes_preview", status: { status: "connected" } }), { timeout: 15_000 });
+    .toContainEqual(expect.objectContaining({ name: "sedes_preview", status: { status: "connected" } })), { timeout: 15_000 });
   const creation = await native.api("POST", "/api/session", { location: { directory: native.workspace }, model: { providerID: "probe", id: "probe-model" } });
   expect(creation.status).toBe(200);
   const call = model.callToolNextStream("page-preview-image", "sedes_preview_sedes_read", { toolId: "page.preview", schemaVersion: 1,
@@ -74,7 +74,7 @@ it.skipIf(!RUN_REAL_OPENCODE)("stock opencode2 invokes the bundled per-call brid
     const location = `?location[directory]=${encodeURIComponent(native.workspace)}`;
     expect((await native.api("PUT", `/api/experimental/mcp/sedes_probe${location}`, { config: { type: "local", command: [process.execPath, wrapper, "opencode-mcp"],
       environment: channel.environment, codemode: false, protocol: "legacy", timeout: { startup: 10_000, catalog: 10_000, execution: 86_400_000 } } })).status).toBe(204);
-    await vi.waitFor(async () => expect((await native.api("GET", `/api/mcp${location}`)).body.data).toContainEqual({ name: "sedes_probe", status: { status: "connected" } }), { timeout: 15_000 });
+    await vi.waitFor(async () => expect((await native.api("GET", `/api/mcp${location}`)).body.data).toContainEqual(expect.objectContaining({ name: "sedes_probe", status: { status: "connected" } })), { timeout: 15_000 });
     const creation = await native.api("POST", "/api/session", { location: { directory: native.workspace }, model: { providerID: "probe", id: "probe-model" } });
     expect(creation.status).toBe(200); const session = creation.body.data;
     const call = model.callToolNextStream("bridge-call", "sedes_probe_sedes_catalog", { action: "list" });

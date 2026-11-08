@@ -1,7 +1,7 @@
 # OpenCode v2
 
-Sedes supports stable stock OpenCode **2.1.1 or newer**, tested through
-**2.1.1**, on a Linux execution host, locally or
+Sedes supports stable stock OpenCode **2.2.6 or newer**, tested through
+**2.2.6**, on a Linux execution host, locally or
 through the persistent SSH or outbound HTTP(S) sidecar. The Sedes server may run
 on another machine or OS. OpenCode and its sidecar use the same host account.
 Sedes finds `opencode2` on the execution account’s PATH by default; an
@@ -14,15 +14,15 @@ from that environment. The older `opencode` v1 executable is not an alternative.
 authentication, native project configuration, plugins, permissions, and model
 definitions remain in the selected native OpenCode environment.
 
-The compiled SDK/schema profile remains pinned to **2.1.1** independently of
+The compiled SDK/schema profile is pinned to **2.2.6** independently of
 this runtime minimum. Newer stable runtimes are admitted with an active
 installation advisory when they exceed the tested-through release; passing the
 version check does not enable new features or bypass protocol validation.
-Prereleases and releases below 2.1.1 are rejected. Upgrade the native executable
+Prereleases and releases below 2.2.6 are rejected. Upgrade the native executable
 on every OpenCode execution host, including external daemon hosts, and restart
 those daemons at the upgraded version. Upgrade execution sidecars with the
 server for sidecar wire protocol **17** and private OpenCode runtime protocol
-**4**. The adapter uses one strict current schema; older message formats are
+**5**. The adapter uses one strict current schema; older message formats are
 not accepted through a compatibility parser.
 
 ## Connections
@@ -151,7 +151,7 @@ native history after a stream
 disconnect, including final full-text repairs for incomplete streaming deltas.
 Initial history acquisition can be expensive: it is bounded to 100,000 records,
 96 MiB of acquisition/projection data, and 60 seconds. Limits fail explicitly.
-Although OpenCode 2.1.1 supports idle-boundary queries, Sedes still reads the
+Although OpenCode supports idle-boundary queries, Sedes still reads the
 complete native history within those bounds. History paging, session counters,
 image evidence and usage attribution retain their existing behavior.
 
@@ -272,9 +272,8 @@ producer attestation. Native generated-image artifacts are unavailable.
 Native reads and event frames are bounded to 32 MiB; complete history acquisition
 is bounded to 96 MiB including repeated reads and projection. Native skill or
 plugin expansion, generated records, external inputs, and large accumulated
-histories can still return an explicit size-limit error. The adapter also avoids an
-upstream Base64-validation stack overflow for large images without requiring a
-patched OpenCode build.
+histories can still return an explicit size-limit error. The current upstream schemas validate large Base64 images without the older
+stack-overflow workaround or a patched OpenCode build.
 
 Manual compact uses one exact private native control ID. Its HTTP reply means
 admission; only its native terminal record proves completion or failure.

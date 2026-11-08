@@ -51,7 +51,6 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/backends/opencode/opencode-native-store.ts",
   "src/server/backends/opencode/opencode-runtime-ownership.ts",
   "src/server/backends/opencode/opencode-owned-process.ts",
-  "src/server/backends/opencode/opencode-native-base64.ts",
   "src/server/backends/opencode/opencode-native-codecs.ts",
   "src/server/backends/opencode/opencode-http-native-adapter.ts",
   "src/server/backends/opencode/opencode-native-observation-proof.ts",
@@ -257,7 +256,7 @@ const ALLOWED_SOURCE_PREFIXES = Object.freeze([
   "src/internal/agent-tool-cli-protocol/",
   "src/internal/agent-tool-mcp/",
   "src/internal/sidecar-protocol/",
-  // Pinned OpenCode 2.1.1 contracts and Effect schema/HTTP runtime.
+  // Pinned OpenCode 2.2.6 contracts and Effect schema/HTTP runtime.
   // Database adapters remain forbidden by the import audit below.
   "node_modules/@opencode/client/",
   "node_modules/@opencode/protocol/",

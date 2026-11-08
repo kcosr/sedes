@@ -819,7 +819,8 @@ if the host is unreachable; only confirmed cleanup is displayed as stopped.
 Runtime wire version **17** preserves OpenCode observation-continuity failures
 for recovery after a sidecar journal changes. It retains the OpenCode 2.1.1
 schema cutover from version 16 and negotiated traffic compression from version
-15. Upgrade both server and sidecar. Wire 17 does not change browser or Android
+15. OpenCode runtime capability **5** requires the current 2.2.6 schema profile.
+Upgrade both server and sidecar. Wire 17 does not change browser or Android
 client protocols. An incompatible
 service cannot attach through an older framing mode. Idle services follow the
 existing automatic upgrade path; active or unreconciled work still blocks

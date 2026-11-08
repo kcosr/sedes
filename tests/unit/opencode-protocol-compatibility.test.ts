@@ -3,8 +3,7 @@ import { Model } from "@opencode/schema/model";
 import { Provider } from "@opencode/schema/provider";
 import { Schema } from "effect";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
-import { parseForm, parseModels, parseOpenCodeNativeEvent, parseOpenCodeNativeMessage, parseSession } from "../../src/server/backends/opencode/opencode-native-codecs.js";
-import { openCodeStackSafeEncodedSchema } from "../../src/server/backends/opencode/opencode-native-base64.js";
+import { openCodeNativeParser, parseForm, parseModels, parseOpenCodeNativeEvent, parseOpenCodeNativeMessage, parseSession } from "../../src/server/backends/opencode/opencode-native-codecs.js";
 import { OpenCodeHistoryProjection } from "../../src/server/backends/opencode/opencode-history-projection.js";
 
 describe("OpenCode runtime protocol compatibility", () => {
@@ -15,6 +14,34 @@ describe("OpenCode runtime protocol compatibility", () => {
   const native = { fixture: { replay: "private-provider-state" } };
   const event = (type: string, data: Record<string, unknown>, version = 1) => ({ id: "evt_native", type, created: 2,
     durable: { aggregateID: "ses_protocol", seq: 1, version }, data: { sessionID: "ses_protocol", ...data } });
+
+  it.each(["persistent-pty.added", "persistent-pty.updated"])("requires the current user title in %s even for unrelated native terminals", type => {
+    const terminal = { id: "pty_other", title: "Terminal", command: "/bin/sh", args: [], cwd: "/other", status: "running", pid: 123,
+      sessionID: "ses_other", userTitle: null, foregroundProcess: null, size: { cols: 80, rows: 24 }, output: { head: 0, tail: 0 } };
+    const value = { id: "evt_other_terminal", type, created: 1, data: { sessionID: "ses_other", terminal } };
+    expect(parseOpenCodeNativeEvent(value)).toEqual(value);
+    const titled = { ...value, data: { ...value.data, terminal: { ...terminal, userTitle: "Named terminal" } } };
+    expect(parseOpenCodeNativeEvent(titled)).toEqual(titled);
+    const { userTitle: _title, ...legacy } = terminal;
+    expect(() => parseOpenCodeNativeEvent({ ...value, data: { ...value.data, terminal: legacy } })).toThrow("opencode_native_protocol_invalid");
+    expect(() => parseOpenCodeNativeEvent({ ...value, data: { ...value.data, terminal: { ...terminal, userTitle: 12 } } })).toThrow("opencode_native_protocol_invalid");
+  });
+
+  it("accepts current busy timestamps, retry delays and typed model metadata with strict values", () => {
+    const session = { id: "ses_protocol", projectID: "prj_fixture", location: { directory: "/fixture" }, cost: 0, tokens,
+      time: { created: 1, updated: 2, busy: 3 } };
+    expect(parseSession(session)).toEqual(session);
+    expect(() => parseSession({ ...session, time: { ...session.time, busy: "now" } })).toThrow("opencode_native_protocol_invalid");
+    const idle = { id: "msg_retry", type: "idle", time: { created: 4 }, outcome: "failed", error: { ...error, retryAfterMs: 2500 } };
+    expect(parseOpenCodeNativeMessage(idle)).toEqual(idle);
+    expect(() => parseOpenCodeNativeMessage({ ...idle, error: { ...idle.error, retryAfterMs: -1 } })).toThrow("opencode_native_protocol_invalid");
+    const models = { location: { directory: "/fixture" }, data: [{
+      ...Model.Info.default(Provider.ID.make("fixture"), Model.ID.make("fixture")),
+      type: "chat", compatibility: { mediaInput: "assets" },
+    }] };
+    expect(parseModels(models)).toEqual(models);
+    expect(() => parseModels({ ...models, data: [{ ...models.data[0], compatibility: { mediaInput: "unknown" } }] })).toThrow("opencode_native_protocol_invalid");
+  });
 
   it("accepts only the 2.1 native replay fields and keeps them private in normalized history", () => {
     const assistant = { id: "msg_assistant", type: "assistant", time: { created: 1, completed: 2 }, agent: "build", model, native,
@@ -124,7 +151,7 @@ describe("OpenCode runtime protocol compatibility", () => {
   });
 
   it("accepts the optional server capabilities and still rejects malformed capability values", async () => {
-    const info = { version: "2.1.1", pid: 123, urls: [], paths: { tmp: "/tmp/fixture" }, capabilities: { persistentPty: true } };
+    const info = { version: "2.2.6", hostname: "fixture-host", pid: 123, urls: [], paths: { tmp: "/tmp/fixture" }, capabilities: { persistentPty: true } };
     const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: async () => Response.json(info) });
     try {
       await expect(client.info()).resolves.toEqual(info);
@@ -136,9 +163,9 @@ describe("OpenCode runtime protocol compatibility", () => {
     } finally { invalid.close(); }
   });
 
-  it("preserves Effect union matching options when replacing the native Base64 validator", () => {
+  it("preserves official Effect union matching options in native parsing", () => {
     const one = Schema.Union([Schema.String, Schema.String], { mode: "oneOf" });
-    const parse = Schema.decodeUnknownSync(openCodeStackSafeEncodedSchema(one, false));
+    const parse = openCodeNativeParser(one, false);
     expect(() => parse("ambiguous")).toThrow();
   });
 });

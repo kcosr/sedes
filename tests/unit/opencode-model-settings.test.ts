@@ -99,6 +99,15 @@ describe("OpenCode native model catalog", () => {
       }
     });
   });
+  it.each(["image", "decision", "unknown"])("excludes explicitly non-chat %s models even when text input is advertised", async type => {
+    const supported = nativeModel({ type: "chat" }), unsupported = nativeModel({ id: "unsupported", type });
+    const read = await catalog([supported, unsupported]);
+    expect(read.catalog.models).toHaveLength(1);
+    expect(decodeOpenCodeModelId(read.catalog.models[0]!.id)).toEqual(selection);
+    expect(read.modelsById.has(qualifiedOpenCodeModelId(unsupported))).toBe(false);
+    expect(read.catalog.notices).toHaveLength(1);
+  });
+
   it("uses exact provider/id pairs, not the upstream routing model or slash concatenation", async () => {
     const ref = { providerID: "provider/日本", id: "model/#other" };
     expect(decodeOpenCodeModelId(qualifiedOpenCodeModelId(ref))).toEqual(ref);

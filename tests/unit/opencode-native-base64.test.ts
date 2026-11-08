@@ -4,17 +4,13 @@ import { SessionInbox } from "@opencode/schema/session-inbox";
 import { PublicSessionMessage } from "@opencode/protocol/groups/message";
 import { Schema } from "effect";
 import { openCodeNativeParser, parseOpenCodeNativeMessage, parseOpenCodeNativeEvent } from "../../src/server/backends/opencode/opencode-native-api.js";
-import { openCodeStackSafeEncodedSchema, validOpenCodeBase64 } from "../../src/server/backends/opencode/opencode-native-base64.js";
 const file = (data: string) => ({ data, mime: "image/png", source: { type: "inline" } });
 describe("stack-safe official OpenCode Base64 refinement", () => {
-  it("matches the official lexical language, including empty input and noncanonical padding bits", () => {
-    const official = Schema.decodeUnknownSync(Base64);
-    const candidates = ["", "AA==", "AB==", "AAA=", "AAB=", "AAAA", "A", "AA", "AAA", "A===", "====", "AA=A", "AAAA=", "AA-_", "AAAA\n", "éAAA"];
-    const alphabet = ["A", "/", "+", "=", "\n"];
-    for (const a of alphabet) for (const b of alphabet) for (const c of alphabet) for (const d of alphabet) candidates.push(a + b + c + d);
-    for (const value of candidates) {
-      let valid = true; try { official(value); } catch { valid = false; }
-      expect(validOpenCodeBase64(value), JSON.stringify(value)).toBe(valid);
+  it("retains official Base64 lexical validation, including noncanonical padding bits", () => {
+    const parse = Schema.decodeUnknownSync(Base64);
+    for (const valid of ["", "AA==", "AB==", "AAA=", "AAB=", "AAAA"]) expect(parse(valid)).toBe(valid);
+    for (const invalid of ["A", "AA", "AAA", "A===", "====", "AA=A", "AAAA=", "AA-_", "AAAA\n", "éAAA"]) {
+      expect(() => parse(invalid)).toThrow();
     }
   });
   it("validates large user history and admission payloads while preserving official shapes", () => {
@@ -36,17 +32,11 @@ describe("stack-safe official OpenCode Base64 refinement", () => {
     expect(parseOpenCodeNativeMessage(message)).toEqual(message);
   });
   it("retains nested optional fields, unions and ordinary native message constraints", () => {
-    const parse = Schema.decodeUnknownSync(openCodeStackSafeEncodedSchema(PublicSessionMessage, true), { onExcessProperty: "error" });
+    const parse = Schema.decodeUnknownSync(Schema.toEncoded(Schema.toCodecJson(PublicSessionMessage)), { onExcessProperty: "error" });
     const valid = { id: "msg_user", type: "user", text: "", time: { created: 1 }, files: [{ ...file("AAAA"), name: "image.png" }] };
     expect(parse(valid)).toEqual(valid);
     expect(() => parse({ ...valid, files: [{ ...file("AAAA"), source: { type: "other" } }] })).toThrow();
     expect(() => parse({ ...valid, time: { created: "yesterday" } })).toThrow();
     expect(() => parse({ ...valid, type: "unknown" })).toThrow();
-  });
-  it("fails closed if an identified Base64 schema adds or substitutes constraints", () => {
-    const replaced = Schema.String.check(Schema.isMinLength(4)).annotate({ identifier: "Prompt.Base64" });
-    expect(() => openCodeStackSafeEncodedSchema(replaced, true)).toThrow("opencode_base64_schema_changed");
-    const augmented = Base64.check(Schema.isMinLength(4)).annotate({ identifier: "Prompt.Base64" });
-    expect(() => openCodeStackSafeEncodedSchema(augmented, true)).toThrow("opencode_base64_schema_changed");
   });
 });

@@ -10,7 +10,9 @@ worker carriers share the framing but select no compression.
 Runtime wire version 17 preserves the OpenCode observation-continuity failure
 response required for journal-change recovery. It retains the OpenCode 2.1.1
 schema cutover from version 16 and negotiated compression and `HSC2` framing
-from version 15. It uses one parser with a 16-byte header:
+from version 15. OpenCode's current private runtime capability **5** selects
+the 2.2.6 SDK/schema profile independently of this framing version. It uses one
+parser with a 16-byte header:
 
 | Offset | Field |
 | --- | --- |

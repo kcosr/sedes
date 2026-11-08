@@ -254,16 +254,18 @@ owned-stdio process-group/native-lock ordering. It currently requires Linux
 x64, procfs, and a compatible operator-installed Codex command.
 
 The OpenCode v2 qualification suite uses an explicitly selected supported
-stable `opencode2` binary (minimum 2.1.1, tested through 2.1.1) with disposable configuration/storage and loopback model/MCP
+stable `opencode2` binary (minimum 2.2.6, tested through 2.2.6) with disposable configuration/storage and loopback model/MCP
 fixtures. Its page-preview image qualification uses the pinned Playwright
 Chromium installed for browser tests, with the production preview sandbox
 enabled; it does not require an operator-owned Sedes preview-browser
 installation. Run `npx playwright install chromium` first and use a host
 that supports sandboxed Chromium. It never uses a native account or external
 inference. It is excluded from ordinary `npm test` and self-gates before
-launching the binary:
+launching the binary. Build Sedes first: the production-carrier and MCP bridge
+checks execute its compiled ownership and CLI helpers.
 
 ```sh
+env -u NODE_ENV npm run build
 SEDES_RUN_REAL_OPENCODE=1 \
   SEDES_REAL_OPENCODE_EXECUTABLE=/absolute/path/to/opencode2 \
   env -u NODE_ENV npm run test:real-opencode
@@ -359,11 +361,12 @@ SEDES_RUN_LIVE_OPENCODE=1 \
   env -u NODE_ENV npm run test:live-opencode
 ```
 
-The [OpenCode 2.1.1 profile](../../protocol/opencode-http/2.1.1/README.md)
-records **intermittent live results and inconclusive stable qualification**:
-three authorized AW Qwen read-only canary attempts produced one two-model-step
-guard stop and two passes under unchanged request, step and time limits. No finish
+The [OpenCode 2.2.6 profile](../../protocol/opencode-http/2.2.6/README.md)
+records one authorized 2.2.6 AW Qwen read-only canary pass on 2026-11-08.
+Historical 2.1.1 results remain intermittent: three attempts produced one
+two-model-step guard stop and two passes under unchanged limits. No finish
 diagnostic was retained for the first attempt; its cause was not established.
+These bounded results do not establish general live-provider reliability.
 
 The endpoint must use HTTPS without embedded credentials, query or fragment.
 The native provider ID is fixed to `sedes-live-gate`, so stock built-in provider

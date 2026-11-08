@@ -79,7 +79,7 @@ the most queued data must resnapshot. Retention exhaustion for unacknowledged
 critical evidence prevents new ordinary work while preserving the independent
 control path.
 
-The persistent sidecar advertises major 4 of the private `opencode_runtime`
+The persistent sidecar advertises major 5 of the private `opencode_runtime`
 capability under sidecar wire protocol 17 on Linux. Its registry owns the same
 runtime/host used locally; SSH and outbound
 carriers share typed operations and the bounded runtime body channel. Carrier
@@ -111,9 +111,9 @@ Pi, Codex, Claude and Grok retain their existing backend contracts.
 ## Native ownership
 
 The immutable compiled HTTP/SSE profile pins `@opencode/client`,
-`@opencode/protocol` and `@opencode/schema` to **2.1.1**, upstream source revision
-`ba546ec1598a70db2570e9c6258028d955ba8f58`. Runtime admission is independent:
-stable stock releases **2.1.1 or newer** are admitted, tested through **2.1.1**.
+`@opencode/protocol` and `@opencode/schema` to **2.2.6**, upstream source revision
+`dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06`. Runtime admission is independent:
+stable stock releases **2.2.6 or newer** are admitted, tested through **2.2.6**.
 Prereleases, malformed versions and releases below the floor fail closed; build
 metadata does not change version precedence. Every admitted runtime uses the
 one compiled schema profile and the existing authentication, process/store
@@ -122,7 +122,16 @@ backend resolves `opencode2` from its execution environment’s PATH unless an
 absolute executable override is supplied. Sedes never searches for the older
 `opencode` executable as an alternative.
 
-The 2.1.1 profile is one strict schema cutover, with no legacy message parser.
+The 2.2.6 profile is one strict schema cutover, with no legacy message parser.
+The qualified runtime floor is 2.2.6: older releases before 2.2.4 omit the
+required persistent-terminal `userTitle` field in the global event stream.
+Validation precedes session routing, so unsupported terminal events cannot be
+made harmless by per-thread filtering. Admission rejects older runtimes.
+It admits bounded server hostname, session busy timestamps, model type and
+media-input metadata, and structured-error retry timing. The new
+`artifact.updated` event is validated but does not grant artifact or generated-
+image capabilities. Experimental media-reference negotiation is not enabled;
+native HTTP reads continue to return hydrated attachment content.
 OpenCode native archive metadata remains private metadata and does not select
 or synchronize Sedes thread state. Pi, Codex, Claude and Grok keep their existing
 provider SDKs, runtime admission, history, settings, image and accounting
@@ -276,7 +285,7 @@ it never resends a native effect. Lifetime invalidation remains visible on the
 separate raw subscription while snapshot hydration is pending.
 
 Only `/api/event` and the finite native input-log route use the provider-private
-SSE framing reader. The official 2.1.1 client hardcodes a 16 MiB decoded buffer,
+SSE framing reader. The official 2.2.6 client hardcodes a 16 MiB decoded buffer,
 including several frames received in one chunk, and offers no override. The
 local reader enforces 32 MiB UTF-8 line/frame bounds, preserves finite EOF flush
 and multiline framing, and rejects malformed JSON/UTF-8. Payloads still pass
@@ -406,7 +415,7 @@ reconciliation, queue and automatic-detachment rules.
 Deterministic tests cover schema/authentication boundaries, release mismatch,
 HTTP response limits, runtime identity replacement, runtime ownership leases and
 scoped operation evidence. Opt-in isolated native tests qualify stock
-`opencode2` 2.1.1 with fixture-owned state. They exercise owned startup, malformed/expired
+`opencode2` 2.2.6 with fixture-owned state. They exercise owned startup, malformed/expired
 readiness, background-shell survival after reference release, external
 Disconnect, detached-descendant cleanup, retained database identity and restart.
 History qualification also exercises the actual driver/handle/actor with native
@@ -726,14 +735,12 @@ context, and native history does not attest those producers or final media
 lineage. This qualification assumes the admitted stock runtime and trusted
 configuration, not arbitrary adversarial context hooks.
 
-The pinned upstream `Prompt.Base64` schema uses a nested repetition regular
-expression that exhausts V8's regexp stack on roughly 5 MiB encoded payloads.
-The adapter derives its validators from the official encoded schema AST and
-replaces only the identified Base64 predicate with an equivalent linear lexical
-validator. All other official shapes and constraints remain intact. This needs
-no native fork. An upstream stack-safe Base64 predicate would remove the local
-workaround; persisted final-request media lineage would strengthen capture
-provenance. The 32 MiB native response/SSE limit accommodates a 16 MiB decoded
+The pinned upstream 2.2.6 `Prompt.Base64` schema uses a stack-safe linear
+validator. The adapter uses the official encoded schemas directly; the older
+local Base64 predicate replacement and AST drift guard are removed. Existing
+large-image and strict-shape tests retain the same lexical and byte bounds.
+Persisted final-request media lineage would strengthen capture provenance.
+The 32 MiB native response/SSE limit accommodates a 16 MiB decoded
 raster's base64 expansion. Total acquisition still charges repeated reads and
 projection against 96 MiB, so large or repeated native images can produce an
 explicit history-limit error rather than a truncated transcript.
@@ -744,9 +751,6 @@ event and normalized projection, without adding
 deduplication to cumulative work accounting. Two maximal-image events in one
 undrained 32 MiB queue overflow and force resnapshot, even for the same image.
 Additional history and repeated live evidence can still reach the finite bound.
-The exact pinned Base64 refinement is checked during module loading; a changed
-or augmented identified check throws `opencode_base64_schema_changed` and
-prevents the server build from loading, rather than accepting a broader schema.
 
 Manual compaction reserves an immutable exact native input ID before one POST.
 A staged revert or existing foreign compaction blocks dispatch; a coalesced

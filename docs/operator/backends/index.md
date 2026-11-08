@@ -93,7 +93,7 @@ an unsupported action and the backend rejects it again if called directly.
 | Codex   | `0.163.0` app-server protocol   | Stable `>=0.162.1`, excluding reviewed incompatible releases             | `0.163.0`             |
 | Claude  | `0.3.296` Agent SDK             | Stable Claude Code `>=2.1.287`, excluding reviewed incompatible releases | Claude Code `2.1.296` |
 | Grok    | `1.x` ACP compatibility profile | Stable `>=1.0.4`, excluding reviewed incompatible releases               | `1.0.4`               |
-| OpenCode v2 | `2.1.1` HTTP/SSE profile | Stable stock `>=2.1.1` | `2.1.1` |
+| OpenCode v2 | `2.2.6` HTTP/SSE profile | Stable stock `>=2.2.6` | `2.2.6` |
 
 Pi, Codex, Claude, Grok, and OpenCode may admit a stable runtime newer than the release most
 recently exercised by this repository. Sedes shows an installation advisory
@@ -119,7 +119,7 @@ runtimes are not equivalent to exercised runtimes.
 | Codex | July 2026 | App-server `0.162.1` and `0.163.0` against the compiled `0.163.0` profile on Linux x64 with isolated mock providers; live qualification not repeated | `test:real-codex-agent-tools` | Local process, external UDS/TCP, persistent SSH or outbound sidecar |
 | Claude | August 2026 | Claude Code `2.1.296` with Agent SDK `0.3.296` | `test:real-claude` (native loopback and authenticated cases) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
 | Grok | August 2026 | Grok Build `1.0.4` against the compiled `1.x` ACP profile | `test:real-grok` (three files) | Local Linux x64 or macOS only |
-| OpenCode v2 | October 2026 | Stock `opencode2` 2.1.1 focused loopback history, mutation, compaction, image and accounting fixtures; AW Qwen live results intermittent and stable qualification inconclusive: one guard stop and two passes under unchanged limits | `test:real-opencode` and authorized `test:live-opencode` | Owned or external HTTP/SSE on a Linux execution host; local, SSH and outbound |
+| OpenCode v2 | October 2026 | Stock `opencode2` 2.2.6 loopback history, mutation, sidecar, image and accounting fixtures; one bounded AW Qwen read-only live canary passed on Linux x64 on 2026-11-08. See the [profile evidence](../../../protocol/opencode-http/2.2.6/README.md) for coverage and historical limits | `test:real-opencode` and authorized `test:live-opencode` | Owned or external HTTP/SSE on a Linux execution host; local, SSH and outbound |
 
 Version-pinned qualification evidence for each external runtime is kept under
 `protocol/` beside its compiled profile. Live suites are opt-in. Pi SDK, Codex, Claude, and Grok suites consume provider
