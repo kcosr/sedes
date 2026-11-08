@@ -305,8 +305,8 @@ async function manualCompactingRun(scenario: "success" | "empty" | "failure" | "
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const body = JSON.parse(Buffer.concat(chunks).toString()) as { messages: unknown; tools?: unknown[] };
       expect(body.tools ?? []).toEqual([]);
-      // Claude can retry a failed summary once. Never permit unbounded work.
-      expect(++requests).toBeLessThanOrEqual(4);
+      // Native releases make up to three summary attempts. Never permit unbounded work.
+      expect(++requests).toBeLessThanOrEqual(5);
       const summary = JSON.stringify(body.messages).includes("Your task is to create a detailed summary");
       if (summary) { summaryRequests++; summaryRequested(); }
       if (summary && scenario === "cancelled") return; // Hold until native interrupt aborts the request.
@@ -358,7 +358,7 @@ async function manualCompactingRun(scenario: "success" | "empty" | "failure" | "
   }, 30_000);
   const bounded = <T>(work: Promise<T>): Promise<T> => Promise.race([work, deadline]);
   try {
-    expect(CLAUDE_AGENT_SDK_RELEASE).toBe("0.3.296");
+    expect(CLAUDE_AGENT_SDK_RELEASE).toBe("0.3.319");
     await bounded(session.start());
     // The production startup marker must not perform a model call.
     expect(requests).toBe(0);
@@ -391,7 +391,11 @@ async function manualCompactingRun(scenario: "success" | "empty" | "failure" | "
     const compactionDelivered = delivered.slice(compactionDeliveredStart);
     const reconciliation = await session.reconcileCompact({ operationId });
     expect(errors).toEqual([]);
-    expect(summaryRequests).toBe(scenario === "empty" ? 0 : scenario === "failure" ? 2 : 1);
+    if (scenario === "failure") {
+      expect(summaryRequests).toBeGreaterThanOrEqual(1);
+      expect(summaryRequests).toBeLessThanOrEqual(3);
+      expect(requests).toBe(2 + summaryRequests);
+    } else expect(summaryRequests).toBe(scenario === "empty" ? 0 : 1);
     const history = await readClaudeSessionMessages(sessionId, { dir: cwd }, env);
     vi.stubEnv("CLAUDE_CONFIG_DIR", env.CLAUDE_CONFIG_DIR!);
     const sdkHistory = await getSessionMessages(sessionId, { dir: cwd });
@@ -481,7 +485,8 @@ it("manual compaction with empty history returns an explicit no-op through the p
 
 it("manual compaction rejects a failed native summary despite the success-shaped command receipt", async () => {
   const { messages, delivered, operationId, requests, result, error, history, reconciliation } = await manualCompactingRun("failure");
-  expect(requests).toBe(4);
+  expect(requests).toBeGreaterThanOrEqual(3);
+  expect(requests).toBeLessThanOrEqual(5);
   expect(result).toBeUndefined();
   expect(error).toBeInstanceOf(ClaudeRuntimeCompactError);
   expect(reconciliation).toMatchObject({ outcome: "not_applied", pending: false, nativeResult: { user_message_uuid: operationId } });

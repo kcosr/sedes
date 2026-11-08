@@ -216,6 +216,12 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Claude uses Agent SDK **0.3.319**, tested through Claude Code **2.1.319**,
+  with the existing stable **>=2.1.287** runtime floor and warnings for newer
+  untested releases. New native startup failures have bounded diagnostics, and
+  tools stopped while running retain their interrupted status with the latest CLI.
+  See [Claude compatibility](docs/operator/backends/claude.md). ([#135](https://github.com/kcosr/sedes/pull/135))
+
 - Packaged Sedes skills default task creation and review to the current thread.
   Individual native and CLI skills can be selected automatically for task
   requests; progressive skills remain explicit-only.

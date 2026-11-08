@@ -49,7 +49,7 @@ function configuration(
     backend: {
       id: "claude-local",
       kind: "claude_agent_sdk" as const,
-      protocolRelease: "0.3.296",
+      protocolRelease: "0.3.319",
       enabled: true,
       modelPolicy: { type: "catalog" as const },
       moduleConfiguration: {
@@ -183,7 +183,7 @@ describe("ClaudeBackendModule", () => {
         label: "Claude",
         enabled: true,
         configurationRevision: 0,
-        protocolRelease: "0.3.296",
+        protocolRelease: "0.3.319",
       };
       const connection = {
         id: "claude-connection",
@@ -331,7 +331,7 @@ describe("ClaudeBackendModule", () => {
         label: "Claude",
         enabled: true,
         configurationRevision: 0,
-        protocolRelease: "0.3.296",
+        protocolRelease: "0.3.319",
       };
       const connection = {
         id: "claude-connection",

@@ -405,8 +405,9 @@ describe("Claude native interruption markers", () => {
 
 describe("Claude tool calls stopped by the user", () => {
   const timestamp = "2026-09-26T10:00:05.000Z";
-  // Claude Code 2.1.281-2.1.283's exact results for a call an interrupt stopped.
+  // Claude Code's exact results for calls an interrupt stopped.
   const stopped = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
+  const stoppedWhileRunning = stopped + " Correction to the text above: this call was stopped while running, not refused before it ran. It may have run in part or in full, and its changes may have been written. No permission prompt was involved. Work it started elsewhere (a remote command, a background process) may still be running, so check before starting the same work again. The instruction to stop and wait still stands.";
   const cancelled = "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed.";
   const correctionNote = "\n\nNote: The user's next message may contain a correction or preference. Pay close attention — if they explain what went wrong or how they'd prefer you to work, consider saving that to memory for future sessions.";
   const prompt = user(uuid(1), "Run the checks");
@@ -427,17 +428,17 @@ describe("Claude tool calls stopped by the user", () => {
   const outcomes = (messages: readonly unknown[]) =>
     tools(messages).map(item => [item.status, "phase" in item ? item.phase : undefined, item.completedAt]);
 
-  it("ends a running call interrupted when the tool-use marker follows its stop result", () => {
-    const [command] = tools([prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", stopped), marker(4)]);
+  it.each([stopped, stoppedWhileRunning, stoppedWhileRunning + correctionNote])("ends a call interrupted when the tool-use marker follows its exact stop result (%#)", (content) => {
+    const [command] = tools([prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", content), marker(4)]);
     expect(command).toMatchObject({ semanticKind: "command", status: "interrupted", phase: "interrupted", completedAt: timestamp,
-      output: { text: stopped } });
+      output: { text: content } });
   });
 
   it("keeps a parallel call's own failure failed while Stop interrupts its running sibling", () => {
     // Claude Code runs both; one exits 1, then Stop aborts the other.
     const failure = "Exit code 1\ncat: missing.txt: No such file or directory";
     const unstopped = [prompt, call(2, "msg-1", "tool-a"), call(3, "msg-1", "tool-b"), result(4, "tool-a", failure)];
-    const live = [...unstopped, result(5, "tool-b", stopped), marker(6)];
+    const live = [...unstopped, result(5, "tool-b", stoppedWhileRunning), marker(6)];
     const reordered = [prompt, live[1], live[3], live[2], live[4], live[5]];
     const [ownFailure] = tools(unstopped);
     expect(ownFailure).toMatchObject({ status: "failed", phase: "failed", output: { text: failure } });
@@ -446,13 +447,13 @@ describe("Claude tool calls stopped by the user", () => {
       const [failed, interrupted] = tools(messages);
       // The failure is exactly what Claude reported: no Stop status or time.
       expect(failed).toEqual(ownFailure);
-      expect(interrupted).toMatchObject({ status: "interrupted", phase: "interrupted", completedAt: timestamp, output: { text: stopped } });
+      expect(interrupted).toMatchObject({ status: "interrupted", phase: "interrupted", completedAt: timestamp, output: { text: stoppedWhileRunning } });
     }
   });
 
   it("keeps a successful sibling completed, in live and reordered history order", () => {
     const live = [prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", "done", false), call(4, "msg-1", "tool-b"),
-      result(5, "tool-b", stopped), marker(6)];
+      result(5, "tool-b", stoppedWhileRunning), marker(6)];
     const reordered = [prompt, live[1], live[3], live[2], live[4], live[5]];
     for (const messages of [live, reordered]) {
       expect(outcomes(messages)).toEqual([["completed", "completed", undefined], ["interrupted", "interrupted", timestamp]]);
@@ -471,7 +472,7 @@ describe("Claude tool calls stopped by the user", () => {
     // as the result; Claude Code writes its stop result when Stop closes an
     // open prompt instead.
     const denied = [prompt, call(2, "msg-1", "tool-a"), call(3, "msg-1", "tool-b"),
-      result(4, "tool-a", "User denied permission."), result(5, "tool-b", stopped), marker(6)];
+      result(4, "tool-a", "User denied permission."), result(5, "tool-b", stoppedWhileRunning), marker(6)];
     expect(outcomes(denied)).toEqual([["failed", "failed", undefined], ["interrupted", "interrupted", timestamp]]);
     const promptClosed = [prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", stopped), marker(4)];
     expect(outcomes(promptClosed)).toEqual([["interrupted", "interrupted", timestamp]]);
@@ -479,12 +480,17 @@ describe("Claude tool calls stopped by the user", () => {
 
   it("requires Claude Code's exact stop result on the call itself", () => {
     for (const content of ["The user doesn't want to proceed with this tool use.", `${stopped} `, `Error: ${stopped}`,
-      [{ type: "text", text: stopped }], "Permission request cancelled."]) {
+      stoppedWhileRunning.slice(0, -1), stoppedWhileRunning.replace("may have run", "did run"),
+      `${stoppedWhileRunning} `, [{ type: "text", text: stoppedWhileRunning }], "Permission request cancelled."]) {
       expect(outcomes([prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", content), marker(4)]))
         .toEqual([["failed", "failed", undefined]]);
     }
-    expect(outcomes([prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", stopped, false), marker(4)]))
-      .toEqual([["completed", "completed", undefined]]);
+    for (const content of [stopped, stoppedWhileRunning, stoppedWhileRunning + correctionNote]) {
+      expect(outcomes([prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", content, false), marker(4)]))
+        .toEqual([["completed", "completed", undefined]]);
+      expect(outcomes([prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", content)]))
+        .toEqual([["failed", "failed", undefined]]);
+    }
   });
 
   it("keeps a denial or an earlier batch's failure failed", () => {
@@ -504,7 +510,7 @@ describe("Claude tool calls stopped by the user", () => {
   });
 
   it("keeps stop results failed after the streaming interruption marker or a subagent's marker", () => {
-    for (const content of ["exit 1", stopped]) {
+    for (const content of ["exit 1", stopped, stoppedWhileRunning, stoppedWhileRunning + correctionNote]) {
       const failed = [prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", content)];
       expect(tools([...failed, marker(4, "[Request interrupted by user]")])[0]).toMatchObject({ status: "failed" });
       const child = { ...marker(4), parent_tool_use_id: "tool-agent" };

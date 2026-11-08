@@ -75,7 +75,7 @@ const instance: AgentBackendInstance = {
   label: "Real Claude",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.3.296",
+  protocolRelease: "0.3.319",
 };
 
 const connection: AgentConnectionProfile = {

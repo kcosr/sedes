@@ -2837,12 +2837,15 @@ describe("ClaudeConversationHandle", () => {
     await handle.close();
   });
 
-  it.each(["error_during_execution", "success", "error_max_turns", "startup_failure", "provider_not_allowed", "org_config_required_unavailable", "org_config_refused", "multiline_diagnostic", "stack_only"])("retains failed terminal evidence after Claude's trailing idle signal (%s)", async (subtype) => {
+  it.each(["error_during_execution", "success", "error_max_turns", "startup_failure", "provider_not_allowed", "org_config_required_unavailable", "org_config_refused", "sandbox_required_unavailable", "initialize_not_first", "config_file_invalid", "multiline_diagnostic", "stack_only"])("retains failed terminal evidence after Claude's trailing idle signal (%s)", async (subtype) => {
     const expectedFailure = subtype === "error_max_turns" ? "Claude reached the configured turn limit."
       : subtype === "startup_failure" ? "Claude proxy configuration is invalid."
       : subtype === "provider_not_allowed" ? "Claude managed settings do not allow the selected provider."
       : subtype === "org_config_required_unavailable" ? "Required Claude organization configuration is unavailable."
       : subtype === "org_config_refused" ? "Claude organization configuration was refused."
+      : subtype === "sandbox_required_unavailable" ? "A required Claude sandbox is unavailable."
+      : subtype === "initialize_not_first" ? "Claude runtime initialization was not the first request."
+      : subtype === "config_file_invalid" ? "Claude configuration is invalid."
       : subtype === "stack_only" ? "The provider reported a failure but supplied no explanation."
       : "provider failed";
     const provider = fixture();
@@ -2867,7 +2870,7 @@ describe("ClaudeConversationHandle", () => {
     await submitted;
     provider.messages.push({
       type: "result",
-      subtype: ["startup_failure", "provider_not_allowed", "org_config_required_unavailable", "org_config_refused", "multiline_diagnostic", "stack_only"].includes(subtype) ? "error_during_execution" : subtype,
+      subtype: ["startup_failure", "provider_not_allowed", "org_config_required_unavailable", "org_config_refused", "sandbox_required_unavailable", "initialize_not_first", "config_file_invalid", "multiline_diagnostic", "stack_only"].includes(subtype) ? "error_during_execution" : subtype,
       duration_ms: 10,
       duration_api_ms: 8,
       is_error: true,
@@ -2891,8 +2894,8 @@ describe("ClaudeConversationHandle", () => {
       ...(subtype === "success" ? { result: "provider failed" }
         : subtype === "startup_failure" ? { startup_failure_reason: "proxy_invalid", errors: ["private startup stderr that must not be retained"] }
         : subtype === "provider_not_allowed" ? { startup_failure_reason: "provider_not_allowed", errors: ["private provider policy stderr that must not be retained"] }
-        : subtype === "org_config_required_unavailable" || subtype === "org_config_refused"
-          ? { startup_failure_reason: subtype, errors: ["private organization policy stderr that must not be retained"] }
+        : ["org_config_required_unavailable", "org_config_refused", "sandbox_required_unavailable", "initialize_not_first", "config_file_invalid"].includes(subtype)
+          ? { startup_failure_reason: subtype, errors: ["private startup policy stderr that must not be retained"] }
         : subtype === "multiline_diagnostic" ? { errors: ["  at privateStack (/private/file:1:2)\nError:\nprovider failed\n  at otherPrivateStack (/private/other:3:4)", "second unrelated diagnostic"] }
         : subtype === "stack_only" ? { errors: ["Error:\n  at privateStack (/private/file:1:2)"] }
         : { errors: subtype === "error_max_turns" ? [] : ["provider failed"] }),
