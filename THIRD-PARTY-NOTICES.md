@@ -42,7 +42,7 @@ Packages listed: 609.
 - Shipped by: sedes
 - License text (`LICENSE`): [665f7d320f28](#license-text-665f7d320f28)
 
-### @anthropic-ai/claude-agent-sdk 0.3.296
+### @anthropic-ai/claude-agent-sdk 0.3.319
 
 - License: SEE LICENSE IN README.md
 - URL: https://github.com/anthropics/claude-agent-sdk-typescript
@@ -10589,7 +10589,7 @@ THE SOFTWARE.
 
 ### License text af2be7b670a0
 
-Applies to: @anthropic-ai/claude-agent-sdk 0.3.296.
+Applies to: @anthropic-ai/claude-agent-sdk 0.3.319.
 
 ```text
 © Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.

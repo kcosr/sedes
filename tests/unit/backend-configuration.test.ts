@@ -252,7 +252,7 @@ describe("backend operator configuration", () => {
     expect(defaultBackendConfiguration(example)).toMatchObject({
       backend: {
         kind: "claude_agent_sdk",
-        protocolRelease: "0.3.296",
+        protocolRelease: "0.3.319",
       },
       target: { kind: "claude_agent_sdk" },
     });
@@ -409,7 +409,7 @@ describe("backend operator configuration", () => {
     expect(
       compiledBackendModuleCatalog.resolveConfiguration(parsed).backends[0]
         ?.protocolRelease,
-    ).toBe("0.3.296");
+    ).toBe("0.3.319");
     expect(() =>
       parseBackendConfiguration({
         ...configuration,

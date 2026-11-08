@@ -105,7 +105,7 @@ function readOptionalString(
 }
 
 /** Exact SDK release whose exported contracts this backend compiles against. */
-export const CLAUDE_AGENT_SDK_RELEASE = "0.3.296";
+export const CLAUDE_AGENT_SDK_RELEASE = "0.3.319";
 
 export interface ClaudeQueryInput {
   readonly prompt: Parameters<typeof query>[0]["prompt"];

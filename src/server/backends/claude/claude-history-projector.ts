@@ -73,22 +73,25 @@ const CLAUDE_INTERRUPTED_BY_USER = "[Request interrupted by user]";
 /** Claude Code writes this after the results of a tool batch the user stopped. */
 const CLAUDE_TOOL_USE_INTERRUPTED_BY_USER = "[Request interrupted by user for tool use]";
 /**
- * Claude Code's exact `is_error` result for one call that an interrupt
- * stopped: a running or queued call it aborts, or an open permission prompt
- * (`rejected`), and a call that reached execution after the interrupt
- * (`cancelled`). Claude Code appends its correction note to either when its
- * memory feature asks for it, and recognizes exactly these four strings as
- * its own stop results. A tool's own failure, and a denial Sedes returns
- * from its permission callback, carry other text.
+ * Exact `is_error` results Sedes accepts for one call an interrupt stopped.
+ * The 2.1.287 floor uses `rejected` for running, queued and prompt-closed
+ * calls. From 2.1.319, a running call interrupted by the controlling host
+ * receives the execution correction. `cancelled` covers a call that reaches
+ * execution after the interrupt. Each can carry Claude's memory note.
+ * Sedes deliberately accepts these six strings, a subset of Claude Code's
+ * broader self-recognition, and still requires the explicit batch interruption
+ * marker below. A tool's own failure or a Sedes permission denial stays distinct.
  */
 const CLAUDE_TOOL_USE_REJECTED =
   "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
+const CLAUDE_TOOL_USE_STOPPED_WHILE_RUNNING = CLAUDE_TOOL_USE_REJECTED +
+  " Correction to the text above: this call was stopped while running, not refused before it ran. It may have run in part or in full, and its changes may have been written. No permission prompt was involved. Work it started elsewhere (a remote command, a background process) may still be running, so check before starting the same work again. The instruction to stop and wait still stands.";
 const CLAUDE_TOOL_USE_CANCELLED =
   "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed.";
 const CLAUDE_CORRECTION_NOTE =
   "\n\nNote: The user's next message may contain a correction or preference. Pay close attention — if they explain what went wrong or how they'd prefer you to work, consider saving that to memory for future sessions.";
 const CLAUDE_STOPPED_TOOL_RESULTS: ReadonlySet<string> = new Set(
-  [CLAUDE_TOOL_USE_REJECTED, CLAUDE_TOOL_USE_CANCELLED].flatMap((text) => [text, text + CLAUDE_CORRECTION_NOTE]),
+  [CLAUDE_TOOL_USE_REJECTED, CLAUDE_TOOL_USE_STOPPED_WHILE_RUNNING, CLAUDE_TOOL_USE_CANCELLED].flatMap((text) => [text, text + CLAUDE_CORRECTION_NOTE]),
 );
 const UNANSWERED_TURN_NOTICE =
   "Claude Code exited before this turn finished and closed it without a response when the conversation resumed.";

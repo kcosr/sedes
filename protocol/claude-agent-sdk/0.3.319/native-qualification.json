@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "sdkRelease": "0.3.319",
+  "reviewedOn": "2026-11-08",
+  "platform": "linux/x64",
+  "runtimePolicy": {
+    "minimum": "2.1.287",
+    "testedThrough": "2.1.319",
+    "excludedVersions": []
+  },
+  "sdkArtifact": {
+    "package": "@anthropic-ai/claude-agent-sdk",
+    "version": "0.3.319",
+    "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.319.tgz",
+    "integrity": "sha512-7X+sh4uZv/u4OL4I4cQvMr9N3NM6FDiuyk829hFylgbrnNwVyiGElWEDWGuO26zwMIxmgpKdPoDILoFIHh1uwA==",
+    "bundledClaudeCodeVersion": "2.1.319",
+    "bundledExecutableUsedBySedes": false,
+    "declarationsSha256": "89b188a33abd97ed31fdaaee8e78b3b73855b0d8cec9d349d21141cae4941182",
+    "toolDeclarationsSha256": "2565f41f7d508beba3ed58823e8b7f63b95c0337970cce727baf8a004afdaab2"
+  },
+  "nativeArtifacts": [
+    {
+      "package": "@anthropic-ai/claude-code-linux-x64",
+      "version": "2.1.319",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.319.tgz",
+      "integrity": "sha512-FO4Sd23BO1VCQPiJe5vG3bNnmV5+YiTau7o1lqK3Fr5VlE4TLdKiyYpwQRwEXO91kE2l12Ep2i7J19T8Md2oOQ==",
+      "executableRelativePath": "claude",
+      "tarballSha256": "9b7b53954b8ffb886fafeefe9ef1e0e9e5c15e8aaf2f54d65ba64d0cca795dc7",
+      "executableSha256": "dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed",
+      "qualification": "33 loopback native and 9 first-party subscription cases passed"
+    },
+    {
+      "package": "@anthropic-ai/claude-code-linux-x64",
+      "version": "2.1.287",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.287.tgz",
+      "integrity": "sha512-Q31ekN28viVjgfDuZKXUR5vxIBgUYoLGe+cRmjx/f01omqFDMi6IrgmcK5pWMnRbu/cjsTA/zO+bVES5oY3XUg==",
+      "executableRelativePath": "claude",
+      "tarballSha256": "348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+      "executableSha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "qualification": "33 loopback native cases passed; no authenticated floor qualification"
+    }
+  ],
+  "verification": {
+    "date": "2026-11-08",
+    "typecheck": "passed on final source",
+    "licenseInventory": "regenerated and check passed",
+    "serverRuntimeBoundary": "passed",
+    "focusedUnit": {
+      "files": 9,
+      "passed": 336,
+      "failed": 0,
+      "seconds": 36.02
+    },
+    "nativeMinimum": {
+      "passed": 33,
+      "failed": 0,
+      "files": 10,
+      "seconds": 35.37,
+      "scope": "Final source and stable rebuilt artifacts; only the ten native loopback files, no subscription tests"
+    },
+    "nativeLatest": {
+      "passed": 33,
+      "failed": 0,
+      "files": 10,
+      "fullSuitePassed": 42,
+      "fullSuiteFiles": 15,
+      "fullSuiteSeconds": 160.82
+    },
+    "authenticatedSuite": {
+      "passed": 9,
+      "failed": 0,
+      "model": "claude-sonnet-5-5",
+      "effort": "low",
+      "authentication": "first-party claude.ai subscription",
+      "manualCompactionGate": true,
+      "topology": "local worker and framed-socket persistent-runtime surrogate; no SSH host",
+      "scope": "Nine authenticated cases passed in the final 42-case full suite, including the explicit manual-compaction gate"
+    },
+    "defaultSuite": {
+      "passed": 19268,
+      "failed": 0,
+      "skipped": 91,
+      "filesPassed": 1145,
+      "filesSkipped": 18,
+      "seconds": 639.05,
+      "sandboxTests": "skipped by SEDES_SKIP_SANDBOX_TESTS=1 per container guidance",
+      "scope": "Final implementation; only a source comment was refined during the run"
+    },
+    "build": "passed on final source",
+    "browser": {
+      "passed": 173,
+      "specs": 64,
+      "failed": 0,
+      "lanes": 4,
+      "seconds": 691.235,
+      "screenshotsInspected": [
+        "claude-parity-streaming-tools",
+        "claude-stop-restored"
+      ],
+      "scope": "Full browser suite after SDK/startup refresh; final rebuilt Claude journey independently passed two cases after native stopped-running adaptation",
+      "finalClaudeJourney": {
+        "passed": 2,
+        "failed": 0,
+        "seconds": 37.787
+      }
+    },
+    "compactionRerun": {
+      "latestPassed": 6,
+      "minimumPassed": 6,
+      "latestSeconds": 4.25,
+      "minimumSeconds": 4.17
+    },
+    "stoppedRunningUnit": {
+      "passed": 168,
+      "files": 2,
+      "suites": [
+        "claude-history-projector",
+        "claude-session-history"
+      ]
+    },
+    "initialNativeFindings": [
+      "Four failures in first latest run: failed-compaction fixture allowed two rather than three summary attempts, and three stopped-running projection failures caused by new exact native result correction. Both fixed and all 42 cases passed on final rerun."
+    ],
+    "executionNote": "A help invocation triggered an unintended concurrent clean build during preliminary final checks. Affected latest/general runs were interrupted and restarted after build completion; recorded final native results use stable artifacts. Both restarted suites passed.",
+    "keelReview": {
+      "workflow": "iterative-review",
+      "profile": "claude-default",
+      "followups": 2,
+      "findingsRemaining": 0,
+      "scope": "SDK compatibility, exact native Stop results, bounded compaction fixture, current docs and qualification evidence; final general totals populated after review"
+    }
+  },
+  "limitations": [
+    "Native qualification is Linux x64 only.",
+    "No native macOS, Windows, SSH, or deployed-host qualification.",
+    "Loopback native fixtures do not establish authenticated model behavior.",
+    "Existing startup-marker refusals remain outside this SDK refresh.",
+    "The SDK-default fork subagent variant was source-audited through existing child-message scoping but was not exercised natively.",
+    "A model-change-held input interrupted during the change was not exercised as a distinct native scenario."
+  ]
+}

@@ -42,9 +42,9 @@ describe("Claude Agent SDK release contract", () => {
       claudeCodeVersion: string;
     };
 
-    expect(CLAUDE_AGENT_SDK_RELEASE).toBe("0.3.296");
+    expect(CLAUDE_AGENT_SDK_RELEASE).toBe("0.3.319");
     expect(CLAUDE_CODE_MINIMUM_VERSION).toBe("2.1.287");
-    expect(CLAUDE_CODE_TESTED_THROUGH_VERSION).toBe("2.1.296");
+    expect(CLAUDE_CODE_TESTED_THROUGH_VERSION).toBe("2.1.319");
     expect(packageJson.dependencies["@anthropic-ai/claude-agent-sdk"]).toBe(
       CLAUDE_AGENT_SDK_RELEASE,
     );
@@ -58,13 +58,13 @@ describe("Claude Agent SDK release contract", () => {
     ).toMatchObject({
       version: CLAUDE_AGENT_SDK_RELEASE,
       resolved:
-        "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.296.tgz",
+        "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.319.tgz",
       integrity:
-        "sha512-Y+cZ2BT8X94mQ9GJOVyIqhjC/nWGvwozUVLjdkzX7aSt+zuo5tgk7Hdv9V7tEUQ9fKnEuiL6moYNWDeHqCD4Lw==",
+        "sha512-7X+sh4uZv/u4OL4I4cQvMr9N3NM6FDiuyk829hFylgbrnNwVyiGElWEDWGuO26zwMIxmgpKdPoDILoFIHh1uwA==",
     });
     expect(installedPackage).toMatchObject({
       version: CLAUDE_AGENT_SDK_RELEASE,
-      claudeCodeVersion: "2.1.296",
+      claudeCodeVersion: "2.1.319",
     });
   });
 });
