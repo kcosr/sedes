@@ -27,6 +27,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/backends/pi/native/host/host-registry.ts",
   "src/server/backends/pi/native/host/native-host.ts",
   "src/server/backends/pi/native/port.ts",
+  "src/server/backends/pi/native/runtime-release.ts",
   "src/server/backends/pi/native/tool-provenance.ts",
   "src/server/backends/pi/native/rpc/pi-managed-bridge.ts",
   "src/server/backends/pi/native/rpc/pi-managed-extension.ts",

@@ -1,3 +1,4 @@
+import { assessPiRuntimeVersion } from "../../src/server/backends/pi/native/runtime-release.js";
 import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,12 +22,12 @@ afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, {
 
 async function currentManagers(): Promise<CurrentManagers> {
   const executable = process.env.SEDES_REAL_PI_NATIVE_EXECUTABLE;
-  if (!executable || !path.isAbsolute(executable)) throw new Error("Set SEDES_REAL_PI_NATIVE_EXECUTABLE to the isolated stock Pi 1.4.0 executable.");
+  if (!executable || !path.isAbsolute(executable)) throw new Error("Set SEDES_REAL_PI_NATIVE_EXECUTABLE to the isolated stock Pi >=1.4.0 executable.");
   let directory = path.dirname(await realpath(executable));
   while (directory !== path.dirname(directory)) {
     const candidate = JSON.parse(await readFile(path.join(directory, "package.json"), "utf8").catch(() => "null")) as { name?: string; version?: string } | null;
     if (candidate?.name === "@earendil-works/pi-coding-agent") {
-      expect(candidate.version).toBe("1.4.0");
+      expect(assessPiRuntimeVersion(candidate.version!).version).toBe(candidate.version);
       return (await import(/* @vite-ignore */ pathToFileURL(path.join(directory, "dist/core/session-manager.js")).href)).SessionManager as CurrentManagers;
     }
     directory = path.dirname(directory);
@@ -56,7 +57,7 @@ async function fixture() {
   return { native, stock, user, file, cwd, sessions, workspace, store, disk, operation };
 }
 
-it("round-trips an ordinary stock 1.4 session through the 0.86 writer without rewriting native entries or receipts", async () => {
+it("round-trips an ordinary stock Pi session through the 0.86 writer without rewriting native entries or receipts", async () => {
   const f = await fixture();
   const before = await readFile(f.file, "utf8");
   expect((await f.store.list(f.workspace)).map(row => row.backendConversationId)).toContain("native-session");
@@ -78,7 +79,7 @@ it("round-trips an ordinary stock 1.4 session through the 0.86 writer without re
   f.disk.close();
 });
 
-it("discovers and resumes an SDK-created session through stock 1.4 while preserving SDK markers", async () => {
+it("discovers and resumes an SDK-created session through stock Pi while preserving SDK markers", async () => {
   const f = await fixture();
   const reserved = await f.store.reserve(f.workspace, "sdk-created", "SDK conversation", "sdk-operation");
   const writer = await f.store.openWriter(f.workspace, "sdk-created", reserved.opaqueBindingDetail);

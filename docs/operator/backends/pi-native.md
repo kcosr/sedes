@@ -1,7 +1,7 @@
 # Pi native backend
 
-Select **Pi** in Settings to run the installed **Pi 1.4.0** CLI in RPC mode on
-the thread's execution host. Sedes owns the process and uses Pi's native
+Select **Pi** in Settings to run the installed **stable Pi 1.4.0 or newer** CLI
+in RPC mode on the thread's execution host. Sedes owns the process and uses Pi's native
 authentication, model catalog, configuration, and JSONL conversation store.
 Local, persistent SSH, and outbound environments are supported on Linux and
 macOS. Native Windows execution is unsupported.
@@ -13,11 +13,15 @@ See the [SDK guide](pi.md) and [backend comparison](index.md).
 
 ## Prerequisites and authentication
 
-Install Pi 1.4.0 and authenticate the operating-system account that will run
-it. For SSH or outbound environments, this is the remote sidecar account.
-Verify `pi --version` reports `1.4.0` and that the intended native model catalog
-is available under that account. Sedes rejects other versions, including newer
-versions; this integration has an exact reviewed runtime boundary.
+Install stable Pi 1.4.0 or newer and authenticate the operating-system account
+that will run it. For SSH or outbound environments, this is the remote sidecar account.
+Verify `pi --version` reports a stable version at least `1.4.0` and that the
+intended native model catalog is available under that account. The reviewed
+RPC and managed-companion profile remains `1.4.0`; runtime qualification extends
+through `1.5.0`. Newer stable releases remain available with an installation
+warning, like Codex. They use the same reviewed profile and do not enable new
+Sedes capabilities. Older releases, prereleases, malformed version output, and
+incompatible runtime behavior are rejected.
 
 Credentials stay in Pi's native configuration. They are not Sedes backend
 configuration fields. An explicit **Agent directory** selects a different
@@ -29,8 +33,12 @@ Sedes's per-thread and startup variable editors do not override it. A leading
 so discovery and the running process always use the same native store.
 
 For a remote runtime, enable persistent sidecar operations and deploy a sidecar
-that advertises the native Pi runtime capability. Install and authenticate Pi
-on that host. Files, attachment staging, terminals, and Sedes CLI tools still
+that advertises native Pi runtime capability **2**. Upgrade the server and
+sidecar together, following the
+[persistent service upgrade procedure](../operations.md#persistent-remote-services).
+Drain native Pi work before an incompatible sidecar upgrade; retained work
+blocks automatic replacement.
+Install and authenticate Pi on that host. Files, attachment staging, terminals, and Sedes CLI tools still
 require their own environment grants; starting Pi grants none of them. Native
 Pi workspace tools run on the execution host and do not use the SDK's remote
 workspace-tool adapter.
@@ -240,7 +248,7 @@ alone do not carry that private authority.
 
 | Symptom | Check |
 | --- | --- |
-| Runtime unavailable | Exact Pi 1.4.0, executable permissions, selected account, Linux/macOS, and the configured native directories. |
+| Runtime unavailable | Stable Pi >=1.4.0, executable permissions, selected account, Linux/macOS, and the configured native directories. |
 | No remote Pi capability | Upgrade the persistent sidecar and verify its platform and operations connection. No local fallback is attempted. |
 | Missing models or credentials | Agent directory, `PI_CODING_AGENT_DIR`, execution-host environment, native login, then model policy. |
 | Missing MCP tools | Native `mcp.json`, project trust, MCP startup/authentication, and tool-access mode. Read-only deliberately denies third-party calls. |
@@ -251,20 +259,20 @@ alone do not carry that private authority.
 Deterministic tests cover configuration, the RPC companion, process ownership,
 durable operations, native history, and sidecar reconnect behavior. Those
 checks do not establish live model-provider compatibility. The separate
-`test:real-pi-native` suite runs an explicitly selected stock Pi 1.4.0 executable
-against isolated loopback model and MCP fixtures. Set
+`test:real-pi-native` suite runs an explicitly selected stock stable Pi >=1.4.0
+executable against isolated loopback model and MCP fixtures. Set
 `SEDES_REAL_PI_NATIVE_EXECUTABLE` to its absolute path; the suite does not use
 normal account credentials or live providers. The existing `test:real-pi` and
 `test:real-pi-cli` gates exercise the SDK backend.
 
 The separate `test:live-pi-native` gate requires explicit authorization,
 `SEDES_RUN_LIVE_PI_NATIVE=1`, and an absolute `SEDES_LIVE_PI_NATIVE_EXECUTABLE`
-selecting stock Pi 1.4.0. It uses disposable native sessions and verifies the
-exact `aw-qwen-3-8-27b/aw-qwen-3-8-27b` model, low reasoning, and read-only tools
-before prompting. On 2026-10-26, its one Linux x64 live test passed, including
-nested code-mode reads, signed provenance, and detach/resume; all ten offline
-native qualification tests also passed, including context occupancy through
-compaction and secret-free process bootstrap. This evidence is limited to that model
+selecting stock stable Pi >=1.4.0. It uses disposable native sessions and
+verifies the exact `aw-qwen-3-8-27b/aw-qwen-3-8-27b` model, low reasoning, and read-only tools
+before prompting. On 2026-11-08, its one Linux x64 live test passed with stock
+Pi 1.5.0, including nested code-mode reads, signed provenance, and detach/resume; all ten offline
+native qualification tests also passed with Pi 1.5.0, including context
+occupancy through compaction and secret-free process bootstrap. This evidence is limited to that model
 and host platform; it does not qualify other providers or macOS execution.
 
 Provider-private evidence, bounds, and lifecycle invariants are documented in

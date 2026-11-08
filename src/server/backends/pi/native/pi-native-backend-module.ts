@@ -1,3 +1,5 @@
+import { PiInstallationAdvisorySource } from "./installation-advisories.js";
+import type { VerifiedPiRuntimeVersion } from "./runtime-release.js";
 import { PiSessionClaims } from "../pi-session-claims.js";
 import { createHash, createHmac } from "node:crypto";
 import type { PiNativeConnectionDefaults } from "../../../../shared/protocol/pi-configuration.js";
@@ -6,7 +8,7 @@ import { createThreadEnvironmentResolver } from "../../../environment-variables/
 import { ManagedTerminalCarrierError } from "../../../terminal/managed-terminal-carrier.js";
 import { APPLICATION_ASSIGNED_CREATION_IDENTITY, type AgentConnectionProfile } from "../../contracts.js";
 import { parsePiNativeBackendConfiguration } from "./pi-native-backend-configuration.js";
-import { NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES, type BackendModule, type BackendModuleConfigurationInput,
+import { type BackendModule, type BackendModuleConfigurationInput,
   type BackendModuleRuntime, type BackendModuleRuntimeContext, type BackendRuntimeAdministration, type BackendRuntimeRecoveryContext,
   type PreparedBackendModule } from "../../module.js";
 import type { BackendDriverFactory } from "../../registry.js";
@@ -33,16 +35,17 @@ export interface PiNativeModuleDependencies {
     readonly context: BackendModuleRuntimeContext;
     readonly configuration: PiNativeRuntimeConfiguration;
     readonly environment: Readonly<Record<string, string | undefined>>;
+    readonly onRuntimeVersion: (assessment: VerifiedPiRuntimeVersion | undefined) => void;
   }): PiNativePort;
 }
 
 const productionDependencies: PiNativeModuleDependencies = {
-  createPort({ context, configuration, environment }) {
+  createPort({ context, configuration, environment, onRuntimeVersion }) {
     if (context.environmentOperations.environmentKind !== "local") {
       if (!context.sidecarRuntime) throw new Error("pi_native_sidecar_required");
-      return new PiNativeRemotePort({ configuration, sidecarRuntime: context.sidecarRuntime });
+      return new PiNativeRemotePort({ configuration, sidecarRuntime: context.sidecarRuntime, onRuntimeVersion });
     }
-    return new PiNativeHost({ configuration, channels: context.environmentChannel, environment,
+    return new PiNativeHost({ configuration, onRuntimeVersion, channels: context.environmentChannel, environment,
       authenticationKey: createHmac("sha256", context.toolProvenanceKey)
         .update("sedes.pi-native.operations.v1\0")
         .update(JSON.stringify([configuration.tenantId, configuration.principalId,
@@ -93,7 +96,7 @@ class PiNativeModuleRuntime implements BackendModuleRuntime {
   readonly savedAgents;
   readonly automationExecutionPolicy;
   readonly administration;
-  readonly installationAdvisories = NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES;
+  readonly installationAdvisories;
   readonly managedProviderTerminals = managedProviderTerminals;
   readonly #drivers = new Map<string, PiNativeConversationDriver>();
   readonly #agentTools;
@@ -102,7 +105,8 @@ class PiNativeModuleRuntime implements BackendModuleRuntime {
   #closing?: Promise<void>;
 
   constructor(readonly context: BackendModuleRuntimeContext, readonly port: PiNativePort,
-    readonly prepared: PreparedPiNativeModule) {
+    readonly prepared: PreparedPiNativeModule, advisories: PiInstallationAdvisorySource) {
+    this.installationAdvisories = advisories;
     this.scope = context.scope;
     this.instance = context.instance;
     this.#agentTools = new PiNativeAgentToolService({ facade: context.agentTools,
@@ -190,6 +194,7 @@ class PiNativeModuleRuntime implements BackendModuleRuntime {
     if (this.#closeComplete) return;
     if (this.#closing) return this.#closing;
     this.#closed = true;
+    this.installationAdvisories.dispose();
     const cleanup = (async () => {
       const outcomes = await Promise.allSettled([...this.#drivers.values()].map(driver => driver.close()));
       // Every driver gets a cleanup attempt. Keep the port usable until all
@@ -278,8 +283,10 @@ class PreparedPiNativeModule implements PreparedBackendModule {
     if ((this.environmentKind === "local") === Boolean(context.sidecarRuntime))
       throw new Error("pi_native_runtime_topology_invalid");
     this.#created = true;
+    const advisories = new PiInstallationAdvisorySource();
     return new PiNativeModuleRuntime(context, this.dependencies.createPort({ context,
-      configuration: this.configuration(context.scope), environment: this.input.environment }), this);
+      configuration: this.configuration(context.scope), environment: this.input.environment,
+      onRuntimeVersion: assessment => { if (assessment) advisories.observe(assessment); else advisories.clear(); } }), this, advisories);
   }
 }
 
@@ -298,7 +305,7 @@ export class PiNativeBackendModule implements BackendModule {
   }
   runtimeDiagnostic(error: unknown) {
     if (error instanceof PiNativeError) return { connectionState: "recovery_required" as const,
-      message: piNativeRecoveryMessage(error.code) ?? "The Pi runtime is unavailable. Verify Pi 1.4.0 and the configured native directories on the execution host." };
+      message: piNativeRecoveryMessage(error.code) ?? "The Pi runtime is unavailable. Verify stable Pi >=1.4.0 and the configured native directories on the execution host." };
     return undefined;
   }
 }

@@ -1,6 +1,9 @@
+import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
+import { createPiNativeSessionProcess } from "../../src/server/backends/pi/native/rpc/pi-native-launch.js";
+import { assessPiRuntimeVersion } from "../../src/server/backends/pi/native/runtime-release.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { SidecarFrameWriteError, SidecarOperationRegistry, SidecarProtocolPeer, controlHelloOperation,
@@ -34,7 +37,7 @@ function deferred<T>() {
   const promise = new Promise<T>(yes => { resolve = yes; });
   return { promise, resolve };
 }
-async function fixture(options: { maximumEventBytes?: number; maximumOperations?: number } = {}) {
+async function fixture(options: { maximumEventBytes?: number; maximumOperations?: number; runtimeVersion?: string; failedProbe?: boolean; secondLaunch?: PiNativeSessionLauncher } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "sedes-pi-sidecar-"));
   cleanup.push(() => rm(directory, { recursive: true, force: true }));
   const services = new PersistentSidecarServiceRegistry({ scope: { ...scope, executionEnvironmentId: "remote", installationId: "installation" },
@@ -48,6 +51,9 @@ async function fixture(options: { maximumEventBytes?: number; maximumOperations?
   const createHost = vi.fn((runtime: PiNativeRuntimeConfiguration, key: Uint8Array) => {
     const launch: PiNativeSessionLauncher = async input => {
       launches(input);
+      if (options.secondLaunch && launches.mock.calls.length > 1) return options.secondLaunch(input);
+      if (options.failedProbe) { input.onRuntimeVersion?.(undefined); throw new Error("pi_native_version_unsupported"); }
+      input.onRuntimeVersion?.(assessPiRuntimeVersion(options.runtimeVersion ?? "1.4.0"));
       return { rpc: { request: requests, respondUI, closed: ended.promise },
         bridge: { request: requests, closed: ended.promise }, close, version: "1.4.0" } as unknown as Awaited<ReturnType<PiNativeSessionLauncher>>;
     };
@@ -104,6 +110,77 @@ function recoveryContext(lease: SidecarRuntimeLease): BackendRuntimeRecoveryCont
 }
 
 describe("native Pi persistent sidecar", () => {
+  it.skipIf(process.platform === "win32")("preserves the last admitted version during a concurrent real probe and after its cancellation", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "pi-probe-held-"));
+    cleanup.push(() => rm(directory, { recursive: true, force: true }));
+    const executablePath = path.join(directory, "pi.mjs"), marker = path.join(directory, "probing");
+    await writeFile(executablePath, `#!${process.execPath}
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(marker)}, "started");
+setInterval(() => {}, 1000);
+`);
+    await chmod(executablePath, 0o700);
+    const channels = new LocalEnvironmentChannelProvider({ scope, executionEnvironmentId: configuration.executionEnvironmentId,
+      environment: { HOME: directory, PATH: process.env.PATH } });
+    cleanup.push(async () => channels.close());
+    const cancellation = new AbortController();
+    cleanup.push(async () => cancellation.abort());
+    const f = await fixture({ runtimeVersion: "1.6.0", secondLaunch: input => createPiNativeSessionProcess({ ...input,
+      runtime: { ...input.runtime, executablePath }, cwd: directory, channels, signal: cancellation.signal }) });
+    const connected = await attachment(f), observed = vi.fn();
+    const port = new PiNativeRemotePort({ configuration, sidecarRuntime: { acquire: async () => connected.lease, acquireExisting: async () => connected.lease }, onRuntimeVersion: observed });
+    cleanup.push(() => port.close());
+    const first = await port.attach(identity);
+    observed.mockClear();
+    const second = port.attach({ ...identity, sessionId: "second-session", sessionFile: "/workspace/second.jsonl" });
+    const rejected = expect(second).rejects.toThrow("pi_native_host_request_failed");
+    await vi.waitFor(async () => expect(await readFile(marker, "utf8")).toBe("started"));
+    await port.observe({ handleId: first.handleId, afterSequence: 0 });
+    expect(observed).toHaveBeenLastCalledWith({ version: "1.6.0", newerThanTested: true });
+    expect(observed.mock.calls.every(([assessment]) => assessment?.version === "1.6.0")).toBe(true);
+    observed.mockClear();
+    cancellation.abort(new Error("probe_cancelled"));
+    await rejected;
+    await port.observe({ handleId: first.handleId, afterSequence: 0 });
+    expect(observed.mock.calls.length).toBeGreaterThan(0);
+    expect(observed.mock.calls.every(([assessment]) => assessment?.version === "1.6.0")).toBe(true);
+  });
+
+  it("propagates observed versions across retained ownership and clears on retirement", async () => {
+    const f = await fixture({ runtimeVersion: "1.6.0" }), first = await attachment(f);
+    const observed = vi.fn();
+    const port = new PiNativeRemotePort({ configuration, sidecarRuntime: { acquire: async () => first.lease, acquireExisting: async () => first.lease }, onRuntimeVersion: observed });
+    cleanup.push(() => port.close());
+    await port.attach(identity);
+    expect(observed).toHaveBeenLastCalledWith({ version: "1.6.0", newerThanTested: true });
+    await first.disconnect();
+    const second = await attachment(f), replacement = vi.fn();
+    const restored = new PiNativeRemotePort({ configuration, sidecarRuntime: { acquire: async () => second.lease, acquireExisting: async () => second.lease }, onRuntimeVersion: replacement });
+    cleanup.push(() => restored.close());
+    const inspection = await restored.inspect();
+    expect(f.launches).toHaveBeenCalledOnce();
+    expect(replacement).toHaveBeenLastCalledWith({ version: "1.6.0", newerThanTested: true });
+    await restored.stop({ expectedRevision: inspection.revision, force: true });
+    expect(replacement).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("clears a prior observation after a failed execution-host re-probe", async () => {
+    const f = await fixture({ failedProbe: true }), connected = await attachment(f), observed = vi.fn();
+    const port = new PiNativeRemotePort({ configuration, sidecarRuntime: { acquire: async () => connected.lease, acquireExisting: async () => connected.lease }, onRuntimeVersion: observed });
+    cleanup.push(() => port.close());
+    await expect(port.attach(identity)).rejects.toThrow("pi_native_host_request_failed");
+    expect(observed).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("requires version-aware native capability 2 before sending provider operations", async () => {
+    const f = await fixture(), connected = await attachment(f);
+    const supported = vi.spyOn(connected.channel, "supportsOperation").mockImplementation(operation => operation.majorVersion === 1);
+    const { port } = proxy(connected.lease);
+    await expect(port.attach(identity)).rejects.toThrow("pi_native_remote_runtime_unsupported");
+    expect(supported).toHaveBeenCalledWith(expect.objectContaining({ capabilityId: "pi_native_runtime", majorVersion: 2 }));
+    expect(f.createHost).not.toHaveBeenCalled();
+  });
+
   it.each(["observe", "acknowledge", "state", "snapshot", "outcome", "acknowledge_operation", "abandon_observation"] as const)("drains an admitted %s frame before cancelling its observer and releasing the handle", async action => {
     const f = await fixture(), connection = await attachment(f), { port } = proxy(connection.lease);
     const session = await port.attach(identity), operation = { handleId: session.handleId, operationId: "observed-read" };

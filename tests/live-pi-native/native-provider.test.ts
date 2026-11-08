@@ -39,7 +39,7 @@ function operationStore(): PiNativeOperations {
 it("qualifies the approved live model through stock native Pi, read-only code mode, and resume", async () => {
   requireGate(process.env.SEDES_RUN_LIVE_PI_NATIVE === "1", "explicit SEDES_RUN_LIVE_PI_NATIVE=1 opt-in is required");
   const executablePath = process.env.SEDES_LIVE_PI_NATIVE_EXECUTABLE;
-  requireGate(Boolean(executablePath && path.isAbsolute(executablePath)), "select an absolute isolated Pi 1.4.0 executable with SEDES_LIVE_PI_NATIVE_EXECUTABLE");
+  requireGate(Boolean(executablePath && path.isAbsolute(executablePath)), "select an absolute isolated Pi >=1.4.0 executable with SEDES_LIVE_PI_NATIVE_EXECUTABLE");
   const sourceDirectory = await realpath(process.env.PI_CODING_AGENT_DIR ?? path.join(homedir(), ".pi", "agent"));
   const directory = await mkdtemp(path.join(tmpdir(), "sedes-live-pi-"));
   const agentDirectory = path.join(directory, "agent");
@@ -91,7 +91,7 @@ it("qualifies the approved live model through stock native Pi, read-only code mo
       inspect: async () => { const state = await inspect(); requireGate(!state.entries.some(entry => entry.type === "message"), "fresh session unexpectedly contains messages"); return {
         kind: "effective_state", provider: state.model!.provider, id: state.model!.id, thinkingLevel: state.thinkingLevel, additionalSafetyChecksPassed: true }; } });
     requireGate(eligibility.eligible.length === 1, "exact authenticated model and effective-state gate did not pass");
-    process.stdout.write("Live native Pi 1.4.0: exact AW Qwen model, low reasoning, fresh session, and read-only tools verified.\n");
+    process.stdout.write(`Live native Pi ${host.runtimeVersion}: exact AW Qwen model, low reasoning, fresh session, and read-only tools verified.\n`);
     const runRead = async (current: ConversationHandle, filename: string) => {
       const token = `NATIVE_PI_${randomUUID().replaceAll("-", "")}`;
       await writeFile(path.join(workspacePath, filename), `${token}\n`, { mode: 0o600 });

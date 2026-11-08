@@ -330,8 +330,8 @@ host's path grammar.
 Disabled historical remote Claude definitions
 retain their IDs and native bindings until explicitly enabled, without a local fallback. Cursor is not
 compiled. Visible Pi SDK naming does not rename the internal `pi` kind. Native
-Pi is the separate `pi_native` module with `pi_rpc` targets, exact Pi 1.4.0
-admission, and Linux/macOS local or persistent-sidecar execution. Its native
+Pi is the separate `pi_native` module with `pi_rpc` targets, stable Pi >=1.4.0
+admission with an active advisory above the tested-through release, and Linux/macOS local or persistent-sidecar execution. Its native
 store, managed companion, and recovery contract are documented in
 [Native Pi internals](backends/pi-native.md).
 A new compiled module must be added to

@@ -7,16 +7,39 @@ interpretation must not escape that boundary. The
 [operator guide](../../operator/backends/pi-native.md) owns installation,
 capabilities, and configuration guidance.
 
+## Runtime compatibility evidence
+
+Pi 1.5.0 is qualified against upstream tag
+`f9a26365568127461c47a07a37dcb42c140a3ac5`
+([release](https://github.com/earendil-works/pi/releases/tag/v1.5.0)). Its RPC
+implementation and `docs/rpc.md` are unchanged from 1.4.0. The tool-schema
+validation change accepts the companion's plain JSON Schema; no second parser
+or companion contract is required. Qualification uses the official release's
+`pi-coding-agent-install-package.json` and matching install lockfile with
+`npm ci`, isolated from the operator installation and credentials. The offline
+suite and gated AW Qwen live suite passed on Linux x64. Other providers and
+macOS remain unqualified by this evidence.
+
 ## Runtime and transport ownership
 
 `native/pi-native-backend-module.ts` prepares one execution-environment-owned
 runtime. Local execution uses `PiNativeHost`; SSH and outbound execution use
 the same host behind `PiNativeRemotePort`. The persistent sidecar advertises
-`pi_native_runtime` major version 1. There is no remote-to-local fallback.
+`pi_native_runtime` major version 2. The response envelope carries the last
+observed admitted executable version, or explicit null when none is known.
+Pending or cancelled probes preserve the prior observation; positive rejection,
+executable replacement, and confirmed retirement clear it. Main assesses the
+version against its compiled tested-through release. Capability negotiation
+rejects version 1 before any new envelope is parsed.
+There is no remote-to-local fallback.
 Windows is excluded because the managed companion uses a Unix-domain socket.
 
-`native/rpc/pi-native-launch.ts` resolves and fingerprints the host executable,
-probes exact version `1.4.0`, and starts owned RPC stdio. It installs only the
+`native/rpc/pi-native-launch.ts` resolves and checks the host executable,
+probes a stable version `>=1.4.0`, and starts owned RPC stdio. The reviewed
+RPC/companion profile remains `1.4.0`; runtime qualification extends through
+`1.5.0`. Newer stable runtimes remain available with one normalized installation
+advisory per backend instance. Prereleases, malformed versions, and versions
+below the floor fail before RPC startup. It installs only the
 managed companion under `--no-extensions`; project trust selects `--approve`
 or `--no-approve`. The companion resolves public factories from the installed
 native package, not the embedded SDK dependency. The separate authenticated
@@ -375,7 +398,7 @@ must exercise wrong-scope denial, lost responses, duplicate operation IDs,
 malformed evidence, detached reads, and cleanup failure as applicable. Run
 typechecks, the normal suite with host-specific sandbox exclusions, builds,
 and applicable browser coverage through the repository's standard scripts.
-The isolated `test:real-pi-native` suite uses a stock 1.4.0 executable selected
+The isolated `test:real-pi-native` suite uses a stock stable Pi >=1.4.0 executable selected
 by absolute `SEDES_REAL_PI_NATIVE_EXECUTABLE` and loopback model/MCP fixtures.
 The SDK live suites do not verify this backend. The separately authorized
 `test:live-pi-native` gate requires `SEDES_RUN_LIVE_PI_NATIVE=1`, an absolute

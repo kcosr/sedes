@@ -1,3 +1,4 @@
+import { assessPiRuntimeVersion } from "../../src/server/backends/pi/native/runtime-release.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -121,6 +122,34 @@ function fixture(environmentKind: "local" | "ssh" | "outbound" = "local",
 }
 
 describe("native Pi module composition", () => {
+  it.each(["local", "ssh", "outbound"] as const)("publishes and clears scoped %s version advisories without late disposal updates", async kind => {
+    const target = fixture(kind), runtime = target.createRuntime();
+    const observe = target.createPort.mock.calls[0]![0].onRuntimeVersion;
+    const changed = vi.fn();
+    runtime.installationAdvisories.subscribe(changed);
+    runtime.installationAdvisories.subscribe(() => { throw new Error("listener_failed"); });
+    expect(runtime.installationAdvisories.active()).toEqual([]);
+    observe(assessPiRuntimeVersion("1.6.0"));
+    expect(runtime.installationAdvisories.active()).toEqual([expect.objectContaining({
+      id: "runtime-newer-than-tested", tone: "warning", title: { text: "Pi is newer than tested" },
+      message: { text: "Running 1.6.0; Sedes is tested through 1.5.0." },
+    })]);
+    observe(assessPiRuntimeVersion("1.6.0"));
+    expect(changed).toHaveBeenCalledTimes(1);
+    observe(assessPiRuntimeVersion("1.7.0"));
+    expect(changed).toHaveBeenCalledTimes(2);
+    observe(assessPiRuntimeVersion("1.4.0"));
+    expect(runtime.installationAdvisories.active()).toEqual([]);
+    observe(assessPiRuntimeVersion("1.6.0"));
+    observe(undefined); // Failed re-probe clears the prior observed runtime.
+    expect(runtime.installationAdvisories.active()).toEqual([]);
+    observe(assessPiRuntimeVersion("1.6.0"));
+    await runtime.close();
+    expect(runtime.installationAdvisories.active()).toEqual([]);
+    observe(assessPiRuntimeVersion("1.8.0"));
+    expect(runtime.installationAdvisories.active()).toEqual([]);
+  });
+
   it.each(["local", "ssh", "outbound"] as const)("composes %s without provider I/O and validates exact runtime authority", async kind => {
     const target = fixture(kind);
     const { context, prepared, createPort, connection, port } = target;

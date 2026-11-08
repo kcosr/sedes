@@ -38,7 +38,7 @@ const submission = (text: string, id = randomUUID()): SubmitTurnInput => ({ appl
 
 async function fixture(options: { mcp?: boolean; agentTools?: PiNativeAgentToolService; bundled?: boolean } = {}) {
   const executablePath = process.env.SEDES_REAL_PI_NATIVE_EXECUTABLE;
-  if (!executablePath || !path.isAbsolute(executablePath)) throw new Error("Set SEDES_REAL_PI_NATIVE_EXECUTABLE to an isolated stock Pi 1.4.0 executable. This suite never uses PATH discovery.");
+  if (!executablePath || !path.isAbsolute(executablePath)) throw new Error("Set SEDES_REAL_PI_NATIVE_EXECUTABLE to an isolated stock Pi >=1.4.0 executable. This suite never uses PATH discovery.");
   const directory = await mkdtemp(path.join(tmpdir(), "sedes-pi-test-"));
   cleanup.push(() => rm(directory, { recursive: true, force: true }));
   const agentDirectory = path.join(directory, "agent");

@@ -1,3 +1,4 @@
+import { assessPiRuntimeVersion } from "../../src/server/backends/pi/native/runtime-release.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -29,6 +30,7 @@ function fixture(options: Partial<ConstructorParameters<typeof PiNativeHost>[0]>
   let event: Parameters<PiNativeSessionLauncher>[0]["onEvent"];
   const launch = vi.fn(async (input: Parameters<PiNativeSessionLauncher>[0]) => {
     event = input.onEvent;
+    input.onRuntimeVersion?.(assessPiRuntimeVersion("1.4.0"));
     return { rpc: { request: requests, respondUI, closed: ended.promise },
       bridge: { request: bridgeRequests, closed: ended.promise }, close, version: "1.4.0" } as unknown as Awaited<ReturnType<PiNativeSessionLauncher>>;
   });
@@ -50,6 +52,17 @@ async function settled(host: PiNativeHost, handleId: string, operationId: string
 }
 
 describe("native Pi host ownership", () => {
+  it("reports the execution-host probe and clears the observation after local Stop", async () => {
+    const observed = vi.fn(), f = fixture({ onRuntimeVersion: observed });
+    expect(f.host.runtimeVersion).toBeNull();
+    await f.host.attach(identity);
+    expect(f.host.runtimeVersion).toBe("1.4.0");
+    expect(observed).toHaveBeenLastCalledWith({ version: "1.4.0", newerThanTested: false });
+    await f.host.stop({ expectedRevision: f.host.snapshot().revision, force: true });
+    expect(f.host.runtimeVersion).toBeNull();
+    expect(observed).toHaveBeenLastCalledWith(undefined);
+  });
+
   it("admits 32 concurrent session snapshots alongside prepare, Send, settings, and all Stop phases", async () => {
     const f = fixture(), snapshots = Array.from({ length: 32 }, () => deferred<unknown>());
     let snapshotIndex = 0;

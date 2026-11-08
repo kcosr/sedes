@@ -27,7 +27,7 @@ state, and backups.
 | Backend             | Provider runtime                                            | Execution environments                                                                          | Core controls                               | Notable supported features                                                                                                             |
 | ------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | [Pi SDK](pi.md)         | SDK embedded in the Sedes process                           | Local; SSH workspace operations and optional remote skill discovery through the managed sidecar | Submit, Steer, Queue, Stop, rename, compact | Tool-access modes, skills, usage and cost, selected-turn forks, optional local Bubblewrap workspaces                                   |
-| [Pi](pi-native.md) | Owned Pi 1.4.0 CLI in RPC mode | Linux/macOS local; persistent-sidecar runtime over SSH or outbound | Submit, Steer, Queue, Stop, rename, compact | Native configuration, MCP and code mode, tool-access modes, skills, completed-turn forks, native history and usage |
+| [Pi](pi-native.md) | Owned stable Pi >=1.4.0 CLI in RPC mode | Linux/macOS local; persistent-sidecar runtime over SSH or outbound | Submit, Steer, Queue, Stop, rename, compact | Native configuration, MCP and code mode, tool-access modes, skills, completed-turn forks, native history and usage |
 | [Codex](codex.md)   | Owned local app-server or an external app-server connection | Linux/macOS local; Windows Managed Local or outbound; persistent-sidecar runtime over SSH or outbound | Submit, Steer, Queue, Stop, rename, compact | Execution settings, approvals, questionnaires, Speed (Fast/Ultrafast), Goal, selected-turn and latest-provider-snapshot forks, eligible managed TUI |
 | [Claude](claude.md) | Managed Claude Agent SDK worker plus Claude Code            | Linux/macOS local; persistent-sidecar runtime over SSH or outbound                                        | Submit, Steer, Queue, Stop, rename, compact        | Permission modes, prompts, native questions, skills, usage, background-work status, selected-completed-turn forks, native image input                                         |
 | [Grok](grok.md)     | Sedes-owned Grok ACP process                                | Local Linux x64 or macOS arm64/x64                                                              | Submit, Queue, Stop, rename                 | Plans, tool and collaboration rendering, file/image input, completed `ImageGen` and `ImageEdit` artifacts                              |
@@ -89,13 +89,13 @@ an unsupported action and the backend rejects it again if called directly.
 | Backend | Compiled profile                | Runtime admission                                                        | Tested through        |
 | ------- | ------------------------------- | ------------------------------------------------------------------------ | --------------------- |
 | Pi SDK  | `0.86.0` SDK                    | Exact pinned SDK package in the Sedes process                            | `0.86.0`              |
-| Pi | `1.4.0` native RPC and managed companion | Exact installed Pi `1.4.0` | `1.4.0`; Linux x64 offline fixtures and gated AW Qwen live test |
+| Pi | `1.4.0` native RPC and managed companion | Stable installed Pi `>=1.4.0` | `1.5.0`; Linux x64 offline fixtures and gated AW Qwen live test |
 | Codex   | `0.163.0` app-server protocol   | Stable `>=0.162.1`, excluding reviewed incompatible releases             | `0.163.0`             |
 | Claude  | `0.3.296` Agent SDK             | Stable Claude Code `>=2.1.287`, excluding reviewed incompatible releases | Claude Code `2.1.296` |
 | Grok    | `1.x` ACP compatibility profile | Stable `>=1.0.4`, excluding reviewed incompatible releases               | `1.0.4`               |
 | OpenCode v2 | `2.1.1` HTTP/SSE profile | Stable stock `>=2.1.1` | `2.1.1` |
 
-Codex, Claude, Grok, and OpenCode may admit a stable runtime newer than the release most
+Pi, Codex, Claude, Grok, and OpenCode may admit a stable runtime newer than the release most
 recently exercised by this repository. Sedes shows an installation advisory
 and continues to use the pinned reviewed protocol profile; a newer executable
 does not unlock new Sedes capabilities. Prereleases, exact excluded releases,
@@ -115,7 +115,7 @@ runtimes are not equivalent to exercised runtimes.
 | Backend | In Sedes since | Most recent runtime qualification | Live suites in the repository | Execution topologies |
 | --- | --- | --- | --- | --- |
 | Pi SDK | July 2026 | Pinned SDK `0.86.0`; four gated AW Qwen live tests passed on Linux x64 on 2026-10-26 | `test:real-pi`, `test:real-pi-cli` | Local runtime; SSH or outbound sidecar for workspace tools and context |
-| Pi | October 2026 | Exact Pi `1.4.0`; eight offline qualification tests and one gated AW Qwen live test passed on Linux x64 on 2026-10-26 | `test:real-pi-native` (isolated loopback fixtures); separately authorized `test:live-pi-native` | Local or persistent SSH/outbound sidecar on Linux/macOS |
+| Pi | October 2026 | Pi `1.5.0`; ten offline qualification tests and one gated AW Qwen live test on Linux x64 on 2026-11-08 | `test:real-pi-native` (isolated loopback fixtures); separately authorized `test:live-pi-native` | Local or persistent SSH/outbound sidecar on Linux/macOS |
 | Codex | July 2026 | App-server `0.162.1` and `0.163.0` against the compiled `0.163.0` profile on Linux x64 with isolated mock providers; live qualification not repeated | `test:real-codex-agent-tools` | Local process, external UDS/TCP, persistent SSH or outbound sidecar |
 | Claude | August 2026 | Claude Code `2.1.296` with Agent SDK `0.3.296` | `test:real-claude` (native loopback and authenticated cases) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
 | Grok | August 2026 | Grok Build `1.0.4` against the compiled `1.x` ACP profile | `test:real-grok` (three files) | Local Linux x64 or macOS only |
@@ -136,7 +136,7 @@ limits in the capability matrix; Claude gained conversation-scoped Steer and
 the sidecar-hosted runtime in September 2026 and is the more actively
 extended of those two, while Grok remains a local-only runtime with no Steer,
 compact, or fork support. OpenCode currently supports stock v2 on Linux
-execution hosts. Native Pi is a new separate integration with an exact 1.4.0
+execution hosts. Native Pi is a new separate integration with a stable >=1.4.0
 runtime requirement and a narrow Linux x64 AW Qwen live qualification. Expect rougher edges in these newer integrations
 and report reproducible problems with the backend, runtime version, and
 topology named.

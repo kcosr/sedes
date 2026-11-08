@@ -56,7 +56,7 @@ export const piNativeHostCommandSchema = z.discriminatedUnion("action", [
 export type PiNativeHostCommand = z.infer<typeof piNativeHostCommandSchema>;
 export type PiNativeHostCommandInput = PiNativeHostCommand extends infer Command
   ? Command extends PiNativeHostCommand ? Omit<Command, "serviceIncarnation" | "controllerEpoch"> : never : never;
-const capability = { capabilityId: "pi_native_runtime", majorVersion: 1 } as const;
+const capability = { capabilityId: "pi_native_runtime", majorVersion: 2 } as const;
 export const piNativeExecuteOperation = { ...capability, operation: "runtime.execute", requestSchema: sidecarRuntimeBodySchema,
   responseSchema: sidecarRuntimeBodySchema, lane: "operation", maximumDeadlineMilliseconds: 120_000,
 } satisfies SidecarOperationDefinition<z.infer<typeof sidecarRuntimeBodySchema>, z.infer<typeof sidecarRuntimeBodySchema>>;
@@ -72,8 +72,8 @@ export function piNativeHostCommandLane(command: PiNativeHostCommand | PiNativeH
 export const piNativeFailureSchema = z.strictObject({ code: z.string().regex(/^pi_[a-z0-9_]{1,100}$/u),
   delivery: z.enum(["not_sent", "sent_outcome_unknown", "rejected"]) });
 export const piNativeHostResponseSchema = z.discriminatedUnion("status", [
-  z.strictObject({ status: z.literal("ok"), value: z.unknown() }),
-  z.strictObject({ status: z.literal("failed"), failure: piNativeFailureSchema }),
+  z.strictObject({ status: z.literal("ok"), runtimeVersion: z.string().max(128).nullable(), value: z.unknown() }),
+  z.strictObject({ status: z.literal("failed"), runtimeVersion: z.string().max(128).nullable(), failure: piNativeFailureSchema }),
 ]);
 export const piNativeAttachmentSchema = piNativeIdentitySchema.extend({ handleId: id, generation: id, throughSequence: position, retainedAfterSequence: position,
   retainedOperationIds: z.array(id).max(512) });

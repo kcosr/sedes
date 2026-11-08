@@ -103,15 +103,18 @@ User-facing changes are collected here before release. See the
   saved-recording recovery. See [Electron voice](docs/operator/clients/electron.md#voice).
   ([#125](https://github.com/kcosr/sedes/pull/125))
 
-- Add a separate **Pi** backend for the installed Pi 1.4.0 CLI on local or
-  persistent SSH/outbound Linux/macOS hosts. It uses native configuration, MCP
+- Add a separate **Pi** backend for the installed stable Pi 1.4.0 or newer CLI
+  on local or persistent SSH/outbound Linux/macOS hosts. It uses native configuration, MCP
   servers, code mode, and session history, with tool-access controls, durable
   input recovery, completed-turn forks, and opt-in
   [lifecycle diagnostics](docs/developer/diagnostics.md#native-pi-lifecycle-and-recovery-capture)
   on the server and sidecar. **Pi SDK** remains available; both
   backends can share session storage without importing duplicate threads. See
-  [native Pi setup and limits](docs/operator/backends/pi-native.md).
-  ([#124](https://github.com/kcosr/sedes/pull/124))
+  [native Pi setup and limits](docs/operator/backends/pi-native.md). Pi 1.5.0 is
+  qualified on Linux x64; newer stable releases remain available with an installation
+  warning. Remote execution requires native Pi runtime capability **2**. The
+  embedded Pi SDK remains pinned separately.
+  ([#124](https://github.com/kcosr/sedes/pull/124), [#133](https://github.com/kcosr/sedes/pull/133))
 
 - A Home button beside Notifications opens the configured default thread and
   reveals Chat. The connection indicator now follows these buttons in reserved

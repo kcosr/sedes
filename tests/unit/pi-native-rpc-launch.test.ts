@@ -9,6 +9,30 @@ const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const action of cleanup.splice(0).reverse()) await action(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe.skipIf(process.platform === "win32")("native Pi owned launch", () => {
+  it.each([
+    { name: "unsupported release", body: 'console.log("1.3.0")', code: "pi_native_version_unsupported" },
+    { name: "malformed output", body: 'console.log("not a version")', code: "pi_native_version_unsupported" },
+    { name: "invalid UTF-8", body: 'process.stdout.write(Buffer.from([255]))', code: "pi_native_version_unsupported" },
+    { name: "nonzero exit", body: 'console.log("1.5.0"); process.exitCode = 23', code: "pi_native_version_unsupported" },
+    { name: "replaced executable", body: 'appendFileSync(process.argv[1], "\\n"); console.log("1.5.0")', code: "pi_native_executable_changed" },
+  ])("clears prior admission only after a positively rejected $name", async ({ body, code }) => {
+    const directory = await mkdtemp(path.join(tmpdir(), "pi-rejected-test-"));
+    cleanup.push(() => rm(directory, { recursive: true, force: true }));
+    const executablePath = path.join(directory, "pi.mjs");
+    await writeFile(executablePath, `#!${process.execPath}\nimport { appendFileSync } from "node:fs";\n${body}\n`);
+    await chmod(executablePath, 0o700);
+    const scope = { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "local", backendInstanceId: "pi" };
+    const environment = { PATH: process.env.PATH, HOME: directory };
+    const channels = new LocalEnvironmentChannelProvider({ scope, executionEnvironmentId: scope.executionEnvironmentId, environment });
+    cleanup.push(async () => channels.close());
+    const observed = vi.fn();
+    await expect(createPiNativeSessionProcess({ runtime: { ...scope, executablePath, initializationTimeoutMs: 2000, projectTrusted: false },
+      cwd: directory, channels, environment, authenticationKey: Buffer.alloc(32, 1), bridgeDirectory: directory,
+      onRuntimeVersion: observed,
+    })).rejects.toThrow(code);
+    expect(observed.mock.calls).toEqual([[undefined]]);
+  });
+
   it("correlates native exit status with initialization failure without retaining stderr or session paths", async () => {
     vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -16,16 +40,18 @@ describe.skipIf(process.platform === "win32")("native Pi owned launch", () => {
     cleanup.push(() => rm(directory, { recursive: true, force: true }));
     const executablePath = path.join(directory, "pi.mjs"), bridgeDirectory = path.join(directory, "bridge");
     await mkdir(bridgeDirectory, { mode: 0o700 });
-    await writeFile(executablePath, `#!${process.execPath}\nif (process.argv[2] === "--version") console.log("1.4.0"); else { console.error("private credential and provider text"); process.exitCode = 23; }\n`);
+    await writeFile(executablePath, `#!${process.execPath}\nif (process.argv[2] === "--version") console.log("1.5.0"); else { console.error("private credential and provider text"); process.exitCode = 23; }\n`);
     await chmod(executablePath, 0o700);
     const scope = { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "local", backendInstanceId: "pi" };
     const environment = { PATH: process.env.PATH, HOME: directory };
     const channels = new LocalEnvironmentChannelProvider({ scope, executionEnvironmentId: scope.executionEnvironmentId, environment });
     cleanup.push(async () => channels.close());
-    await expect(createPiNativeSessionProcess({ runtime: { ...scope, executablePath, initializationTimeoutMs: 2000, projectTrusted: false },
+    const observed = vi.fn();
+    await expect(createPiNativeSessionProcess({ onRuntimeVersion: observed, runtime: { ...scope, executablePath, initializationTimeoutMs: 2000, projectTrusted: false },
       cwd: directory, channels, environment, authenticationKey: Buffer.alloc(32, 1), bridgeDirectory,
       diagnostic: { runtimeId: "runtime", handleId: "handle", handleGeneration: "generation" },
     })).rejects.toThrow("pi_native_initialization_exited");
+    expect(observed.mock.calls).toEqual([[{ version: "1.5.0", newerThanTested: false }]]);
     const records = log.mock.calls.map(([line]) => JSON.parse(String(line).replace("[delivery-attachment] ", "")));
     const launch = records.find(record => record.event === "pi_native_launch_started");
     expect(records).toContainEqual(expect.objectContaining({ event: "pi_native_process_exited", reason: "exit", exitCode: 23, signal: null,
