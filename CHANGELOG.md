@@ -46,7 +46,7 @@ User-facing changes are collected here before release. See the
 - Upgrade OpenCode to stable stock **2.2.6 or newer** on every execution host.
   OpenCode's private runtime protocol is now **5**. See
   [OpenCode setup](docs/operator/backends/opencode.md).
-  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123))
+  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134))
 
 - Automation management now uses explicit automation IDs and the
   `/api/automations` collection. Update automation agent-tool versions and
@@ -278,7 +278,7 @@ User-facing changes are collected here before release. See the
   statistics and usage accounting. Qualification extends through **2.2.6**;
   newer-than-tested stable runtimes still show an active advisory. See
   [OpenCode compatibility](docs/operator/backends/opencode.md).
-  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123))
+  ([#93](https://github.com/kcosr/sedes/pull/93), [#123](https://github.com/kcosr/sedes/pull/123), [#134](https://github.com/kcosr/sedes/pull/134))
 
 - Archiving and restoring Codex threads also updates their native archive state
   by default, while preserving local archive controls when a backend is missing
