@@ -114,10 +114,12 @@ prereleases, malformed versions, versions below the floor, and explicitly
 excluded known-bad releases are rejected.
 
 The minimum provides native provider-specific model discovery. Restored threads
-keep their saved native provider when the account default changes; Sedes validates
-their model, reasoning, input modalities, and Speed offers against that provider's
-catalog. Older app-servers can ignore the provider selector and return the
-wrong catalog, so they are rejected rather than admitted with ambiguous settings.
+and forks keep the source thread's saved native provider when the native default
+changes; Sedes validates their model, reasoning, input modalities, and Speed offers
+against that provider's catalog. Start a new thread to use the new default
+provider rather than forking existing work. Older app-servers can ignore the
+provider selector and return the wrong catalog, so they are rejected rather than
+admitted with ambiguous settings.
 
 Releases newer than the 0.169.0 tested-through threshold are admitted with an
 installation advisory. They do not gain capabilities merely because of their

@@ -511,8 +511,9 @@ User-facing changes are collected here before release. See the
 
 - Codex cold resume restores the saved model and reasoning effort so a stale
   native configuration cannot silently replace the selected effort. Restored threads
-  validate their model, reasoning, and Speed against their saved provider after the
-  account default changes. Disallowed saved settings stay unresolved until repaired. See
+  and forks retain the source's saved provider and validate its model, reasoning,
+  and Speed after the native default changes. Start a new thread to use the new
+  default provider. Disallowed saved settings stay unresolved until repaired. See
   [Codex execution settings](docs/internals/codex-thread-execution-settings.md).
   ([#131](https://github.com/kcosr/sedes/pull/131))
 
