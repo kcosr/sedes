@@ -203,6 +203,9 @@ export interface BackendCatalog {
 export interface BackendCatalogContext {
   readonly scope: ExecutionScope;
   readonly workspace: ValidatedWorkspace;
+  /** Server-derived binding for a bound thread. Native interpretation stays in
+   * its backend; unbound creation intentionally uses that backend's defaults. */
+  readonly binding?: ConversationBinding;
   /**
    * An explicit picker read. Backends may refresh their native skill listing
    * without discarding unrelated catalog data; ordinary presentation reads

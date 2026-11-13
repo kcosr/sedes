@@ -46,7 +46,7 @@ function fixture() {
   const client = new CodexSharedClientFacade({ current: () => ({ generation: 3, request: vi.fn() as never, requestWithReceipt: vi.fn() as never }), latestGeneration: () => 3, retireGeneration: async () => {} });
   client.updateLifecycle({ state: "ready", generation: 3 });
   const runtime: CodexManagedTuiHostRuntime = {
-    configuration: { scope, instance: { tenantId: scope.tenantId, id: "backend", kind: "codex_app_server", label: "Codex", enabled: true, configurationRevision: 1, protocolRelease: "0.167.0" },
+    configuration: { scope, instance: { tenantId: scope.tenantId, id: "backend", kind: "codex_app_server", label: "Codex", enabled: true, configurationRevision: 1, protocolRelease: "0.169.0" },
       executionEnvironmentId: "remote", connection: { ownership: "external", channel: { type: "unix_websocket", socketPath: "/remote/provider.sock" } } },
     environmentChannel: {} as never, environment: { HOME: "/remote/account", PATH: "/remote/bin" }, supervisor: { client },
   };

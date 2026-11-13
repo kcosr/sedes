@@ -46,6 +46,32 @@ describe("Codex C2 pinned protocol", () => {
     }
   });
 
+  it("selects a configured native model provider without accepting aliases", () => {
+    for (const modelProvider of [null, "gateway-one", "x".repeat(512)]) {
+      const params = { modelProvider, includeHidden: false, limit: 10 };
+      expect(codexModelListMethod.encodeParams(params)).toEqual(params);
+    }
+    for (const modelProvider of ["", "x".repeat(513), 7]) {
+      expect(() => codexModelListMethod.encodeParams({ modelProvider } as never)).toThrow();
+    }
+    expect(() => codexModelListMethod.encodeParams({ provider: "gateway-one" } as never)).toThrow();
+  });
+
+  it("accepts nullable completion telemetry independently of persisted usage", () => {
+    const item = { type: "userMessage", id: "user-1", clientId: null,
+      content: [{ type: "text", text: "Hello", text_elements: [] }] };
+    const baseline = { threadId: "thread-1", turnId: "turn-1", item, completedAtMs: 2 };
+    expect(decodeCodexC2Notification("item/completed", baseline)).toEqual(baseline);
+    for (const contentTokenCount of [null, 0, 29, Number.MAX_SAFE_INTEGER]) {
+      const params = { ...baseline, contentTokenCount };
+      expect(decodeCodexC2Notification("item/completed", params)).toEqual(params);
+    }
+    for (const contentTokenCount of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, "29"]) {
+      expect(() => decodeCodexC2Notification("item/completed", { ...baseline, contentTokenCount })).toThrow();
+    }
+    expect(() => decodeCodexC2Notification("item/completed", { ...baseline, contentTokenCount: 29, extraTelemetry: 1 })).toThrow();
+  });
+
   it("accepts file-backed native images without inventing URL or path fields", () => {
     const input = [{ type: "image", fileId: "file-1", detail: "high" }] as const;
     expect(codexTurnStartMethod.encodeParams({ threadId: "thread-1", input: [...input] })).toEqual({ threadId: "thread-1", input });
@@ -1225,6 +1251,23 @@ describe("Codex C2 pinned protocol", () => {
     expect(
       decodeCodexC2Notification("thread/settings/updated", params),
     ).toEqual(params);
+    const environment = { environmentId: "local", cwd: "/workspace", runtimeWorkspaceRoots: ["/workspace"] };
+    for (const environments of [null, [], [environment], [{ ...environment, environmentId: "remote-native" }]]) {
+      const observed = { ...params, threadSettings: { ...params.threadSettings, environments } };
+      expect(decodeCodexC2Notification("thread/settings/updated", observed)).toEqual(observed);
+    }
+    for (const environments of [
+      [{ ...environment, environmentId: "" }],
+      [{ ...environment, environmentId: "x".repeat(513) }],
+      [{ ...environment, runLocally: true }],
+      [{ ...environment, runtimeWorkspaceRoots: [1] }],
+      [{ environmentId: "local", runtimeWorkspaceRoots: ["/workspace"] }],
+      Array.from({ length: 10_001 }, () => environment),
+    ]) {
+      expect(() => decodeCodexC2Notification("thread/settings/updated", {
+        ...params, threadSettings: { ...params.threadSettings, environments },
+      })).toThrow();
+    }
     for (const disabledPluginIds of [[""], [42], Array.from({ length: 1001 }, () => "plugin")]) {
       expect(() => decodeCodexC2Notification("thread/settings/updated", {
         ...params, threadSettings: { ...params.threadSettings, disabledPluginIds },

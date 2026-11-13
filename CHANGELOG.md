@@ -7,6 +7,11 @@ User-facing changes are collected here before release. See the
 
 ### Breaking Changes
 
+- Codex app-servers and managed TUI commands now require **0.169.0 or newer**.
+  Upgrade every execution host and rebuild execution sidecars with the server.
+  Remove the retired native Guardian configuration keys before startup. See
+  [Codex upgrade requirements](docs/operator/backends/codex.md#version-compatibility).
+
 - Android now requires Android 10 (API 29) or newer for native Opus encoding.
   ([#128](https://github.com/kcosr/sedes/pull/128))
 
@@ -497,17 +502,17 @@ User-facing changes are collected here before release. See the
   answered forms cannot reappear from an older interaction read.
   ([#93](https://github.com/kcosr/sedes/pull/93))
 
-- Codex 0.167.0 conversations accept native section notifications, audio file
-  references, item timestamps, generated-image metadata, and current account
-  and hook values without losing streaming or
-  history. The runtime minimum remains 0.162.1; native read-state metadata stays
-  informational, and file-backed generated images are explicitly unavailable.
-  See [Codex compatibility](docs/operator/backends/codex.md#version-compatibility).
+- Codex 0.169.0 conversations accept native moderation, completion-token,
+  executor-environment and audio-reference metadata without losing streaming or
+  history. Native metadata adds no audio playback or extra-executor authority;
+  file-backed generated images remain unavailable. See
+  [Codex compatibility](docs/operator/backends/codex.md#version-compatibility).
   ([#91](https://github.com/kcosr/sedes/pull/91), [#129](https://github.com/kcosr/sedes/pull/129), [#131](https://github.com/kcosr/sedes/pull/131))
 
 - Codex cold resume restores the saved model and reasoning effort so a stale
-  native configuration cannot silently replace the selected effort. Disallowed
-  saved settings stay unresolved until repaired. See
+  native configuration cannot silently replace the selected effort. Restored threads
+  validate their model, reasoning, and Speed against their saved provider after the
+  account default changes. Disallowed saved settings stay unresolved until repaired. See
   [Codex execution settings](docs/internals/codex-thread-execution-settings.md).
   ([#131](https://github.com/kcosr/sedes/pull/131))
 

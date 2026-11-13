@@ -725,7 +725,7 @@ limits and uncertain-input recovery.
 Every enabled Codex backend declares one connection topology, an
 execution-policy ceiling, and a top-level model policy using model IDs and/or
 reasoning efforts, never `providerIds`. Sedes supplies its exact generated
-`0.163.0` protocol profile from the compiled backend module.
+`0.169.0` protocol profile from the compiled backend module.
 
 Active Speed needs no global feature toggle or daemon restart. Sedes supplies
 `features.step_model_switching = true` through the native per-thread
@@ -760,10 +760,10 @@ working directory. The executable is installed on the selected execution host.
 The service account's first executable `codex` on `PATH` is used by default;
 optional `connection.channel.executablePath` is a canonical absolute override.
 `codexHome` is optional; when omitted, normal Codex home resolution is
-retained. The compiled backend selects the generated 0.163.0 parser profile;
+retained. The compiled backend selects the generated 0.169.0 parser profile;
 independently, Sedes admits a stable Linux x64 or macOS arm64/x64 `codex-cli`
-runtime at or above 0.162.1.
-Sedes is tested through 0.163.0 and reports a newer admitted runtime as newer
+runtime at or above 0.169.0.
+Sedes is tested through 0.169.0 and reports a newer admitted runtime as newer
 than tested. It owns the process group and native-store lock for the process
 lifetime.
 

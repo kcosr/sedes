@@ -114,9 +114,13 @@ function readyClient(
   return { client, request, requestWithReceipt };
 }
 
+function liveThreadProvider(modelProvider = "openai", id = "native-thread") {
+  return { generation: 7, inboundSequence: 1, result: { thread: { id, modelProvider } } };
+}
+
 /** A live `model/list` page whose one model advertises `serviceTiers`. */
 function liveCatalog(serviceTiers: readonly string[]) {
-  return async (...arguments_: readonly unknown[]) => (arguments_[0] as { method: string }).method === "experimentalFeature/list" ? liveSpeedPolicy() : ({
+  return async (...arguments_: readonly unknown[]) => (arguments_[0] as { method: string }).method === "thread/read" ? liveThreadProvider("openai", (arguments_[1] as { threadId: string }).threadId) : (arguments_[0] as { method: string }).method === "experimentalFeature/list" ? liveSpeedPolicy() : ({
     generation: 7,
     inboundSequence: 1,
     result: {
@@ -177,7 +181,7 @@ function externalConfiguration(
       label: "Codex",
       enabled: true,
       configurationRevision: 1,
-      protocolRelease: "0.167.0",
+      protocolRelease: "0.169.0",
     },
     executionEnvironmentId: authority.executionEnvironmentId,
     connection: { ownership: "external", channel },
@@ -234,7 +238,7 @@ function launcherChannels() {
     ExecutionEnvironmentChannelProvider["openOwnedProcess"];
   const openOwnedProcess = vi.fn(
     async (..._arguments: Parameters<OpenOwnedProcess>) => {
-      return codexVersionProbeChannel("codex-cli 0.162.1\n");
+      return codexVersionProbeChannel("codex-cli 0.169.0\n");
     },
   );
   const resolveOwnedProcessExecutable = vi.fn(async (_scope, _input) => ({
@@ -1059,6 +1063,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       });
     };
     const requestWithReceipt = vi.fn(async (method: { method: string }, _params: unknown) => {
+      if (method.method === "thread/read") return { ...liveThreadProvider("openai", authority.backendConversationId), inboundSequence: ++sequence };
       if (method.method === "experimentalFeature/list") return { ...liveSpeedPolicy(), inboundSequence: ++sequence };
       if (method.method === "model/list") return {
         generation: 7, inboundSequence: ++sequence,
@@ -1113,7 +1118,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
     expect(fixture.openOwnedPty).not.toHaveBeenCalled();
     fixture.emitSettings();
     await launched;
-    expect(fixture.requestWithReceipt.mock.calls[2]?.[1]).toEqual({
+    expect(fixture.requestWithReceipt.mock.calls[3]?.[1]).toEqual({
       threadId: authority.backendConversationId, cwd: authority.canonicalWorkspacePath,
       model: settings.model, effort: settings.reasoningEffort, serviceTier: "priority",
       approvalPolicy: "on-request", approvalsReviewer: "auto_review",
@@ -1131,9 +1136,9 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
     const fixture = settingsFixture("no_op");
     await fixture.launch();
     expect(fixture.requestWithReceipt.mock.calls.map(([method]) => method.method)).toEqual([
-      "model/list", "experimentalFeature/list", "thread/settings/update", "thread/resume",
+      "thread/read", "model/list", "experimentalFeature/list", "thread/settings/update", "thread/resume",
     ]);
-    expect(fixture.requestWithReceipt.mock.calls[3]?.[1]).toEqual({
+    expect(fixture.requestWithReceipt.mock.calls[4]?.[1]).toEqual({
       threadId: authority.backendConversationId, excludeTurns: true,
     });
     expect(fixture.openOwnedPty).toHaveBeenCalledOnce();
@@ -1148,7 +1153,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
     await fixture.launch();
     const args = fixture.openOwnedPty.mock.calls[0]![1].arguments;
     expect(args[args.indexOf("-m") + 1]).toBe(selection.model);
-    expect(fixture.requestWithReceipt.mock.calls[2]?.[1]).toMatchObject({ model: selection.model });
+    expect(fixture.requestWithReceipt.mock.calls[3]?.[1]).toMatchObject({ model: selection.model });
     const quoted = (value: string) => JSON.stringify(value).replace(/\u007f/gu, "\\u007f");
     expect(args.filter(arg => arg.startsWith("notice.model_migrations="))).toEqual([
       `notice.model_migrations={${quoted(selection.model)}=${quoted(selection.upgrade)}}`,
@@ -1179,7 +1184,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
   it("never prepares or opens a PTY for a speed the live model does not offer", async () => {
     const fixture = settingsFixture("ready", { model: settings.model, upgrade: null, serviceTiers: [] });
     await expect(fixture.launch()).rejects.toThrow("codex_tui_live_model_selection_unavailable");
-    expect(fixture.requestWithReceipt.mock.calls.map(([method]) => method.method)).toEqual(["model/list"]);
+    expect(fixture.requestWithReceipt.mock.calls.map(([method]) => method.method)).toEqual(["thread/read", "model/list"]);
     expect(fixture.prepareManagedProcessEndpoint).not.toHaveBeenCalled();
     expect(fixture.openOwnedPty).not.toHaveBeenCalled();
   });
@@ -1615,6 +1620,7 @@ describe("assertCodexLiveModelSelection", () => {
   it.each([null, "gpt-6.1-luna"])("reads uncached pages and returns the exact live model's upgrade: %s", async upgrade => {
     const requestWithReceipt = vi
       .fn()
+      .mockResolvedValueOnce(liveThreadProvider())
       .mockResolvedValueOnce({
         generation: 7,
         inboundSequence: 1,
@@ -1650,10 +1656,11 @@ describe("assertCodexLiveModelSelection", () => {
         signal: new AbortController().signal,
       }),
     ).resolves.toEqual({ upgrade });
-    expect(requestWithReceipt).toHaveBeenCalledTimes(2);
-    expect(requestWithReceipt.mock.calls[1]?.[1]).toMatchObject({
+    expect(requestWithReceipt).toHaveBeenCalledTimes(3);
+    expect(requestWithReceipt.mock.calls[2]?.[1]).toMatchObject({
       cursor: "page-2",
       includeHidden: false,
+      modelProvider: "openai",
     });
   });
 
@@ -1661,7 +1668,7 @@ describe("assertCodexLiveModelSelection", () => {
     const client = new CodexSharedClientFacade({
       current: () => ({
         generation: 7, request: vi.fn() as never,
-        requestWithReceipt: vi.fn(async () => ({
+        requestWithReceipt: vi.fn(async (method: { method: string }) => method.method === "thread/read" ? liveThreadProvider() : ({
           generation: 7, inboundSequence: 1,
           result: { data: [{ ...model("gpt-6-sol", ["high"]), upgrade }], nextCursor: null },
         })) as never,
@@ -1682,7 +1689,7 @@ describe("assertCodexLiveModelSelection", () => {
         current: () => ({
           generation: 7,
           request: vi.fn() as never,
-          requestWithReceipt: vi.fn(async (method: { method: string }) => method.method === "experimentalFeature/list" ? liveSpeedPolicy(fast, ultrafast) : ({
+          requestWithReceipt: vi.fn(async (method: { method: string }) => method.method === "thread/read" ? liveThreadProvider() : method.method === "experimentalFeature/list" ? liveSpeedPolicy(fast, ultrafast) : ({
             generation: 7,
             inboundSequence: 1,
             result: {
@@ -1735,6 +1742,28 @@ describe("assertCodexLiveModelSelection", () => {
     await expect(offered(["priority", "ultrafast"], false, true)("fast")).rejects.toThrow("codex_tui_live_speed_policy_disabled");
     await expect(offered(["priority", "ultrafast"], true, false)("ultrafast")).rejects.toThrow("codex_tui_live_speed_policy_disabled");
     await expect(offered(["priority", "ultrafast"], false, false)("standard")).resolves.toEqual({ upgrade: null });
+  });
+
+  it.each(["offered", "effort_unavailable", "speed_unavailable"] as const)("checks the saved provider for overlapping model IDs: %s", async selection => {
+    const requestWithReceipt = vi.fn(async (method: { method: string }, params: { modelProvider?: string }) => {
+      if (method.method === "thread/read") return liveThreadProvider("provider-a");
+      if (method.method === "experimentalFeature/list") return liveSpeedPolicy();
+      const explicit = params.modelProvider === "provider-a";
+      return { generation: 7, inboundSequence: 2, result: { data: [{
+        ...model("shared-model", explicit && selection === "effort_unavailable" ? ["low"] : ["high"]),
+        serviceTiers: explicit && selection === "speed_unavailable" ? [] : [{ id: "priority", name: "Fast", description: "Fast" }],
+      }], nextCursor: null } };
+    });
+    const client = new CodexSharedClientFacade({ current: () => ({ generation: 7,
+      request: vi.fn() as never, requestWithReceipt: requestWithReceipt as never }), latestGeneration: () => 7,
+      retireGeneration: async () => undefined });
+    client.updateLifecycle({ state: "ready", generation: 7 });
+    const result = assertCodexLiveModelSelection({ nativeThreadId: "native-thread", client, expectedGeneration: 7,
+      model: "shared-model", reasoningEffort: "high", serviceTier: "fast", signal: new AbortController().signal });
+    if (selection === "offered") await expect(result).resolves.toEqual({ upgrade: null });
+    else await expect(result).rejects.toThrow("codex_tui_live_model_selection_unavailable");
+    expect(requestWithReceipt.mock.calls.find(([method]) => method.method === "model/list")?.[1])
+      .toMatchObject({ modelProvider: "provider-a" });
   });
 
   it("rejects a response from a stale daemon generation", async () => {

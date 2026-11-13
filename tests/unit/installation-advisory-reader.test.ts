@@ -41,7 +41,7 @@ function runtime(
       label,
       enabled: true,
       configurationRevision: 1,
-      protocolRelease: "0.167.0",
+      protocolRelease: "0.169.0",
     },
     installationAdvisories: source,
   };

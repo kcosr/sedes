@@ -1829,7 +1829,7 @@ class CodexE2eRpcFixture {
     ];
     for (const [index, questions] of batches.entries()) {
       const item: CodexThread["turns"][number]["items"][number] = {
-        type: "agentMessage",
+        type: "agentMessage", moderation: null,
         id: `question-${turn.id}-${index}`,
         text: questions.map(({ title }) => title).join("\n"),
         phase: "commentary",
@@ -1859,7 +1859,7 @@ class CodexE2eRpcFixture {
     if (!thread || !turn) throw new Error("e2e_partial_answer_turn_not_active");
     const items: CodexThread["turns"][number]["items"] = [
       {
-        type: "agentMessage", id: `${turn.id}-progress`,
+        type: "agentMessage", moderation: null, id: `${turn.id}-progress`,
         text: "Checking the remaining compatibility paths.",
         phase: "commentary", memoryCitation: null, delivery: null, questions: null,
       },
@@ -1870,7 +1870,7 @@ class CodexE2eRpcFixture {
         reasoningEffort: "ultra",
       },
       {
-        type: "agentMessage", id: `${turn.id}-partial-answer`,
+        type: "agentMessage", moderation: null, id: `${turn.id}-partial-answer`,
         text: "The first compatibility finding is confirmed. I am checking the remaining paths.",
         phase: "partial_answer", memoryCitation: null, delivery: null, questions: null,
       },
@@ -1921,7 +1921,7 @@ class CodexE2eRpcFixture {
     for (let index = 0; index < benchmarkStreamItems; index += 1) {
       // Real provider-shaped item additions revise the normalized turn membership.
       const item: CodexThread["turns"][number]["items"][number] = {
-        type: "agentMessage",
+        type: "agentMessage", moderation: null,
         id: `benchmark-stream-item-${index}`,
         text: `Streaming checkpoint ${index}: inspected the request lifecycle.`,
         phase: "commentary",
@@ -1945,7 +1945,7 @@ class CodexE2eRpcFixture {
       await new Promise((resolve) => setTimeout(resolve, 40));
     }
     const finalItem: CodexThread["turns"][number]["items"][number] = {
-      type: "agentMessage",
+      type: "agentMessage", moderation: null,
       id: "benchmark-stream-final",
       text: "Browser benchmark stream complete.",
       phase: "final_answer",
@@ -2094,7 +2094,7 @@ class CodexE2eRpcFixture {
       type: "imageView", id: `${turn.id}-viewed-image`, path: absolutePath,
     };
     const following: CodexThread["turns"][number]["items"][number] = {
-      type: "agentMessage", id: `${turn.id}-after-viewed-image`,
+      type: "agentMessage", moderation: null, id: `${turn.id}-after-viewed-image`,
       text: "The file was viewed; work continues while its preview is captured.",
       phase: "commentary", memoryCitation: null, delivery: null, questions: null,
     };
@@ -2531,7 +2531,7 @@ class CodexE2eRpcFixture {
           id,
           extra: {},
           sessionId: FORBIDDEN_CODEX_SESSION,
-          forkedFromId: null,
+          forkedFromId: null, attachedToThreadId: null,
           parentThreadId: null,
           preview: `Imported Codex history — ${workspace.summary.displayName}`,
           ephemeral: false,
@@ -2599,7 +2599,7 @@ class CodexE2eRpcFixture {
                   durationMs: 1,
                 },
                 {
-                  type: "agentMessage",
+                  type: "agentMessage", moderation: null,
                   id: `agent-${ordinal}`,
                   text: "Which deployment region?\n- us-east-1\n- eu-west-1\n\nWhat should I keep in mind?",
                   phase: "final_answer",
@@ -3069,7 +3069,7 @@ class CodexE2eRpcFixture {
         daybreakEnabled: null,
         extra: {},
         sessionId: `e2e-codex-created-session-${threadSource}`,
-        forkedFromId: null,
+        forkedFromId: null, attachedToThreadId: null,
         parentThreadId: null,
         preview: "",
         ephemeral: false,
@@ -3480,7 +3480,7 @@ class CodexE2eRpcFixture {
           const current = this.#threads.get(thread.id)!;
           const currentTurn = current.turns.find(({ id }) => id === turnId)!;
           const finalAgent = {
-            type: "agentMessage" as const,
+            type: "agentMessage" as const, moderation: null,
             id: `interactive-agent-${ordinal}`,
             text: "Codex is streaming a browser-neutral normalized response.",
             phase: "final_answer" as const,

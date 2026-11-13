@@ -74,6 +74,7 @@ export interface BackendBindingDetailReader {
 export interface DatabasePresentationTarget {
   readonly backend: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
+  readonly binding?: ConversationBinding;
   readonly workspace?: ValidatedWorkspace;
   readonly driver?: ConversationBackendDriver;
 }
@@ -497,7 +498,10 @@ export class DatabaseConversationTargetStore {
         true,
       );
       const driver = this.#registry.driver(connection);
-      return { backend, connection, workspace, driver };
+      const binding = target.backingState === "bound"
+        ? bindingRecord(this.#bindings, scope, applicationThreadId)
+        : undefined;
+      return { backend, connection, workspace, driver, ...(binding ? { binding } : {}) };
     } catch {
       return { backend, connection };
     }

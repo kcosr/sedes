@@ -7,22 +7,22 @@ describe("CodexInstallationAdvisorySource", () => {
     const listener = vi.fn();
     const unsubscribe = source.subscribe(listener);
 
-    source.observe({ version: "0.162.1+vendor.1", newerThanTested: false });
+    source.observe({ version: "0.169.0+vendor.1", newerThanTested: false });
     expect(source.active()).toEqual([]);
 
-    source.observe({ version: "0.168.0", newerThanTested: true });
+    source.observe({ version: "0.170.0", newerThanTested: true });
     expect(source.active()).toEqual([
       {
         id: "runtime-newer-than-tested",
         tone: "warning",
         title: { text: "Codex is newer than tested" },
         message: {
-          text: "Running 0.168.0; Sedes is tested through 0.167.0.",
+          text: "Running 0.170.0; Sedes is tested through 0.169.0.",
         },
       },
     ]);
 
-    source.observe({ version: "0.162.1", newerThanTested: false });
+    source.observe({ version: "0.169.0", newerThanTested: false });
     expect(source.active()).toEqual([]);
     expect(listener).toHaveBeenCalledTimes(2);
 
@@ -36,8 +36,8 @@ describe("CodexInstallationAdvisorySource", () => {
     const listener = vi.fn();
     source.subscribe(listener);
 
-    source.observe({ version: "0.168.0", newerThanTested: true });
-    source.observe({ version: "0.168.0", newerThanTested: true });
+    source.observe({ version: "0.170.0", newerThanTested: true });
+    source.observe({ version: "0.170.0", newerThanTested: true });
 
     expect(listener).toHaveBeenCalledOnce();
   });

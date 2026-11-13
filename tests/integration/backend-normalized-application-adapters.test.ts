@@ -3280,6 +3280,7 @@ describe("backend-normalized application adapters", () => {
       expect(catalogRead).toHaveBeenCalledExactlyOnceWith({
         scope: current.scope,
         workspace: expect.objectContaining({ canonicalPath: "/tmp" }),
+        binding: expect.objectContaining({ applicationThreadId: current.threadId }),
         purpose: "skill_picker",
       });
       catalogRead.mockRestore();

@@ -433,6 +433,7 @@ export class DatabaseThreadApplicationPresentationReader implements ThreadApplic
         ? await target.driver.catalog({
             scope,
             workspace: target.workspace,
+            ...(target.binding ? { binding: target.binding } : {}),
             ...(options?.catalogPurpose ? { purpose: options.catalogPurpose } : {}),
           })
         : undefined;
@@ -537,6 +538,8 @@ export class DatabaseThreadApplicationPresentationReader implements ThreadApplic
       target.backend.configurationRevision,
       target.connection.id,
       target.connection.configurationRevision,
+      target.binding?.backendConversationId,
+      target.binding?.createdAt,
       target.workspace?.summary.id,
       target.workspace?.summary.revision,
       target.workspace?.authorityRevision,

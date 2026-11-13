@@ -90,7 +90,7 @@ an unsupported action and the backend rejects it again if called directly.
 | ------- | ------------------------------- | ------------------------------------------------------------------------ | --------------------- |
 | Pi SDK  | `0.86.0` SDK                    | Exact pinned SDK package in the Sedes process                            | `0.86.0`              |
 | Pi | `1.4.0` native RPC and managed companion | Stable installed Pi `>=1.4.0` | `1.5.0`; Linux x64 offline fixtures and gated AW Qwen live test |
-| Codex   | `0.163.0` app-server protocol   | Stable `>=0.162.1`, excluding reviewed incompatible releases             | `0.163.0`             |
+| Codex   | `0.169.0` app-server protocol   | Stable `>=0.169.0`, excluding reviewed incompatible releases             | `0.169.0`             |
 | Claude  | `0.3.319` Agent SDK             | Stable Claude Code `>=2.1.287`, excluding reviewed incompatible releases | Claude Code `2.1.319` |
 | Grok    | `1.x` ACP compatibility profile | Stable `>=1.0.4`, excluding reviewed incompatible releases               | `1.0.4`               |
 | OpenCode v2 | `2.2.6` HTTP/SSE profile | Stable stock `>=2.2.6` | `2.2.6` |

@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Prepare an approved plan for the first turn of a fresh thread.",
+  "properties": {
+    "attachmentPath": {
+      "description": "Absolute path to the optional app-server copy of the plan.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "markdown": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "markdown",
+    "threadId"
+  ],
+  "title": "ThreadPrepareApprovedPlanParams",
+  "type": "object"
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "prompt": {
+      "description": "Initial user prompt. If no attachment is readable, the plan is already in the thread's context.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "prompt"
+  ],
+  "title": "ThreadPrepareApprovedPlanResponse",
+  "type": "object"
+}

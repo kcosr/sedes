@@ -30,7 +30,7 @@ const adoptionManifest = JSON.parse(
   readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.167.0/adoption-manifest.json",
+      "protocol/codex-app-server/0.169.0/adoption-manifest.json",
     ),
     "utf8",
   ),
@@ -49,7 +49,7 @@ const stableProtocolManifest = JSON.parse(
   readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.167.0/protocol-manifest.json",
+      "protocol/codex-app-server/0.169.0/protocol-manifest.json",
     ),
     "utf8",
   ),
@@ -58,7 +58,7 @@ const experimentalProtocolManifest = JSON.parse(
   readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.167.0/protocol-manifest-experimental.json",
+      "protocol/codex-app-server/0.169.0/protocol-manifest-experimental.json",
     ),
     "utf8",
   ),
@@ -90,7 +90,7 @@ const officialServerNotificationDefinitions = new Map(
   [...readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.167.0/official/stable/typescript/ServerNotification.ts",
+      "protocol/codex-app-server/0.169.0/official/stable/typescript/ServerNotification.ts",
     ),
     "utf8",
   ).matchAll(/\{ "method": "([^"]+)", "params": ([A-Za-z0-9_]+) \}/gu)].map(
@@ -103,7 +103,7 @@ function readSchema(profile: "generated" | "generated-experimental") {
     readFileSync(
       path.join(
         repositoryRoot,
-        `protocol/codex-app-server/0.167.0/${profile}/json-schema/codex_app_server_protocol.v2.schemas.json`,
+        `protocol/codex-app-server/0.169.0/${profile}/json-schema/codex_app_server_protocol.v2.schemas.json`,
       ),
       "utf8",
     ),
@@ -222,10 +222,10 @@ describe("Codex D3 production app-server binding", () => {
   });
 
   it("keeps the manifest and generated production registries exactly aligned", () => {
-    expect(CODEX_APP_SERVER_RELEASE).toBe("0.167.0");
-    expect(adoptionManifest.productionRelease).toBe("0.167.0");
+    expect(CODEX_APP_SERVER_RELEASE).toBe("0.169.0");
+    expect(adoptionManifest.productionRelease).toBe("0.169.0");
     expect(adoptionManifest.productionRuntimeCompatibility.currentPolicy).toBe(
-      "stable releases admitted by the runtime policy using exactly the 0.167.0 parser profile",
+      "stable releases admitted by the runtime policy using exactly the 0.169.0 parser profile",
     );
     expect(adoptionManifest.routes).toHaveLength(78);
 
@@ -336,7 +336,7 @@ describe("Codex D3 production app-server binding", () => {
   it("keeps receipt metadata optional in the exact official result schemas", () => {
     // The official TypeScript export spells these nullable fields as required,
     // while its JSON Schema permits omission. Keep that actual wire authority:
-    // the same parser must admit existing 0.162.1 runtimes without receipts.
+    // absence must remain admitted wherever the selected wire schema permits it.
     for (const [definition, property] of [
       ["ThreadListResponse", "readStates"],
       ["ThreadReadResponse", "readState"],

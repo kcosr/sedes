@@ -28,26 +28,26 @@ troubleshooting, see the [Codex operator guide](../../operator/backends/codex.md
 
 ## Protocol and release admission
 
-Sedes pins `@openai/codex` 0.167.0 as its development-time generated protocol
+Sedes pins `@openai/codex` 0.169.0 as its development-time generated protocol
 baseline. Generated TypeScript, JSON Schema, the method
 inventory, hashes, and release evidence live under
-`protocol/codex-app-server/0.167.0`.
+`protocol/codex-app-server/0.169.0`.
 
 Owned Codex processes support Linux x64 and macOS arm64/x64. External
 topologies retain their separate transport and execution-environment
 requirements.
 
-The compiled Codex backend supplies exactly one `0.167.0` generated parser
+The compiled Codex backend supplies exactly one `0.169.0` generated parser
 profile and persists that value for diagnostics and runtime-generation
 integrity. It is not operator configuration and remains separate from
 executable admission. Owned and external runtimes admit stable releases at or
-above 0.162.1. Build metadata is allowed. Prereleases, malformed versions,
+above 0.169.0. Build metadata is allowed. Prereleases, malformed versions,
 versions below the floor, and explicitly excluded known-bad releases are
 rejected.
 
-Releases newer than the 0.167.0 tested-through threshold receive a
+Releases newer than the 0.169.0 tested-through threshold receive a
 provider-private `newerThanTested` assessment for the installation advisory.
-They still use only the pinned 0.167.0 stable and experimental validators and
+They still use only the pinned 0.169.0 stable and experimental validators and
 gain no capabilities from their version. Managed TUI uses the same
 operator-installed command policy in every deployment: an optional canonical
 `tuiExecutablePath` override, otherwise the first `codex` on `PATH`, with the
@@ -76,25 +76,30 @@ is unavailable without probing a native path, treating an ID as a URL, or
 performing a network lookup. Interrupted turns retain meaningful
 native errors as bounded warning notices; an ordinary Stop adds no error notice.
 
-The 0.167.0 profile accepts the exact URL-or-file-reference audio union in
-native user content. File identifiers are bounded and remain provider-private;
-the history projector does not expose audio playback or treat an identifier as
-a retrievable URL. Function-call output audio keeps its separate native shape.
+The 0.169.0 profile accepts URL-or-file-reference audio in native user content
+and function-call output. File identifiers remain bounded provider-private
+metadata; no audio playback, attachment submission, or file retrieval is implied.
 Sedes does not advertise `requiredHumanApproval`; unexpected `humanCommand`
-approval requests fail closed instead of becoming ordinary command approvals.
+approvals fail closed.
 
-The runtime floor remains 0.162.1. The qualified 0.162.1, 0.163.0, 0.166.0, and
-0.167.0 runtimes use the one current parser; the older generated tree is removed.
-The floor and tested-through policy remain independent constants; newer stable runtimes are admitted with
-the usual advisory. Operator-owned app-servers and managed TUI commands are
-upgraded separately from Sedes.
+Assistant moderation/display metadata, item-completion token counts, and
+settings executor environments are exact, bounded native metadata. Display hints
+do not trigger browser actions, token telemetry does not replace aggregate usage,
+and environment metadata does not grant access to additional native executors.
 
-The [runtime qualification](../../../protocol/codex-app-server/0.167.0/runtime-compatibility/README.md)
-records exact reviewed exports and Linux x64 execution of the minimum, previous
-baseline, and current release against a local mock model,
-including changed-settings notification, persistence after restart, explicit fork
-settings, and rejected command approval. macOS artifacts are integrity-checked
-only. Authenticated provider and topology checks are recorded separately.
+The runtime minimum and tested-through release are 0.169.0. The single generated
+profile replaces the older tree. Provider-specific `model/list.modelProvider`
+selection is required because earlier executables can ignore that selector and
+return the default provider's catalog. Thread catalog validation retains native
+provider identity within the Codex backend; normalized browser provider identity
+continues to name the Sedes connection. Operator-owned app-servers and managed
+TUI commands are upgraded separately from Sedes.
+
+The [runtime qualification](../../../protocol/codex-app-server/0.169.0/runtime-compatibility/README.md)
+records exact exports and Linux x64 execution against isolated mock providers,
+including settings, streaming, restart persistence, fork settings and declined
+command approval. macOS artifacts have integrity evidence only. Authenticated
+provider and topology checks are recorded separately.
 
 Sedes opts into the contracted experimental `thread/settings/update` and
 `turn/settings/update` methods. Unknown experimental methods are rejected.
@@ -137,8 +142,7 @@ Codex 0.163.0 introduced native receipt metadata to `thread/list` and `thread/re
 and the stable `thread/readState/changed` notification, which can precede
 `turn/completed`. These values are structurally validated and bounded, then
 discarded before transcript queuing or mutation accounting. Nullable or omitted
-receipt fields follow the one official schema, including on the supported
-0.162.1 runtime. Receipt state is never completion or delivery evidence and
+receipt fields follow the one official schema, with the exact selected schema. Receipt state is never completion or delivery evidence and
 does not replace principal-owned Sedes completion attention. Native read-state
 mutations remain unsupported. This compatibility change is private to Codex;
 Pi, Claude, Grok, and OpenCode retain their existing contracts and capabilities.
@@ -526,7 +530,7 @@ fails closed.
 A `turn/steer` response only admits the input to the active turn's pending
 input. Codex records it (model history, then the `userMessage` item with its
 `clientId`) when the turn loop drains that input, before the next model request.
-Codex 0.162.1 enables `instant_interrupt` by default, so a Steer can preempt
+Codex enables `instant_interrupt` by default, so a Steer can preempt
 the current response and reach that drain immediately. Sedes uses the same
 item evidence in either mode; a fast native drain is not a new Sedes turn. The handle therefore returns `pending_materialization`
 unless the exact authenticated item is already in its projection, and the

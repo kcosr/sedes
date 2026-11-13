@@ -23,7 +23,7 @@ const coordinate: CodexProjectedItemCoordinate = {
 };
 
 const agentItem = (text = ""): CodexThreadItem => ({
-  type: "agentMessage",
+  type: "agentMessage", moderation: null,
   id: "item-1",
   text,
   phase: "final_answer",
