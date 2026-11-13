@@ -1003,6 +1003,12 @@ complete desired model, effort, permission mode, and exact Sedes tool policy
 from an available source.
 It revision-fences and revalidates those values before creating an independent
 empty draft with no Claude session or history.
+The copy fence uses a thread-owned desired-settings revision, separate from the
+overall settings revision used for runtime evidence and UI mutations. Attaching,
+reconfirming, or invalidating effective settings does not invalidate a copy.
+Desired model, effort, and permission writes (including imported permission
+adoption) advance both revisions, so concurrent edits still reject the copy,
+even when the desired values are changed back before creation commits.
 
 ## Permissions and blocking interactions
 

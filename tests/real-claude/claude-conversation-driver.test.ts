@@ -207,6 +207,7 @@ describe.sequential("real Claude subscription driver", () => {
         desired_model TEXT,
         desired_effort TEXT,
         desired_permission_mode TEXT,
+      desired_revision INTEGER NOT NULL DEFAULT 0,
         effective_model TEXT,
         effective_model_state TEXT NOT NULL,
         effective_model_generation INTEGER,

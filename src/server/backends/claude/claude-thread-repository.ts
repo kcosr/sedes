@@ -32,6 +32,8 @@ export interface ClaudeThreadSettingsRecord extends ClaudeDesiredSettings {
   readonly effectivePermissionClassification: ClaudeEffectiveClassification | null;
   readonly effectivePermissionState: ClaudeEffectiveState;
   readonly effectivePermissionGeneration: number | null;
+  /** Changes to the desired tuple only; runtime observations use revision. */
+  readonly desiredRevision: number;
   readonly revision: number;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -127,6 +129,7 @@ const settingsColumns = `
   effective_permission_classification AS effectivePermissionClassification,
   effective_permission_state AS effectivePermissionState,
   effective_permission_generation AS effectivePermissionGeneration,
+  desired_revision AS desiredRevision,
   revision,
   created_at AS createdAt,
   updated_at AS updatedAt
@@ -297,6 +300,7 @@ export class ClaudeThreadRepository {
         `
           UPDATE claude_thread_settings
           SET desired_model = ?, desired_effort = ?, desired_permission_mode = ?,
+            desired_revision = desired_revision + 1,
             revision = revision + 1, updated_at = ?
           WHERE tenant_id = ? AND owner_principal_id = ?
             AND application_thread_id = ? AND revision = ?
@@ -340,6 +344,7 @@ export class ClaudeThreadRepository {
         effective_permission_classification = 'recognized',
         effective_permission_state = 'confirmed',
         effective_permission_generation = ?, revision = revision + 1,
+        desired_revision = desired_revision + 1,
         updated_at = max(updated_at, ?)
       WHERE tenant_id = ? AND owner_principal_id = ?
         AND application_thread_id = ? AND revision = ?

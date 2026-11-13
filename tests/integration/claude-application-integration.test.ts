@@ -14,6 +14,7 @@ import type {
   AgentConnectionProfile,
 } from "../../src/server/backends/contracts.js";
 import { ClaudeBackendModule } from "../../src/server/backends/claude/claude-backend-module.js";
+import { ClaudeThreadRepository } from "../../src/server/backends/claude/claude-thread-repository.js";
 import { ClaudeSdkRuntimeAdapter } from "../../src/server/backends/claude/claude-runtime-client.js";
 import { claudeConfigDirectory } from "../../src/server/backends/claude/claude-child-environment.js";
 import type {
@@ -542,9 +543,10 @@ describe("Claude production application integration", () => {
       });
       const drafts = new ConversationDraftRepository(database);
       const completion = new SubmissionCompletionRepository(database);
+      const lifecycleTargets = new DatabaseLifecycleTargetResolver(targets);
       const lifecycle = new ConversationLifecycleService({
         registry,
-        targets: new DatabaseLifecycleTargetResolver(targets),
+        targets: lifecycleTargets,
         backendPersistence: runtimeModules.threadPersistence,
         bindings,
         creation: new ConversationCreationRepository(database),
@@ -593,6 +595,51 @@ describe("Claude production application integration", () => {
       });
       expect(created.draft.revision).toBe(0);
 
+      // A settings copy can be in flight while opening the source attaches
+      // Claude. Hold target resolution so the actual attach completes between
+      // capturing the selection and checking it in the creation transaction.
+      const adapter = runtimeModules.savedAgents.get(instance.id)!;
+      const settings = new ClaudeThreadRepository(database);
+      const captureInput = { scope, applicationThreadId: created.applicationThreadId, connection };
+      const capture = adapter.captureThreadConfiguration(captureInput);
+      const sourceBeforeAttach = settings.get(scope, created.applicationThreadId);
+      const context = {
+        scope,
+        connection,
+        workspace: resolvedTarget.workspace,
+        catalog: await registry.driver(connection).catalog({ scope, workspace: resolvedTarget.workspace }),
+      };
+      const backendConfiguration = adapter.resolve({
+        ...context,
+        prepared: adapter.prepareResolutionContext(context),
+        overrides: adapter.validateOverrides({ overrides: capture.overrides }),
+      });
+      const copyInput = {
+        workspaceId: workspace.id,
+        connectionProfileId: connection.id,
+        title: "Copied Claude settings",
+        configurationCopy: {
+          sourceApplicationThreadId: created.applicationThreadId,
+          mutationId: crypto.randomUUID(),
+        },
+        bootstrap: {
+          backendAdapter: adapter,
+          backendConfiguration,
+          assertDurableFences: (transaction: Parameters<typeof adapter.assertThreadConfigurationCapture>[0]["transaction"]) =>
+            adapter.assertThreadConfigurationCapture({ ...captureInput, transaction, capture }),
+        },
+      };
+      let releaseCopy!: () => void;
+      const copyGate = new Promise<void>((resolve) => { releaseCopy = resolve; });
+      const resolveNew = lifecycleTargets.resolveNew.bind(lifecycleTargets);
+      const resolveSpy = vi.spyOn(lifecycleTargets, "resolveNew").mockImplementationOnce(async (...args) => {
+        await copyGate;
+        return resolveNew(...args);
+      });
+      const pendingCopy = lifecycle.createServerDraft(scope, copyInput);
+      expect(resolveSpy).toHaveBeenCalledOnce();
+      resolveSpy.mockRestore();
+
       await expect(
         lifecycle.startFirstSend(scope, created.applicationThreadId, {
           attemptId: "claude-first-attempt",
@@ -604,6 +651,21 @@ describe("Claude production application integration", () => {
         status: "bound",
         binding: { backendConversationId: SESSION_ID },
       });
+      expect(settings.get(scope, created.applicationThreadId).revision).toBeGreaterThan(sourceBeforeAttach.revision);
+      expect(settings.get(scope, created.applicationThreadId).desiredRevision).toBe(sourceBeforeAttach.desiredRevision);
+      releaseCopy();
+      const copied = await pendingCopy;
+      expect(settings.get(scope, copied.applicationThreadId)).toMatchObject({
+        model: sourceBeforeAttach.model,
+        effort: sourceBeforeAttach.effort,
+        permissionMode: sourceBeforeAttach.permissionMode,
+        desiredRevision: 0,
+        revision: 0,
+        effectiveModelState: "unconfirmed",
+      });
+      expect(bindings.getBinding(scope, copied.applicationThreadId)).toBeUndefined();
+      expect(copied.draft).toMatchObject({ text: "", revision: 0 });
+      expect((await lifecycle.createServerDraft(scope, copyInput)).applicationThreadId).toBe(copied.applicationThreadId);
       expect(
         runtimeModules.bindingDetails
           .get(instance.id)!
@@ -777,6 +839,40 @@ describe("Claude production application integration", () => {
           }),
         }),
       );
+
+      // Real desired edits still reject before inserting a child or receipt,
+      // even if the user restores the original value before creation commits.
+      for (const change of [
+        { model: "claude-opus-5" },
+        { effort: "high" },
+        { permissionMode: "acceptEdits" as const },
+      ]) {
+        const original = settings.get(scope, created.applicationThreadId);
+        const captured = adapter.captureThreadConfiguration(captureInput);
+        const edited = settings.updateDesired(scope, created.applicationThreadId, {
+          expectedRevision: original.revision, desired: { ...original, ...change }, now: original.updatedAt + 1,
+        });
+        const attempt = {
+          ...copyInput,
+          configurationCopy: { ...copyInput.configurationCopy, mutationId: crypto.randomUUID() },
+          bootstrap: {
+            ...copyInput.bootstrap,
+            assertDurableFences: (transaction: Parameters<typeof adapter.assertThreadConfigurationCapture>[0]["transaction"]) =>
+              adapter.assertThreadConfigurationCapture({ ...captureInput, transaction, capture: captured }),
+          },
+        };
+        const threadCount = () => database.prepare("SELECT count(*) AS count FROM application_threads").get();
+        const before = threadCount();
+        await expect(lifecycle.createServerDraft(scope, attempt)).rejects.toMatchObject({ code: "conflict" });
+        settings.updateDesired(scope, created.applicationThreadId, {
+          expectedRevision: edited.revision, desired: original, now: edited.updatedAt + 1,
+        });
+        await expect(lifecycle.createServerDraft(scope, attempt)).rejects.toMatchObject({ code: "conflict" });
+        expect(threadCount()).toEqual(before);
+        expect(lifecycle.findThreadConfigurationCopy(scope, {
+          ...attempt.configurationCopy, title: attempt.title,
+        })).toBeUndefined();
+      }
     } finally {
       releaseObservedActor?.();
       await actors?.close().catch(() => undefined);

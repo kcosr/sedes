@@ -3547,6 +3547,13 @@ attachments, queues, Tasks, automations, managed clients, and runtime-generation
 observations do not transfer. Creation capabilities are recomputed from the
 current target rather than persisted from the source.
 
+Claude fences this copy with its dedicated desired-settings revision. Its
+overall settings revision also tracks effective runtime evidence, so an attach
+or observation refresh must not be treated as an edit of the captured desired
+tuple. Desired writes advance both revisions; the copy still rejects concurrent
+edits, including values changed away and back. This provider-private split does
+not change other backends' settings contracts or normalized capabilities.
+
 An application-assigned provider identity uses the backend's explicit
 `reserveBackendConversationId` formatter; shared code must not assume native
 session syntax. Existing backends keep their current identifier format.

@@ -237,7 +237,8 @@ describe("Claude SavedAgent configuration", () => {
       effectivePermissionClassification: null,
       effectivePermissionState: "unconfirmed" as const,
       effectivePermissionGeneration: null,
-      revision: 4,
+      desiredRevision: 4,
+      revision: 7,
       createdAt: 1,
       updatedAt: 1,
     };
@@ -288,7 +289,25 @@ describe("Claude SavedAgent configuration", () => {
           }),
         )(),
       ).not.toThrow();
-      settings = { ...settings, revision: 5 };
+      // Loading the source changes runtime evidence, not the copied selection.
+      settings = { ...settings, revision: 8 };
+      expect(() =>
+        database.transaction(() =>
+          adapter.assertThreadConfigurationCapture({
+            transaction:
+              ConversationCreationTransaction.fromActiveDatabase(database),
+            scope: {
+              tenantId: connection.tenantId,
+              principalId: connection.ownerPrincipalId,
+            },
+            applicationThreadId: "thread-source",
+            connection,
+            capture,
+          }),
+        )(),
+      ).not.toThrow();
+      // An edit followed by restoration still invalidates the old capture.
+      settings = { ...settings, desiredRevision: 6, revision: 10 };
       expect(() =>
         database.transaction(() =>
           adapter.assertThreadConfigurationCapture({
