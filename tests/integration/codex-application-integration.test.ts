@@ -241,11 +241,15 @@ function fakeCodexDependencies(
       } as Result;
     }
     if (method === "model/list") {
+      // The imported thread retains its provider while new-chat defaults offer
+      // a disjoint model. Both execution and normalized controls must use the
+      // saved provider, regardless of the daemon-default catalog cache.
+      const savedProvider = (params as { readonly modelProvider?: string }).modelProvider === thread.modelProvider;
       return {
         data: [
           {
-            id: "gpt-5.6-codex",
-            model: "gpt-5.6-codex",
+            id: savedProvider ? "gpt-5.6-codex" : "different-default-provider-model",
+            model: savedProvider ? "gpt-5.6-codex" : "different-default-provider-model",
             upgrade: null,
             upgradeInfo: null,
             availabilityNux: null,
@@ -390,7 +394,7 @@ function fakeCodexDependencies(
             },
             executable: {
               path: "/usr/bin/false",
-              version: "0.162.1",
+              version: "0.169.0",
               newerThanTested: false,
             },
             workingDirectory: input.connection.channel.workingDirectory,
@@ -956,8 +960,19 @@ describe("Codex production application integration", () => {
               includeTurns: false,
             },
           },
+          {
+            method: "thread/read",
+            params: {
+              threadId: "codex-native-thread",
+              includeTurns: false,
+            },
+          },
         ],
       );
+      expect(requests).toContainEqual({
+        method: "model/list",
+        params: expect.objectContaining({ modelProvider: "openai" }),
+      });
       expect(
         requests.filter(({ method }) => method === "thread/resume"),
       ).toEqual([

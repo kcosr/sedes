@@ -1,0 +1,42 @@
+{
+  "release": "0.169.0",
+  "parserRelease": "0.169.0",
+  "platform": "linux/x64",
+  "executableSha256": "b452ca20f838a8855a88a41050ee4a694033fff4ea3ecdad5633e6e0e8d13f2b",
+  "verifiedAt": "2026-11-13T13:51:52.155754+00:00",
+  "model": "gpt-5.6-luna",
+  "reasoningEffort": "low",
+  "isolatedNativeHomes": true,
+  "operatorConfigurationModified": false,
+  "suites": [
+    {
+      "command": "npm run test:real-codex",
+      "passed": 14,
+      "skipped": 1,
+      "authenticatedCases": [
+        "disposable UDS streaming and passive history",
+        "Steer/Stop per-operation native correlation",
+        "managed TUI-originated read-only work",
+        "persistent sidecar receipt and native-history recovery"
+      ],
+      "fixtureCases": 10
+    },
+    {
+      "command": "npm --ignore-scripts run test:real-codex-agent-tools (after npm run build)",
+      "passed": 4,
+      "skipped": 0,
+      "authenticatedCases": [
+        "generated CLI skill and source-bound invocation",
+        "native individual MCP",
+        "native progressive MCP",
+        "HTML publish and screenshot-only text through native MCP"
+      ]
+    }
+  ],
+  "steerStop": "Each signed native client ID and exact text independently determines materialized/accepted versus absent/not accepted after interruption. Pending ACK timing is not treated as settled absence.",
+  "limits": [
+    "Generated-image canary not run; no authorization specific to image-generation capacity and retained image session.",
+    "No external SSH network, macOS or Windows execution qualification.",
+    "Electron graphical/package verification deferred under workspace instructions."
+  ]
+}

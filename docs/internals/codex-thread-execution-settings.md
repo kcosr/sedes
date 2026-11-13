@@ -131,7 +131,7 @@ transport. Replaying the pair prevents an inherited `config.toml` effort, such
 as `none`, from conflicting with the selected model. The turn still sends its
 own frozen effort. These overrides never rewrite operator configuration.
 
-An already-loaded Codex 0.167.0 session can retain its initial request-level
+An already-loaded Codex 0.169.0 session can retain its initial request-level
 effort for the same model even after `thread/settings/update` or `turn/start`
 selects another effort. Resuming that session while another native subscriber
 retains it does not rebuild the baseline. Sedes preserves that live authority;

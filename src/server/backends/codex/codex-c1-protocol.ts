@@ -267,7 +267,7 @@ function assertUserInputClosed(input: Extract<OfficialThreadItem, { type: "userM
 
 function assertThreadItemClosed(item: OfficialThreadItem): void {
   const keysByType = {
-    userMessage: ["type", "id", "clientId", "content"], hookPrompt: ["type", "id", "fragments"], agentMessage: ["type", "id", "text", "phase", "memoryCitation", "delivery", "questions"], functionCallOutput: ["type", "id", "name", "namespace", "output"], plan: ["type", "id", "text"], reasoning: ["type", "id", "summary", "content"],
+    userMessage: ["type", "id", "clientId", "content"], hookPrompt: ["type", "id", "fragments"], agentMessage: ["type", "id", "text", "phase", "memoryCitation", "delivery", "questions", "moderation"], functionCallOutput: ["type", "id", "name", "namespace", "output"], plan: ["type", "id", "text"], reasoning: ["type", "id", "summary", "content"],
     commandExecution: ["type", "id", "pluginId", "scriptPath", "command", "cwd", "processId", "source", "status", "commandActions", "aggregatedOutput", "exitCode", "durationMs"], fileChange: ["type", "id", "changes", "status"],
     mcpToolCall: ["type", "id", "server", "tool", "status", "arguments", "appContext", "mcpAppResourceUri", "mcpAppUi", "pluginId", "readOnlyHint", "result", "error", "durationMs"], dynamicToolCall: ["type", "id", "namespace", "tool", "arguments", "status", "contentItems", "success", "durationMs"],
     collabAgentToolCall: ["type", "id", "tool", "status", "senderThreadId", "receiverThreadIds", "prompt", "model", "reasoningEffort", "agentsStates"], subAgentActivity: ["type", "id", "kind", "agentThreadId", "agentPath", "model", "reasoningEffort"], webSearch: ["type", "id", "query", "action", "results"], imageView: ["type", "id", "path"], sleep: ["type", "id", "durationMs"], imageGeneration: ["type", "id", "status", "revisedPrompt", "result", "fileId", "transparentBackground", "failure", "savedPath", "inputImages", "generationId"], enteredReviewMode: ["type", "id", "review"], exitedReviewMode: ["type", "id", "review"], contextCompaction: ["type", "id"],
@@ -277,6 +277,15 @@ function assertThreadItemClosed(item: OfficialThreadItem): void {
     case "userMessage": item.content.forEach(assertUserInputClosed); break;
     case "hookPrompt": item.fragments.forEach((fragment) => assertExactKeys(fragment, ["text", "hookRunId"], "hook_prompt_fragment")); break;
     case "agentMessage":
+      // These are native Chat presentation hints, not Sedes instructions or
+      // authority to invoke account/contact actions. Validate them as metadata;
+      // the normalized transcript continues to project the authored text only.
+      if (item.moderation != null) {
+        assertExactKeys(item.moderation, ["moderated", "display"], "agent_message_moderation");
+        if (item.moderation.display != null) {
+          assertExactKeys(item.moderation.display, ["action", "blockType", "cyberTrustedAccess", "checkTrustedContacts"], "agent_message_display");
+        }
+      }
       if (item.memoryCitation !== null) {
         assertExactKeys(item.memoryCitation, ["entries", "threadIds"], "memory_citation");
         item.memoryCitation.entries.forEach((entry) => assertExactKeys(entry, ["path", "lineStart", "lineEnd", "note"], "memory_citation_entry"));
@@ -293,14 +302,14 @@ function assertThreadItemClosed(item: OfficialThreadItem): void {
               : content.type === "input_image"
                 ? ["type", "image_url" in content ? "image_url" : "file_id", "detail"]
                 : content.type === "input_audio"
-                  ? ["type", "audio_url"]
+                  ? ["type", "audio_url" in content ? "audio_url" : "file_id"]
                   : ["type", "encrypted_content"],
             "function_call_output_content",
           ),
         );
         for (const content of item.output) {
-          if (content.type === "input_image" && "file_id" in content) {
-            assertNativeId(content.file_id, "function_output_image_file_id");
+          if ((content.type === "input_image" || content.type === "input_audio") && "file_id" in content) {
+            assertNativeId(content.file_id, `function_output_${content.type === "input_image" ? "image" : "audio"}_file_id`);
           }
         }
       }
@@ -623,6 +632,7 @@ export function projectCodexThread(value: OfficialThread): CodexThread {
   assertNativeId(value.sessionId, "session_id");
   if (value.forkedFromId !== null) assertNativeId(value.forkedFromId, "forked_from_id");
   if (value.parentThreadId !== null) assertNativeId(value.parentThreadId, "parent_thread_id");
+  if (value.attachedToThreadId != null) assertNativeId(value.attachedToThreadId, "attached_to_thread_id");
   if (value.projectId !== null) assertNativeId(value.projectId, "project_id");
   if (value.section !== null) assertNativeId(value.section.id, "section_id");
   assertSafeCount(value.createdAt, "thread_created_at");
@@ -663,6 +673,7 @@ export function projectCodexThread(value: OfficialThread): CodexThread {
     sessionId: value.sessionId,
     forkedFromId: value.forkedFromId,
     parentThreadId: value.parentThreadId,
+    attachedToThreadId: value.attachedToThreadId ?? null,
     preview: value.preview,
     ephemeral: value.ephemeral,
     section: value.section,

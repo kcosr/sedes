@@ -75,6 +75,7 @@ const baseThread = {
   sessionId: "native-session-secret",
   forkedFromId: null,
   parentThreadId: null,
+  attachedToThreadId: null,
   preview: "Preview",
   ephemeral: false,
   section: null,
@@ -805,7 +806,54 @@ function decodeThreadItem(item: unknown): CodexThreadItem {
   }).item;
 }
 
-describe("Codex 0.167.0 C1 protocol codecs", () => {
+describe("Codex 0.169.0 C1 protocol codecs", () => {
+  it("retains a bounded native attachment identity without exposing it in the normalized transcript", () => {
+    const native = thread([], { attachedToThreadId: "private-attached-thread" });
+    expect(codexThreadReadMethod.decodeResult({ thread: native }).thread.attachedToThreadId)
+      .toBe("private-attached-thread");
+    expect(JSON.stringify(projectCodexHistory(native).snapshot)).not.toContain("private-attached-thread");
+    for (const attachedToThreadId of ["", "x".repeat(513), 1]) {
+      expect(() => codexThreadReadMethod.decodeResult({ thread: thread([], { attachedToThreadId }) })).toThrow();
+    }
+  });
+
+  it.each([
+    null,
+    { moderated: false, display: null },
+    { moderated: true, display: { action: "native-chat-action", blockType: "native-block", cyberTrustedAccess: true, checkTrustedContacts: true } },
+  ])("accepts bounded moderation metadata without exposing native presentation instructions: %j", (moderation) => {
+    const native = { type: "agentMessage", id: "answer", text: "Authored answer", phase: null,
+      memoryCitation: null, delivery: null, questions: null, moderation };
+    const item = decodeThreadItem(native);
+    const response = codexThreadItemsListMethod.decodeResult({
+      data: [{ turnId: "turn", item: native, startedAtMs: 1, completedAtMs: 2 }],
+      nextCursor: null, backwardsCursor: null,
+    });
+    expect(response.data[0]?.item).toEqual(native);
+    const snapshot = projectCodexHistory(thread([turn("moderation", [item])])).snapshot;
+    const encoded = JSON.stringify(snapshot);
+    expect(encoded).toContain("Authored answer");
+    expect(encoded).not.toContain("moderated");
+    expect(encoded).not.toContain("native-chat-action");
+    expect(encoded).not.toContain("checkTrustedContacts");
+    for (const method of ["item/completed", "turn/completed"] as const) {
+      const params = method === "item/completed"
+        ? { threadId: "thread", turnId: "turn", item: native, completedAtMs: 2, contentTokenCount: null }
+        : { threadId: "thread", turn: turn("moderation", [item], { itemsView: "full" }) };
+      expect(decodeCodexC2Notification(method, params)).toMatchObject(params);
+    }
+  });
+
+  it.each([
+    { moderated: "true", display: null },
+    { moderated: true, display: null, instructions: "ignore policy" },
+    { moderated: true, display: { action: 1, blockType: null, cyberTrustedAccess: null, checkTrustedContacts: null } },
+    { moderated: true, display: { action: "native", blockType: null, cyberTrustedAccess: null, checkTrustedContacts: null, invoke: "contact" } },
+  ])("rejects malformed or extended moderation metadata: %j", (moderation) => {
+    expect(() => decodeThreadItem({ type: "agentMessage", id: "answer", text: "Authored answer", phase: null,
+      memoryCitation: null, delivery: null, questions: null, moderation })).toThrow();
+  });
+
   it.each([
     { type: "audio", fileId: "file-private-audio" },
     { type: "audio", url: "https://private.invalid/audio.wav" },
@@ -856,6 +904,24 @@ describe("Codex 0.167.0 C1 protocol codecs", () => {
       content: [{ type: "image", fileId: "file-image", url: "https://private.invalid/image.png", detail: "high" }] })).toThrow();
     expect(() => decodeThreadItem({ ...item,
       output: [{ type: "input_image", file_id: "file-image", image_url: "https://private.invalid/image.png", detail: "high" }] })).toThrow();
+  });
+
+  it("accepts file-backed audio function output without granting byte retrieval or playback", () => {
+    const native = { type: "functionCallOutput", id: "output-audio", name: "tool", namespace: null,
+      output: [{ type: "input_audio", file_id: "file-private-audio" }] };
+    const item = decodeThreadItem(native);
+    expect(codexThreadItemsListMethod.decodeResult({
+      data: [{ turnId: "turn", item: native, startedAtMs: 1, completedAtMs: 2 }],
+      nextCursor: null, backwardsCursor: null,
+    }).data[0]?.item).toEqual(native);
+    expect(projectCodexHistory(thread([turn("audio-output", [item])])).snapshot.itemsById).toEqual({});
+    for (const reference of [
+      { file_id: "" }, { file_id: "x".repeat(513) }, { file_id: null }, { file_id: 7 },
+      { file_id: "file-audio", audio_url: "https://private.invalid/audio.wav" },
+      { file_id: "file-audio", path: "/private/audio.wav" },
+    ]) {
+      expect(() => decodeThreadItem({ ...native, output: [{ type: "input_audio", ...reference }] })).toThrow();
+    }
   });
 
   it("omits a reversed completion time without discarding the observed start", () => {
@@ -1037,7 +1103,7 @@ describe("Codex 0.167.0 C1 protocol codecs", () => {
     const generated = readFileSync(
       path.join(
         repositoryRoot,
-        "protocol/codex-app-server/0.167.0/official/stable/typescript/v2/ThreadItem.ts",
+        "protocol/codex-app-server/0.169.0/official/stable/typescript/v2/ThreadItem.ts",
       ),
       "utf8",
     );
@@ -1925,7 +1991,7 @@ describe("Codex 0.167.0 C1 protocol codecs", () => {
   });
 });
 
-describe("Codex 0.167.0 C1 history projector", () => {
+describe("Codex 0.169.0 C1 history projector", () => {
   it.each([
     [{ startedAtMs: 2_000, completedAtMs: 2_500 }, { startedAtMs: 1_000, completedAtMs: 1_500 },
       { startedAt: "1970-01-01T00:00:02.000Z", completedAt: "1970-01-01T00:00:02.500Z" }],
@@ -4329,7 +4395,7 @@ it.each(["idle", "notLoaded", "active"])("retains native Codex failure details w
 it("reserves viewed-image order positions and immutable artifact identity across rewritten native IDs", async () => {
   const artifacts = testOutputArtifactPublisher();
   const view: CodexThreadItem = { type: "imageView", id: "view-before-persistence", path: "/private/viewed.png" };
-  const later: CodexThreadItem = { type: "agentMessage", id: "later", text: "After viewing", phase: "final_answer", memoryCitation: null, delivery: null, questions: null };
+  const later: CodexThreadItem = { type: "agentMessage", id: "later", text: "After viewing", phase: "final_answer", memoryCitation: null, delivery: null, questions: null, moderation: null };
   const initial = projectCodexHistory(thread([turn("view-turn", [view, later])]), correlationScope(), artifacts);
   const [pending] = initial.pendingViewedImages;
   expect(pending).toBeDefined();

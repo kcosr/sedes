@@ -93,6 +93,7 @@ function projectedForkResponse() {
     ...projected,
     thread: {
       ...projected.thread,
+      attachedToThreadId: null,
       environments: null,
       originator: null,
       daybreakEnabled: null,

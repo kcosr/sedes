@@ -561,9 +561,7 @@ try {
         item.type === "agentMessage" && item.text === "fixture complete",
     ),
   );
-  const reasoningSessionBaseline = release === "0.167.0"
-    ? await verifyReasoningSessionBaseline()
-    : null;
+  const reasoningSessionBaseline = await verifyReasoningSessionBaseline();
   console.log(
     JSON.stringify(
       {

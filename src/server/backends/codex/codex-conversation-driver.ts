@@ -143,6 +143,7 @@ const FORK_REQUEST_TIMEOUT_MILLISECONDS = 60_000;
 const MAXIMUM_CURSOR_BYTES = 4_096;
 const MAXIMUM_MODEL_CATALOG_PAGES = 32;
 const MAXIMUM_CACHED_SKILL_CATALOGS = 256;
+const MAXIMUM_CACHED_MODEL_CATALOGS = 256;
 const CODEX_BRANCH_CHECKPOINT_PREFIX = "codex-branch-checkpoint:";
 
 const codexCompletedTurnBranchCheckpointSchema = z
@@ -282,19 +283,19 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
    * The native model catalog only changes with daemon restarts or operator
    * config changes, and the daemon does not service model/list while a turn
    * is active (publication would otherwise hang into the RPC timeout).
-   * Cache per client lifecycle generation: a generation change (daemon
-   * restart) invalidates, failures are never cached, and concurrent callers
-   * share one in-flight fetch.
+   * Cache each native provider separately from the default used by drafts.
+   * A client generation change invalidates every slot; failures are never
+   * cached, and concurrent callers for one provider share an in-flight fetch.
    */
   #catalogGeneration?: number;
-  #modelCatalogCache?: {
+  readonly #modelCatalogCache = new Map<string | undefined, {
     readonly generation: number;
     readonly models: BackendCatalog["models"];
-  };
-  #modelCatalogInflight?: {
+  }>();
+  readonly #modelCatalogInflight = new Map<string | undefined, {
     readonly generation: number;
     readonly promise: Promise<BackendCatalog["models"]>;
-  };
+  }>();
   readonly #skillCatalogCache = new Map<string, CodexSkillCatalog>();
   readonly #skillCatalogInflight = new Map<
     string,
@@ -398,8 +399,8 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     if (lifecycle.state !== "ready") throw daemonUnavailable();
     if (this.#catalogGeneration !== lifecycle.generation) {
       this.#catalogGeneration = lifecycle.generation;
-      this.#modelCatalogCache = undefined;
-      this.#modelCatalogInflight = undefined;
+      this.#modelCatalogCache.clear();
+      this.#modelCatalogInflight.clear();
       this.#skillCatalogCache.clear();
       this.#skillCatalogInflight.clear();
     }
@@ -408,7 +409,21 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
 
   async catalog(context: BackendCatalogContext): Promise<BackendCatalog> {
     const lifecycle = this.#catalogLifecycle(context);
-    const models = await this.#cachedModels(lifecycle.generation);
+    let modelProvider: string | undefined;
+    if (context.binding) {
+      this.#assertSourceBinding(context.binding, context.workspace);
+      try {
+        const receipt = await this.#client.requestWithReceipt(codexThreadReadMethod,
+          { threadId: context.binding.backendConversationId, includeTurns: false },
+          { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS });
+        this.#assertCatalogGeneration(lifecycle.generation, receipt.generation);
+        assertThreadBinding(receipt.result.thread, context.binding.backendConversationId, context.workspace.canonicalPath);
+        modelProvider = receipt.result.thread.modelProvider;
+      } catch (error) {
+        throw mapCodexReadError(error);
+      }
+    }
+    const models = await this.#cachedModels(lifecycle.generation, modelProvider);
     const preferences = this.#composerSkillPreferences.read(context.scope);
     try {
       const skills = await this.#readSkillCatalog(
@@ -443,30 +458,40 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     }
   }
 
-  #cachedModels(generation: number): Promise<BackendCatalog["models"]> {
-    if (this.#modelCatalogCache?.generation === generation) {
-      return Promise.resolve(this.#modelCatalogCache.models);
+  #cachedModels(generation: number, modelProvider?: string): Promise<BackendCatalog["models"]> {
+    const cached = this.#modelCatalogCache.get(modelProvider);
+    if (cached?.generation === generation) {
+      this.#modelCatalogCache.delete(modelProvider);
+      this.#modelCatalogCache.set(modelProvider, cached);
+      return Promise.resolve(cached.models);
     }
-    if (this.#modelCatalogInflight?.generation === generation) {
-      return this.#modelCatalogInflight.promise;
+    const inflight = this.#modelCatalogInflight.get(modelProvider);
+    if (inflight?.generation === generation) return inflight.promise;
+    if (this.#modelCatalogInflight.size >= MAXIMUM_CACHED_MODEL_CATALOGS) {
+      return Promise.reject(invalidModelCatalog("codex_model_catalog_too_many_providers"));
     }
     const entry = {
       generation,
       promise: undefined as unknown as Promise<BackendCatalog["models"]>,
     };
-    entry.promise = this.#fetchModels(generation)
+    entry.promise = this.#fetchModels(generation, modelProvider)
       .then((models) => {
-        if (this.#modelCatalogInflight === entry) {
-          this.#modelCatalogCache = { generation, models };
+        if (this.#modelCatalogInflight.get(modelProvider) === entry) {
+          this.#modelCatalogCache.delete(modelProvider);
+          this.#modelCatalogCache.set(modelProvider, { generation, models });
+          while (this.#modelCatalogCache.size > MAXIMUM_CACHED_MODEL_CATALOGS) {
+            const oldest = this.#modelCatalogCache.keys().next().value;
+            this.#modelCatalogCache.delete(oldest);
+          }
         }
         return models;
       })
       .finally(() => {
-        if (this.#modelCatalogInflight === entry) {
-          this.#modelCatalogInflight = undefined;
+        if (this.#modelCatalogInflight.get(modelProvider) === entry) {
+          this.#modelCatalogInflight.delete(modelProvider);
         }
       });
-    this.#modelCatalogInflight = entry;
+    this.#modelCatalogInflight.set(modelProvider, entry);
     return entry.promise;
   }
 
@@ -477,9 +502,10 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
    */
   #modelCatalogFresh(
     context: BackendCatalogContext,
+    modelProvider?: string,
   ): Promise<BackendCatalog["models"]> {
     const lifecycle = this.#catalogLifecycle(context);
-    return this.#fetchModels(lifecycle.generation);
+    return this.#fetchModels(lifecycle.generation, modelProvider);
   }
 
   #readSkillCatalog(
@@ -550,7 +576,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     return entry.promise;
   }
 
-  async #fetchModels(generation: number): Promise<BackendCatalog["models"]> {
+  async #fetchModels(generation: number, modelProvider?: string): Promise<BackendCatalog["models"]> {
     const nativeIds = new Set<string>();
     const cursors = new Set<string>();
     const models: BackendCatalog["models"][number][] = [];
@@ -567,6 +593,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
             ...(cursor ? { cursor } : {}),
             limit: remaining,
             includeHidden: false,
+            ...(modelProvider === undefined ? {} : { modelProvider }),
           },
           { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS },
         );
@@ -1346,6 +1373,15 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         string,
         readonly ("text" | "image")[]
       >();
+      let modalitiesGeneration = this.#client.lifecycleSnapshot().generation;
+      const modalitiesKey = (modelProvider: string, model: string) => {
+        const generation = this.#client.lifecycleSnapshot().generation;
+        if (modalitiesGeneration !== generation) {
+          resolvedModelInputModalities.clear();
+          modalitiesGeneration = generation;
+        }
+        return JSON.stringify([modelProvider, model]);
+      };
       const handle = new CodexConversationHandle({
         onControlReady: input.onControlReady,
         usageSink: this.#usageSink,
@@ -1368,27 +1404,28 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         fastModeSessions: this.#fastModeSessions,
         agentToolCliEnvironment: this.#agentToolCliEnvironment,
         composerSkillPreferences: this.#composerSkillPreferences,
-        validateExecutionSettings: async (settings) =>
+        validateExecutionSettings: async (settings, modelProvider) =>
           await this.#assertExecutionSettingsAvailable(
             input.scope,
             input.workspace,
             settings,
             input.binding.applicationThreadId,
+            modelProvider,
           ),
         assertModelPolicyAllowed: (model, reasoningEffort) =>
           this.#assertModelPolicyAllowed(model, reasoningEffort),
-        resolveImportedReasoningEffort: async (model, observedEffort) => {
+        resolveImportedReasoningEffort: async (model, observedEffort, modelProvider) => {
           const models = await this.#modelCatalogFresh({
             scope: input.scope,
             workspace: input.workspace,
-          });
+          }, modelProvider);
           const descriptor = models.find(
             (candidate) =>
               candidate.provider === this.connection.id &&
               candidate.id === model,
           );
           if (descriptor) {
-            resolvedModelInputModalities.set(model, descriptor.inputModalities);
+            resolvedModelInputModalities.set(modalitiesKey(modelProvider, model), descriptor.inputModalities);
           }
           if (!descriptor?.supportedReasoningEfforts?.length) return undefined;
           if (observedEffort !== null) {
@@ -1403,12 +1440,12 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
             ? descriptor.defaultReasoningEffort
             : undefined;
         },
-        serviceTierOffered: async (model, serviceTier) => {
+        serviceTierOffered: async (model, serviceTier, modelProvider) => {
           if (serviceTier === "standard") return true;
           const models = await this.#modelCatalogFresh({
             scope: input.scope,
             workspace: input.workspace,
-          });
+          }, modelProvider);
           return codexModelOffersServiceTier(
             models.find(
               (candidate) =>
@@ -1418,19 +1455,20 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
             serviceTier,
           );
         },
-        resolveModelInputModalities: async (model, fresh) => {
-          const cached = resolvedModelInputModalities.get(model);
+        resolveModelInputModalities: async (model, fresh, modelProvider) => {
+          const key = modalitiesKey(modelProvider, model);
+          const cached = resolvedModelInputModalities.get(key);
           if (!fresh && cached) return cached;
           const models = await this.#modelCatalogFresh({
             scope: input.scope,
             workspace: input.workspace,
-          });
+          }, modelProvider);
           const inputModalities = models.find(
             (candidate) =>
               candidate.provider === this.connection.id &&
               candidate.id === model,
           )?.inputModalities ?? ["text"];
-          resolvedModelInputModalities.set(model, inputModalities);
+          resolvedModelInputModalities.set(key, inputModalities);
           return inputModalities;
         },
         ...(this.#goalSessions ? { goalSessions: this.#goalSessions } : {}),
@@ -1792,7 +1830,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       const currentModels = await this.#modelCatalogFresh({
         scope: input.scope,
         workspace: input.workspace,
-      });
+      }, sourceThread.modelProvider);
       const selectedModel = currentModels.find(
         (candidate) =>
           candidate.provider === this.connection.id &&
@@ -1823,6 +1861,8 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       input.scope,
       input.workspace,
       executionSettings,
+      undefined,
+      sourceThread.modelProvider,
     );
     const providerPolicy = codexExecutionPolicy(executionSettings).thread;
     const cliEnvironment = await this.#acquireAgentToolCliEnvironment(
@@ -1843,6 +1883,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
           : {}),
         excludeTurns: true,
         model: executionSettings.model,
+        modelProvider: sourceThread.modelProvider,
         serviceTier: encodeCodexServiceTier(executionSettings.serviceTier),
         cwd: input.workspace.canonicalPath,
         approvalPolicy: providerPolicy.approvalPolicy,
@@ -1935,6 +1976,8 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         child.status.type !== "idle" && "child_status",
         child.turns.length !== 0 && "response_turns",
         result.model !== executionSettings.model && "model",
+        result.modelProvider !== sourceThread.modelProvider && "model_provider",
+        child.modelProvider !== sourceThread.modelProvider && "child_model_provider",
         result.reasoningEffort !== executionSettings.reasoningEffort &&
           "reasoning_effort",
         (observedSettings.serviceTierClassification !== "recognized" ||
@@ -2741,6 +2784,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     workspace: ValidatedWorkspace,
     settings: CodexExecutionSettingsTuple,
     fastModeApplicationThreadId?: string,
+    modelProvider?: string,
   ): Promise<readonly ("text" | "image")[]> {
     if (
       settings.model.trim().length === 0 ||
@@ -2756,7 +2800,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         "codex_execution_settings_policy_rejected",
       );
     }
-    const models = await this.#modelCatalogFresh({ scope, workspace });
+    const models = await this.#modelCatalogFresh({ scope, workspace }, modelProvider);
     const model = models.find(
       (candidate) =>
         candidate.provider === this.connection.id &&

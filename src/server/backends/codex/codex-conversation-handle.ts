@@ -331,6 +331,7 @@ export interface CodexConversationHandleInput {
   readonly composerSkillPreferences?: CodexComposerSkillPreferenceReader;
   readonly validateExecutionSettings: (
     settings: CodexExecutionSettingsTuple,
+    modelProvider: string,
   ) => Promise<readonly ("text" | "image")[] | undefined>;
   readonly assertModelPolicyAllowed?: (
     model: string,
@@ -339,15 +340,18 @@ export interface CodexConversationHandleInput {
   readonly resolveImportedReasoningEffort: (
     model: string,
     observedReasoningEffort: string | null,
+    modelProvider: string,
   ) => Promise<string | undefined>;
   /** Whether the live catalog offers this tier for the model; Standard always is. */
   readonly serviceTierOffered: (
     model: string,
     serviceTier: CodexServiceTierSelection,
+    modelProvider: string,
   ) => Promise<boolean>;
   readonly resolveModelInputModalities?: (
     model: string,
     fresh: boolean,
+    modelProvider: string,
   ) => Promise<readonly ("text" | "image")[]>;
   /** Shared Goal projection registry for this backend instance. */
   readonly goalSessions?: CodexGoalSessionRegistry;
@@ -392,6 +396,7 @@ export class CodexConversationHandle implements ConversationHandle {
   readonly #composerSkillPreferences: CodexComposerSkillPreferenceReader;
   readonly #validateExecutionSettingsForTurn: (
     settings: CodexExecutionSettingsTuple,
+    modelProvider: string,
   ) => Promise<readonly ("text" | "image")[] | undefined>;
   readonly #assertModelPolicyAllowed: (
     model: string,
@@ -400,14 +405,17 @@ export class CodexConversationHandle implements ConversationHandle {
   readonly #resolveImportedReasoningEffort: (
     model: string,
     observedReasoningEffort: string | null,
+    modelProvider: string,
   ) => Promise<string | undefined>;
   readonly #serviceTierOffered: (
     model: string,
     serviceTier: CodexServiceTierSelection,
+    modelProvider: string,
   ) => Promise<boolean>;
   readonly #resolveModelInputModalities: (
     model: string,
     fresh: boolean,
+    modelProvider: string,
   ) => Promise<readonly ("text" | "image")[]>;
   readonly #goalSessions: CodexGoalSessionRegistry | undefined;
   readonly #goalRecovery = new CodexGoalRecoveryTracker();
@@ -490,6 +498,7 @@ export class CodexConversationHandle implements ConversationHandle {
   #terminalErrorFallbackThread: CodexThread | undefined;
   #failureFencedGeneration: number | undefined;
   #nativeThread: CodexThread | undefined;
+  #catalogModelProvider: { readonly generation: number; readonly inboundSequence: number; readonly value: string } | undefined;
   #itemTimestamps: CodexHistoryItemTimestamps = new Map();
   #paginatedHistoryAdapter: CodexPaginatedHistoryAdapter | undefined;
   #paginatedHistoryPreviousCursor: string | undefined;
@@ -675,7 +684,7 @@ export class CodexConversationHandle implements ConversationHandle {
         const state = this.#managedTui?.presentation(this.#scope(), this.binding.applicationThreadId).state.lifecycle;
         return state === "running" || state === "starting";
       },
-      validateSelection: async settings => { await this.#validateExecutionSettingsForTurn(settings); },
+      validateSelection: async settings => { await this.#validateExecutionSettingsForTurn(settings, this.#nativeCatalogProvider()); },
       assertPolicy: settings => { this.#assertModelPolicyAllowed(settings.model, settings.reasoningEffort); this.#executionSettings.assertExecutionPolicyAllowed(settings); },
       confirmDefaults: (result, generation) => this.#confirmEffective(codexObservedThreadExecutionSettings(result.model,
         result.reasoningEffort, result.serviceTier, result.approvalPolicy, result.approvalsReviewer, result.sandbox), generation),
@@ -1317,6 +1326,24 @@ export class CodexConversationHandle implements ConversationHandle {
     };
   }
 
+  #observeCatalogProvider(value: string, generation: number, inboundSequence: number): void {
+    const current = this.#catalogModelProvider;
+    if (!current || current.generation < generation ||
+        (current.generation === generation && current.inboundSequence <= inboundSequence)) {
+      this.#catalogModelProvider = { value, generation, inboundSequence };
+    }
+  }
+
+  /** Provider identity is native thread metadata, never the daemon default or browser namespace. */
+  #nativeCatalogProvider(): string {
+    const lifecycle = this.#client.lifecycleSnapshot();
+    const provider = this.#catalogModelProvider;
+    if (!provider || lifecycle.state !== "ready" || provider.generation !== lifecycle.generation) {
+      throw codexError("unavailable", "The Codex thread provider is not resolved.", "codex_thread_model_provider_unresolved", true);
+    }
+    return provider.value;
+  }
+
   async #refreshModelInputModalities(
     model: string,
     fresh = false,
@@ -1324,6 +1351,7 @@ export class CodexConversationHandle implements ConversationHandle {
     const inputModalities = await this.#resolveModelInputModalities(
       model,
       fresh,
+      this.#nativeCatalogProvider(),
     );
     if (this.#model?.id === model) {
       this.#modelInputModalities = inputModalities;
@@ -1490,12 +1518,13 @@ export class CodexConversationHandle implements ConversationHandle {
           });
         const executionSettings = executionSnapshot.settings;
         const validatedInputModalities =
-          await this.#validateExecutionSettingsForTurn(executionSettings);
+          await this.#validateExecutionSettingsForTurn(executionSettings, this.#nativeCatalogProvider());
         const inputModalities =
           validatedInputModalities ??
           (await this.#resolveModelInputModalities(
             executionSettings.model,
             true,
+            this.#nativeCatalogProvider(),
           ));
         if (this.#model?.id === executionSettings.model) {
           this.#modelInputModalities = inputModalities;
@@ -1872,7 +1901,7 @@ export class CodexConversationHandle implements ConversationHandle {
           this.#model.reasoningEffort,
         );
         const inputModalities = this.#model
-          ? await this.#resolveModelInputModalities(this.#model.id, true)
+          ? await this.#resolveModelInputModalities(this.#model.id, true, this.#nativeCatalogProvider())
           : (["text"] as const);
         if (this.#model) this.#modelInputModalities = inputModalities;
         const pathCarrierAttachments = inputModalities.includes("image")
@@ -2501,7 +2530,7 @@ export class CodexConversationHandle implements ConversationHandle {
             (["model", "reasoningEffort", "serviceTier", "sandboxMode", "networkAccess", "approvalPolicy", "approvalReviewer"] as const).some(key => saved[key] !== observed[key])) return "rejected";
         this.#executionSettings.assertExecutionPolicyAllowed(saved);
         this.#assertModelPolicyAllowed(saved.model, saved.reasoningEffort);
-        await this.#validateExecutionSettingsForTurn(saved);
+        await this.#validateExecutionSettingsForTurn(saved, this.#nativeCatalogProvider());
         const fresh = await this.#client.request(codexThreadGoalGetMethod, { threadId: this.binding.backendConversationId }, { timeoutMilliseconds: 10_000, signal: this.#controlLifetime.signal });
         if (!request.isCurrent() || !this.#goalRecovery.canResume(evidence, fresh.goal) || !fresh.goal) return "rejected";
         this.#goalSessions!.publishObserved({ scope: this.#scope(), applicationThreadId: this.binding.applicationThreadId,
@@ -2794,6 +2823,7 @@ export class CodexConversationHandle implements ConversationHandle {
         offered = await this.#serviceTierOffered(
           checked.model,
           checked.serviceTier,
+          this.#nativeCatalogProvider(),
         );
       } catch {
         return { desired: checked, writable: false };
@@ -2830,7 +2860,7 @@ export class CodexConversationHandle implements ConversationHandle {
   ): Promise<boolean | undefined> {
     if (serviceTier === "standard") return true;
     try {
-      return await this.#serviceTierOffered(model, serviceTier);
+      return await this.#serviceTierOffered(model, serviceTier, this.#nativeCatalogProvider());
     } catch {
       return undefined;
     }
@@ -3026,6 +3056,7 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#assertEstablishmentMayContinue(signal);
         this.#assertCurrentReceipt(inspected.generation);
         this.#validateThread(inspected.result.thread);
+        this.#observeCatalogProvider(inspected.result.thread.modelProvider, inspected.generation, inspected.inboundSequence);
         this.#publishControl(inspected.result.thread, inspected.generation, controlObservationBeforeRead, "omitted");
         const historyMode = assertCodexHistoryMode(inspected.result.thread);
 
@@ -3113,7 +3144,7 @@ export class CodexConversationHandle implements ConversationHandle {
               // turn. Never pin an effort that the current model no longer
               // accepts, even when the saved selection remains policy-allowed.
               const admittedEffort = await this.#resolveImportedReasoningEffort(
-                desiredBeforeResume.model, desiredBeforeResume.reasoningEffort,
+                desiredBeforeResume.model, desiredBeforeResume.reasoningEffort, inspected.result.thread.modelProvider,
               );
               this.#assertEstablishmentMayContinue(signal);
               this.#assertCurrentReceipt(inspected.generation);
@@ -3404,6 +3435,7 @@ export class CodexConversationHandle implements ConversationHandle {
             this.#speedSession.invalidate();
           }
         }
+        this.#observeCatalogProvider(resumed.result.modelProvider, resumed.generation, resumed.inboundSequence);
         let settingsReceipt: CodexSettingsObservationReceipt = {
           generation: resumed.generation,
           inboundSequence: resumed.inboundSequence,
@@ -3486,6 +3518,7 @@ export class CodexConversationHandle implements ConversationHandle {
             await this.#resolveImportedReasoningEffort(
               settingsReceipt.settings.model,
               settingsReceipt.settings.reasoningEffort,
+              settingsReceipt.modelProvider,
             );
           this.#assertEstablishmentMayContinue(signal);
           this.#assertCurrentReceipt(resumed.generation);
@@ -5676,6 +5709,7 @@ export class CodexConversationHandle implements ConversationHandle {
     this.#lastSettingsObservationGeneration = generation;
     this.#lastSettingsObservationInboundSequence = inboundSequence;
     this.#lastSettingsObservation = observation;
+    this.#observeCatalogProvider(observation.modelProvider, observation.generation, observation.inboundSequence);
     return observation;
   }
 
@@ -5718,6 +5752,7 @@ export class CodexConversationHandle implements ConversationHandle {
       const desiredReasoningEffort = await this.#resolveImportedReasoningEffort(
         observation.settings.model,
         observation.settings.reasoningEffort,
+        observation.modelProvider,
       );
       this.#assertEstablishmentMayContinue(signal);
       this.#assertCurrentReceipt(observation.generation);
@@ -5801,6 +5836,7 @@ export class CodexConversationHandle implements ConversationHandle {
     const desiredReasoningEffort = await this.#resolveImportedReasoningEffort(
       observation.settings.model,
       observation.settings.reasoningEffort,
+      observation.modelProvider,
     );
     if (this.#closing || this.#closed) return;
     const lifecycle = this.#client.lifecycleSnapshot();

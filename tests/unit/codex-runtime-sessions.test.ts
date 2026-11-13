@@ -29,6 +29,7 @@ function updatedSettings(): OfficialCodexServerNotificationParams<"thread/settin
   return {
     threadId: "thread",
     threadSettings: {
+      environments: null,
       cwd: "/workspace", approvalPolicy: "never", approvalsReviewer: "user",
       sandboxPolicy: { type: "dangerFullAccess" }, activePermissionProfile: null,
       model: "gpt-5.6", modelProvider: "openai", serviceTier: "default", effort: "high",

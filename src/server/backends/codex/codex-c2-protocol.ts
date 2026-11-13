@@ -597,8 +597,11 @@ function projectSkillsList(value: OfficialCodexClientRequestResult<"skills/list"
 
 export const codexModelListMethod = method(
   "model/list",
-  (value: OfficialCodexClientRequestParams<"model/list">) =>
-    refinePaginatedParams(value, ["cursor", "limit", "includeHidden"]),
+  (value: OfficialCodexClientRequestParams<"model/list">) => {
+    refinePaginatedParams(value, ["modelProvider", "cursor", "limit", "includeHidden"]);
+    if (value.modelProvider != null) assertNativeId(value.modelProvider);
+    return value;
+  },
   projectModelList,
 );
 export const codexExperimentalFeatureListMethod = method(
@@ -969,7 +972,7 @@ const notificationKeys = Object.freeze({
   "turn/diff/updated": ["threadId", "turnId", "diff"],
   "turn/plan/updated": ["threadId", "turnId", "explanation", "plan"],
   "item/started": ["item", "threadId", "turnId", "startedAtMs"],
-  "item/completed": ["item", "threadId", "turnId", "completedAtMs"],
+  "item/completed": ["item", "threadId", "turnId", "contentTokenCount", "completedAtMs"],
   "item/agentMessage/delta": ["threadId", "turnId", "itemId", "delta"],
   "item/plan/delta": ["threadId", "turnId", "itemId", "delta"],
   "item/commandExecution/outputDelta": ["threadId", "turnId", "itemId", "delta"],
@@ -1001,6 +1004,10 @@ function refineNotification<Method extends keyof typeof notificationKeys>(
   if (notification.completedAtMs !== undefined) {
     assertSafeCount(notification.completedAtMs as number);
   }
+  // Per-item completion telemetry is independent of persisted thread totals.
+  if (notification.contentTokenCount != null) {
+    assertSafeCount(notification.contentTokenCount as number);
+  }
   if (notification.summaryIndex !== undefined) {
     assertSafeCount(notification.summaryIndex as number);
   }
@@ -1024,7 +1031,15 @@ function refineNotification<Method extends keyof typeof notificationKeys>(
   } else if (method === "thread/status/changed") {
     refineCodexThreadStatus(notification.status as never);
   } else if (method === "thread/settings/updated") {
-    const settings = exactKeys(notification.threadSettings, ["cwd", "approvalPolicy", "approvalsReviewer", "sandboxPolicy", "activePermissionProfile", "model", "modelProvider", "serviceTier", "effort", "summary", "collaborationMode", "multiAgentMode", "personality", "disabledPluginIds"]);
+    const settings = exactKeys(notification.threadSettings, ["cwd", "environments", "approvalPolicy", "approvalsReviewer", "sandboxPolicy", "activePermissionProfile", "model", "modelProvider", "serviceTier", "effort", "summary", "collaborationMode", "multiAgentMode", "personality", "disabledPluginIds"]);
+    // This records the native selection only. It does not grant Sedes Files or
+    // tools authority in additional Codex executor environments.
+    if (settings.environments != null) {
+      for (const environment of settings.environments as readonly unknown[]) {
+        const selected = exactKeys(environment, ["environmentId", "cwd", "runtimeWorkspaceRoots"]);
+        assertNativeId(selected.environmentId as string);
+      }
+    }
     // This is saved provider metadata, not evidence that plugin tools are disabled.
     if (settings.disabledPluginIds !== undefined) {
       const ids = settings.disabledPluginIds as readonly string[];

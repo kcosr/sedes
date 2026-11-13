@@ -6,7 +6,7 @@ const modulePath = path.resolve(
 );
 const binding = await import(pathToFileURL(modulePath).href);
 
-if (binding.CODEX_APP_SERVER_RELEASE !== "0.167.0") {
+if (binding.CODEX_APP_SERVER_RELEASE !== "0.169.0") {
   throw new Error("Built Codex binding selected the wrong release.");
 }
 if (binding.CODEX_CLIENT_REQUEST_METHODS.length !== 27) {
@@ -122,5 +122,5 @@ if (!rejected) {
 }
 
 console.log(
-  "Built Codex 0.167.0 production binding executes stable and experimental profiles as ESM.",
+  "Built Codex 0.169.0 production binding executes stable and experimental profiles as ESM.",
 );

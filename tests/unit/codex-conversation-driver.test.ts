@@ -126,7 +126,7 @@ import {
 } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import * as codexBindingModule from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
-import { codexServerNotificationRegistry } from "../../src/server/provider-protocol/bindings/codex-app-server/generated/0.167.0/route-registry.js";
+import { codexServerNotificationRegistry } from "../../src/server/provider-protocol/bindings/codex-app-server/generated/0.169.0/route-registry.js";
 
 const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 const instance: AgentBackendInstance = {
@@ -136,7 +136,7 @@ const instance: AgentBackendInstance = {
   label: "Codex",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.167.0",
+  protocolRelease: "0.169.0",
 };
 const toolProvenanceKey = new Uint8Array(32).fill(0x43);
 const agentToolSourceCapability =
@@ -292,6 +292,7 @@ function nativeThread(
       sessionId: "session-1",
       forkedFromId: null,
       parentThreadId: null,
+      attachedToThreadId: null,
       preview: "A thread",
       ephemeral: false,
       section: null,
@@ -307,7 +308,7 @@ function nativeThread(
       status: { type: "idle" },
       path: "/private/rollout.jsonl",
       cwd: "/workspace",
-      cliVersion: "0.162.1",
+      cliVersion: "0.169.0",
       source: "appServer",
       canAcceptDirectInput: true,
       threadSource: null,
@@ -1779,7 +1780,7 @@ describe("CodexConversationBackendDriver", () => {
       turns: [{ ...nativeTurn(1), status: "inProgress", completedAt: null, items: [] }] }));
     await establish(harness, other, nativeThread({ id: "other-thread" }));
     const parse = vi.spyOn(codexBindingModule, "assertCodexAttestedServerNotificationParams");
-    const item = { type: "agentMessage", id: "large-message", text: "x".repeat(128 * 1_024),
+    const item = { type: "agentMessage", moderation: null, id: "large-message", text: "x".repeat(128 * 1_024),
       phase: "commentary", memoryCitation: null, delivery: null, questions: null };
     const countItemParses = () => parse.mock.calls.filter(([method]) => method === "item/completed").length;
     try {
@@ -2758,6 +2759,68 @@ describe("CodexConversationBackendDriver", () => {
     ).toHaveLength(2);
   });
 
+  it("keeps bound-provider presentation catalogs separate from the default and other providers", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    harness.enqueue("model/list", { data: [nativeModel({ id: "default-model", model: "default-model" })], nextCursor: null });
+    expect((await target.catalog({ scope, workspace })).models[0]?.id).toBe("default-model");
+    for (const [nativeProvider, modelId] of [["provider-a", "a-model"], ["provider-b", "b-model"]]) {
+      harness.enqueue("thread/read", { thread: nativeThread({ modelProvider: nativeProvider }) });
+      harness.enqueue("model/list", (params: { modelProvider?: string }) => {
+        expect(params.modelProvider).toBe(nativeProvider);
+        return { data: [nativeModel({ id: modelId, model: modelId })], nextCursor: null };
+      });
+      expect((await target.catalog({ scope, workspace, binding: binding() })).models[0]?.id).toBe(modelId);
+    }
+    harness.enqueue("thread/read", { thread: nativeThread({ modelProvider: "provider-a" }) });
+    expect((await target.catalog({ scope, workspace, binding: binding() })).models[0]?.id).toBe("a-model");
+    expect((await target.catalog({ scope, workspace })).models[0]?.id).toBe("default-model");
+    expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(3);
+    harness.lifecycle("ready", 2);
+    harness.enqueue("thread/read", { thread: nativeThread({ modelProvider: "provider-a" }) });
+    harness.enqueue("model/list", { data: [nativeModel({ id: "a-model-updated", model: "a-model-updated" })], nextCursor: null });
+    expect((await target.catalog({ scope, workspace, binding: binding() })).models[0]?.id).toBe("a-model-updated");
+    expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(4);
+  });
+
+  it("rejects bound catalog identity errors and never substitutes the default on stale metadata", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    await expect(target.catalog({ scope, workspace, binding: { ...binding(), ownerPrincipalId: "other" } }))
+      .rejects.toMatchObject({ backendCode: "codex_thread_binding_mismatch" });
+    expect(harness.calls).toEqual([]);
+    harness.enqueue("thread/read", () => {
+      harness.lifecycle("ready", 2);
+      return { thread: nativeThread({ modelProvider: "provider-a" }) };
+    });
+    await expect(target.catalog({ scope, workspace, binding: binding() }))
+      .rejects.toMatchObject({ category: "unavailable" });
+    expect(harness.calls.map(({ method }) => method)).toEqual(["thread/read"]);
+  });
+
+  it("bounds concurrent provider presentation catalog reads before starting another model request", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    harness.enqueue("thread/read", ...Array.from({ length: 257 }, () => (params: { threadId: string }) => ({
+      thread: nativeThread({ id: params.threadId, modelProvider: `provider-${params.threadId}` }),
+    })));
+    harness.enqueue("model/list", ...Array.from({ length: 256 }, () => async () => {
+      await gate;
+      return { data: [nativeModel()], nextCursor: null };
+    }));
+    const pending = Array.from({ length: 256 }, (_, index) => target.catalog({ scope, workspace,
+      binding: { ...binding(), backendConversationId: `provider-thread-${index}` } }));
+    try {
+      await vi.waitFor(() => expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(256));
+      await expect(target.catalog({ scope, workspace,
+        binding: { ...binding(), backendConversationId: "provider-thread-excess" } }))
+        .rejects.toMatchObject({ backendCode: "codex_model_catalog_too_many_providers" });
+      expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(256);
+    } finally { release(); await Promise.all(pending); }
+  });
+
   it("shares one in-flight model catalog fetch between concurrent callers", async () => {
     const harness = new RpcHarness();
     let release!: () => void;
@@ -3407,7 +3470,7 @@ describe("CodexConversationBackendDriver", () => {
     const harness = new RpcHarness();
     const target = driver(harness);
     const liveAgentItem = {
-      type: "agentMessage" as const,
+      type: "agentMessage" as const, moderation: null,
       id: "live-agent-item",
       text: "partial answer",
       phase: "commentary" as const,
@@ -3566,7 +3629,7 @@ describe("CodexConversationBackendDriver", () => {
   it("invalidates live projection when accumulated JSON-escaped text exceeds the message limit", async () => {
     const harness = new RpcHarness();
     const liveAgentItem = {
-      type: "agentMessage" as const, id: "live-oversized-agent", text: "safe prefix",
+      type: "agentMessage" as const, moderation: null, id: "live-oversized-agent", text: "safe prefix",
       phase: "commentary" as const, memoryCitation: null, delivery: null, questions: null,
     };
     const activeThread = nativeThread({
@@ -3605,7 +3668,7 @@ describe("CodexConversationBackendDriver", () => {
   it("installs and fences a bounded local failure after error recovery stays noisy", async () => {
     const harness = new RpcHarness();
     const liveAgentItem = {
-      type: "agentMessage" as const,
+      type: "agentMessage" as const, moderation: null,
       id: "live-agent-item",
       text: "partial answer",
       phase: "commentary" as const,
@@ -3894,7 +3957,7 @@ describe("CodexConversationBackendDriver", () => {
   it("publishes complete assistant progress beyond the former preview ceiling", async () => {
     const harness = new RpcHarness();
     const liveAgentItem = {
-      type: "agentMessage" as const,
+      type: "agentMessage" as const, moderation: null,
       id: "bounded-agent",
       text: "Unicode 雪🙂 paragraph.\n\n".repeat(4_000),
       phase: "commentary" as const,
@@ -5629,7 +5692,7 @@ describe("CodexConversationBackendDriver", () => {
         applicationOperationId,
       });
       const persistedAfterRead = {
-        type: "agentMessage" as const,
+        type: "agentMessage" as const, moderation: null,
         id: "latest-snapshot-persisted-agent-item",
         text: "persisted after the checkpoint read",
         phase: "commentary" as const,
@@ -5690,6 +5753,48 @@ describe("CodexConversationBackendDriver", () => {
       });
     },
   );
+
+  it.each([
+    { ids: "disjoint", response: "correct" },
+    { ids: "overlapping", response: "correct" },
+    { ids: "overlapping", response: "result_mismatch" },
+    { ids: "overlapping", response: "child_mismatch" },
+  ])("pins a fork to its source provider with $ids IDs and $response readback", async ({ ids, response }) => {
+    const harness = new RpcHarness();
+    const modelId = ids === "disjoint" ? "provider-a-model" : "shared-model";
+    const selected = executionSettingsTuple({ model: modelId, reasoningEffort: "high" });
+    harness.defaultModelOverrides = { id: ids === "disjoint" ? "provider-b-model" : modelId,
+      model: ids === "disjoint" ? "provider-b-model" : modelId,
+      supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }], defaultReasoningEffort: "low" };
+    const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), { type: "catalog" },
+      executionSettingsProvider({ desiredSettings: () => selected, freezeOperationSnapshot: () => ({ settings: selected }) }));
+    await target.catalog({ scope, workspace });
+    const source = nativeThread({ modelProvider: "provider-a", turns: [] });
+    harness.enqueue("thread/read", { thread: source });
+    const checkpoint = await target.resolveBranchCheckpoint({ ...attachInput(), selection: { kind: "latest_provider_snapshot" } });
+    const applicationOperationId = `provider-fork-${ids}-${response}`;
+    const forkMarker = codexForkCreationMarker({ toolProvenanceKey, tenantId: scope.tenantId, principalId: scope.principalId,
+      backendInstanceId: instance.id, nativeThreadId: source.id, correlationAncestorThreadIds: [], applicationOperationId });
+    const child = nativeThread({ id: "provider-fork-child", sessionId: "provider-fork-child-session", turns: [],
+      modelProvider: response === "child_mismatch" ? "provider-b" : "provider-a", forkedFromId: source.id, threadSource: forkMarker });
+    harness.enqueue("thread/read", { thread: source });
+    harness.enqueue("model/list", (params: { modelProvider?: string }) => {
+      expect(params.modelProvider).toBe("provider-a");
+      return { data: [nativeModel({ id: modelId, model: modelId })], nextCursor: null };
+    });
+    harness.enqueue("thread/fork", { ...resumeResult(child), model: modelId, reasoningEffort: "high",
+      modelProvider: response === "result_mismatch" ? "provider-b" : "provider-a" });
+    const result = target.branchConversation({ scope, childApplicationThreadId: "provider-fork-application", applicationOperationId,
+      source: { kind: "user" }, sourceBinding: binding(), sourceOpaqueBindingDetail: attachInput().opaqueBindingDetail,
+      workspace, sourceCheckpoint: checkpoint, creationCorrelation: "provider-fork-correlation" });
+    if (response === "correct") await expect(result).resolves.toMatchObject({ backendConversationId: child.id });
+    else {
+      await expect(result).rejects.toMatchObject({ category: "submission_unknown", backendCode: "codex_fork_response_invalid", crossedSubmissionBoundary: true });
+      expect(harness.retirements).toEqual([1]);
+    }
+    expect(harness.calls.find(({ method }) => method === "thread/fork")?.params)
+      .toMatchObject({ modelProvider: "provider-a", model: modelId, config: expect.objectContaining({ model_reasoning_effort: "high" }) });
+  });
 
   it("rejects a latest provider snapshot response that leaves the child active", async () => {
     const activeTurn = {
@@ -6903,7 +7008,7 @@ describe("CodexConversationHandle", () => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     const items = Array.from({ length: 2_001 }, (_, index) => ({
-      type: "agentMessage" as const,
+      type: "agentMessage" as const, moderation: null,
       id: `long-running-item-${index}`,
       text: "progress",
       phase: null,
@@ -9138,7 +9243,7 @@ describe("CodexConversationHandle", () => {
     const turns: ReturnType<typeof nativeThread>["turns"] =
       Array.from({ length: 12 }, (_, index) => nativeTurn(index));
     turns[2] = { ...turns[2]!, items: [{
-      type: "agentMessage", id: "oversized-message",
+      type: "agentMessage", moderation: null, id: "oversized-message",
       text: "\u0000".repeat(3 * 1024 * 1024), phase: null,
       memoryCitation: null, delivery: null, questions: null,
     }] };
@@ -9156,7 +9261,7 @@ describe("CodexConversationHandle", () => {
     const oversizedTurn = {
       ...nativeTurn(0),
       items: Array.from({ length: 1_000 }, (_, itemIndex) => ({
-        type: "agentMessage" as const,
+        type: "agentMessage" as const, moderation: null,
         id: `oversized-agent-message-${itemIndex}`,
         text: "x".repeat(20_000),
         phase: null,
@@ -9884,7 +9989,7 @@ describe("CodexConversationHandle", () => {
 
     const active = { ...nativeTurn(2), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null };
     const assistant = {
-      type: "agentMessage", id: "advisory-assistant", text: "", phase: "final_answer",
+      type: "agentMessage", moderation: null, id: "advisory-assistant", text: "", phase: "final_answer",
       memoryCitation: null, delivery: null, questions: null,
     };
     harness.notify("turn/started", { threadId: "thread-1", turn: active });
@@ -10310,6 +10415,112 @@ describe("CodexConversationHandle", () => {
     } finally {
       persisted.database.close();
     }
+  });
+
+  it.each(["disjoint", "overlapping"] as const)("uses the saved provider catalog for %s model IDs after the daemon default changes", async ids => {
+    const harness = new RpcHarness();
+    const savedModel = ids === "disjoint" ? "provider-a-model" : "shared-model";
+    const defaultModel = ids === "disjoint" ? "provider-b-model" : savedModel;
+    const saved = executionSettingsTuple({ model: savedModel, reasoningEffort: "high", serviceTier: "fast" });
+    const resolveUnavailableServiceTier = vi.fn(() => saved);
+    const observeEffective = vi.fn();
+    const settings = executionSettingsProvider({ desiredSettings: () => saved,
+      freezeOperationSnapshot: () => ({ settings: saved }), resolveUnavailableServiceTier, observeEffective });
+    harness.defaultModelOverrides = { id: defaultModel, model: defaultModel,
+      supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }], defaultReasoningEffort: "low" };
+    const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), { type: "catalog" }, settings);
+    // A warm default-provider catalog must not authorize or reject provider A.
+    expect((await target.catalog({ scope, workspace })).models[0]?.id).toBe(defaultModel);
+    const providerModels = (params: { modelProvider?: string }) => ({
+      data: [params.modelProvider === "provider-a" ? nativeModel({ id: savedModel, model: savedModel,
+        supportedReasoningEfforts: [{ reasoningEffort: "high", description: "High" }], defaultReasoningEffort: "high",
+        inputModalities: ["text", "image"], serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }] })
+        : nativeModel(harness.defaultModelOverrides)], nextCursor: null,
+    });
+    harness.enqueue("model/list", ...Array.from({ length: 8 }, () => providerModels));
+    const thread = nativeThread({ modelProvider: "provider-a" });
+    const handle = await attachIdle(harness, target);
+    try {
+      harness.enqueue("thread/read", { thread });
+      harness.enqueue("thread/resume", { ...resumeResult(thread), model: savedModel,
+        modelProvider: "provider-a", reasoningEffort: "high", serviceTier: "priority" });
+      harness.enqueue("experimentalFeature/list", fastModeFeatures(true));
+      await handle.establishProjection({ signal: new AbortController().signal });
+      expect((await handle.backendCapabilities()).deliveryModes).toContain("submit");
+      expect(resolveUnavailableServiceTier).not.toHaveBeenCalled();
+      expect(observeEffective).toHaveBeenLastCalledWith(scope, expect.objectContaining({
+        initializeDesired: expect.objectContaining({ model: savedModel, reasoningEffort: "high", serviceTier: "fast" }),
+      }));
+      harness.enqueue("turn/start", { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null } });
+      await handle.submit({ applicationOperationId: "provider-specific-submit", source: { kind: "user" },
+        mutationId: "provider-specific-submit", reconciliationToken: "provider-specific-submit",
+        taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
+      expect(harness.calls.find(({ method }) => method === "turn/start")?.params).toMatchObject({
+        model: savedModel, effort: "high", serviceTier: "priority",
+      });
+      const selectedCatalogCalls = harness.calls.filter(({ method }) => method === "model/list").slice(1);
+      expect(selectedCatalogCalls.length).toBeGreaterThan(2);
+      expect(selectedCatalogCalls.every(({ params }) => (params as { modelProvider?: string }).modelProvider === "provider-a")).toBe(true);
+    } finally {
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    }
+  });
+
+  it("rejects a saved-provider effort even when the default provider offers the same model ID", async () => {
+    const harness = new RpcHarness();
+    const saved = executionSettingsTuple({ model: "shared-model", reasoningEffort: "high" });
+    harness.defaultModelOverrides = { id: saved.model, model: saved.model };
+    const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(),
+      { type: "catalog" }, executionSettingsProvider({ desiredSettings: () => saved })));
+    const metadata = nativeThread({ modelProvider: "provider-a", turns: [] });
+    harness.enqueue("thread/read", { thread: metadata }, { thread: metadata }, { thread: nativeThread({ modelProvider: "provider-a" }) });
+    const catalog = (params: { modelProvider?: string }) => ({ data: [nativeModel({ id: saved.model, model: saved.model,
+      ...(params.modelProvider === "provider-a" ? {
+        supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }], defaultReasoningEffort: "low",
+      } : {}) })], nextCursor: null });
+    harness.enqueue("model/list", catalog, catalog);
+    try {
+      await handle.establishProjection({ signal: new AbortController().signal });
+      expect((await handle.backendCapabilities()).deliveryModes).toEqual([]);
+      expect(harness.calls.some(({ method }) => method === "thread/resume" || method === "turn/start")).toBe(false);
+      expect(harness.calls.filter(({ method }) => method === "model/list")).toEqual([
+        expect.objectContaining({ params: expect.objectContaining({ modelProvider: "provider-a" }) }),
+      ]);
+    } finally { await handle.close(); }
+  });
+
+  it.each(["unresolved", "stale"] as const)("denies the managed-TUI catalog callback with %s provider evidence", async state => {
+    const harness = new RpcHarness();
+    const speeds = new CodexFastModeSessionRegistry();
+    const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), { type: "catalog" },
+      executionSettingsProvider(), undefined, undefined, unavailableCodexAgentToolCliEnvironmentProvider, speeds);
+    const handle = await attachIdle(harness, target);
+    if (state === "stale") { await establish(harness, handle); harness.lifecycle("ready", 2); }
+    const before = harness.calls.length;
+    try {
+      await expect(speeds.controller(scope, "application-profile-1")!.input.validateSelection(executionSettingsTuple()))
+        .rejects.toMatchObject({ backendCode: "codex_thread_model_provider_unresolved", retryable: true, crossedSubmissionBoundary: false });
+      expect(harness.calls.slice(before)).toEqual([]);
+    } finally { await handle.close(); }
+  });
+
+  it("does not cross submission when provider evidence becomes stale during snapshot capture", async () => {
+    const harness = new RpcHarness();
+    const settings = executionSettingsProvider({ freezeOperationSnapshot: () => {
+      harness.lifecycle("ready", 2);
+      return { settings: executionSettingsTuple() };
+    } });
+    const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(), { type: "catalog" }, settings));
+    await establish(harness, handle);
+    const before = harness.calls.length;
+    try {
+      await expect(handle.submit({ applicationOperationId: "stale-provider-submit", source: { kind: "user" },
+        mutationId: "stale-provider-submit", reconciliationToken: "stale-provider-submit",
+        taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" }))
+        .rejects.toMatchObject({ backendCode: "codex_thread_model_provider_unresolved", retryable: true, crossedSubmissionBoundary: false });
+      expect(harness.calls.slice(before)).toEqual([]);
+    } finally { await handle.close(); }
   });
 
   it("keeps revoked saved effort out of native resume and wakes after a durable model-policy repair", async () => {
@@ -12523,7 +12734,7 @@ describe("CodexConversationHandle", () => {
       turn: startedTurn,
     });
     const agentItem = {
-      type: "agentMessage" as const,
+      type: "agentMessage" as const, moderation: null,
       id: "agent-1",
       text: "hello",
       phase,
@@ -12694,7 +12905,7 @@ describe("CodexConversationHandle", () => {
     application.replace(established.snapshot, established.handleSequence);
     const active = { ...nativeTurn(1), items: [], status: "inProgress" as const, completedAt: null, durationMs: null };
     const viewed = { type: "imageView" as const, id: "viewed-1", path: "/workspace/preview.png" };
-    const text = { type: "agentMessage" as const, id: "after-image", text: "The image is ready.", phase: "final_answer" as const, memoryCitation: null, delivery: null, questions: null };
+    const text = { type: "agentMessage" as const, moderation: null, id: "after-image", text: "The image is ready.", phase: "final_answer" as const, memoryCitation: null, delivery: null, questions: null };
     harness.notify("turn/started", { threadId: "thread-1", turn: active });
     harness.notify("item/started", { threadId: "thread-1", turnId: active.id, item: viewed, startedAtMs: 1_700_000_002_000 });
     harness.notify("item/completed", { threadId: "thread-1", turnId: active.id, item: viewed, completedAtMs: 1_700_000_002_100 });
@@ -12993,7 +13204,7 @@ describe("CodexConversationHandle", () => {
     });
     const handle = await attachIdle(harness, driverWithOutputArtifacts(harness, artifacts, { capture }));
     // Codex bounds one native text, so completed history carries most of the page.
-    const bulk = (id: string) => ({ type: "agentMessage" as const, id, text: "y".repeat(5 * 1_024 * 1_024),
+    const bulk = (id: string) => ({ type: "agentMessage" as const, moderation: null, id, text: "y".repeat(5 * 1_024 * 1_024),
       phase: "final_answer" as const, memoryCitation: null, delivery: null, questions: null });
     const established = await establish(harness, handle, nativeThread({ turns: [
       { ...nativeTurn(0), items: [...nativeTurn(0).items,
@@ -13006,7 +13217,7 @@ describe("CodexConversationHandle", () => {
     harness.notify("turn/started", { threadId: "thread-1",
       turn: { ...nativeTurn(2), items: [], status: "inProgress" as const, completedAt: null } });
     harness.notify("item/started", { threadId: "thread-1", turnId: "turn-2", startedAtMs: 1_700_000_002_000,
-      item: { type: "agentMessage" as const, id: "agent-1", text: "", phase: "commentary" as const,
+      item: { type: "agentMessage" as const, moderation: null, id: "agent-1", text: "", phase: "commentary" as const,
         memoryCitation: null, delivery: null, questions: null } });
     await vi.waitFor(async () => expect(Object.values((await handle.readCurrent()).snapshot.itemsById)
       .some(item => item.status === "streaming")).toBe(true));
@@ -13566,7 +13777,7 @@ describe("CodexConversationHandle", () => {
       turn: startedTurn,
     });
     const agentItem = {
-      type: "agentMessage" as const,
+      type: "agentMessage" as const, moderation: null,
       id: "agent-1",
       text: "",
       phase: "commentary" as const,
@@ -13806,7 +14017,7 @@ describe("CodexConversationHandle", () => {
         // update. The item has already appended its ID to the actor's turn,
         // so only the private correlation differs when that update arrives.
         const item = {
-          type: "agentMessage" as const,
+          type: "agentMessage" as const, moderation: null,
           id: "first-commentary",
           text: "I am checking the result.",
           phase: "commentary" as const,
@@ -13920,7 +14131,7 @@ describe("CodexConversationHandle", () => {
       ],
     };
     const assistant = {
-      type: "agentMessage" as const,
+      type: "agentMessage" as const, moderation: null,
       id: "external-assistant-live",
       text: "external answer",
       phase: "final_answer" as const,
@@ -14223,7 +14434,7 @@ describe("CodexConversationHandle", () => {
       });
     }
     const terminalOnlyAssistant = {
-      type: "agentMessage" as const,
+      type: "agentMessage" as const, moderation: null,
       id: "terminal-only-assistant",
       text: "Done",
       phase: "final_answer" as const,
@@ -14575,7 +14786,7 @@ describe("CodexConversationHandle", () => {
           threadId: "thread-1",
           turnId: activeTurn.id,
           item: {
-            type: "agentMessage",
+            type: "agentMessage", moderation: null,
             id: "later-assistant",
             text: "",
             phase: "final_answer",
@@ -14717,7 +14928,7 @@ describe("CodexConversationHandle", () => {
       threadId: "thread-1",
       turnId: activeTurn.id,
       item: {
-        type: "agentMessage",
+        type: "agentMessage", moderation: null,
         id: "ledger-assistant",
         text: "",
         phase: "final_answer",
@@ -14750,7 +14961,7 @@ describe("CodexConversationHandle", () => {
         ...nativeTurn(2),
         items: [
           {
-            type: "agentMessage" as const,
+            type: "agentMessage" as const, moderation: null,
             id: "storm-assistant",
             text: "",
             phase: "final_answer" as const,
@@ -15056,7 +15267,7 @@ describe("CodexConversationHandle", () => {
       status: { type: "active", activeFlags: [] },
     });
     const agentItem = {
-      type: "agentMessage" as const,
+      type: "agentMessage" as const, moderation: null,
       id: "agent-during-hydration",
       text: "",
       phase: "commentary" as const,

@@ -1,4 +1,5 @@
 import type { CodexSharedClientFacade } from "./codex-client-facade.js";
+import { codexThreadReadMethod } from "./codex-c1-protocol.js";
 import { readCodexSpeedEnablement } from "./codex-speed-policy.js";
 import {
   encodeCodexServiceTier,
@@ -34,6 +35,18 @@ export async function assertCodexLiveModelSelection(input: {
   readonly serviceTier: CodexServiceTierSelection;
   readonly signal: AbortSignal;
 }): Promise<CodexLiveModelSelection> {
+  // The daemon default can differ from this saved thread's provider. Resolve
+  // native metadata before reading a catalog, and fence both reads to one
+  // generation; the normalized connection namespace is not a native provider.
+  const thread = await input.client.requestWithReceipt(codexThreadReadMethod,
+    { threadId: input.nativeThreadId, includeTurns: false }, {
+      timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS, signal: input.signal,
+    });
+  assertGeneration(input.client, input.expectedGeneration, thread.generation);
+  if (thread.result.thread.id !== input.nativeThreadId) {
+    throw new Error("codex_tui_live_model_thread_mismatch");
+  }
+  const modelProvider = thread.result.thread.modelProvider;
   const nativeServiceTier =
     input.serviceTier === "standard"
       ? undefined
@@ -50,6 +63,7 @@ export async function assertCodexLiveModelSelection(input: {
         ...(cursor ? { cursor } : {}),
         limit: remaining,
         includeHidden: false,
+        modelProvider,
       },
       {
         timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS,

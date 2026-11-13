@@ -26,7 +26,7 @@ export function benchmarkHistory(thread: CodexThread): CodexThread {
           command: `rg --files src/server/workspaces/checkpoint-${index}`, cwd: thread.cwd,
           processId: null, source: "agent", status: "completed", commandActions: [],
           aggregatedOutput: `src/server/workspaces/checkpoint-${index}/service.ts\n`, exitCode: 0, durationMs: 23 },
-        { type: "agentMessage", id: `benchmark-agent-${index}`, phase: "final_answer", memoryCitation: null, delivery: null, questions: null,
+        { type: "agentMessage", moderation: null, id: `benchmark-agent-${index}`, phase: "final_answer", memoryCitation: null, delivery: null, questions: null,
           text: `## Checkpoint ${index}\n\n\`src/server/workspaces/service.ts\`\n\n\`\`\`ts\nexport const checkpoint = ${index};\n\`\`\`\n\n` + paragraph.repeat(Math.ceil(benchmarkMessageCharacters / paragraph.length)).slice(0, benchmarkMessageCharacters) },
       ],
     })),

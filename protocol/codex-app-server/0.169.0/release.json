@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "release": "0.169.0",
+  "selection": "stable release selected and artifacts verified on 2026-11-13",
+  "source": {
+    "repository": "https://github.com/openai/codex",
+    "release": "https://github.com/openai/codex/releases/tag/rust-v0.169.0"
+  },
+  "git": {
+    "tag": "rust-v0.169.0",
+    "tagObject": "a41fe5b443652cbdbee57717fbb9fd78d8d8b32a",
+    "commit": "d32063f96c2dff1dc96af839b3952abb6acfeda4"
+  },
+  "npm": {
+    "package": "@openai/codex",
+    "version": "0.169.0",
+    "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.169.0.tgz",
+    "integrity": "sha512-KhzYlkKPxoNssR8CEm45IjqnFWn7UtlF4CiD3tOJPea51xBs7MaHy0UQG9GSbCqk6Lrjn5QdJDV0QD1/FgWlGw==",
+    "tarballSha256": "5928066ef039439ee241552ef071434925a9c4471ed579bb72caabc6e4a02280"
+  },
+  "generation": {
+    "profiles": [
+      "stable",
+      "experimental"
+    ],
+    "command": "npm run generate:codex-protocol",
+    "supportedPlatforms": [
+      {
+        "nodePlatform": "linux",
+        "nodeArch": "x64",
+        "nativePackage": "@openai/codex-linux-x64",
+        "nativePackageVersion": "0.169.0-linux-x64",
+        "nativePackageResolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.169.0-linux-x64.tgz",
+        "nativePackageIntegrity": "sha512-o05NyAOCDygSPRo1yinzxvkRSdmsZyBD9E7mbpmjRanSfM8lypqWtQgEo4XfNkwhuCR2aFu8mlGOsQGFXVbVww==",
+        "nativePackageTarballSha256": "89801b4b97faba562eb80fe0a833159ac79399be674022f4b1a0ccab1d153faa",
+        "executableRelativePath": "vendor/x86_64-unknown-linux-musl/bin/codex",
+        "executableSha256": "b452ca20f838a8855a88a41050ee4a694033fff4ea3ecdad5633e6e0e8d13f2b"
+      },
+      {
+        "nodePlatform": "darwin",
+        "nodeArch": "arm64",
+        "nativePackage": "@openai/codex-darwin-arm64",
+        "nativePackageVersion": "0.169.0-darwin-arm64",
+        "nativePackageResolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.169.0-darwin-arm64.tgz",
+        "nativePackageIntegrity": "sha512-5WsWFBbVP78D+6FvNo1MMVxLPZdmcoQlqVJFrF4qx/TmvneLnMQKtLyXkUo54XOTDfoYKpNouTJ/F7gTVA8FnQ==",
+        "nativePackageTarballSha256": "d67d443253294438a21fde15753d7c1174e6a32147d842eb84428479d664c93d",
+        "executableRelativePath": "vendor/aarch64-apple-darwin/bin/codex",
+        "executableSha256": "739cda86e15d30a6e2b40cf8dcbbfb988aaf48b305b27065573bb8e9fd41d002"
+      },
+      {
+        "nodePlatform": "darwin",
+        "nodeArch": "x64",
+        "nativePackage": "@openai/codex-darwin-x64",
+        "nativePackageVersion": "0.169.0-darwin-x64",
+        "nativePackageResolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.169.0-darwin-x64.tgz",
+        "nativePackageIntegrity": "sha512-K1FKSsSLl9v3z5TeagBQXyQRDBIGB5Jncy5dxsRxwT3aaTqN3AI8VrCfoxBxKMOOU9O2QX1vg7WkBwNVth/s9A==",
+        "nativePackageTarballSha256": "99ac403e2fdec6e4a99390ae15362c8aa5f888995c8e9cc1c7f4cf6dacd20ef2",
+        "executableRelativePath": "vendor/x86_64-apple-darwin/bin/codex",
+        "executableSha256": "e57da7be8695c079d2d1d156dab79708e43ebb6cf7e34527b8b01d6aa942788e"
+      }
+    ],
+    "rawJsonSchemaInventories": {
+      "stable": {
+        "count": 329,
+        "pathSetSha256": "70e9a0a01be196fe7c0df62dfdea242e16153da8456f5a28028f4854409ca737"
+      },
+      "experimental": {
+        "count": 479,
+        "pathSetSha256": "4317668c188fc1c88b445d2d5c20bc36ea9f8cd379fc2086509657bbe0e2d060"
+      }
+    }
+  }
+}

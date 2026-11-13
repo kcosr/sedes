@@ -77,9 +77,16 @@ prose differ, establish the production path and tests, then update the prose.
 
 ### Current compiled backends
 
-The Codex 0.167.0 compatibility update is provider-private. It uses one exact
-generated profile, validates native audio file references without adding audio
-playback, and treats native section changes as informational metadata. Required
+The Codex 0.169.0 compatibility update is provider-private. Its single generated
+profile validates native moderation, completion-token, executor-environment and
+audio-reference metadata without granting browser or additional-executor authority.
+Runtime admission requires the native provider-specific catalog selector; catalog
+validation retains each thread's saved native provider instead of substituting the
+daemon default. Thread presentation supplies the server-derived binding to catalog
+reads and fences retained catalogs by binding identity. Codex resolves the native
+provider from that binding; Pi SDK, Pi, Claude, Grok and OpenCode retain their
+existing catalog semantics and do not reinterpret Codex provider selectors.
+Native sections remain informational metadata. Required
 human command approval remains unsupported and fails closed. Cold resume
 restores the thread model and effort after checking policy and the live catalog,
 alongside saved security settings;

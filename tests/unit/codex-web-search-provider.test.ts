@@ -33,7 +33,7 @@ describe("Codex research boundary", () => {
     expect(runProcess).not.toHaveBeenCalled();
   });
 
-  it.each(["0.162.1", "0.163.0", "0.164.0"])("uses the normal Codex runtime policy for %s with a curated environment and configured home", async (release) => {
+  it.each(["0.169.0", "0.169.0+vendor.1", "0.170.0"])("uses the normal Codex runtime policy for %s with a curated environment and configured home", async (release) => {
     const root = await mkdtemp(path.join(tmpdir(), "sedes-search-provider-"));
     const runProcess = vi.fn<typeof runCodexProcess>()
       .mockResolvedValueOnce(success(`codex-cli ${release}\n`));
@@ -53,7 +53,7 @@ describe("Codex research boundary", () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it.each(["0.162.0", "0.163.0-beta.1", "not-a-version"])("rejects unqualified release %s", async (release) => {
+  it.each(["0.162.0", "0.167.0", "0.168.0", "0.169.0-beta.1", "not-a-version"])("rejects unqualified release %s", async (release) => {
     const runProcess = vi.fn<typeof runCodexProcess>().mockResolvedValue(success(`codex-cli ${release}`));
     const root = await mkdtemp(path.join(tmpdir(), "sedes-search-version-"));
     try {
@@ -66,7 +66,7 @@ describe("Codex research boundary", () => {
   it("allows native login to repair authentication without reconfiguring the service", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sedes-search-auth-"));
     const runProcess = vi.fn<typeof runCodexProcess>()
-      .mockResolvedValueOnce(success("codex-cli 0.163.0"))
+      .mockResolvedValueOnce(success("codex-cli 0.169.0"))
       .mockResolvedValueOnce({ ...success(), exitCode: 1, stderr: "Unauthorized private-token" })
       .mockResolvedValueOnce(success());
     try {
