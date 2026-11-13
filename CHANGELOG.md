@@ -11,6 +11,7 @@ User-facing changes are collected here before release. See the
   Upgrade every execution host and rebuild execution sidecars with the server.
   Remove the retired native Guardian configuration keys before startup. See
   [Codex upgrade requirements](docs/operator/backends/codex.md#version-compatibility).
+  ([#136](https://github.com/kcosr/sedes/pull/136))
 
 - Android now requires Android 10 (API 29) or newer for native Opus encoding.
   ([#128](https://github.com/kcosr/sedes/pull/128))
@@ -507,7 +508,7 @@ User-facing changes are collected here before release. See the
   history. Native metadata adds no audio playback or extra-executor authority;
   file-backed generated images remain unavailable. See
   [Codex compatibility](docs/operator/backends/codex.md#version-compatibility).
-  ([#91](https://github.com/kcosr/sedes/pull/91), [#129](https://github.com/kcosr/sedes/pull/129), [#131](https://github.com/kcosr/sedes/pull/131))
+  ([#91](https://github.com/kcosr/sedes/pull/91), [#129](https://github.com/kcosr/sedes/pull/129), [#131](https://github.com/kcosr/sedes/pull/131), [#136](https://github.com/kcosr/sedes/pull/136))
 
 - Codex cold resume restores the saved model and reasoning effort so a stale
   native configuration cannot silently replace the selected effort. Restored threads
@@ -515,7 +516,7 @@ User-facing changes are collected here before release. See the
   and Speed after the native default changes. Start a new thread to use the new
   default provider. Disallowed saved settings stay unresolved until repaired. See
   [Codex execution settings](docs/internals/codex-thread-execution-settings.md).
-  ([#131](https://github.com/kcosr/sedes/pull/131))
+  ([#131](https://github.com/kcosr/sedes/pull/131), [#136](https://github.com/kcosr/sedes/pull/136))
 
 - Codex threads keep model, reasoning, Speed, and permissions editable between
   runs while automations remain enabled. Same-thread automation uses current
