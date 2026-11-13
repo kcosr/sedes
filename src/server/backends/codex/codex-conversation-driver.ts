@@ -1883,6 +1883,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
           : {}),
         excludeTurns: true,
         model: executionSettings.model,
+        modelProvider: sourceThread.modelProvider,
         serviceTier: encodeCodexServiceTier(executionSettings.serviceTier),
         cwd: input.workspace.canonicalPath,
         approvalPolicy: providerPolicy.approvalPolicy,
@@ -1975,6 +1976,8 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         child.status.type !== "idle" && "child_status",
         child.turns.length !== 0 && "response_turns",
         result.model !== executionSettings.model && "model",
+        result.modelProvider !== sourceThread.modelProvider && "model_provider",
+        child.modelProvider !== sourceThread.modelProvider && "child_model_provider",
         result.reasoningEffort !== executionSettings.reasoningEffort &&
           "reasoning_effort",
         (observedSettings.serviceTierClassification !== "recognized" ||

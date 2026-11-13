@@ -1,0 +1,215 @@
+{
+  "release": "0.169.0",
+  "parserRelease": "0.169.0",
+  "platform": "linux/x64",
+  "executableSha256": "b452ca20f838a8855a88a41050ee4a694033fff4ea3ecdad5633e6e0e8d13f2b",
+  "verifiedAt": "2026-11-13T13:40:00.411621+00:00",
+  "fixtureOnly": true,
+  "liveProviderVerified": false,
+  "speedTestsPassed": 11,
+  "lifecycleTestsPassed": 2,
+  "results": [
+    {
+      "topology": "local",
+      "statuses": [
+        "published",
+        "published",
+        "published"
+      ],
+      "modelRequests": 18,
+      "serviceTiers": [
+        "omitted",
+        "priority",
+        "omitted",
+        "ultrafast",
+        "priority",
+        "omitted",
+        "omitted",
+        "omitted",
+        "priority",
+        "omitted",
+        "omitted",
+        "ultrafast",
+        "priority",
+        "priority",
+        "priority",
+        "ultrafast",
+        "priority",
+        "omitted"
+      ],
+      "subagents": {
+        "firstChildInitialTier": "omitted",
+        "firstChildNextStepTier": "omitted",
+        "laterChildInitialTier": "priority",
+        "parentAfterFirstSpawnTier": "priority",
+        "parentAfterSecondSpawnTier": "ultrafast"
+      },
+      "replayNativePublications": 0,
+      "completedTargetNativePublications": 0,
+      "liveProviderVerified": false
+    },
+    {
+      "topology": "external",
+      "statuses": [
+        "published",
+        "published",
+        "published"
+      ],
+      "modelRequests": 18,
+      "serviceTiers": [
+        "omitted",
+        "priority",
+        "omitted",
+        "ultrafast",
+        "priority",
+        "omitted",
+        "omitted",
+        "omitted",
+        "priority",
+        "omitted",
+        "omitted",
+        "ultrafast",
+        "priority",
+        "priority",
+        "priority",
+        "ultrafast",
+        "priority",
+        "omitted"
+      ],
+      "subagents": {
+        "firstChildInitialTier": "omitted",
+        "firstChildNextStepTier": "omitted",
+        "laterChildInitialTier": "priority",
+        "parentAfterFirstSpawnTier": "priority",
+        "parentAfterSecondSpawnTier": "ultrafast"
+      },
+      "replayNativePublications": 0,
+      "completedTargetNativePublications": 0,
+      "liveProviderVerified": false
+    },
+    {
+      "topology": "sidecar",
+      "scenario": "framed-order-and-stale-controller",
+      "status": "passed",
+      "firstPublishedTiers": [
+        "priority",
+        "default",
+        "ultrafast"
+      ],
+      "staleControllerNativeFrames": 0
+    },
+    {
+      "topology": "sidecar",
+      "statuses": [
+        "published",
+        "published",
+        "published"
+      ],
+      "modelRequests": 18,
+      "serviceTiers": [
+        "omitted",
+        "priority",
+        "omitted",
+        "ultrafast",
+        "priority",
+        "omitted",
+        "omitted",
+        "omitted",
+        "priority",
+        "omitted",
+        "omitted",
+        "ultrafast",
+        "priority",
+        "priority",
+        "priority",
+        "ultrafast",
+        "priority",
+        "omitted"
+      ],
+      "subagents": {
+        "firstChildInitialTier": "omitted",
+        "firstChildNextStepTier": "omitted",
+        "laterChildInitialTier": "priority",
+        "parentAfterFirstSpawnTier": "priority",
+        "parentAfterSecondSpawnTier": "ultrafast"
+      },
+      "replayNativePublications": 0,
+      "completedTargetNativePublications": 0,
+      "liveProviderVerified": false
+    },
+    {
+      "topology": "local",
+      "scenario": "no-fast",
+      "status": "passed",
+      "modelRequests": 2,
+      "nativeSpeedPublications": 1,
+      "nextStepTier": "ultrafast"
+    },
+    {
+      "topology": "local",
+      "scenario": "no-ultrafast",
+      "status": "passed",
+      "modelRequests": 2,
+      "nativeSpeedPublications": 1,
+      "nextStepTier": "priority"
+    },
+    {
+      "topology": "local",
+      "scenario": "no-tiers",
+      "status": "passed",
+      "modelRequests": 2,
+      "nativeSpeedPublications": 0,
+      "nextStepTier": "default"
+    },
+    {
+      "topology": "local",
+      "scenario": "fallback-only",
+      "status": "passed",
+      "modelRequests": 2,
+      "nativeSpeedPublications": 0,
+      "nextStepTier": "default"
+    },
+    {
+      "topology": "local",
+      "scenario": "non-advertising",
+      "status": "passed",
+      "modelRequests": 2,
+      "nativeSpeedPublications": 0,
+      "nextStepTier": "default"
+    },
+    {
+      "topology": "local",
+      "scenario": "stale-gate",
+      "status": "passed",
+      "modelRequests": 2,
+      "nativeSpeedPublications": 1,
+      "nextStepTier": "default"
+    },
+    {
+      "topology": "external",
+      "scenario": "restart",
+      "status": "passed",
+      "generationChangedDuringPublication": true,
+      "nativeRecoveryTier": "default",
+      "explicitSuccessorTier": "priority",
+      "graceBoundMilliseconds": 30000
+    },
+    {
+      "topology": "external",
+      "scenario": "recovery-link",
+      "status": "passed",
+      "activeDefaultWritePreservesInterruptedSnapshot": true,
+      "nativeRecoveryObserved": true,
+      "recoveredTier": "default"
+    }
+  ],
+  "lifecycleChecks": [
+    "real spawned-child archive restoration",
+    "saved-provider cold resume after changing daemon default",
+    "explicit provider switch rejection",
+    "unknown provider selector rejection"
+  ],
+  "limitations": [
+    "Loopback model fixtures; no platform or authenticated provider claim."
+  ]
+}

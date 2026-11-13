@@ -45,11 +45,13 @@ env -u NODE_ENV npm run verify:codex-interactions -- /absolute/path/to/codex 0.1
 
 ## Additional qualification
 
-The gated native Speed suite uses the production driver, actor, scoped settings,
+[Recorded lifecycle and Speed results](0.169.0-lifecycle-speed-linux-x64.json)
+cover 13 passing native cases. The gated native Speed suite uses the production driver, actor, scoped settings,
 receipts and persistent sidecar with loopback models. The separate ordering probe
 injects delayed native-bound frames to establish same-stream ordering and the
-absence of a cross-stream issue-order guarantee. The lifecycle suite covers real
-spawned-child archival and saved-provider restoration after a default change.
+absence of a cross-stream issue-order guarantee. The [provider lifecycle extension](0.169.0-provider-fork-linux-x64.json) covers
+real spawned-child archival, saved-provider restoration after a default change,
+and an explicitly pinned fork that continues on the source provider.
 
 ```sh
 env -u NODE_ENV SEDES_SPEED_NATIVE_EXECUTABLE=/absolute/path/to/codex \
@@ -68,6 +70,11 @@ their existing contracts.
 
 Loopback checks do not establish authenticated model behavior, real web search,
 image generation, external networking or target-platform desktop compatibility.
-The authorized live suites and their actual results are recorded separately.
+[Authorized live results](0.169.0-live-linux-x64.json) record eight authenticated
+Luna-low canaries plus ten private fixture cases: UDS streaming and native history,
+Steer/Stop attribution, managed TUI, persistent receipt recovery, the generated CLI
+skill and both native MCP modes, including HTML screenshot content. All 18 suite
+cases passed; the separate generated-image canary was not enabled. Native provider
+switch/fork coverage uses isolated loopback providers, not multiple real accounts.
 macOS artifact integrity is not execution evidence. Windows/macOS desktop
 verification must run on the target platform before shipment.

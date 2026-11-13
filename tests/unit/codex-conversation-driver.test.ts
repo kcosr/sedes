@@ -2798,6 +2798,29 @@ describe("CodexConversationBackendDriver", () => {
     expect(harness.calls.map(({ method }) => method)).toEqual(["thread/read"]);
   });
 
+  it("bounds concurrent provider presentation catalog reads before starting another model request", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    harness.enqueue("thread/read", ...Array.from({ length: 257 }, () => (params: { threadId: string }) => ({
+      thread: nativeThread({ id: params.threadId, modelProvider: `provider-${params.threadId}` }),
+    })));
+    harness.enqueue("model/list", ...Array.from({ length: 256 }, () => async () => {
+      await gate;
+      return { data: [nativeModel()], nextCursor: null };
+    }));
+    const pending = Array.from({ length: 256 }, (_, index) => target.catalog({ scope, workspace,
+      binding: { ...binding(), backendConversationId: `provider-thread-${index}` } }));
+    try {
+      await vi.waitFor(() => expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(256));
+      await expect(target.catalog({ scope, workspace,
+        binding: { ...binding(), backendConversationId: "provider-thread-excess" } }))
+        .rejects.toMatchObject({ backendCode: "codex_model_catalog_too_many_providers" });
+      expect(harness.calls.filter(({ method }) => method === "model/list")).toHaveLength(256);
+    } finally { release(); await Promise.all(pending); }
+  });
+
   it("shares one in-flight model catalog fetch between concurrent callers", async () => {
     const harness = new RpcHarness();
     let release!: () => void;
@@ -5730,6 +5753,48 @@ describe("CodexConversationBackendDriver", () => {
       });
     },
   );
+
+  it.each([
+    { ids: "disjoint", response: "correct" },
+    { ids: "overlapping", response: "correct" },
+    { ids: "overlapping", response: "result_mismatch" },
+    { ids: "overlapping", response: "child_mismatch" },
+  ])("pins a fork to its source provider with $ids IDs and $response readback", async ({ ids, response }) => {
+    const harness = new RpcHarness();
+    const modelId = ids === "disjoint" ? "provider-a-model" : "shared-model";
+    const selected = executionSettingsTuple({ model: modelId, reasoningEffort: "high" });
+    harness.defaultModelOverrides = { id: ids === "disjoint" ? "provider-b-model" : modelId,
+      model: ids === "disjoint" ? "provider-b-model" : modelId,
+      supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }], defaultReasoningEffort: "low" };
+    const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), { type: "catalog" },
+      executionSettingsProvider({ desiredSettings: () => selected, freezeOperationSnapshot: () => ({ settings: selected }) }));
+    await target.catalog({ scope, workspace });
+    const source = nativeThread({ modelProvider: "provider-a", turns: [] });
+    harness.enqueue("thread/read", { thread: source });
+    const checkpoint = await target.resolveBranchCheckpoint({ ...attachInput(), selection: { kind: "latest_provider_snapshot" } });
+    const applicationOperationId = `provider-fork-${ids}-${response}`;
+    const forkMarker = codexForkCreationMarker({ toolProvenanceKey, tenantId: scope.tenantId, principalId: scope.principalId,
+      backendInstanceId: instance.id, nativeThreadId: source.id, correlationAncestorThreadIds: [], applicationOperationId });
+    const child = nativeThread({ id: "provider-fork-child", sessionId: "provider-fork-child-session", turns: [],
+      modelProvider: response === "child_mismatch" ? "provider-b" : "provider-a", forkedFromId: source.id, threadSource: forkMarker });
+    harness.enqueue("thread/read", { thread: source });
+    harness.enqueue("model/list", (params: { modelProvider?: string }) => {
+      expect(params.modelProvider).toBe("provider-a");
+      return { data: [nativeModel({ id: modelId, model: modelId })], nextCursor: null };
+    });
+    harness.enqueue("thread/fork", { ...resumeResult(child), model: modelId, reasoningEffort: "high",
+      modelProvider: response === "result_mismatch" ? "provider-b" : "provider-a" });
+    const result = target.branchConversation({ scope, childApplicationThreadId: "provider-fork-application", applicationOperationId,
+      source: { kind: "user" }, sourceBinding: binding(), sourceOpaqueBindingDetail: attachInput().opaqueBindingDetail,
+      workspace, sourceCheckpoint: checkpoint, creationCorrelation: "provider-fork-correlation" });
+    if (response === "correct") await expect(result).resolves.toMatchObject({ backendConversationId: child.id });
+    else {
+      await expect(result).rejects.toMatchObject({ category: "submission_unknown", backendCode: "codex_fork_response_invalid", crossedSubmissionBoundary: true });
+      expect(harness.retirements).toEqual([1]);
+    }
+    expect(harness.calls.find(({ method }) => method === "thread/fork")?.params)
+      .toMatchObject({ modelProvider: "provider-a", model: modelId, config: expect.objectContaining({ model_reasoning_effort: "high" }) });
+  });
 
   it("rejects a latest provider snapshot response that leaves the child active", async () => {
     const activeTurn = {
@@ -10422,6 +10487,39 @@ describe("CodexConversationHandle", () => {
       expect(harness.calls.filter(({ method }) => method === "model/list")).toEqual([
         expect.objectContaining({ params: expect.objectContaining({ modelProvider: "provider-a" }) }),
       ]);
+    } finally { await handle.close(); }
+  });
+
+  it.each(["unresolved", "stale"] as const)("denies the managed-TUI catalog callback with %s provider evidence", async state => {
+    const harness = new RpcHarness();
+    const speeds = new CodexFastModeSessionRegistry();
+    const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), { type: "catalog" },
+      executionSettingsProvider(), undefined, undefined, unavailableCodexAgentToolCliEnvironmentProvider, speeds);
+    const handle = await attachIdle(harness, target);
+    if (state === "stale") { await establish(harness, handle); harness.lifecycle("ready", 2); }
+    const before = harness.calls.length;
+    try {
+      await expect(speeds.controller(scope, "application-profile-1")!.input.validateSelection(executionSettingsTuple()))
+        .rejects.toMatchObject({ backendCode: "codex_thread_model_provider_unresolved", retryable: true, crossedSubmissionBoundary: false });
+      expect(harness.calls.slice(before)).toEqual([]);
+    } finally { await handle.close(); }
+  });
+
+  it("does not cross submission when provider evidence becomes stale during snapshot capture", async () => {
+    const harness = new RpcHarness();
+    const settings = executionSettingsProvider({ freezeOperationSnapshot: () => {
+      harness.lifecycle("ready", 2);
+      return { settings: executionSettingsTuple() };
+    } });
+    const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(), { type: "catalog" }, settings));
+    await establish(harness, handle);
+    const before = harness.calls.length;
+    try {
+      await expect(handle.submit({ applicationOperationId: "stale-provider-submit", source: { kind: "user" },
+        mutationId: "stale-provider-submit", reconciliationToken: "stale-provider-submit",
+        taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" }))
+        .rejects.toMatchObject({ backendCode: "codex_thread_model_provider_unresolved", retryable: true, crossedSubmissionBoundary: false });
+      expect(harness.calls.slice(before)).toEqual([]);
     } finally { await handle.close(); }
   });
 

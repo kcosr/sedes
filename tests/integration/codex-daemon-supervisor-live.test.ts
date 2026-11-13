@@ -1,5 +1,6 @@
 import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { CodexConversationHandle } from "../../src/server/backends/codex/codex-conversation-handle.js";
+import { codexClientUserMessageId } from "../../src/server/backends/codex/codex-submission-correlation.js";
 import { NO_USAGE_SINK, type UsageObservation } from "../../src/server/usage/contracts.js";
 import { createServer, type Server } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -58,6 +59,7 @@ import { CODEX_APP_SERVER_RELEASE } from "../../src/server/backends/codex/codex-
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import {
   materializeCodexGeneratedImagePublications,
+  codexBackendTurnId,
   projectCodexHistory,
 } from "../../src/server/backends/codex/codex-history-projector.js";
 import { resolveCodexRuntimeConfiguration } from "../../src/server/backends/codex/codex-runtime-config.js";
@@ -2602,8 +2604,9 @@ plugins = false
               ),
             120_000,
           );
-          // Codex drains steering only after this model response finishes,
-          // so three steers wait in the turn's pending input at once.
+          // All three ACKs can still be pending while sampling. The native
+          // response may finish and drain some inputs before Stop reaches it;
+          // settled native client IDs below decide each operation's outcome.
           const steers = ["first", "second", "third"].map((label) => ({
             applicationOperationId: `steer-stop-uds-${label}-${randomFixtureId()}`,
             mutationId: `steer-stop-uds-${label}-${randomFixtureId()}`,
@@ -2635,6 +2638,16 @@ plugins = false
             deadlineAt: Date.now() + 30_000,
           });
           await interrupted;
+          // Read native history independently of Sedes's normalized projection
+          // and reconciliation. Pending ACKs are not evidence of settled absence.
+          const native = await supervisor.client.request(codexThreadReadMethod,
+            { threadId: started.thread.id, includeTurns: true }, requestOptions);
+          expect(native.thread.id).toBe(started.thread.id);
+          const nativeTarget = native.thread.turns.find(turn =>
+            codexBackendTurnId(native.thread.id, turn.id) === turnId);
+          expect(nativeTarget).toMatchObject({ status: "interrupted", itemsView: "full" });
+          const nativeUsers = native.thread.turns.flatMap(turn => turn.items.flatMap(item =>
+            item.type === "userMessage" ? [{ turnId: turn.id, item }] : []));
           unsubscribe();
           const projection = await handle.establishProjection({
             signal: new AbortController().signal,
@@ -2643,14 +2656,30 @@ plugins = false
           expect(projection.snapshot.turnsById[turnId]?.status).toBe(
             "interrupted",
           );
+          let materialized = 0;
           for (const steer of steers) {
-            expect(
-              Object.values(projection.snapshot.itemsById).some(
-                (item) =>
-                  item.semanticKind === "user_message" &&
-                  JSON.stringify(item).includes(steer.text),
-              ),
-            ).toBe(false);
+            const expectedClientId = codexClientUserMessageId({
+              toolProvenanceKey: new Uint8Array(32).fill(0x54),
+              tenantId: scope.tenantId, principalId: scope.principalId,
+              backendInstanceId: instance.id, nativeThreadId: started.thread.id,
+              correlationAncestorThreadIds: [],
+              applicationOperationId: steer.applicationOperationId,
+              reconciliationToken: steer.reconciliationToken,
+            });
+            const nativeMatches = nativeUsers.filter(({ item }) => item.clientId === expectedClientId);
+            expect(nativeMatches.length).toBeLessThanOrEqual(1);
+            const drained = nativeMatches.length === 1;
+            if (drained) {
+              materialized++;
+              expect(nativeMatches[0]!.turnId).toBe(nativeTarget!.id);
+              expect(nativeMatches[0]!.item.content.filter(content => content.type === "text").map(content => content.text))
+                .toEqual([steer.text]);
+            }
+            expect(Object.values(projection.snapshot.itemsById).filter(item =>
+              item.semanticKind === "user_message" && JSON.stringify(item).includes(steer.text)))
+              .toHaveLength(nativeMatches.length);
+            expect(projection.snapshot.turnsById[turnId]?.completionCorrelations?.includes(steer.applicationOperationId) ?? false)
+              .toBe(drained);
             await expect(
               driver.reconcileSubmission({
                 ...boundInput,
@@ -2658,8 +2687,13 @@ plugins = false
                 reconciliationToken: steer.reconciliationToken,
                 steerTarget: steer.target,
               }),
-            ).resolves.toMatchObject({ status: "not_accepted", retryable: false });
+            ).resolves.toMatchObject(drained
+              ? { status: "accepted", backendTurn: { backendTurnId: turnId, status: "interrupted" } }
+              : { status: "not_accepted", retryable: false });
           }
+          process.stdout.write(`Codex live Steer/Stop native evidence: ${JSON.stringify({
+            operations: steers.length, materialized, notAccepted: steers.length - materialized,
+          })}\n`);
         } finally {
           unsubscribe();
           await handle.close();

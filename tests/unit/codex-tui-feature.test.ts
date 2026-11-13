@@ -1766,6 +1766,19 @@ describe("assertCodexLiveModelSelection", () => {
       .toMatchObject({ modelProvider: "provider-a" });
   });
 
+  it("rejects mismatched native thread metadata before requesting a model catalog", async () => {
+    const requestWithReceipt = vi.fn(async (_method: { method: string }) => liveThreadProvider("provider-a", "different-thread"));
+    const client = new CodexSharedClientFacade({ current: () => ({ generation: 7,
+      request: vi.fn() as never, requestWithReceipt: requestWithReceipt as never }), latestGeneration: () => 7,
+      retireGeneration: async () => undefined });
+    client.updateLifecycle({ state: "ready", generation: 7 });
+    await expect(assertCodexLiveModelSelection({ nativeThreadId: "native-thread", client, expectedGeneration: 7,
+      model: "shared-model", reasoningEffort: "high", serviceTier: "standard", signal: new AbortController().signal }))
+      .rejects.toThrow("codex_tui_live_model_thread_mismatch");
+    expect(requestWithReceipt).toHaveBeenCalledTimes(1);
+    expect(requestWithReceipt.mock.calls[0]?.[0]).toMatchObject({ method: "thread/read" });
+  });
+
   it("rejects a response from a stale daemon generation", async () => {
     const client = new CodexSharedClientFacade({
       current: () => ({

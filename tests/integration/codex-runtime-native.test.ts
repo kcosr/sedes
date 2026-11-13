@@ -7,6 +7,7 @@ import { beforeAll, expect, it } from "vitest";
 import model from "../../scripts/codex-probes/speed-fixture-model.json";
 import { startMockResponsesServer, type MockResponseEvent } from "../../scripts/codex-probes/mock-responses-server.mjs";
 import { RawCodexAppServerClient, probeEnvironment } from "../../scripts/codex-probes/raw-app-server-client.mjs";
+import { codexThreadForkMethod } from "../../src/server/backends/codex/codex-c4-protocol.js";
 import { codexThreadReadMethod, type CodexThread } from "../../src/server/backends/codex/codex-c1-protocol.js";
 import { codexThreadStartMethod, codexTurnStartMethod } from "../../src/server/backends/codex/codex-c2-protocol.js";
 
@@ -208,5 +209,17 @@ native("offline 0.169 preserves a saved provider after default changes and rejec
       (notification.params as { threadId: string }).threadId === threadId), "saved provider continuation");
     expect(f.provider.requestCount).toBe(beforeRejected + 1);
     expect((await f.read(threadId)).modelProvider).toBe("original");
+    const fork = codexThreadForkMethod.decodeResult(await f.client.request("thread/fork", {
+      threadId, modelProvider: original.modelProvider, cwd: original.cwd, excludeTurns: true,
+    }));
+    expect(fork.modelProvider).toBe("original");
+    expect(fork.thread.modelProvider).toBe("original");
+    expect(fork.thread.forkedFromId).toBe(threadId);
+    const beforeForkContinuation = f.notifications.length;
+    await f.send(fork.thread.id, "Continue the fork on its pinned original provider.");
+    await f.waitFor(() => f.notifications.slice(beforeForkContinuation).some(notification => notification.method === "turn/completed" &&
+      (notification.params as { threadId: string }).threadId === fork.thread.id), "pinned provider fork continuation");
+    expect(f.provider.requestCount).toBe(beforeRejected + 2);
+    expect((await f.read(fork.thread.id)).modelProvider).toBe("original");
   } finally { await f.close(); }
 }, 60_000);

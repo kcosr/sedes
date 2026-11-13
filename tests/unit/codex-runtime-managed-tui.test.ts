@@ -349,11 +349,11 @@ describe("persistent Codex managed TUI", () => {
     const remote = await host.attach();
     await remote.registry.start(authority, host.launcher);
     const input = host.createLauncher.mock.calls[0]![0] as { onRuntimeVersionAssessment(value: { version: string; newerThanTested: boolean }): void };
-    input.onRuntimeVersionAssessment({ version: "0.168.0", newerThanTested: true });
-    await vi.waitFor(() => expect(remote.assessment).toHaveBeenCalledWith({ version: "0.168.0", newerThanTested: true }));
+    input.onRuntimeVersionAssessment({ version: "0.170.0", newerThanTested: true });
+    await vi.waitFor(() => expect(remote.assessment).toHaveBeenCalledWith({ version: "0.170.0", newerThanTested: true }));
     remote.lose();
     const next = await host.attach(100);
-    expect(next.assessment).toHaveBeenCalledWith({ version: "0.168.0", newerThanTested: true });
+    expect(next.assessment).toHaveBeenCalledWith({ version: "0.170.0", newerThanTested: true });
   });
 
   it("rechecks controller authority when queued input reaches the native write boundary", async () => {
