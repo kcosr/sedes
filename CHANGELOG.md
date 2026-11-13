@@ -328,6 +328,10 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Claude's **New with same settings** action no longer fails when the source
+  thread loads or refreshes its runtime status during creation. Concurrent
+  edits to the chosen settings still reject the copy.
+
 - Restoring an archived thread while viewing it now updates the conversation
   controls without requiring a page refresh.
   ([#132](https://github.com/kcosr/sedes/pull/132))

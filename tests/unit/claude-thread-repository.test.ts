@@ -32,6 +32,7 @@ function repository(): ClaudeThreadRepository {
       desired_model TEXT,
       desired_effort TEXT,
       desired_permission_mode TEXT,
+      desired_revision INTEGER NOT NULL DEFAULT 0,
       effective_model TEXT,
       effective_model_state TEXT NOT NULL,
       effective_model_generation INTEGER,
@@ -221,6 +222,7 @@ describe("Claude thread repository", () => {
       ...target,
       model: "claude-sonnet-5",
       effort: "low",
+      desiredRevision: 0,
       revision: 0,
     });
     expect(
@@ -231,7 +233,7 @@ describe("Claude thread repository", () => {
         { model: "ignored-replay", effort: "high", permissionMode: "auto" },
         200,
       ),
-    ).toMatchObject({ model: "claude-sonnet-5", effort: "low", revision: 0 });
+    ).toMatchObject({ model: "claude-sonnet-5", effort: "low", desiredRevision: 0, revision: 0 });
     expect(
       settings.updateDesired(scope, "thread", {
         expectedRevision: 0,
@@ -242,7 +244,7 @@ describe("Claude thread repository", () => {
         },
         now: 300,
       }),
-    ).toMatchObject({ effort: "medium", revision: 1, updatedAt: 300 });
+    ).toMatchObject({ effort: "medium", desiredRevision: 1, revision: 1, updatedAt: 300 });
     expect(() =>
       settings.updateDesired(scope, "thread", {
         expectedRevision: 0,
@@ -306,6 +308,8 @@ describe("Claude thread repository", () => {
       },
     );
     expect(record).toMatchObject({
+      desiredRevision: 0,
+      revision: 3,
       effectiveModel: "claude-sonnet-5",
       effectiveModelState: "confirmed",
       effectiveModelGeneration: 2,
@@ -324,6 +328,8 @@ describe("Claude thread repository", () => {
       now: 135,
     });
     expect(record).toMatchObject({
+      desiredRevision: 0,
+      revision: 4,
       effectiveModelState: "confirmed",
       effectiveEffortState: "unknown",
       effectiveEffortGeneration: null,
@@ -335,6 +341,8 @@ describe("Claude thread repository", () => {
         now: 140,
       }),
     ).toMatchObject({
+      desiredRevision: 0,
+      revision: 5,
       effectiveModel: "claude-sonnet-5",
       effectiveModelState: "unknown",
       effectiveModelGeneration: null,
@@ -364,6 +372,8 @@ describe("Claude thread repository", () => {
       },
     );
     expect(adopted).toMatchObject({
+      desiredRevision: 1,
+      revision: 1,
       model: null,
       effort: null,
       permissionMode: "dontAsk",
@@ -413,6 +423,8 @@ describe("Claude thread repository", () => {
       ),
     ).toBe(1);
     expect(settings.get(scope, "thread-restart")).toMatchObject({
+      desiredRevision: 0,
+      revision: 2,
       effectivePermissionMode: "default",
       effectivePermissionState: "unknown",
       effectivePermissionGeneration: null,

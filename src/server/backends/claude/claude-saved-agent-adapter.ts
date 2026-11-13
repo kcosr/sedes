@@ -173,7 +173,7 @@ export class ClaudeSavedAgentBackendAdapter implements SavedAgentBackendAdapter 
     return Object.freeze({
       backendTypeId: this.typeId,
       schemaVersion: this.overrideSchemaVersion,
-      settingsRevision: settings.revision,
+      settingsRevision: settings.desiredRevision,
       overrides: canonical.overrides,
     });
   }
@@ -197,7 +197,7 @@ export class ClaudeSavedAgentBackendAdapter implements SavedAgentBackendAdapter 
       input.applicationThreadId,
       input.connection,
     );
-    if (current.revision !== input.capture.settingsRevision) {
+    if (current.desiredRevision !== input.capture.settingsRevision) {
       throw new DomainError(
         "conflict",
         "The source Claude settings changed while the new thread was created.",
