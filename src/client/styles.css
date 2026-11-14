@@ -7448,8 +7448,8 @@ tr.diff-hunk td {
   position: absolute;
   z-index: var(--z-sticky);
   top: -1px;
-  right: calc(var(--radius-lg) - 1px);
-  left: calc(var(--radius-lg) - 1px);
+  right: var(--composer-line-inset);
+  left: var(--composer-line-inset);
   height: 3px;
   overflow: hidden;
   background: color-mix(in srgb, var(--border) 65%, transparent);
@@ -7491,9 +7491,9 @@ tr.diff-hunk td {
   --account-usage-remaining: 0%;
   position: absolute;
   z-index: var(--z-sticky);
-  right: calc(var(--radius-lg) - 1px);
+  right: var(--composer-line-inset);
   bottom: -14px;
-  left: calc(var(--radius-lg) - 1px);
+  left: var(--composer-line-inset);
   height: 20px;
   padding: 0;
   border: 0;
@@ -7516,7 +7516,6 @@ tr.diff-hunk td {
 .input-activity-bar,
 .input-activity-bar::before,
 .account-usage-fill {
-  --composer-line-taper: 12px;
   /* A single curve tapers only the top edge, leaving the bottom flat.
      Short segments compress the caps to fit without changing their height. */
   mask-image:
@@ -7952,6 +7951,8 @@ tr.diff-hunk td {
 }
 
 .composer {
+  --composer-line-inset: calc(var(--radius-lg) + 5px);
+  --composer-line-taper: 18px;
   position: relative;
   width: 100%;
   margin: 0;

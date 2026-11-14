@@ -88,8 +88,9 @@ User-facing changes are collected here before release. See the
 
 - Codex threads show a 2px colored account quota line that shrinks toward the
   center, matching the activity indicator's width at full quota. Both indicators
-  use mirrored single-curve 12px tapers, with flat edges against the composer
-  border, with 2px of extra space below the buttons when quota is shown.
+  use mirrored single-curve 18px tapers and start 6px clear of the rounded
+  corners, with flat edges against the composer border and 2px of extra space
+  below the buttons when quota is shown.
   The quota line and Accounts use green
   at 75% remaining, yellow at 50%, orange at 20%, and red below 20%, with
   delayed hover and tap quota details. Native quota
