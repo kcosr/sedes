@@ -7455,7 +7455,8 @@ tr.diff-hunk td {
   background: color-mix(in srgb, var(--border) 65%, transparent);
   opacity: 0;
   pointer-events: none;
-  transform: scaleY(0.6);
+  /* Mirror the shared taper so the top edge stays flat against the border. */
+  transform: scaleY(-0.6);
   transition:
     opacity 180ms ease,
     transform 180ms ease;
@@ -7477,7 +7478,7 @@ tr.diff-hunk td {
 
 .input-activity-bar.visible {
   opacity: 1;
-  transform: scaleY(1);
+  transform: scaleY(-1);
 }
 
 .input-activity-bar.visible::before {
