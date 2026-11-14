@@ -125,6 +125,16 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     expect(JSON.stringify(await fixture.json(`${fileUrl}/status`))).toContain("example.txt");
 
     const targetId = await fixture.addCodexBackend();
+    await fixture.waitFor(async () => (await fixture.snapshot()).accountUsages.length === 1);
+    expect((await fixture.snapshot()).accountUsages).toEqual([
+      expect.objectContaining({
+        backendInstanceId: "outbound-codex-backend",
+        executionEnvironmentId: fixture.environmentId,
+        accountId: "account-1",
+        plan: "Pro Max",
+        windows: [{ remainingPercent: 28, durationMinutes: 10_080, resetsAt: 1_800_000_000_000 }],
+      }),
+    ]);
     const created = await fixture.json("/api/threads", "POST", { workspaceId: workspace.id, title: "Outbound terminal fixture", executionWorkspace: { kind: "direct" }, configuration: { kind: "custom", targetId } }) as { threadId: string };
     const terminal = terminalMutationResultSchema.parse(await fixture.json(`/api/threads/${created.threadId}/terminals`, "POST", { mutationId: randomUUID(), displayName: "Retained shell", rows: 24, columns: 80 })).terminal!;
     fixture.terminalIds.push(terminal.terminalId);

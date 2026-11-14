@@ -18,7 +18,7 @@
   },
   "sourceTransformation": {
     "description": "copy adopted transitive TypeScript closures and append .js to relative NodeNext specifiers",
-    "treeSha256": "9996c01f173fd8b193612aa0b3714e3129b5fda4b4e4b7b371b65c50d2de7b78",
+    "treeSha256": "ebec85211be049670aaa3cc8dbe2dce7a460ceb3b4cca2860f518c9e23f081c6",
     "artifacts": [
       {
         "path": "experimental/AbsolutePathBuf.ts",
@@ -857,8 +857,8 @@
       },
       {
         "path": "route-registry.ts",
-        "bytes": 59997,
-        "sha256": "2dc2896916538ee5abad5a805d21714a9e36302356af40150825fe0e71e408b1"
+        "bytes": 60698,
+        "sha256": "949c5a916e82a6206c0402178005c2ed19b6c52e7863ca8a8ed7d5e1b8deeee3"
       },
       {
         "path": "stable/AbsolutePathBuf.ts",
@@ -1516,6 +1516,16 @@
         "sha256": "c929992bae03d9812ff88055b32bb31954ed2f33de8d1e03f55e0becd3198b1b"
       },
       {
+        "path": "stable/v2/GetAccountRateLimitsParams.ts",
+        "bytes": 730,
+        "sha256": "2777710a93776ec971d9f4a016b20d8f555525d1f40de4a5e7bec6e58ce37e97"
+      },
+      {
+        "path": "stable/v2/GetAccountRateLimitsResponse.ts",
+        "bytes": 1300,
+        "sha256": "4809fcbb94f942341d01b3b41d30935197beac2bb1c5317119ac8a50971abe06"
+      },
+      {
         "path": "stable/v2/GitInfo.ts",
         "bytes": 249,
         "sha256": "ae05c1fdc69bba0d6aea22f2f7a8e2f7c5b494330d6827cfac9ec9a9cc290269"
@@ -1879,6 +1889,26 @@
         "path": "stable/v2/RateLimitReachedType.ts",
         "bytes": 366,
         "sha256": "67ca3e1a5154ac7ea40be29b31ad55be4a786b228ce89fecc566ef00309b5e8c"
+      },
+      {
+        "path": "stable/v2/RateLimitResetCredit.ts",
+        "bytes": 918,
+        "sha256": "70d7fa1a4d60fe5140b2512d925d0e292c681ffa65b9af9ae91cfa9ed4907b91"
+      },
+      {
+        "path": "stable/v2/RateLimitResetCreditStatus.ts",
+        "bytes": 246,
+        "sha256": "bdb35657a7d3b1d42c69892f1fb4ebf48a95fd4221c647f26c9aa66d646591f4"
+      },
+      {
+        "path": "stable/v2/RateLimitResetCreditsSummary.ts",
+        "bytes": 650,
+        "sha256": "1ceb5ca2ff724ac2697d65beb616c0ce8ecf88bb68382bc4f5740e3d01a61752"
+      },
+      {
+        "path": "stable/v2/RateLimitResetType.ts",
+        "bytes": 217,
+        "sha256": "762b31640420075407fe3b1a7dd6e7662551d155d0d1f562bb59f79ecc6a58e7"
       },
       {
         "path": "stable/v2/RateLimitSnapshot.ts",
@@ -2587,8 +2617,8 @@
       },
       {
         "path": "validators.ts",
-        "bytes": 2226883,
-        "sha256": "87c90781f632ef8d14010692164ca421fde71ac491d79b01befcfdc61954bcbc"
+        "bytes": 2242070,
+        "sha256": "4dfb4a75a127f2773d9ffed2634f463fbff13c5876be4bc5b52b4e70ad56617d"
       }
     ]
   },
@@ -2612,9 +2642,33 @@
     "thread_history",
     "live_turns",
     "interactions",
-    "actions"
+    "actions",
+    "account_usage"
   ],
   "routes": [
+    {
+      "direction": "client_request",
+      "method": "account/rateLimits/read",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "account_usage",
+      "paramsDefinition": "GetAccountRateLimitsParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/GetAccountRateLimitsParams"
+      },
+      "resultDefinition": "GetAccountRateLimitsResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/GetAccountRateLimitsResponse"
+      },
+      "sedesRefinements": [
+        "ordinary_included_windows",
+        "bounded_display_metadata",
+        "snapshot_only"
+      ]
+    },
     {
       "direction": "client_request",
       "method": "initialize",

@@ -53,7 +53,7 @@ test("desktop voice receives policy and notifications through the packaged-clien
   const hub = new ApplicationEventHub();
   const baseline = hub.publish({ type: "snapshot", generation: hub.generation, snapshot: {
     environments: [], projects: [], workspaces: [], threads: [], forkOrigins: [], lineagePlacements: [], groups: [],
-    lineageFamilies: [], executionTargets: [], advisories: [], defaultNewThreadTargetId: null, tasks: [],
+    lineageFamilies: [], executionTargets: [], advisories: [], accountUsages: [], defaultNewThreadTargetId: null, tasks: [],
   } });
   const policy = notificationPolicySchema.parse({ generation: 1, settings: { enabled: true, silenced: false, revision: 0,
     assistantResultPhases: ["final"], scriptPath: "", arguments: [], timeoutSeconds: 30, delivery: defaultNotificationDelivery() } });

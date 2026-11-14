@@ -2309,6 +2309,7 @@ function sidebarFixture(
 } {
   const snapshot = {
     advisories: [],
+    accountUsages: [],
     environments: [
       {
         id: "environment-1",
@@ -2332,6 +2333,7 @@ function sidebarFixture(
     threads: [thread],
     executionTargets: [
       {
+        backendInstanceId: "backend-1",
         id: "target-1",
         environmentId: "environment-1",
         label: { text: "Local SDK" },

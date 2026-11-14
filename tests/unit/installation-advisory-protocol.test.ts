@@ -35,6 +35,7 @@ function emptySnapshot(advisories: readonly unknown[]) {
     lineageFamilies: [],
     executionTargets: [],
     advisories,
+    accountUsages: [],
     defaultNewThreadTargetId: null,
     tasks: [],
   };

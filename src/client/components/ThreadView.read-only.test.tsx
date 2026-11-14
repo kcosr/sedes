@@ -1842,6 +1842,7 @@ function fixture(
     pendingThreadConfigurationCopySourceIds: [],
     snapshot: {
       advisories: [],
+      accountUsages: [],
       environments: [snapshot.environment],
       projects: [{ id: "project-1", name: "Workspace", revision: 0 }],
       workspaces: [snapshot.workspace],

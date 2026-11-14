@@ -197,6 +197,7 @@ function captureFixture(current: ReturnType<typeof fixture>) {
     {
       read: async () => ({
         executionTargets: [{
+          backendInstanceId: "backend-1",
           id: current.connectionProfileId, environmentId: current.environmentId,
           label: { text: "Local Pi SDK" }, backend: { label: { text: "Primary Pi" }, brand: "pi" },
           workspaceExecution: { kind: "direct_only" }, available: true,
@@ -2566,6 +2567,7 @@ describe("backend-normalized application adapters", () => {
           read: async () => ({
             executionTargets: [
               {
+                backendInstanceId: "backend-1",
                 id: current.connectionProfileId,
                 environmentId: current.environmentId,
                 label: { text: "Local Pi SDK" },
@@ -2798,6 +2800,7 @@ describe("backend-normalized application adapters", () => {
           read: async () => ({
             executionTargets: [
               {
+                backendInstanceId: "backend-1",
                 id: current.connectionProfileId,
                 environmentId: current.environmentId,
                 label: { text: "Local Pi SDK" },

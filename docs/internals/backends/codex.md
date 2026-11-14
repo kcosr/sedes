@@ -14,6 +14,7 @@ troubleshooting, see the [Codex operator guide](../../operator/backends/codex.md
 
 - [Protocol and release admission](#protocol-and-release-admission)
 - [Runtime and transport generations](#runtime-and-transport-generations)
+- [Account quota observations](#account-quota-observations)
 - [Native thread creation and binding](#native-thread-creation-and-binding)
 - [History and event projection](#history-and-event-projection)
 - [Asynchronous question items](#asynchronous-question-items)
@@ -25,6 +26,38 @@ troubleshooting, see the [Codex operator guide](../../operator/backends/codex.md
 - [Agent-tool integration](#agent-tool-integration)
 - [Managed TUI integration](#managed-tui-integration)
 - [Contributor verification](#contributor-verification)
+
+## Account quota observations
+
+`CodexAccountUsageSource` owns one in-memory snapshot and one five-minute timer
+per principal/backend/environment runtime. The first `ready` or `idle` lifecycle
+observation starts polling; later transitions do not fetch immediately. At most
+one `account/rateLimits/read` request is in flight. The shared facade's existing
+short residency lease wakes a parked runtime for the read and releases it
+afterward. Both module close and pre-cleanup Stop close the source before any
+provider teardown, cancel the request, and prevent late publication.
+
+The request sets `excludeResetCreditDetails: true` and does not advertise Luna
+Reserve support. The method is explicitly classified as a read on the sidecar,
+so it creates no mutation receipt. Current generated bindings admit it; older
+sidecars reject it without inventing a fallback. Full successful responses replace
+the observation; errors publish absence. Polling continues after auth errors to
+discover a later login. No account-profile read or account-notification merge is
+needed: native account updates also occur on ordinary connection initialization.
+
+Only `rateLimitsByLimitId.codex` contributes. The backend converts used percentages
+to bounded remaining percentages, durations to minutes, and reset times from
+Unix seconds to milliseconds. Optional plan and opaque account ID come from the
+same response. Credits and unrelated model buckets are excluded. A reading can
+describe the previous account briefly after an account switch; it is an observation,
+never account authentication or permission to send.
+
+The normalized `accountUsages` application collection carries these observations
+through the principal-scoped stream and its replay/checkpoint projection. Targets
+include their application backend instance ID so the composer can select the
+exact backend and environment. There is no browser polling or connection-interest
+tracking. Client expiry hides readings after ten minutes or a reported reset.
+Pi SDK, Pi, Claude, Grok, and OpenCode explicitly contribute no account quota.
 
 ## Protocol and release admission
 

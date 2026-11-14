@@ -388,6 +388,33 @@ function fakeDependencies() {
 }
 
 describe("CodexBackendModule", () => {
+  it.each(["close", "stopBeforeConversationCleanup"] as const)("ends quota polling before %s tears down the transport", async method => {
+    const workingDirectory = await temporaryDirectory();
+    const fakes = fakeDependencies();
+    const prepared = new CodexBackendModule(fakes.dependencies).prepare(
+      configuration({ workingDirectory, ownership: "external" }),
+    );
+    const runtime = prepared.createRuntime(context());
+    const request = vi.spyOn(fakes.clients[0]!, "request");
+    vi.useFakeTimers();
+    try {
+      await runtime.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledOnce();
+      const signal = request.mock.calls[0]![2].signal;
+      fakes.closes[0]!.mockImplementationOnce(async () => {
+        expect(signal?.aborted).toBe(true);
+      });
+      await runtime[method]!();
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(request).toHaveBeenCalledOnce();
+      expect(runtime.accountUsage.snapshot()).toBeNull();
+    } finally {
+      await runtime.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("defaults owned stdio to HOME/.codex without setting CODEX_HOME and claims that native namespace", async () => {
     const home = await temporaryDirectory();
     const defaultCodexHome = path.join(home, ".codex");

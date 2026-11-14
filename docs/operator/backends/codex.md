@@ -572,6 +572,36 @@ transport, generated-image path, or TUI.
 For contributor-facing protocol and lifecycle contracts, continue with
 [Codex backend internals](../../internals/backends/codex.md).
 
+## Account quota
+
+Codex threads can show a thin line along the bottom of the composer for the
+account's last checked included quota. Hover briefly, click, or tap the line to
+see the returned quota windows, reset times, and optional plan and account ID.
+Only windows supplied by Codex appear; a weekly-only plan has no five-hour row.
+The line reflects the lowest remaining percentage among those included-usage
+windows. Extra credits and model-specific quotas are not combined into it, and
+it never controls whether you can send a message.
+
+Sedes uses the native `account/rateLimits/read` RPC, independently of Provider
+Pulse and experimental recorded usage. One in-memory cache serves every thread
+and client using that backend. It refreshes when the backend first becomes ready
+and every five minutes afterward, even with no connected clients. Opening a
+thread or quota details does not fetch again. Changes to the active account in
+the running Codex backend appear on the next successful read; the timestamp
+identifies the last observation. Codex caches managed credentials, so an external
+auth-file change can require a Codex reload or restart before the RPC observes it.
+
+The timer runs while the backend is enabled. A parked backend can briefly wake
+for the read, then park again; external UDS/TCP connections reconnect without
+starting the externally owned process. Explicit backend Stop ends polling before
+teardown. A stopped server cannot refresh its cache. No quota history is persisted.
+
+Failed, unsupported, or empty readings hide the line. It also disappears after
+ten minutes without a fresh reading or when a returned reset time passes, until
+the next successful scheduled read. Sedes never assumes a reset has restored
+quota. Rebuild remote execution sidecars with this version to enable quota reads;
+older sidecars reject the unrecognized method and the indicator stays hidden.
+
 ## Recorded usage
 
 Codex records cumulative `thread/tokenUsage/updated` observations on main.

@@ -299,6 +299,7 @@ function makeState(
     executionTargets: [
       ...(options.executionTargets ?? [
         {
+          backendInstanceId: "backend-1",
           id: "target-1",
           environmentId: "environment-1",
           label: { text: "Pi" },
@@ -1357,6 +1358,7 @@ describe("InventorySidebar view modes", () => {
     ];
     const executionTargets: NonNullable<StateOptions["executionTargets"]> = [
       {
+        backendInstanceId: "backend-1",
         id: "target-1",
         environmentId: "environment-local",
         label: { text: "Pi" },
@@ -1365,6 +1367,7 @@ describe("InventorySidebar view modes", () => {
         available: true,
       },
       {
+        backendInstanceId: "backend-1",
         id: "target-remote",
         environmentId: "environment-remote",
         label: { text: "Codex" },
@@ -1485,6 +1488,7 @@ describe("InventorySidebar view modes", () => {
       ];
       const executionTargets: NonNullable<StateOptions["executionTargets"]> = [
         {
+          backendInstanceId: "backend-1",
           id: "target-1",
           environmentId: "environment-local",
           label: { text: "Pi" },
@@ -1493,6 +1497,7 @@ describe("InventorySidebar view modes", () => {
           available: true,
         },
         {
+          backendInstanceId: "backend-1",
           id: "target-remote",
           environmentId: "environment-remote",
           label: { text: "Codex" },
@@ -1563,6 +1568,7 @@ describe("InventorySidebar view modes", () => {
     ];
     const executionTargets: NonNullable<StateOptions["executionTargets"]> = [
       {
+        backendInstanceId: "backend-1",
         id: "target-1",
         environmentId: "environment-local",
         label: { text: "Pi" },
@@ -1571,6 +1577,7 @@ describe("InventorySidebar view modes", () => {
         available: true,
       },
       {
+        backendInstanceId: "backend-1",
         id: "target-remote",
         environmentId: "environment-remote",
         label: { text: "Codex" },
@@ -1641,6 +1648,7 @@ describe("InventorySidebar view modes", () => {
     ];
     const executionTargets: NonNullable<StateOptions["executionTargets"]> = [
       {
+        backendInstanceId: "backend-1",
         id: "target-1",
         environmentId: "environment-local",
         label: { text: "Pi" },
@@ -1649,6 +1657,7 @@ describe("InventorySidebar view modes", () => {
         available: true,
       },
       {
+        backendInstanceId: "backend-1",
         id: "target-remote",
         environmentId: "environment-remote",
         label: { text: "Codex" },
@@ -2449,6 +2458,7 @@ describe("InventorySidebar view modes", () => {
         ],
         executionTargets: [
           {
+            backendInstanceId: "backend-1",
             id: "target-ssh",
             environmentId: "environment-ssh",
             label: { text: "Codex SSH" },
@@ -2534,6 +2544,7 @@ describe("InventorySidebar view modes", () => {
         ],
         executionTargets: [
           {
+            backendInstanceId: "backend-1",
             id: "target-1",
             environmentId: "environment-local",
             label: { text: "Pi" },
@@ -2542,6 +2553,7 @@ describe("InventorySidebar view modes", () => {
             available: true,
           },
           {
+            backendInstanceId: "backend-1",
             id: "target-ssh",
             environmentId: "environment-ssh",
             label: { text: "Codex SSH" },
@@ -2550,6 +2562,7 @@ describe("InventorySidebar view modes", () => {
             available: true,
           },
           {
+            backendInstanceId: "backend-1",
             id: "target-remote-pi",
             environmentId: "environment-ssh",
             label: { text: "Pi" },
@@ -2796,6 +2809,7 @@ describe("InventorySidebar view modes", () => {
         ],
         executionTargets: [
           {
+            backendInstanceId: "backend-1",
             id: "target-1",
             environmentId: "environment-1",
             label: { text: "Pi" },
@@ -2804,6 +2818,7 @@ describe("InventorySidebar view modes", () => {
             available: true,
           },
           {
+            backendInstanceId: "backend-1",
             id: "target-remote",
             environmentId: "environment-1",
             label: { text: "Codex" },
@@ -2825,6 +2840,7 @@ describe("InventorySidebar view modes", () => {
     renderSidebar([root], {
       executionTargets: [
         {
+          backendInstanceId: "backend-1",
           id: "target-1",
           environmentId: "environment-1",
           label: { text: "Pi" },
@@ -2833,6 +2849,7 @@ describe("InventorySidebar view modes", () => {
           available: true,
         },
         {
+          backendInstanceId: "backend-1",
           id: "target-2",
           environmentId: "environment-1",
           label: { text: "Codex" },
@@ -2875,6 +2892,7 @@ describe("InventorySidebar view modes", () => {
       { id: "remote-one", environmentId: "remote", projectId: "project-remote", label: { text: "Remote" }, displayPath: { text: "/remote" }, available: true },
     ];
     const executionTargets = environments.map((environment) => ({
+      backendInstanceId: "backend-1",
       id: `target-${environment.id}`, environmentId: environment.id,
       label: { text: "Pi" }, backend: { label: { text: "Pi" }, brand: "pi" as const },
       workspaceExecution: { kind: "direct_only" as const }, available: true as const,
@@ -4821,6 +4839,7 @@ describe("InventorySidebar view modes", () => {
     renderSidebar([root], {
       executionTargets: [
         {
+          backendInstanceId: "backend-1",
           id: "target-1",
           environmentId: "environment-1",
           label: { text: "Pi" },
@@ -4829,6 +4848,7 @@ describe("InventorySidebar view modes", () => {
           available: true,
         },
         {
+          backendInstanceId: "backend-1",
           id: "target-2",
           environmentId: "environment-1",
           label: { text: "Codex" },

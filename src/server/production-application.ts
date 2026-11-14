@@ -44,6 +44,7 @@ import {
 import { DatabaseApplicationThreadSummaryReader } from "./application/database-application-summary-reader.js";
 import { DatabaseApplicationLineageSummaryReader } from "./application/database-application-lineage-summary-reader.js";
 import { DatabaseExecutionTargetReader } from "./application/execution-target-reader.js";
+import { CompositeAccountUsageReader } from "./application/account-usage-reader.js";
 import {
   CompositeInstallationAdvisoryReader,
   NO_ACTIVE_APPLICATION_INSTALLATION_ADVISORIES,
@@ -1622,6 +1623,10 @@ export async function startProductionApplication(
       runtimes: moduleRuntimes,
       backendEnvironments: backendAdvisoryEnvironments,
     });
+    const accountUsages = new CompositeAccountUsageReader({
+      scope, runtimes: moduleRuntimes,
+      environmentId: id => runtimeModules.executionEnvironmentId(id),
+    });
     const application = new ApplicationSnapshotService(
       inventoryRepository,
       applicationThreadSummaries,
@@ -1634,10 +1639,15 @@ export async function startProductionApplication(
         execution!.directoryBrowsingAvailability(requestScope, environmentId),
       terminalRepository,
       installationAdvisories,
+      accountUsages,
     );
     const activeApplicationSnapshots =
       new ApplicationSnapshotPublicationBoundary(application, applicationHubs);
     applicationSnapshots = activeApplicationSnapshots;
+    resources.defer("account usage publication subscription", accountUsages.subscribe(scope, () => {
+      void activeApplicationSnapshots.publishAccountUsagesChange(scope)
+        .catch(reportBackgroundError("Account usage publication"));
+    }));
     targets.bindWorkspacePublications(activeApplicationSnapshots);
     const unsubscribeInstallationAdvisories =
       subscribeInstallationAdvisoryPublication(
@@ -2579,6 +2589,7 @@ export async function startProductionApplication(
         }
       }
       executionTargets.invalidateHealth(); discoveryServices = createDiscoveryServices();
+      accountUsages.replaceRuntimes(scope, moduleRuntimes);
       return installationAdvisories.replaceRuntimes(scope, moduleRuntimes);
     };
     const reconcileLiveConfiguration = async (): Promise<void> => {
@@ -2700,6 +2711,7 @@ export async function startProductionApplication(
       executionTargets.setDefaultTargetTemplateId(backendConfigurationFile.defaultTargetId);
       // Replacing advisory sources publishes through their existing subscriber.
       const advisoryRuntimesChanged = installationAdvisories.replaceRuntimes(scope, moduleRuntimes);
+      accountUsages.replaceRuntimes(scope, moduleRuntimes);
       if (changed && !advisoryRuntimesChanged) await activeApplicationSnapshots.publishAuthoritativeReplacement(scope);
     };
     const detachBackend = async (id: string, effect?: () => Promise<void>): Promise<void> => {

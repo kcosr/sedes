@@ -183,6 +183,8 @@ export interface BackendRuntimeRecoveryContext {
 }
 
 export interface BackendModuleRuntime {
+  /** Native included-quota observations, including an explicit unsupported source. */
+  readonly accountUsage: import("./backend-account-usage.js").BackendAccountUsageSource;
   /** Read-only eligibility; must never acquire a runtime or start provider work. */
   agentToolRuntimeAvailability?(input: BackendAgentToolRuntimeContext): BackendAgentToolRuntimeAvailability;
   /** Current safe diagnostic from lazy runtime checks; reading must not start work. */

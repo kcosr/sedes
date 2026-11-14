@@ -24,6 +24,7 @@ import type { ThreadRuntimeCoordinator } from "../events/thread-runtime-coordina
 import { boundDisplayText } from "../conversations/payload-policy.js";
 import type { ExecutionTargetReader } from "./execution-target-reader.js";
 import { isDeepStrictEqual } from "node:util";
+import { NO_ACCOUNT_USAGES, type AccountUsageReader } from "./account-usage-reader.js";
 import {
   environmentAdmitsForegroundOperation,
   environmentOperationalState,
@@ -164,6 +165,7 @@ export class ApplicationSnapshotService {
     ) => "available" | "unavailable",
     readonly terminalSummaries: ApplicationTerminalSummaryReader,
     readonly advisories: InstallationAdvisoryReader = NO_INSTALLATION_ADVISORIES,
+    readonly accountUsages: AccountUsageReader = NO_ACCOUNT_USAGES,
   ) {}
 
   /** A targeted inventory read never attaches the conversation or reads history. */
@@ -306,6 +308,7 @@ export class ApplicationSnapshotService {
       })),
       executionTargets,
       advisories: this.advisories.read(scope),
+      accountUsages: this.accountUsages.read(scope),
       defaultNewThreadTargetId,
       threads,
       groups: this.groups.list(scope).map((group) => ({
@@ -355,6 +358,7 @@ type CaptureOperation = {
   cancelDelay?: () => void;
 };
 type ApplicationChange =
+  | { kind: "account_usages"; id: "account_usages" }
   | {kind: "automation"; id:string; threadId:string; revision:number; runsRevision:number; deleted:boolean}
   | { kind: "thread"; id: string; forcePublication: boolean }
   | { kind: "task"; id: string }
@@ -514,6 +518,10 @@ export class ApplicationSnapshotPublicationBoundary {
     void this.publishThreadChange(scope, threadId).catch((error) => {
       if (hub) this.#failed(scope, error, hub);
     });
+  }
+
+  publishAccountUsagesChange(scope: RequestScope): Promise<void> {
+    return this.#change(scope, { kind: "account_usages", id: "account_usages" });
   }
 
   /** Admit committed bulk structural facts before any per-thread runtime waits. */
@@ -765,6 +773,12 @@ export class ApplicationSnapshotPublicationBoundary {
     hint: ApplicationChange,
   ): Promise<void | "retry"> {
     switch (hint.kind) {
+      case "account_usages":
+        hub.publish({
+          type: "account_usages_changed", generation: hub.generation,
+          accountUsages: [...this.snapshots.accountUsages.read(scope)],
+        });
+        return;
       case "thread":
         return this.#publishThreadChange(
           scope,

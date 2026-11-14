@@ -156,6 +156,7 @@ const applicationBootstrap = applicationSession;
 const applicationEventId = "10000000-0000-4000-8000-000000000001.0";
 const applicationSnapshot = {
   advisories: [],
+  accountUsages: [],
   environments: [
     {
       id: "10000000-0000-4000-8000-000000000002",
@@ -1859,6 +1860,7 @@ describe("application endpoint startup", () => {
       ],
       executionTargets: [
         {
+          backendInstanceId: "backend-1",
           id: "target-1",
           environmentId: "10000000-0000-4000-8000-000000000002",
           label: { text: "Local SDK" },

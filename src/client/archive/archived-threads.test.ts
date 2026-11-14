@@ -73,6 +73,7 @@ function snapshot(
 ): NormalizedApplicationSnapshot {
   return {
     advisories: [],
+    accountUsages: [],
     environments: [
       {
         id: "env-local",
@@ -124,6 +125,7 @@ function snapshot(
     ],
     executionTargets: [
       {
+        backendInstanceId: "backend-1",
         id: "t-codex",
         environmentId: "env-local",
         label: { text: "Codex" },
@@ -132,6 +134,7 @@ function snapshot(
         available: true,
       },
       {
+        backendInstanceId: "backend-1",
         id: "t-claude",
         environmentId: "env-local",
         label: { text: "Claude Code" },
@@ -140,6 +143,7 @@ function snapshot(
         available: true,
       },
       {
+        backendInstanceId: "backend-1",
         id: "t-ssh",
         environmentId: "env-ssh",
         label: { text: "Codex on build-box" },

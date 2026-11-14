@@ -342,6 +342,7 @@ describe("execution-target catalog reader", () => {
     await expect(reader.read(scope)).resolves.toEqual({
       executionTargets: [
         {
+          backendInstanceId: "backend-a",
           id: "profile-a",
           environmentId: "environment-1",
           label: { text: "Remote" },
@@ -350,6 +351,7 @@ describe("execution-target catalog reader", () => {
           available: true,
         },
         {
+          backendInstanceId: "backend-z",
           id: "profile-z",
           environmentId: "environment-1",
           label: { text: "Local" },
@@ -453,6 +455,7 @@ describe("execution-target catalog reader", () => {
     await expect(disabledDefault.reader.read(scope)).resolves.toEqual({
       executionTargets: [
         {
+          backendInstanceId: "backend-a",
           id: "profile-a",
           environmentId: "environment-1",
           label: { text: "Remote" },
@@ -461,6 +464,7 @@ describe("execution-target catalog reader", () => {
           available: true,
         },
         {
+          backendInstanceId: "backend-z",
           id: "profile-z",
           environmentId: "environment-1",
           label: { text: "Local" },

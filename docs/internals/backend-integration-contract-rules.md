@@ -112,6 +112,15 @@ of a configured target.
 Every backend-facing change must give all six an explicit implemented or
 intentionally unsupported disposition.
 
+Account-quota observation is a required explicit runtime contribution. Codex
+implements the native reader; Pi SDK, Pi, Claude, Grok, and OpenCode contribute
+the unsupported source. Observations belong to the authenticated principal's
+backend instance and execution environment and enter the existing application
+snapshot/event projection. Reading that projection never initiates provider
+work, and quota metadata never authorizes or blocks a turn. Browser clients
+select the exact target's backend/environment pair rather than matching a
+provider label or account display name.
+
 The OpenCode 2.2.6 compatibility cutover is provider-private: use one current
 strict SDK/schema profile and its 2.2.6 runtime floor, retaining full native
 history acquisition, counters, delivery evidence, images and usage accounting.

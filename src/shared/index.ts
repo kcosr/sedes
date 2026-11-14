@@ -1,6 +1,7 @@
 export * from "./protocol/api.js";
 export * from "./protocol/projects.js";
 export * from "./protocol/application.js";
+export * from "./protocol/account-usage.js";
 export * from "./protocol/application-preferences.js";
 export * from "./protocol/automation.js";
 export * from "./protocol/automation-presentation.js";

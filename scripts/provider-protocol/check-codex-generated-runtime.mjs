@@ -9,7 +9,7 @@ const binding = await import(pathToFileURL(modulePath).href);
 if (binding.CODEX_APP_SERVER_RELEASE !== "0.169.0") {
   throw new Error("Built Codex binding selected the wrong release.");
 }
-if (binding.CODEX_CLIENT_REQUEST_METHODS.length !== 27) {
+if (binding.CODEX_CLIENT_REQUEST_METHODS.length !== 28) {
   throw new Error("Built Codex client-request registry is incomplete.");
 }
 if (binding.CODEX_SERVER_REQUEST_METHODS.length !== 10) {
@@ -39,6 +39,26 @@ if (encodedSettings.threadId !== "thread-1") {
   );
 }
 settings.decodeResult({});
+
+const quota = binding.defineCodexAppServerMethod({
+  method: "account/rateLimits/read",
+  refineParams: value => value,
+  refineResult: value => value,
+});
+if (quota.encodeParams({ excludeResetCreditDetails: true }).excludeResetCreditDetails !== true) {
+  throw new Error("Built Codex account quota request codec rejected its fixture.");
+}
+const limits = {
+  limitId: "codex", limitName: null, normalModelSlug: null,
+  primary: null,
+  secondary: { usedPercent: 72, windowDurationMins: 10080, resetsAt: null },
+  credits: null, individualLimit: null, spendControlReached: null,
+  planType: "promax", rateLimitReachedType: null,
+};
+quota.decodeResult({
+  ordinaryUsageAllowed: true, rateLimits: limits, rateLimitsByLimitId: { codex: limits },
+  rateLimitResetCredits: null, accountId: null, rateLimitUpsell: null,
+});
 
 for (const method of ["thread/archive", "thread/unarchive"]) {
   const codec = binding.defineCodexAppServerMethod({

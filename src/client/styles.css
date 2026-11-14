@@ -7480,6 +7480,138 @@ tr.diff-hunk td {
   animation: input-activity-bar-slide 1.4s ease-in-out infinite;
 }
 
+/* The thin line sits on the border. Its hit area uses the empty footer padding
+   and space below the composer, keeping the action controls unobstructed. */
+.account-usage-line {
+  --account-usage-remaining: 0%;
+  position: absolute;
+  z-index: var(--z-sticky);
+  right: calc(var(--radius-lg) - 1px);
+  bottom: -14px;
+  left: calc(var(--radius-lg) - 1px);
+  height: 20px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.account-usage-track {
+  position: absolute;
+  top: 5px;
+  right: 0;
+  left: 0;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border) 85%, var(--muted-foreground));
+}
+
+.account-usage-fill {
+  display: block;
+  width: var(--account-usage-remaining);
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--primary) 72%, var(--muted-foreground));
+}
+
+.account-usage-line[data-level="low"] .account-usage-fill {
+  background: var(--warning);
+}
+
+.account-usage-line[data-level="critical"] .account-usage-fill {
+  background: var(--destructive);
+}
+
+.account-usage-line[data-level="critical"] .account-usage-track {
+  background: color-mix(in srgb, var(--destructive) 32%, var(--border));
+}
+
+.account-usage-line:focus-visible .account-usage-track {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+
+.account-usage-heading,
+.account-usage-window-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-usage-provider {
+  margin: 3px 0 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+}
+
+.account-usage-close {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.account-usage-close:hover,
+.account-usage-close:focus-visible {
+  color: var(--foreground);
+  background: var(--accent);
+}
+
+.account-usage-windows {
+  display: grid;
+  gap: 12px;
+}
+
+.account-usage-window-heading strong {
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.account-usage-reset,
+.account-usage-checked,
+.account-usage-note {
+  margin: 3px 0 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+  line-height: 1.5;
+}
+
+.account-usage-note {
+  color: var(--destructive);
+}
+
+.account-usage-checked {
+  margin: 0;
+}
+
+.account-usage-account {
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+}
+
+.account-usage-account summary {
+  cursor: pointer;
+}
+
+.account-usage-account code {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .background-activity-status-slot,
 .reasoning-summary-status-slot {
   --composer-inline-inset: clamp(14px, 4vw, 48px);

@@ -374,6 +374,7 @@ function snapshot(
   submitAvailable = true,
 ): NormalizedThreadSnapshot {
   return {
+    thread: { id: "thread-1", targetId: "target-1" },
     runState,
     draft: {
       text: "",
@@ -575,7 +576,7 @@ function applicationStore(
     authoritative,
     search: "",
     visibleThreads: [],
-    snapshot: { tasks },
+    snapshot: { tasks, executionTargets: [], accountUsages: [] },
   };
   return {
     subscribe: () => () => undefined,
@@ -591,7 +592,7 @@ function applicationStoreWithPrompts(): ApplicationClientStore {
     authoritative: true,
     search: "",
     visibleThreads: [],
-    snapshot: { tasks: [] },
+    snapshot: { tasks: [], executionTargets: [], accountUsages: [] },
   };
   const promptState = {
     status: "ready" as const,
@@ -637,10 +638,10 @@ function refreshableApplicationStore(
     authoritative: true,
     search: "",
     visibleThreads: [],
-    snapshot: { tasks: initialTasks },
+    snapshot: { tasks: initialTasks, executionTargets: [], accountUsages: [] },
   };
   const refresh = vi.fn(async () => {
-    state = { ...state, snapshot: { tasks: refreshedTasks } };
+    state = { ...state, snapshot: { tasks: refreshedTasks, executionTargets: [], accountUsages: [] } };
     for (const listener of listeners) listener();
   });
   return {
@@ -738,7 +739,7 @@ const referenceCatalog = {
 const referenceLocationDescription = "Project: Sedes. Environment: Local";
 
 function referenceApplication(threads = [referencedThread], descendants: readonly NormalizedApplicationThreadSummary[] = [], catalog = referenceCatalog) {
-  const snapshot = { threads, groups: [], tasks: [], ...catalog } as unknown as NormalizedApplicationSnapshot;
+  const snapshot = { threads, groups: [], tasks: [], executionTargets: [], accountUsages: [], ...catalog } as unknown as NormalizedApplicationSnapshot;
   const state = { status: "ready", connection: "connected", authoritative: true, search: "", visibleThreads: [], snapshot, descendantPages: { loaded: { descendants: descendants.map((thread) => ({ thread })) } } };
   return { snapshot, store: { getSnapshot: () => state, subscribe: () => () => undefined } as unknown as ApplicationClientStore };
 }
@@ -756,6 +757,33 @@ function ThreadDragTestSource() {
   return <button draggable onDragStart={(event) => drag?.beginThreadDrag(referencedThread.id, event.dataTransfer)}
     onDragEnd={() => drag?.endThreadDrag()}>Drag thread</button>;
 }
+
+describe("composer account usage", () => {
+  it("shows the cached quota for the thread target without changing send availability", () => {
+    const current = snapshot();
+    current.capabilities.backend.label.text = "Codex";
+    const store = new FakeComposerStore(current, "Ask");
+    const application = referenceApplication();
+    application.snapshot.executionTargets = [{
+      id: "target-1", backendInstanceId: "codex-one", environmentId: "remote", available: true,
+      label: { text: "Codex remote" }, backend: { label: { text: "Codex" }, brand: "codex" },
+      workspaceExecution: { kind: "direct_only" },
+    }];
+    const entry = {
+      capturedAt: Date.now(), accountId: null, plan: null, includedUsageAllowed: false,
+      windows: [{ remainingPercent: 0, durationMinutes: 10_080, resetsAt: null }],
+      backendInstanceId: "codex-one", executionEnvironmentId: "remote",
+    };
+    application.snapshot.accountUsages = [
+      { ...entry, backendInstanceId: "codex-two", windows: [{ ...entry.windows[0]!, remainingPercent: 90 }] },
+      entry,
+    ];
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={application.store} />);
+    expect(screen.getByRole("button", { name: /Codex included usage: 0% remaining/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+    expect(store.deliver).not.toHaveBeenCalled();
+  });
+});
 
 describe("thread references", () => {
   it("distinguishes repeated titles by project and environment while retaining the selected thread identity", async () => {
@@ -1262,7 +1290,7 @@ describe("task references", () => {
       lineagePlacements: [],
       lineageFamilies: [],
       executionTargets: [],
-      advisories: [],
+      advisories: [], accountUsages: [],
       defaultNewThreadTargetId: null,
     } as unknown as NormalizedApplicationSnapshot;
     render(
@@ -1315,7 +1343,7 @@ describe("task references", () => {
       lineagePlacements: [],
       lineageFamilies: [],
       executionTargets: [],
-      advisories: [],
+      advisories: [], accountUsages: [],
       defaultNewThreadTargetId: null,
     } as unknown as NormalizedApplicationSnapshot;
     render(

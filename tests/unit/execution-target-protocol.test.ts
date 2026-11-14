@@ -46,6 +46,7 @@ function snapshot() {
     ],
     executionTargets: [
       {
+        backendInstanceId: "backend-1",
         id: "target-1",
         environmentId: "environment-1",
         label: { text: "Local Pi" },
@@ -54,6 +55,7 @@ function snapshot() {
         available: true,
       },
       {
+        backendInstanceId: "backend-1",
         id: "target-2",
         environmentId: "environment-2",
         label: { text: "Remote Codex" },
@@ -64,6 +66,7 @@ function snapshot() {
       },
     ],
     advisories: [],
+    accountUsages: [],
     defaultNewThreadTargetId: "target-1",
     threads: [
       {
@@ -135,7 +138,7 @@ function associatedTask(
 
 describe("execution-target application protocol", () => {
   it("uses the current client protocol for associated task presentation", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(174);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(175);
   });
 
   it("enforces exact associated-project semantics on task projections", () => {

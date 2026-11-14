@@ -34,6 +34,7 @@ const catalog: SidebarScopeCatalog = {
   ],
   executionTargets: [
     {
+      backendInstanceId: "backend-1",
       id: "target-a",
       environmentId: "env-a",
       label: { text: "Socket A" },

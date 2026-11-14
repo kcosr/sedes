@@ -41,6 +41,7 @@ const emptySnapshot = {
   lineageFamilies: [],
   executionTargets: [
     {
+      backendInstanceId: "backend-1",
       id: "target-1",
       environmentId: "environment-1",
       label: { text: "Local SDK" },
@@ -50,6 +51,7 @@ const emptySnapshot = {
     },
   ],
   advisories: [],
+  accountUsages: [],
   defaultNewThreadTargetId: "target-1",
   tasks: [],
 };

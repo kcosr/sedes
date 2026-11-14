@@ -195,6 +195,21 @@ stopping or unloading the runtime, or restarting the server, discards them.
 Refreshing the browser can retain them while the same session is loaded.
 Codex, Claude, and Grok do not currently provide this measurement.
 
+## Account quota
+
+When Codex supplies account quota, a thin line at the bottom of the composer
+shows the lowest remaining percentage of its included-usage windows. Hover for
+half a second, click, or tap to see the reported windows, reset times, last-check
+time, and optional account details. Click to keep the pop-out open; click outside
+or press Escape to close it. Keyboard focus opens the details immediately.
+
+The reading is shared across threads and refreshes every five minutes while the
+backend is enabled, including when no client is connected. Missing windows are
+omitted, and failed or expired readings hide the line. It is separate from the
+thread's context meter and does not include extra credits or model-specific quotas.
+See [Codex account quota](../operator/backends/codex.md#account-quota) for refresh
+and availability details.
+
 ## Context and Session stats
 
 The composer context meter and **Thread actions → Session stats** show the

@@ -6,6 +6,7 @@
  * definition can become structural authority.
  */
 export const clientRequests = [
+  ["account/rateLimits/read", "GetAccountRateLimitsParams", "GetAccountRateLimitsResponse", "account_usage"],
   ["initialize", "InitializeParams", "InitializeResponse", "initialization"],
   ["thread/list", "ThreadListParams", "ThreadListResponse", "thread_history", "stable", "experimental"],
   ["thread/loaded/list", "ThreadLoadedListParams", "ThreadLoadedListResponse", "thread_history"],
@@ -96,6 +97,7 @@ export const serverNotifications = [
 ];
 
 export const refinementDomains = {
+  account_usage: ["ordinary_included_windows", "bounded_display_metadata", "snapshot_only"],
   initialization: ["release_guard", "owned_scope", "native_text_bounds"],
   thread_history: ["native_identity_bounds", "history_bounds", "consumed_projection"],
   live_turns: ["route_identity", "collection_bounds", "completion_semantics"],

@@ -30,7 +30,8 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **174**. Research settings now select Codex CLI. Remote environment
+  **175**. Account quota snapshots now include the execution target's backend
+  identity. Research settings now select Codex CLI. Remote environment
   configuration adds the required connection
   compression setting. Usage requests now select report sections and load filter choices
   through a separate endpoint; see [Usage accounting](docs/internals/usage-accounting.md#analytics-read).
@@ -84,6 +85,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
+
+- Codex threads show a thin account quota line beneath the composer, with
+  delayed hover and tap details. Native quota readings refresh once every five
+  minutes per enabled backend, including while clients are disconnected. See
+  [account quota](docs/operator/backends/codex.md#account-quota).
 
 - Accounts show aligned banked-reset count badges, highlighted red when the
   next expiry is within three days or the reported expiry has passed. Exact

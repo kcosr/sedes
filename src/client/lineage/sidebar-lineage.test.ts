@@ -86,6 +86,7 @@ function snapshot(
 ): NormalizedApplicationSnapshot {
   return {
     advisories: [],
+    accountUsages: [],
     environments: [
       {
         id: "environment-1",
@@ -113,6 +114,7 @@ function snapshot(
     lineageFamilies: [],
     executionTargets: [
       {
+        backendInstanceId: "backend-1",
         id: "target-1",
         environmentId: "environment-1",
         label: { text: "Pi" },

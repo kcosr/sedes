@@ -125,6 +125,7 @@ function makeSnapshot(
 ): Snapshot {
   return {
     advisories: [],
+    accountUsages: [],
     environments: [
       {
         id: "env-local",
@@ -158,6 +159,7 @@ function makeSnapshot(
     ],
     executionTargets: [
       {
+        backendInstanceId: "backend-1",
         id: "t-codex",
         environmentId: "env-local",
         label: { text: "Codex" },
@@ -270,6 +272,7 @@ describe("ArchivedView rows", () => {
         ],
         executionTargets: [
           {
+            backendInstanceId: "backend-1",
             id: "target-1",
             environmentId: "environment-1",
             label: { text: "Codex SSH" },
@@ -531,6 +534,7 @@ describe("ArchivedView scope and search", () => {
         ],
         executionTargets: [
           {
+            backendInstanceId: "backend-1",
             id: "t-codex",
             environmentId: "env-local",
             label: { text: "Codex" },
@@ -539,6 +543,7 @@ describe("ArchivedView scope and search", () => {
             available: true,
           },
           {
+            backendInstanceId: "backend-1",
             id: "t-remote",
             environmentId: "env-remote",
             label: { text: "Codex" },

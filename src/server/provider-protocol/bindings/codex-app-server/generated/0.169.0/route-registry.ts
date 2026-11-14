@@ -45,6 +45,8 @@ import type { FileChangeOutputDeltaNotification as StableFileChangeOutputDeltaNo
 import type { FileChangePatchUpdatedNotification as StableFileChangePatchUpdatedNotification } from "./stable/v2/FileChangePatchUpdatedNotification.js";
 import type { FileChangeRequestApprovalParams as StableFileChangeRequestApprovalParams } from "./stable/v2/FileChangeRequestApprovalParams.js";
 import type { FileChangeRequestApprovalResponse as StableFileChangeRequestApprovalResponse } from "./stable/v2/FileChangeRequestApprovalResponse.js";
+import type { GetAccountRateLimitsParams as StableGetAccountRateLimitsParams } from "./stable/v2/GetAccountRateLimitsParams.js";
+import type { GetAccountRateLimitsResponse as StableGetAccountRateLimitsResponse } from "./stable/v2/GetAccountRateLimitsResponse.js";
 import type { InitializeParams as StableInitializeParams } from "./stable/InitializeParams.js";
 import type { InitializeResponse as StableInitializeResponse } from "./stable/InitializeResponse.js";
 import type { ItemCompletedNotification as StableItemCompletedNotification } from "./stable/v2/ItemCompletedNotification.js";
@@ -174,6 +176,8 @@ import {
   validateStableFuzzyFileSearchSessionCompletedNotification,
   validateStableFuzzyFileSearchSessionUpdatedNotification,
   validateStableGatewayOAuthChangedNotification,
+  validateStableGetAccountRateLimitsParams,
+  validateStableGetAccountRateLimitsResponse,
   validateStableGuardianWarningNotification,
   validateStableHookCompletedNotification,
   validateStableHookStartedNotification,
@@ -284,6 +288,7 @@ import {
 export const CODEX_APP_SERVER_RELEASE = "0.169.0" as const;
 
 export interface CodexClientRequestMap {
+  readonly "account/rateLimits/read": { readonly params: StableGetAccountRateLimitsParams; readonly result: StableGetAccountRateLimitsResponse; readonly stability: "stable" };
   readonly "initialize": { readonly params: StableInitializeParams; readonly result: StableInitializeResponse; readonly stability: "stable" };
   readonly "thread/list": { readonly params: ExperimentalThreadListParams; readonly result: ExperimentalThreadListResponse; readonly stability: "stable" };
   readonly "thread/loaded/list": { readonly params: StableThreadLoadedListParams; readonly result: StableThreadLoadedListResponse; readonly stability: "stable" };
@@ -477,6 +482,7 @@ export const codexOfficialServerNotificationRegistry = Object.freeze({
 } satisfies Readonly<Record<CodexServerNotificationMethod, OfficialNotificationRegistryEntry>>);
 
 export const codexClientRequestRegistry = Object.freeze({
+  "account/rateLimits/read": Object.freeze({ params: validateStableGetAccountRateLimitsParams, result: validateStableGetAccountRateLimitsResponse, stability: "stable" }),
   "initialize": Object.freeze({ params: validateStableInitializeParams, result: validateStableInitializeResponse, stability: "stable" }),
   "thread/list": Object.freeze({ params: validateExperimentalThreadListParams, result: validateExperimentalThreadListResponse, stability: "stable" }),
   "thread/loaded/list": Object.freeze({ params: validateStableThreadLoadedListParams, result: validateStableThreadLoadedListResponse, stability: "stable" }),

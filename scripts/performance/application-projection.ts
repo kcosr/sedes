@@ -108,9 +108,11 @@ function fixture(): Snapshot {
     lineageFamilies: [],
     tasks: [],
     advisories: [],
+    accountUsages: [],
     executionTargets: [
       {
         id: "target",
+        backendInstanceId: "backend",
         environmentId: "environment",
         label: { text: "Synthetic" },
         backend: base.backend,

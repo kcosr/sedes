@@ -95,6 +95,7 @@ import { assertCodexLiveModelSelection } from "./codex-live-model-selection.js";
 import { prepareCodexManagedTuiThreadSettings } from "./codex-managed-tui-settings.js";
 import { CodexAutomationExecutionPolicy } from "./codex-automation-execution-policy.js";
 import { CodexInstallationAdvisorySource } from "./codex-installation-advisories.js";
+import { CodexAccountUsageSource } from "./codex-account-usage.js";
 
 type CodexRuntimeSupervisor = {
   readonly administration?: import("../module.js").BackendRuntimeAdministration;
@@ -182,6 +183,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
   readonly savedAgents;
   readonly automationExecutionPolicy;
   readonly installationAdvisories = new CodexInstallationAdvisorySource();
+  readonly accountUsage: CodexAccountUsageSource;
   readonly #agentToolEnvironment: DatabaseCodexAgentToolCliEnvironmentProvider;
   readonly #context: BackendModuleRuntimeContext;
   readonly #prepared: PreparedCodexBackendConfiguration;
@@ -255,6 +257,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
         ? { expectedRuntimeVersion: () => this.#ownedRuntimeVersion }
         : {}),
     });
+    this.accountUsage = new CodexAccountUsageSource(this.#supervisor.client);
     const settingsRepository = new CodexThreadExecutionSettingsRepository(
       input.context.database,
     );
@@ -466,17 +469,20 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
     if (this.#closePromise) {
       return Promise.reject(new Error("codex_backend_runtime_closed"));
     }
+    this.accountUsage.start();
     this.#startPromise ??= this.#performStart();
     return this.#startPromise;
   }
 
   close(): Promise<void> {
+    this.accountUsage.close();
     this.#closeRequested = true;
     this.#closePromise ??= this.#performClose();
     return this.#closePromise;
   }
 
   async stopBeforeConversationCleanup(): Promise<void> {
+    this.accountUsage.close();
     if (!this.#context.sidecarRuntime && this.#prepared.configuration.connection.ownership === "owned") {
       await this.driverFactory.ownership.interruptOwnedActiveTurns();
     }

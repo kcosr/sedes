@@ -8,6 +8,7 @@ import { AutomationForkTargetResolver } from "../../src/server/runtime/automatio
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { ViewedImageCaptureService } from "../../src/server/output-artifacts/viewed-image-capture.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
+import { backendAccountUsageSchema, type NormalizedBackendAccountUsage } from "../../src/shared/protocol/account-usage.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { EnvironmentVariablesService } from "../../src/server/environment-variables/environment-variables-service.js";
 import { HostPairingRepository } from "../../src/server/host-pairing/host-pairing-repository.js";
@@ -5038,6 +5039,7 @@ async function main(): Promise<void> {
     repository: new ThreadTemplateRepository(database),
     savedAgents,
   });
+  let accountUsageFixture: readonly NormalizedBackendAccountUsage[] = [];
   const application = new ApplicationSnapshotService(
     inventoryRepository,
     applicationThreadSummaries,
@@ -5049,6 +5051,8 @@ async function main(): Promise<void> {
     (requestScope, environmentId) =>
       execution.directoryBrowsingAvailability(requestScope, environmentId),
     terminalRepository,
+    undefined,
+    { read: () => accountUsageFixture },
   );
   const applicationSnapshots = new ApplicationSnapshotPublicationBoundary(
     application,
@@ -5491,6 +5495,20 @@ async function main(): Promise<void> {
   app.post("/__e2e/claude/arm-compact-noop", (_request, response) => {
     claudeSdk.armNextCompactNoop();
     response.status(204).end();
+  });
+  // Substitute the provider's last quota observation only. Application
+  // publication, reconnect checkpoints, target selection and rendering stay real.
+  app.post("/__e2e/codex/account-usage", express.json({ limit: "8kb" }), async (request, response, next) => {
+    try {
+      const usage = backendAccountUsageSchema.nullable().parse(request.body.usage);
+      accountUsageFixture = usage ? [{
+        ...usage,
+        backendInstanceId: codexBackend.id,
+        executionEnvironmentId: environmentRecord.id,
+      }] : [];
+      await applicationSnapshots.publishAccountUsagesChange(scope);
+      response.status(204).end();
+    } catch (error) { next(error); }
   });
   app.post("/__e2e/codex/arm-create-outcome-unknown", (_request, response) => {
     codexRpc.armNextCreateOutcomeUnknown();

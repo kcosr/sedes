@@ -18,6 +18,7 @@ const COLLECTIONS = [
   "lineageFamilies",
   "executionTargets",
   "advisories",
+  "accountUsages",
   "tasks",
 ] as const;
 type Collection = (typeof COLLECTIONS)[number];
@@ -46,6 +47,7 @@ function referenceParts(reference: string): [Collection, string] {
   ];
 }
 function idOf(collection: Collection, value: Value): string {
+  if (collection === "accountUsages") return (value as Values["accountUsages"]).backendInstanceId;
   if (collection === "forkOrigins" || collection === "lineagePlacements")
     return (value as Values["forkOrigins"]).childThreadId;
   if (collection === "lineageFamilies")
@@ -188,6 +190,7 @@ export class ApplicationProjection {
       "application_projection_snapshot_requires_replacement",
     );
     const version = this.#version;
+    if (event.type === "account_usages_changed") return this.#prepareAccountUsages(event.accountUsages);
     let collection: Collection | undefined;
     let id = "";
     let value: Value | undefined;
@@ -378,8 +381,37 @@ export class ApplicationProjection {
       }
     }
   }
+
+  #prepareAccountUsages(usages: Snapshot["accountUsages"]): () => void {
+    const version = this.#version;
+    const previous = this.#collections.get("accountUsages")!;
+    const next = new Map<string, Entry>();
+    for (const value of usages) {
+      this.#validate("accountUsages", value, (collection, id) => this.get(collection, id));
+      next.set(value.backendInstanceId, {
+        value, json: JSON.stringify(value), references: this.#references("accountUsages", value),
+      });
+    }
+    const oldBytes = bytes([...previous.values()].map(entry => entry.value));
+    const newBytes = bytes(usages);
+    const nextBytes = this.#bytes + newBytes - oldBytes;
+    assert(nextBytes <= MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES, "application_projection_snapshot_limit");
+    return () => {
+      assert(version === this.#version, "application_projection_prepared_update_stale");
+      for (const [id, entry] of previous) this.#index(key("accountUsages", id), entry.references, false);
+      for (const [id, entry] of next) this.#index(key("accountUsages", id), entry.references, true);
+      this.#collections.set("accountUsages", next);
+      this.#bytes = nextBytes;
+      this.#version++;
+      this.#folds++;
+      this.#changedBytes += oldBytes + newBytes;
+      this.#firstFoldAt ??= performance.now();
+    };
+  }
   #references(collection: Collection, raw: Value): string[] {
     switch (collection) {
+      case "accountUsages":
+        return [key("environments", (raw as Values["accountUsages"]).executionEnvironmentId)];
       case "workspaces": {
         const value = raw as Values["workspaces"];
         return [

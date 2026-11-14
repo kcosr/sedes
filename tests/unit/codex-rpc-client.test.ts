@@ -723,7 +723,8 @@ describe("Codex RPC client", () => {
 
   it("pins the stable inventory, explicitly adopts reviewed experiments, and rejects unknown methods", async () => {
     const { client, transport } = createClient();
-    expect(CODEX_CLIENT_REQUEST_METHODS).toHaveLength(27);
+    expect(CODEX_CLIENT_REQUEST_METHODS).toHaveLength(28);
+    expect(CODEX_CLIENT_REQUEST_METHODS).toContain("account/rateLimits/read");
     expect(CODEX_CLIENT_REQUEST_METHODS).toContain("thread/loaded/list");
     expect(CODEX_CLIENT_REQUEST_METHODS).toContain("thread/archive");
     expect(CODEX_CLIENT_REQUEST_METHODS).toContain("thread/unarchive");

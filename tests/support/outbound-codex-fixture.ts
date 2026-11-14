@@ -6,6 +6,7 @@ import path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
 import { codexThreadReadMethod, type CodexThread } from "../../src/server/backends/codex/codex-c1-protocol.js";
 import { codexModelListMethod, codexThreadStartMethod } from "../../src/server/backends/codex/codex-c2-protocol.js";
+import { codexAccountUsageResult } from "../helpers/codex-account-usage.js";
 
 export interface OutboundCodexFixtureRequest {
   readonly id?: string | number;
@@ -116,6 +117,7 @@ export class OutboundCodexFixture {
         platformOs: process.platform === "darwin" ? "macos" : "linux",
       };
       case "account/read": return { account: null, requiresOpenaiAuth: false };
+      case "account/rateLimits/read": return codexAccountUsageResult();
       case "model/list": return codexModelListMethod.decodeResult({ data: [{
         id: this.model,
         model: this.model,

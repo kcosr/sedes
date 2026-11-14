@@ -135,6 +135,7 @@ describe("ApplicationSnapshotService", () => {
         read: async () => ({
           executionTargets: [
             {
+              backendInstanceId: "backend-1",
               id: "target-local",
               environmentId: "environment-local",
               label: { text: "Local Pi" },
@@ -143,6 +144,7 @@ describe("ApplicationSnapshotService", () => {
               available: true,
             },
             {
+              backendInstanceId: "backend-1",
               id: "target-remote",
               environmentId: "environment-ssh",
               label: { text: "Remote Pi" },
@@ -151,6 +153,7 @@ describe("ApplicationSnapshotService", () => {
               available: true,
             },
             {
+              backendInstanceId: "backend-1",
               id: "target-remote-required",
               environmentId: "environment-ssh",
               label: { text: "Remote Codex" },
@@ -269,6 +272,7 @@ describe("ApplicationSnapshotService", () => {
             ["target-remote", "environment-ssh"],
             ["target-empty", "environment-empty"],
           ].map(([id, environmentId]) => ({
+            backendInstanceId: "backend-1",
             id: id!, environmentId: environmentId!, label: { text: id! },
             backend: { label: { text: "Pi" }, brand: "pi" as const },
             workspaceExecution: { kind: "direct_only" as const },
@@ -376,6 +380,7 @@ describe("ApplicationSnapshotService", () => {
           return {
             executionTargets: [
               {
+                backendInstanceId: "backend-1",
                 id: "target-local",
                 environmentId: "environment-local",
                 label: { text: "Local Pi" },
@@ -447,7 +452,7 @@ it("keeps scoped background counts equivalent in full snapshots and incremental 
       return loaded;
     },
   }, {
-    read: async () => ({ executionTargets: [{ id: "target-local", environmentId: "environment-local", label: { text: "Local" }, backend: { label: { text: "Claude" }, brand: "claude" as const }, workspaceExecution: { kind: "direct_only" as const }, available: true }], defaultTargetId: "target-local" }),
+    read: async () => ({ executionTargets: [{ backendInstanceId: "backend-1", id: "target-local", environmentId: "environment-local", label: { text: "Local" }, backend: { label: { text: "Claude" }, brand: "claude" as const }, workspaceExecution: { kind: "direct_only" as const }, available: true }], defaultTargetId: "target-local" }),
     requireSelectable: async () => undefined,
   }, {
     list: () => ({ forkOrigins: [], lineagePlacements: [], lineageFamilies: [] }),
