@@ -86,9 +86,10 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
-- Codex threads show a thin account quota line beneath the composer, with
-  delayed hover and tap details. Native quota readings refresh once every five
-  minutes per enabled backend, including while clients are disconnected. See
+- Codex threads show an inset 2px account quota line with tapered ends,
+  Accounts quota colors, and delayed hover and tap details. Native quota
+  readings refresh once every five minutes per enabled backend, including
+  while clients are disconnected. See
   [account quota](docs/operator/backends/codex.md#account-quota).
   ([#138](https://github.com/kcosr/sedes/pull/138))
 

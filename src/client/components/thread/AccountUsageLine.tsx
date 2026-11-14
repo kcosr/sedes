@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type { BackendAccountUsage, NormalizedApplicationSnapshot } from "../../../shared/index.js";
+import { usageBand } from "../../provider-pulse/presentation.js";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover.js";
 import { eyebrowClass } from "../ui/floating.js";
 import { cn } from "../../lib/utils.js";
@@ -62,7 +63,7 @@ function AvailableAccountUsageLine({ usage, backendLabel }: {
   const contentId = useId();
   const open = mode !== "closed";
   const remaining = Math.min(...usage.windows.map(({ remainingPercent }) => remainingPercent));
-  const level = remaining < 5 ? "critical" : remaining < 15 ? "low" : "normal";
+  const level = usageBand(remaining);
   const bounds = () => {
     const rect = trigger.current?.closest(".composer")?.getBoundingClientRect();
     const left = Math.max(8, rect?.width ? rect.left : 8);
@@ -75,7 +76,7 @@ function AvailableAccountUsageLine({ usage, backendLabel }: {
       if (!rect) return new DOMRect();
       const { left, right, width } = bounds();
       const x = Math.max(left + width / 2, Math.min(right - width / 2, rect.left + rect.width * anchorFraction));
-      return new DOMRect(x, rect.top + 6, 0, 0);
+      return new DOMRect(x, rect.top + 5, 0, 0);
     },
     get contextElement() { return trigger.current ?? undefined; },
   } }), [anchorFraction, geometryRevision]);

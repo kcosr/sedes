@@ -2132,16 +2132,23 @@ textarea:disabled {
   display: block;
   height: 100%;
   border-radius: inherit;
+}
+
+.sidebar-usage-bar > i,
+.account-usage-line[data-level="ok"] .account-usage-fill {
   background: var(--success);
 }
 
-.sidebar-usage-bar[data-band="warn"] > i {
+.sidebar-usage-bar[data-band="warn"] > i,
+.account-usage-line[data-level="warn"] .account-usage-fill {
   background: var(--warning);
 }
-.sidebar-usage-bar[data-band="low"] > i {
+.sidebar-usage-bar[data-band="low"] > i,
+.account-usage-line[data-level="low"] .account-usage-fill {
   background: color-mix(in oklch, var(--warning) 55%, var(--destructive));
 }
-.sidebar-usage-bar[data-band="critical"] > i {
+.sidebar-usage-bar[data-band="critical"] > i,
+.account-usage-line[data-level="critical"] .account-usage-fill {
   background: var(--destructive);
 }
 
@@ -7480,15 +7487,15 @@ tr.diff-hunk td {
   animation: input-activity-bar-slide 1.4s ease-in-out infinite;
 }
 
-/* The thin line sits on the border. Its hit area uses the empty footer padding
-   and space below the composer, keeping the action controls unobstructed. */
+/* The inset line sits against the inside of the bottom border. Its hit area
+   uses the footer padding and space below the composer, away from controls. */
 .account-usage-line {
   --account-usage-remaining: 0%;
   position: absolute;
   z-index: var(--z-sticky);
-  right: calc(var(--radius-lg) - 1px);
+  right: 32px;
   bottom: -14px;
-  left: calc(var(--radius-lg) - 1px);
+  left: 32px;
   height: 20px;
   padding: 0;
   border: 0;
@@ -7500,38 +7507,44 @@ tr.diff-hunk td {
 
 .account-usage-track {
   position: absolute;
-  top: 5px;
+  top: 4px;
   right: 0;
   left: 0;
   height: 2px;
   overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--border) 85%, var(--muted-foreground));
+  background: var(--accent);
+  /* Fixed 6px SVG caps curve only the top edge; the bottom stays flat.
+     Three mask layers preserve the cap width as the composer resizes. */
+  mask-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 6 2'%3E%3Cpath d='M0 2C3 2 3 0 6 0V2Z'/%3E%3C/svg%3E"),
+    linear-gradient(#000, #000),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 6 2'%3E%3Cpath d='M0 0C3 0 3 2 6 2H0Z'/%3E%3C/svg%3E");
+  mask-size: 6px 100%, calc(100% - 12px) 100%, 6px 100%;
+  mask-position: left top, center top, right top;
+  mask-repeat: no-repeat;
 }
 
 .account-usage-fill {
   display: block;
   width: var(--account-usage-remaining);
   height: 100%;
-  border-radius: inherit;
-  background: color-mix(in srgb, var(--primary) 72%, var(--muted-foreground));
-}
-
-.account-usage-line[data-level="low"] .account-usage-fill {
-  background: var(--warning);
-}
-
-.account-usage-line[data-level="critical"] .account-usage-fill {
-  background: var(--destructive);
 }
 
 .account-usage-line[data-level="critical"] .account-usage-track {
   background: color-mix(in srgb, var(--destructive) 32%, var(--border));
 }
 
-.account-usage-line:focus-visible .account-usage-track {
-  outline: 2px solid var(--ring);
-  outline-offset: 3px;
+/* Keep the focus ring outside the masked track so the taper cannot clip it. */
+.account-usage-line:focus-visible::after {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  left: -4px;
+  height: 10px;
+  border: 2px solid var(--ring);
+  border-radius: 4px;
+  content: "";
+  pointer-events: none;
 }
 
 .account-usage-heading,
