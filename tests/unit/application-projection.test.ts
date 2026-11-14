@@ -106,6 +106,7 @@ function snapshot(): Snapshot {
     lineageFamilies: [],
     executionTargets: [
       {
+        backendInstanceId: "backend-1",
         id: "target",
         environmentId: "environment",
         label: { text: "Local" },
@@ -115,6 +116,7 @@ function snapshot(): Snapshot {
       },
     ],
     advisories: [],
+    accountUsages: [],
     defaultNewThreadTargetId: "target",
     tasks: [],
   };
@@ -137,6 +139,46 @@ function envelope(sequence: number, event: NormalizedApplicationEvent) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("indexed application projection", () => {
+  it("replaces quota observations atomically with exact client/checkpoint bytes and environment references", () => {
+    const seed = snapshot();
+    const projection = new ApplicationProjection(seed);
+    const client = new NormalizedApplicationStore();
+    client.apply(envelope(1, { type: "snapshot", generation, snapshot: seed }));
+    const usage = {
+      backendInstanceId: "backend-1", executionEnvironmentId: "environment", capturedAt: 1_000,
+      accountId: "account-😀", plan: "Pro", includedUsageAllowed: false,
+      windows: [{ remainingPercent: 0, durationMinutes: 10_080, resetsAt: 2_000 }],
+    };
+    let sequence = 2;
+    for (const accountUsages of [[usage], [{ ...usage, accountId: null, plan: null }], []]) {
+      const event: Delta = { type: "account_usages_changed", generation, accountUsages };
+      projection.prepare(event)();
+      expect(client.apply(envelope(sequence++, event))).toEqual({ kind: "applied" });
+      const expected = { ...seed, accountUsages };
+      expect(projection.materialize()).toEqual(expected);
+      expect(client.state.snapshot).toEqual(expected);
+      expect(projection.serializedBytes).toBe(bytes(expected));
+    }
+    const invalid: Delta = { type: "account_usages_changed", generation, accountUsages: [{ ...usage, executionEnvironmentId: "missing" }] };
+    expect(() => projection.prepare(invalid)).toThrow("application_inventory_reference_invalid");
+    expect(client.apply(envelope(sequence, invalid)).kind).toBe("resnapshot_required");
+    expect(projection.materialize().accountUsages).toEqual([]);
+  });
+
+  it("prevents removing an environment with a retained quota observation", () => {
+    const seed = snapshot();
+    const environment = { ...seed.environments[0]!, id: "usage-only-host" };
+    const projection = new ApplicationProjection({ ...seed, environments: [...seed.environments, environment], accountUsages: [{
+      backendInstanceId: "backend", executionEnvironmentId: environment.id, capturedAt: 1_000,
+      accountId: null, plan: null, includedUsageAllowed: null,
+      windows: [{ remainingPercent: 50, durationMinutes: null, resetsAt: null }],
+    }] });
+    projection.prepare({ type: "environment_upsert", generation, environment: { ...environment, available: false } })();
+    expect(() => projection.prepare({ type: "environment_remove", generation, environmentId: environment.id })).toThrow("application_inventory_reference_invalid");
+    projection.prepare({ type: "account_usages_changed", generation, accountUsages: [] })();
+    projection.prepare({ type: "environment_remove", generation, environmentId: environment.id })();
+    expect(projection.materialize().environments).toEqual(seed.environments);
+  });
   it("folds every incremental kind with client-equivalent ordering and exact UTF-8 bytes", () => {
     const seed = snapshot();
     const projection = new ApplicationProjection(seed);

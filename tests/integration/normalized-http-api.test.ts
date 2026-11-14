@@ -978,6 +978,7 @@ async function fixture(
         lineageFamilies: [],
         executionTargets: [
           {
+            backendInstanceId: "backend-1",
             id: profile.id,
             environmentId: environment.id,
             label: { text: "Local Pi SDK" },
@@ -987,6 +988,7 @@ async function fixture(
           },
         ],
         advisories: [],
+        accountUsages: [],
         defaultNewThreadTargetId: profile.id,
         tasks: taskRepository.listAssociated(scope).map(presentAssociatedTask),
       };
@@ -1358,6 +1360,7 @@ async function fixture(
       read: async () => ({
         executionTargets: [
           {
+            backendInstanceId: "backend-1",
             id: profile.id,
             environmentId: legacyEnvironment.id,
             label: { text: "Local Pi SDK" },

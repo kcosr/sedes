@@ -66,6 +66,7 @@ const environments = [
 
 const targets: readonly NormalizedExecutionTargetDescriptor[] = [
   {
+    backendInstanceId: "backend-1",
     id: "target-pi",
     environmentId: "environment-1",
     label: { text: "Local SDK" },
@@ -74,6 +75,7 @@ const targets: readonly NormalizedExecutionTargetDescriptor[] = [
     available: true as const,
   },
   {
+    backendInstanceId: "backend-1",
     id: "target-codex",
     environmentId: "environment-1",
     label: { text: "Local app server" },
@@ -82,6 +84,7 @@ const targets: readonly NormalizedExecutionTargetDescriptor[] = [
     available: true as const,
   },
   {
+    backendInstanceId: "backend-1",
     id: "target-website",
     environmentId: "environment-2",
     label: { text: "Website agent" },

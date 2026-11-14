@@ -244,6 +244,7 @@ describe("automation CLI thread requests", () => {
       if (path === "/api/application/snapshot") {
         return Response.json({
           advisories: [],
+          accountUsages: [],
           environments: [],
           projects: [{ id: "project-1", name: "Project", revision: 0 }],
           workspaces: [],

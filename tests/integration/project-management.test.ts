@@ -203,7 +203,7 @@ describe("project registration lifecycle", () => {
     f.inventory.removeProject(f.scope,removed.projectId,{expectedRevision:removedProject.revision,expectedMembershipRevision:removedProject.membershipRevision,expectedLocations:inspection.locations,now:530});
     const [summary]=f.summaries.list(f.scope,f.environment.id);
     const snapshot=await new ApplicationSnapshotService(f.inventory,f.summaries,{captureLoadedState:async()=>undefined},
-      {read:async()=>({executionTargets:[{id:summary!.targetId,environmentId:f.environment.id,label:{text:"Target"},backend:summary!.backend,workspaceExecution:{kind:"direct_only"},available:true}],defaultTargetId:null}),requireSelectable:async()=>undefined},
+      {read:async()=>({executionTargets:[{backendInstanceId: "backend-1", id:summary!.targetId,environmentId:f.environment.id,label:{text:"Target"},backend:summary!.backend,workspaceExecution:{kind:"direct_only"},available:true}],defaultTargetId:null}),requireSelectable:async()=>undefined},
       {list:()=>({forkOrigins:[],lineagePlacements:[],lineageFamilies:[]})},
       {listAssociated:()=>[],listAssociatedByThread:()=>[],findAssociated:()=>undefined},
       {list:()=>[]},()=>"unavailable",{summariesByThread:()=>new Map()}).capture(f.scope);

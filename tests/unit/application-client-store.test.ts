@@ -59,6 +59,7 @@ function snapshot(): NormalizedApplicationSnapshot {
   const child = thread("child", "Needle result");
   return {
     advisories: [],
+    accountUsages: [],
     environments: [
       {
         id: "environment-1",
@@ -106,6 +107,7 @@ function snapshot(): NormalizedApplicationSnapshot {
     lineageFamilies: [],
     executionTargets: [
       {
+        backendInstanceId: "backend-1",
         id: "target-1",
         environmentId: "environment-1",
         label: { text: "Local SDK" },

@@ -50,6 +50,7 @@ function snapshot(projectRevision: number): NormalizedApplicationSnapshot {
     lineageFamilies: [],
     executionTargets: [
       {
+        backendInstanceId: "backend-1",
         id: "target-1",
         environmentId: "environment-1",
         label: { text: "Local SDK" },
@@ -59,6 +60,7 @@ function snapshot(projectRevision: number): NormalizedApplicationSnapshot {
       },
     ],
     advisories: [],
+    accountUsages: [],
     defaultNewThreadTargetId: "target-1",
     tasks: [],
   };
@@ -194,6 +196,7 @@ function incrementalSnapshots(input: {
       })),
       groups: input.groups ?? [],
       advisories: [],
+      accountUsages: [],
       tasks: (input.tasks ?? []).map(presentAssociatedTask),
     };
   };
@@ -240,6 +243,82 @@ function incrementalSnapshots(input: {
 }
 
 describe("ApplicationSnapshotPublicationBoundary", () => {
+  it("filters quota changes against the published environments while removed runtimes drain", async () => {
+    let baseline = snapshot(0);
+    const capture = vi.fn(async () => baseline);
+    const validUsage = {
+      backendInstanceId: "backend-1", executionEnvironmentId: "environment-1", capturedAt: 1_000,
+      accountId: "account", plan: "Pro", includedUsageAllowed: true,
+      windows: [{ remainingPercent: 25, durationMinutes: 10_080, resetsAt: 2_000 }],
+    };
+    const sourceUsages = [validUsage, { ...validUsage, backendInstanceId: "removed-backend", executionEnvironmentId: "removed-host" }];
+    const service = capturedService(capture, { accountUsages: { read: () => sourceUsages } });
+    const boundary = new ApplicationSnapshotPublicationBoundary(service, new ScopedApplicationEventHubs());
+    const hub = boundary.hub(scope);
+    const changes: NormalizedApplicationSnapshot["accountUsages"][] = [];
+    const subscription = hub.subscribe(({ event }) => {
+      if (event.type === "account_usages_changed") changes.push(event.accountUsages);
+    });
+    try {
+      await boundary.checkpoint(scope, hub);
+      await boundary.publishAccountUsagesChange(scope);
+      await boundary.flush();
+      expect(changes).toEqual([[validUsage]]);
+      expect(capture).toHaveBeenCalledTimes(1);
+      expect(hub.state).toBe("ready");
+
+      baseline = { ...snapshot(1), environments: [], executionTargets: [], defaultNewThreadTargetId: null };
+      await boundary.publishAuthoritativeReplacement(scope);
+      await boundary.flush();
+      await boundary.publishAccountUsagesChange(scope);
+      await boundary.flush();
+      expect(changes).toEqual([[validUsage], []]);
+      expect(capture).toHaveBeenCalledTimes(2);
+      expect(hub.state).toBe("ready");
+      expect((await boundary.checkpoint(scope, hub)).snapshot).toEqual(baseline);
+    } finally {
+      subscription.close();
+      await boundary.close();
+    }
+  });
+
+  it("publishes account cache changes without recapturing threads and keeps reconnect checkpoints current", async () => {
+    let accountUsages: NormalizedApplicationSnapshot["accountUsages"] = [];
+    const capture = vi.fn(async () => ({ ...snapshot(0), accountUsages }));
+    const accountReader = { read: vi.fn(() => accountUsages) };
+    const service = capturedService(capture, { accountUsages: accountReader });
+    const boundary = new ApplicationSnapshotPublicationBoundary(service, new ScopedApplicationEventHubs());
+    const hub = boundary.hub(scope);
+    const events: string[] = [];
+    const subscription = hub.subscribe(({ event }) => events.push(event.type));
+    try {
+      await boundary.checkpoint(scope, hub);
+      accountUsages = [{
+        backendInstanceId: "backend-1", executionEnvironmentId: "environment-1", capturedAt: 1_000,
+        accountId: "account", plan: "Pro", includedUsageAllowed: true,
+        windows: [{ remainingPercent: 25, durationMinutes: 10_080, resetsAt: 2_000 }],
+      }];
+      await boundary.publishAccountUsagesChange(scope);
+      await boundary.flush();
+      expect(events).toEqual(["snapshot", "account_usages_changed"]);
+      expect(capture).toHaveBeenCalledTimes(1);
+      expect((await boundary.checkpoint(scope, hub)).snapshot).toEqual(await capture());
+      subscription.close();
+
+      accountUsages = [];
+      await boundary.publishAccountUsagesChange(scope);
+      await boundary.flush();
+      const reconnected = boundary.hub(scope);
+      const reconnectSubscription = reconnected.subscribe(() => undefined);
+      try {
+        expect((await boundary.checkpoint(scope, reconnected)).snapshot.accountUsages).toEqual([]);
+      } finally { reconnectSubscription.close(); }
+    } finally {
+      subscription.close();
+      await boundary.close();
+    }
+  });
+
   it("coalesces 20000 same-thread hints during recovery into one reread and preserves force", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(0);

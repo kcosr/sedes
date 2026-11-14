@@ -1,3 +1,4 @@
+import { NO_BACKEND_ACCOUNT_USAGE } from "../backend-account-usage.js";
 import { OpenCodeRemoteRuntime } from "./opencode-remote-runtime.js";
 import { recoverOpenCodeRuntimeAdministration } from "./opencode-runtime-administration.js";
 import { openCodeRuntimeOperations } from "./opencode-runtime-wire.js";
@@ -128,6 +129,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   get actionPersistence() { return this.#composed().actionPersistence; }
   get savedAgents() { return this.#composed().savedAgents; }
   get automationExecutionPolicy() { return this.#composed().automationExecutionPolicy; }
+  readonly accountUsage = NO_BACKEND_ACCOUNT_USAGE;
   readonly installationAdvisories = new OpenCodeInstallationAdvisorySource();
   readonly managedProviderTerminals = managedTerminals;
   readonly administration: BackendRuntimeAdministration | undefined;

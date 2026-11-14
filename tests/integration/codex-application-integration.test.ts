@@ -5,6 +5,7 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
+import { codexAccountUsageResult } from "../helpers/codex-account-usage.js";
 
 const agentToolSourceCapabilities =
   createFakeAgentToolSourceCapabilities().issuer;
@@ -226,6 +227,9 @@ function fakeCodexDependencies(
     const thread = readThread();
     events.push(`rpc:${method}`);
     requests.push({ method, params });
+    if (method === "account/rateLimits/read") {
+      return codexAccountUsageResult() as Result;
+    }
     if (method === "thread/list") {
       return {
         data: [thread],
@@ -660,6 +664,13 @@ describe("Codex production application integration", () => {
         registry,
         resources,
       });
+      await vi.waitFor(() => {
+        expect(runtimeModules.runtimes.get(codexBackend.id)!.accountUsage.snapshot()).toMatchObject({
+          accountId: "account-1",
+          plan: "Pro Max",
+          windows: [{ remainingPercent: 28, durationMinutes: 10_080 }],
+        });
+      });
       const piDriver = new InMemoryConformanceDriver({
         instance: piBackend,
         connection: piConnection,
@@ -942,8 +953,9 @@ describe("Codex production application integration", () => {
         "codex.tui@1",
       ]);
       expect(threadSnapshot.composerCommands).toEqual([]);
-      expect(events.slice(0, 7)).toEqual([
+      expect(events.slice(0, 8)).toEqual([
         "supervisor:start",
+        "rpc:account/rateLimits/read",
         "rpc:thread/list",
         "rpc:thread/read",
         "rpc:thread/resume",

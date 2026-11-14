@@ -104,6 +104,7 @@ function removeEntry(
 }
 
 const collectionByEvent = {
+  account_usages_changed: "accountUsages",
   environment_upsert: "environments",
   environment_remove: "environments",
   workspace_upsert: "workspaces",
@@ -112,7 +113,7 @@ const collectionByEvent = {
   thread_remove: "threads",
   task_upsert: "tasks",
   task_remove: "tasks",
-} as const satisfies Record<string, IncrementalCollection>;
+} as const satisfies Record<string, IncrementalCollection | "accountUsages">;
 
 export class NormalizedApplicationStore {
   #state: NormalizedApplicationState = { authoritative: false };
@@ -287,6 +288,12 @@ export class NormalizedApplicationStore {
     const event = envelope.event;
     let change: CollectionChange;
     switch (event.type) {
+      case "account_usages_changed":
+        change = {
+          snapshot: { ...snapshot, accountUsages: event.accountUsages },
+          byteDelta: serializedUtf8Bytes(event.accountUsages) - serializedUtf8Bytes(snapshot.accountUsages),
+        };
+        break;
       case "environment_upsert":
         change = upsertEntry(snapshot, "environments", event.environment);
         break;

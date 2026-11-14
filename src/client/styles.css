@@ -2132,16 +2132,23 @@ textarea:disabled {
   display: block;
   height: 100%;
   border-radius: inherit;
+}
+
+.sidebar-usage-bar > i,
+.account-usage-line[data-level="ok"] .account-usage-fill {
   background: var(--success);
 }
 
-.sidebar-usage-bar[data-band="warn"] > i {
+.sidebar-usage-bar[data-band="warn"] > i,
+.account-usage-line[data-level="warn"] .account-usage-fill {
   background: var(--warning);
 }
-.sidebar-usage-bar[data-band="low"] > i {
+.sidebar-usage-bar[data-band="low"] > i,
+.account-usage-line[data-level="low"] .account-usage-fill {
   background: color-mix(in oklch, var(--warning) 55%, var(--destructive));
 }
-.sidebar-usage-bar[data-band="critical"] > i {
+.sidebar-usage-bar[data-band="critical"] > i,
+.account-usage-line[data-level="critical"] .account-usage-fill {
   background: var(--destructive);
 }
 
@@ -7441,15 +7448,15 @@ tr.diff-hunk td {
   position: absolute;
   z-index: var(--z-sticky);
   top: -1px;
-  left: calc(var(--radius-lg) - 1px);
-  width: calc(100% - var(--radius-lg) - var(--radius-lg) + 2px);
+  right: var(--composer-line-inset);
+  left: var(--composer-line-inset);
   height: 3px;
   overflow: hidden;
-  border-radius: 999px;
   background: color-mix(in srgb, var(--border) 65%, transparent);
   opacity: 0;
   pointer-events: none;
-  transform: scaleY(0.6);
+  /* Mirror the shared taper so the top edge stays flat against the border. */
+  transform: scaleY(-0.6);
   transition:
     opacity 180ms ease,
     transform 180ms ease;
@@ -7462,22 +7469,163 @@ tr.diff-hunk td {
   content: "";
   background: linear-gradient(
     90deg,
-    transparent,
     color-mix(in srgb, var(--primary) 35%, transparent),
     var(--primary),
-    color-mix(in srgb, var(--primary) 35%, transparent),
-    transparent
+    color-mix(in srgb, var(--primary) 35%, transparent)
   );
   transform: translateX(-140%);
 }
 
 .input-activity-bar.visible {
   opacity: 1;
-  transform: scaleY(1);
+  transform: scaleY(-1);
 }
 
 .input-activity-bar.visible::before {
   animation: input-activity-bar-slide 1.4s ease-in-out infinite;
+}
+
+/* At full quota the line aligns with the top activity indicator. Its hit area
+   uses the footer padding and space below the composer, away from controls. */
+.account-usage-line {
+  --account-usage-remaining: 0%;
+  position: absolute;
+  z-index: var(--z-sticky);
+  right: var(--composer-line-inset);
+  bottom: -14px;
+  left: var(--composer-line-inset);
+  height: 20px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.account-usage-track {
+  position: absolute;
+  top: 4px;
+  right: 0;
+  left: 0;
+  display: flex;
+  justify-content: center;
+  height: 2px;
+}
+
+.input-activity-bar,
+.input-activity-bar::before,
+.account-usage-fill {
+  /* A single curve tapers only the top edge, leaving the bottom flat.
+     Short segments compress the caps to fit without changing their height. */
+  mask-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 2' preserveAspectRatio='none'%3E%3Cpath d='M0 2Q4 0 12 0V2Z'/%3E%3C/svg%3E"),
+    linear-gradient(#000, #000),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 2' preserveAspectRatio='none'%3E%3Cpath d='M0 0Q8 0 12 2H0Z'/%3E%3C/svg%3E");
+  mask-size:
+    min(var(--composer-line-taper), 50%) 100%,
+    max(0px, calc(100% - var(--composer-line-taper) - var(--composer-line-taper))) 100%,
+    min(var(--composer-line-taper), 50%) 100%;
+  mask-position: left top, center top, right top;
+  mask-repeat: no-repeat;
+}
+
+.account-usage-fill {
+  position: relative;
+  display: block;
+  width: var(--account-usage-remaining);
+  height: 100%;
+}
+
+/* Keep the focus ring outside the masked track so the taper cannot clip it. */
+.account-usage-line:focus-visible::after {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  left: -4px;
+  height: 10px;
+  border: 2px solid var(--ring);
+  border-radius: 4px;
+  content: "";
+  pointer-events: none;
+}
+
+.account-usage-heading,
+.account-usage-window-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-usage-provider {
+  margin: 3px 0 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+}
+
+.account-usage-close {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.account-usage-close:hover,
+.account-usage-close:focus-visible {
+  color: var(--foreground);
+  background: var(--accent);
+}
+
+.account-usage-windows {
+  display: grid;
+  gap: 12px;
+}
+
+.account-usage-window-heading strong {
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.account-usage-reset,
+.account-usage-checked,
+.account-usage-note {
+  margin: 3px 0 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+  line-height: 1.5;
+}
+
+.account-usage-note {
+  color: var(--destructive);
+}
+
+.account-usage-checked {
+  margin: 0;
+}
+
+.account-usage-account {
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+}
+
+.account-usage-account summary {
+  cursor: pointer;
+}
+
+.account-usage-account code {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 
 .background-activity-status-slot,
@@ -7803,6 +7951,8 @@ tr.diff-hunk td {
 }
 
 .composer {
+  --composer-line-inset: calc(var(--radius-lg) + 5px);
+  --composer-line-taper: 18px;
   position: relative;
   width: 100%;
   margin: 0;
@@ -8398,6 +8548,11 @@ tr.diff-hunk td {
   justify-content: space-between;
   gap: 10px;
   padding: 4px 8px 8px 8px;
+}
+
+/* Reserve the quota line's 2px height beneath the actions when it is shown. */
+.composer:has(> .account-usage-line) .composer-footer {
+  padding-bottom: 10px;
 }
 
 /* Roomier composer actions and setting selectors. */

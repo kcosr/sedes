@@ -98,6 +98,7 @@ describe("normalized application components", () => {
     };
     const snapshot = {
       advisories: [],
+      accountUsages: [],
       environments: [
         {
           id: "environment-1",
@@ -121,6 +122,7 @@ describe("normalized application components", () => {
       threads: [thread],
       executionTargets: [
         {
+          backendInstanceId: "backend-1",
           id: "target-1",
           environmentId: "environment-1",
           label: { text: "Local SDK" },
@@ -286,6 +288,7 @@ describe("normalized application components", () => {
     };
     const snapshot = {
       advisories: [],
+      accountUsages: [],
       environments: [
         {
           id: "environment-1",
@@ -320,6 +323,7 @@ describe("normalized application components", () => {
       threads: [threadA, threadB],
       executionTargets: [
         {
+          backendInstanceId: "backend-1",
           id: "target-1",
           environmentId: "environment-1",
           label: { text: "Local SDK" },
@@ -422,6 +426,7 @@ describe("normalized application components", () => {
     const children = [child, runningChild, failedChild, doneChild];
     const snapshot = {
       advisories: [],
+      accountUsages: [],
       environments: [
         {
           id: "environment-1",
@@ -587,6 +592,7 @@ describe("normalized application components", () => {
     };
     const snapshot = {
       advisories: [],
+      accountUsages: [],
       environments: [
         {
           id: "environment-1",
@@ -663,6 +669,7 @@ describe("normalized application components", () => {
     );
     const snapshot = {
       advisories: [],
+      accountUsages: [],
       environments: [
         {
           id: "environment-1",
@@ -737,6 +744,7 @@ describe("normalized application components", () => {
     const child = makeSidebarThread("child", "Child thread", "idle");
     const snapshot = {
       advisories: [],
+      accountUsages: [],
       environments: [
         {
           id: "environment-1",
@@ -874,6 +882,7 @@ describe("normalized application components", () => {
     };
     const snapshot = {
       advisories: [],
+      accountUsages: [],
       environments: [
         {
           id: "environment-1",
@@ -1023,6 +1032,7 @@ function sidebarElement(runState: "running" | "waiting_for_input") {
   };
   const snapshot = {
     advisories: [],
+    accountUsages: [],
     environments: [
       {
         id: "environment-1",

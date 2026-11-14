@@ -45,6 +45,7 @@ function fixture() {
     {
       read: async () => ({
         executionTargets: [{
+          backendInstanceId: "backend-1",
           id: profile.id, environmentId: environment.id, label: { text: "Local Pi" },
           backend: { label: { text: "Primary Pi" }, brand: "pi" },
           workspaceExecution: { kind: "direct_only" }, available: true,

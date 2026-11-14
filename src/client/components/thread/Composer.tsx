@@ -96,6 +96,7 @@ import { MAXIMUM_CODEX_TUI_INPUT_BYTES } from "../../provider-features/codex-tui
 import { useMediaQuery } from "../../app/use-media-query.js";
 import { TerminalBottomControls } from "../../terminals/TerminalBottomControls.js";
 import { ContextUsageMeter } from "./ContextUsageMeter.js";
+import { AccountUsageLine, accountUsageForTarget } from "./AccountUsageLine.js";
 import { ThreadSettingsControls } from "./ThreadSettingsControls.js";
 import {
   clearRetainedComposerDeliveryState,
@@ -4197,6 +4198,12 @@ export function Composer({
                     )}
                   </div>
                 </div>
+                <AccountUsageLine
+                  key={snapshot.thread.targetId}
+                  usage={accountUsageForTarget(application.snapshot, snapshot.thread.targetId)}
+                  backendLabel={snapshot.capabilities.backend.label.text}
+                  visible={active && chatViewVisible}
+                />
               </div>
             </div>
           </PopoverAnchor>

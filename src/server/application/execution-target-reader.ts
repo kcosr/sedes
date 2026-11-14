@@ -194,6 +194,7 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
       profile.backendInstanceId,
     );
     const base = {
+      backendInstanceId: profile.backendInstanceId,
       id: profile.id,
       environmentId: profile.executionEnvironmentId,
       label: boundDisplayText(profile.label),

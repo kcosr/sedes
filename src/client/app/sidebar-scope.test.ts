@@ -31,6 +31,7 @@ const catalog: SidebarScopeCatalog = {
   ],
   executionTargets: [
     {
+      backendInstanceId: "backend-1",
       id: "target-a1",
       environmentId: "env-a",
       label: { text: "Socket A" },
@@ -39,6 +40,7 @@ const catalog: SidebarScopeCatalog = {
       available: true,
     },
     {
+      backendInstanceId: "backend-1",
       id: "target-a2",
       environmentId: "env-a",
       label: { text: "Pi A" },
@@ -47,6 +49,7 @@ const catalog: SidebarScopeCatalog = {
       available: true,
     },
     {
+      backendInstanceId: "backend-1",
       id: "target-b",
       environmentId: "env-b",
       label: { text: "Socket B" },

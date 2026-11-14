@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { backendAccountUsagesSchema, MAXIMUM_BACKEND_ACCOUNT_USAGES } from "./account-usage.js";
 import { backgroundActivitySchema } from "./background-activity.js";
 import {
   backendBrandSchema,
@@ -31,6 +32,7 @@ const safeInventoryCountSchema = z
 
 const normalizedExecutionTargetDescriptorShape = {
   id: applicationEntityIdSchema,
+  backendInstanceId: applicationEntityIdSchema,
   environmentId: applicationEntityIdSchema,
   label: boundedDisplayTextSchema,
   backend: z.strictObject({
@@ -388,6 +390,7 @@ export const APPLICATION_SNAPSHOT_COLLECTION_LIMITS = {
   lineageFamilies: 10_000,
   executionTargets: 256,
   advisories: MAXIMUM_ACTIVE_INSTALLATION_ADVISORIES,
+  accountUsages: MAXIMUM_BACKEND_ACCOUNT_USAGES,
   tasks: 10_000,
 } as const;
 const collectionLimits = APPLICATION_SNAPSHOT_COLLECTION_LIMITS;
@@ -420,6 +423,7 @@ const normalizedApplicationSnapshotEntitiesSchema = z.strictObject({
   advisories: z
     .array(normalizedInstallationAdvisorySchema)
     .max(collectionLimits.advisories),
+  accountUsages: backendAccountUsagesSchema,
   defaultNewThreadTargetId: applicationEntityIdSchema.nullable(),
   tasks: z.array(associatedTaskSchema).max(collectionLimits.tasks),
 });
@@ -452,6 +456,12 @@ export function reportApplicationSnapshotReferenceIssues(
     snapshot.environments.map((environment) => environment.id),
   );
   const projectIds = new Set(snapshot.projects.map(({ id }) => id));
+  for (const [index, usage] of snapshot.accountUsages.entries()) {
+    if (!environmentIds.has(usage.executionEnvironmentId)) report({
+      message: "Account usage references an unknown environment.",
+      path: ["accountUsages", index, "executionEnvironmentId"],
+    });
+  }
   for (let index = 0; index < snapshot.workspaces.length; index += 1) {
     if (!environmentIds.has(snapshot.workspaces[index]!.environmentId)) {
       report({
@@ -707,6 +717,11 @@ export type WorkpadChangedEvent = z.infer<typeof workpadChangedEventSchema>;
 
 export const normalizedApplicationEventSchema = z.discriminatedUnion("type", [
   z.strictObject({
+    type: z.literal("account_usages_changed"),
+    generation: applicationGenerationSchema,
+    accountUsages: backendAccountUsagesSchema,
+  }),
+  z.strictObject({
     type: z.literal("automation_changed"),
     generation: applicationGenerationSchema,
     automationId: z.uuid(),
@@ -796,7 +811,7 @@ export type ApplicationEventEnvelope = z.infer<
   typeof applicationEventEnvelopeSchema
 >;
 
-export const SEDES_CLIENT_PROTOCOL_VERSION = 174 as const;
+export const SEDES_CLIENT_PROTOCOL_VERSION = 175 as const;
 
 export const normalizedApplicationSessionSchema = z.strictObject({
   clientProtocolVersion: z.literal(SEDES_CLIENT_PROTOCOL_VERSION),

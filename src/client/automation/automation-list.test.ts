@@ -39,7 +39,7 @@ function automation(id: string, name: string, overrides: Partial<SummaryAutomati
 
 function snapshot(threads: NormalizedApplicationThreadSummary[] = [], overrides: Partial<NormalizedApplicationSnapshot> = {}): NormalizedApplicationSnapshot {
   return {
-    advisories: [], environments: [{ id: "env-local", kind: "local", label: { text: "Local" }, available: true, directoryBrowsing: "available" }],
+    advisories: [], accountUsages: [], environments: [{ id: "env-local", kind: "local", label: { text: "Local" }, available: true, directoryBrowsing: "available" }],
     projects: [{ id: "project-acme", name: "acme-web", revision: 1 }, { id: "project-billing", name: "billing-service", revision: 1 }],
     workspaces: [
       { id: "ws-acme", environmentId: "env-local", projectId: "project-acme", label: { text: "acme-web" }, displayPath: { text: "/src/acme-web" }, available: true },

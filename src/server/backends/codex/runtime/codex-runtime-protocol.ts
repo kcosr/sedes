@@ -85,6 +85,7 @@ export function codexRuntimeMethod(method: string): import("../rpc/codex-rpc-cli
 // frame for even a tiny metadata read. All other admitted methods retain the
 // mutation handoff contract, including resume and settings changes.
 const readMethods: ReadonlySet<string> = new Set<CodexClientRequestMethod>([
+  "account/rateLimits/read",
   "thread/list", "thread/loaded/list", "thread/read", "thread/turns/list",
   "thread/items/list", "thread/goal/get", "model/list",
   "experimentalFeature/list", "skills/list", "permissionProfile/list",

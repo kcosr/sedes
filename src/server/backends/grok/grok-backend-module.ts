@@ -1,3 +1,4 @@
+import { NO_BACKEND_ACCOUNT_USAGE } from "../backend-account-usage.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { backendStartupEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { createThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
@@ -58,6 +59,7 @@ class GrokBackendModuleRuntime implements BackendModuleRuntime {
   readonly actionPersistence;
   readonly discoveryPersistence;
   readonly discovery;
+  readonly accountUsage = NO_BACKEND_ACCOUNT_USAGE;
   readonly installationAdvisories;
   readonly savedAgents;
   readonly agentToolRuntimeAvailability: NonNullable<BackendModuleRuntime["agentToolRuntimeAvailability"]>;

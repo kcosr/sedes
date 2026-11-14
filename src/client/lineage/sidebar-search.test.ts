@@ -61,6 +61,7 @@ const snapshot = {
   ],
   executionTargets: [
     {
+      backendInstanceId: "backend-1",
       id: "target-1",
       environmentId: "environment-1",
       label: { text: "Local socket" },

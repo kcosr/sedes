@@ -1,6 +1,7 @@
 import { startProductionSshServer, unusedLoopbackPort, terminateChild } from "../support/production-carrier-fixture.js";
 import { SEDES_VERSION } from "../../src/shared/version.js";
 import { authenticatedProductionFetch } from "../helpers/authenticated-production-client.js";
+import { codexAccountUsageResult } from "../helpers/codex-account-usage.js";
 import type { ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { accessSync, constants as fsConstants } from "node:fs";
@@ -131,7 +132,17 @@ describe.skipIf(!openSshAvailable)(
         const firstService = await fixture.serviceStatus();
         expect(firstService?.state).toBe("ready");
 
+        await waitFor(async () => (await readApplicationSnapshot(fixture)).accountUsages.length === 1, 5_000);
         const snapshot = await readApplicationSnapshot(fixture);
+        expect(snapshot.accountUsages).toEqual([
+          expect.objectContaining({
+            backendInstanceId: "codex-ssh-production-backend",
+            executionEnvironmentId: SSH_ENVIRONMENT_ID,
+            accountId: "account-1",
+            plan: "Pro Max",
+            windows: [{ remainingPercent: 28, durationMinutes: 10_080, resetsAt: 1_800_000_000_000 }],
+          }),
+        ]);
         expect(snapshot.environments).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -693,6 +704,10 @@ class MinimalCodexAppServer {
           }
           if (envelope.method === "thread/loaded/list" && envelope.id !== undefined) {
             await connection.sendText(JSON.stringify({ id: envelope.id, result: { data: [], nextCursor: null } }));
+            continue;
+          }
+          if (envelope.method === "account/rateLimits/read" && envelope.id !== undefined) {
+            await connection.sendText(JSON.stringify({ id: envelope.id, result: codexAccountUsageResult() }));
             continue;
           }
           if (envelope.method === "thread/list" && envelope.id !== undefined) {

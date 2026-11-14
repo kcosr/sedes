@@ -93,6 +93,7 @@ const emptySnapshot: NormalizedApplicationSnapshot = {
   lineageFamilies: [],
   executionTargets: [
     {
+      backendInstanceId: "backend-1",
       id: "target-1",
       environmentId: "environment-1",
       label: { text: "Local SDK" },
@@ -102,6 +103,7 @@ const emptySnapshot: NormalizedApplicationSnapshot = {
     },
   ],
   advisories: [],
+  accountUsages: [],
   defaultNewThreadTargetId: "target-1",
   tasks: [],
 };
@@ -532,6 +534,7 @@ describe("serveApplicationEventStream", () => {
               lineageFamilies: [],
               executionTargets: [
                 {
+                  backendInstanceId: "backend-1",
                   id: "target-1",
                   environmentId: "environment-1",
                   label: { text: "Local SDK" },
@@ -542,6 +545,7 @@ describe("serveApplicationEventStream", () => {
               ],
               defaultNewThreadTargetId: "target-1",
               advisories: [],
+              accountUsages: [],
               tasks: [],
             },
           }),

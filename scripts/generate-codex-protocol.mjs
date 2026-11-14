@@ -435,6 +435,7 @@ async function buildAdoptionManifest({
       "live_turns",
       "interactions",
       "actions",
+      "account_usage",
     ],
     routes,
   };

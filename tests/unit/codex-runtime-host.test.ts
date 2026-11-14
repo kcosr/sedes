@@ -7,6 +7,7 @@ import { codexRuntimeMethod, type CodexRuntimeAuthority, type CodexRuntimeEvent 
 import type { CodexRpcRequestReceipt, CodexInboundServerRequest } from "../../src/server/backends/codex/rpc/codex-rpc-client.js";
 import { decodeCodexServerNotificationParams, decodeCodexServerRequestParams, type OfficialCodexClientRequestResult } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import type { CodexRuntimeReceiptSink } from "../../src/server/backends/codex/runtime/codex-runtime-receipt-store.js";
+import { codexAccountUsageResult } from "../helpers/codex-account-usage.js";
 
 const scope = { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "backend" };
 const authority: CodexRuntimeAuthority = { scope, runtimeId: "runtime", controllerId: "1" };
@@ -370,6 +371,23 @@ describe("persistent Codex runtime ownership", () => {
     expect(acknowledge).not.toHaveBeenCalled();
     expect(f.host.pendingOutcomeCount()).toBe(0);
     await remote.close();
+  });
+
+  it("carries account quota reads without mutation receipts or acknowledgements", async () => {
+    const f = fixture();
+    const record = vi.fn(() => "untracked" as const);
+    const acknowledge = vi.spyOn(f.host, "acknowledge");
+    const remote = new CodexRuntimeClient({ connection: f.host, authority, receipts: { ...sink, recordOutcome: record } });
+    try {
+      await remote.start();
+      const result = codexAccountUsageResult();
+      f.dispatch.mockResolvedValue({ result, generation: 1, inboundSequence: 2 });
+      await expect(remote.client.request(codexRuntimeMethod("account/rateLimits/read"),
+        { excludeResetCreditDetails: true }, { timeoutMilliseconds: 1_000 })).resolves.toEqual(result);
+      expect(record).not.toHaveBeenCalled();
+      expect(acknowledge).not.toHaveBeenCalled();
+      expect(f.host.retainedOutcomeReferences()).toEqual([]);
+    } finally { await remote.close(); f.host.dispose(); }
   });
 
   it("returns a metadata read while four unrelated native reads remain slow", async () => {

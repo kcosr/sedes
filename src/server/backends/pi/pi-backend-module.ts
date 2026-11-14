@@ -1,3 +1,4 @@
+import { NO_BACKEND_ACCOUNT_USAGE } from "../backend-account-usage.js";
 import { PiSessionClaims } from "./pi-session-claims.js";
 import { createThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import { realpathSync } from "node:fs";
@@ -48,6 +49,7 @@ class PiBackendModuleRuntime implements BackendModuleRuntime {
   readonly savedAgents;
   readonly automationExecutionPolicy;
   readonly agentToolRuntimeAvailability: NonNullable<BackendModuleRuntime["agentToolRuntimeAvailability"]>;
+  readonly accountUsage = NO_BACKEND_ACCOUNT_USAGE;
   readonly installationAdvisories = NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES;
   readonly managedProviderTerminals = Object.freeze({
     async authorizeAdmission(): Promise<never> {

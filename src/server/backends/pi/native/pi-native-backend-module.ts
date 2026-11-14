@@ -1,3 +1,4 @@
+import { NO_BACKEND_ACCOUNT_USAGE } from "../../backend-account-usage.js";
 import { PiInstallationAdvisorySource } from "./installation-advisories.js";
 import type { VerifiedPiRuntimeVersion } from "./runtime-release.js";
 import { PiSessionClaims } from "../pi-session-claims.js";
@@ -96,6 +97,7 @@ class PiNativeModuleRuntime implements BackendModuleRuntime {
   readonly savedAgents;
   readonly automationExecutionPolicy;
   readonly administration;
+  readonly accountUsage = NO_BACKEND_ACCOUNT_USAGE;
   readonly installationAdvisories;
   readonly managedProviderTerminals = managedProviderTerminals;
   readonly #drivers = new Map<string, PiNativeConversationDriver>();
