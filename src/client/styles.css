@@ -8549,6 +8549,11 @@ tr.diff-hunk td {
   padding: 4px 8px 8px 8px;
 }
 
+/* Reserve the quota line's 2px height beneath the actions when it is shown. */
+.composer:has(> .account-usage-line) .composer-footer {
+  padding-bottom: 10px;
+}
+
 /* Roomier composer actions and setting selectors. */
 .composer-footer :is(.skill-button, .attachment-button, .stash-button,
   .context-usage-meter, .composer-prompt-toolbar, .codex-goal-indicator,

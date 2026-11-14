@@ -89,7 +89,8 @@ User-facing changes are collected here before release. See the
 - Codex threads show a 2px colored account quota line that shrinks toward the
   center, matching the activity indicator's width at full quota. Both indicators
   use mirrored single-curve 12px tapers, with flat edges against the composer
-  border. The quota line and Accounts use green
+  border, with 2px of extra space below the buttons when quota is shown.
+  The quota line and Accounts use green
   at 60% remaining, yellow at 40%, orange at 20%, and red below 20%, with
   delayed hover and tap quota details. Native quota
   readings refresh once every five minutes per enabled backend, including
