@@ -10,9 +10,9 @@ export type UsageBand = "ok" | "warn" | "low" | "critical" | "unknown";
 
 export function usageBand(remaining: number | undefined): UsageBand {
   if (remaining === undefined) return "unknown";
-  if (remaining < 10) return "critical";
-  if (remaining < 25) return "low";
-  if (remaining < 50) return "warn";
+  if (remaining < 20) return "critical";
+  if (remaining < 40) return "low";
+  if (remaining < 60) return "warn";
   return "ok";
 }
 

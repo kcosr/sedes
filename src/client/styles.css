@@ -7448,11 +7448,10 @@ tr.diff-hunk td {
   position: absolute;
   z-index: var(--z-sticky);
   top: -1px;
+  right: calc(var(--radius-lg) - 1px);
   left: calc(var(--radius-lg) - 1px);
-  width: calc(100% - var(--radius-lg) - var(--radius-lg) + 2px);
   height: 3px;
   overflow: hidden;
-  border-radius: 999px;
   background: color-mix(in srgb, var(--border) 65%, transparent);
   opacity: 0;
   pointer-events: none;
@@ -7469,11 +7468,9 @@ tr.diff-hunk td {
   content: "";
   background: linear-gradient(
     90deg,
-    transparent,
     color-mix(in srgb, var(--primary) 35%, transparent),
     var(--primary),
-    color-mix(in srgb, var(--primary) 35%, transparent),
-    transparent
+    color-mix(in srgb, var(--primary) 35%, transparent)
   );
   transform: translateX(-140%);
 }
@@ -7487,16 +7484,15 @@ tr.diff-hunk td {
   animation: input-activity-bar-slide 1.4s ease-in-out infinite;
 }
 
-/* The inset line sits against the inside of the bottom border. Its hit area
+/* At full quota the line aligns with the top activity indicator. Its hit area
    uses the footer padding and space below the composer, away from controls. */
 .account-usage-line {
   --account-usage-remaining: 0%;
-  --account-usage-taper: 12px;
   position: absolute;
   z-index: var(--z-sticky);
-  right: 32px;
+  right: calc(var(--radius-lg) - 1px);
   bottom: -14px;
-  left: 32px;
+  left: calc(var(--radius-lg) - 1px);
   height: 20px;
   padding: 0;
   border: 0;
@@ -7516,17 +7512,20 @@ tr.diff-hunk td {
   height: 2px;
 }
 
+.input-activity-bar,
+.input-activity-bar::before,
 .account-usage-fill {
-  /* Each colored endpoint tapers; short fills compress the caps to fit.
-     The full-width wrapper stays transparent as the fill shrinks to center. */
+  --composer-line-taper: 12px;
+  /* A single curve tapers only the top edge, leaving the bottom flat.
+     Short segments compress the caps to fit without changing their height. */
   mask-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 2' preserveAspectRatio='none'%3E%3Cpath d='M0 2C6 2 6 0 12 0V2Z'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 2' preserveAspectRatio='none'%3E%3Cpath d='M0 2Q4 0 12 0V2Z'/%3E%3C/svg%3E"),
     linear-gradient(#000, #000),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 2' preserveAspectRatio='none'%3E%3Cpath d='M0 0C6 0 6 2 12 2H0Z'/%3E%3C/svg%3E");
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 2' preserveAspectRatio='none'%3E%3Cpath d='M0 0Q8 0 12 2H0Z'/%3E%3C/svg%3E");
   mask-size:
-    min(var(--account-usage-taper), 50%) 100%,
-    max(0px, calc(100% - var(--account-usage-taper) - var(--account-usage-taper))) 100%,
-    min(var(--account-usage-taper), 50%) 100%;
+    min(var(--composer-line-taper), 50%) 100%,
+    max(0px, calc(100% - var(--composer-line-taper) - var(--composer-line-taper))) 100%,
+    min(var(--composer-line-taper), 50%) 100%;
   mask-position: left top, center top, right top;
   mask-repeat: no-repeat;
 }
