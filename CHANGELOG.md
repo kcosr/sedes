@@ -86,9 +86,9 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
-- Codex threads show an inset 2px account quota line with longer top-edge
-  tapers on both ends of the colored fill and track,
-  Accounts quota colors, and delayed hover and tap details. Native quota
+- Codex threads show an inset 2px colored account quota line that shrinks
+  toward the center with longer top-edge tapers at both ends. It uses Accounts
+  quota colors and delayed hover and tap details. Native quota
   readings refresh once every five minutes per enabled backend, including
   while clients are disconnected. See
   [account quota](docs/operator/backends/codex.md#account-quota).

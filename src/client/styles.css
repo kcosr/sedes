@@ -7511,20 +7511,14 @@ tr.diff-hunk td {
   top: 4px;
   right: 0;
   left: 0;
+  display: flex;
+  justify-content: center;
   height: 2px;
 }
 
-.account-usage-track::before {
-  position: absolute;
-  inset: 0;
-  background: var(--accent);
-  content: "";
-}
-
-.account-usage-track::before,
 .account-usage-fill {
-  /* Mask the track and fill separately so the colored endpoint also tapers.
-     Caps shorten for small fills while preserving the flat 2px bottom edge. */
+  /* Each colored endpoint tapers; short fills compress the caps to fit.
+     The full-width wrapper stays transparent as the fill shrinks to center. */
   mask-image:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 2' preserveAspectRatio='none'%3E%3Cpath d='M0 2C6 2 6 0 12 0V2Z'/%3E%3C/svg%3E"),
     linear-gradient(#000, #000),
@@ -7542,10 +7536,6 @@ tr.diff-hunk td {
   display: block;
   width: var(--account-usage-remaining);
   height: 100%;
-}
-
-.account-usage-line[data-level="critical"] .account-usage-track::before {
-  background: color-mix(in srgb, var(--destructive) 32%, var(--border));
 }
 
 /* Keep the focus ring outside the masked track so the taper cannot clip it. */
