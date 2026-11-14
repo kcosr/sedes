@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import type { OutboundClaudeFixtureEvent } from "../support/outbound-claude-sdk-fixture.js";
 import { normalizedThreadSnapshotSchema, threadEventEnvelopeSchema } from "../../src/shared/protocol/conversation.js";
 import { OutboundCodexFixture } from "../support/outbound-codex-fixture.js";
+import { CodexAccountUsageSource } from "../../src/server/backends/codex/codex-account-usage.js";
 import { terminalAdmissionSchema, terminalMutationResultSchema, terminalResourceSchema, terminalServerFrameSchema, decodeTerminalBinaryFrame, encodeTerminalBinaryFrame, TERMINAL_WEBSOCKET_PATH, TERMINAL_WEBSOCKET_PROTOCOL, type TerminalServerFrame, type TerminalResource } from "../../src/shared/protocol/terminals.js";
 import { WebSocket } from "ws";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -234,7 +235,13 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     expect((await fixture.pairings()).pairings[0]!.executionEnvironmentId).toBe(fixture.environmentId);
     expect((await fixture.serviceStatus())?.serviceIncarnation).toBe(original!.serviceIncarnation);
     expect(await fixture.json(`${fileUrl}/content?rootId=primary&path=example.txt`)).toMatchObject({ availability: "available", content: "after\n" });
+    const closeQuota = vi.spyOn(CodexAccountUsageSource.prototype, "close");
+    const stopActors = vi.spyOn(ThreadRuntimeCoordinator.prototype, "runWithRuntimesStopped");
+    cleanups.push(async () => { closeQuota.mockRestore(); stopActors.mockRestore(); });
     await fixture.stopBackend();
+    // Independent polling is cancelled before actor cleanup can await remote
+    // shutdown, while transport retirement retains its existing order.
+    expect(closeQuota.mock.invocationCallOrder[0]).toBeLessThan(stopActors.mock.invocationCallOrder[0]!);
     const retiredBackend = await fixture.configuration();
     await fixture.json("/api/configuration", "PUT", { mutationId: randomUUID(), expectedRevision: retiredBackend.revision, configuration: { ...retiredBackend.configuration, backends: [], targets: [], defaultTargetId: null } });
     const reapproved = (await fixture.pairings()).pairings[0]!;

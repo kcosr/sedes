@@ -170,7 +170,6 @@ export class PrincipalBackendRuntimeCollection
     this.#runtimes,
     "installationAdvisories",
   );
-  readonly accountUsage = new RuntimeContributionMap(this.#runtimes, "accountUsage");
   readonly savedAgentAdapters = new SavedAgentBackendAdapterRegistry([]);
   #tail: Promise<unknown> = Promise.resolve();
   #closed = false;

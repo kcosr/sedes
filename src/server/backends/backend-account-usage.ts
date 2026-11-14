@@ -5,6 +5,8 @@ export interface BackendAccountUsageSource {
   readonly supported: boolean;
   snapshot(): BackendAccountUsage | null;
   subscribe(listener: () => void): () => void;
+  /** Idempotently cancel background reads before operator shutdown begins. */
+  close(): void;
 }
 
 /** Explicit disposition for backends without a native account-quota reader. */
@@ -12,4 +14,5 @@ export const NO_BACKEND_ACCOUNT_USAGE: BackendAccountUsageSource = Object.freeze
   supported: false,
   snapshot: () => null,
   subscribe: () => () => undefined,
+  close: () => undefined,
 });

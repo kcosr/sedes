@@ -2747,6 +2747,9 @@ export async function startProductionApplication(
     const stopBackends = async <Result>(ids: readonly string[], effect: () => Promise<Result>): Promise<Result> => {
       const selected = [...new Set(ids)];
       for (const id of selected) cancelBackendStartup(id);
+      // Cancel independent reads before actor shutdown or a remote Stop can
+      // yield; a later transport close must not leave its poll timer running.
+      for (const id of selected) moduleRuntimes.get(id)?.accountUsage.close();
       const admissions = selected.map(id => registry.suspend(scope, id));
       executionTargets.invalidateHealth();
       try {

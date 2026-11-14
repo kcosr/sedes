@@ -120,6 +120,9 @@ snapshot/event projection. Reading that projection never initiates provider
 work, and quota metadata never authorizes or blocks a turn. Browser clients
 select the exact target's backend/environment pair rather than matching a
 provider label or account display name.
+Every source exposes idempotent `close()` cancellation. Explicit Stop closes
+quota sources before actor shutdown or remote provider effects begin; transport
+retirement retains its existing ordering. Unsupported sources close harmlessly.
 
 The OpenCode 2.2.6 compatibility cutover is provider-private: use one current
 strict SDK/schema profile and its 2.2.6 runtime floor, retaining full native

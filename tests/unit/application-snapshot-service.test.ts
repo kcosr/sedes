@@ -244,7 +244,12 @@ describe("ApplicationSnapshotService", () => {
     expect(snapshot.defaultNewThreadTargetId).toBe("target-remote");
   });
 
-  it("omits targets of removed empty hosts while preserving disabled targets and retained thread history", async () => {
+  it("omits targets and quota from removed empty hosts while preserving disabled targets and retained thread history", async () => {
+    const accountUsages = ["environment-local", "environment-ssh", "environment-empty"].map(executionEnvironmentId => ({
+      backendInstanceId: `backend-${executionEnvironmentId}`, executionEnvironmentId,
+      capturedAt: 1_000, accountId: "account", plan: "Pro", includedUsageAllowed: true,
+      windows: [{ remainingPercent: 25, durationMinutes: 10_080, resetsAt: 2_000 }],
+    }));
     const service = new ApplicationSnapshotService(
       {
         listEnvironments: () => [
@@ -287,6 +292,8 @@ describe("ApplicationSnapshotService", () => {
       { list: () => [] },
       () => "unavailable",
       { summariesByThread: () => new Map() },
+      undefined,
+      { read: () => accountUsages },
     );
 
     const snapshot = await service.capture(scope);
@@ -295,6 +302,7 @@ describe("ApplicationSnapshotService", () => {
       { id: "target-remote", available: false },
     ]);
     expect(snapshot.environments.map(({ id }) => id)).toEqual(["environment-local", "environment-ssh"]);
+    expect(snapshot.accountUsages).toEqual(accountUsages.slice(0, 2));
     expect(snapshot.threads).toContainEqual(expect.objectContaining({ id: "thread-retained", targetId: "target-remote" }));
     expect(snapshot.defaultNewThreadTargetId).toBeNull();
   });

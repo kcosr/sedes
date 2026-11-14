@@ -243,6 +243,45 @@ function incrementalSnapshots(input: {
 }
 
 describe("ApplicationSnapshotPublicationBoundary", () => {
+  it("filters quota changes against the published environments while removed runtimes drain", async () => {
+    let baseline = snapshot(0);
+    const capture = vi.fn(async () => baseline);
+    const validUsage = {
+      backendInstanceId: "backend-1", executionEnvironmentId: "environment-1", capturedAt: 1_000,
+      accountId: "account", plan: "Pro", includedUsageAllowed: true,
+      windows: [{ remainingPercent: 25, durationMinutes: 10_080, resetsAt: 2_000 }],
+    };
+    const sourceUsages = [validUsage, { ...validUsage, backendInstanceId: "removed-backend", executionEnvironmentId: "removed-host" }];
+    const service = capturedService(capture, { accountUsages: { read: () => sourceUsages } });
+    const boundary = new ApplicationSnapshotPublicationBoundary(service, new ScopedApplicationEventHubs());
+    const hub = boundary.hub(scope);
+    const changes: NormalizedApplicationSnapshot["accountUsages"][] = [];
+    const subscription = hub.subscribe(({ event }) => {
+      if (event.type === "account_usages_changed") changes.push(event.accountUsages);
+    });
+    try {
+      await boundary.checkpoint(scope, hub);
+      await boundary.publishAccountUsagesChange(scope);
+      await boundary.flush();
+      expect(changes).toEqual([[validUsage]]);
+      expect(capture).toHaveBeenCalledTimes(1);
+      expect(hub.state).toBe("ready");
+
+      baseline = { ...snapshot(1), environments: [], executionTargets: [], defaultNewThreadTargetId: null };
+      await boundary.publishAuthoritativeReplacement(scope);
+      await boundary.flush();
+      await boundary.publishAccountUsagesChange(scope);
+      await boundary.flush();
+      expect(changes).toEqual([[validUsage], []]);
+      expect(capture).toHaveBeenCalledTimes(2);
+      expect(hub.state).toBe("ready");
+      expect((await boundary.checkpoint(scope, hub)).snapshot).toEqual(baseline);
+    } finally {
+      subscription.close();
+      await boundary.close();
+    }
+  });
+
   it("publishes account cache changes without recapturing threads and keeps reconnect checkpoints current", async () => {
     let accountUsages: NormalizedApplicationSnapshot["accountUsages"] = [];
     const capture = vi.fn(async () => ({ ...snapshot(0), accountUsages }));

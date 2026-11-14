@@ -14,6 +14,7 @@ function source() {
   const listeners = new Set<() => void>();
   return {
     supported: true,
+    close: () => undefined,
     snapshot: vi.fn(() => current),
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     replace(value: BackendAccountUsage | null) { current = value; for (const listener of listeners) listener(); },

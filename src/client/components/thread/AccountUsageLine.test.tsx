@@ -99,6 +99,23 @@ describe("AccountUsageLine", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  it("rechecks expiry when the wall clock moves backward before the timeout fires", async () => {
+    render(<AccountUsageLine backendLabel="Codex" usage={usage({
+      windows: [{ remainingPercent: 28, durationMinutes: 300, resetsAt: NOW + 1_000 }],
+    })} />);
+    expect(vi.getTimerCount()).toBe(1);
+    // Moving wall time does not postpone the already scheduled elapsed-time callback.
+    vi.setSystemTime(NOW - 500);
+    await advance(1_000);
+    expect(Date.now()).toBe(NOW + 500);
+    expect(line()).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(1);
+    await advance(499);
+    expect(line()).toBeInTheDocument();
+    await advance(1);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("delays hover, cancels crossings, and lets the pointer enter the details", async () => {
     render(<><input aria-label="Message" /><AccountUsageLine backendLabel="Codex" usage={usage()} /></>);
     screen.getByRole("textbox").focus();

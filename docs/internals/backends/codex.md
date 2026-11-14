@@ -34,8 +34,9 @@ per principal/backend/environment runtime. The first `ready` or `idle` lifecycle
 observation starts polling; later transitions do not fetch immediately. At most
 one `account/rateLimits/read` request is in flight. The shared facade's existing
 short residency lease wakes a parked runtime for the read and releases it
-afterward. Both module close and pre-cleanup Stop close the source before any
-provider teardown, cancel the request, and prevent late publication.
+afterward. Operator Stop closes quota sources before actor cleanup and remote
+shutdown begin. Module close and pre-cleanup Stop also close the source
+idempotently, cancel its request, and prevent late publication.
 
 The request sets `excludeResetCreditDetails: true` and does not advertise Luna
 Reserve support. The method is explicitly classified as a read on the sidecar,

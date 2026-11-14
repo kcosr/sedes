@@ -308,7 +308,8 @@ export class ApplicationSnapshotService {
       })),
       executionTargets,
       advisories: this.advisories.read(scope),
-      accountUsages: this.accountUsages.read(scope),
+      accountUsages: this.accountUsages.read(scope)
+        .filter(usage => environmentIds.has(usage.executionEnvironmentId)),
       defaultNewThreadTargetId,
       threads,
       groups: this.groups.list(scope).map((group) => ({
@@ -776,7 +777,8 @@ export class ApplicationSnapshotPublicationBoundary {
       case "account_usages":
         hub.publish({
           type: "account_usages_changed", generation: hub.generation,
-          accountUsages: [...this.snapshots.accountUsages.read(scope)],
+          accountUsages: this.snapshots.accountUsages.read(scope)
+            .filter(usage => hub.projection!.get("environments", usage.executionEnvironmentId) !== undefined),
         });
         return;
       case "thread":

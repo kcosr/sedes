@@ -29,7 +29,7 @@ export function AccountUsageLine({ usage, backendLabel, visible = true }: {
   readonly backendLabel: string;
   readonly visible?: boolean;
 }): React.JSX.Element | null {
-  const [, expire] = useState(0);
+  const [expiryRevision, expire] = useState(0);
   const expiresAt = usage ? Math.min(
     usage.capturedAt + MAXIMUM_AGE_MS,
     ...usage.windows.flatMap(({ resetsAt }) => resetsAt === null ? [] : [resetsAt]),
@@ -38,7 +38,7 @@ export function AccountUsageLine({ usage, backendLabel, visible = true }: {
     if (!visible || !expiresAt || expiresAt <= Date.now()) return;
     const timer = window.setTimeout(() => expire((value) => value + 1), expiresAt - Date.now());
     return () => window.clearTimeout(timer);
-  }, [expiresAt, visible]);
+  }, [expiresAt, visible, expiryRevision]);
   if (!visible || !usage?.windows.length || expiresAt <= Date.now()) return null;
   return <AvailableAccountUsageLine key={usage.accountId ?? "unknown"} usage={usage} backendLabel={backendLabel} />;
 }

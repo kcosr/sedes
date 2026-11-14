@@ -596,6 +596,10 @@ for the read, then park again; external UDS/TCP connections reconnect without
 starting the externally owned process. Explicit backend Stop ends polling before
 teardown. A stopped server cannot refresh its cache. No quota history is persisted.
 
+A poll that wakes and parks a remote backend changes its runtime generation.
+If that happens while a Stop, Restart, or Upgrade confirmation is open, the
+existing safety check can require a fresh impact preview and confirmation.
+
 Failed, unsupported, or empty readings hide the line. It also disappears after
 ten minutes without a fresh reading or when a returned reset time passes, until
 the next successful scheduled read. Sedes never assumes a reset has restored
