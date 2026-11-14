@@ -7491,6 +7491,7 @@ tr.diff-hunk td {
    uses the footer padding and space below the composer, away from controls. */
 .account-usage-line {
   --account-usage-remaining: 0%;
+  --account-usage-taper: 12px;
   position: absolute;
   z-index: var(--z-sticky);
   right: 32px;
@@ -7511,26 +7512,39 @@ tr.diff-hunk td {
   right: 0;
   left: 0;
   height: 2px;
-  overflow: hidden;
+}
+
+.account-usage-track::before {
+  position: absolute;
+  inset: 0;
   background: var(--accent);
-  /* Fixed 6px SVG caps curve only the top edge; the bottom stays flat.
-     Three mask layers preserve the cap width as the composer resizes. */
+  content: "";
+}
+
+.account-usage-track::before,
+.account-usage-fill {
+  /* Mask the track and fill separately so the colored endpoint also tapers.
+     Caps shorten for small fills while preserving the flat 2px bottom edge. */
   mask-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 6 2'%3E%3Cpath d='M0 2C3 2 3 0 6 0V2Z'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 2' preserveAspectRatio='none'%3E%3Cpath d='M0 2C6 2 6 0 12 0V2Z'/%3E%3C/svg%3E"),
     linear-gradient(#000, #000),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 6 2'%3E%3Cpath d='M0 0C3 0 3 2 6 2H0Z'/%3E%3C/svg%3E");
-  mask-size: 6px 100%, calc(100% - 12px) 100%, 6px 100%;
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 2' preserveAspectRatio='none'%3E%3Cpath d='M0 0C6 0 6 2 12 2H0Z'/%3E%3C/svg%3E");
+  mask-size:
+    min(var(--account-usage-taper), 50%) 100%,
+    max(0px, calc(100% - var(--account-usage-taper) - var(--account-usage-taper))) 100%,
+    min(var(--account-usage-taper), 50%) 100%;
   mask-position: left top, center top, right top;
   mask-repeat: no-repeat;
 }
 
 .account-usage-fill {
+  position: relative;
   display: block;
   width: var(--account-usage-remaining);
   height: 100%;
 }
 
-.account-usage-line[data-level="critical"] .account-usage-track {
+.account-usage-line[data-level="critical"] .account-usage-track::before {
   background: color-mix(in srgb, var(--destructive) 32%, var(--border));
 }
 

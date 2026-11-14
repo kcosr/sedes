@@ -86,7 +86,8 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
-- Codex threads show an inset 2px account quota line with tapered ends,
+- Codex threads show an inset 2px account quota line with longer top-edge
+  tapers on both ends of the colored fill and track,
   Accounts quota colors, and delayed hover and tap details. Native quota
   readings refresh once every five minutes per enabled backend, including
   while clients are disconnected. See
