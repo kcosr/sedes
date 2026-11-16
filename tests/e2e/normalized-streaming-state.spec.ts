@@ -129,17 +129,24 @@ test.describe.serial("normalized streaming and restored state", () => {
       .boundingBox();
     const composer = page.getByTestId("composer");
     const composerBox = await composer.boundingBox();
-    const composerCornerRadius = await composer.evaluate((element) =>
-      Number.parseFloat(getComputedStyle(element).borderTopLeftRadius),
-    );
+    // Both composer lines sit 5px beyond the corner radius, measured from
+    // the padding edge inside the border.
+    const composerLineInset = await composer.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return (
+        Number.parseFloat(style.borderTopLeftRadius) +
+        Number.parseFloat(style.borderLeftWidth) +
+        5
+      );
+    });
     expect(activityBarBox).not.toBeNull();
     expect(composerBox).not.toBeNull();
     expect(
-      Math.abs(activityBarBox!.x - (composerBox!.x + composerCornerRadius)),
+      Math.abs(activityBarBox!.x - (composerBox!.x + composerLineInset)),
     ).toBeLessThanOrEqual(1);
     expect(
       Math.abs(
-        activityBarBox!.width - (composerBox!.width - composerCornerRadius * 2),
+        activityBarBox!.width - (composerBox!.width - composerLineInset * 2),
       ),
     ).toBeLessThanOrEqual(1);
     const writeElement = await streamingWrite.elementHandle();

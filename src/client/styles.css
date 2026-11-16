@@ -7545,7 +7545,7 @@ tr.diff-hunk td {
   left: -4px;
   height: 10px;
   border: 2px solid var(--ring);
-  border-radius: 4px;
+  border-radius: var(--radius-ctl);
   content: "";
   pointer-events: none;
 }

@@ -4,7 +4,7 @@ import { CodexSharedClientFacade } from "../../src/server/backends/codex/codex-c
 import { RetainedRuntimeLifecycle } from "../../src/server/backends/retained-runtime-lifecycle.js";
 import { codexAccountUsageResult } from "../helpers/codex-account-usage.js";
 
-const INTERVAL = 5 * 60 * 1_000;
+const INTERVAL = 30 * 1_000;
 const sources: CodexAccountUsageSource[] = [];
 
 function fixture(residency?: RetainedRuntimeLifecycle) {
@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 describe("Codex account usage polling", () => {
-  it("starts on first readiness and polls without any browser subscribers", async () => {
+  it("starts on first readiness and polls every 30 seconds without any browser subscribers", async () => {
     const f = fixture();
     f.source.start();
     f.client.updateLifecycle({ state: "reconciling", generation: 0 });
