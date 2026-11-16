@@ -585,7 +585,7 @@ it never controls whether you can send a message.
 Sedes uses the native `account/rateLimits/read` RPC, independently of Provider
 Pulse and experimental recorded usage. One in-memory cache serves every thread
 and client using that backend. It refreshes when the backend first becomes ready
-and every five minutes afterward, even with no connected clients. Opening a
+and every 30 seconds afterward, even with no connected clients. Opening a
 thread or quota details does not fetch again. Changes to the active account in
 the running Codex backend appear on the next successful read; the timestamp
 identifies the last observation. Codex caches managed credentials, so an external

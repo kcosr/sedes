@@ -203,7 +203,7 @@ half a second, click, or tap to see the reported windows, reset times, last-chec
 time, and optional account details. Click to keep the pop-out open; click outside
 or press Escape to close it. Keyboard focus opens the details immediately.
 
-The reading is shared across threads and refreshes every five minutes while the
+The reading is shared across threads and refreshes every 30 seconds while the
 backend is enabled, including when no client is connected. Missing windows are
 omitted, and failed or expired readings hide the line. It is separate from the
 thread's context meter and does not include extra credits or model-specific quotas.

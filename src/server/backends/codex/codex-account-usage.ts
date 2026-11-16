@@ -6,7 +6,7 @@ import {
 } from "../../provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import type { CodexSharedClientFacade } from "./codex-client-facade.js";
 
-const POLL_INTERVAL_MS = 5 * 60 * 1_000;
+const POLL_INTERVAL_MS = 30 * 1_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 
 const rateLimitsRead = defineCodexAppServerMethod({

@@ -94,10 +94,10 @@ User-facing changes are collected here before release. See the
   The quota line and Accounts use green
   at 75% remaining, yellow at 50%, orange at 20%, and red below 20%, with
   delayed hover and tap quota details. Native quota
-  readings refresh once every five minutes per enabled backend, including
+  readings refresh once every 30 seconds per enabled backend, including
   while clients are disconnected. See
   [account quota](docs/operator/backends/codex.md#account-quota).
-  ([#138](https://github.com/kcosr/sedes/pull/138))
+  ([#138](https://github.com/kcosr/sedes/pull/138), [#139](https://github.com/kcosr/sedes/pull/139))
 
 - Accounts show aligned banked-reset count badges, highlighted red when the
   next expiry is within three days or the reported expiry has passed. Exact

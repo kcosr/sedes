@@ -29,7 +29,7 @@ troubleshooting, see the [Codex operator guide](../../operator/backends/codex.md
 
 ## Account quota observations
 
-`CodexAccountUsageSource` owns one in-memory snapshot and one five-minute timer
+`CodexAccountUsageSource` owns one in-memory snapshot and one 30-second timer
 per principal/backend/environment runtime. The first `ready` or `idle` lifecycle
 observation starts polling; later transitions do not fetch immediately. At most
 one `account/rateLimits/read` request is in flight. The shared facade's existing
