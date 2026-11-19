@@ -109,6 +109,7 @@
      while leaving the already-reviewed transcript width untouched; the
      composer (was 830) and the archived list (was 760) join it. */
   --measure: 768px;
+  --transcript-measure: var(--measure);
 
   /* The workbench bar is the one chrome row above every panel surface. It
      lives here, not on .workspace-panel-layout, because the mobile Files
@@ -2479,6 +2480,7 @@ textarea:disabled {
 .workbench-panel-toggle,
 .workspace-panel-open-trigger,
 .thread-find-trigger,
+.chat-width-trigger,
 .thread-tools-shell > button,
 .workspace-panel-actions > button,
 .workspace-files-toolbar-actions > button,
@@ -2494,6 +2496,7 @@ textarea:disabled {
 .default-thread-home-button svg,
 .workbench-panel-toggle svg,
 .thread-find-trigger svg,
+.chat-width-trigger svg,
 .thread-tools-shell > button svg,
 .workspace-panel-actions > button svg,
 .workspace-files-toolbar-actions > button svg,
@@ -3657,6 +3660,21 @@ textarea:disabled {
   container-name: chat-thread;
 }
 
+@property --transcript-measure {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 768px;
+}
+
+/* Resolve the length against Chat before inheriting it into the transcript's
+   inner scrollport, so the atmosphere, history rail and messages agree. */
+.chat-thread-panel > :is(.chat-atmosphere, .thread-conversation-pane) {
+  --transcript-measure: min(
+    var(--preferred-transcript-measure, var(--measure)),
+    max(var(--measure), calc(100cqw - var(--transcript-gutters, 0px)))
+  );
+}
+
 .chat-thread-panel > :not(.chat-atmosphere) {
   position: relative;
   z-index: var(--z-sticky);
@@ -3674,21 +3692,21 @@ textarea:disabled {
   -webkit-mask-image: linear-gradient(
     90deg,
     #000 0%,
-    #000 max(0px, calc(50% - (var(--measure) / 2) - 8px)),
-    rgb(0 0 0 / 0.16) max(0px, calc(50% - (var(--measure) / 2) + 64px)),
+    #000 max(0px, calc(50% - (var(--transcript-measure) / 2) - 8px)),
+    rgb(0 0 0 / 0.16) max(0px, calc(50% - (var(--transcript-measure) / 2) + 64px)),
     rgb(0 0 0 / 0.05) 50%,
-    rgb(0 0 0 / 0.16) calc(50% + (var(--measure) / 2) - 64px),
-    #000 calc(50% + (var(--measure) / 2) + 8px),
+    rgb(0 0 0 / 0.16) calc(50% + (var(--transcript-measure) / 2) - 64px),
+    #000 calc(50% + (var(--transcript-measure) / 2) + 8px),
     #000 100%
   );
   mask-image: linear-gradient(
     90deg,
     #000 0%,
-    #000 max(0px, calc(50% - (var(--measure) / 2) - 8px)),
-    rgb(0 0 0 / 0.16) max(0px, calc(50% - (var(--measure) / 2) + 64px)),
+    #000 max(0px, calc(50% - (var(--transcript-measure) / 2) - 8px)),
+    rgb(0 0 0 / 0.16) max(0px, calc(50% - (var(--transcript-measure) / 2) + 64px)),
     rgb(0 0 0 / 0.05) 50%,
-    rgb(0 0 0 / 0.16) calc(50% + (var(--measure) / 2) - 64px),
-    #000 calc(50% + (var(--measure) / 2) + 8px),
+    rgb(0 0 0 / 0.16) calc(50% + (var(--transcript-measure) / 2) - 64px),
+    #000 calc(50% + (var(--transcript-measure) / 2) + 8px),
     #000 100%
   );
 }
@@ -4292,7 +4310,7 @@ textarea:disabled {
 }
 
 @media (min-width: 820px) {
-  .thread-header .thread-find-trigger svg {
+  .thread-header :is(.thread-find-trigger, .chat-width-trigger) svg {
     width: calc(var(--bar-icon) - 2px);
     height: calc(var(--bar-icon) - 2px);
   }
@@ -4577,7 +4595,8 @@ textarea:disabled {
 /* ── In-thread find: an editor-style strip owned by the Chat panel. The
    transcript stays React-owned; Custom Highlight API ranges paint matches
    without inserting wrapper elements into streaming Markdown. ── */
-.thread-find-trigger {
+.thread-find-trigger,
+.chat-width-trigger {
   flex: 0 0 auto;
 }
 
@@ -5196,7 +5215,7 @@ textarea:disabled {
   z-index: calc(var(--z-sticky) + 2);
   top: 16px;
   bottom: 16px;
-  left: max(12px, calc(50% - (var(--measure) / 2) - 36px));
+  left: max(12px, calc(50% - (var(--transcript-measure) / 2) - 36px));
   display: none;
   width: 42px;
   align-items: center;
@@ -5611,7 +5630,7 @@ textarea:disabled {
 }
 
 .message-content {
-  width: min(100%, var(--measure));
+  width: min(100%, var(--transcript-measure));
   min-height: 100%;
   margin: 0 auto;
   padding: 28px clamp(18px, 3vw, 24px) 52px;
@@ -5826,7 +5845,7 @@ textarea:disabled {
 
 .message-row.assistant,
 .image-figure {
-  /* Use most of the shared --measure column; ch caps wrapped too early. */
+  /* Use most of the transcript column; ch caps wrapped too early. */
   max-width: 90%;
 }
 

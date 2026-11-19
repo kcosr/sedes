@@ -159,6 +159,51 @@ describe("ZoomablePreview", () => {
     expect(screen.queryByRole("group", { name: "Inline controls" })).toBeNull();
   });
 
+  it("fits inline images from dimensions that include scrollbars", () => {
+    const { container } = render(
+      <ZoomablePreview
+        controlsLabel="Image controls"
+        interactionMode="inline"
+        resetLabel="Reset image"
+        title="Image"
+        viewportLabel="Image viewport"
+      >
+        <img alt="Screenshot" />
+      </ZoomablePreview>,
+    );
+    const viewport = screen.getByRole("region", { name: "Image viewport" });
+    const image = screen.getByRole("img", { name: "Screenshot" });
+    const shell = container.querySelector(".zoomable-preview-shell");
+    const content = container.querySelector(".zoomable-preview-content");
+    Object.defineProperties(viewport, {
+      offsetWidth: { value: 400 },
+      offsetHeight: { value: 200 },
+      clientWidth: { value: 390 },
+      clientHeight: { value: 190 },
+    });
+    Object.defineProperties(image, {
+      naturalWidth: { value: 1000 },
+      naturalHeight: { value: 500 },
+    });
+    fireEvent.load(image);
+    expect(shell).toHaveStyle({ height: "200px" });
+    expect(content).toHaveStyle({ width: "400px", height: "200px" });
+    expect(viewport).toHaveAttribute("data-inline-fit", "true");
+
+    fireEvent.keyDown(viewport, { key: "+" });
+    expect(shell).toHaveStyle({ height: "200px" });
+    expect(content).toHaveStyle({ width: "650px", height: "325px" });
+    expect(viewport).not.toHaveAttribute("data-inline-fit");
+
+    fireEvent.keyDown(viewport, { key: "0" });
+    expect(content).toHaveStyle({ width: "400px", height: "200px" });
+    expect(viewport).toHaveAttribute("data-inline-fit", "true");
+
+    fireEvent.wheel(viewport, { ctrlKey: true, deltaY: -0.2 });
+    expect(Number.parseFloat((content as HTMLElement).style.width)).toBeGreaterThan(400);
+    expect(viewport).toHaveAttribute("data-inline-fit", "true");
+  });
+
   it("zooms below 100% without shrinking the popup viewport", () => {
     const { container } = render(
       <ZoomablePreview

@@ -46,6 +46,17 @@
   touch-action: pan-y;
 }
 
+.zoomable-preview-viewport[data-inline-fit="true"] {
+  overflow: clip;
+}
+
+/* DOM measurements round to whole CSS pixels. Fit inside the browser's
+   actual fractional layout box so rounding cannot create a scroll range. */
+.zoomable-preview-viewport[data-inline-fit="true"] :is(.zoomable-preview-canvas, .zoomable-preview-content) {
+  max-width: 100%;
+  max-height: 100%;
+}
+
 .zoomable-preview-shell .zoomable-preview-viewport[data-gesture-zoom="true"] {
   touch-action: none;
 }

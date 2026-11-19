@@ -672,6 +672,15 @@ unacknowledged-completion dot. Opening the thread acknowledges completion and
 reveals any remaining background indicator. Hover for counts by kind. Uncertain
 or disconnected observations do not claim that background work is still live.
 
+## Adjust chat width
+
+When the Chat panel has room to expand, open **Chat width** using the
+horizontal-arrow icon beside **Find in thread**. Drag the slider or use its
+arrow keys to adjust the transcript. The composer has its own centered width.
+The client stores the preferred transcript width locally across threads and
+reloads. When the Chat panel narrows, its available space limits the displayed
+width. The preferred width returns when there is room again.
+
 ## Find text in a thread
 
 On narrow screens, Bookmarks and thread settings stay in the main thread
