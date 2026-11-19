@@ -89,6 +89,7 @@ User-facing changes are collected here before release. See the
 - A **Chat width** icon beside **Find in thread** opens a slider for the
   transcript. Each client remembers its preferred width locally. See
   [Adjust chat width](docs/user/conversations.md#adjust-chat-width).
+  ([#140](https://github.com/kcosr/sedes/pull/140))
 
 - Codex threads show a 2px colored account quota line that shrinks toward the
   center, matching the activity indicator's width at full quota. Both indicators
@@ -348,6 +349,7 @@ User-facing changes are collected here before release. See the
 
 - Inline image and diagram previews fit without repeatedly showing and hiding
   scrollbars at fractional display scales, which could shake the conversation.
+  ([#140](https://github.com/kcosr/sedes/pull/140))
 
 - Claude's **New with same settings** action no longer fails when the source
   thread loads or refreshes its runtime status during creation. Concurrent
