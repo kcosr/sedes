@@ -60,11 +60,11 @@ describe("chat width", () => {
     const unsubscribe = subscribeChatWidth((width) => seen.push(width));
     saveChatWidth(1024);
     expect(localStorage.getItem("sedes-chat-width")).toBe("1024");
-    localStorage.setItem("sedes-chat-width", "1152");
+    localStorage.setItem("sedes-chat-width", "1540");
     window.dispatchEvent(new StorageEvent("storage", { key: "sedes-chat-width" }));
     localStorage.setItem("sedes-chat-width", "invalid");
     window.dispatchEvent(new StorageEvent("storage", { key: "sedes-chat-width" }));
-    expect(seen).toEqual([1024, 1152, 768]);
+    expect(seen).toEqual([1024, 1540, 768]);
     unsubscribe();
   });
 });

@@ -13,7 +13,7 @@ import {
 } from "../../shared/protocol/api.js";
 import type { ActivityDetailMode } from "../../shared/protocol/conversation.js";
 import { readStorage, writeStorage } from "../workbench/lib/storage.js";
-import { maximumChatWidth, standardChatWidth } from "./chat-width.js";
+import { standardChatWidth } from "./chat-width.js";
 
 const seekOnSubmitKey = "sedes-seek-on-submit";
 const diagnosticCategoryKeys = {
@@ -103,7 +103,7 @@ function subscribeSettingChange(
 
 export function getChatWidth(): number {
   const width = Number(readStorage(chatWidthKey));
-  return Number.isInteger(width) && width >= standardChatWidth && width <= maximumChatWidth
+  return Number.isSafeInteger(width) && width >= standardChatWidth
     ? width
     : standardChatWidth;
 }

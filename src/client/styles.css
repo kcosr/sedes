@@ -5843,13 +5843,14 @@ textarea:disabled {
   scroll-margin-top: 22px;
 }
 
-.message-row.assistant,
 .image-figure {
   /* Use most of the transcript column; ch caps wrapped too early. */
   max-width: 90%;
 }
 
 .message-row.assistant {
+  /* Preserve the standard reading inset and use the full column once widened. */
+  max-width: min(100%, calc(90% + var(--transcript-measure) - var(--measure)));
   margin: 6px 0;
 }
 
