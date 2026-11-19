@@ -338,6 +338,27 @@ describe("ClaudeManagedRuntimeOwner", () => {
     await second.close();
   });
 
+  it("releases the last conversation lease after generation loss while retaining the cleanup fence", async () => {
+    const harness = runtimeHarness();
+    const owner = harness.owner({ configDirectory: undefined });
+    const other = harness.owner();
+    const session = owner.createSession({
+      executablePath: "/usr/bin/claude", initializationTimeoutMs: 30_000,
+      sessionId: randomUUID(), cwd: "/workspace", launch: "new",
+      environment: {}, onMessage: () => {},
+    });
+    try {
+      await listSessions(owner);
+      harness.generations[0]!.finish({ reason: "exit", exitCode: 255, signal: null });
+      await waitUntil(() => harness.backgroundErrors.length > 0);
+      await expect(session.close()).resolves.toBeUndefined();
+      await expect(listSessions(owner)).rejects.toThrow("claude_managed_runtime_cleanup_unproven");
+      await expect(listSessions(other)).rejects.toThrow("claude_default_config_directory_conflict");
+      await expect(owner.close()).rejects.toThrow("managed_worker_local_cleanup_unproven");
+      expect(harness.open).toHaveBeenCalledOnce();
+    } finally { await other.close(); }
+  });
+
   it("permanently poisons replacement after an unproven carrier closure", async () => {
     const harness = runtimeHarness();
     const owner = harness.owner();

@@ -88,7 +88,9 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
     onRetirementError: error => { this.#reportUnavailable(error); this.#onBackgroundError(error); },
     retire: async () => {
       if (this.#closed) return;
-      if (this.#retirementFailure !== undefined) throw this.#retirementFailure;
+      // The failed owner already fences admission and explicit close. Keep its
+      // directory reservation without poisoning release of existing leases.
+      if (this.#retirementFailure !== undefined) return;
       const current = this.#current;
       this.#current = undefined;
       if (current) {
