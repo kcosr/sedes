@@ -87,8 +87,9 @@ User-facing changes are collected here before release. See the
 ### Added
 
 - A **Chat width** icon beside **Find in thread** opens a slider for the
-  transcript up to the available panel width. Each client remembers its
-  preferred width locally. See
+  transcript up to the available panel width. Reasoning and background work
+  indicators align with the transcript. Each client remembers its preferred
+  width locally. See
   [Adjust chat width](docs/user/conversations.md#adjust-chat-width).
   ([#140](https://github.com/kcosr/sedes/pull/140))
 

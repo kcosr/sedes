@@ -678,7 +678,8 @@ When the Chat panel has room to expand, open **Chat width** using the
 horizontal-arrow icon beside **Find in thread**. Drag the slider or use its
 arrow keys to adjust the transcript. **Wide** uses the available Chat panel
 width, leaving room for the history rail and scrollbar. The composer has its
-own centered width.
+own centered width. The reasoning and background work indicators line up with
+the transcript.
 The client stores the preferred transcript width locally across threads and
 reloads. When the Chat panel narrows, its available space limits the displayed
 width. The preferred width returns when there is room again.
