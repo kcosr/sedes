@@ -109,6 +109,8 @@
      while leaving the already-reviewed transcript width untouched; the
      composer (was 830) and the archived list (was 760) join it. */
   --measure: 768px;
+  --transcript-measure: var(--measure);
+  --transcript-inline-padding: clamp(18px, 3vw, 24px);
 
   /* The workbench bar is the one chrome row above every panel surface. It
      lives here, not on .workspace-panel-layout, because the mobile Files
@@ -2479,6 +2481,7 @@ textarea:disabled {
 .workbench-panel-toggle,
 .workspace-panel-open-trigger,
 .thread-find-trigger,
+.chat-width-trigger,
 .thread-tools-shell > button,
 .workspace-panel-actions > button,
 .workspace-files-toolbar-actions > button,
@@ -2494,6 +2497,7 @@ textarea:disabled {
 .default-thread-home-button svg,
 .workbench-panel-toggle svg,
 .thread-find-trigger svg,
+.chat-width-trigger svg,
 .thread-tools-shell > button svg,
 .workspace-panel-actions > button svg,
 .workspace-files-toolbar-actions > button svg,
@@ -3620,6 +3624,8 @@ textarea:disabled {
 .thread-presentation {
   position: relative;
   display: flex;
+  container-type: inline-size;
+  container-name: chat-thread;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
@@ -3653,8 +3659,20 @@ textarea:disabled {
 
 .chat-thread-panel {
   position: relative;
-  container-type: inline-size;
-  container-name: chat-thread;
+}
+
+@property --transcript-measure {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 768px;
+}
+
+/* Resolve the length once for the transcript and the activity rows below it. */
+.thread-presentation-content {
+  --transcript-measure: min(
+    var(--preferred-transcript-measure, var(--measure)),
+    max(var(--measure), calc(100cqw - var(--transcript-gutters, 0px)))
+  );
 }
 
 .chat-thread-panel > :not(.chat-atmosphere) {
@@ -3674,21 +3692,21 @@ textarea:disabled {
   -webkit-mask-image: linear-gradient(
     90deg,
     #000 0%,
-    #000 max(0px, calc(50% - (var(--measure) / 2) - 8px)),
-    rgb(0 0 0 / 0.16) max(0px, calc(50% - (var(--measure) / 2) + 64px)),
+    #000 max(0px, calc(50% - (var(--transcript-measure) / 2) - 8px)),
+    rgb(0 0 0 / 0.16) max(0px, calc(50% - (var(--transcript-measure) / 2) + 64px)),
     rgb(0 0 0 / 0.05) 50%,
-    rgb(0 0 0 / 0.16) calc(50% + (var(--measure) / 2) - 64px),
-    #000 calc(50% + (var(--measure) / 2) + 8px),
+    rgb(0 0 0 / 0.16) calc(50% + (var(--transcript-measure) / 2) - 64px),
+    #000 calc(50% + (var(--transcript-measure) / 2) + 8px),
     #000 100%
   );
   mask-image: linear-gradient(
     90deg,
     #000 0%,
-    #000 max(0px, calc(50% - (var(--measure) / 2) - 8px)),
-    rgb(0 0 0 / 0.16) max(0px, calc(50% - (var(--measure) / 2) + 64px)),
+    #000 max(0px, calc(50% - (var(--transcript-measure) / 2) - 8px)),
+    rgb(0 0 0 / 0.16) max(0px, calc(50% - (var(--transcript-measure) / 2) + 64px)),
     rgb(0 0 0 / 0.05) 50%,
-    rgb(0 0 0 / 0.16) calc(50% + (var(--measure) / 2) - 64px),
-    #000 calc(50% + (var(--measure) / 2) + 8px),
+    rgb(0 0 0 / 0.16) calc(50% + (var(--transcript-measure) / 2) - 64px),
+    #000 calc(50% + (var(--transcript-measure) / 2) + 8px),
     #000 100%
   );
 }
@@ -4292,7 +4310,7 @@ textarea:disabled {
 }
 
 @media (min-width: 820px) {
-  .thread-header .thread-find-trigger svg {
+  .thread-header :is(.thread-find-trigger, .chat-width-trigger) svg {
     width: calc(var(--bar-icon) - 2px);
     height: calc(var(--bar-icon) - 2px);
   }
@@ -4577,7 +4595,8 @@ textarea:disabled {
 /* ── In-thread find: an editor-style strip owned by the Chat panel. The
    transcript stays React-owned; Custom Highlight API ranges paint matches
    without inserting wrapper elements into streaming Markdown. ── */
-.thread-find-trigger {
+.thread-find-trigger,
+.chat-width-trigger {
   flex: 0 0 auto;
 }
 
@@ -5196,7 +5215,7 @@ textarea:disabled {
   z-index: calc(var(--z-sticky) + 2);
   top: 16px;
   bottom: 16px;
-  left: max(12px, calc(50% - (var(--measure) / 2) - 36px));
+  left: max(12px, calc(50% - (var(--transcript-measure) / 2) - 36px));
   display: none;
   width: 42px;
   align-items: center;
@@ -5610,11 +5629,17 @@ textarea:disabled {
   outline-offset: -2px;
 }
 
-.message-content {
-  width: min(100%, var(--measure));
-  min-height: 100%;
+.message-content,
+.background-activity-status,
+.reasoning-summary-status-trigger {
+  width: min(100%, var(--transcript-measure));
   margin: 0 auto;
-  padding: 28px clamp(18px, 3vw, 24px) 52px;
+  padding-inline: var(--transcript-inline-padding);
+}
+
+.message-content {
+  min-height: 100%;
+  padding-block: 28px 52px;
 }
 
 .history-loader {
@@ -5824,13 +5849,14 @@ textarea:disabled {
   scroll-margin-top: 22px;
 }
 
-.message-row.assistant,
 .image-figure {
-  /* Use most of the shared --measure column; ch caps wrapped too early. */
+  /* Use most of the transcript column; ch caps wrapped too early. */
   max-width: 90%;
 }
 
 .message-row.assistant {
+  /* Preserve the standard reading inset and use the full column once widened. */
+  max-width: min(100%, calc(90% + var(--transcript-measure) - var(--measure)));
   margin: 6px 0;
 }
 
@@ -7630,7 +7656,6 @@ tr.diff-hunk td {
 
 .background-activity-status-slot,
 .reasoning-summary-status-slot {
-  --composer-inline-inset: clamp(14px, 4vw, 48px);
   display: flex;
   width: 100%;
   min-height: 31px;
@@ -7638,18 +7663,18 @@ tr.diff-hunk td {
   align-items: center;
   flex: 0 0 auto;
   margin-bottom: 4px;
-  padding: 0 var(--composer-inline-inset);
+  /* Match the transcript scrollport's usable width on classic scrollbars. */
+  overflow: hidden;
+  scrollbar-gutter: stable both-edges;
   background: var(--background);
 }
 
 .background-activity-status {
   display: flex;
-  width: min(100%, var(--measure));
   min-width: 0;
   align-items: center;
   gap: 8px;
-  margin: 0 auto;
-  padding: 3px 10px;
+  padding-block: 3px;
   color: var(--muted-foreground-2);
   font-size: 14.5px;
   line-height: 1.5;
@@ -7689,13 +7714,11 @@ tr.diff-hunk td {
 .reasoning-summary-status-trigger {
   position: relative;
   display: flex;
-  width: min(100%, var(--measure));
   min-width: 0;
   min-height: 31px;
   align-items: center;
   gap: 8px;
-  margin: 0 auto;
-  padding: 3px 10px;
+  padding-block: 3px;
   border: 0;
   background: transparent;
   color: var(--muted-foreground-2);
@@ -7743,7 +7766,7 @@ tr.diff-hunk td {
 
 .reasoning-summary-status-trigger:focus-visible {
   outline: 2px solid var(--ring);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
 /* New summaries enter on the trigger's 180ms transition; idle dismissal uses
@@ -10415,6 +10438,10 @@ tr.diff-hunk td {
    ─────────────────────────────────────────────────────────────────────── */
 
 @media (max-width: 819px) {
+  :root {
+    --transcript-inline-padding: 15px;
+  }
+
   .provider-feature-conversation-items {
     max-width: 100%;
   }
@@ -10589,7 +10616,7 @@ tr.diff-hunk td {
   }
 
   .message-content {
-    padding: 22px 15px 44px;
+    padding-block: 22px 44px;
   }
 
   .message-row.assistant,
@@ -10606,16 +10633,6 @@ tr.diff-hunk td {
     --composer-inline-inset: 9px;
     padding: 0 var(--composer-inline-inset)
       calc(9px + env(safe-area-inset-bottom));
-  }
-
-  .background-activity-status-slot,
-  .reasoning-summary-status-slot {
-    --composer-inline-inset: 9px;
-  }
-
-  .background-activity-status,
-  .reasoning-summary-status-trigger {
-    padding-inline: 7px;
   }
 
   .skill-popover {
@@ -10829,6 +10846,10 @@ tr.diff-hunk td {
 }
 
 @media (max-width: 390px) {
+  :root {
+    --transcript-inline-padding: 11px;
+  }
+
   .turn-fork-footer {
     min-height: 44px;
     padding-inline: 0 4px;
@@ -10844,10 +10865,6 @@ tr.diff-hunk td {
 
   .thread-header {
     gap: 5px;
-  }
-
-  .message-content {
-    padding-inline: 11px;
   }
 
   .message-row.user {

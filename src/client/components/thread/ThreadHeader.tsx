@@ -182,6 +182,7 @@ export const ThreadHeader = memo(function ThreadHeader({
   findOpen,
   findButtonRef,
   onFindOpenChange,
+  chatWidthControl,
   bookmarks,
   bookmarkStatus,
   bookmarkRevision,
@@ -201,6 +202,7 @@ export const ThreadHeader = memo(function ThreadHeader({
   findOpen: boolean;
   findButtonRef: RefObject<HTMLButtonElement | null>;
   onFindOpenChange: (open: boolean) => void;
+  chatWidthControl?: ReactNode;
   bookmarks: ThreadClientState["bookmarks"];
   bookmarkStatus: ThreadClientState["bookmarkStatus"];
   bookmarkRevision: number;
@@ -709,6 +711,7 @@ export const ThreadHeader = memo(function ThreadHeader({
               >
                 <Search size={16} strokeWidth={1.8} />
               </Button>
+              {chatWidthControl}
               {mobileLayout && (
                 <ThreadWorktreePicker
                   api={applicationStore.api}

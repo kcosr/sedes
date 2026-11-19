@@ -6,9 +6,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
 } from "react";
 import { navigate, threadPath, threadTurnPath } from "../app/router.js";
-import { getSeekOnSubmit } from "../app/settings.js";
+import { chatWidthGutters, chatWidthLimit, standardChatWidth } from "../app/chat-width.js";
+import { getChatWidth, getSeekOnSubmit, saveChatWidth, subscribeChatWidth } from "../app/settings.js";
 import { matchesKeyboardShortcut } from "../app/keyboard-shortcuts.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
@@ -18,6 +20,7 @@ import {
 } from "../stores/ThreadClientStore.js";
 import { ThreadLoadingView } from "./thread/ThreadLoadingView.js";
 import { ChatAtmosphere } from "./thread/ChatAtmosphere.js";
+import { ChatWidthControl } from "./thread/ChatWidthControl.js";
 import { Composer } from "./thread/Composer.js";
 import {
   QuestionInboxProvider,
@@ -91,6 +94,31 @@ export const ThreadView = memo(function ThreadView({
   const findViewport = useRef<HTMLDivElement>(null);
   const findContent = useRef<HTMLDivElement>(null);
   const [findOpen, setFindOpen] = useState(false);
+  const [conversationPane, setConversationPane] = useState<HTMLDivElement | null>(null);
+  const [maxChatWidth, setMaxChatWidth] = useState(standardChatWidth);
+  const [preferredChatWidth, setPreferredChatWidth] = useState(getChatWidth);
+  useLayoutEffect(() => subscribeChatWidth(setPreferredChatWidth), []);
+  useLayoutEffect(() => {
+    if (!visible || !conversationPane) return;
+    // The observer only updates the slider. CSS fits the transcript in the
+    // same layout pass as the pane, including while other panels resize it.
+    const measure = () => setMaxChatWidth(chatWidthLimit(conversationPane.clientWidth));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(conversationPane);
+    return () => observer.disconnect();
+  }, [conversationPane, visible]);
+  const chatWidth = Math.min(preferredChatWidth, maxChatWidth);
+  const changeChatWidth = useCallback((width: number) => {
+    saveChatWidth(width);
+    setPreferredChatWidth(width);
+  }, []);
+  const chatWidthControl = useMemo(() =>
+    visible && maxChatWidth > standardChatWidth
+      ? <ChatWidthControl width={chatWidth} limit={maxChatWidth} onChange={changeChatWidth} />
+      : undefined,
+    [visible, chatWidth, maxChatWidth, changeChatWidth],
+  );
   const [showReconnectBanner, setShowReconnectBanner] = useState(false);
   const [taskDropActive, setTaskDropActive] = useState(false);
   useEffect(() => {
@@ -384,6 +412,10 @@ export const ThreadView = memo(function ThreadView({
       <section
         ref={threadView}
         className="thread-view"
+        style={{
+          "--preferred-transcript-measure": `${preferredChatWidth}px`,
+          "--transcript-gutters": `${chatWidthGutters}px`,
+        } as CSSProperties}
         data-testid="thread-view"
         data-task-drop-active={taskDropActive || undefined}
         aria-label={`Thread: ${snapshot.thread.title.text}`}
@@ -516,6 +548,7 @@ export const ThreadView = memo(function ThreadView({
           findOpen={findOpen}
           findButtonRef={findButton}
           onFindOpenChange={setFindOpen}
+          chatWidthControl={chatWidthControl}
           bookmarks={state.bookmarks}
           bookmarkStatus={state.bookmarkStatus}
           bookmarkRevision={state.bookmarkRevision}
@@ -687,7 +720,7 @@ export const ThreadView = memo(function ThreadView({
           chat={
             <>
               <ChatAtmosphere />
-              <div className="thread-conversation-pane">
+              <div className="thread-conversation-pane" ref={setConversationPane}>
                 <Transcript
                   ref={transcript}
                   store={store}

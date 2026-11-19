@@ -97,6 +97,7 @@ test("sidebar open-task filter shares menu and toolbar state across views and li
 });
 
 test("sidebar prioritizes turns, unseen completion, subagents, and background commands", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1720, height: 900 });
   await openSedesWorkspace(page);
   await page.getByRole("button", { name: "Switch to Timeline", exact: true }).click();
   await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
@@ -114,9 +115,20 @@ test("sidebar prioritizes turns, unseen completion, subagents, and background co
     expect((await page.request.post(`/__e2e/claude/sidebar-background/${stage}`)).status()).toBe(204);
   };
 
+  await page.getByRole("button", { name: "Chat width", exact: true }).click();
+  await page.getByRole("slider", { name: "Transcript width" }).press("End");
+  await page.keyboard.press("Escape");
   await page.getByRole("textbox", { name: /Message Claude/ }).fill("Start sidebar background fixture");
   await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.getByTestId("background-activity-status")).toContainText("1 subagent, 1 command");
+  const backgroundActivity = page.getByTestId("background-activity-status");
+  await expect(backgroundActivity).toContainText("1 subagent, 1 command");
+  await expect.poll(async () => {
+    const textStart = await page.getByRole("log").evaluate(element =>
+      element.getBoundingClientRect().left + Number.parseFloat(getComputedStyle(element).paddingLeft),
+    );
+    const dot = await backgroundActivity.locator(".reasoning-summary-status-dot").boundingBox();
+    return dot ? Math.abs(dot.x - textStart) : Infinity;
+  }).toBeLessThanOrEqual(1);
   await expect(glyph).toHaveAttribute("data-glyph", "running");
   await expect(glyph.locator(".comet-spinner")).toHaveCSS("animation-duration", "1s");
   await capture(page, testInfo, "sidebar-background-running.png");

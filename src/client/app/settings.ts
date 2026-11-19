@@ -12,6 +12,8 @@ import {
   type ThreadHistoryPageSize,
 } from "../../shared/protocol/api.js";
 import type { ActivityDetailMode } from "../../shared/protocol/conversation.js";
+import { readStorage, writeStorage } from "../workbench/lib/storage.js";
+import { standardChatWidth } from "./chat-width.js";
 
 const seekOnSubmitKey = "sedes-seek-on-submit";
 const diagnosticCategoryKeys = {
@@ -27,6 +29,7 @@ const mobileComposerRefocusAfterSendKey =
 const mobileHistorySeekControlKey = "sedes-mobile-history-seek-control";
 const smoothStreamingKey = "sedes-smooth-streaming";
 const chatAtmosphereKey = "sedes-chat-atmosphere";
+const chatWidthKey = "sedes-chat-width";
 const settingsChangeEvent = "settings-change";
 const terminalFontSizeKey = "sedes-terminal-font-size";
 const terminalCursorBlinkKey = "sedes-terminal-cursor-blink";
@@ -96,6 +99,22 @@ function subscribeSettingChange(
     window.removeEventListener(settingsChangeEvent, onLocalChange);
     window.removeEventListener("storage", onStorage);
   };
+}
+
+export function getChatWidth(): number {
+  const width = Number(readStorage(chatWidthKey));
+  return Number.isSafeInteger(width) && width >= standardChatWidth
+    ? width
+    : standardChatWidth;
+}
+
+export function saveChatWidth(width: number): void {
+  writeStorage(chatWidthKey, String(width));
+  announceSettingChange(chatWidthKey);
+}
+
+export function subscribeChatWidth(onChange: (width: number) => void): () => void {
+  return subscribeSettingChange(chatWidthKey, () => onChange(getChatWidth()));
 }
 
 export function getActivityDetail(): ActivityDetailMode {

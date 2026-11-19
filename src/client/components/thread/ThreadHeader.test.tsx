@@ -32,6 +32,8 @@ import type {
 } from "../../workspace-panels/PanelChrome.js";
 import type { RegionId } from "../../workspace-panels/regions.js";
 import { setEnvironmentColorsEnabled } from "../../app/environment-palette.js";
+import { getChatWidth, saveChatWidth } from "../../app/settings.js";
+import { ChatWidthControl } from "./ChatWidthControl.js";
 import { ThreadHeader } from "./ThreadHeader.js";
 import {
   CONNECTION_INDICATOR_DELAY_MILLISECONDS,
@@ -418,6 +420,7 @@ function renderHeader({
   automations = false,
   findOpen = false,
   onFindOpenChange = vi.fn(),
+  chatWidthControl,
 }: {
   readonly projects?: readonly CatalogProject[];
   readonly workspaces?: readonly CatalogWorkspace[];
@@ -425,6 +428,7 @@ function renderHeader({
   readonly automations?: boolean | HeaderAutomation | "attachable";
   readonly findOpen?: boolean;
   readonly onFindOpenChange?: (open: boolean) => void;
+  readonly chatWidthControl?: React.ReactNode;
   readonly environmentCount?: number;
   readonly environmentKind?: "local" | "ssh";
   readonly backingState?: "bound" | "unbound";
@@ -483,6 +487,7 @@ function renderHeader({
       findOpen={findOpen}
       findButtonRef={{ current: null }}
       onFindOpenChange={onFindOpenChange}
+      chatWidthControl={chatWidthControl}
     />,
   );
   return { ...view, applicationStore, panelControls, publishPin };
@@ -878,6 +883,22 @@ describe("ThreadHeader panel chrome", () => {
   });
 
 
+});
+
+describe("ThreadHeader chat width", () => {
+  it("keeps the saved preference when an arrow cannot widen the current pane", async () => {
+    saveChatWidth(1152);
+    renderHeader({
+      chatWidthControl: <ChatWidthControl width={904} limit={904} onChange={saveChatWidth} />,
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Chat width" }));
+    const slider = screen.getByRole("slider", { name: "Transcript width" });
+
+    fireEvent.keyDown(slider, { key: "ArrowRight" });
+    expect(getChatWidth()).toBe(1152);
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+    expect(getChatWidth()).toBe(888);
+  });
 });
 
 describe("ThreadHeader backend brand mark", () => {

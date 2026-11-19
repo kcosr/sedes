@@ -597,6 +597,10 @@ test.describe.serial("normalized streaming and restored state", () => {
     ).toHaveCount(0);
     await capture(page, testInfo, "normalized-activity-summary-desktop.png");
 
+    await page.setViewportSize({ width: 1720, height: 900 });
+    await page.getByRole("button", { name: "Chat width", exact: true }).click();
+    await page.getByRole("slider", { name: "Transcript width" }).press("End");
+    await page.keyboard.press("Escape");
     await fillAndPersistDraft(page, "Stream explicit reasoning summaries");
     await sendCurrentDraft(page);
 
@@ -617,9 +621,8 @@ test.describe.serial("normalized streaming and restored state", () => {
       "Preparing to inspect the workspace",
     );
     await expect(summaryStatus).toHaveAttribute("data-visible", "true");
-    await expect(
-      summaryStatus.locator(".reasoning-summary-status-dot"),
-    ).toBeVisible();
+    const summaryDot = summaryStatus.locator(".reasoning-summary-status-dot");
+    await expect(summaryDot).toBeVisible();
     const assistantMessage = page
       .locator('[data-item-kind="assistant_message"] .markdown')
       .last();
@@ -635,6 +638,13 @@ test.describe.serial("normalized streaming and restored state", () => {
     // assertions inspect the final streamed part.
     await summaryTrigger.hover();
     await summaryTrigger.focus();
+    const expectSummaryAligned = () => expect.poll(async () => {
+      const dot = await summaryDot.boundingBox();
+      const message = await assistantMessage.boundingBox();
+      return dot && message ? Math.abs(dot.x - message.x) : Infinity;
+    }).toBeLessThanOrEqual(1);
+    await expectSummaryAligned();
+    await capture(page, testInfo, "normalized-reasoning-summary-wide-chat.png");
 
     for (const privateMarker of [
       "RAW_REASONING_DETAIL_MUST_NOT_REACH_SUMMARY_CLIENT",
@@ -650,6 +660,7 @@ test.describe.serial("normalized streaming and restored state", () => {
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(summaryStatus).toBeVisible();
+    await expectSummaryAligned();
     await expectNoPageOverflow(page);
     const compactLayout = await summaryTrigger.evaluate((trigger) => {
       const candidates = [

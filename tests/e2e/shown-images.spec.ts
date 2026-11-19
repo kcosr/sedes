@@ -42,8 +42,9 @@ async function chartImage(page: Page, color: string, label: string): Promise<Buf
 test("shown images stay inline and retained after source deletion, completion, and reload", async ({ page }, testInfo) => {
   const workspace = path.join(loadE2ERunContext().workspacesDirectory, "shown-images");
   const imagePath = path.join(workspace, "results.png");
+  const desktopViewport = { width: 1720, height: 1000 };
   await mkdir(workspace, { recursive: true });
-  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.setViewportSize(desktopViewport);
   const firstBytes = await chartImage(page, "#356bc7", "Results before change");
   await writeFile(imagePath, firstBytes);
   await openWorkspaceDirectory(page, workspace);
@@ -62,6 +63,44 @@ test("shown images stay inline and retained after source deletion, completion, a
     await expect(page.getByTestId("viewed-image-group")).toHaveCount(0);
     await expect.poll(() => firstImage.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBe(640);
     await capture(page, testInfo, "shown-image-streaming-desktop.png");
+
+    const widthTrigger = page.getByRole("button", { name: "Chat width", exact: true });
+    const transcript = page.getByRole("log");
+    const composer = page.getByTestId("composer");
+    const standardWidth = await transcript.evaluate(element => element.clientWidth);
+    const composerBounds = (await composer.boundingBox())!;
+    await expect(widthTrigger).toHaveText("");
+    await widthTrigger.click();
+    const slider = page.getByRole("slider", { name: "Transcript width" });
+    await slider.press("ArrowRight");
+    await expect(slider).toHaveValue(String(standardWidth + 16));
+    await expect(transcript).toHaveCSS("width", `${standardWidth + 16}px`);
+    await slider.press("Home");
+    const track = (await slider.boundingBox())!;
+    await page.mouse.move(track.x + 8, track.y + track.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(track.x + track.width * 0.7, track.y + track.height / 2, { steps: 4 });
+    await page.mouse.up();
+    const draggedWidth = Number(await slider.inputValue());
+    expect(draggedWidth).toBeGreaterThan(standardWidth + 100);
+    await expect(transcript).toHaveCSS("width", `${draggedWidth}px`);
+
+    await slider.press("End");
+    const preferredWidth = Number(await slider.inputValue());
+    expect(preferredWidth).toBeGreaterThan(1152);
+    const paneWidth = await page.locator(".thread-conversation-pane").evaluate(element => element.clientWidth);
+    expect(paneWidth - preferredWidth).toBe(96);
+    await expect.poll(() => transcript.evaluate(element => element.clientWidth)).toBe(preferredWidth);
+    expect(await composer.boundingBox()).toMatchObject({ x: composerBounds.x, width: composerBounds.width });
+    await slider.press("Escape");
+    await expect(widthTrigger).toBeFocused();
+    await capture(page, testInfo, "shown-image-wide-chat-streaming-desktop.png");
+
+    await page.setViewportSize({ width: 1220, height: 1000 });
+    await expect.poll(() => transcript.evaluate(element => element.clientWidth)).toBeLessThan(preferredWidth);
+    expect(await page.evaluate(() => localStorage.getItem("sedes-chat-width"))).toBe(String(preferredWidth));
+    await page.setViewportSize(desktopViewport);
+    await expect.poll(() => transcript.evaluate(element => element.clientWidth)).toBe(preferredWidth);
 
     const secondBytes = await chartImage(page, "#397d5e", "Results after change");
     await writeFile(imagePath, secondBytes);
@@ -96,9 +135,13 @@ test("shown images stay inline and retained after source deletion, completion, a
     await expect.poll(async () => (await page.request.post(`/__e2e/threads/${threadId}/close-idle-runtime`)).status()).toBe(204);
     await page.goto(threadPath);
     await page.reload();
+    await expect.poll(() => transcript.evaluate(element => element.clientWidth)).toBe(preferredWidth);
+    const assistant = transcript.locator(".message-row.assistant").last();
+    await expect.poll(() => assistant.evaluate(row => row.clientWidth - row.parentElement!.clientWidth)).toBe(0);
 
-    for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+    for (const viewport of [desktopViewport, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport);
+      if (viewport.width === 390) await expect(widthTrigger).toBeHidden();
       await firstImage.scrollIntoViewIfNeeded();
       await expect(firstImage).toBeVisible();
       await expectNoPageOverflow(page);

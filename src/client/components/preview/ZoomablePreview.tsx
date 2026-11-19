@@ -16,6 +16,7 @@ import "../../workbench/styles/media-frame.css";
 import "./zoomable-preview.css";
 
 const BASE_ZOOM = 1;
+const FIT_ZOOM_TOLERANCE = 0.001;
 const STANDARD_MINIMUM_ZOOM = BASE_ZOOM;
 const POPUP_MINIMUM_ZOOM = 0.25;
 const MAXIMUM_ZOOM = 4;
@@ -196,6 +197,7 @@ export function ZoomablePreview({
   const [zoom, setZoom] = useState(() =>
     boundedZoom(initialViewState.zoom, minimumZoom),
   );
+  const inlineFit = inline && zoom <= BASE_ZOOM + FIT_ZOOM_TOLERANCE;
   const zoomRef = useRef(zoom);
   const fitScale =
     dimensions.naturalWidth > 0 && dimensions.naturalHeight > 0
@@ -229,8 +231,10 @@ export function ZoomablePreview({
       const naturalHeight =
         image?.naturalHeight || (viewBox?.length === 4 ? viewBox[3] : 0) || 0;
       const next = {
-        width: viewport.clientWidth,
-        height: viewport.clientHeight,
+        // An inline preview also sizes its shell from this width. Scrollbars
+        // must not change that height or the scale that zoom is relative to.
+        width: inline ? viewport.offsetWidth : viewport.clientWidth,
+        height: inline ? viewport.offsetHeight : viewport.clientHeight,
         naturalWidth,
         naturalHeight,
       };
@@ -250,14 +254,14 @@ export function ZoomablePreview({
       typeof ResizeObserver === "undefined"
         ? undefined
         : new ResizeObserver(measure);
-    observer?.observe(viewport);
+    observer?.observe(viewport, { box: inline ? "border-box" : "content-box" });
     window.addEventListener("resize", measure);
     return () => {
       content.removeEventListener("load", measure, true);
       observer?.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [children]);
+  }, [children, inline]);
 
   const rememberViewState = useCallback((): void => {
     const viewport = viewportRef.current;
@@ -333,7 +337,7 @@ export function ZoomablePreview({
     const remaining = touches[0];
     if (
       remaining &&
-      (!inline || zoomRef.current > BASE_ZOOM + 0.001) &&
+      (!inline || zoomRef.current > BASE_ZOOM + FIT_ZOOM_TOLERANCE) &&
       viewportCanPan(viewport)
     ) {
       dragRef.current = {
@@ -384,7 +388,7 @@ export function ZoomablePreview({
   }, [popupInteractions, updateZoom]);
 
   const canZoomOut = zoom > minimumZoom;
-  const resettable = Math.abs(zoom - BASE_ZOOM) > 0.001 || panned;
+  const resettable = Math.abs(zoom - BASE_ZOOM) > FIT_ZOOM_TOLERANCE || panned;
   const zoomPercent = Math.round(zoom * 100);
 
   return (
@@ -438,6 +442,7 @@ export function ZoomablePreview({
         aria-label={viewportLabel}
         className="zoomable-preview-viewport"
         data-dragging={dragging ? "true" : undefined}
+        data-inline-fit={inlineFit ? "true" : undefined}
         data-gesture-zoom={popupInteractions ? "true" : undefined}
         data-pannable={overflowing ? "true" : undefined}
         onClickCapture={(event) => {
@@ -519,7 +524,7 @@ export function ZoomablePreview({
             event.currentTarget.setPointerCapture(event.pointerId);
             if (
               inline &&
-              zoomRef.current <= BASE_ZOOM + 0.001 &&
+              zoomRef.current <= BASE_ZOOM + FIT_ZOOM_TOLERANCE &&
               touchPointersRef.current.size === 0
             ) {
               scrollTouch.current = {
@@ -538,7 +543,7 @@ export function ZoomablePreview({
             return;
           }
           if (
-            (inline && zoomRef.current <= BASE_ZOOM + 0.001) ||
+            (inline && zoomRef.current <= BASE_ZOOM + FIT_ZOOM_TOLERANCE) ||
             !viewportCanPan(event.currentTarget) ||
             event.button !== 0
           ) {
