@@ -4,6 +4,7 @@ import { RetainedRuntimeLifecycle } from "../retained-runtime-lifecycle.js";
 import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
 import { isAgentToolCliEndpoint } from "../../../internal/agent-tool-cli-protocol/local-endpoint.js";
 import { randomBytes } from "node:crypto";
+import { SidecarOperationError } from "../../../internal/sidecar-protocol/operation-registry.js";
 import type {
   EffortLevel,
   PermissionMode,
@@ -48,6 +49,9 @@ import {
   claudeRuntimeWorkerOperations,
 } from "./worker/claude-runtime-v4.js";
 import { CLAUDE_RUNTIME_WORKER_CLEANUP_PROVEN_FAILURE_EXIT_CODE } from "./worker/claude-outer-process-supervisor.js";
+import {
+  claudeHistoryReadScope, CLAUDE_HISTORY_MAXIMUM_SNAPSHOTS, CLAUDE_HISTORY_SNAPSHOT_IDLE_MS,
+} from "./claude-session-history.js";
 
 export interface ClaudeManagedRuntimeOwnerOptions {
   readonly scope: EnvironmentChannelScope;
@@ -84,6 +88,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
     onRetirementError: error => { this.#reportUnavailable(error); this.#onBackgroundError(error); },
     retire: async () => {
       if (this.#closed) return;
+      if (this.#retirementFailure !== undefined) throw this.#retirementFailure;
       const current = this.#current;
       this.#current = undefined;
       if (current) {
@@ -102,6 +107,11 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
   #closed = false;
   #closePromise: Promise<void> | undefined;
   #releaseDirectoryReservation: (() => void) | undefined;
+  readonly #historyAcquisitions = new Map<string, {
+    readonly scope: string;
+    readonly release: () => Promise<void>;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
 
   constructor(options: ClaudeManagedRuntimeOwnerOptions) {
     if (options.environmentKind !== "local") {
@@ -212,7 +222,50 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
     environment: Readonly<Record<string, string | undefined>>,
   ) {
     assertEmptyEnvironment(environment);
-    return await this.#observe(async () => await (await this.#client()).getSessionMessagesPage(sessionId, options));
+    return await this.#observe(async () => {
+      const client = await this.#client();
+      const scope = claudeHistoryReadScope(sessionId, options);
+      const previous = options.cursor?.snapshotId;
+      try {
+        const page = await client.getSessionMessagesPage(sessionId, options);
+        if (previous && this.#historyAcquisitions.get(previous)?.scope === scope) {
+          await this.#releaseHistoryAcquisition(previous);
+        }
+        // The operation lease remains held while the acquisition takes over.
+        // Never retain a continuation from an already-ended worker generation.
+        if (page.nextCursor && !this.#closed && this.#current?.client === client) {
+          while (this.#historyAcquisitions.size >= CLAUDE_HISTORY_MAXIMUM_SNAPSHOTS) {
+            await this.#releaseHistoryAcquisition(this.#historyAcquisitions.keys().next().value!);
+          }
+          const id = page.nextCursor.snapshotId;
+          const lease = this.#residency.retain();
+          const timer = setTimeout(() => {
+            void this.#releaseHistoryAcquisition(id).catch(this.#onBackgroundError);
+          }, CLAUDE_HISTORY_SNAPSHOT_IDLE_MS);
+          timer.unref();
+          this.#historyAcquisitions.set(id, { scope, release: () => lease.release(), timer });
+        }
+        return page;
+      } catch (error) {
+        if (previous && this.#historyAcquisitions.get(previous)?.scope === scope &&
+            error instanceof SidecarOperationError && error.code === "claude_runtime_history_snapshot_expired") {
+          await this.#releaseHistoryAcquisition(previous);
+        }
+        throw error;
+      }
+    });
+  }
+
+  async #releaseHistoryAcquisition(id: string): Promise<void> {
+    const acquisition = this.#historyAcquisitions.get(id);
+    if (!acquisition) return;
+    this.#historyAcquisitions.delete(id);
+    clearTimeout(acquisition.timer);
+    await acquisition.release();
+  }
+
+  async #releaseHistoryAcquisitions(): Promise<void> {
+    await Promise.all([...this.#historyAcquisitions.keys()].map(id => this.#releaseHistoryAcquisition(id)));
   }
 
   async hasSessionTranscript(
@@ -347,6 +400,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
     if (this.#current !== owned) return;
     this.#current = undefined;
     attachmentDiagnostic("claude_worker_generation_ended", { ...this.#scope, pid: process.pid, carrierGeneration: owned.carrierGeneration }, error);
+    void this.#releaseHistoryAcquisitions().catch(this.#onBackgroundError);
     owned.client.close(error ?? new Error("claude_managed_runtime_generation_ended"));
     if (isCleanupProofFailure(error)) this.#retirementFailure ??= error;
     if (this.#retirementFailure === undefined) this.#releaseDirectory();
@@ -369,10 +423,11 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
     if (this.#closed) return;
     this.#closed = true;
     this.#closeController.abort(new Error(reason));
+    const failures: unknown[] = [];
+    try { await this.#releaseHistoryAcquisitions(); } catch (error) { failures.push(error); }
     const current = this.#current;
     this.#current = undefined;
     if (current) this.#retiring = this.#retire(current, reason);
-    const failures: unknown[] = [];
     if (this.#starting) {
       try { await this.#starting; } catch (error) {
         if (!this.#closeController.signal.aborted) failures.push(error);

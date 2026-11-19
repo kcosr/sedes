@@ -349,6 +349,11 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Larger Claude threads reopen after idle eviction or reconnection without
+  repeatedly expiring their history snapshot. Update execution sidecars with
+  the server. See [Claude troubleshooting](docs/operator/backends/claude.md#troubleshooting).
+  ([#141](https://github.com/kcosr/sedes/pull/141))
+
 - Inline image and diagram previews fit without repeatedly showing and hiding
   scrollbars at fractional display scales, which could shake the conversation.
   ([#140](https://github.com/kcosr/sedes/pull/140))

@@ -523,6 +523,12 @@ workspace, and do not use sensitive files merely to validate connectivity.
 
 ## Troubleshooting
 
+History acquisitions retain their worker through every page, including after
+the last live conversation is evicted. Abandoned reads expire after two minutes
+of inactivity. For repeated `claude_runtime_history_snapshot_expired` errors
+after reconnecting, update both the server and the execution sidecar; resetting
+or deleting the native conversation is unnecessary.
+
 | Symptom                                                      | Checks and resolution                                                                                                                                                                                                                                                                                                              |
 | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Backend is unavailable at startup                            | Confirm the target account's `PATH` resolves `claude`, or verify the optional canonical `executablePath` override; also check the selected provider home (`configDirectory`, then the execution account's `CLAUDE_CONFIG_DIR`, then `$HOME/.claude`), worker artifact admission, executable permissions, and runtime compatibility. Inspect the bounded diagnostic code for worker, version, authentication, or initialization failure. |

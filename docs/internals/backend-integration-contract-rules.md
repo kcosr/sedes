@@ -273,6 +273,15 @@ history for each page. These are Claude-private rules: Codex, Pi, and Grok retai
 their existing history and delivery contracts, and no browser capability or
 protocol changes.
 
+Claude's managed worker must retain one scoped runtime lease across a complete
+paged history acquisition, including the gaps between page requests. Bound
+abandoned acquisitions by the history snapshot count and idle timeout; release
+leases on completion, expiry, generation loss, and explicit shutdown. Invalid
+continuations cannot release another reader's lease, and unproven cleanup must
+retain the native-directory fence. This applies to local and persistent Claude
+workers. Pi SDK, Pi, Codex, Grok, and OpenCode intentionally do not consume
+Claude-private history cursors and retain their existing history lifetimes.
+
 OpenCode's resident host uses per-thread evidence journals and a compact native
 baseline independent of presentation subscriptions. Input dispatch must retain
 its scope before native admission can race the first SSE event. Main commits
