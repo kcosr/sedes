@@ -227,6 +227,7 @@ export function PierreSelectionAction({
     onCopySuccess?.();
   };
 
+  const quote = startInNoteMode ? copyText : undefined;
   const overlay = (
     <div
       aria-label={ariaLabel ?? `Actions for ${label}`}
@@ -243,8 +244,8 @@ export function PierreSelectionAction({
       role="toolbar"
       style={position}
     >
-      {startInNoteMode && copyText ? (
-        <ContextQuote text={copyText} mode="editor" kind={quoteKind} />
+      {quote ? (
+        <ContextQuote text={quote} mode="editor" kind={quoteKind} />
       ) : (
         <div className="pierre-selection-card-heading">
           <strong>{sentenceCase(label)}</strong>
@@ -254,7 +255,7 @@ export function PierreSelectionAction({
       {addingNote && (
         <>
           <label className="pierre-selection-note-field">
-            <span>Note about selected text</span>
+            {!quote && <span>Note about selected text</span>}
             <textarea
               aria-label={noteInputLabel}
               autoFocus={autoFocusNote}

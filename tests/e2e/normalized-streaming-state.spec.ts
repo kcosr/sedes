@@ -56,6 +56,7 @@ test("a saved reply question opens the existing note editor", async ({ page }, t
   await expect(chatSelectionActions.locator(":scope > :first-child")).toHaveText(questionText);
   await expect(chatSelectionActions.getByText("Selected message text", { exact: true })).toHaveCount(0);
   await expect(chatSelectionActions.getByText("Add an optional note", { exact: true })).toHaveCount(0);
+  await expect(chatSelectionActions.getByText("Note about selected text", { exact: true })).toHaveCount(0);
   const noteText = "Run it after checking the build.";
   await questionNote.fill(noteText);
   await capture(page, testInfo, "chat-question-note-desktop.png");

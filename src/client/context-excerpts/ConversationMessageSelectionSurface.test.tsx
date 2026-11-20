@@ -53,6 +53,8 @@ describe("ConversationMessageSelectionSurface", () => {
     expect(editor.firstElementChild).toHaveAttribute("data-quote-kind", "selection");
     expect(within(editor).queryByText("Selected message text", { exact: true })).not.toBeInTheDocument();
     expect(within(editor).queryByText("Add an optional note", { exact: true })).not.toBeInTheDocument();
+    expect(within(editor).queryByText("Note about selected text", { exact: true })).not.toBeInTheDocument();
+    expect(within(editor).getByRole("textbox", { name: "Note about selected message text" })).toBeVisible();
     expect(within(editor).getByRole("textbox")).not.toHaveFocus();
     expect(document.getSelection()?.toString()).toBe("selected");
     expect(within(editor).queryByRole("button", { name: "Add note…" })).not.toBeInTheDocument();
