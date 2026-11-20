@@ -627,38 +627,52 @@ describe("ConversationMessageSelectionSurface", () => {
     expect(screen.getByLabelText("Selectable conversation message")).toHaveFocus();
   });
 
-  it("keeps outside focus when a clipboard write completes after dismissal", async () => {
-    const user = userEvent.setup();
-    let finishCopy!: () => void;
-    const copy = new Promise<void>((resolve) => {
-      finishCopy = resolve;
-    });
-    setClipboard(vi.fn(() => copy));
-    render(
-      <>
-        <ConversationMessageSelectionSurface
-          enabled
-          itemId="copy-item"
-          itemRevision={1}
-          selectionKind="plain_text"
-          selectionDebounceMilliseconds={0}
-          stagingTarget={stagingTarget()}
-        >
-          <span {...conversationMessageSelectableTextProps}>Copy exactly</span>
-        </ConversationMessageSelectionSurface>
-        <button type="button">Outside action</button>
-      </>,
-    );
-    selectText(screen.getByText("Copy exactly").firstChild!);
-    fireEvent(document, new Event("selectionchange"));
-    await user.click(await screen.findByRole("button", { name: "Copy" }));
-    const outside = screen.getByRole("button", { name: "Outside action" });
-    await user.click(outside);
-    expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+  it.each(["dismissed", "replaced"] as const)(
+    "keeps focus when a clipboard write completes after the editor is %s",
+    async (editorChange) => {
+      const user = userEvent.setup();
+      let finishCopy!: () => void;
+      const copy = new Promise<void>((resolve) => {
+        finishCopy = resolve;
+      });
+      setClipboard(vi.fn(() => copy));
+      render(
+        <>
+          <ConversationMessageSelectionSurface
+            enabled
+            itemId="copy-item"
+            itemRevision={1}
+            selectionKind="plain_text"
+            selectionDebounceMilliseconds={0}
+            stagingTarget={stagingTarget()}
+          >
+            <span {...conversationMessageSelectableTextProps}>Copy exactly</span>
+          </ConversationMessageSelectionSurface>
+          <button type="button">Outside action</button>
+        </>,
+      );
+      const source = screen.getByText("Copy exactly").firstChild!;
+      selectText(source);
+      fireEvent(document, new Event("selectionchange"));
+      await user.click(await screen.findByRole("button", { name: "Copy" }));
 
-    await act(async () => finishCopy());
-    expect(outside).toHaveFocus();
-  });
+      let focusTarget: HTMLElement;
+      if (editorChange === "dismissed") {
+        focusTarget = screen.getByRole("button", { name: "Outside action" });
+        await user.click(focusTarget);
+        expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+      } else {
+        selectText(source, 5);
+        fireEvent(document, new Event("selectionchange"));
+        await waitFor(() => expect(screen.getByRole("blockquote").textContent).toBe("exactly"));
+        focusTarget = screen.getByRole("textbox");
+      }
+
+      await act(async () => finishCopy());
+      expect(focusTarget).toHaveFocus();
+      expect(screen.getByRole("status")).toBeEmptyDOMElement();
+    },
+  );
 
   it("keeps the captured quote available when Copy fails", async () => {
     const writeText = vi.fn(async () => {
