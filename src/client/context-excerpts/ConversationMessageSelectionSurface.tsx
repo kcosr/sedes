@@ -323,6 +323,7 @@ export function ConversationMessageSelectionSurface({
           }}
           onClickOutside={clearPending}
           onCopySuccess={() => {
+            if (!quoteInteraction.current || pending.captureId !== nextCaptureId.current) return;
             const selection = document.getSelection();
             const copiedRange =
               selection?.rangeCount === 1
@@ -330,7 +331,7 @@ export function ConversationMessageSelectionSurface({
                 : undefined;
             clearPending();
             setCopyConfirmation("Copied selected message text.");
-            pending.noteTrigger?.focus({ preventScroll: true });
+            (pending.noteTrigger ?? root)?.focus({ preventScroll: true });
             globalThis.setTimeout(() => {
               if (copiedRange && selectionMatchesRange(copiedRange)) {
                 document.getSelection()?.removeAllRanges();

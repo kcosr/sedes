@@ -42,7 +42,7 @@ test("a saved reply question opens the existing note editor", async ({ page }, t
   await expect(question.locator("strong")).toHaveText("full browser suite");
   await expect(question).toHaveCSS("color", "rgb(163, 47, 72)");
   await expect(question).toHaveCSS("text-decoration-line", "underline");
-  await expect(completedAssistant.getByRole("button", { name: "Add note to question" })).toBeVisible();
+  await expect(completedAssistant.getByRole("button", { name: `Add note to question “${questionText}”` })).toBeVisible();
 
   await question.click();
   const questionNote = chatSelectionActions.getByRole("textbox", {

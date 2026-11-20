@@ -125,7 +125,18 @@ function sliceInline(parts: readonly InlinePart[], start: number, end: number): 
   return result;
 }
 
+function inlineText(node: ElementContent): string {
+  if (node.type === "text") return node.value;
+  if (node.type !== "element") return "";
+  if (node.tagName === "br") return " ";
+  if (node.tagName === "img") return String(node.properties.alt ?? "");
+  return node.children.map(inlineText).join("");
+}
+
 function questionElement(id: string, children: ElementContent[]): Element {
+  const question = children.map(inlineText).join("").replace(/\s+/gu, " ").trim();
+  const characters = Array.from(question);
+  const label = characters.length > 80 ? `${characters.slice(0, 80).join("")}…` : question;
   return {
     type: "element",
     tagName: "span",
@@ -138,7 +149,7 @@ function questionElement(id: string, children: ElementContent[]): Element {
         properties: {
           "data-assistant-question-note": "",
           type: "button",
-          ariaLabel: "Add note to question",
+          ariaLabel: `Add note to question “${label}”`,
           title: "Add note",
         },
         children: [],

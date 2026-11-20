@@ -104,6 +104,8 @@ describe("ProgressiveMarkdown", () => {
     expect(questions()[0]!.querySelector("strong")).toHaveTextContent("Should I run");
     expect(questions()[0]!.querySelector("a")).toHaveAttribute("href", "https://example.test/?query=x");
     expect(questions()[1]!.querySelector("sup a")).toHaveTextContent("1");
+    expect(screen.getByRole("button", { name: "Add note to question “Should I run the browser suite?”" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add note to question “Is the build ready？”" })).toBeInTheDocument();
     expect(container.querySelector("li > input[type='checkbox']")).not.toBeNull();
     expect(container.querySelector("p")?.textContent).toBe(
       "The checks passed. Should I run the browser suite? Next up.",
@@ -111,6 +113,16 @@ describe("ProgressiveMarkdown", () => {
 
     rerender(<ProgressiveMarkdown streaming={false}>{source}</ProgressiveMarkdown>);
     expect(questions()).toHaveLength(0);
+  });
+
+  it("bounds the accessible name of the note button for a long question", () => {
+    smoothStreaming = false;
+    const question = `Should I ${"📘".repeat(80)}?`;
+    render(<ProgressiveMarkdown highlightQuestions streaming={false}>{question}</ProgressiveMarkdown>);
+    expect(screen.getByRole("button", {
+      name: `Add note to question “Should I ${"📘".repeat(71)}…”`,
+    })).toBeInTheDocument();
+    expect(screen.getByText(question)).toBeInTheDocument();
   });
 
   it("puts the full text in layout immediately without a duplicate accessible copy", () => {
