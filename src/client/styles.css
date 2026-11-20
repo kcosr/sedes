@@ -6305,6 +6305,7 @@ blockquote.context-excerpt-quote {
   }
 
   .context-excerpt-conversation blockquote.context-excerpt-quote {
+    order: 1;
     flex-basis: 100%;
   }
 }

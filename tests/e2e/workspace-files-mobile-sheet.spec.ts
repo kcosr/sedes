@@ -231,6 +231,14 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
   expect(await expandedQuote.evaluate((element) =>
     element.getBoundingClientRect().width / element.parentElement!.clientWidth,
   )).toBeGreaterThan(0.95);
+  const listBounds = (await chatExcerpt.boundingBox())!;
+  const quoteBounds = (await expandedQuote.boundingBox())!;
+  for (const control of [quoteToggle, chatExcerpt.getByRole("button", { name: /^Remove quote/ })]) {
+    const bounds = (await control.boundingBox())!;
+    expect(bounds.y).toBeGreaterThanOrEqual(listBounds.y);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(quoteBounds.y);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(listBounds.y + listBounds.height);
+  }
   await capture(page, testInfo, "chat-mobile-expanded-quote.png");
 });
 
