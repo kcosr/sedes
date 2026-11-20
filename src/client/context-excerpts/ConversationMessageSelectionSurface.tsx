@@ -52,7 +52,6 @@ interface PendingConversationSelection {
 
 interface QuoteInteraction {
   readonly range: Range;
-  retainWhenSelectionClears: boolean;
   hasNote: boolean;
 }
 
@@ -137,7 +136,7 @@ export function ConversationMessageSelectionSurface({
             })
           : capturePlainConversationSelection(root, range);
       if (!captured) {
-        if (!quoteInteraction.current?.retainWhenSelectionClears) clearPending();
+        if (!quoteInteraction.current) clearPending();
         return;
       }
       setCopyConfirmation(undefined);
@@ -151,7 +150,6 @@ export function ConversationMessageSelectionSurface({
       }
       quoteInteraction.current = {
         range: range.cloneRange(),
-        retainWhenSelectionClears: noteTrigger !== undefined,
         hasNote: false,
       };
       setPending({
@@ -179,7 +177,8 @@ export function ConversationMessageSelectionSurface({
         if (interaction?.hasNote) return;
         const selection = document.getSelection();
         if (selection?.rangeCount !== 1 || selection.isCollapsed) {
-          if (!interaction?.retainWhenSelectionClears) clearPending();
+          // The editor can take focus and collapse the selection after capture.
+          if (!interaction) clearPending();
           return;
         }
         const range = selection.getRangeAt(0);
@@ -191,8 +190,7 @@ export function ConversationMessageSelectionSurface({
         captureRange(range);
       },
       onGestureStart: () => {
-        // Keep the editor open while reading or scrolling after focusing it.
-        if (!quoteInteraction.current?.retainWhenSelectionClears) clearPending();
+        if (!quoteInteraction.current) clearPending();
       },
     });
   }, [captureRange, clearPending, enabled, root, selectionDebounceMilliseconds]);
@@ -317,14 +315,13 @@ export function ConversationMessageSelectionSurface({
           quoteKind={pending.noteTrigger ? "question" : undefined}
           initialError={actionError}
           startInNoteMode
-          autoFocusNote={pending.noteTrigger !== undefined}
           label="selected message text"
           noteInputLabel="Note about selected message text"
           onCancel={() => {
             document.getSelection()?.removeAllRanges();
             clearPending();
           }}
-          onClickOutside={pending.noteTrigger ? clearPending : undefined}
+          onClickOutside={clearPending}
           onCopySuccess={() => {
             const selection = document.getSelection();
             const copiedRange =
@@ -339,9 +336,6 @@ export function ConversationMessageSelectionSurface({
                 document.getSelection()?.removeAllRanges();
               }
             }, 1_200);
-          }}
-          onNoteFocus={() => {
-            if (quoteInteraction.current) quoteInteraction.current.retainWhenSelectionClears = true;
           }}
           onNoteChange={(value) => {
             if (quoteInteraction.current) quoteInteraction.current.hasNote = value !== "";

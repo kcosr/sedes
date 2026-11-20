@@ -38,7 +38,6 @@ export function PierreSelectionAction({
   ariaLabel,
   initialError,
   startInNoteMode = false,
-  autoFocusNote = true,
   anchor,
   owner,
   copyText,
@@ -49,7 +48,6 @@ export function PierreSelectionAction({
   onClickOutside,
   onCopySuccess,
   onNoteModeChange,
-  onNoteFocus,
   onNoteChange,
   noteInputLabel = "Note for agent",
   stageWithNoteLabel = "Add note",
@@ -60,7 +58,6 @@ export function PierreSelectionAction({
   readonly ariaLabel?: string;
   readonly initialError?: string;
   readonly startInNoteMode?: boolean;
-  readonly autoFocusNote?: boolean;
   readonly anchor?: SelectionActionAnchor;
   readonly owner?: HTMLElement | null;
   readonly copyText?: string;
@@ -74,7 +71,6 @@ export function PierreSelectionAction({
   readonly onClickOutside?: () => void;
   readonly onCopySuccess?: () => void;
   readonly onNoteModeChange?: (active: boolean) => void;
-  readonly onNoteFocus?: () => void;
   readonly onNoteChange?: (value: string) => void;
   readonly noteInputLabel?: string;
   readonly stageWithNoteLabel?: string;
@@ -273,9 +269,8 @@ export function PierreSelectionAction({
             {!quote && <span>Note about selected text</span>}
             <textarea
               aria-label={noteInputLabel}
-              autoFocus={autoFocusNote}
+              autoFocus
               className="pierre-selection-note"
-              onFocus={onNoteFocus}
               onChange={(event) => {
                 const value = event.currentTarget.value;
                 setNote(value);

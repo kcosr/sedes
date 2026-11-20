@@ -253,7 +253,8 @@ User-facing changes are collected here before release. See the
 - Selecting chat text or tapping a highlighted question opens the quote
   editor with the quote directly above a two-row optional note and the
   **Add**, **Add & send**, **Copy**, and **Cancel** actions.
-  Click or tap outside the editor to dismiss it after opening a question.
+  The note field takes focus when the editor opens. Click or tap outside the
+  editor to dismiss it.
   Conversation excerpts in drafts and sent messages show a compact quote
   preview and expand to the full text. See
   [Context excerpts](docs/user/files-and-context.md#capture-an-exact-context-excerpt).

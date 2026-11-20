@@ -119,7 +119,12 @@ test("active chat notes deliver the combined composer draft with Steer and Queue
       });
       await expect(actions).toBeVisible();
       await expect(actions.locator("blockquote")).toHaveText(sourceText);
+      await expect(actions.getByRole("textbox", { name: "Note about selected message text" })).toBeFocused();
     };
+
+    await selectSource();
+    await source.click();
+    await expect(actions).toBeHidden();
 
     for (const mode of ["steer", "queue"] as const) {
       await page.setViewportSize(mode === "steer"

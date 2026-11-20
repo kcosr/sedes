@@ -169,6 +169,10 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
   });
   await page.waitForTimeout(500);
   await expect(chatActions).toBeHidden();
+  expect(await page.evaluate(() => {
+    const selection = document.getSelection();
+    return selection?.rangeCount ? selection.getRangeAt(0).toString() : "";
+  })).toBe(quoteText);
   await assistant.evaluate((root) => {
     root.dispatchEvent(
       new PointerEvent("pointerup", {
@@ -186,18 +190,15 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
     name: "Note about selected message text",
   });
   await expect(chatNote).toBeVisible();
-  await expect(chatNote).not.toBeFocused();
+  await expect(chatNote).toBeFocused();
   const editorQuote = chatActions.locator("blockquote");
   await expect(editorQuote).toHaveText(quoteText);
   await expect(chatActions.locator(":scope > :first-child")).toHaveText(quoteText);
   const selectionRailColor = "oklch(0.512 0.012 260)";
   await expect(editorQuote).toHaveCSS("border-left-color", selectionRailColor);
-  expect(await page.evaluate(() => {
-    const selection = document.getSelection();
-    return selection?.rangeCount ? selection.getRangeAt(0).toString() : "";
-  })).toBe(quoteText);
   const noteText = "Use this response as context for the follow-up and keep the original wording visible when the quote is expanded.";
-  await chatNote.fill(noteText);
+  await page.keyboard.insertText(noteText);
+  await expect(chatNote).toHaveValue(noteText);
   for (const button of await chatActions.getByRole("button").all()) {
     expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   }

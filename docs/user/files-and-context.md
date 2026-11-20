@@ -221,8 +221,9 @@ from:
 - visible text in a rendered Markdown preview; or
 - settled lines in a Git Changes diff.
 
-In chat, selecting text opens the editor with the quote above an optional
-note. **Add** puts the quote and any note in the draft. **Copy** copies the
+In chat, selecting text or tapping a highlighted question opens the editor
+with the quote above the focused optional note field.
+**Add** puts the quote and any note in the draft. **Copy** copies the
 quote. In files and diffs, choose **Add to message** to attach the selection or
 **Add note** to include an explanation. The resulting card is part of the
 durable draft and follows stash, queue, retry, Send, and Steer.
