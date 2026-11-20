@@ -629,8 +629,11 @@ describe("ConversationMessageSelectionSurface", () => {
 
   it("keeps outside focus when a clipboard write completes after dismissal", async () => {
     const user = userEvent.setup();
-    const copy = Promise.withResolvers<void>();
-    setClipboard(vi.fn(() => copy.promise));
+    let finishCopy!: () => void;
+    const copy = new Promise<void>((resolve) => {
+      finishCopy = resolve;
+    });
+    setClipboard(vi.fn(() => copy));
     render(
       <>
         <ConversationMessageSelectionSurface
@@ -653,7 +656,7 @@ describe("ConversationMessageSelectionSurface", () => {
     await user.click(outside);
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
 
-    await act(async () => copy.resolve());
+    await act(async () => finishCopy());
     expect(outside).toHaveFocus();
   });
 
