@@ -202,9 +202,16 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
     expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   }
   await capture(page, testInfo, "chat-mobile-selection-note.png");
+  const draftPath = `/api${new URL(page.url()).pathname}/draft`;
+  const quoteSaved = page.waitForResponse((response) =>
+    response.request().method() === "PUT" && response.ok() &&
+    new URL(response.url()).pathname === draftPath &&
+    response.request().postDataJSON().contextExcerpts?.[0]?.note === noteText,
+  );
   await chatActions
     .getByRole("button", { name: "Add", exact: true })
     .tap();
+  await quoteSaved;
   await expect(chatActions).toBeHidden();
   await expect(
     assistant.locator(".context-selection-confirmation"),
@@ -254,7 +261,7 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
   await capture(page, testInfo, "chat-mobile-expanded-quote.png");
   const quoteRemoved = page.waitForResponse((response) =>
     response.request().method() === "PUT" && response.ok() &&
-    new URL(response.url()).pathname.endsWith("/draft") &&
+    new URL(response.url()).pathname === draftPath &&
     response.request().postDataJSON().contextExcerpts?.length === 0,
   );
   await chatExcerpt.getByRole("button", { name: `Remove quote ${boundedQuote}`, exact: true }).tap();
