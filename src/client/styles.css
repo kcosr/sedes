@@ -6188,6 +6188,7 @@ textarea:disabled {
 }
 
 blockquote.context-excerpt-quote {
+  order: -1;
   max-height: min(220px, 40dvh);
   margin-block: 2px;
   overflow: auto;
@@ -6296,6 +6297,15 @@ blockquote.context-excerpt-quote {
 
   .context-excerpt-conversation :is(.context-excerpt-quote-toggle[aria-expanded="true"], .context-excerpt-card-actions button) {
     min-width: var(--control-touch);
+  }
+
+  .context-excerpt-conversation[data-state="open"] .context-excerpt-card-heading {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .context-excerpt-conversation blockquote.context-excerpt-quote {
+    flex-basis: 100%;
   }
 }
 

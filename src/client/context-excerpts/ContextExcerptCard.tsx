@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   Check,
   ChevronDown,
@@ -29,6 +29,12 @@ export function ContextExcerptCard({
   const [note, setNote] = useState(excerpt.note ?? "");
   const [noteError, setNoteError] = useState<string>();
   const isConversation = excerpt.source.kind === "conversation_message";
+  const quoteId = useId();
+  const quotePreview = isConversation ? excerpt.excerpt.replace(/\s+/g, " ").trim() : "";
+  const quoteCharacters = Array.from(quotePreview);
+  const quoteName = quoteCharacters.length > 80
+    ? `“${quoteCharacters.slice(0, 80).join("")}…”`
+    : `“${quotePreview}”`;
   const path = sourcePath(excerpt);
   const label = path.split("/").at(-1) ?? path;
   const SourceIcon =
@@ -55,22 +61,18 @@ export function ContextExcerptCard({
       data-state={isConversation ? (expanded ? "open" : "closed") : undefined}
     >
       <div className="context-excerpt-card-heading">
-        {isConversation && expanded && (
-          <blockquote className="context-excerpt-quote">{excerpt.excerpt}</blockquote>
-        )}
         <button
           type="button"
           className={isConversation ? "context-excerpt-quote-toggle" : "context-excerpt-summary"}
-          aria-label={isConversation && expanded ? "Collapse quote" : undefined}
+          aria-label={isConversation ? `Quote ${quoteName}` : undefined}
+          aria-controls={isConversation ? quoteId : undefined}
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
           {isConversation ? (
             <>
               {!expanded && (
-                <span className="context-excerpt-quote">
-                  {excerpt.excerpt.replace(/\s+/g, " ").trim()}
-                </span>
+                <span className="context-excerpt-quote">{quotePreview}</span>
               )}
               <ChevronDown size={14} aria-hidden="true" />
             </>
@@ -84,6 +86,11 @@ export function ContextExcerptCard({
             </>
           )}
         </button>
+        {isConversation && (
+          <blockquote id={quoteId} className="context-excerpt-quote" hidden={!expanded}>
+            {expanded ? excerpt.excerpt : undefined}
+          </blockquote>
+        )}
         <div className="context-excerpt-card-actions">
           {onOpen && (
             <button type="button" aria-label={`Open ${path}`} onClick={onOpen}>
@@ -93,7 +100,7 @@ export function ContextExcerptCard({
           {editable && onNoteChange && (
             <button
               type="button"
-              aria-label={`Edit note for ${label}`}
+              aria-label={`Edit note for ${isConversation ? quoteName : label}`}
               onClick={() => {
                 setNote(excerpt.note ?? "");
                 setNoteError(undefined);
@@ -107,7 +114,7 @@ export function ContextExcerptCard({
           {editable && onRemove && (
             <button
               type="button"
-              aria-label={`Remove ${label}`}
+              aria-label={isConversation ? `Remove quote ${quoteName}` : `Remove ${label}`}
               onClick={onRemove}
             >
               <Trash2 size={13} strokeWidth={1.8} aria-hidden="true" />

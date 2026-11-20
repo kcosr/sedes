@@ -4,6 +4,7 @@ import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
   capture,
+  expectNoPageOverflow,
   fillAndPersistDraft,
   openPanelFromMenu,
   overlaySettled,
@@ -138,7 +139,7 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
     .last();
   await expect(assistant).toBeVisible({ timeout: 20_000 });
   await expect(assistant.locator("[data-markdown-block]")).toHaveCount(2);
-  await assistant.evaluate((root) => {
+  const quoteText = await assistant.evaluate((root) => {
     const blocks = root.querySelectorAll("[data-markdown-block]");
     const firstBlock = blocks.item(0);
     const lastBlock = blocks.item(blocks.length - 1);
@@ -161,6 +162,7 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
     selection?.removeAllRanges();
     selection?.addRange(range);
     document.dispatchEvent(new Event("selectionchange"));
+    return range.toString();
   });
   const chatActions = page.getByRole("toolbar", {
     name: "Selected message text actions",
@@ -184,7 +186,8 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
   const chatNote = chatActions.getByRole("textbox", {
     name: "Note about selected message text",
   });
-  await chatNote.fill("Use this response as context");
+  const noteText = "Use this response as context for the follow-up and keep the original wording visible when the quote is expanded.";
+  await chatNote.fill(noteText);
   for (const button of await chatActions.getByRole("button").all()) {
     expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   }
@@ -197,8 +200,38 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
     assistant.locator(".context-selection-confirmation"),
   ).toHaveCount(0);
   const chatExcerpt = page.getByTestId("composer").getByLabel("Context excerpts");
-  await expect(chatExcerpt.getByRole("button", { name: /Mobile transcript selection/ })).toHaveAttribute("aria-expanded", "false");
-  await expect(chatExcerpt).toContainText("Use this response as context");
+  const summary = quoteText.replace(/\s+/gu, " ").trim();
+  expect(summary).toContain("Mobile transcript selection");
+  const quoteCharacters = Array.from(summary);
+  expect(quoteCharacters.length).toBeGreaterThan(80);
+  const boundedQuote = `“${quoteCharacters.slice(0, 80).join("")}…”`;
+  const quoteToggle = chatExcerpt.getByRole("button", { name: `Quote ${boundedQuote}`, exact: true });
+  await expect(quoteToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(chatExcerpt.getByRole("button", { name: `Remove quote ${boundedQuote}`, exact: true })).toBeVisible();
+  const quotePreview = quoteToggle.locator(".context-excerpt-quote");
+  const notePreview = chatExcerpt.locator(".context-excerpt-quote-note");
+  await expect(quotePreview).toHaveText(summary);
+  await expect(notePreview).toHaveText(noteText);
+  for (const preview of [quotePreview, notePreview]) {
+    await expect(preview).toHaveCSS("white-space", "nowrap");
+    await expect(preview).toHaveCSS("text-overflow", "ellipsis");
+    expect(await preview.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  }
+  for (const button of await chatExcerpt.getByRole("button").all()) {
+    const bounds = await button.boundingBox();
+    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+    expect(bounds?.width).toBeGreaterThanOrEqual(44);
+  }
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "chat-mobile-collapsed-quote.png");
+  await quoteToggle.tap();
+  const expandedQuote = chatExcerpt.getByRole("blockquote");
+  await expect(expandedQuote).toBeVisible();
+  expect(await expandedQuote.textContent()).toBe(quoteText);
+  expect(await expandedQuote.evaluate((element) =>
+    element.getBoundingClientRect().width / element.parentElement!.clientWidth,
+  )).toBeGreaterThan(0.95);
+  await capture(page, testInfo, "chat-mobile-expanded-quote.png");
 });
 
 // Regression: the panel stops wheel/touchmove itself so the tree's scroller —

@@ -66,17 +66,19 @@ test("a saved reply question opens the existing note editor", async ({ page }, t
   ]);
   await expect(chatSelectionActions).toBeHidden();
   const stagedNote = page.getByTestId("composer").getByLabel("Context excerpts");
-  const stagedQuoteToggle = stagedNote.getByRole("button", { name: questionText, exact: true });
+  const stagedQuoteToggle = stagedNote.getByRole("button", { name: `Quote “${questionText}”`, exact: true });
   await expect(stagedQuoteToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(stagedQuoteToggle.locator(".context-excerpt-quote")).toHaveText(questionText);
   await expect(stagedNote).toContainText(noteText);
   await expect(stagedNote.getByText("Conversation message", { exact: true })).toHaveCount(0);
   await stagedQuoteToggle.click();
+  await expect(stagedQuoteToggle).toHaveAttribute("aria-expanded", "true");
   const stagedQuote = stagedNote.locator("blockquote");
   await expect(stagedQuote).toHaveText(questionText);
   await stagedQuote.dblclick({ position: { x: 14, y: 9 } });
   expect(await page.evaluate(() => window.getSelection()?.toString().trim())).toBe("Should");
   await page.evaluate(() => window.getSelection()?.removeAllRanges());
-  await stagedNote.getByRole("button", { name: "Collapse quote" }).click();
+  await stagedQuoteToggle.click();
   await expect(stagedQuoteToggle).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator('[data-item-kind="user_message"]')).toHaveCount(1);
   const noteRemoved = page.waitForResponse((response) =>
@@ -84,7 +86,7 @@ test("a saved reply question opens the existing note editor", async ({ page }, t
     new URL(response.url()).pathname === draftPath &&
     response.request().postDataJSON().contextExcerpts?.length === 0,
   );
-  await stagedNote.getByRole("button", { name: "Remove Conversation message" }).click();
+  await stagedNote.getByRole("button", { name: `Remove quote “${questionText}”`, exact: true }).click();
   await noteRemoved;
 
   await page.reload();
