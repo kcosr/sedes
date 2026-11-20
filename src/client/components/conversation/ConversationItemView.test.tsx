@@ -16,6 +16,7 @@ import {
   conversationItemRenderers,
 } from "./ConversationItemView";
 import { MarkdownContent } from "./MarkdownContent";
+import { setHighlightQuestions } from "../../app/settings.js";
 import { WorkspaceFileLinkProvider } from "../../workspace-files/workspace-file-link-routing.js";
 import { formatThreadReferenceText, THREAD_REFERENCE_HEADER } from "../../../shared/thread-references.js";
 
@@ -776,6 +777,24 @@ describe("normalized conversation renderers", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(screen.getByText("Recovered")).toBeInTheDocument();
   });
+
+  it.each(["failed", "interrupted"] as const)(
+    "only highlights questions in completed replies, including after a %s reply",
+    (status) => {
+      setHighlightQuestions(true);
+      const item = {
+        ...common,
+        kind: "assistant_message" as const,
+        status,
+        markdown: { text: "Should I run the tests?" },
+      };
+      const { container, rerender } = render(<ConversationItemView item={item} />);
+      expect(container.querySelector("[data-assistant-question-text]")).toBeNull();
+
+      rerender(<ConversationItemView item={{ ...item, status: "completed", revision: 2 }} />);
+      expect(container.querySelector("[data-assistant-question-text]")).toHaveTextContent(item.markdown.text);
+    },
+  );
 
   it("progressively renders safe Markdown and suppresses an empty transient row", () => {
     const { container, rerender } = render(

@@ -299,7 +299,8 @@ function AssistantMessage({
   const [presentationActive, setPresentationActive] = useState(
     item.status === "streaming",
   );
-  const highlightQuestions = useSyncExternalStore(subscribeHighlightQuestions, getHighlightQuestions);
+  const highlightQuestionsEnabled = useSyncExternalStore(subscribeHighlightQuestions, getHighlightQuestions);
+  const highlightQuestions = highlightQuestionsEnabled && item.status === "completed";
   const presentationChanged = useCallback((active: boolean) => {
     setPresentationActive(active);
   }, []);
