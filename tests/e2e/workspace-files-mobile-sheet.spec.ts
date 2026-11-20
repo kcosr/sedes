@@ -188,7 +188,10 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
   await expect(chatNote).toBeVisible();
   await expect(chatNote).not.toBeFocused();
   await expect(chatActions.locator("blockquote")).toHaveText(quoteText);
-  expect(await page.evaluate(() => document.getSelection()?.toString())).toBe(quoteText);
+  expect(await page.evaluate(() => {
+    const selection = document.getSelection();
+    return selection?.rangeCount ? selection.getRangeAt(0).toString() : "";
+  })).toBe(quoteText);
   const noteText = "Use this response as context for the follow-up and keep the original wording visible when the quote is expanded.";
   await chatNote.fill(noteText);
   for (const button of await chatActions.getByRole("button").all()) {

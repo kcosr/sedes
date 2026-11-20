@@ -142,7 +142,7 @@ export function AppearanceSettingsPage(): React.JSX.Element {
         <SwitchField
           id="setting-highlight-questions"
           label="Highlight questions in agent replies"
-          description="Show questions in red with an underline. Select a highlighted question to open Add note."
+          description="Show questions in red with an underline. Select a highlighted question to open the quote editor."
           checked={highlightQuestions}
           onCheckedChange={setHighlightQuestions}
         />
