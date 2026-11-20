@@ -49,11 +49,14 @@ describe("ContextExcerptCard", () => {
     expect(screen.getByRole("textbox", { name: "Note" })).toBeInTheDocument();
   });
 
-  it("labels normalized conversation-message provenance without native identity", () => {
+  it("leads with the conversation quote and expands it as selectable text", () => {
+    const quote = "Should I run the browser suite?\nThe build is ready.";
     render(
       <ContextExcerptCard
         excerpt={{
           ...excerpt,
+          excerpt: quote,
+          note: "Run it first.",
           source: {
             kind: "conversation_message",
             itemId: "normalized-item-1",
@@ -63,14 +66,31 @@ describe("ContextExcerptCard", () => {
             kind: "text_quote",
             prefix: "Before ",
             suffix: " after",
+            sourceStartLine: 13,
+            sourceEndLine: 13,
           },
         }}
       />,
     );
 
-    expect(screen.getByText("Conversation message")).toBeInTheDocument();
-    expect(screen.getByText("selected text")).toBeInTheDocument();
+    const preview = screen.getByRole("button", {
+      name: "Should I run the browser suite? The build is ready.",
+    });
+    expect(preview).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Run it first.")).toBeVisible();
+    expect(screen.queryByText("Conversation message")).not.toBeInTheDocument();
+    expect(screen.queryByText("line 13")).not.toBeInTheDocument();
     expect(screen.queryByText("normalized-item-1")).not.toBeInTheDocument();
+
+    fireEvent.click(preview);
+    const expanded = screen.getByRole("blockquote");
+    expect(expanded.textContent).toBe(quote);
+    expect(expanded.closest("button")).toBeNull();
+    const collapse = screen.getByRole("button", { name: "Collapse quote" });
+    expect(collapse).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(collapse);
+    expect(screen.queryByRole("blockquote")).not.toBeInTheDocument();
+    expect(preview).toHaveAttribute("aria-expanded", "false");
   });
 
   it("renders workspace comparison provenance without exposing opaque handles", () => {

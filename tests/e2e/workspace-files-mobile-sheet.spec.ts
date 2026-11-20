@@ -196,9 +196,9 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
   await expect(
     assistant.locator(".context-selection-confirmation"),
   ).toHaveCount(0);
-  await expect(
-    page.getByTestId("composer").getByLabel("Context excerpts"),
-  ).toContainText("Conversation message");
+  const chatExcerpt = page.getByTestId("composer").getByLabel("Context excerpts");
+  await expect(chatExcerpt.getByRole("button", { name: /Mobile transcript selection/ })).toHaveAttribute("aria-expanded", "false");
+  await expect(chatExcerpt).toContainText("Use this response as context");
 });
 
 // Regression: the panel stops wheel/touchmove itself so the tree's scroller —

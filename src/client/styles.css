@@ -6138,6 +6138,78 @@ textarea:disabled {
   font-size: 11px;
 }
 
+.context-excerpt-conversation {
+  padding-block: 4px;
+}
+
+.context-excerpt-conversation .context-excerpt-card-heading {
+  align-items: start;
+}
+
+.context-excerpt-quote-toggle {
+  display: flex;
+  min-width: 0;
+  min-height: var(--control-xs);
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-inline);
+  text-align: left;
+}
+
+.context-excerpt-quote-toggle svg {
+  flex: none;
+  color: var(--muted-foreground);
+}
+
+.context-excerpt-quote-toggle:hover {
+  background: var(--accent);
+}
+
+.context-excerpt-quote-toggle[aria-expanded="true"] {
+  width: var(--control-xs);
+  flex: none;
+  justify-content: center;
+}
+
+.context-excerpt-quote-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.context-excerpt-quote {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  border-inline-start: 2px solid var(--chat-question);
+  padding-inline-start: 8px;
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  line-height: var(--leading-normal);
+}
+
+blockquote.context-excerpt-quote {
+  max-height: min(220px, 40dvh);
+  margin-block: 2px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.context-excerpt-quote-note {
+  margin: 2px 0 0 10px;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.context-excerpt-conversation[data-state="closed"] :is(.context-excerpt-quote, .context-excerpt-quote-note) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .context-excerpt-card-actions {
   display: flex;
   flex: 0 0 auto;
@@ -6216,6 +6288,14 @@ textarea:disabled {
 @media (max-width: 819px), (pointer: coarse) {
   .context-excerpt-note-editor textarea {
     font-size: var(--text-input);
+  }
+
+  .context-excerpt-conversation :is(.context-excerpt-quote-toggle, .context-excerpt-card-actions button) {
+    min-height: var(--control-touch);
+  }
+
+  .context-excerpt-conversation :is(.context-excerpt-quote-toggle[aria-expanded="true"], .context-excerpt-card-actions button) {
+    min-width: var(--control-touch);
   }
 }
 

@@ -250,6 +250,9 @@ User-facing changes are collected here before release. See the
 ### Changed
 
 - The context selection note editor opens with a two-line text field.
+  Conversation excerpts in drafts and sent messages show a compact quote
+  preview and expand to the full text. See
+  [Context excerpts](docs/user/files-and-context.md#capture-an-exact-context-excerpt).
   ([#142](https://github.com/kcosr/sedes/pull/142))
 
 - Claude uses Agent SDK **0.3.319**, tested through Claude Code **2.1.319**,

@@ -225,6 +225,10 @@ Select the text and choose **Add to message** or **Add note**. **Add note** lets
 you attach your own explanation to the quote. The resulting card is part of the
 durable draft and follows stash, queue, retry, Send, and Steer.
 
+For excerpts from a chat message, the card leads with a one-line quote preview
+and shows any note below it. Select the quote to read it in full in the composer
+or in the sent chat bubble.
+
 In the note editor, **Add note & send** attaches the quote and note and sends
 it together with everything already in the composer, including text, other
 excerpts, attachments, and Tasks. During an active turn, the action follows the

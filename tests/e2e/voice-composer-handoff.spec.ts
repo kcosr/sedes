@@ -365,6 +365,18 @@ test("foreground dictation sends the live full draft as one composer input witho
     await expect(page.locator('[data-item-kind="user_message"]')).toHaveCount(2);
     await expect(page.locator(".conversation-turn").last()).toContainText(speech);
     await expect(page.locator(".conversation-turn").last()).toContainText("voice-supplement.txt");
+    const sentExcerpts = page.locator('[data-item-kind="user_message"]').last().getByLabel("Context excerpts");
+    const sentQuoteToggle = sentExcerpts.getByRole("button", { name: excerpt.excerpt, exact: true });
+    await expect(sentQuoteToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(sentExcerpts).toContainText(excerpt.note);
+    await expect(sentExcerpts.getByText("Conversation message", { exact: true })).toHaveCount(0);
+    await sentQuoteToggle.click();
+    const sentQuote = sentExcerpts.locator("blockquote");
+    await expect(sentQuote).toHaveText(excerpt.excerpt);
+    await sentQuote.dblclick({ position: { x: 14, y: 9 } });
+    expect(await page.evaluate(() => window.getSelection()?.toString().trim())).toBe("Original");
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await sentExcerpts.getByRole("button", { name: "Collapse quote" }).click();
     expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery)).toBeNull();
     await expect(page.getByRole("button", { name: "Saved dictation", exact: true })).toHaveCount(0);
     await capture(page, testInfo, "voice-full-draft-streaming.png");

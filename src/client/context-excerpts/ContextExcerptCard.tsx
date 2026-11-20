@@ -1,10 +1,10 @@
 import { useState } from "react";
 import {
   Check,
+  ChevronDown,
   ExternalLink,
   FileText,
   GitCompare,
-  MessageSquareText,
   Pencil,
   Trash2,
   X,
@@ -28,15 +28,14 @@ export function ContextExcerptCard({
   const [editingNote, setEditingNote] = useState(false);
   const [note, setNote] = useState(excerpt.note ?? "");
   const [noteError, setNoteError] = useState<string>();
+  const isConversation = excerpt.source.kind === "conversation_message";
   const path = sourcePath(excerpt);
   const label = path.split("/").at(-1) ?? path;
   const SourceIcon =
     excerpt.source.kind === "conversation_diff" ||
     excerpt.source.kind === "workspace_diff"
       ? GitCompare
-      : excerpt.source.kind === "conversation_message"
-        ? MessageSquareText
-        : FileText;
+      : FileText;
 
   const saveNote = () => {
     const normalized = note.trim();
@@ -51,21 +50,39 @@ export function ContextExcerptCard({
 
   return (
     <article
-      className="context-excerpt-card"
+      className={isConversation ? "context-excerpt-card context-excerpt-conversation" : "context-excerpt-card"}
       data-context-excerpt-id={excerpt.id}
+      data-state={isConversation ? (expanded ? "open" : "closed") : undefined}
     >
       <div className="context-excerpt-card-heading">
+        {isConversation && expanded && (
+          <blockquote className="context-excerpt-quote">{excerpt.excerpt}</blockquote>
+        )}
         <button
           type="button"
-          className="context-excerpt-summary"
+          className={isConversation ? "context-excerpt-quote-toggle" : "context-excerpt-summary"}
+          aria-label={isConversation && expanded ? "Collapse quote" : undefined}
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
-          <SourceIcon size={14} strokeWidth={1.8} aria-hidden="true" />
-          <span>
-            <strong>{label}</strong>
-            <small>{locatorLabel(excerpt)}</small>
-          </span>
+          {isConversation ? (
+            <>
+              {!expanded && (
+                <span className="context-excerpt-quote">
+                  {excerpt.excerpt.replace(/\s+/g, " ").trim()}
+                </span>
+              )}
+              <ChevronDown size={14} aria-hidden="true" />
+            </>
+          ) : (
+            <>
+              <SourceIcon size={14} strokeWidth={1.8} aria-hidden="true" />
+              <span>
+                <strong>{label}</strong>
+                <small>{locatorLabel(excerpt)}</small>
+              </span>
+            </>
+          )}
         </button>
         <div className="context-excerpt-card-actions">
           {onOpen && (
@@ -98,21 +115,28 @@ export function ContextExcerptCard({
           )}
         </div>
       </div>
-      {!expanded && (
+      {isConversation && excerpt.note && (!expanded || !editingNote) && (
+        <p className="context-excerpt-quote-note">{excerpt.note}</p>
+      )}
+      {!isConversation && !expanded && (
         <p className="context-excerpt-preview">
           {(excerpt.note ?? excerpt.excerpt).replace(/\s+/g, " ").trim()}
         </p>
       )}
-      {expanded && (
+      {expanded && (!isConversation || editingNote) && (
         <div className="context-excerpt-details">
-          <small className="context-excerpt-path">{path}</small>
-          <pre>{excerpt.excerpt}</pre>
+          {!isConversation && (
+            <>
+              <small className="context-excerpt-path">{path}</small>
+              <pre>{excerpt.excerpt}</pre>
+            </>
+          )}
           {editingNote ? (
             <div className="context-excerpt-note-editor">
               <label>
                 <span>Note</span>
                 <textarea
-                  rows={3}
+                  rows={isConversation ? 2 : 3}
                   value={note}
                   placeholder="What should the agent do with this excerpt?"
                   onChange={(event) => setNote(event.target.value)}
