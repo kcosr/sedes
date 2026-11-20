@@ -46,10 +46,14 @@ describe("ConversationMessageSelectionSurface", () => {
 
     selectText(screen.getByText("Before selected after").firstChild!, 7, 15);
     fireEvent(document, new Event("selectionchange"));
-    await screen.findByRole("toolbar", {
+    const editor = await screen.findByRole("toolbar", {
       name: "Selected message text actions",
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add to message" }));
+    expect(within(editor).getByRole("blockquote")).toHaveTextContent("selected");
+    expect(within(editor).getByRole("textbox")).not.toHaveFocus();
+    expect(document.getSelection()?.toString()).toBe("selected");
+    expect(within(editor).queryByRole("button", { name: "Add note…" })).not.toBeInTheDocument();
+    fireEvent.click(within(editor).getByRole("button", { name: "Add" }));
 
     expect(target.stage).toHaveBeenCalledWith({
       id: expect.any(String),
@@ -90,7 +94,7 @@ describe("ConversationMessageSelectionSurface", () => {
     selectText(screen.getByText("selected").firstChild!);
     fireEvent(document, new Event("selectionchange"));
     await screen.findByRole("toolbar");
-    fireEvent.click(screen.getByRole("button", { name: "Add to message" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     expect(target.stage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -133,12 +137,17 @@ describe("ConversationMessageSelectionSurface", () => {
 
     selectText(screen.getByText("Select this text").firstChild!, 0, 6);
     fireEvent(document, new Event("selectionchange"));
-    await screen.findByRole("toolbar");
-    fireEvent.click(screen.getByRole("button", { name: "Add note…" }));
-    fireEvent.change(screen.getByRole("textbox", { name: /Note about/u }), {
+    const toolbar = await screen.findByRole("toolbar");
+    const note = within(toolbar).getByRole("textbox");
+    note.focus();
+    document.getSelection()?.removeAllRanges();
+    fireEvent(document, new Event("selectionchange"));
+    await delay(20);
+    expect(within(toolbar).getByRole("blockquote")).toHaveTextContent("Select");
+    fireEvent.change(note, {
       target: { value: "Explain this." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add note & send" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add & send" }));
 
     expect(attachAndSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ excerpt: "Select", note: "Explain this." }),
@@ -182,9 +191,9 @@ describe("ConversationMessageSelectionSurface", () => {
     expect(note).toHaveFocus();
     expect(note).toHaveAttribute("rows", "2");
     expect(screen.getByRole("button", { name: "Copy" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Add note & send" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add & send" })).toBeEnabled();
     fireEvent.change(note, { target: { value: "Yes, please." } });
-    fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     expect(target.stage).toHaveBeenCalledWith(expect.objectContaining({
       excerpt: "Should I run the full suite?",
@@ -230,8 +239,9 @@ describe("ConversationMessageSelectionSurface", () => {
     expect(document.getSelection()?.toString()).toBe("full suite");
     fireEvent(document, new Event("selectionchange"));
     const actions = await screen.findByRole("toolbar");
-    expect(within(actions).getByRole("button", { name: "Add to message" })).toBeEnabled();
-    expect(within(actions).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(actions).getByRole("button", { name: "Add" })).toBeEnabled();
+    expect(within(actions).getByRole("blockquote")).toHaveTextContent("full suite");
+    expect(within(actions).getByRole("textbox")).not.toHaveFocus();
   });
 
   it("rejects cross-message and control-spanning selections", async () => {

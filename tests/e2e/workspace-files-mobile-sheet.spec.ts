@@ -182,10 +182,13 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
   });
   await expect(chatActions).toBeVisible();
   await expect(chatActions).toHaveCSS("position", "fixed");
-  await chatActions.getByRole("button", { name: "Add note…" }).tap();
   const chatNote = chatActions.getByRole("textbox", {
     name: "Note about selected message text",
   });
+  await expect(chatNote).toBeVisible();
+  await expect(chatNote).not.toBeFocused();
+  await expect(chatActions.locator("blockquote")).toHaveText(quoteText);
+  expect(await page.evaluate(() => document.getSelection()?.toString())).toBe(quoteText);
   const noteText = "Use this response as context for the follow-up and keep the original wording visible when the quote is expanded.";
   await chatNote.fill(noteText);
   for (const button of await chatActions.getByRole("button").all()) {
@@ -193,7 +196,7 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
   }
   await capture(page, testInfo, "chat-mobile-selection-note.png");
   await chatActions
-    .getByRole("button", { name: "Add note", exact: true })
+    .getByRole("button", { name: "Add", exact: true })
     .tap();
   await expect(chatActions).toBeHidden();
   await expect(

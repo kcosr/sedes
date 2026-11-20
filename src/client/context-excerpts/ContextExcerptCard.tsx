@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import type { ContextExcerpt } from "../../shared/index.js";
+import { ContextQuote } from "./ContextQuote.js";
 
 export function ContextExcerptCard({
   excerpt,
@@ -72,7 +73,7 @@ export function ContextExcerptCard({
           {isConversation ? (
             <>
               {!expanded && (
-                <span className="context-excerpt-quote">{quotePreview}</span>
+                <ContextQuote text={quotePreview} mode="compact" />
               )}
               <ChevronDown size={14} aria-hidden="true" />
             </>
@@ -87,9 +88,7 @@ export function ContextExcerptCard({
           )}
         </button>
         {isConversation && (
-          <blockquote id={quoteId} className="context-excerpt-quote" hidden={!expanded}>
-            {expanded ? excerpt.excerpt : undefined}
-          </blockquote>
+          <ContextQuote id={quoteId} text={excerpt.excerpt} mode="expanded" hidden={!expanded} />
         )}
         <div className="context-excerpt-card-actions">
           {onOpen && (

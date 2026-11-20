@@ -118,7 +118,7 @@ test("active chat notes deliver the combined composer draft with Steer and Queue
         document.dispatchEvent(new Event("selectionchange"));
       });
       await expect(actions).toBeVisible();
-      await actions.getByRole("button", { name: "Add note…" }).click();
+      await expect(actions.locator("blockquote")).toHaveText(sourceText);
     };
 
     for (const mode of ["steer", "queue"] as const) {
@@ -130,13 +130,13 @@ test("active chat notes deliver the combined composer draft with Steer and Queue
       await fillAndPersistDraft(page, draftText, "Message Codex");
       await selectSource();
       await actions.getByRole("textbox", { name: "Note about selected message text" }).fill("Already attached context");
-      await actions.getByRole("button", { name: "Add note", exact: true }).click();
+      await actions.getByRole("button", { name: "Add", exact: true }).click();
       await expect(actions).toBeHidden();
       await expect(page.getByTestId("composer").getByLabel("Context excerpts")).toContainText("Already attached context");
       await selectSource();
       const note = `New annotation for ${mode}.`;
       await actions.getByRole("textbox", { name: "Note about selected message text" }).fill(note);
-      const send = actions.getByRole("button", { name: `Add note & ${mode}`, exact: true });
+      const send = actions.getByRole("button", { name: `Add & ${mode}`, exact: true });
       await expect(send).toBeEnabled();
       await expect(send).toHaveAccessibleDescription("Includes this selection, note, and any existing composer content.");
       await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();

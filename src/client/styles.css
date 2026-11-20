@@ -6178,22 +6178,34 @@ textarea:disabled {
 
 .context-excerpt-quote {
   min-width: 0;
-  flex: 1;
   margin: 0;
-  border-inline-start: 2px solid var(--chat-question);
+  border-inline-start: 2px solid var(--muted-foreground-2);
   padding-inline-start: 8px;
   color: var(--foreground);
   font-size: var(--text-ui);
   line-height: var(--leading-normal);
 }
 
-blockquote.context-excerpt-quote {
+.context-excerpt-quote[data-mode="expanded"] {
+  flex: 1;
   order: -1;
   max-height: min(220px, 40dvh);
   margin-block: 2px;
   overflow: auto;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.context-excerpt-quote[data-mode="compact"] {
+  flex: 1;
+}
+
+.context-excerpt-quote[data-mode="editor"] {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .context-excerpt-quote-note {
@@ -6205,7 +6217,8 @@ blockquote.context-excerpt-quote {
   white-space: pre-wrap;
 }
 
-.context-excerpt-conversation[data-state="closed"] :is(.context-excerpt-quote, .context-excerpt-quote-note) {
+.context-excerpt-quote[data-mode="compact"],
+.context-excerpt-conversation[data-state="closed"] .context-excerpt-quote-note {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6304,7 +6317,7 @@ blockquote.context-excerpt-quote {
     justify-content: flex-end;
   }
 
-  .context-excerpt-conversation blockquote.context-excerpt-quote {
+  .context-excerpt-conversation .context-excerpt-quote[data-mode="expanded"] {
     order: 1;
     flex-basis: 100%;
   }
@@ -11062,18 +11075,6 @@ tr.diff-hunk td {
   flex-direction: column;
   gap: 6px;
   font-size: 12px;
-}
-
-.pierre-selection-quote {
-  display: -webkit-box;
-  overflow: hidden;
-  margin: 0;
-  padding-inline-start: 8px;
-  border-inline-start: 2px solid var(--chat-question);
-  font-size: var(--text-meta);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow-wrap: anywhere;
 }
 
 .pierre-selection-note {

@@ -60,7 +60,7 @@ test("a saved reply question opens the existing note editor", async ({ page }, t
     new URL(response.url()).pathname === draftPath &&
     response.request().postDataJSON().contextExcerpts?.length === 1,
   );
-  await chatSelectionActions.getByRole("button", { name: "Add note", exact: true }).click();
+  await chatSelectionActions.getByRole("button", { name: "Add", exact: true }).click();
   expect((await noteSaved).request().postDataJSON().contextExcerpts).toMatchObject([
     { excerpt: questionText, note: noteText },
   ]);
@@ -512,19 +512,11 @@ test.describe.serial("normalized streaming and restored state", () => {
       name: "Selected message text actions",
     });
     await expect(chatSelectionActions).toBeVisible();
-    await chatSelectionActions
-      .getByRole("button", { name: "Add note…" })
-      .click();
+    await expect(chatSelectionActions.locator("blockquote")).toContainText("Workspace inspected");
     await chatSelectionActions
       .getByRole("textbox", { name: "Note about selected message text" })
       .fill("Use this completed response as context");
     await capture(page, testInfo, "chat-selection-note-desktop.png");
-    await page.keyboard.press("Escape");
-    await expect(
-      chatSelectionActions.getByRole("textbox", {
-        name: "Note about selected message text",
-      }),
-    ).toBeHidden();
     await page.keyboard.press("Escape");
     await expect(chatSelectionActions).toBeHidden();
 

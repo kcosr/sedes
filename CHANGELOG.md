@@ -88,7 +88,7 @@ User-facing changes are collected here before release. See the
 
 - Enable **Highlight questions in agent replies** under **Settings > Appearance
   > Chat formatting** to show completed questions in red with an underline.
-  Select a question to open **Add note** with its text quoted. See
+  Select a question to open the chat quote editor. See
   [Appearance settings](docs/user/settings.md#appearance).
   ([#142](https://github.com/kcosr/sedes/pull/142))
 
@@ -249,8 +249,9 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
-- The context selection note editor opens with a two-line text field.
-  Conversation excerpts in drafts and sent messages show a compact quote
+- Selecting chat text or tapping a highlighted question opens the quote
+  editor with a preview, a two-line optional note, and **Add** and **Add & send**
+  actions. Conversation excerpts in drafts and sent messages show a compact quote
   preview and expand to the full text. See
   [Context excerpts](docs/user/files-and-context.md#capture-an-exact-context-excerpt).
   ([#142](https://github.com/kcosr/sedes/pull/142))

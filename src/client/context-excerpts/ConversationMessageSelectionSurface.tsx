@@ -84,9 +84,9 @@ export function ConversationMessageSelectionSurface({
     : targetSnapshot.reason;
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const [pending, setPending] = useState<PendingConversationSelection>();
-  const noteModeRef = useRef(false);
-  const setNoteMode = useCallback((active: boolean) => {
-    noteModeRef.current = active;
+  const lockedQuote = useRef(false);
+  const lockQuote = useCallback(() => {
+    lockedQuote.current = true;
   }, []);
   const questionPress = useRef<{ x: number; y: number } | undefined>(undefined);
   const [actionError, setActionError] = useState<string>();
@@ -94,9 +94,9 @@ export function ConversationMessageSelectionSurface({
 
   const clearPending = useCallback(() => {
     setPending(undefined);
-    setNoteMode(false);
+    lockedQuote.current = false;
     setActionError(undefined);
-  }, [setNoteMode]);
+  }, []);
 
   useEffect(clearPending, [
     clearPending,
@@ -144,7 +144,7 @@ export function ConversationMessageSelectionSurface({
         setActionError("The selected text is too large to attach.");
         return;
       }
-      setNoteMode(noteTrigger !== undefined);
+      lockedQuote.current = noteTrigger !== undefined;
       setPending({
         ...captured,
         anchor: safeRangeRect(range),
@@ -156,7 +156,7 @@ export function ConversationMessageSelectionSurface({
       });
       setActionError(undefined);
     },
-    [clearPending, itemId, itemRevision, root, selectionKind, setNoteMode, target?.threadId, target?.workspaceId],
+    [clearPending, itemId, itemRevision, root, selectionKind, target?.threadId, target?.workspaceId],
   );
 
   useEffect(() => {
@@ -165,7 +165,7 @@ export function ConversationMessageSelectionSurface({
       root,
       debounceMilliseconds: selectionDebounceMilliseconds,
       capture: () => {
-        if (noteModeRef.current) return;
+        if (lockedQuote.current) return;
         const selection = document.getSelection();
         if (selection?.rangeCount !== 1 || selection.isCollapsed) {
           clearPending();
@@ -293,7 +293,8 @@ export function ConversationMessageSelectionSurface({
           anchor={pending.anchor}
           copyText={pending.excerpt}
           initialError={actionError}
-          startInNoteMode={pending.noteTrigger !== undefined}
+          startInNoteMode
+          autoFocusNote={pending.noteTrigger !== undefined}
           label="selected message text"
           noteInputLabel="Note about selected message text"
           onCancel={() => {
@@ -315,10 +316,10 @@ export function ConversationMessageSelectionSurface({
               }
             }, 1_200);
           }}
-          onNoteModeChange={setNoteMode}
+          onNoteFocus={lockQuote}
           onStage={stage}
           owner={pending.noteTrigger ?? root}
-          stageWithNoteLabel="Add note"
+          stageWithNoteLabel="Add"
           unavailableReason={!available ? unavailableReason : undefined}
         />
       )}

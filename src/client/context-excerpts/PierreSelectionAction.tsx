@@ -12,6 +12,7 @@ import { Copy, MessageSquareText, Paperclip, Send } from "lucide-react";
 import { MAXIMUM_CONTEXT_EXCERPT_NOTE_BYTES } from "../../shared/index.js";
 import { OPEN_OVERLAY_SELECTOR } from "../app/android-back.js";
 import { Button } from "../components/ui/button.js";
+import { ContextQuote } from "./ContextQuote.js";
 
 import { useComposerDraftStagingSnapshot, type ContextExcerptStagingTarget } from "./coordinator.js";
 
@@ -37,6 +38,7 @@ export function PierreSelectionAction({
   ariaLabel,
   initialError,
   startInNoteMode = false,
+  autoFocusNote = true,
   anchor,
   owner,
   copyText,
@@ -45,6 +47,7 @@ export function PierreSelectionAction({
   onCancel,
   onCopySuccess,
   onNoteModeChange,
+  onNoteFocus,
   noteInputLabel = "Note for agent",
   stageWithNoteLabel = "Add note",
   stagingTarget,
@@ -54,6 +57,7 @@ export function PierreSelectionAction({
   readonly ariaLabel?: string;
   readonly initialError?: string;
   readonly startInNoteMode?: boolean;
+  readonly autoFocusNote?: boolean;
   readonly anchor?: SelectionActionAnchor;
   readonly owner?: HTMLElement | null;
   readonly copyText?: string;
@@ -65,6 +69,7 @@ export function PierreSelectionAction({
   readonly onCancel: () => void;
   readonly onCopySuccess?: () => void;
   readonly onNoteModeChange?: (active: boolean) => void;
+  readonly onNoteFocus?: () => void;
   readonly noteInputLabel?: string;
   readonly stageWithNoteLabel?: string;
 }): React.JSX.Element {
@@ -239,7 +244,7 @@ export function PierreSelectionAction({
         <span>{addingNote ? "Add an optional note" : "Selection actions"}</span>
       </div>
       {startInNoteMode && copyText && (
-        <blockquote className="pierre-selection-quote">{copyText}</blockquote>
+        <ContextQuote text={copyText} mode="editor" />
       )}
       {addingNote && (
         <>
@@ -247,8 +252,9 @@ export function PierreSelectionAction({
             <span>Note about selected text</span>
             <textarea
               aria-label={noteInputLabel}
-              autoFocus
+              autoFocus={autoFocusNote}
               className="pierre-selection-note"
+              onFocus={onNoteFocus}
               onChange={(event) => {
                 setNote(event.currentTarget.value);
                 setError(undefined);
