@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { PassThrough } from "node:stream";
 import {
+  ClaudeHistoryPager, CLAUDE_HISTORY_PAGE_MESSAGES, CLAUDE_HISTORY_SNAPSHOT_IDLE_MS, CLAUDE_HISTORY_MAXIMUM_SNAPSHOTS,
+} from "../../src/server/backends/claude/claude-session-history.js";
+import {
   LengthPrefixedSidecarFrameTransport,
   SidecarOperationRegistry,
   SidecarProtocolPeer,
@@ -21,7 +24,9 @@ import {
   type ClaudeRuntimeV4WorkerHandlers,
 } from "../../src/server/backends/claude/worker/claude-runtime-v4.js";
 
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+type HistoryMessage = Awaited<ReturnType<ClaudeRuntimeV4WorkerHandlers["getSessionMessages"]>>["messages"][number];
+
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); });
 
 const scope = Object.freeze({
   tenantId: "tenant-1",
@@ -31,6 +36,119 @@ const scope = Object.freeze({
 });
 
 describe("ClaudeManagedRuntimeOwner", () => {
+  it("keeps one generation across paginated history after the last conversation was evicted", async () => {
+    const f = paginatedHistoryHarness();
+    try {
+      await f.evict();
+      const first = await f.owner.getSessionMessagesPage(f.sessionId, {}, {});
+      expect(first.nextCursor).not.toBeNull();
+      const second = await f.owner.getSessionMessagesPage(f.sessionId, { cursor: first.nextCursor! }, {});
+      expect(second.nextCursor).toBeNull();
+      expect([...first.messages, ...second.messages].map(message => message.uuid)).toEqual(f.history.map(message => message.uuid));
+      expect(f.open).toHaveBeenCalledOnce();
+      await f.owner.listSessions({}, {});
+      expect(f.open).toHaveBeenCalledTimes(2);
+    } finally { await f.owner.close(); }
+  });
+
+  it("does not let a wrong-scope continuation release an existing history acquisition", async () => {
+    const f = paginatedHistoryHarness();
+    try {
+      await f.evict();
+      const first = await f.owner.getSessionMessagesPage(f.sessionId, {}, {});
+      await expect(f.owner.getSessionMessagesPage(randomUUID(), { cursor: first.nextCursor! }, {})).rejects.toThrow("snapshot_invalid");
+      await expect(f.owner.getSessionMessagesPage(f.sessionId, { cursor: first.nextCursor!, includeSystemMessages: true }, {})).rejects.toThrow("snapshot_invalid");
+      expect((await f.owner.getSessionMessagesPage(f.sessionId, { cursor: first.nextCursor! }, {})).nextCursor).toBeNull();
+      expect(f.open).toHaveBeenCalledOnce();
+    } finally { await f.owner.close(); }
+  });
+
+  it("releases abandoned history acquisitions after their idle timeout", async () => {
+    vi.useFakeTimers();
+    const f = paginatedHistoryHarness();
+    try {
+      await f.evict();
+      await f.owner.getSessionMessagesPage(f.sessionId, {}, {});
+      await vi.advanceTimersByTimeAsync(CLAUDE_HISTORY_SNAPSHOT_IDLE_MS);
+      await f.owner.listSessions({}, {});
+      expect(f.open).toHaveBeenCalledTimes(2);
+      expect(f.backgroundErrors).toEqual([]);
+    } finally { await f.owner.close(); }
+  });
+
+  it("renews progressing acquisitions without retiring another reader", async () => {
+    vi.useFakeTimers();
+    const f = paginatedHistoryHarness({}, 2 * CLAUDE_HISTORY_PAGE_MESSAGES + 1);
+    try {
+      await f.evict();
+      const first = await f.owner.getSessionMessagesPage(f.sessionId, {}, {});
+      const other = await f.owner.getSessionMessagesPage(f.sessionId, {}, {});
+      await vi.advanceTimersByTimeAsync(CLAUDE_HISTORY_SNAPSHOT_IDLE_MS - 1);
+      const middle = await f.owner.getSessionMessagesPage(f.sessionId, { cursor: first.nextCursor! }, {});
+      await vi.advanceTimersByTimeAsync(CLAUDE_HISTORY_SNAPSHOT_IDLE_MS - 1);
+      expect((await f.owner.getSessionMessagesPage(f.sessionId, { cursor: middle.nextCursor! }, {})).nextCursor).toBeNull();
+      expect(other.nextCursor).not.toBeNull();
+      expect(f.open).toHaveBeenCalledOnce();
+    } finally { await f.owner.close(); }
+  });
+
+  it("bounds simultaneous history leases without pinning evicted readers", async () => {
+    const f = paginatedHistoryHarness();
+    try {
+      await f.evict();
+      await f.owner.getSessionMessagesPage(f.sessionId, {}, {});
+      const acquisitions = [];
+      for (let index = 0; index < CLAUDE_HISTORY_MAXIMUM_SNAPSHOTS; index++) {
+        acquisitions.push(await f.owner.getSessionMessagesPage(f.sessionId, {}, {}));
+      }
+      for (const first of acquisitions) {
+        expect((await f.owner.getSessionMessagesPage(f.sessionId, { cursor: first.nextCursor! }, {})).nextCursor).toBeNull();
+      }
+      expect(f.open).toHaveBeenCalledOnce();
+      await f.owner.listSessions({}, {});
+      expect(f.open).toHaveBeenCalledTimes(2);
+    } finally { await f.owner.close(); }
+  }, 15_000);
+
+  it("keeps the native directory fenced when a history worker has unproven cleanup", async () => {
+    const f = paginatedHistoryHarness({ configDirectory: undefined });
+    const other = f.createOwner();
+    try {
+      await f.evict();
+      await f.owner.getSessionMessagesPage(f.sessionId, {}, {});
+      f.generations[0]!.finish({ reason: "exit", exitCode: 255, signal: null });
+      await waitUntil(() => f.backgroundErrors.length > 0);
+      await expect(other.listSessions({}, {})).rejects.toThrow("claude_default_config_directory_conflict");
+      await expect(f.owner.close()).rejects.toThrow("cleanup_unproven");
+    } finally { await other.close(); }
+  });
+
+  it("drops history leases on proven generation loss and retries with a fresh acquisition", async () => {
+    const f = paginatedHistoryHarness();
+    try {
+      await f.evict();
+      const first = await f.owner.getSessionMessagesPage(f.sessionId, {}, {});
+      f.generations[0]!.finish({ reason: "exit", exitCode: CLAUDE_RUNTIME_WORKER_CLEANUP_PROVEN_FAILURE_EXIT_CODE, signal: null });
+      await waitUntil(() => f.backgroundErrors.length > 0);
+      await expect(f.owner.getSessionMessagesPage(f.sessionId, { cursor: first.nextCursor! }, {})).rejects.toThrow("snapshot_expired");
+      const replacement = await f.owner.getSessionMessagesPage(f.sessionId, {}, {});
+      expect((await f.owner.getSessionMessagesPage(f.sessionId, { cursor: replacement.nextCursor! }, {})).nextCursor).toBeNull();
+    } finally { await f.owner.close(); }
+  });
+
+  it("clears retained history timers on explicit close without starting another generation", async () => {
+    vi.useFakeTimers();
+    const f = paginatedHistoryHarness();
+    await f.evict();
+    const first = await f.owner.getSessionMessagesPage(f.sessionId, {}, {});
+    await f.owner.close();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(CLAUDE_HISTORY_SNAPSHOT_IDLE_MS);
+    await expect(f.owner.getSessionMessagesPage(f.sessionId, { cursor: first.nextCursor! }, {})).rejects.toThrow("claude_managed_runtime_closed");
+    expect(f.open).toHaveBeenCalledOnce();
+    expect(f.backgroundErrors).toEqual([]);
+  });
+
   it("releases the shared worker only after the last query lease closes and can restart it", async () => {
     const f = runtimeHarness();
     const owner = f.owner();
@@ -220,6 +338,27 @@ describe("ClaudeManagedRuntimeOwner", () => {
     await second.close();
   });
 
+  it("releases the last conversation lease after generation loss while retaining the cleanup fence", async () => {
+    const harness = runtimeHarness();
+    const owner = harness.owner({ configDirectory: undefined });
+    const other = harness.owner();
+    const session = owner.createSession({
+      executablePath: "/usr/bin/claude", initializationTimeoutMs: 30_000,
+      sessionId: randomUUID(), cwd: "/workspace", launch: "new",
+      environment: {}, onMessage: () => {},
+    });
+    try {
+      await listSessions(owner);
+      harness.generations[0]!.finish({ reason: "exit", exitCode: 255, signal: null });
+      await waitUntil(() => harness.backgroundErrors.length > 0);
+      await expect(session.close()).resolves.toBeUndefined();
+      await expect(listSessions(owner)).rejects.toThrow("claude_managed_runtime_cleanup_unproven");
+      await expect(listSessions(other)).rejects.toThrow("claude_default_config_directory_conflict");
+      await expect(owner.close()).rejects.toThrow("managed_worker_local_cleanup_unproven");
+      expect(harness.open).toHaveBeenCalledOnce();
+    } finally { await other.close(); }
+  });
+
   it("permanently poisons replacement after an unproven carrier closure", async () => {
     const harness = runtimeHarness();
     const owner = harness.owner();
@@ -259,7 +398,7 @@ function listSessions(owner: ClaudeManagedRuntimeOwner) {
   );
 }
 
-function runtimeHarness(ownerScope: EnvironmentChannelScope = { ...scope, executionEnvironmentId: randomUUID() }) {
+function runtimeHarness(ownerScope: EnvironmentChannelScope = { ...scope, executionEnvironmentId: randomUUID() }, history?: readonly HistoryMessage[]) {
   const artifact = {
     buildId: "owner-lifecycle-test",
     artifactSha256: "a".repeat(64),
@@ -276,6 +415,7 @@ function runtimeHarness(ownerScope: EnvironmentChannelScope = { ...scope, execut
       launch.identity.carrierGeneration,
       launch.identity.sessionNonce,
       artifact,
+      history,
     );
     generations.push(generation);
     return generation.stream;
@@ -304,7 +444,9 @@ function memoryWorkerGeneration(
   carrierGeneration: number,
   sessionNonce: string,
   artifact: ManagedWorkerArtifactRegistration,
+  history?: readonly HistoryMessage[],
 ) {
+  const historyPager = new ClaudeHistoryPager<HistoryMessage>();
   const ownerToWorker = new PassThrough();
   const workerToOwner = new PassThrough();
   let finished = false;
@@ -319,6 +461,7 @@ function memoryWorkerGeneration(
   const finish = (closure: SidecarByteStreamClosure) => {
     if (finished) return;
     finished = true;
+    historyPager.close();
     ownerToWorker.end();
     workerToOwner.end();
     resolveOwner(closure);
@@ -351,7 +494,11 @@ function memoryWorkerGeneration(
     }),
   });
   const registry = new SidecarOperationRegistry();
-  registerClaudeRuntimeV4WorkerOperations(registry, lifecycleHandlers());
+  const handlers = lifecycleHandlers();
+  registerClaudeRuntimeV4WorkerOperations(registry, history ? {
+    ...handlers,
+    getSessionMessages: ({ sessionId, ...options }) => historyPager.getPage(sessionId, options, async () => history),
+  } : handlers);
   registerControlV2Operations(registry, {
     buildId: artifact.buildId,
     artifactSha256: artifact.artifactSha256,
@@ -376,6 +523,24 @@ function memoryWorkerGeneration(
   });
   peer.start();
   return { stream, finish };
+}
+
+function paginatedHistoryHarness(overrides: Partial<ClaudeManagedRuntimeOwnerOptions> = {}, count = CLAUDE_HISTORY_PAGE_MESSAGES + 1) {
+  const sessionId = randomUUID();
+  const history: HistoryMessage[] = Array.from({ length: count }, () => ({
+    type: "user", uuid: randomUUID(), session_id: sessionId,
+    parent_tool_use_id: null, parent_agent_id: null,
+    message: { role: "user", content: "history" },
+  }));
+  const f = runtimeHarness(undefined, history);
+  const owner = f.owner(overrides);
+  return { ...f, createOwner: f.owner, owner, history, sessionId, evict: async () => {
+    const session = owner.createSession({
+      executablePath: "/usr/bin/claude", initializationTimeoutMs: 30_000,
+      sessionId, cwd: "/workspace", launch: "new", environment: {}, onMessage: () => {},
+    });
+    await session.close();
+  } };
 }
 
 function lifecycleHandlers(): ClaudeRuntimeV4WorkerHandlers {

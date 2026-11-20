@@ -32,6 +32,11 @@ export interface ClaudeHistoryPage<Message extends SessionMessage = SessionMessa
   readonly nextCursor: ClaudeHistoryCursor | null;
 }
 
+export function claudeHistoryReadScope(ownerScope: string, options: ClaudeHistoryPageOptions): string {
+  return JSON.stringify([ownerScope, options.dir ?? null, options.includeSystemMessages ?? false,
+    options.offset ?? 0, options.limit ?? null, options.maintenance ?? false, options.resumableOnly ?? false]);
+}
+
 type Acquisition<Message extends SessionMessage> = {
   id: string; scope: string; maintenance: boolean; start: number; end: number; nextOffset: number;
   messages: readonly Message[]; sizes: number[]; bytes: number;
@@ -62,8 +67,7 @@ export class ClaudeHistoryPager<Message extends SessionMessage = SessionMessage>
     load: () => Promise<readonly Message[]>,
   ): Promise<ClaudeHistoryPage<Message>> {
     if (this.#disposal.signal.aborted) throw historyError("closed");
-    const scope = JSON.stringify([ownerScope, options.dir ?? null, options.includeSystemMessages ?? false,
-      options.offset ?? 0, options.limit ?? null, options.maintenance ?? false, options.resumableOnly ?? false]);
+    const scope = claudeHistoryReadScope(ownerScope, options);
     if (options.cursor) {
       const snapshot = this.#snapshots.get(options.cursor.snapshotId);
       if (!snapshot) throw historyError("expired", true);
