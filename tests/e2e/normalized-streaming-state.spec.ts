@@ -93,7 +93,11 @@ test("a saved reply question opens the existing note editor", async ({ page }, t
   await expect(question).toHaveText(questionText);
   await expect(stagedQuoteToggle.locator(".context-excerpt-quote")).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
   await sendCurrentDraft(page);
-  const sentMessage = page.locator('[data-item-kind="user_message"]').last();
+  const sentMessages = page.locator('[data-item-kind="user_message"]:not([data-client-provisional])');
+  await expect(sentMessages).toHaveCount(2);
+  await page.reload();
+  await expect(sentMessages).toHaveCount(2);
+  const sentMessage = sentMessages.last();
   const sentQuoteToggle = sentMessage.getByRole("button", { name: `Quote “${questionText}”`, exact: true });
   await expect(sentQuoteToggle.locator(".context-excerpt-quote")).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
   await sentQuoteToggle.click();

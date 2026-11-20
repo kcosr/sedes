@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import type { ContextExcerpt } from "../../src/shared/protocol/context-excerpts.js";
 import { historyPage, locateHistory, nativeBranch, nativeImageKey, projectNativeHistory, projectionWindow, publishNativeHistoryArtifacts } from "../../src/server/backends/pi/native/driver/history.js";
 import type { PiNativeHistory } from "../../src/server/backends/pi/native/port.js";
 import type { PiManagedOperation } from "../../src/server/backends/pi/native/rpc/pi-managed-protocol.js";
@@ -35,9 +36,9 @@ const toolResult = (id: string, parentId: string, call: PiNativeToolCall, result
   type: "message", id, parentId, timestamp: time, message: { role: "toolResult", timestamp: Date.parse(time), toolName: call.toolName,
     toolCallId: call.toolCallId, content: [{ type: "text", text: "done" }], isError: false, ...result },
 });
-const operation = (userEntryId: string, mode: "submit" | "steer", targetTurnId: string): PiManagedOperation => ({
+const operation = (userEntryId: string, mode: "submit" | "steer", targetTurnId: string, contextExcerpts: ContextExcerpt[] = []): PiManagedOperation => ({
   input: { operationId: `op-${userEntryId}`, mutationId: `mutation-${userEntryId}`, reconciliationToken: `receipt-${userEntryId}`,
-    fingerprint: "a".repeat(64), mode, text: "private native envelope", presentation: { text: `Visible ${userEntryId}`, contextExcerpts: [], taskContexts: [], attachments: [] } },
+    fingerprint: "a".repeat(64), mode, text: "private native envelope", presentation: { text: `Visible ${userEntryId}`, contextExcerpts, taskContexts: [], attachments: [] } },
   phase: "accepted", userEntryId, targetTurnId,
 });
 
@@ -58,12 +59,21 @@ describe("native Pi history", () => {
     expect(() => nativeBranch(history([user("a", "b", "x"), user("b", "a", "y")]))).toThrow();
   });
   it("groups exact authenticated Steer evidence and hides only authenticated envelopes", () => {
+    const question: ContextExcerpt = {
+      id: "f5e34b5c-d3a1-40bf-989d-540750044336",
+      excerpt: "Should I continue?",
+      source: { kind: "conversation_message", itemId: "assistant-question", itemRevision: 2, quoteKind: "question" },
+      locator: { kind: "text_quote" },
+    };
     const input = history([user("u1", null, "private native envelope"), assistant("a1", "u1", "working", "toolUse"),
       user("u2", "a1", "private native envelope"), assistant("a2", "u2", "done")]);
-    const projected = projectNativeHistory({ ...input, operations: [operation("u1", "submit", "u1"), operation("u2", "steer", "u1")] });
+    const projected = projectNativeHistory({ ...input, operations: [operation("u1", "submit", "u1"), operation("u2", "steer", "u1", [question])] });
     expect(projected.snapshot.orderedBackendTurnIds).toEqual(["u1"]);
     expect(projected.snapshot.turnsById.u1?.completionCorrelations).toEqual(["op-u1", "op-u2"]);
-    expect(projected.snapshot.itemsById["u2:user"]).toMatchObject({ deliveryOperationId: "op-u2", content: [{ kind: "text", text: { text: "Visible u2" } }] });
+    expect(projected.snapshot.itemsById["u2:user"]).toMatchObject({
+      deliveryOperationId: "op-u2",
+      content: [{ kind: "text", text: { text: "Visible u2" } }, { kind: "context_excerpt", excerpt: question }],
+    });
     const untrusted = projectNativeHistory({ ...input, operations: [] });
     expect(untrusted.snapshot.orderedBackendTurnIds).toEqual(["u1", "u2"]);
     expect(untrusted.snapshot.itemsById["u2:user"]).not.toHaveProperty("deliveryOperationId");

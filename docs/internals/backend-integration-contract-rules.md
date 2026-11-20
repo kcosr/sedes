@@ -3337,8 +3337,10 @@ shortcut. This presentation field is scoped to the thread's existing excerpt
 data, enters drafts and delivery snapshots, and reaches the browser in client
 protocol 176. Pi SDK, native Pi, Codex, Claude, and OpenCode use the same
 normalized excerpt schema in their existing delivery paths. Grok does not
-accept context excerpts. The field controls the quote border and confers no
-authority to read or navigate to the source.
+accept context excerpts. OpenCode restores the excerpt from the shared
+immutable delivery snapshot, which preserves the presentation field without
+parsing it from the native prompt. The field controls the quote border and
+confers no authority to read or navigate to the source.
 
 Signed attachment carriers and replay fingerprints validate staged paths using
 the shared normalized absolute-path contract, including native Windows drive

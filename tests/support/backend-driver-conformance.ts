@@ -55,12 +55,13 @@ const submittedContextExcerpt = {
 
 const steeredContextExcerpt = {
   id: "10000000-0000-4000-8000-000000000002",
-  excerpt: "Use the normalized message behavior.",
+  excerpt: "Should we use the normalized message behavior?",
   note: "Preserve this clarification.",
   source: {
     kind: "conversation_message",
     itemId: "normalized-message-item-1",
     itemRevision: 3,
+    quoteKind: "question",
   },
   locator: {
     kind: "text_quote",

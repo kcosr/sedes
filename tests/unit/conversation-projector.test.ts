@@ -9,6 +9,7 @@ import type {
   BackendItem,
 } from "../../src/shared/protocol/backend.js";
 import type { DeliveryInputSnapshot } from "../../src/server/db/repositories/delivery-input-snapshot-repository.js";
+import type { ContextExcerpt } from "../../src/shared/protocol/context-excerpts.js";
 import { conversationTurnSchema } from "../../src/shared/protocol/conversation.js";
 
 function snapshot(): BackendConversationSnapshot {
@@ -224,7 +225,13 @@ describe("ConversationProjector", () => {
     expect(compactions[1]).not.toHaveProperty("summary");
   });
 
-  it("restores image-only and mixed attachment messages from common delivery snapshots", () => {
+  it("restores attachments and a question quote from common delivery snapshots", () => {
+    const question: ContextExcerpt = {
+      id: "889bc8f0-e331-4fe7-9e80-a38c4387afb9",
+      excerpt: "Should I read both?",
+      source: { kind: "conversation_message", itemId: "assistant-question", itemRevision: 3, quoteKind: "question" },
+      locator: { kind: "text_quote" },
+    };
     const imageDescriptor = {
       id: "2dff386b-2f0a-4cd2-acf1-3fc220b82947",
       kind: "image" as const,
@@ -271,7 +278,7 @@ describe("ConversationProjector", () => {
             sourceThreadId: "worker-thread",
             sourceThreadLabel: { text: "Research agent" },
           },
-          contextExcerpts: [],
+          contextExcerpts: [question],
           taskContexts: [],
           attachments: [
             { descriptor: imageDescriptor, sha256: "a".repeat(64) },
@@ -350,6 +357,7 @@ describe("ConversationProjector", () => {
       content: [
         { kind: "attachment", attachment: imageDescriptor },
         { kind: "attachment", attachment: fileDescriptor },
+        { kind: "context_excerpt", excerpt: question },
         { kind: "text", text: { text: "Read both" } },
       ],
     });
@@ -379,6 +387,7 @@ describe("ConversationProjector", () => {
       content: [
         { kind: "attachment", attachment: imageDescriptor },
         { kind: "attachment", attachment: fileDescriptor },
+        { kind: "context_excerpt", excerpt: question },
         { kind: "text", text: { text: "Read both" } },
       ],
     });
