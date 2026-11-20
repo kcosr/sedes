@@ -36,6 +36,7 @@ export function PierreSelectionAction({
   label,
   ariaLabel,
   initialError,
+  startInNoteMode = false,
   anchor,
   owner,
   copyText,
@@ -52,6 +53,7 @@ export function PierreSelectionAction({
   readonly label: string;
   readonly ariaLabel?: string;
   readonly initialError?: string;
+  readonly startInNoteMode?: boolean;
   readonly anchor?: SelectionActionAnchor;
   readonly owner?: HTMLElement | null;
   readonly copyText?: string;
@@ -75,7 +77,7 @@ export function PierreSelectionAction({
   const [resolvedOwner, setResolvedOwner] = useState<HTMLElement | null>(
     owner ?? null,
   );
-  const [addingNote, setAddingNote] = useState(false);
+  const [addingNote, setAddingNote] = useState(startInNoteMode);
   const [note, setNote] = useState("");
   const [error, setError] = useState(initialError);
   const [position, setPosition] = useState<CSSProperties>();
@@ -170,7 +172,7 @@ export function PierreSelectionAction({
       if (overlays.item(overlays.length - 1) !== overlayRef.current) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (addingNote) {
+      if (addingNote && !startInNoteMode) {
         setAddingNote(false);
         queueMicrotask(() =>
           overlayRef.current
@@ -183,7 +185,7 @@ export function PierreSelectionAction({
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [addingNote, onCancel, resolvedOwner]);
+  }, [addingNote, onCancel, resolvedOwner, startInNoteMode]);
 
   const stage = (sendImmediately = false) => {
     const normalizedNote = note.trim();
@@ -236,6 +238,9 @@ export function PierreSelectionAction({
         <strong>{sentenceCase(label)}</strong>
         <span>{addingNote ? "Add an optional note" : "Selection actions"}</span>
       </div>
+      {startInNoteMode && copyText && (
+        <blockquote className="pierre-selection-quote">{copyText}</blockquote>
+      )}
       {addingNote && (
         <>
           <label className="pierre-selection-note-field">
@@ -255,7 +260,7 @@ export function PierreSelectionAction({
                 }
               }}
               placeholder="Note for the agent (optional)"
-              rows={4}
+              rows={2}
               value={note}
             />
           </label>

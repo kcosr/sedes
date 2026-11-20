@@ -34,6 +34,7 @@
   --accent: oklch(0.235 0.01 260 / 0.07);
   --accent-foreground: oklch(0.235 0.01 260);
   --destructive: oklch(0.45 0.19 25);
+  --chat-question: #a32f48;
   --border: oklch(0.235 0.01 260 / 0.13);
   --input: oklch(0.235 0.01 260 / 0.16);
   --ring: oklch(0.55 0.012 260);
@@ -277,6 +278,7 @@
   --accent: oklch(1 0 0 / 0.09);
   --accent-foreground: oklch(0.93 0.004 260);
   --destructive: oklch(0.66 0.17 25);
+  --chat-question: #f091a2;
   /* --destructive is tuned as text on dark surfaces; as a fill it would
      leave white text under AA, so the solid fill steps darker. */
   --destructive-solid: oklch(0.56 0.19 25);
@@ -6344,6 +6346,46 @@ textarea:disabled {
   vertical-align: -0.1em;
 }
 
+.markdown [data-assistant-question-text] {
+  color: var(--chat-question);
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
+}
+
+[data-question-notes] .markdown [data-assistant-question-text] {
+  cursor: pointer;
+}
+
+.markdown [data-assistant-question-note] {
+  display: none;
+}
+
+[data-question-notes] .markdown [data-assistant-question-note] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.65em;
+  height: 1.5em;
+  margin-inline-start: 0.3em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inline);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+[data-question-notes] .markdown [data-assistant-question-note]:is(:hover, :focus-visible) {
+  color: var(--foreground);
+  background: var(--accent);
+}
+
+@media (pointer: coarse) {
+  [data-question-notes] .markdown [data-assistant-question-note] {
+    min-width: 24px;
+    min-height: 24px;
+  }
+}
+
 .markdown .markdown-file-link-notice {
   margin-top: 0.45em;
   color: var(--warning);
@@ -10931,10 +10973,21 @@ tr.diff-hunk td {
   font-size: 12px;
 }
 
+.pierre-selection-quote {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  padding-inline-start: 8px;
+  border-inline-start: 2px solid var(--chat-question);
+  font-size: var(--text-meta);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
 .pierre-selection-note {
   box-sizing: border-box;
   width: min(520px, calc(100vw - 46px));
-  min-height: 104px;
   max-height: min(280px, 40dvh);
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -11460,7 +11513,6 @@ tr.diff-hunk td {
 
   .pierre-selection-note {
     width: 100%;
-    min-height: 120px;
     max-height: min(36dvh, 240px);
     font-size: var(--text-input);
   }

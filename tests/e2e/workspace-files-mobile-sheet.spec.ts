@@ -93,7 +93,8 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
     name: "Note about selected text",
   });
   await expect(note).toBeVisible();
-  expect((await note.boundingBox())?.height).toBeGreaterThanOrEqual(120);
+  await expect(note).toHaveAttribute("rows", "2");
+  expect((await note.boundingBox())?.height).toBeLessThan(104);
   for (const button of await actions.getByRole("button").all()) {
     expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   }

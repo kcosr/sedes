@@ -86,6 +86,11 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
+- Enable **Highlight questions in agent replies** under **Settings > Appearance
+  > Chat formatting** to show completed questions in red with an underline.
+  Select a question to open **Add note** with its text quoted. See
+  [Appearance settings](docs/user/settings.md#appearance).
+
 - A **Chat width** icon beside **Find in thread** opens a slider for the
   transcript up to the available panel width. Reasoning and background work
   indicators align with the transcript. Each client remembers its preferred
@@ -242,6 +247,8 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Changed
+
+- The context selection note editor opens with a two-line text field.
 
 - Claude uses Agent SDK **0.3.319**, tested through Claude Code **2.1.319**,
   with the existing stable **>=2.1.287** runtime floor and warnings for newer

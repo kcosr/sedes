@@ -503,6 +503,12 @@ every category indefinitely.
 - **Animated chat background** adds a subtle point field behind conversations.
 - **Smooth streaming** fades in response text and eases live-edge following.
 
+Under **Chat formatting**, **Highlight questions in agent replies** displays
+questions in completed replies in red with a dotted underline. Select a
+highlighted sentence or its note button to open **Add note** with the sentence
+quoted. The setting is off by default and applies to this browser or packaged
+client.
+
 The operating system's Reduce Motion preference disables the optional motion
 effects even when their toggles are on.
 

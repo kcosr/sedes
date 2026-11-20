@@ -21,7 +21,7 @@ import {
 } from "./markdown-stream-fade.js";
 import { opacityAt } from "./smooth-streaming-text.js";
 import { openExternal } from "../../app/router";
-import { Check, Copy, ExternalLink, FileText, X } from "lucide-react";
+import { Check, Copy, ExternalLink, FileText, MessageSquareText, X } from "lucide-react";
 import {
   classifyMarkdownHref,
   type MarkdownFileLinkSource,
@@ -271,6 +271,13 @@ const PLAIN_COMPONENTS: MarkdownComponents = {
   pre: PLAIN_PRE_COMPONENT,
   a: LINK_COMPONENT,
   img: OMITTED_IMAGE_COMPONENT,
+  button: ({ node, children, ...props }) => (
+    <button {...props}>
+      {node?.properties["data-assistant-question-note"] !== undefined
+        ? <MessageSquareText size={13} aria-hidden="true" />
+        : children}
+    </button>
+  ),
 };
 const MERMAID_COMPONENTS: MarkdownComponents = {
   ...PLAIN_COMPONENTS,

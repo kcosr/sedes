@@ -5,6 +5,7 @@ import {
 } from "../../app/use-smooth-streaming.js";
 import { recordStreamingDiagnostic } from "../../app/diagnostics.js";
 import { MarkdownContent } from "./MarkdownContent";
+import { rehypeAssistantQuestions } from "./assistant-questions.js";
 import {
   beginTerminalSettlement,
   createOpaqueStreamFade,
@@ -30,6 +31,7 @@ export function ProgressiveMarkdown({
   streaming,
   copyCodeBlocks = false,
   sourcePositionMetadata = false,
+  highlightQuestions = false,
   animationActive = true,
   onPresentationActiveChange,
 }: {
@@ -38,6 +40,7 @@ export function ProgressiveMarkdown({
   /** Adds copy controls to fenced code blocks in the rendered Markdown. */
   readonly copyCodeBlocks?: boolean;
   readonly sourcePositionMetadata?: boolean;
+  readonly highlightQuestions?: boolean;
   /** Hidden reasoning keeps its content mounted, but must not keep a RAF alive. */
   readonly animationActive?: boolean;
   /** Lets selection owners wait for the terminal fade cleanup. */
@@ -159,9 +162,10 @@ export function ProgressiveMarkdown({
   // Only source observations change the parser plugin. Animation frames update
   // context consumers in the bounded text spans, not the Markdown parser.
   const fade = presentation?.fade;
+  const showQuestions = highlightQuestions && !streaming && !presentation;
   const rehypePlugins = useMemo(
-    () => fade ? [rehypeStreamFade(fade)] : [],
-    [fade],
+    () => fade ? [rehypeStreamFade(fade)] : showQuestions ? [rehypeAssistantQuestions] : [],
+    [fade, showQuestions],
   );
   const records = useMemo(
     () => new Map(fade?.animated.map((record) => [record.index, record])),

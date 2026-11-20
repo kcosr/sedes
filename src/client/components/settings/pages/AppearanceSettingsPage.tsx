@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { getAppearance, setAppearance } from "../../../app/appearance.js";
 import {
   DEFAULT_ENVIRONMENT_TINT_SETTINGS,
@@ -20,10 +20,13 @@ import {
 } from "../../../app/environment-palette.js";
 import {
   getChatAtmosphereEnabled,
+  getHighlightQuestions,
   getSmoothStreamingEnabled,
   setChatAtmosphereEnabled,
+  setHighlightQuestions,
   setSmoothStreamingEnabled,
   subscribeChatAtmosphereEnabled,
+  subscribeHighlightQuestions,
   subscribeSmoothStreamingEnabled,
 } from "../../../app/settings.js";
 import type { Appearance } from "../../../types.js";
@@ -61,6 +64,7 @@ export function AppearanceSettingsPage(): React.JSX.Element {
   const [chatAtmosphere, setChatAtmosphereState] = useState(
     getChatAtmosphereEnabled,
   );
+  const highlightQuestions = useSyncExternalStore(subscribeHighlightQuestions, getHighlightQuestions);
   useEffect(() => {
     const onChange = () => setAppearanceState(getAppearance());
     window.addEventListener("appearance-change", onChange);
@@ -88,7 +92,7 @@ export function AppearanceSettingsPage(): React.JSX.Element {
   return (
     <SettingsPage
       title="Appearance"
-      description="Theme, environment colors and motion in this browser."
+      description="Theme, chat formatting, environment colors and motion in this browser."
     >
       <SettingsSection title="Display" card>
         <SettingsField
@@ -132,6 +136,15 @@ export function AppearanceSettingsPage(): React.JSX.Element {
             setSmoothStreamingEnabled(next);
           }}
           switchProps={{ "data-testid": "smooth-streaming-toggle" }}
+        />
+      </SettingsSection>
+      <SettingsSection title="Chat formatting" card>
+        <SwitchField
+          id="setting-highlight-questions"
+          label="Highlight questions in agent replies"
+          description="Show questions in red with an underline. Select a highlighted question to open Add note."
+          checked={highlightQuestions}
+          onCheckedChange={setHighlightQuestions}
         />
       </SettingsSection>
       <SettingsSection

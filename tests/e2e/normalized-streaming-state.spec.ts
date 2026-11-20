@@ -11,6 +11,75 @@ import {
   sendCurrentDraft,
 } from "./helpers";
 
+test("a saved reply question opens the existing note editor", async ({ page }, testInfo) => {
+  await openSedesWorkspace(page);
+  const threadPath = await createDraftThread(page);
+  await fillAndPersistDraft(page, "Show a question for the note shortcut.", "Message Scripted agent");
+  await sendCurrentDraft(page);
+  const completedAssistant = page
+    .locator('[data-item-kind="assistant_message"][data-item-status="completed"]')
+    .last();
+  // The scripted turn settles after its 13 streaming steps.
+  await expect(completedAssistant).toBeVisible({ timeout: 15_000 });
+  const chatSelectionActions = page.getByRole("toolbar", {
+    name: "Selected message text actions",
+  });
+
+  const questionText = "Should I run the full browser suite?";
+  const question = completedAssistant.locator("[data-assistant-question-text]");
+  await expect(completedAssistant.getByText(questionText, { exact: true })).toBeVisible();
+  await expect(question).toHaveCount(0);
+  await openSettingsPage(page, "appearance");
+  const questionSetting = page.getByRole("switch", {
+    name: "Highlight questions in agent replies",
+  });
+  await expect(questionSetting).not.toBeChecked();
+  await questionSetting.click();
+  await expect(questionSetting).toBeChecked();
+  await returnFromSettings(page);
+  await expect(page).toHaveURL(threadPath);
+  await expect(question).toHaveText(questionText);
+  await expect(question.locator("strong")).toHaveText("full browser suite");
+  await expect(question).toHaveCSS("color", "rgb(163, 47, 72)");
+  await expect(question).toHaveCSS("text-decoration-line", "underline");
+  await expect(completedAssistant.getByRole("button", { name: "Add note to question" })).toBeVisible();
+
+  await question.click();
+  const questionNote = chatSelectionActions.getByRole("textbox", {
+    name: "Note about selected message text",
+  });
+  await expect(questionNote).toBeFocused();
+  await expect(questionNote).toHaveAttribute("rows", "2");
+  await expect(chatSelectionActions.getByText(questionText, { exact: true })).toBeVisible();
+  const noteText = "Run it after checking the build.";
+  await questionNote.fill(noteText);
+  await capture(page, testInfo, "chat-question-note-desktop.png");
+  const draftPath = `/api${threadPath}/draft`;
+  const noteSaved = page.waitForResponse((response) =>
+    response.request().method() === "PUT" && response.ok() &&
+    new URL(response.url()).pathname === draftPath &&
+    response.request().postDataJSON().contextExcerpts?.length === 1,
+  );
+  await chatSelectionActions.getByRole("button", { name: "Add note", exact: true }).click();
+  expect((await noteSaved).request().postDataJSON().contextExcerpts).toMatchObject([
+    { excerpt: questionText, note: noteText },
+  ]);
+  await expect(chatSelectionActions).toBeHidden();
+  const stagedNote = page.getByLabel("Context excerpts");
+  await expect(stagedNote).toContainText(noteText);
+  await expect(page.locator('[data-item-kind="user_message"]')).toHaveCount(1);
+  const noteRemoved = page.waitForResponse((response) =>
+    response.request().method() === "PUT" && response.ok() &&
+    new URL(response.url()).pathname === draftPath &&
+    response.request().postDataJSON().contextExcerpts?.length === 0,
+  );
+  await stagedNote.getByRole("button", { name: "Remove Conversation message" }).click();
+  await noteRemoved;
+
+  await page.reload();
+  await expect(question).toHaveText(questionText);
+});
+
 test.describe.serial("normalized streaming and restored state", () => {
   let completedThreadPath = "";
 

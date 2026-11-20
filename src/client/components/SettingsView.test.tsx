@@ -25,6 +25,7 @@ import {
   getActivityDetail,
   getChatAtmosphereEnabled,
   getDiagnosticCategoryEnabled,
+  getHighlightQuestions,
   getHistoryPageSize,
   getMobileComposerRefocusAfterSend,
   getMobileHistorySeekControl,
@@ -1245,6 +1246,20 @@ describe("SettingsView", () => {
 
     fireEvent.click(toggle);
     expect(getChatAtmosphereEnabled()).toBe(false);
+  });
+
+  it("keeps question highlighting opt-in under Chat formatting", () => {
+    renderSettings({ page: "appearance" });
+    const section = screen.getByRole("region", { name: "Chat formatting" });
+    const toggle = within(section).getByRole("switch", {
+      name: "Highlight questions in agent replies",
+    });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
+    expect(getHighlightQuestions()).toBe(true);
+    fireEvent.click(toggle);
+    expect(getHighlightQuestions()).toBe(false);
   });
 
   it("defaults to terminal termination confirmation and persists toggling it", () => {

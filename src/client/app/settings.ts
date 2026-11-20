@@ -29,6 +29,7 @@ const mobileComposerRefocusAfterSendKey =
 const mobileHistorySeekControlKey = "sedes-mobile-history-seek-control";
 const smoothStreamingKey = "sedes-smooth-streaming";
 const chatAtmosphereKey = "sedes-chat-atmosphere";
+const highlightQuestionsKey = "sedes-highlight-questions";
 const chatWidthKey = "sedes-chat-width";
 const settingsChangeEvent = "settings-change";
 const terminalFontSizeKey = "sedes-terminal-font-size";
@@ -383,6 +384,19 @@ export function subscribeChatAtmosphereEnabled(
   return subscribeSettingChange(chatAtmosphereKey, () =>
     listener(getChatAtmosphereEnabled()),
   );
+}
+
+export function getHighlightQuestions(): boolean {
+  return readStorage(highlightQuestionsKey) === "true";
+}
+
+export function setHighlightQuestions(value: boolean): void {
+  writeStorage(highlightQuestionsKey, String(value));
+  announceSettingChange(highlightQuestionsKey);
+}
+
+export function subscribeHighlightQuestions(onChange: () => void): () => void {
+  return subscribeSettingChange(highlightQuestionsKey, onChange);
 }
 
 export type ClientDiagnosticCategory = keyof typeof diagnosticCategoryKeys;

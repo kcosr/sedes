@@ -76,7 +76,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   {
     id: "appearance",
     label: "Appearance",
-    description: "Theme, environment colors and motion.",
+    description: "Theme, chat formatting, colors and motion.",
     icon: SunMoon,
     group: "preferences",
     available: always,

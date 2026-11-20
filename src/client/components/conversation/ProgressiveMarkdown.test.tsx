@@ -67,6 +67,52 @@ afterEach(() => {
 });
 
 describe("ProgressiveMarkdown", () => {
+  it("highlights only settled prose questions while preserving inline Markdown", () => {
+    smoothStreaming = false;
+    const source = [
+      "# A heading?",
+      "",
+      "**The checks passed. Should I run** the [browser suite](https://example.test/?query=x)? Next up.",
+      "",
+      "Is there a source[^guide]?",
+      "",
+      "- Use `x?y:z` here.",
+      "- Is the **build** ready？",
+      "- [ ] Should I review the change?",
+      "",
+      "> Is this a quote?",
+      "",
+      "```",
+      "Is this code?",
+      "```",
+      "",
+      "[^guide]: See the guide.",
+    ].join("\n");
+    const { container, rerender } = render(
+      <ProgressiveMarkdown highlightQuestions streaming>{source}</ProgressiveMarkdown>,
+    );
+    const questions = () => Array.from(container.querySelectorAll("[data-assistant-question-text]"));
+    expect(questions()).toHaveLength(0);
+
+    rerender(<ProgressiveMarkdown highlightQuestions streaming={false}>{source}</ProgressiveMarkdown>);
+    expect(questions().map((question) => question.textContent)).toEqual([
+      "Should I run the browser suite?",
+      "Is there a source1?",
+      "Is the build ready？",
+      "Should I review the change?",
+    ]);
+    expect(questions()[0]!.querySelector("strong")).toHaveTextContent("Should I run");
+    expect(questions()[0]!.querySelector("a")).toHaveAttribute("href", "https://example.test/?query=x");
+    expect(questions()[1]!.querySelector("sup a")).toHaveTextContent("1");
+    expect(container.querySelector("li > input[type='checkbox']")).not.toBeNull();
+    expect(container.querySelector("p")?.textContent).toBe(
+      "The checks passed. Should I run the browser suite? Next up.",
+    );
+
+    rerender(<ProgressiveMarkdown streaming={false}>{source}</ProgressiveMarkdown>);
+    expect(questions()).toHaveLength(0);
+  });
+
   it("puts the full text in layout immediately without a duplicate accessible copy", () => {
     const source = "A👨‍👩‍👧‍👦e\u0301";
     const { container } = render(

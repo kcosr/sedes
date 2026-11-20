@@ -9,7 +9,9 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { MarkdownContent } from "../components/conversation/MarkdownContent.js";
+import { rehypeAssistantQuestions } from "../components/conversation/assistant-questions.js";
 import type { ContextExcerptStagingTarget } from "./coordinator.js";
 import {
   ConversationMessageSelectionSurface,
@@ -145,6 +147,91 @@ describe("ConversationMessageSelectionSurface", () => {
       "Wait for attachment uploads to finish before sending.",
     );
     expect(screen.getByRole("toolbar")).toBeInTheDocument();
+  });
+
+  it("opens Add note directly for the whole question and keeps its source hints", async () => {
+    const user = userEvent.setup();
+    const target = stagingTarget();
+    render(
+      <ConversationMessageSelectionSurface
+        enabled
+        itemId="assistant-question"
+        itemRevision={3}
+        selectionKind="markdown"
+        questionNotes
+        stagingTarget={target}
+      >
+        <MarkdownContent sourcePositionMetadata rehypePlugins={[rehypeAssistantQuestions]}>
+          {"# Guide\n\nTests passed. Should I run the **full suite**? The build is ready."}
+        </MarkdownContent>
+      </ConversationMessageSelectionSurface>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Add note to question" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("blockquote")).toHaveTextContent("Should I run the full suite?");
+    expect(screen.getByRole("textbox", { name: "Note about selected message text" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("full suite"));
+    expect(screen.getByRole("blockquote")).toHaveTextContent("Should I run the full suite?");
+    const note = screen.getByRole("textbox", { name: "Note about selected message text" });
+    expect(note).toHaveFocus();
+    expect(note).toHaveAttribute("rows", "2");
+    expect(screen.getByRole("button", { name: "Copy" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add note & send" })).toBeEnabled();
+    fireEvent.change(note, { target: { value: "Yes, please." } });
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+
+    expect(target.stage).toHaveBeenCalledWith(expect.objectContaining({
+      excerpt: "Should I run the full suite?",
+      note: "Yes, please.",
+      source: { kind: "conversation_message", itemId: "assistant-question", itemRevision: 3 },
+      locator: {
+        kind: "text_quote",
+        prefix: "Tests passed. ",
+        suffix: " The build is ready.",
+        headingTrail: ["Guide"],
+        sourceStartLine: 3,
+        sourceEndLine: 3,
+      },
+    }));
+    expect(target.attachAndSubmit).not.toHaveBeenCalled();
+    expect(trigger).toHaveFocus();
+  });
+
+  it.each([
+    { detail: 2 },
+    { detail: 1, shiftKey: true },
+    { detail: 1 },
+  ])("preserves native text selection for a highlighted question with %o", async (click) => {
+    render(
+      <ConversationMessageSelectionSurface
+        enabled
+        itemId="assistant-question"
+        itemRevision={1}
+        selectionKind="markdown"
+        questionNotes
+        selectionDebounceMilliseconds={0}
+        stagingTarget={stagingTarget()}
+      >
+        <MarkdownContent sourcePositionMetadata rehypePlugins={[rehypeAssistantQuestions]}>
+          {"Should I run the **full suite**?"}
+        </MarkdownContent>
+      </ConversationMessageSelectionSurface>,
+    );
+
+    const words = screen.getByText("full suite");
+    selectText(words.firstChild!);
+    fireEvent.click(words, click);
+    expect(document.getSelection()?.toString()).toBe("full suite");
+    fireEvent(document, new Event("selectionchange"));
+    const actions = await screen.findByRole("toolbar");
+    expect(within(actions).getByRole("button", { name: "Add to message" })).toBeEnabled();
+    expect(within(actions).queryByRole("textbox")).not.toBeInTheDocument();
   });
 
   it("rejects cross-message and control-spanning selections", async () => {
