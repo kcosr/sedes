@@ -221,16 +221,25 @@ from:
 - visible text in a rendered Markdown preview; or
 - settled lines in a Git Changes diff.
 
-Select the text and choose **Add to message** or **Add note**. **Add note** lets
-you attach your own explanation to the quote. The resulting card is part of the
+In chat, selecting text or tapping a highlighted question opens the editor
+with the quote above the focused optional note field.
+**Add** puts the quote and any note in the draft. **Copy** copies the
+quote. In files and diffs, choose **Add to message** to attach the selection or
+**Add note** to include an explanation. The resulting card is part of the
 durable draft and follows stash, queue, retry, Send, and Steer.
 
-In the note editor, **Add note & send** attaches the quote and note and sends
-it together with everything already in the composer, including text, other
-excerpts, attachments, and Tasks. During an active turn, the action follows the
-composer's selected delivery mode and is labeled **Add note & steer** or
-**Add note & queue**. **Add note** alone keeps the combined draft for later.
-Uploads, draft conflicts, and pending composer actions must finish before sending.
+Quotes opened from a highlighted question have a red side border. Manual
+selections have a gray side border. The composer and sent chat bubble show
+the same border next to a one-line preview, with any note below it. Click or
+tap the quote to show the full text and select or copy it.
+
+In the chat quote editor, **Add & send** sends the quote and any note with
+everything already in the composer, including text, other excerpts,
+attachments, and Tasks. During an active turn, **Add & steer** or
+**Add & queue** follows the selected delivery mode. In files and diffs, the
+corresponding actions are **Add note & send**, **Add note & steer**, and
+**Add note & queue**. Uploads, draft conflicts, and pending composer actions
+must finish before sending.
 
 After delivery, the excerpt is immutable conversation content. Sedes does not
 reread the file or source turn during replay. Paths, line numbers, item IDs,

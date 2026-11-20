@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -9,7 +10,9 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { MarkdownContent } from "../components/conversation/MarkdownContent.js";
+import { rehypeAssistantQuestions } from "../components/conversation/assistant-questions.js";
 import type { ContextExcerptStagingTarget } from "./coordinator.js";
 import {
   ConversationMessageSelectionSurface,
@@ -43,11 +46,20 @@ describe("ConversationMessageSelectionSurface", () => {
     );
 
     selectText(screen.getByText("Before selected after").firstChild!, 7, 15);
+    expect(document.getSelection()?.toString()).toBe("selected");
     fireEvent(document, new Event("selectionchange"));
-    await screen.findByRole("toolbar", {
+    const editor = await screen.findByRole("toolbar", {
       name: "Selected message text actions",
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add to message" }));
+    expect(within(editor).getByRole("blockquote")).toHaveTextContent("selected");
+    expect(editor.firstElementChild).toHaveAttribute("data-quote-kind", "selection");
+    expect(within(editor).queryByText("Selected message text", { exact: true })).not.toBeInTheDocument();
+    expect(within(editor).queryByText("Add an optional note", { exact: true })).not.toBeInTheDocument();
+    expect(within(editor).queryByText("Note about selected text", { exact: true })).not.toBeInTheDocument();
+    expect(within(editor).getByRole("textbox", { name: "Note about selected message text" })).toBeVisible();
+    expect(within(editor).getByRole("textbox")).toHaveFocus();
+    expect(within(editor).queryByRole("button", { name: "Add note…" })).not.toBeInTheDocument();
+    fireEvent.click(within(editor).getByRole("button", { name: "Add" }));
 
     expect(target.stage).toHaveBeenCalledWith({
       id: expect.any(String),
@@ -88,7 +100,7 @@ describe("ConversationMessageSelectionSurface", () => {
     selectText(screen.getByText("selected").firstChild!);
     fireEvent(document, new Event("selectionchange"));
     await screen.findByRole("toolbar");
-    fireEvent.click(screen.getByRole("button", { name: "Add to message" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     expect(target.stage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -110,7 +122,7 @@ describe("ConversationMessageSelectionSurface", () => {
     );
   });
 
-  it("keeps a failed immediate note selection open and reports the delivery blocker", async () => {
+  it("keeps the edited quote open when touching the source and when delivery fails", async () => {
     const attachAndSubmit = vi.fn(() => ({
       ok: false as const,
       reason: "Wait for attachment uploads to finish before sending.",
@@ -129,14 +141,26 @@ describe("ConversationMessageSelectionSurface", () => {
       </ConversationMessageSelectionSurface>,
     );
 
-    selectText(screen.getByText("Select this text").firstChild!, 0, 6);
+    const source = screen.getByText("Select this text");
+    selectText(source.firstChild!, 0, 6);
     fireEvent(document, new Event("selectionchange"));
-    await screen.findByRole("toolbar");
-    fireEvent.click(screen.getByRole("button", { name: "Add note…" }));
-    fireEvent.change(screen.getByRole("textbox", { name: /Note about/u }), {
+    const toolbar = await screen.findByRole("toolbar");
+    const note = within(toolbar).getByRole("textbox");
+    expect(note).toHaveFocus();
+    document.getSelection()?.removeAllRanges();
+    fireEvent(document, new Event("selectionchange"));
+    await delay(20);
+    expect(within(toolbar).getByRole("blockquote")).toHaveTextContent("Select");
+    fireEvent.change(note, {
       target: { value: "Explain this." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add note & send" }));
+    fireEvent.touchStart(source, { touches: [{ identifier: 1, target: source }] });
+    fireEvent.touchEnd(source, { touches: [] });
+    await delay(20);
+    expect(note).toBeVisible();
+    expect(note).toHaveValue("Explain this.");
+    expect(within(toolbar).getByRole("blockquote")).toHaveTextContent("Select");
+    fireEvent.click(screen.getByRole("button", { name: "Add & send" }));
 
     expect(attachAndSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ excerpt: "Select", note: "Explain this." }),
@@ -145,6 +169,212 @@ describe("ConversationMessageSelectionSurface", () => {
       "Wait for attachment uploads to finish before sending.",
     );
     expect(screen.getByRole("toolbar")).toBeInTheDocument();
+  });
+
+  it("opens Add note directly for the whole question and keeps its source hints", async () => {
+    const user = userEvent.setup();
+    const target = stagingTarget();
+    render(
+      <ConversationMessageSelectionSurface
+        enabled
+        itemId="assistant-question"
+        itemRevision={3}
+        selectionKind="markdown"
+        questionNotes
+        stagingTarget={target}
+      >
+        <MarkdownContent sourcePositionMetadata rehypePlugins={[rehypeAssistantQuestions]}>
+          {"# Guide\n\nTests passed. Should I run the **full suite**? The build is ready."}
+        </MarkdownContent>
+      </ConversationMessageSelectionSurface>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Add note to question “Should I run the full suite?”" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("blockquote")).toHaveTextContent("Should I run the full suite?");
+    expect(screen.getByRole("textbox", { name: "Note about selected message text" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+
+    const writeText = vi.fn(async () => undefined);
+    setClipboard(writeText);
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(writeText).toHaveBeenCalledWith("Should I run the full suite?");
+    expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("full suite"));
+    expect(screen.getByRole("blockquote")).toHaveTextContent("Should I run the full suite?");
+    const note = screen.getByRole("textbox", { name: "Note about selected message text" });
+    expect(note).toHaveFocus();
+    expect(note).toHaveAttribute("rows", "2");
+    expect(screen.getByRole("button", { name: "Copy" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add & send" })).toBeEnabled();
+    fireEvent.change(note, { target: { value: "Yes, please." } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(target.stage).toHaveBeenCalledWith(expect.objectContaining({
+      excerpt: "Should I run the full suite?",
+      note: "Yes, please.",
+      source: {
+        kind: "conversation_message",
+        itemId: "assistant-question",
+        itemRevision: 3,
+        quoteKind: "question",
+      },
+      locator: {
+        kind: "text_quote",
+        prefix: "Tests passed. ",
+        suffix: " The build is ready.",
+        headingTrail: ["Guide"],
+        sourceStartLine: 3,
+        sourceEndLine: 3,
+      },
+    }));
+    expect(target.attachAndSubmit).not.toHaveBeenCalled();
+    expect(trigger).toHaveFocus();
+  });
+
+  it.each(["selection", "question"] as const)("dismisses a %s editor on an outside click and keeps it open during a touch scroll", async (opening) => {
+    const user = userEvent.setup();
+    const target = stagingTarget();
+    render(
+      <>
+        <ConversationMessageSelectionSurface
+          enabled
+          itemId="assistant-question"
+          itemRevision={1}
+          selectionKind="markdown"
+          selectionDebounceMilliseconds={0}
+          questionNotes
+          stagingTarget={target}
+        >
+          <MarkdownContent sourcePositionMetadata rehypePlugins={[rehypeAssistantQuestions]}>
+            {"Should I run the tests?\n\nIt may take a minute."}
+          </MarkdownContent>
+        </ConversationMessageSelectionSurface>
+        <button type="button">Outside action</button>
+      </>,
+    );
+
+    const source = screen.getByText("It may take a minute.");
+    const outside = screen.getByRole("button", { name: "Outside action" });
+    const openEditor = async () => {
+      if (opening === "question") {
+        await user.click(screen.getByText("Should I run the tests?"));
+      } else {
+        selectText(source.firstChild!);
+        fireEvent(document, new Event("selectionchange"));
+      }
+      const note = await screen.findByRole("textbox");
+      expect(note).toHaveFocus();
+      return note;
+    };
+    const note = await openEditor();
+    await user.type(note, "Run them.");
+    document.getSelection()?.removeAllRanges();
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.touchStart(source, { touches: [{ identifier: 1, target: source, clientY: 300 }] });
+    fireEvent.touchMove(source, { touches: [{ identifier: 1, target: source, clientY: 240 }] });
+    fireEvent.touchEnd(source, { touches: [] });
+    await delay(20);
+    expect(note).toHaveValue("Run them.");
+
+    await user.click(outside);
+    expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+    expect(outside).toHaveFocus();
+    expect(target.stage).not.toHaveBeenCalled();
+    expect(await openEditor()).toHaveValue("");
+  });
+
+  it.each([
+    { detail: 2 },
+    { detail: 1, shiftKey: true },
+    { detail: 1 },
+  ])("preserves native text selection for a highlighted question with %o", async (click) => {
+    render(
+      <ConversationMessageSelectionSurface
+        enabled
+        itemId="assistant-question"
+        itemRevision={1}
+        selectionKind="markdown"
+        questionNotes
+        selectionDebounceMilliseconds={0}
+        stagingTarget={stagingTarget()}
+      >
+        <MarkdownContent sourcePositionMetadata rehypePlugins={[rehypeAssistantQuestions]}>
+          {"Should I run the **full suite**?"}
+        </MarkdownContent>
+      </ConversationMessageSelectionSurface>,
+    );
+
+    const words = screen.getByText("full suite");
+    selectText(words.firstChild!);
+    fireEvent.click(words, click);
+    expect(document.getSelection()?.toString()).toBe("full suite");
+    fireEvent(document, new Event("selectionchange"));
+    const actions = await screen.findByRole("toolbar");
+    expect(within(actions).getByRole("button", { name: "Add" })).toBeEnabled();
+    expect(within(actions).getByRole("blockquote")).toHaveTextContent("full suite");
+    expect(within(actions).getByRole("blockquote")).toHaveAttribute("data-quote-kind", "selection");
+    expect(within(actions).getByRole("textbox")).toHaveFocus();
+  });
+
+  it("replaces an empty quote on reselection and preserves a typed note through a selection drag", async () => {
+    const target = stagingTarget();
+    render(
+      <ConversationMessageSelectionSurface
+        enabled
+        itemId="assistant-question"
+        itemRevision={1}
+        selectionKind="markdown"
+        questionNotes
+        selectionDebounceMilliseconds={0}
+        stagingTarget={target}
+      >
+        <MarkdownContent sourcePositionMetadata rehypePlugins={[rehypeAssistantQuestions]}>
+          {"Should I send it?\n\nAnother sentence to select."}
+        </MarkdownContent>
+      </ConversationMessageSelectionSurface>,
+    );
+
+    const question = screen.getByText("Should I send it?");
+    const sentence = screen.getByText("Another sentence to select.");
+    const editor = () => within(screen.getByRole("toolbar"));
+    fireEvent.click(question);
+    expect(editor().getByRole("blockquote")).toHaveTextContent("Should I send it?");
+    expect(editor().getByRole("textbox")).toHaveFocus();
+
+    fireEvent.pointerDown(sentence, { button: 0, isPrimary: true, pointerType: "mouse" });
+    selectText(sentence.firstChild!);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.pointerUp(sentence, { button: 0, isPrimary: true, pointerType: "mouse" });
+    fireEvent.click(sentence);
+    await waitFor(() => expect(editor().getByRole("blockquote")).toHaveTextContent(sentence.textContent!));
+
+    expect(editor().getByRole("textbox")).toHaveFocus();
+    selectText(sentence.firstChild!, 0, 7);
+    fireEvent(document, new Event("selectionchange"));
+    await waitFor(() => expect(editor().getByRole("blockquote").textContent).toBe("Another"));
+
+    const note = editor().getByRole("textbox");
+    expect(note).toHaveFocus();
+    fireEvent.change(note, { target: { value: "Keep this note." } });
+    fireEvent.pointerDown(question, { button: 0, isPrimary: true, pointerType: "mouse" });
+    selectText(question.firstChild!);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.pointerUp(question, { button: 0, isPrimary: true, pointerType: "mouse" });
+    fireEvent.click(question);
+    await delay(20);
+    expect(editor().getByRole("blockquote").textContent).toBe("Another");
+    expect(editor().getByRole("textbox")).toHaveValue("Keep this note.");
+    fireEvent.click(editor().getByRole("button", { name: "Add" }));
+    expect(target.stage).toHaveBeenCalledWith(expect.objectContaining({
+      excerpt: "Another", note: "Keep this note.",
+    }));
   });
 
   it("rejects cross-message and control-spanning selections", async () => {
@@ -359,7 +589,7 @@ describe("ConversationMessageSelectionSurface", () => {
     expect(secondTarget.stage).not.toHaveBeenCalled();
   });
 
-  it("copies without staging and preserves the native selection briefly", async () => {
+  it.each(["cleared", "retained"] as const)("copies without staging when the native selection is %s", async (nativeSelection) => {
     const writeText = vi.fn(async () => undefined);
     setClipboard(writeText);
     const target = stagingTarget();
@@ -375,21 +605,76 @@ describe("ConversationMessageSelectionSurface", () => {
         <span {...conversationMessageSelectableTextProps}>Copy exactly</span>
       </ConversationMessageSelectionSurface>,
     );
-    selectText(screen.getByText("Copy exactly").firstChild!);
+    const source = screen.getByText("Copy exactly").firstChild!;
+    selectText(source);
     fireEvent(document, new Event("selectionchange"));
-    await screen.findByRole("toolbar");
+    const editor = await screen.findByRole("toolbar");
+    if (nativeSelection === "retained") {
+      selectText(source);
+      fireEvent(document, new Event("selectionchange"));
+      await delay(20);
+      expect(screen.getByRole("toolbar")).toBe(editor);
+    }
+    expect(document.getSelection()?.toString()).toBe(nativeSelection === "retained" ? "Copy exactly" : "");
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("Copy exactly"));
     expect(target.stage).not.toHaveBeenCalled();
-    expect(screen.queryByRole("toolbar")).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("toolbar")).toBeNull());
     expect(screen.getByRole("status")).toHaveTextContent(
       "Copied selected message text.",
     );
-    expect(document.getSelection()?.toString()).toBe("Copy exactly");
+    expect(screen.getByLabelText("Selectable conversation message")).toHaveFocus();
   });
 
-  it("keeps the overlay and selection available when Copy fails", async () => {
+  it.each(["dismissed", "replaced"] as const)(
+    "keeps focus when a clipboard write completes after the editor is %s",
+    async (editorChange) => {
+      const user = userEvent.setup();
+      let finishCopy!: () => void;
+      const copy = new Promise<void>((resolve) => {
+        finishCopy = resolve;
+      });
+      setClipboard(vi.fn(() => copy));
+      render(
+        <>
+          <ConversationMessageSelectionSurface
+            enabled
+            itemId="copy-item"
+            itemRevision={1}
+            selectionKind="plain_text"
+            selectionDebounceMilliseconds={0}
+            stagingTarget={stagingTarget()}
+          >
+            <span {...conversationMessageSelectableTextProps}>Copy exactly</span>
+          </ConversationMessageSelectionSurface>
+          <button type="button">Outside action</button>
+        </>,
+      );
+      const source = screen.getByText("Copy exactly").firstChild!;
+      selectText(source);
+      fireEvent(document, new Event("selectionchange"));
+      await user.click(await screen.findByRole("button", { name: "Copy" }));
+
+      let focusTarget: HTMLElement;
+      if (editorChange === "dismissed") {
+        focusTarget = screen.getByRole("button", { name: "Outside action" });
+        await user.click(focusTarget);
+        expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+      } else {
+        selectText(source, 5);
+        fireEvent(document, new Event("selectionchange"));
+        await waitFor(() => expect(screen.getByRole("blockquote").textContent).toBe("exactly"));
+        focusTarget = screen.getByRole("textbox");
+      }
+
+      await act(async () => finishCopy());
+      expect(focusTarget).toHaveFocus();
+      expect(screen.getByRole("status")).toBeEmptyDOMElement();
+    },
+  );
+
+  it("keeps the captured quote available when Copy fails", async () => {
     const writeText = vi.fn(async () => {
       throw new Error("denied");
     });
@@ -415,8 +700,9 @@ describe("ConversationMessageSelectionSurface", () => {
     expect(
       await screen.findByText("Copy failed. The selection is still available."),
     ).toHaveAttribute("role", "alert");
-    expect(screen.getByRole("toolbar")).toBeInTheDocument();
-    expect(document.getSelection()?.toString()).toBe("Keep selected");
+    const toolbar = screen.getByRole("toolbar");
+    expect(within(toolbar).getByRole("blockquote")).toHaveTextContent("Keep selected");
+    expect(within(toolbar).getByRole("textbox")).toHaveFocus();
     expect(target.stage).not.toHaveBeenCalled();
   });
 
@@ -452,6 +738,9 @@ describe("ConversationMessageSelectionSurface", () => {
     await delay(20);
     expect(screen.queryByRole("toolbar")).toBeNull();
 
+    const exactSelection = document.getSelection()?.toString() ?? "";
+    expect(exactSelection).toContain("First selected line.");
+    expect(exactSelection).toContain("Second selected line.");
     fireEvent.pointerUp(second, {
       button: 0,
       isPrimary: true,
@@ -459,9 +748,7 @@ describe("ConversationMessageSelectionSurface", () => {
       pointerType: "mouse",
     });
     const toolbar = await screen.findByRole("toolbar");
-    const exactSelection = document.getSelection()?.toString() ?? "";
-    expect(exactSelection).toContain("First selected line.");
-    expect(exactSelection).toContain("Second selected line.");
+    expect(within(toolbar).getByRole("blockquote").textContent).toBe(exactSelection);
     const copyButton = within(toolbar).getByRole("button", { name: "Copy" });
     fireEvent.pointerDown(copyButton, {
       button: 0,
@@ -511,25 +798,25 @@ describe("ConversationMessageSelectionSurface", () => {
     expect(screen.queryByRole("toolbar")).toBeNull();
 
     fireEvent.touchEnd(second, { touches: [] });
-    await screen.findByRole("toolbar", {
+    const editor = await screen.findByRole("toolbar", {
       name: "Selected message text actions",
     });
+    const originalQuote = within(editor).getByRole("blockquote").textContent;
+    expect(originalQuote).toContain("Touch first line.");
+    expect(originalQuote).toContain("Touch second line.");
 
     // Android's native selection handles can target the document rather than
-    // the selected text. Beginning that adjustment must hide the old overlay
-    // and wait for the handle release before presenting the new snapshot.
+    // the selected text. Wait for release before replacing the captured quote.
     fireEvent.touchStart(document.body, {
       touches: [{ identifier: 2, target: document.body }],
     });
-    expect(screen.queryByRole("toolbar")).toBeNull();
-    selectAcross(first.firstChild!, second.firstChild!);
+    selectText(second.firstChild!);
     fireEvent(document, new Event("selectionchange"));
     await delay(20);
-    expect(screen.queryByRole("toolbar")).toBeNull();
+    expect(within(editor).getByRole("blockquote").textContent).toBe(originalQuote);
     fireEvent.touchEnd(document.body, { touches: [] });
-    await screen.findByRole("toolbar", {
-      name: "Selected message text actions",
-    });
+    await waitFor(() => expect(screen.getByRole("blockquote").textContent).toBe("Touch second line."));
+    expect(screen.getByRole("textbox")).toHaveFocus();
   });
 });
 

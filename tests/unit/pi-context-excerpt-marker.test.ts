@@ -13,11 +13,12 @@ const authentication = {
 };
 const excerpt: ContextExcerpt = {
   id: "0d1bfa8b-dc37-4f52-8b0e-f8181ac0a7e9",
-  excerpt: "selected text",
+  excerpt: "Should this text be selected?",
   source: {
     kind: "conversation_message",
     itemId: "normalized-message-item-1",
     itemRevision: 2,
+    quoteKind: "question",
   },
   locator: {
     kind: "text_quote",

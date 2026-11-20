@@ -4,6 +4,7 @@ import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
   capture,
+  expectNoPageOverflow,
   fillAndPersistDraft,
   openPanelFromMenu,
   overlaySettled,
@@ -93,7 +94,8 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
     name: "Note about selected text",
   });
   await expect(note).toBeVisible();
-  expect((await note.boundingBox())?.height).toBeGreaterThanOrEqual(120);
+  await expect(note).toHaveAttribute("rows", "2");
+  expect((await note.boundingBox())?.height).toBeLessThan(104);
   for (const button of await actions.getByRole("button").all()) {
     expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   }
@@ -137,7 +139,7 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
     .last();
   await expect(assistant).toBeVisible({ timeout: 20_000 });
   await expect(assistant.locator("[data-markdown-block]")).toHaveCount(2);
-  await assistant.evaluate((root) => {
+  const quoteText = await assistant.evaluate((root) => {
     const blocks = root.querySelectorAll("[data-markdown-block]");
     const firstBlock = blocks.item(0);
     const lastBlock = blocks.item(blocks.length - 1);
@@ -160,12 +162,17 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
     selection?.removeAllRanges();
     selection?.addRange(range);
     document.dispatchEvent(new Event("selectionchange"));
+    return range.toString();
   });
   const chatActions = page.getByRole("toolbar", {
     name: "Selected message text actions",
   });
   await page.waitForTimeout(500);
   await expect(chatActions).toBeHidden();
+  expect(await page.evaluate(() => {
+    const selection = document.getSelection();
+    return selection?.rangeCount ? selection.getRangeAt(0).toString() : "";
+  })).toBe(quoteText);
   await assistant.evaluate((root) => {
     root.dispatchEvent(
       new PointerEvent("pointerup", {
@@ -179,25 +186,88 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
   });
   await expect(chatActions).toBeVisible();
   await expect(chatActions).toHaveCSS("position", "fixed");
-  await chatActions.getByRole("button", { name: "Add note…" }).tap();
   const chatNote = chatActions.getByRole("textbox", {
     name: "Note about selected message text",
   });
-  await chatNote.fill("Use this response as context");
+  await expect(chatNote).toBeVisible();
+  await expect(chatNote).toBeFocused();
+  const editorQuote = chatActions.locator("blockquote");
+  await expect(editorQuote).toHaveText(quoteText);
+  await expect(chatActions.locator(":scope > :first-child")).toHaveText(quoteText);
+  const selectionRailColor = "oklch(0.512 0.012 260)";
+  await expect(editorQuote).toHaveCSS("border-left-color", selectionRailColor);
+  const noteText = "Use this response as context for the follow-up and keep the original wording visible when the quote is expanded.";
+  await page.keyboard.insertText(noteText);
+  await expect(chatNote).toHaveValue(noteText);
   for (const button of await chatActions.getByRole("button").all()) {
     expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   }
   await capture(page, testInfo, "chat-mobile-selection-note.png");
+  const draftPath = `/api${new URL(page.url()).pathname}/draft`;
+  const quoteSaved = page.waitForResponse((response) =>
+    response.request().method() === "PUT" && response.ok() &&
+    new URL(response.url()).pathname === draftPath &&
+    response.request().postDataJSON().contextExcerpts?.[0]?.note === noteText,
+  );
   await chatActions
-    .getByRole("button", { name: "Add note", exact: true })
+    .getByRole("button", { name: "Add", exact: true })
     .tap();
+  await quoteSaved;
   await expect(chatActions).toBeHidden();
   await expect(
     assistant.locator(".context-selection-confirmation"),
   ).toHaveCount(0);
-  await expect(
-    page.getByTestId("composer").getByLabel("Context excerpts"),
-  ).toContainText("Conversation message");
+  const chatExcerpt = page.getByTestId("composer").getByLabel("Context excerpts");
+  const summary = quoteText.replace(/\s+/gu, " ").trim();
+  expect(summary).toContain("Mobile transcript selection");
+  const quoteCharacters = Array.from(summary);
+  expect(quoteCharacters.length).toBeGreaterThan(80);
+  const boundedQuote = `“${quoteCharacters.slice(0, 80).join("")}…”`;
+  const quoteToggle = chatExcerpt.getByRole("button", { name: `Quote ${boundedQuote}`, exact: true });
+  await expect(quoteToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(chatExcerpt.getByRole("button", { name: `Remove quote ${boundedQuote}`, exact: true })).toBeVisible();
+  const quotePreview = quoteToggle.locator(".context-excerpt-quote");
+  const notePreview = chatExcerpt.locator(".context-excerpt-quote-note");
+  await expect(quotePreview).toHaveText(summary);
+  await expect(quotePreview).toHaveCSS("border-left-color", selectionRailColor);
+  await expect(notePreview).toHaveText(noteText);
+  for (const preview of [quotePreview, notePreview]) {
+    await expect(preview).toHaveCSS("white-space", "nowrap");
+    await expect(preview).toHaveCSS("text-overflow", "ellipsis");
+    expect(await preview.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  }
+  for (const button of await chatExcerpt.getByRole("button").all()) {
+    const bounds = await button.boundingBox();
+    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+    expect(bounds?.width).toBeGreaterThanOrEqual(44);
+  }
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "chat-mobile-collapsed-quote.png");
+  await quoteToggle.tap();
+  const expandedQuote = chatExcerpt.getByRole("blockquote");
+  await expect(expandedQuote).toBeVisible();
+  await expect(expandedQuote).toHaveCSS("border-left-color", selectionRailColor);
+  expect(await expandedQuote.textContent()).toBe(quoteText);
+  expect(await expandedQuote.evaluate((element) =>
+    element.getBoundingClientRect().width / element.parentElement!.clientWidth,
+  )).toBeGreaterThan(0.95);
+  const listBounds = (await chatExcerpt.boundingBox())!;
+  const quoteBounds = (await expandedQuote.boundingBox())!;
+  for (const control of [quoteToggle, chatExcerpt.getByRole("button", { name: /^Remove quote/ })]) {
+    const bounds = (await control.boundingBox())!;
+    expect(bounds.y).toBeGreaterThanOrEqual(listBounds.y);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(quoteBounds.y);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(listBounds.y + listBounds.height);
+  }
+  await capture(page, testInfo, "chat-mobile-expanded-quote.png");
+  const quoteRemoved = page.waitForResponse((response) =>
+    response.request().method() === "PUT" && response.ok() &&
+    new URL(response.url()).pathname === draftPath &&
+    response.request().postDataJSON().contextExcerpts?.length === 0,
+  );
+  await chatExcerpt.getByRole("button", { name: `Remove quote ${boundedQuote}`, exact: true }).tap();
+  await quoteRemoved;
+  await expect(chatExcerpt).toBeHidden();
 });
 
 // Regression: the panel stops wheel/touchmove itself so the tree's scroller —

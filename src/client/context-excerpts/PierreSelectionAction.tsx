@@ -12,6 +12,7 @@ import { Copy, MessageSquareText, Paperclip, Send } from "lucide-react";
 import { MAXIMUM_CONTEXT_EXCERPT_NOTE_BYTES } from "../../shared/index.js";
 import { OPEN_OVERLAY_SELECTOR } from "../app/android-back.js";
 import { Button } from "../components/ui/button.js";
+import { ContextQuote, type ContextQuoteKind } from "./ContextQuote.js";
 
 import { useComposerDraftStagingSnapshot, type ContextExcerptStagingTarget } from "./coordinator.js";
 
@@ -36,14 +37,18 @@ export function PierreSelectionAction({
   label,
   ariaLabel,
   initialError,
+  startInNoteMode = false,
   anchor,
   owner,
   copyText,
+  quoteKind,
   unavailableReason,
   onStage,
   onCancel,
+  onClickOutside,
   onCopySuccess,
   onNoteModeChange,
+  onNoteChange,
   noteInputLabel = "Note for agent",
   stageWithNoteLabel = "Add note",
   stagingTarget,
@@ -52,17 +57,21 @@ export function PierreSelectionAction({
   readonly label: string;
   readonly ariaLabel?: string;
   readonly initialError?: string;
+  readonly startInNoteMode?: boolean;
   readonly anchor?: SelectionActionAnchor;
   readonly owner?: HTMLElement | null;
   readonly copyText?: string;
+  readonly quoteKind?: ContextQuoteKind;
   readonly unavailableReason?: string;
   readonly onStage: (
     note?: string,
     sendImmediately?: boolean,
   ) => PierreSelectionStageResult;
   readonly onCancel: () => void;
+  readonly onClickOutside?: () => void;
   readonly onCopySuccess?: () => void;
   readonly onNoteModeChange?: (active: boolean) => void;
+  readonly onNoteChange?: (value: string) => void;
   readonly noteInputLabel?: string;
   readonly stageWithNoteLabel?: string;
 }): React.JSX.Element {
@@ -75,7 +84,7 @@ export function PierreSelectionAction({
   const [resolvedOwner, setResolvedOwner] = useState<HTMLElement | null>(
     owner ?? null,
   );
-  const [addingNote, setAddingNote] = useState(false);
+  const [addingNote, setAddingNote] = useState(startInNoteMode);
   const [note, setNote] = useState("");
   const [error, setError] = useState(initialError);
   const [position, setPosition] = useState<CSSProperties>();
@@ -170,7 +179,7 @@ export function PierreSelectionAction({
       if (overlays.item(overlays.length - 1) !== overlayRef.current) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (addingNote) {
+      if (addingNote && !startInNoteMode) {
         setAddingNote(false);
         queueMicrotask(() =>
           overlayRef.current
@@ -183,7 +192,20 @@ export function PierreSelectionAction({
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [addingNote, onCancel, resolvedOwner]);
+  }, [addingNote, onCancel, resolvedOwner, startInNoteMode]);
+
+  useEffect(() => {
+    if (!onClickOutside) return;
+    const handleClick = (event: MouseEvent) => {
+      const overlay = overlayRef.current;
+      if (!overlay || event.composedPath().includes(overlay)) return;
+      // A click can follow a text-selection drag. Let selection capture handle it.
+      if (document.getSelection()?.isCollapsed === false) return;
+      onClickOutside();
+    };
+    document.addEventListener("click", handleClick, true);
+    return () => document.removeEventListener("click", handleClick, true);
+  }, [onClickOutside]);
 
   const stage = (sendImmediately = false) => {
     const normalizedNote = note.trim();
@@ -216,6 +238,7 @@ export function PierreSelectionAction({
     onCopySuccess?.();
   };
 
+  const quote = startInNoteMode ? copyText : undefined;
   const overlay = (
     <div
       aria-label={ariaLabel ?? `Actions for ${label}`}
@@ -232,20 +255,26 @@ export function PierreSelectionAction({
       role="toolbar"
       style={position}
     >
-      <div className="pierre-selection-card-heading">
-        <strong>{sentenceCase(label)}</strong>
-        <span>{addingNote ? "Add an optional note" : "Selection actions"}</span>
-      </div>
+      {quote ? (
+        <ContextQuote text={quote} mode="editor" kind={quoteKind} />
+      ) : (
+        <div className="pierre-selection-card-heading">
+          <strong>{sentenceCase(label)}</strong>
+          <span>{addingNote ? "Add an optional note" : "Selection actions"}</span>
+        </div>
+      )}
       {addingNote && (
         <>
           <label className="pierre-selection-note-field">
-            <span>Note about selected text</span>
+            {!quote && <span>Note about selected text</span>}
             <textarea
               aria-label={noteInputLabel}
               autoFocus
               className="pierre-selection-note"
               onChange={(event) => {
-                setNote(event.currentTarget.value);
+                const value = event.currentTarget.value;
+                setNote(value);
+                onNoteChange?.(value);
                 setError(undefined);
               }}
               onKeyDown={(event) => {
@@ -255,7 +284,7 @@ export function PierreSelectionAction({
                 }
               }}
               placeholder="Note for the agent (optional)"
-              rows={4}
+              rows={2}
               value={note}
             />
           </label>
@@ -267,7 +296,7 @@ export function PierreSelectionAction({
         </span>
       )}
       {addingNote && !initialError && (
-        <span id={sendHintId} className="pierre-selection-send-hint">
+        <span id={sendHintId} className="pierre-selection-send-hint" hidden={Boolean(quote)}>
           Includes this selection, note, and any existing composer content.
         </span>
       )}

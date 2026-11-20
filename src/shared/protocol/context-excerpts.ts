@@ -99,6 +99,8 @@ const conversationMessageContextSourceSchema = z.strictObject({
   kind: z.literal("conversation_message"),
   itemId: z.string().min(1).max(160),
   itemRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  // Presentation metadata set by the highlighted-question shortcut.
+  quoteKind: z.literal("question").optional(),
 });
 
 export const contextExcerptSourceSchema = z.discriminatedUnion("kind", [

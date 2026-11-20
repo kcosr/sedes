@@ -34,6 +34,7 @@
   --accent: oklch(0.235 0.01 260 / 0.07);
   --accent-foreground: oklch(0.235 0.01 260);
   --destructive: oklch(0.45 0.19 25);
+  --chat-question: #a32f48;
   --border: oklch(0.235 0.01 260 / 0.13);
   --input: oklch(0.235 0.01 260 / 0.16);
   --ring: oklch(0.55 0.012 260);
@@ -277,6 +278,7 @@
   --accent: oklch(1 0 0 / 0.09);
   --accent-foreground: oklch(0.93 0.004 260);
   --destructive: oklch(0.66 0.17 25);
+  --chat-question: #f091a2;
   /* --destructive is tuned as text on dark surfaces; as a fill it would
      leave white text under AA, so the solid fill steps darker. */
   --destructive-solid: oklch(0.56 0.19 25);
@@ -6136,6 +6138,96 @@ textarea:disabled {
   font-size: 11px;
 }
 
+.context-excerpt-conversation {
+  padding-block: 4px;
+}
+
+.context-excerpt-conversation .context-excerpt-card-heading {
+  align-items: start;
+}
+
+.context-excerpt-quote-toggle {
+  display: flex;
+  min-width: 0;
+  min-height: var(--control-xs);
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-inline);
+  text-align: left;
+}
+
+.context-excerpt-quote-toggle svg {
+  flex: none;
+  color: var(--muted-foreground);
+}
+
+.context-excerpt-quote-toggle:hover {
+  background: var(--accent);
+}
+
+.context-excerpt-quote-toggle[aria-expanded="true"] {
+  width: var(--control-xs);
+  flex: none;
+  justify-content: center;
+}
+
+.context-excerpt-quote-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.context-excerpt-quote {
+  min-width: 0;
+  margin: 0;
+  border-inline-start: 2px solid var(--muted-foreground-2);
+  padding-inline-start: 8px;
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  line-height: var(--leading-normal);
+}
+
+.context-excerpt-quote[data-quote-kind="question"] {
+  border-inline-start-color: var(--chat-question);
+}
+
+.context-excerpt-quote[data-mode="expanded"] {
+  flex: 1;
+  order: -1;
+  max-height: min(220px, 40dvh);
+  margin-block: 2px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.context-excerpt-quote[data-mode="compact"] {
+  flex: 1;
+}
+
+.context-excerpt-quote[data-mode="editor"] {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.context-excerpt-quote-note {
+  margin: 2px 0 0 10px;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.context-excerpt-quote[data-mode="compact"],
+.context-excerpt-conversation[data-state="closed"] .context-excerpt-quote-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .context-excerpt-card-actions {
   display: flex;
   flex: 0 0 auto;
@@ -6214,6 +6306,24 @@ textarea:disabled {
 @media (max-width: 819px), (pointer: coarse) {
   .context-excerpt-note-editor textarea {
     font-size: var(--text-input);
+  }
+
+  .context-excerpt-conversation :is(.context-excerpt-quote-toggle, .context-excerpt-card-actions button) {
+    min-height: var(--control-touch);
+  }
+
+  .context-excerpt-conversation :is(.context-excerpt-quote-toggle[aria-expanded="true"], .context-excerpt-card-actions button) {
+    min-width: var(--control-touch);
+  }
+
+  .context-excerpt-conversation[data-state="open"] .context-excerpt-card-heading {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .context-excerpt-conversation .context-excerpt-quote[data-mode="expanded"] {
+    order: 1;
+    flex-basis: 100%;
   }
 }
 
@@ -6342,6 +6452,46 @@ textarea:disabled {
   display: inline;
   margin-left: 3px;
   vertical-align: -0.1em;
+}
+
+.markdown [data-assistant-question-text] {
+  color: var(--chat-question);
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
+}
+
+[data-question-notes] .markdown [data-assistant-question-text] {
+  cursor: pointer;
+}
+
+.markdown [data-assistant-question-note] {
+  display: none;
+}
+
+[data-question-notes] .markdown [data-assistant-question-note] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.65em;
+  height: 1.5em;
+  margin-inline-start: 0.3em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inline);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+[data-question-notes] .markdown [data-assistant-question-note]:is(:hover, :focus-visible) {
+  color: var(--foreground);
+  background: var(--accent);
+}
+
+@media (pointer: coarse) {
+  [data-question-notes] .markdown [data-assistant-question-note] {
+    min-width: 24px;
+    min-height: 24px;
+  }
 }
 
 .markdown .markdown-file-link-notice {
@@ -10934,7 +11084,6 @@ tr.diff-hunk td {
 .pierre-selection-note {
   box-sizing: border-box;
   width: min(520px, calc(100vw - 46px));
-  min-height: 104px;
   max-height: min(280px, 40dvh);
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -11460,7 +11609,6 @@ tr.diff-hunk td {
 
   .pierre-selection-note {
     width: 100%;
-    min-height: 120px;
     max-height: min(36dvh, 240px);
     font-size: var(--text-input);
   }

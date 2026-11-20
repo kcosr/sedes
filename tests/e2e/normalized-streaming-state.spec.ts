@@ -11,6 +11,104 @@ import {
   sendCurrentDraft,
 } from "./helpers";
 
+test("a saved reply question opens the existing note editor", async ({ page }, testInfo) => {
+  await openSedesWorkspace(page);
+  const threadPath = await createDraftThread(page);
+  await fillAndPersistDraft(page, "Show a question for the note shortcut.", "Message Scripted agent");
+  await sendCurrentDraft(page);
+  const completedAssistant = page
+    .locator('[data-item-kind="assistant_message"][data-item-status="completed"]')
+    .last();
+  // The scripted turn settles after its 13 streaming steps.
+  await expect(completedAssistant).toBeVisible({ timeout: 15_000 });
+  const chatSelectionActions = page.getByRole("toolbar", {
+    name: "Selected message text actions",
+  });
+
+  const questionText = "Should I run the full browser suite?";
+  const question = completedAssistant.locator("[data-assistant-question-text]");
+  await expect(completedAssistant.getByText(questionText, { exact: true })).toBeVisible();
+  await expect(question).toHaveCount(0);
+  await openSettingsPage(page, "appearance");
+  const questionSetting = page.getByRole("switch", {
+    name: "Highlight questions in agent replies",
+  });
+  await expect(questionSetting).not.toBeChecked();
+  await questionSetting.click();
+  await expect(questionSetting).toBeChecked();
+  await returnFromSettings(page);
+  await expect(page).toHaveURL(threadPath);
+  await expect(question).toHaveText(questionText);
+  await expect(question.locator("strong")).toHaveText("full browser suite");
+  await expect(question).toHaveCSS("color", "rgb(163, 47, 72)");
+  await expect(question).toHaveCSS("text-decoration-line", "underline");
+  await expect(completedAssistant.getByRole("button", { name: `Add note to question “${questionText}”` })).toBeVisible();
+
+  await question.click();
+  const questionNote = chatSelectionActions.getByRole("textbox", {
+    name: "Note about selected message text",
+  });
+  await expect(questionNote).toBeFocused();
+  await completedAssistant.getByRole("heading", { name: "Live summary" }).click();
+  await expect(chatSelectionActions).toBeHidden();
+  await question.click();
+  await expect(questionNote).toBeFocused();
+  await expect(questionNote).toHaveAttribute("rows", "2");
+  const editorQuote = chatSelectionActions.locator("blockquote");
+  await expect(editorQuote).toHaveText(questionText);
+  await expect(editorQuote).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
+  await expect(chatSelectionActions.locator(":scope > :first-child")).toHaveText(questionText);
+  await expect(chatSelectionActions.getByText("Selected message text", { exact: true })).toHaveCount(0);
+  await expect(chatSelectionActions.getByText("Add an optional note", { exact: true })).toHaveCount(0);
+  await expect(chatSelectionActions.getByText("Note about selected text", { exact: true })).toHaveCount(0);
+  const noteText = "Run it after checking the build.";
+  await questionNote.fill(noteText);
+  await capture(page, testInfo, "chat-question-note-desktop.png");
+  const draftPath = `/api${threadPath}/draft`;
+  const noteSaved = page.waitForResponse((response) =>
+    response.request().method() === "PUT" && response.ok() &&
+    new URL(response.url()).pathname === draftPath &&
+    response.request().postDataJSON().contextExcerpts?.length === 1,
+  );
+  await chatSelectionActions.getByRole("button", { name: "Add", exact: true }).click();
+  expect((await noteSaved).request().postDataJSON().contextExcerpts).toMatchObject([
+    { excerpt: questionText, note: noteText, source: { quoteKind: "question" } },
+  ]);
+  await expect(chatSelectionActions).toBeHidden();
+  const stagedNote = page.getByTestId("composer").getByLabel("Context excerpts");
+  const stagedQuoteToggle = stagedNote.getByRole("button", { name: `Quote “${questionText}”`, exact: true });
+  await expect(stagedQuoteToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(stagedQuoteToggle.locator(".context-excerpt-quote")).toHaveText(questionText);
+  await expect(stagedQuoteToggle.locator(".context-excerpt-quote")).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
+  await expect(stagedNote).toContainText(noteText);
+  await expect(stagedNote.getByText("Conversation message", { exact: true })).toHaveCount(0);
+  await stagedQuoteToggle.click();
+  await expect(stagedQuoteToggle).toHaveAttribute("aria-expanded", "true");
+  const stagedQuote = stagedNote.locator("blockquote");
+  await expect(stagedQuote).toHaveText(questionText);
+  await expect(stagedQuote).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
+  await stagedQuote.dblclick({ position: { x: 14, y: 9 } });
+  expect(await page.evaluate(() => window.getSelection()?.toString().trim())).toBe("Should");
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  await stagedQuoteToggle.click();
+  await expect(stagedQuoteToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator('[data-item-kind="user_message"]')).toHaveCount(1);
+  await page.reload();
+  await expect(question).toHaveText(questionText);
+  await expect(stagedQuoteToggle.locator(".context-excerpt-quote")).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
+  await sendCurrentDraft(page);
+  const sentMessages = page.locator('[data-item-kind="user_message"]:not([data-client-provisional])');
+  await expect(sentMessages).toHaveCount(2);
+  await page.reload();
+  await expect(sentMessages).toHaveCount(2);
+  const sentMessage = sentMessages.last();
+  const sentQuoteToggle = sentMessage.getByRole("button", { name: `Quote “${questionText}”`, exact: true });
+  await expect(sentQuoteToggle.locator(".context-excerpt-quote")).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
+  await sentQuoteToggle.click();
+  await expect(sentMessage.locator("blockquote")).toHaveText(questionText);
+  await expect(sentMessage.locator("blockquote")).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
+});
+
 test.describe.serial("normalized streaming and restored state", () => {
   let completedThreadPath = "";
 
@@ -430,19 +528,11 @@ test.describe.serial("normalized streaming and restored state", () => {
       name: "Selected message text actions",
     });
     await expect(chatSelectionActions).toBeVisible();
-    await chatSelectionActions
-      .getByRole("button", { name: "Add note…" })
-      .click();
+    await expect(chatSelectionActions.locator("blockquote")).toContainText("Workspace inspected");
     await chatSelectionActions
       .getByRole("textbox", { name: "Note about selected message text" })
       .fill("Use this completed response as context");
     await capture(page, testInfo, "chat-selection-note-desktop.png");
-    await page.keyboard.press("Escape");
-    await expect(
-      chatSelectionActions.getByRole("textbox", {
-        name: "Note about selected message text",
-      }),
-    ).toBeHidden();
     await page.keyboard.press("Escape");
     await expect(chatSelectionActions).toBeHidden();
 

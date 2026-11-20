@@ -4,6 +4,8 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type MouseEvent,
+  type PointerEvent,
   type ReactNode,
 } from "react";
 import {
@@ -14,6 +16,11 @@ import {
   type ContextExcerpt,
 } from "../../shared/index.js";
 import { captureMarkdownContextSelection } from "../workspace-files/markdown-context-selection.js";
+import {
+  ASSISTANT_QUESTION_NOTE_SELECTOR,
+  ASSISTANT_QUESTION_SELECTOR,
+  ASSISTANT_QUESTION_TEXT_SELECTOR,
+} from "../components/conversation/assistant-questions.js";
 import {
   useComposerDraftStaging,
   type ContextExcerptStagingSnapshot,
@@ -32,6 +39,7 @@ const UNAVAILABLE: ContextExcerptStagingSnapshot = Object.freeze({
 });
 
 interface PendingConversationSelection {
+  readonly captureId: number;
   readonly excerpt: string;
   readonly locator: Extract<ContextExcerpt["locator"], { kind: "text_quote" }>;
   readonly anchor: DOMRect;
@@ -39,6 +47,12 @@ interface PendingConversationSelection {
   readonly itemRevision: number;
   readonly targetThreadId?: string;
   readonly targetWorkspaceId?: string;
+  readonly noteTrigger?: HTMLButtonElement;
+}
+
+interface QuoteInteraction {
+  readonly range: Range;
+  hasNote: boolean;
 }
 
 export function ConversationMessageSelectionSurface({
@@ -48,6 +62,7 @@ export function ConversationMessageSelectionSurface({
   enabled,
   className,
   children,
+  questionNotes = false,
   stagingTarget,
   selectionDebounceMilliseconds = DEFAULT_SELECTION_DEBOUNCE_MILLISECONDS,
 }: {
@@ -57,6 +72,7 @@ export function ConversationMessageSelectionSurface({
   readonly enabled: boolean;
   readonly className?: string;
   readonly children: ReactNode;
+  readonly questionNotes?: boolean;
   readonly stagingTarget?: ContextExcerptStagingTarget;
   /** Exposed for deterministic tests; product callers should use the default. */
   readonly selectionDebounceMilliseconds?: number;
@@ -74,15 +90,15 @@ export function ConversationMessageSelectionSurface({
     : targetSnapshot.reason;
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const [pending, setPending] = useState<PendingConversationSelection>();
-  const [noteMode, setNoteMode] = useState(false);
-  const noteModeRef = useRef(noteMode);
-  noteModeRef.current = noteMode;
+  const nextCaptureId = useRef(0);
+  const quoteInteraction = useRef<QuoteInteraction | undefined>(undefined);
+  const questionPress = useRef<{ x: number; y: number } | undefined>(undefined);
   const [actionError, setActionError] = useState<string>();
   const [copyConfirmation, setCopyConfirmation] = useState<string>();
 
   const clearPending = useCallback(() => {
     setPending(undefined);
-    setNoteMode(false);
+    quoteInteraction.current = undefined;
     setActionError(undefined);
   }, []);
 
@@ -91,6 +107,7 @@ export function ConversationMessageSelectionSurface({
     enabled,
     itemId,
     itemRevision,
+    questionNotes,
     target?.threadId,
     target?.workspaceId,
   ]);
@@ -107,16 +124,9 @@ export function ConversationMessageSelectionSurface({
     return () => globalThis.clearTimeout(timeout);
   }, [copyConfirmation]);
 
-  useEffect(() => {
-    if (!root || !enabled) return;
-    const captureSelection = () => {
-      if (noteModeRef.current) return;
-      const selection = document.getSelection();
-      if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) {
-        clearPending();
-        return;
-      }
-      const range = selection.getRangeAt(0).cloneRange();
+  const captureRange = useCallback(
+    (range: Range, noteTrigger?: HTMLButtonElement) => {
+      if (!root) return;
       const captured =
         selectionKind === "markdown"
           ? captureMarkdownContextSelection(root, range, {
@@ -126,7 +136,7 @@ export function ConversationMessageSelectionSurface({
             })
           : capturePlainConversationSelection(root, range);
       if (!captured) {
-        clearPending();
+        if (!quoteInteraction.current) clearPending();
         return;
       }
       setCopyConfirmation(undefined);
@@ -134,37 +144,90 @@ export function ConversationMessageSelectionSurface({
         encoder.encode(captured.excerpt).byteLength >
         MAXIMUM_CONTEXT_EXCERPT_BYTES
       ) {
-        setPending(undefined);
+        clearPending();
         setActionError("The selected text is too large to attach.");
         return;
       }
+      quoteInteraction.current = {
+        range: range.cloneRange(),
+        hasNote: false,
+      };
       setPending({
         ...captured,
+        captureId: ++nextCaptureId.current,
         anchor: safeRangeRect(range),
         itemId,
         itemRevision,
         targetThreadId: target?.threadId,
         targetWorkspaceId: target?.workspaceId,
+        noteTrigger,
       });
       setActionError(undefined);
-    };
+    },
+    [clearPending, itemId, itemRevision, root, selectionKind, target?.threadId, target?.workspaceId],
+  );
+
+  useEffect(() => {
+    if (!root || !enabled) return;
     return observeSettledSelection({
       root,
       debounceMilliseconds: selectionDebounceMilliseconds,
-      capture: captureSelection,
-      onGestureStart: clearPending,
+      capture: () => {
+        const interaction = quoteInteraction.current;
+        if (interaction?.hasNote) return;
+        const selection = document.getSelection();
+        if (selection?.rangeCount !== 1 || selection.isCollapsed) {
+          // The editor can take focus and collapse the selection after capture.
+          if (!interaction) clearPending();
+          return;
+        }
+        const range = selection.getRangeAt(0);
+        if (!root.contains(range.commonAncestorContainer)) {
+          clearPending();
+          return;
+        }
+        if (interaction && selectionMatchesRange(interaction.range)) return;
+        captureRange(range);
+      },
+      onGestureStart: () => {
+        if (!quoteInteraction.current) clearPending();
+      },
     });
-  }, [
-    clearPending,
-    enabled,
-    itemId,
-    itemRevision,
-    root,
-    selectionDebounceMilliseconds,
-    selectionKind,
-    target?.threadId,
-    target?.workspaceId,
-  ]);
+  }, [captureRange, clearPending, enabled, root, selectionDebounceMilliseconds]);
+
+  const rememberQuestionPress = (event: PointerEvent<HTMLDivElement>) => {
+    questionPress.current = {
+      x: event.clientX,
+      y: event.clientY,
+    };
+  };
+  const openQuestionNote = (event: MouseEvent<HTMLDivElement>) => {
+    const press = questionPress.current;
+    questionPress.current = undefined;
+    const clicked = event.target;
+    if (!available || quoteInteraction.current?.hasNote ||
+        event.defaultPrevented || !(clicked instanceof Element)) return;
+    const question = clicked.closest(ASSISTANT_QUESTION_SELECTOR);
+    if (!question || !event.currentTarget.contains(question)) return;
+    const text = question.querySelector(ASSISTANT_QUESTION_TEXT_SELECTOR);
+    const trigger = question.querySelector<HTMLButtonElement>(ASSISTANT_QUESTION_NOTE_SELECTOR);
+    if (!text || !trigger) return;
+    if (!trigger.contains(clicked)) {
+      if (!text.contains(clicked) || clicked.closest("a, button, input")) return;
+      if (event.detail > 1 || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+      if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 4) return;
+      const selection = document.getSelection();
+      if (
+        selection?.rangeCount && !selection.isCollapsed &&
+        selection.getRangeAt(0).intersectsNode(text)
+      ) return;
+    }
+    if (pending?.noteTrigger === trigger) return;
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    document.getSelection()?.removeAllRanges();
+    captureRange(range, trigger);
+  };
 
   const stage = useCallback(
     (note?: string, sendImmediately?: boolean) => {
@@ -191,6 +254,7 @@ export function ConversationMessageSelectionSurface({
           kind: "conversation_message",
           itemId,
           itemRevision,
+          ...(pending.noteTrigger ? { quoteKind: "question" } : {}),
         },
         locator: pending.locator,
       };
@@ -200,7 +264,7 @@ export function ConversationMessageSelectionSurface({
       if (!result.ok) return result;
       document.getSelection()?.removeAllRanges();
       clearPending();
-      root?.focus({ preventScroll: true });
+      (pending.noteTrigger ?? root)?.focus({ preventScroll: true });
       return result;
     },
     [
@@ -220,6 +284,10 @@ export function ConversationMessageSelectionSurface({
       aria-label="Selectable conversation message"
       className={className}
       data-selection-enabled={enabled ? "true" : "false"}
+      data-question-notes={questionNotes && available ? "true" : undefined}
+      onClick={questionNotes ? openQuestionNote : undefined}
+      onPointerDown={questionNotes ? rememberQuestionPress : undefined}
+      onPointerCancel={questionNotes ? () => { questionPress.current = undefined; } : undefined}
       ref={setRoot}
       tabIndex={-1}
     >
@@ -239,18 +307,23 @@ export function ConversationMessageSelectionSurface({
       )}
       {pending && (
         <PierreSelectionAction
+          key={pending.captureId}
           stagingTarget={target}
           ariaLabel="Selected message text actions"
           anchor={pending.anchor}
           copyText={pending.excerpt}
+          quoteKind={pending.noteTrigger ? "question" : undefined}
           initialError={actionError}
+          startInNoteMode
           label="selected message text"
           noteInputLabel="Note about selected message text"
           onCancel={() => {
             document.getSelection()?.removeAllRanges();
             clearPending();
           }}
+          onClickOutside={clearPending}
           onCopySuccess={() => {
+            if (!quoteInteraction.current || pending.captureId !== nextCaptureId.current) return;
             const selection = document.getSelection();
             const copiedRange =
               selection?.rangeCount === 1
@@ -258,16 +331,19 @@ export function ConversationMessageSelectionSurface({
                 : undefined;
             clearPending();
             setCopyConfirmation("Copied selected message text.");
+            (pending.noteTrigger ?? root)?.focus({ preventScroll: true });
             globalThis.setTimeout(() => {
               if (copiedRange && selectionMatchesRange(copiedRange)) {
                 document.getSelection()?.removeAllRanges();
               }
             }, 1_200);
           }}
-          onNoteModeChange={setNoteMode}
+          onNoteChange={(value) => {
+            if (quoteInteraction.current) quoteInteraction.current.hasNote = value !== "";
+          }}
           onStage={stage}
-          owner={root}
-          stageWithNoteLabel="Add note"
+          owner={pending.noteTrigger ?? root}
+          stageWithNoteLabel="Add"
           unavailableReason={!available ? unavailableReason : undefined}
         />
       )}

@@ -109,28 +109,25 @@ describe("context excerpt protocol", () => {
         },
       }),
     ).toMatchObject({ locator: { kind: "text_quote" } });
-    expect(
-      contextExcerptSchema.parse({
-        ...excerpt,
-        source: {
-          kind: "conversation_message",
-          itemId: "normalized-message-item-1",
-          itemRevision: 7,
-        },
-        locator: {
-          kind: "text_quote",
-          prefix: "Before ",
-          suffix: " after",
-        },
-      }),
-    ).toMatchObject({
+    const conversationQuote = {
+      ...excerpt,
       source: {
-        kind: "conversation_message",
+        kind: "conversation_message" as const,
         itemId: "normalized-message-item-1",
         itemRevision: 7,
       },
-      locator: { kind: "text_quote" },
-    });
+      locator: {
+        kind: "text_quote" as const,
+        prefix: "Before ",
+        suffix: " after",
+      },
+    };
+    expect(contextExcerptSchema.parse(conversationQuote)).toEqual(conversationQuote);
+    const questionQuote = {
+      ...conversationQuote,
+      source: { ...conversationQuote.source, quoteKind: "question" },
+    };
+    expect(contextExcerptSchema.parse(questionQuote)).toEqual(questionQuote);
   });
 
   it("enforces UTF-8 byte limits and ordered unique identities", () => {

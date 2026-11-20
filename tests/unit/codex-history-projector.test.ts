@@ -103,12 +103,13 @@ const baseThread = {
 const toolProvenanceKey = new Uint8Array(32).fill(0x48);
 const contextExcerpt = {
   id: "3d2eb945-d747-4dda-bf03-e24a96f9a71e",
-  excerpt: "The answer is fixed by the earlier message.",
+  excerpt: "Is the answer fixed by the earlier message?",
   note: "Explain why this remains fixed.",
   source: {
     kind: "conversation_message" as const,
     itemId: "normalized-message-item-1",
     itemRevision: 5,
+    quoteKind: "question" as const,
   },
   locator: {
     kind: "text_quote" as const,
@@ -3193,7 +3194,7 @@ describe("Codex 0.169.0 C1 history projector", () => {
       const carrier =
         kind === "tampered"
           ? signed.replace(
-              "The answer is fixed by the earlier message.",
+              "Is the answer fixed by the earlier message?",
               "The answer changed in the earlier message.",
             )
           : signed;

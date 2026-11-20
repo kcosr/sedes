@@ -1167,6 +1167,9 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
     const completeText = streamsMermaid
       ? "# Live diagram\n\n```mermaid\nflowchart TD\nA-->B-->C-->D-->E-->F-->G-->H-->I-->J\n```\n\nDiagram ready while the response is still streaming."
       : `${partialText}a deterministic normalized result for **${inputText}**.`;
+    const settledText = inputText === "Show a question for the note shortcut."
+      ? `${completeText}\n\nShould I run the **full browser suite**?`
+      : completeText;
 
     const firstReasoningSummary = "Preparing";
     const updatedFirstReasoningSummary = "Preparing to inspect the workspace";
@@ -1395,7 +1398,7 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
       delete record.snapshot.activeBackendTurnId;
       record.updatedAt = completedAt;
       record.historyRevision += 1;
-      const outputTokens = Math.max(1, Math.ceil(completeText.length / 4));
+      const outputTokens = Math.max(1, Math.ceil(settledText.length / 4));
       const counters = record.usage.counters ?? {};
       record.usage = {
         ...record.usage,
@@ -1422,7 +1425,7 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
         ...assistantBase,
         status: "completed" as const,
         completedAt,
-        markdown: preserveMessageText(completeText),
+        markdown: preserveMessageText(settledText),
       } satisfies BackendItem;
       record.snapshot.itemsById[item.backendItemId] = item;
       this.emit(record, { type: "item_completed", item });

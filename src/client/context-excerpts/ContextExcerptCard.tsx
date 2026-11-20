@@ -1,15 +1,16 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   Check,
+  ChevronDown,
   ExternalLink,
   FileText,
   GitCompare,
-  MessageSquareText,
   Pencil,
   Trash2,
   X,
 } from "lucide-react";
 import type { ContextExcerpt } from "../../shared/index.js";
+import { ContextQuote } from "./ContextQuote.js";
 
 export function ContextExcerptCard({
   excerpt,
@@ -28,15 +29,22 @@ export function ContextExcerptCard({
   const [editingNote, setEditingNote] = useState(false);
   const [note, setNote] = useState(excerpt.note ?? "");
   const [noteError, setNoteError] = useState<string>();
+  const { source } = excerpt;
+  const isConversation = source.kind === "conversation_message";
+  const quoteKind = source.kind === "conversation_message" ? source.quoteKind : undefined;
+  const quoteId = useId();
+  const quotePreview = isConversation ? excerpt.excerpt.replace(/\s+/g, " ").trim() : "";
+  const quoteCharacters = Array.from(quotePreview);
+  const quoteName = quoteCharacters.length > 80
+    ? `“${quoteCharacters.slice(0, 80).join("")}…”`
+    : `“${quotePreview}”`;
   const path = sourcePath(excerpt);
   const label = path.split("/").at(-1) ?? path;
   const SourceIcon =
     excerpt.source.kind === "conversation_diff" ||
     excerpt.source.kind === "workspace_diff"
       ? GitCompare
-      : excerpt.source.kind === "conversation_message"
-        ? MessageSquareText
-        : FileText;
+      : FileText;
 
   const saveNote = () => {
     const normalized = note.trim();
@@ -51,22 +59,45 @@ export function ContextExcerptCard({
 
   return (
     <article
-      className="context-excerpt-card"
+      className={isConversation ? "context-excerpt-card context-excerpt-conversation" : "context-excerpt-card"}
       data-context-excerpt-id={excerpt.id}
+      data-state={isConversation ? (expanded ? "open" : "closed") : undefined}
     >
       <div className="context-excerpt-card-heading">
         <button
           type="button"
-          className="context-excerpt-summary"
+          className={isConversation ? "context-excerpt-quote-toggle" : "context-excerpt-summary"}
+          aria-label={isConversation ? `Quote ${quoteName}` : undefined}
+          aria-controls={isConversation ? quoteId : undefined}
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
-          <SourceIcon size={14} strokeWidth={1.8} aria-hidden="true" />
-          <span>
-            <strong>{label}</strong>
-            <small>{locatorLabel(excerpt)}</small>
-          </span>
+          {isConversation ? (
+            <>
+              {!expanded && (
+                <ContextQuote text={quotePreview} mode="compact" kind={quoteKind} />
+              )}
+              <ChevronDown size={14} aria-hidden="true" />
+            </>
+          ) : (
+            <>
+              <SourceIcon size={14} strokeWidth={1.8} aria-hidden="true" />
+              <span>
+                <strong>{label}</strong>
+                <small>{locatorLabel(excerpt)}</small>
+              </span>
+            </>
+          )}
         </button>
+        {isConversation && (
+          <ContextQuote
+            id={quoteId}
+            text={excerpt.excerpt}
+            mode="expanded"
+            kind={quoteKind}
+            hidden={!expanded}
+          />
+        )}
         <div className="context-excerpt-card-actions">
           {onOpen && (
             <button type="button" aria-label={`Open ${path}`} onClick={onOpen}>
@@ -76,7 +107,7 @@ export function ContextExcerptCard({
           {editable && onNoteChange && (
             <button
               type="button"
-              aria-label={`Edit note for ${label}`}
+              aria-label={`Edit note for ${isConversation ? quoteName : label}`}
               onClick={() => {
                 setNote(excerpt.note ?? "");
                 setNoteError(undefined);
@@ -90,7 +121,7 @@ export function ContextExcerptCard({
           {editable && onRemove && (
             <button
               type="button"
-              aria-label={`Remove ${label}`}
+              aria-label={isConversation ? `Remove quote ${quoteName}` : `Remove ${label}`}
               onClick={onRemove}
             >
               <Trash2 size={13} strokeWidth={1.8} aria-hidden="true" />
@@ -98,21 +129,28 @@ export function ContextExcerptCard({
           )}
         </div>
       </div>
-      {!expanded && (
+      {isConversation && excerpt.note && (!expanded || !editingNote) && (
+        <p className="context-excerpt-quote-note">{excerpt.note}</p>
+      )}
+      {!isConversation && !expanded && (
         <p className="context-excerpt-preview">
           {(excerpt.note ?? excerpt.excerpt).replace(/\s+/g, " ").trim()}
         </p>
       )}
-      {expanded && (
+      {expanded && (!isConversation || editingNote) && (
         <div className="context-excerpt-details">
-          <small className="context-excerpt-path">{path}</small>
-          <pre>{excerpt.excerpt}</pre>
+          {!isConversation && (
+            <>
+              <small className="context-excerpt-path">{path}</small>
+              <pre>{excerpt.excerpt}</pre>
+            </>
+          )}
           {editingNote ? (
             <div className="context-excerpt-note-editor">
               <label>
                 <span>Note</span>
                 <textarea
-                  rows={3}
+                  rows={isConversation ? 2 : 3}
                   value={note}
                   placeholder="What should the agent do with this excerpt?"
                   onChange={(event) => setNote(event.target.value)}

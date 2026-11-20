@@ -32,12 +32,13 @@ import {
 
 const excerpt = {
   id: "3d2eb945-d747-4dda-bf03-e24a96f9a71e",
-  excerpt: "The earlier answer remains relevant.",
+  excerpt: "Does the earlier answer remain relevant?",
   note: "Use this as quoted context.",
   source: {
     kind: "conversation_message" as const,
     itemId: "message-item-1",
     itemRevision: 2,
+    quoteKind: "question" as const,
   },
   locator: {
     kind: "text_quote" as const,

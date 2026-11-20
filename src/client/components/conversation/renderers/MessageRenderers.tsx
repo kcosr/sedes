@@ -1,5 +1,5 @@
 import { QuestionTranscriptDisclosure } from "../../thread/QuestionInbox.js";
-import { useCallback, useState } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import { ChevronRight, FileText, MessageCircleQuestion, Sparkles } from "lucide-react";
 import type {
   AssistantMessageItem,
@@ -8,6 +8,7 @@ import type {
   UserMessageItem,
 } from "../../../../shared/index.js";
 import { ProgressiveMarkdown } from "../ProgressiveMarkdown";
+import { getHighlightQuestions, subscribeHighlightQuestions } from "../../../app/settings.js";
 import { TruncationNotice } from "../StructuredValue";
 import type { ConversationItemRenderer, ItemRenderContext } from "../types";
 import { ContextExcerptList } from "../../../context-excerpts/ContextExcerptCard.js";
@@ -298,6 +299,8 @@ function AssistantMessage({
   const [presentationActive, setPresentationActive] = useState(
     item.status === "streaming",
   );
+  const highlightQuestionsEnabled = useSyncExternalStore(subscribeHighlightQuestions, getHighlightQuestions);
+  const highlightQuestions = highlightQuestionsEnabled && item.status === "completed";
   const presentationChanged = useCallback((active: boolean) => {
     setPresentationActive(active);
   }, []);
@@ -317,9 +320,11 @@ function AssistantMessage({
         itemId={item.id}
         itemRevision={item.revision}
         selectionKind="markdown"
+        questionNotes={highlightQuestions}
       >
         <ProgressiveMarkdown
           copyCodeBlocks
+          highlightQuestions={highlightQuestions}
           onPresentationActiveChange={presentationChanged}
           sourcePositionMetadata={item.status !== "streaming"}
           streaming={item.status === "streaming"}

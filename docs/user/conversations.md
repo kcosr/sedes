@@ -427,10 +427,12 @@ draft. See [Tasks and automations](tasks-and-automations.md).
 
 ### Attach a file or capture context
 
-Choose files, paste into the focused composer, or drop files onto it. You can
-also select eligible text in a completed message, a read-only file, a rendered
-Markdown preview, or a settled diff and choose **Add to message** or **Add
-note**. Details are in [Files and context](files-and-context.md).
+Choose files, paste into the focused composer, or drop files onto it.
+Selecting text in a completed chat message opens the quote editor. Choose
+**Add** to stage the quote and any note or **Add & send** to send the draft.
+In a read-only file, rendered Markdown preview, or settled diff, select text
+and choose **Add to message** or **Add note**. See
+[Files and context](files-and-context.md#capture-an-exact-context-excerpt).
 
 ## Send, Steer, Queue, and Stop
 
