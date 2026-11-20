@@ -137,8 +137,10 @@ test("active chat notes deliver the combined composer draft with Steer and Queue
       const note = `New annotation for ${mode}.`;
       await actions.getByRole("textbox", { name: "Note about selected message text" }).fill(note);
       const send = actions.getByRole("button", { name: `Add & ${mode}`, exact: true });
+      const sendDescription = "Includes this selection, note, and any existing composer content.";
       await expect(send).toBeEnabled();
-      await expect(send).toHaveAccessibleDescription("Includes this selection, note, and any existing composer content.");
+      await expect(send).toHaveAccessibleDescription(sendDescription);
+      await expect(actions.getByText(sendDescription, { exact: true })).toBeHidden();
       await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
       await expectNoPageOverflow(page);
       await capture(page, testInfo, `chat-active-note-${mode}-${mode === "steer" ? "desktop" : "mobile"}.png`);

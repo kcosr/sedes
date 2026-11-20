@@ -286,7 +286,7 @@ export function PierreSelectionAction({
         </span>
       )}
       {addingNote && !initialError && (
-        <span id={sendHintId} className="pierre-selection-send-hint">
+        <span id={sendHintId} className="pierre-selection-send-hint" hidden={Boolean(quote)}>
           Includes this selection, note, and any existing composer content.
         </span>
       )}
