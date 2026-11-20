@@ -50,7 +50,12 @@ test("a saved reply question opens the existing note editor", async ({ page }, t
   });
   await expect(questionNote).toBeFocused();
   await expect(questionNote).toHaveAttribute("rows", "2");
-  await expect(chatSelectionActions.getByText(questionText, { exact: true })).toBeVisible();
+  const editorQuote = chatSelectionActions.locator("blockquote");
+  await expect(editorQuote).toHaveText(questionText);
+  await expect(editorQuote).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
+  await expect(chatSelectionActions.locator(":scope > :first-child")).toHaveText(questionText);
+  await expect(chatSelectionActions.getByText("Selected message text", { exact: true })).toHaveCount(0);
+  await expect(chatSelectionActions.getByText("Add an optional note", { exact: true })).toHaveCount(0);
   const noteText = "Run it after checking the build.";
   await questionNote.fill(noteText);
   await capture(page, testInfo, "chat-question-note-desktop.png");
@@ -62,35 +67,37 @@ test("a saved reply question opens the existing note editor", async ({ page }, t
   );
   await chatSelectionActions.getByRole("button", { name: "Add", exact: true }).click();
   expect((await noteSaved).request().postDataJSON().contextExcerpts).toMatchObject([
-    { excerpt: questionText, note: noteText },
+    { excerpt: questionText, note: noteText, source: { quoteKind: "question" } },
   ]);
   await expect(chatSelectionActions).toBeHidden();
   const stagedNote = page.getByTestId("composer").getByLabel("Context excerpts");
   const stagedQuoteToggle = stagedNote.getByRole("button", { name: `Quote “${questionText}”`, exact: true });
   await expect(stagedQuoteToggle).toHaveAttribute("aria-expanded", "false");
   await expect(stagedQuoteToggle.locator(".context-excerpt-quote")).toHaveText(questionText);
+  await expect(stagedQuoteToggle.locator(".context-excerpt-quote")).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
   await expect(stagedNote).toContainText(noteText);
   await expect(stagedNote.getByText("Conversation message", { exact: true })).toHaveCount(0);
   await stagedQuoteToggle.click();
   await expect(stagedQuoteToggle).toHaveAttribute("aria-expanded", "true");
   const stagedQuote = stagedNote.locator("blockquote");
   await expect(stagedQuote).toHaveText(questionText);
+  await expect(stagedQuote).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
   await stagedQuote.dblclick({ position: { x: 14, y: 9 } });
   expect(await page.evaluate(() => window.getSelection()?.toString().trim())).toBe("Should");
   await page.evaluate(() => window.getSelection()?.removeAllRanges());
   await stagedQuoteToggle.click();
   await expect(stagedQuoteToggle).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator('[data-item-kind="user_message"]')).toHaveCount(1);
-  const noteRemoved = page.waitForResponse((response) =>
-    response.request().method() === "PUT" && response.ok() &&
-    new URL(response.url()).pathname === draftPath &&
-    response.request().postDataJSON().contextExcerpts?.length === 0,
-  );
-  await stagedNote.getByRole("button", { name: `Remove quote “${questionText}”`, exact: true }).click();
-  await noteRemoved;
-
   await page.reload();
   await expect(question).toHaveText(questionText);
+  await expect(stagedQuoteToggle.locator(".context-excerpt-quote")).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
+  await sendCurrentDraft(page);
+  const sentMessage = page.locator('[data-item-kind="user_message"]').last();
+  const sentQuoteToggle = sentMessage.getByRole("button", { name: `Quote “${questionText}”`, exact: true });
+  await expect(sentQuoteToggle.locator(".context-excerpt-quote")).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
+  await sentQuoteToggle.click();
+  await expect(sentMessage.locator("blockquote")).toHaveText(questionText);
+  await expect(sentMessage.locator("blockquote")).toHaveCSS("border-left-color", "rgb(163, 47, 72)");
 });
 
 test.describe.serial("normalized streaming and restored state", () => {

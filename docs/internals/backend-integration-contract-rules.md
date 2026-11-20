@@ -3332,6 +3332,14 @@ for accepted or uncertain outcomes; remove it only after authoritative evidence
 proves non-acceptance. A backend must not create a second input snapshot,
 attachment or Task store, replay record, or security policy.
 
+Conversation excerpts may mark a quote captured through a highlighted-question
+shortcut. This presentation field is scoped to the thread's existing excerpt
+data, enters drafts and delivery snapshots, and reaches the browser in client
+protocol 176. Pi SDK, native Pi, Codex, Claude, and OpenCode use the same
+normalized excerpt schema in their existing delivery paths. Grok does not
+accept context excerpts. The field controls the quote border and confers no
+authority to read or navigate to the source.
+
 Signed attachment carriers and replay fingerprints validate staged paths using
 the shared normalized absolute-path contract, including native Windows drive
 and UNC paths, independently of the main server's OS. Keep exact path spelling

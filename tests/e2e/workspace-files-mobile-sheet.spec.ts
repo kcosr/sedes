@@ -187,7 +187,11 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
   });
   await expect(chatNote).toBeVisible();
   await expect(chatNote).not.toBeFocused();
-  await expect(chatActions.locator("blockquote")).toHaveText(quoteText);
+  const editorQuote = chatActions.locator("blockquote");
+  await expect(editorQuote).toHaveText(quoteText);
+  await expect(chatActions.locator(":scope > :first-child")).toHaveText(quoteText);
+  const selectionRailColor = "oklch(0.512 0.012 260)";
+  await expect(editorQuote).toHaveCSS("border-left-color", selectionRailColor);
   expect(await page.evaluate(() => {
     const selection = document.getSelection();
     return selection?.rangeCount ? selection.getRangeAt(0).toString() : "";
@@ -217,6 +221,7 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
   const quotePreview = quoteToggle.locator(".context-excerpt-quote");
   const notePreview = chatExcerpt.locator(".context-excerpt-quote-note");
   await expect(quotePreview).toHaveText(summary);
+  await expect(quotePreview).toHaveCSS("border-left-color", selectionRailColor);
   await expect(notePreview).toHaveText(noteText);
   for (const preview of [quotePreview, notePreview]) {
     await expect(preview).toHaveCSS("white-space", "nowrap");
@@ -233,6 +238,7 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
   await quoteToggle.tap();
   const expandedQuote = chatExcerpt.getByRole("blockquote");
   await expect(expandedQuote).toBeVisible();
+  await expect(expandedQuote).toHaveCSS("border-left-color", selectionRailColor);
   expect(await expandedQuote.textContent()).toBe(quoteText);
   expect(await expandedQuote.evaluate((element) =>
     element.getBoundingClientRect().width / element.parentElement!.clientWidth,
@@ -246,6 +252,14 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
     expect(bounds.y + bounds.height).toBeLessThanOrEqual(listBounds.y + listBounds.height);
   }
   await capture(page, testInfo, "chat-mobile-expanded-quote.png");
+  const quoteRemoved = page.waitForResponse((response) =>
+    response.request().method() === "PUT" && response.ok() &&
+    new URL(response.url()).pathname.endsWith("/draft") &&
+    response.request().postDataJSON().contextExcerpts?.length === 0,
+  );
+  await chatExcerpt.getByRole("button", { name: `Remove quote ${boundedQuote}`, exact: true }).tap();
+  await quoteRemoved;
+  await expect(chatExcerpt).toBeHidden();
 });
 
 // Regression: the panel stops wheel/touchmove itself so the tree's scroller —

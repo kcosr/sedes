@@ -29,7 +29,9 @@ export function ContextExcerptCard({
   const [editingNote, setEditingNote] = useState(false);
   const [note, setNote] = useState(excerpt.note ?? "");
   const [noteError, setNoteError] = useState<string>();
-  const isConversation = excerpt.source.kind === "conversation_message";
+  const { source } = excerpt;
+  const isConversation = source.kind === "conversation_message";
+  const quoteKind = source.kind === "conversation_message" ? source.quoteKind : undefined;
   const quoteId = useId();
   const quotePreview = isConversation ? excerpt.excerpt.replace(/\s+/g, " ").trim() : "";
   const quoteCharacters = Array.from(quotePreview);
@@ -73,7 +75,7 @@ export function ContextExcerptCard({
           {isConversation ? (
             <>
               {!expanded && (
-                <ContextQuote text={quotePreview} mode="compact" />
+                <ContextQuote text={quotePreview} mode="compact" kind={quoteKind} />
               )}
               <ChevronDown size={14} aria-hidden="true" />
             </>
@@ -88,7 +90,13 @@ export function ContextExcerptCard({
           )}
         </button>
         {isConversation && (
-          <ContextQuote id={quoteId} text={excerpt.excerpt} mode="expanded" hidden={!expanded} />
+          <ContextQuote
+            id={quoteId}
+            text={excerpt.excerpt}
+            mode="expanded"
+            kind={quoteKind}
+            hidden={!expanded}
+          />
         )}
         <div className="context-excerpt-card-actions">
           {onOpen && (

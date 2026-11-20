@@ -50,6 +50,9 @@ describe("ConversationMessageSelectionSurface", () => {
       name: "Selected message text actions",
     });
     expect(within(editor).getByRole("blockquote")).toHaveTextContent("selected");
+    expect(editor.firstElementChild).toHaveAttribute("data-quote-kind", "selection");
+    expect(within(editor).queryByText("Selected message text", { exact: true })).not.toBeInTheDocument();
+    expect(within(editor).queryByText("Add an optional note", { exact: true })).not.toBeInTheDocument();
     expect(within(editor).getByRole("textbox")).not.toHaveFocus();
     expect(document.getSelection()?.toString()).toBe("selected");
     expect(within(editor).queryByRole("button", { name: "Add note…" })).not.toBeInTheDocument();
@@ -205,7 +208,12 @@ describe("ConversationMessageSelectionSurface", () => {
     expect(target.stage).toHaveBeenCalledWith(expect.objectContaining({
       excerpt: "Should I run the full suite?",
       note: "Yes, please.",
-      source: { kind: "conversation_message", itemId: "assistant-question", itemRevision: 3 },
+      source: {
+        kind: "conversation_message",
+        itemId: "assistant-question",
+        itemRevision: 3,
+        quoteKind: "question",
+      },
       locator: {
         kind: "text_quote",
         prefix: "Tests passed. ",
@@ -248,6 +256,7 @@ describe("ConversationMessageSelectionSurface", () => {
     const actions = await screen.findByRole("toolbar");
     expect(within(actions).getByRole("button", { name: "Add" })).toBeEnabled();
     expect(within(actions).getByRole("blockquote")).toHaveTextContent("full suite");
+    expect(within(actions).getByRole("blockquote")).toHaveAttribute("data-quote-kind", "selection");
     expect(within(actions).getByRole("textbox")).not.toHaveFocus();
   });
 

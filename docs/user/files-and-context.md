@@ -221,15 +221,16 @@ from:
 - visible text in a rendered Markdown preview; or
 - settled lines in a Git Changes diff.
 
-In chat, selecting text opens the quote editor with a preview and an optional
+In chat, selecting text opens the editor with the quote above an optional
 note. **Add** puts the quote and any note in the draft. **Copy** copies the
 quote. In files and diffs, choose **Add to message** to attach the selection or
 **Add note** to include an explanation. The resulting card is part of the
 durable draft and follows stash, queue, retry, Send, and Steer.
 
-For excerpts from a chat message, the card leads with a one-line quote preview
-and shows any note below it. Click or tap the quote to show the full text in the
-composer or in the sent chat bubble, where you can select and copy it.
+Quotes opened from a highlighted question have a red side border. Manual
+selections have a gray side border. The composer and sent chat bubble show
+the same border next to a one-line preview, with any note below it. Click or
+tap the quote to show the full text and select or copy it.
 
 In the chat quote editor, **Add & send** sends the quote and any note with
 everything already in the composer, including text, other excerpts,

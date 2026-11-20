@@ -505,8 +505,8 @@ every category indefinitely.
 
 Under **Chat formatting**, **Highlight questions in agent replies** displays
 questions in completed replies in red with a dotted underline. Select a
-highlighted sentence or its note button to open the same quote editor as a
-chat text selection, with the sentence quoted. The setting is off by default
+highlighted sentence or its note button to open the quote editor with a red
+border next to the quoted question. The setting is off by default
 and applies to this browser or packaged client.
 
 The operating system's Reduce Motion preference disables the optional motion

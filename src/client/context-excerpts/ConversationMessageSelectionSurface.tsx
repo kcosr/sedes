@@ -256,6 +256,7 @@ export function ConversationMessageSelectionSurface({
           kind: "conversation_message",
           itemId,
           itemRevision,
+          ...(pending.noteTrigger ? { quoteKind: "question" } : {}),
         },
         locator: pending.locator,
       };
@@ -313,6 +314,7 @@ export function ConversationMessageSelectionSurface({
           ariaLabel="Selected message text actions"
           anchor={pending.anchor}
           copyText={pending.excerpt}
+          quoteKind={pending.noteTrigger ? "question" : undefined}
           initialError={actionError}
           startInNoteMode
           autoFocusNote={pending.noteTrigger !== undefined}

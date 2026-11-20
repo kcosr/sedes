@@ -6186,6 +6186,10 @@ textarea:disabled {
   line-height: var(--leading-normal);
 }
 
+.context-excerpt-quote[data-quote-kind="question"] {
+  border-inline-start-color: var(--chat-question);
+}
+
 .context-excerpt-quote[data-mode="expanded"] {
   flex: 1;
   order: -1;

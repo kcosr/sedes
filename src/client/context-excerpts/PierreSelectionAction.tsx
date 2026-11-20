@@ -12,7 +12,7 @@ import { Copy, MessageSquareText, Paperclip, Send } from "lucide-react";
 import { MAXIMUM_CONTEXT_EXCERPT_NOTE_BYTES } from "../../shared/index.js";
 import { OPEN_OVERLAY_SELECTOR } from "../app/android-back.js";
 import { Button } from "../components/ui/button.js";
-import { ContextQuote } from "./ContextQuote.js";
+import { ContextQuote, type ContextQuoteKind } from "./ContextQuote.js";
 
 import { useComposerDraftStagingSnapshot, type ContextExcerptStagingTarget } from "./coordinator.js";
 
@@ -42,6 +42,7 @@ export function PierreSelectionAction({
   anchor,
   owner,
   copyText,
+  quoteKind,
   unavailableReason,
   onStage,
   onCancel,
@@ -62,6 +63,7 @@ export function PierreSelectionAction({
   readonly anchor?: SelectionActionAnchor;
   readonly owner?: HTMLElement | null;
   readonly copyText?: string;
+  readonly quoteKind?: ContextQuoteKind;
   readonly unavailableReason?: string;
   readonly onStage: (
     note?: string,
@@ -241,12 +243,13 @@ export function PierreSelectionAction({
       role="toolbar"
       style={position}
     >
-      <div className="pierre-selection-card-heading">
-        <strong>{sentenceCase(label)}</strong>
-        <span>{addingNote ? "Add an optional note" : "Selection actions"}</span>
-      </div>
-      {startInNoteMode && copyText && (
-        <ContextQuote text={copyText} mode="editor" />
+      {startInNoteMode && copyText ? (
+        <ContextQuote text={copyText} mode="editor" kind={quoteKind} />
+      ) : (
+        <div className="pierre-selection-card-heading">
+          <strong>{sentenceCase(label)}</strong>
+          <span>{addingNote ? "Add an optional note" : "Selection actions"}</span>
+        </div>
       )}
       {addingNote && (
         <>

@@ -30,10 +30,11 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **175**. Account quota snapshots now include the execution target's backend
-  identity. Research settings now select Codex CLI. Remote environment
-  configuration adds the required connection
-  compression setting. Usage requests now select report sections and load filter choices
+  **176**. Chat excerpts captured from highlighted questions retain their quote
+  style in drafts and sent messages. Account quota snapshots now include the
+  execution target's backend identity. Research settings now select Codex CLI.
+  Remote environment configuration adds the required connection compression
+  setting. Usage requests now select report sections and load filter choices
   through a separate endpoint; see [Usage accounting](docs/internals/usage-accounting.md#analytics-read).
   Provider-feature mutations now require explicit mutation revisions;
   Codex Speed uses its strict v3 action/result contract. Sedes tool policies replace cross-boundary approval modes with
@@ -42,7 +43,7 @@ User-facing changes are collected here before release. See the
   review rather than broadened. Saved Agent and thread-create tool contracts
   advance to version 6; thread-message transcripts advance to version 5 to
   identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
-  ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112), [#116](https://github.com/kcosr/sedes/pull/116))
+  ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112), [#116](https://github.com/kcosr/sedes/pull/116), [#142](https://github.com/kcosr/sedes/pull/142))
 
 - Upgrade execution sidecars with the server for runtime wire version **17**
   and negotiated traffic compression. Incompatible active services retain the
@@ -88,7 +89,7 @@ User-facing changes are collected here before release. See the
 
 - Enable **Highlight questions in agent replies** under **Settings > Appearance
   > Chat formatting** to show completed questions in red with an underline.
-  Select a question to open the chat quote editor. See
+  Select a question to open the editor with a red quote border. See
   [Appearance settings](docs/user/settings.md#appearance).
   ([#142](https://github.com/kcosr/sedes/pull/142))
 
