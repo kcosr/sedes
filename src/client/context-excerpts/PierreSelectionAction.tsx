@@ -46,6 +46,7 @@ export function PierreSelectionAction({
   unavailableReason,
   onStage,
   onCancel,
+  onClickOutside,
   onCopySuccess,
   onNoteModeChange,
   onNoteFocus,
@@ -70,6 +71,7 @@ export function PierreSelectionAction({
     sendImmediately?: boolean,
   ) => PierreSelectionStageResult;
   readonly onCancel: () => void;
+  readonly onClickOutside?: () => void;
   readonly onCopySuccess?: () => void;
   readonly onNoteModeChange?: (active: boolean) => void;
   readonly onNoteFocus?: () => void;
@@ -195,6 +197,19 @@ export function PierreSelectionAction({
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [addingNote, onCancel, resolvedOwner, startInNoteMode]);
+
+  useEffect(() => {
+    if (!onClickOutside) return;
+    const handleClick = (event: MouseEvent) => {
+      const overlay = overlayRef.current;
+      if (!overlay || event.composedPath().includes(overlay)) return;
+      // A click can follow a text-selection drag. Let selection capture handle it.
+      if (document.getSelection()?.isCollapsed === false) return;
+      onClickOutside();
+    };
+    document.addEventListener("click", handleClick, true);
+    return () => document.removeEventListener("click", handleClick, true);
+  }, [onClickOutside]);
 
   const stage = (sendImmediately = false) => {
     const normalizedNote = note.trim();

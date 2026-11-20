@@ -49,6 +49,10 @@ test("a saved reply question opens the existing note editor", async ({ page }, t
     name: "Note about selected message text",
   });
   await expect(questionNote).toBeFocused();
+  await completedAssistant.getByRole("heading", { name: "Live summary" }).click();
+  await expect(chatSelectionActions).toBeHidden();
+  await question.click();
+  await expect(questionNote).toBeFocused();
   await expect(questionNote).toHaveAttribute("rows", "2");
   const editorQuote = chatSelectionActions.locator("blockquote");
   await expect(editorQuote).toHaveText(questionText);

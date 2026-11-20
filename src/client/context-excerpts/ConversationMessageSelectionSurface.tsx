@@ -324,6 +324,7 @@ export function ConversationMessageSelectionSurface({
             document.getSelection()?.removeAllRanges();
             clearPending();
           }}
+          onClickOutside={pending.noteTrigger ? clearPending : undefined}
           onCopySuccess={() => {
             const selection = document.getSelection();
             const copiedRange =

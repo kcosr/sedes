@@ -229,6 +229,49 @@ describe("ConversationMessageSelectionSurface", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("dismisses a question editor on an outside click and keeps it open during a touch scroll", async () => {
+    const user = userEvent.setup();
+    const target = stagingTarget();
+    render(
+      <>
+        <ConversationMessageSelectionSurface
+          enabled
+          itemId="assistant-question"
+          itemRevision={1}
+          selectionKind="markdown"
+          selectionDebounceMilliseconds={0}
+          questionNotes
+          stagingTarget={target}
+        >
+          <MarkdownContent sourcePositionMetadata rehypePlugins={[rehypeAssistantQuestions]}>
+            {"Should I run the tests?\n\nIt may take a minute."}
+          </MarkdownContent>
+        </ConversationMessageSelectionSurface>
+        <button type="button">Outside action</button>
+      </>,
+    );
+
+    const question = screen.getByText("Should I run the tests?");
+    const outside = screen.getByRole("button", { name: "Outside action" });
+    await user.click(question);
+    const note = screen.getByRole("textbox");
+    await user.click(note);
+    await user.type(note, "Run them.");
+    const source = screen.getByText("It may take a minute.");
+    fireEvent.touchStart(source, { touches: [{ identifier: 1, target: source, clientY: 300 }] });
+    fireEvent.touchMove(source, { touches: [{ identifier: 1, target: source, clientY: 240 }] });
+    fireEvent.touchEnd(source, { touches: [] });
+    await delay(20);
+    expect(note).toHaveValue("Run them.");
+
+    await user.click(outside);
+    expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+    expect(outside).toHaveFocus();
+    expect(target.stage).not.toHaveBeenCalled();
+    await user.click(question);
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
   it.each([
     { detail: 2 },
     { detail: 1, shiftKey: true },
@@ -291,6 +334,7 @@ describe("ConversationMessageSelectionSurface", () => {
     selectText(sentence.firstChild!);
     fireEvent(document, new Event("selectionchange"));
     fireEvent.pointerUp(sentence, { button: 0, isPrimary: true, pointerType: "mouse" });
+    fireEvent.click(sentence);
     await waitFor(() => expect(editor().getByRole("blockquote")).toHaveTextContent(sentence.textContent!));
 
     editor().getByRole("textbox").focus();
