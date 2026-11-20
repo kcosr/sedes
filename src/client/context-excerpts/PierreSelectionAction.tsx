@@ -48,6 +48,7 @@ export function PierreSelectionAction({
   onCopySuccess,
   onNoteModeChange,
   onNoteFocus,
+  onNoteChange,
   noteInputLabel = "Note for agent",
   stageWithNoteLabel = "Add note",
   stagingTarget,
@@ -70,6 +71,7 @@ export function PierreSelectionAction({
   readonly onCopySuccess?: () => void;
   readonly onNoteModeChange?: (active: boolean) => void;
   readonly onNoteFocus?: () => void;
+  readonly onNoteChange?: (value: string) => void;
   readonly noteInputLabel?: string;
   readonly stageWithNoteLabel?: string;
 }): React.JSX.Element {
@@ -256,7 +258,9 @@ export function PierreSelectionAction({
               className="pierre-selection-note"
               onFocus={onNoteFocus}
               onChange={(event) => {
-                setNote(event.currentTarget.value);
+                const value = event.currentTarget.value;
+                setNote(value);
+                onNoteChange?.(value);
                 setError(undefined);
               }}
               onKeyDown={(event) => {

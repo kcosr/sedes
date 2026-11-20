@@ -251,6 +251,58 @@ describe("ConversationMessageSelectionSurface", () => {
     expect(within(actions).getByRole("textbox")).not.toHaveFocus();
   });
 
+  it("replaces an empty quote on reselection and protects a typed note from question taps", async () => {
+    const target = stagingTarget();
+    render(
+      <ConversationMessageSelectionSurface
+        enabled
+        itemId="assistant-question"
+        itemRevision={1}
+        selectionKind="markdown"
+        questionNotes
+        selectionDebounceMilliseconds={0}
+        stagingTarget={target}
+      >
+        <MarkdownContent sourcePositionMetadata rehypePlugins={[rehypeAssistantQuestions]}>
+          {"Should I send it?\n\nAnother sentence to select."}
+        </MarkdownContent>
+      </ConversationMessageSelectionSurface>,
+    );
+
+    const question = screen.getByText("Should I send it?");
+    const sentence = screen.getByText("Another sentence to select.");
+    const editor = () => within(screen.getByRole("toolbar"));
+    fireEvent.click(question);
+    expect(editor().getByRole("blockquote")).toHaveTextContent("Should I send it?");
+    expect(editor().getByRole("textbox")).toHaveFocus();
+
+    fireEvent.pointerDown(sentence, { button: 0, isPrimary: true, pointerType: "mouse" });
+    selectText(sentence.firstChild!);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.pointerUp(sentence, { button: 0, isPrimary: true, pointerType: "mouse" });
+    await waitFor(() => expect(editor().getByRole("blockquote")).toHaveTextContent(sentence.textContent!));
+
+    editor().getByRole("textbox").focus();
+    selectText(sentence.firstChild!, 0, 7);
+    fireEvent(document, new Event("selectionchange"));
+    await waitFor(() => expect(editor().getByRole("blockquote").textContent).toBe("Another"));
+
+    const note = editor().getByRole("textbox");
+    note.focus();
+    fireEvent.change(note, { target: { value: "Keep this note." } });
+    document.getSelection()?.removeAllRanges();
+    fireEvent.pointerDown(question, { button: 0, isPrimary: true, pointerType: "touch" });
+    fireEvent.pointerUp(question, { button: 0, isPrimary: true, pointerType: "touch" });
+    fireEvent.click(question);
+    await delay(20);
+    expect(editor().getByRole("blockquote").textContent).toBe("Another");
+    expect(editor().getByRole("textbox")).toHaveValue("Keep this note.");
+    fireEvent.click(editor().getByRole("button", { name: "Add" }));
+    expect(target.stage).toHaveBeenCalledWith(expect.objectContaining({
+      excerpt: "Another", note: "Keep this note.",
+    }));
+  });
+
   it("rejects cross-message and control-spanning selections", async () => {
     const target = stagingTarget();
     const { rerender } = render(

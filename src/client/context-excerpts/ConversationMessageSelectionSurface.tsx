@@ -39,6 +39,7 @@ const UNAVAILABLE: ContextExcerptStagingSnapshot = Object.freeze({
 });
 
 interface PendingConversationSelection {
+  readonly captureId: number;
   readonly excerpt: string;
   readonly locator: Extract<ContextExcerpt["locator"], { kind: "text_quote" }>;
   readonly anchor: DOMRect;
@@ -47,6 +48,12 @@ interface PendingConversationSelection {
   readonly targetThreadId?: string;
   readonly targetWorkspaceId?: string;
   readonly noteTrigger?: HTMLButtonElement;
+}
+
+interface QuoteInteraction {
+  readonly range: Range;
+  retainWhenSelectionClears: boolean;
+  hasNote: boolean;
 }
 
 export function ConversationMessageSelectionSurface({
@@ -84,17 +91,15 @@ export function ConversationMessageSelectionSurface({
     : targetSnapshot.reason;
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const [pending, setPending] = useState<PendingConversationSelection>();
-  const lockedQuote = useRef(false);
-  const lockQuote = useCallback(() => {
-    lockedQuote.current = true;
-  }, []);
+  const nextCaptureId = useRef(0);
+  const quoteInteraction = useRef<QuoteInteraction | undefined>(undefined);
   const questionPress = useRef<{ x: number; y: number } | undefined>(undefined);
   const [actionError, setActionError] = useState<string>();
   const [copyConfirmation, setCopyConfirmation] = useState<string>();
 
   const clearPending = useCallback(() => {
     setPending(undefined);
-    lockedQuote.current = false;
+    quoteInteraction.current = undefined;
     setActionError(undefined);
   }, []);
 
@@ -132,7 +137,7 @@ export function ConversationMessageSelectionSurface({
             })
           : capturePlainConversationSelection(root, range);
       if (!captured) {
-        clearPending();
+        if (!quoteInteraction.current?.retainWhenSelectionClears) clearPending();
         return;
       }
       setCopyConfirmation(undefined);
@@ -144,9 +149,14 @@ export function ConversationMessageSelectionSurface({
         setActionError("The selected text is too large to attach.");
         return;
       }
-      lockedQuote.current = noteTrigger !== undefined;
+      quoteInteraction.current = {
+        range: range.cloneRange(),
+        retainWhenSelectionClears: noteTrigger !== undefined,
+        hasNote: false,
+      };
       setPending({
         ...captured,
+        captureId: ++nextCaptureId.current,
         anchor: safeRangeRect(range),
         itemId,
         itemRevision,
@@ -165,18 +175,24 @@ export function ConversationMessageSelectionSurface({
       root,
       debounceMilliseconds: selectionDebounceMilliseconds,
       capture: () => {
-        if (lockedQuote.current) return;
+        const interaction = quoteInteraction.current;
+        if (interaction?.hasNote) return;
         const selection = document.getSelection();
         if (selection?.rangeCount !== 1 || selection.isCollapsed) {
+          if (!interaction?.retainWhenSelectionClears) clearPending();
+          return;
+        }
+        const range = selection.getRangeAt(0);
+        if (!root.contains(range.commonAncestorContainer)) {
           clearPending();
           return;
         }
-        captureRange(selection.getRangeAt(0));
+        if (interaction && selectionMatchesRange(interaction.range)) return;
+        captureRange(range);
       },
       onGestureStart: () => {
-        // Once the user starts editing, reading or scrolling the message
-        // should keep the captured quote and note available.
-        if (!lockedQuote.current) clearPending();
+        // Keep the editor open while reading or scrolling after focusing it.
+        if (!quoteInteraction.current?.retainWhenSelectionClears) clearPending();
       },
     });
   }, [captureRange, clearPending, enabled, root, selectionDebounceMilliseconds]);
@@ -191,7 +207,8 @@ export function ConversationMessageSelectionSurface({
     const press = questionPress.current;
     questionPress.current = undefined;
     const clicked = event.target;
-    if (!available || event.defaultPrevented || !(clicked instanceof Element)) return;
+    if (!available || quoteInteraction.current?.hasNote ||
+        event.defaultPrevented || !(clicked instanceof Element)) return;
     const question = clicked.closest(ASSISTANT_QUESTION_SELECTOR);
     if (!question || !event.currentTarget.contains(question)) return;
     const text = question.querySelector(ASSISTANT_QUESTION_TEXT_SELECTOR);
@@ -291,7 +308,7 @@ export function ConversationMessageSelectionSurface({
       )}
       {pending && (
         <PierreSelectionAction
-          key={pending.noteTrigger?.closest(ASSISTANT_QUESTION_SELECTOR)?.getAttribute("data-assistant-question")}
+          key={pending.captureId}
           stagingTarget={target}
           ariaLabel="Selected message text actions"
           anchor={pending.anchor}
@@ -320,7 +337,12 @@ export function ConversationMessageSelectionSurface({
               }
             }, 1_200);
           }}
-          onNoteFocus={lockQuote}
+          onNoteFocus={() => {
+            if (quoteInteraction.current) quoteInteraction.current.retainWhenSelectionClears = true;
+          }}
+          onNoteChange={(value) => {
+            if (quoteInteraction.current) quoteInteraction.current.hasNote = value !== "";
+          }}
           onStage={stage}
           owner={pending.noteTrigger ?? root}
           stageWithNoteLabel="Add"
