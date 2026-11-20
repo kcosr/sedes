@@ -116,7 +116,7 @@ describe("ConversationMessageSelectionSurface", () => {
     );
   });
 
-  it("keeps a failed immediate note selection open and reports the delivery blocker", async () => {
+  it("keeps the edited quote open when touching the source and when delivery fails", async () => {
     const attachAndSubmit = vi.fn(() => ({
       ok: false as const,
       reason: "Wait for attachment uploads to finish before sending.",
@@ -135,7 +135,8 @@ describe("ConversationMessageSelectionSurface", () => {
       </ConversationMessageSelectionSurface>,
     );
 
-    selectText(screen.getByText("Select this text").firstChild!, 0, 6);
+    const source = screen.getByText("Select this text");
+    selectText(source.firstChild!, 0, 6);
     fireEvent(document, new Event("selectionchange"));
     const toolbar = await screen.findByRole("toolbar");
     const note = within(toolbar).getByRole("textbox");
@@ -147,6 +148,12 @@ describe("ConversationMessageSelectionSurface", () => {
     fireEvent.change(note, {
       target: { value: "Explain this." },
     });
+    fireEvent.touchStart(source, { touches: [{ identifier: 1, target: source }] });
+    fireEvent.touchEnd(source, { touches: [] });
+    await delay(20);
+    expect(note).toBeVisible();
+    expect(note).toHaveValue("Explain this.");
+    expect(within(toolbar).getByRole("blockquote")).toHaveTextContent("Select");
     fireEvent.click(screen.getByRole("button", { name: "Add & send" }));
 
     expect(attachAndSubmit).toHaveBeenCalledWith(

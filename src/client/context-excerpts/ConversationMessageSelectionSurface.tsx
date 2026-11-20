@@ -173,7 +173,11 @@ export function ConversationMessageSelectionSurface({
         }
         captureRange(selection.getRangeAt(0));
       },
-      onGestureStart: clearPending,
+      onGestureStart: () => {
+        // Once the user starts editing, reading or scrolling the message
+        // should keep the captured quote and note available.
+        if (!lockedQuote.current) clearPending();
+      },
     });
   }, [captureRange, clearPending, enabled, root, selectionDebounceMilliseconds]);
 
