@@ -40,6 +40,26 @@ test("Antigravity production connection streams, stops, requests permission and 
   await sendCurrentDraft(page);
   await expect(page.getByText("Streaming fixture-alt at xhigh effort in plan mode.", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Antigravity native journey", exact: true }).click();
+  const title = page.getByRole("textbox", { name: "Thread title", exact: true });
+  await title.fill("My Antigravity thread");
+  const renamed = page.waitForResponse(response => response.request().method() === "POST" &&
+    response.url().endsWith("/operations") && response.request().postDataJSON().operation?.action === "rename");
+  await title.press("Enter");
+  const renameResponse = await renamed;
+  expect(renameResponse.ok(), await renameResponse.text()).toBe(true);
+  const renameInput = renameResponse.request().postDataJSON();
+  const operationUrl = `${fixture.origin}/api/threads/${creation.threadId}/operations`;
+  const headers = { "X-CSRF-Token": (await renameResponse.request().headerValue("X-CSRF-Token"))! };
+  const replay = await page.request.post(operationUrl, { data: renameInput, headers });
+  expect(replay.ok(), await replay.text()).toBe(true);
+  expect(await replay.json()).toEqual(await renameResponse.json());
+  const collision = await page.request.post(operationUrl, {
+    headers,
+    data: { ...renameInput, operation: { action: "rename", title: "Conflicting replay" } },
+  });
+  expect(collision.status()).toBe(409);
+  await expect(page.getByRole("heading", { name: "My Antigravity thread", exact: true })).toBeVisible();
   await capture(page, testInfo, "antigravity-native-streaming.png");
   await page.getByRole("button", { name: "Stop", exact: true }).click();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden();
@@ -68,6 +88,7 @@ test("Antigravity production connection streams, stops, requests permission and 
   expect(settled.orderedTurnIds.map(id => settled.turnsById[id]!.status)).toEqual(["interrupted", "completed"]);
   await page.reload();
   await expect(page.getByText("Streaming fixture-alt at xhigh effort in plan mode.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "My Antigravity thread", exact: true })).toBeVisible();
   await expect(page.getByText("Permission allowed.", { exact: true })).toBeVisible();
   await expect(composer).toBeEnabled();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden();
@@ -146,6 +167,7 @@ test("Antigravity production connection streams, stops, requests permission and 
   await expect(pendingSteer).toContainText("Antigravity withdrew this input when the execution was cancelled.");
   await pendingSteer.getByRole("button", { name: `Restore queued input to composer: ${steerText}` }).click();
   await expect(pendingSteer).toBeHidden();
+  await expect(page.getByText("Steer unconfirmed", { exact: true })).toBeHidden();
   await expect(composer).toBeEnabled();
   await expect(composer).toHaveValue(steerText);
   await sendCurrentDraft(page);

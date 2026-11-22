@@ -24,6 +24,7 @@ function fixture(options: {
   readonly nativeArchive?: boolean;
   readonly connectionProfileIds?: readonly string[];
   readonly sharedStoreClaimed?: boolean;
+  readonly localTitle?: boolean;
 } = {}) {
   const database = {
     transaction: <Result>(operation: () => Result) => operation,
@@ -105,6 +106,7 @@ function fixture(options: {
         {
           database,
           isDiscoveredConversationClaimed: () => options.sharedStoreClaimed === true,
+          preservesLocalTitle: () => options.localTitle === true,
           initializeThread: () => undefined,
           saveBoundBindingDetail: () => undefined,
         },
@@ -144,6 +146,17 @@ function discoveredConversation(id: string) {
 }
 
 describe("BackendDiscoveryService scan policy", () => {
+  it.each([false, true])("refreshes discovery without overwriting a local title override (%s)", async (localTitle) => {
+    const current = fixture({ localTitle });
+    current.discover.mockResolvedValue({ conversations: [{ ...discoveredConversation("existing"), title: "Native title" }] });
+    await current.service.discoverWorkspace(scope, "workspace-1", EXHAUSTIVE_DISCOVERY_SCAN, neverAbortedSignal);
+    expect(current.markDiscoveredAvailable).toHaveBeenCalledOnce();
+    const [actualScope, threadId, update] = current.markDiscoveredAvailable.mock.calls[0]!;
+    expect(actualScope).toEqual(scope);
+    expect(threadId).toBe("application-existing");
+    expect(update.updatedAt).toBe(Date.parse("2026-08-07T00:00:00.000Z"));
+    expect(update.title).toBe(localTitle ? undefined : "Native title");
+  });
   it("suppresses a provider-owned shared-store reservation before creating an application thread", async () => {
     const current = fixture({ sharedStoreClaimed: true });
     current.discover.mockResolvedValue({ conversations: [{ ...discoveredConversation("parent-reserved"), nativeAncestry: undefined }] });

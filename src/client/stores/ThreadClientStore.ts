@@ -3165,7 +3165,9 @@ export class ThreadClientStore {
           transfer = { ...transfer, queuedInputId: queued.id };
         }
       } else if (queued && currentMode === "steer") {
-        if (queued.state === "failed") {
+        if (queued.state === "failed" || queued.state === "uncertain") {
+          // The exact durable row owns recovery and presentation from now on.
+          // Removing it during reset must not leave a second client-only card.
           return [];
         }
         transfer = {
@@ -3173,12 +3175,15 @@ export class ThreadClientStore {
           authorityState: "queue_owned" as const,
           queuedInputId: queued.id,
           steerPhase:
-            queued.state === "uncertain"
-              ? ("unconfirmed" as const)
-              : queued.state === "dispatching"
-                ? ("steering" as const)
-                : transfer.steerPhase,
+            queued.state === "dispatching"
+              ? ("steering" as const)
+              : transfer.steerPhase,
         };
+      } else if (currentMode === "steer" && transfer.authorityState === "queue_owned") {
+        // We already observed this exact durable row. Its authoritative removal
+        // retires the local presentation, not the input's delivery evidence.
+        // Never restore text or retry a send from queue absence.
+        return [];
       }
 
       const requestTerminal =
@@ -3229,14 +3234,33 @@ export class ThreadClientStore {
         : event.type === "queue_changed"
           ? event.items
           : undefined;
-    if (!queue || this.#state.pendingComposerTransfers.length === 0) return;
+    if (!queue) return;
+    // Observe each accepted event before frame batching can remove the row.
+    // Queue-to-Steer requests have their own client collection and must hand
+    // recovery to the same exact durable operation as composer Steers.
+    if (this.#state.pendingQueuedSteers.length > 0) {
+      const queueById = new Map(queue.map(item => [item.id, item]));
+      const pendingQueuedSteers = this.#state.pendingQueuedSteers.filter(steer => {
+        const item = queueById.get(steer.queuedInputId);
+        return !item || item.deliveryOperationId !== steer.operationId ||
+          (item.state !== "uncertain" && item.state !== "failed");
+      });
+      if (pendingQueuedSteers.length !== this.#state.pendingQueuedSteers.length) {
+        this.#setPendingQueuedSteers(pendingQueuedSteers);
+      }
+    }
+    if (this.#state.pendingComposerTransfers.length === 0) return;
     const queueByOperationId = new Map(
       queue.map((item) => [item.deliveryOperationId, item]),
     );
     const transfers = this.#state.pendingComposerTransfers.filter(
       (transfer) => {
         const item = queueByOperationId.get(transfer.operationId);
-        if (!item || transfer.authorityState !== "client_only") return true;
+        if (
+          !item ||
+          (transfer.authorityState !== "client_only" && transfer.authorityState !== "queue_owned") ||
+          transfer.lateMaterializationRequiresComposerReconciliation
+        ) return true;
         const currentMode = item.resolvedDeliveryMode;
         if (currentMode === "queue") return false;
         if (
@@ -3247,7 +3271,10 @@ export class ThreadClientStore {
         ) {
           return false;
         }
-        if (currentMode === "steer" && item.state === "failed") return false;
+        if (
+          currentMode === "steer" &&
+          (item.state === "failed" || item.state === "uncertain")
+        ) return false;
         return true;
       },
     );
@@ -3315,12 +3342,11 @@ export class ThreadClientStore {
       if (queued.deliveryOperationId !== steer.operationId) {
         return steer.requestState === "requesting" ? [steer] : [];
       }
+      // Accepted queue-to-Steer receipts await exact materialization, while
+      // failure/uncertainty belongs solely to the durable row's recovery UI.
+      if (queued.state === "uncertain" || queued.state === "failed") return [];
       const phase =
-        queued.state === "uncertain"
-          ? ("unconfirmed" as const)
-          : queued.state === "dispatching"
-            ? ("steering" as const)
-            : steer.phase;
+        queued.state === "dispatching" ? ("steering" as const) : steer.phase;
       return phase === steer.phase ? [steer] : [{ ...steer, phase }];
     });
     if (

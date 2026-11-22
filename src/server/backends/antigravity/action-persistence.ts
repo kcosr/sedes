@@ -1,4 +1,4 @@
-import type { ThreadApplicationOperation } from "../../../shared/protocol/api.js";
+import { threadTitleInputSchema, type ThreadApplicationOperation } from "../../../shared/protocol/api.js";
 import { createHash } from "node:crypto";
 import type { ThreadActionPersistenceProvider } from "../../conversations/thread-mutation-gateway.js";
 import { DomainError } from "../../domain/errors.js";
@@ -90,6 +90,31 @@ export class AntigravityActionPersistence implements ThreadActionPersistenceProv
 
   #assertScope(scope: RequestScope): void {
     if (scope.tenantId !== this.scope.tenantId || scope.principalId !== this.scope.principalId) throw changed();
+  }
+
+  persistLocalRename(scope: RequestScope, applicationThreadId: string,
+    input: Parameters<NonNullable<ThreadActionPersistenceProvider["persistLocalRename"]>>[2]): void {
+    this.#assertScope(scope);
+    const { expectedThreadRevision, now } = input;
+    const parsedTitle = threadTitleInputSchema.safeParse(input.title);
+    if (!parsedTitle.success) throw unsupportedAction();
+    const title = parsedTitle.data;
+    this.settings.database.transaction(() => {
+      const target = this.settings.target(scope, applicationThreadId);
+      if (target.backendInstanceId !== this.backendInstanceId || target.revision !== expectedThreadRevision ||
+          (target.backingState !== "unbound" && target.backingState !== "bound")) throw changed();
+      const updated = this.settings.database.prepare(`
+        UPDATE application_threads SET title = ?, revision = revision + 1, updated_at = max(updated_at, ?)
+        WHERE tenant_id = ? AND owner_principal_id = ? AND id = ? AND backend_instance_id = ? AND revision = ?
+      `).run(title, now, scope.tenantId, scope.principalId, applicationThreadId, this.backendInstanceId, expectedThreadRevision);
+      if (updated.changes !== 1) throw changed();
+      this.settings.markLocalTitleOverride(scope, applicationThreadId, now);
+      const generation = this.settings.database.prepare(`
+        UPDATE principal_generations SET inventory_generation = inventory_generation + 1
+        WHERE tenant_id = ? AND principal_id = ?
+      `).run(scope.tenantId, scope.principalId);
+      if (generation.changes !== 1) throw new Error("antigravity_inventory_generation_missing");
+    })();
   }
 
   persistAccepted(scope: RequestScope, applicationThreadId: string, input: Parameters<ThreadActionPersistenceProvider["persistAccepted"]>[2]): void {

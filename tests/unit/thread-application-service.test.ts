@@ -174,6 +174,7 @@ function createService(input?: {
   isAutomaticModelRetryPending?: (eventScope: typeof scope, threadId: string) => boolean;
   state?: AuthorizedThreadApplicationState;
   disconnected?: boolean;
+  localRename?: boolean;
   runState?:
     | "idle"
     | "failed"
@@ -450,6 +451,7 @@ function createService(input?: {
       [
         state.backendInstanceId,
         {
+          ...(input?.localRename ? { persistLocalRename: () => undefined } : {}),
           providerFeatureConcurrency:
             input?.providerFeatureConcurrency ??
             (() => QUIET_THREAD_PROVIDER_FEATURE_CONCURRENCY),
@@ -1953,6 +1955,18 @@ describe("ThreadApplicationService", () => {
     expect(
       snapshot.capabilities.operations.find(({ id }) => id === "compact"),
     ).toMatchObject({ available: true });
+  });
+
+  it.each(["idle", "running"] as const)("exposes application-owned rename while %s without claiming native support", async (runState) => {
+    const { service } = createService({ runState, actions: [], localRename: true, includeInteraction: false });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(snapshot.capabilities.operations.find(({ id }) => id === "rename")).toMatchObject({ available: true });
+  });
+
+  it("keeps local rename unavailable for a read-only thread", async () => {
+    const { service } = createService({ actions: [], localRename: true, interactionMode: "read_only" });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(snapshot.capabilities.operations.find(({ id }) => id === "rename")).toBeUndefined();
   });
 
   it("omits provider controls for a bound read-only backend", async () => {

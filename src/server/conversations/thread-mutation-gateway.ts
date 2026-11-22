@@ -158,6 +158,12 @@ export interface ProviderFeatureMutationContext {
 export interface ThreadActionPersistenceProvider {
   /** Backend-owned best-effort feature lifecycle work after accepted Stop. */
   afterInterruptAccepted(actor: ProviderFeatureMutationActor): Promise<boolean>;
+  /** Presence advertises application-owned rename. Runs inside the receipt transaction; no provider calls. */
+  persistLocalRename?(
+    scope: RequestScope,
+    applicationThreadId: string,
+    input: { readonly title: string; readonly expectedThreadRevision: number; readonly now: number },
+  ): void;
   /** Local next-turn settings never cross a provider boundary at mutation time. */
   isLocalOperation?(operation: PerformOperation["operation"]): boolean;
   driverAction(
@@ -2854,6 +2860,78 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         operation.operation,
       );
       await this.#publishThreadSnapshot(scope, applicationThreadId);
+      return {
+        status: "accepted",
+        operationId: receipt.applicationOperationId,
+      };
+    }
+    if (
+      operation.operation.action === "rename" &&
+      provider?.persistLocalRename !== undefined
+    ) {
+      if (
+        aggregate.thread.backingState !== "unbound" &&
+        aggregate.thread.backingState !== "bound"
+      ) {
+        throw new DomainError(
+          "invalid_transition",
+          "The thread cannot be renamed while its conversation is being created.",
+        );
+      }
+      const receipt = this.input.operations.prepareBackendAction(
+        scope,
+        applicationThreadId,
+        {
+          mutationId: operation.mutationId,
+          expectedThreadRevision: operation.expectedThreadRevision,
+          operation: operation.operation,
+          now: this.#now(),
+        },
+      );
+      if (receipt.state === "accepted") {
+        return {
+          status: "accepted",
+          operationId: receipt.applicationOperationId,
+        };
+      }
+      if (
+        receipt.state !== "prepared" ||
+        aggregate.thread.revision !== operation.expectedThreadRevision
+      ) {
+        if (receipt.state === "prepared") {
+          this.input.operations.rejectBackendActionProvenNotApplied(
+            scope,
+            operation.mutationId,
+          );
+        }
+        throw new DomainError(
+          "conflict",
+          "The thread changed in another client.",
+        );
+      }
+      const persistLocalRename = provider.persistLocalRename.bind(provider);
+      const title = operation.operation.title;
+      try {
+        this.input.operations.database.transaction(() => {
+          persistLocalRename(scope, applicationThreadId, {
+            title,
+            expectedThreadRevision: operation.expectedThreadRevision,
+            now: this.#now(),
+          });
+          this.input.operations.acceptBackendAction(
+            scope,
+            operation.mutationId,
+          );
+        })();
+      } catch (error) {
+        this.input.operations.rejectBackendActionProvenNotApplied(
+          scope,
+          operation.mutationId,
+        );
+        throw error;
+      }
+      await this.#publishThreadSnapshot(scope, applicationThreadId);
+      await this.#changed(scope, applicationThreadId);
       return {
         status: "accepted",
         operationId: receipt.applicationOperationId,

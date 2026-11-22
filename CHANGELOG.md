@@ -109,6 +109,8 @@ User-facing changes are collected here before release. See the
   message recovery when the server permits it. Child cancellation and background
   completion require native terminal evidence. Unchanged history avoids repeated
   transcript processing, and native reads run outside the server event loop.
+  Bound threads support Sedes-local titles that survive native rediscovery;
+  uncertain Steer cards follow their durable queue entry through recovery and reset.
   Antigravity displays its official brand mark and reasoning effort labels such
   as **Extra High**. Codex Saved Agents use the same reasoning labels as threads.
   Upgrade Antigravity execution sidecars with the server for runtime capability **3**.

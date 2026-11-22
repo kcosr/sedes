@@ -32,7 +32,7 @@ state, and backups.
 | [Claude](claude.md) | Managed Claude Agent SDK worker plus Claude Code            | Linux/macOS local; persistent-sidecar runtime over SSH or outbound                                        | Submit, Steer, Queue, Stop, rename, compact        | Permission modes, prompts, native questions, skills, usage, background-work status, selected-completed-turn forks, native image input                                         |
 | [Grok](grok.md)     | Sedes-owned Grok ACP process                                | Local Linux x64 or macOS arm64/x64                                                              | Submit, Queue, Stop, rename                 | Plans, tool and collaboration rendering, file/image input, completed `ImageGen` and `ImageEdit` artifacts                              |
 | [OpenCode v2](opencode.md) | Owned resident daemon or external HTTP/SSE server | Local, SSH or outbound Linux host; same host account | Submit, Steer, Queue, Stop, rename | Native history, reviewed model/effort selection, approvals/forms, observed background work |
-| [Antigravity](antigravity.md) | Owned official `agy acp` process | Linux/macOS local, SSH or outbound | Submit, Steer, Queue, Stop | Native history, model/reasoning selection, permissions, background continuations, file/image input |
+| [Antigravity](antigravity.md) | Owned official `agy acp` process | Linux/macOS local, SSH or outbound | Submit, Steer, Queue, Stop, Sedes-local rename | Native history, model/reasoning selection, permissions, background continuations, file/image input |
 
 `Queue` is a provider-neutral Sedes feature: while a turn is active, Sedes
 retains the next input and submits it only after authoritative settlement. It

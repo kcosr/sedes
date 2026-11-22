@@ -112,6 +112,25 @@ export class AntigravityThreadRepository {
       return this.get(scope, applicationThreadId);
     })();
   }
+
+  markLocalTitleOverride(scope: RequestScope, applicationThreadId: string, now: number): void {
+    const updated = this.database.prepare(`
+      UPDATE antigravity_thread_settings
+      SET local_title_override = 1, updated_at = max(updated_at, ?)
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ?
+    `).run(now, scope.tenantId, scope.principalId, applicationThreadId);
+    if (updated.changes !== 1) throw missingThread();
+  }
+
+  hasLocalTitleOverride(scope: RequestScope, applicationThreadId: string): boolean {
+    const row = this.database.prepare(`
+      SELECT local_title_override AS override
+      FROM antigravity_thread_settings
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ?
+    `).get(scope.tenantId, scope.principalId, applicationThreadId) as { readonly override: number } | undefined;
+    if (!row) throw missingThread();
+    return row.override === 1;
+  }
 }
 
 function validateDesired(input: AntigravityDesiredSettings): void {

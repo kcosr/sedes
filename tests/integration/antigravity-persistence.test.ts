@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
+import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
+import { threadAgentToolPolicyRepository } from "../support/thread-agent-tool-policy.js";
 import { AntigravityActionPersistence } from "../../src/server/backends/antigravity/action-persistence.js";
 import { serializeAntigravityBinding } from "../../src/server/backends/antigravity/binding.js";
 import { AntigravityModeCatalog } from "../../src/server/backends/antigravity/mode-catalog.js";
@@ -43,6 +46,124 @@ function antigravityConnection({ database, scope }: ReturnType<typeof savedAgent
 }
 
 describe("Antigravity persistence", () => {
+  function renameGatewayFixture(backingState: "unbound" | "bound" | "creating" | "creation_unknown") {
+    const { database, scope } = savedAgentDatabase();
+    const connection = antigravityConnection({ database, scope });
+    const inventory = new InventoryRepository(database);
+    const workspace = inventory.upsertWorkspace(scope, {
+      environmentId: connection.executionEnvironmentId, canonicalPath: "/tmp/rename-gateway", displayName: "Project",
+      project: { kind: "new", name: "Project" }, available: true, trustState: "trusted", environmentConfigurationRevision: 0, now: 230,
+    });
+    const bindings = new ConversationBindingRepository(database);
+    const thread = bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: connection.id, title: "Original", now: 230 });
+    const settings = new AntigravityThreadRepository(database);
+    settings.initialize(scope, thread.id, connection, { modelId: null, thinkingLevel: null, modeId: null }, 230);
+    if (backingState === "bound") bindings.bindDiscoveredConversation(scope, thread.id, { backendConversationId: randomUUID(), now: 240 });
+    else database.prepare("UPDATE application_threads SET backing_state = ? WHERE id = ?").run(backingState, thread.id);
+    const action = new AntigravityActionPersistence(settings, scope, "ag", compileBackendModelPolicy({ type: "catalog" }, "model_effort"));
+    const persistImplementation = action.persistLocalRename.bind(action);
+    const persist = vi.spyOn(action, "persistLocalRename");
+    const operations = new ConversationOperationRepository(database);
+    const prepare = vi.spyOn(operations, "prepareBackendAction");
+    const acquire = vi.fn(async () => { throw new Error("Local rename must not acquire a provider runtime"); });
+    const gateway = new ThreadMutationGateway({
+      actors: {} as never, bindings, inventory, operations, completions: { database } as never,
+      lifecycle: {} as never, forks: {} as never, queue: {} as never, queueGateway: {} as never,
+      runtimes: { acquire } as never, interactions: {} as never, presentation: {} as never,
+      agentToolPolicies: threadAgentToolPolicyRepository(database), actionPersistence: new Map([["ag", action]]),
+      publishThreadSnapshot: vi.fn(async () => {}), now: () => 250,
+    });
+    const request = { kind: "perform" as const, mutationId: randomUUID(), expectedThreadRevision: settings.target(scope, thread.id).revision,
+      operation: { action: "rename" as const, title: "Local name" } };
+    return { database, scope, thread, settings, inventory, gateway, operations, action, persist, persistImplementation, prepare, acquire, request };
+  }
+
+  it.each(["creating", "creation_unknown"] as const)("refuses local rename during %s without preparing a receipt", async (state) => {
+    const f = renameGatewayFixture(state);
+    try {
+      await expect(f.gateway.mutate(f.scope, f.thread.id, f.request)).rejects.toMatchObject({ code: "invalid_transition" });
+      expect(f.prepare).not.toHaveBeenCalled();
+      expect(f.persist).not.toHaveBeenCalled();
+      expect(f.acquire).not.toHaveBeenCalled();
+      expect(f.inventory.getThread(f.scope, f.thread.id).thread.title).toBe("Original");
+    } finally { f.database.close(); }
+  });
+
+  it.each(["unbound", "bound"] as const)("replays local rename and refuses a changed fingerprint on %s threads", async (state) => {
+    const f = renameGatewayFixture(state);
+    try {
+      const result = { status: "accepted", operationId: f.request.mutationId };
+      await expect(f.gateway.mutate(f.scope, f.thread.id, f.request)).resolves.toEqual(result);
+      await expect(f.gateway.mutate(f.scope, f.thread.id, f.request)).resolves.toEqual(result);
+      await expect(f.gateway.mutate(f.scope, f.thread.id, { ...f.request,
+        operation: { action: "rename", title: "Changed replay" } })).rejects.toMatchObject({ code: "conflict" });
+      expect(f.persist).toHaveBeenCalledOnce();
+      expect(f.acquire).not.toHaveBeenCalled();
+      expect(f.inventory.getThread(f.scope, f.thread.id).thread).toMatchObject({ title: "Local name", revision: f.request.expectedThreadRevision + 1 });
+      expect(f.settings.hasLocalTitleOverride(f.scope, f.thread.id)).toBe(true);
+      expect(f.operations.findBackendAction(f.scope, f.request.mutationId)?.state).toBe("accepted");
+    } finally { f.database.close(); }
+  });
+
+  it("rolls back local title and override writes and rejects the prepared receipt when persistence fails", async () => {
+    const f = renameGatewayFixture("bound");
+    try {
+      f.persist.mockImplementationOnce((...args) => { f.persistImplementation(...args); throw new Error("Failure after title writes"); });
+      await expect(f.gateway.mutate(f.scope, f.thread.id, f.request)).rejects.toThrow("Failure after title writes");
+      expect(f.inventory.getThread(f.scope, f.thread.id).thread).toMatchObject({ title: "Original", revision: f.request.expectedThreadRevision });
+      expect(f.settings.hasLocalTitleOverride(f.scope, f.thread.id)).toBe(false);
+      expect(f.operations.findBackendAction(f.scope, f.request.mutationId)).toBeUndefined();
+      expect(f.acquire).not.toHaveBeenCalled();
+    } finally { f.database.close(); }
+  });
+
+  it.each([false, true])("owns a revision-fenced local title for an unbound or bound thread (bound=%s)", (bound) => {
+    const { database, scope } = savedAgentDatabase();
+    try {
+      const connection = antigravityConnection({ database, scope });
+      const inventory = new InventoryRepository(database);
+      const workspace = inventory.upsertWorkspace(scope, {
+        environmentId: connection.executionEnvironmentId, canonicalPath: "/tmp/local-title", displayName: "Project",
+        project: { kind: "new", name: "Project" }, available: true, trustState: "trusted", environmentConfigurationRevision: 0, now: 230,
+      });
+      const bindings = new ConversationBindingRepository(database);
+      const thread = bindings.createUnboundThread(scope, {
+        workspaceId: workspace.id, connectionProfileId: connection.id, title: "Native title", now: 230,
+      });
+      const settings = new AntigravityThreadRepository(database);
+      const policy = compileBackendModelPolicy({ type: "catalog" }, "model_effort");
+      const persistence = new AntigravityThreadPersistence({ scope, backendInstanceId: "ag", settings, modelPolicy: policy,
+        defaultsForConnection: () => ({}), nativeNamespaceKey: "antigravity:test" });
+      persistence.initializeThread(scope, thread.id, connection);
+      if (bound) bindings.bindDiscoveredConversation(scope, thread.id, { backendConversationId: randomUUID(), now: 240 });
+      const action = new AntigravityActionPersistence(settings, scope, "ag", policy);
+      const originalSettings = settings.get(scope, thread.id);
+      const revision = settings.target(scope, thread.id).revision;
+      const input = { expectedThreadRevision: revision, title: "My local title", now: 250 };
+      expect(persistence.preservesLocalTitle(scope, thread.id)).toBe(false);
+      expect(() => action.persistLocalRename({ ...scope, principalId: randomUUID() }, thread.id, input)).toThrow();
+      expect(() => action.persistLocalRename({ ...scope, tenantId: randomUUID() }, thread.id, input)).toThrow();
+      expect(() => new AntigravityActionPersistence(settings, scope, "wrong-backend", policy).persistLocalRename(scope, thread.id, input)).toThrow();
+      expect(() => action.persistLocalRename(scope, thread.id, { ...input, title: "" })).toThrow();
+      expect(persistence.preservesLocalTitle(scope, thread.id)).toBe(false);
+      const generation = database.prepare("SELECT inventory_generation AS generation FROM principal_generations WHERE tenant_id = ? AND principal_id = ?");
+      const before = generation.get(scope.tenantId, scope.principalId) as { generation: number };
+      action.persistLocalRename(scope, thread.id, input);
+      expect(inventory.getThread(scope, thread.id).thread).toMatchObject({ title: "My local title", revision: revision + 1 });
+      expect(generation.get(scope.tenantId, scope.principalId)).toEqual({ generation: before.generation + 1 });
+      expect(settings.get(scope, thread.id)).toEqual(originalSettings);
+      expect(persistence.preservesLocalTitle(scope, thread.id)).toBe(true);
+      expect(() => action.persistLocalRename(scope, thread.id, input)).toThrow(/changed/);
+      expect(() => persistence.preservesLocalTitle({ ...scope, principalId: randomUUID() }, thread.id)).toThrow();
+      database.prepare("DELETE FROM antigravity_thread_settings WHERE application_thread_id = ?").run(thread.id);
+      expect(() => action.persistLocalRename(scope, thread.id, { ...input, expectedThreadRevision: revision + 1,
+        title: "Must roll back" })).toThrow(/not found/);
+      expect(inventory.getThread(scope, thread.id).thread).toMatchObject({ title: "My local title", revision: revision + 1 });
+      expect(generation.get(scope.tenantId, scope.principalId)).toEqual({ generation: before.generation + 1 });
+      expect(database.pragma("foreign_key_check")).toEqual([]);
+    } finally { database.close(); }
+  });
+
   it("preserves old identities and enforces scope, target, and revision fences", async () => {
     const { database, scope } = savedAgentDatabase(162);
     try {

@@ -641,6 +641,7 @@ export class ThreadApplicationService {
     if (!actionPersistence) {
       throw new Error("thread_application_action_persistence_missing");
     }
+    const localRename = actionPersistence.persistLocalRename !== undefined;
     const historyOperational = this.#history?.operational(actor) === true;
     const capabilities = composeCapabilities({
       inventory,
@@ -657,6 +658,7 @@ export class ThreadApplicationService {
       exclusivePendingSteer,
       interactionResponseRecovery,
       interactions,
+      localRename,
       providerFeatureConcurrency: (feature, actionId) =>
         actionPersistence.providerFeatureConcurrency(feature, actionId),
       historyOperational,
@@ -975,6 +977,7 @@ function composeCapabilities(input: {
   readonly exclusivePendingSteer: boolean;
   readonly interactionResponseRecovery: boolean;
   readonly interactions: readonly BackendInteraction[];
+  readonly localRename?: boolean;
   readonly providerFeatureConcurrency: ThreadActionPersistenceProvider["providerFeatureConcurrency"];
   readonly historyOperational: boolean;
   readonly attachmentStagingAvailable: boolean;
@@ -1009,8 +1012,11 @@ function composeCapabilities(input: {
   const canReconcileQueue = bound && backendCanSubmit;
   const backendCanSteer =
     interactive && input.backendCapabilities.deliveryModes.includes("steer");
+  const localRenameAvailable = bound && input.localRename === true;
   const backendCanRename =
-    unbound || input.backendCapabilities.actions.includes("rename");
+    unbound ||
+    input.backendCapabilities.actions.includes("rename") ||
+    localRenameAvailable;
   const turnControllable = new Set<ThreadRunState>([
     "running",
     "waiting_for_approval",
@@ -1265,10 +1271,7 @@ function composeCapabilities(input: {
   });
   const supportedOperations = operations.filter((operation) => {
     if (operation.id === "rename") {
-      return (
-        interactive &&
-        (unbound || input.backendCapabilities.actions.includes("rename"))
-      );
+      return interactive && backendCanRename;
     }
     if (operation.id === "move_draft") return interactive && unbound;
     if (operation.id === "compact") {
@@ -1388,6 +1391,7 @@ function composeCapabilities(input: {
         recovery: input.recovery,
         exclusivePendingSteer: input.exclusivePendingSteer,
         interactionResponseRecovery: input.interactionResponseRecovery,
+        localRename: input.localRename === true,
         historyOperational: input.historyOperational,
         attachmentStagingAvailable: input.attachmentStagingAvailable,
       }),

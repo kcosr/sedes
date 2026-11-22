@@ -141,6 +141,12 @@ message text or timing.
 
 ## Capability boundaries
 
+Thread renames are local to Sedes, for drafts and bound threads while idle or running.
+The saved title takes precedence over subsequent native discovery titles on both
+local and remote execution hosts. It does not rename the conversation in `agy`.
+Renaming a draft also preserves that title after its first send binds the native
+session. Before an explicit rename, native discovery can refresh the displayed title.
+
 The first integration supports native session discovery, creation, streaming,
 passive paged history, conversation-scoped Steer, model/reasoning selection, permission decisions and native
 choice questions, staged files and image input, Saved Agents, automation policy,

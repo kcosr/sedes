@@ -1,5 +1,12 @@
 # Antigravity backend internals
 
+Antigravity action persistence advertises application-owned rename separately
+from its ACP capabilities (which still omit native rename). Migration 165 adds
+a scoped `local_title_override` marker; local rename commits it with the title,
+thread revision, inventory generation and operation receipt. Discovery honors
+the marker without changing native state or model settings. Existing threads
+retain native title refresh until explicitly renamed in Sedes.
+
 The implementation is private to `src/server/backends/antigravity`. The browser
 uses normalized backend contracts and the Antigravity brand, never ACP methods,
 native database paths, protobuf records, or session identifiers.

@@ -126,6 +126,11 @@ export class AntigravityThreadPersistence implements BackendThreadPersistenceAda
     return row ? serializeAntigravityBinding(this.#requireBinding(scope, applicationThreadId, row.detail)) : undefined;
   }
 
+  preservesLocalTitle(scope: RequestScope, applicationThreadId: string): boolean {
+    this.#assertThread(scope, applicationThreadId);
+    return this.input.settings.hasLocalTitleOverride(scope, applicationThreadId);
+  }
+
   #requireBinding(scope: RequestScope, applicationThreadId: string, detail: string): AntigravityBinding {
     const target = this.#assertThread(scope, applicationThreadId);
     const row = this.database.prepare(`

@@ -2395,6 +2395,16 @@ application title locally, and reconcile against that projection. Never let a
 valid application title wedge first-send creation merely because the provider
 accepts fewer characters.
 
+Application-owned rename is an explicit action-persistence capability, separate
+from a native backend rename action. Validate the normalized title and exact
+scope, target and thread revision; atomically persist the title, its discovery
+override marker and accepted operation receipt. Replay the same receipt without
+provider calls, and reject mutation-ID collisions. Rediscovery must preserve a
+local override while continuing to update availability and activity. Antigravity
+implements this for both local and sidecar targets. Pi SDK, Pi, Codex, Claude,
+Grok and OpenCode retain their existing native rename paths and do not advertise
+application-owned rename. The browser continues to use normalized `rename`.
+
 ## Discovery and pagination
 
 Discovery is bounded by provider namespace, workspace, backend instance,
