@@ -5143,7 +5143,7 @@ describe("normalized HTTP application contract", () => {
       .set(SEDES_AGENT_TOOL_SOURCE_CAPABILITY_HEADER, sourceCapability)
       .send({
         toolId: "agent.context",
-        schemaVersion: 4,
+        schemaVersion: 5,
         requestId: "request-1",
         input: {},
       })

@@ -521,7 +521,7 @@ describe("AgentToolRegistry", () => {
     expect(registry.resolveAdapterName("cli", "thread.status").id).toBe(
       "thread.status",
     );
-    expect(registry.artifact("thread.status", 4)).toMatchObject({
+    expect(registry.artifact("thread.status", 5)).toMatchObject({
       deployment: { eligible: true },
       adapters: {
         http: { invocation: "inline" },
@@ -540,7 +540,7 @@ describe("AgentToolRegistry", () => {
     expect(
       registry.resolveAdapterName("mcp", "sedes_thread_status").id,
     ).toBe("thread.status");
-    expect(registry.artifact("thread.status", 4)).toMatchObject({
+    expect(registry.artifact("thread.status", 5)).toMatchObject({
       exposure: { adapters: ["cli", "http", "mcp", "pi_rpc", "pi_sdk"] },
       adapters: { mcp: { name: "sedes_thread_status" } },
       execution: { adapterWaitCeilingMilliseconds: { mcp: 30_000 } },

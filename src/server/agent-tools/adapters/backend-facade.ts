@@ -46,6 +46,7 @@ export function nativeAgentToolAdapter(
     case "codex_app_server":
     case "claude_agent_sdk":
     case "opencode":
+    case "antigravity":
       return "mcp";
     case "grok_build":
       return undefined;

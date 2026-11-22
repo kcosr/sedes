@@ -232,6 +232,9 @@ export class SedesMcpServer {
   async #method(message: JsonRpcRequest, signal: AbortSignal): Promise<unknown> {
     if (message.method === "ping") return {};
     if (message.method === "initialize") return this.#initialize(message);
+    if (message.method !== "tools/list" && message.method !== "tools/call") {
+      throw new SedesMcpProtocolError(JSON_RPC_METHOD_NOT_FOUND, "Method not found");
+    }
     const version = this.#protocolVersion;
     if (!version) {
       throw new SedesMcpProtocolError(

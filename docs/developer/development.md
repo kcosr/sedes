@@ -324,7 +324,8 @@ release-artifact contract.
 ## Live-provider suites
 
 Do not run commands matching `test:real-pi*`, `test:real-codex*`,
-`test:real-claude*`, `test:real-grok*`, `test:live-pi-native`, or `test:live-opencode` by default.
+`test:real-claude*`, `test:real-grok*`, `test:live-pi-native`, `test:live-opencode`,
+or `test:live-antigravity` by default.
 They consume live provider capacity or exercise authenticated external state
 and require explicit user authorization for the relevant backend change.
 The `test:real-pi-native` offline exception is described below; it makes no
@@ -404,6 +405,11 @@ a loopback model: it checks exclusive wire token-limit fields, canary content
 in the model's tool result after the allowed read, and a denied
 read outside the canary path without external inference. This rehearsal does
 not qualify a real provider or its billing behavior.
+
+The [Antigravity qualification instructions](../internals/backends/antigravity.md#cross-backend-audit)
+cover the separate stock CLI gate, `test:live-antigravity`, and its optional
+loopback SSH case. The suite builds the production application before testing
+against disposable native conversations.
 
 When a backend-specific change affects protocol handling, streaming, history,
 lifecycle, tools, interactions, or provider integration, ask whether to run the

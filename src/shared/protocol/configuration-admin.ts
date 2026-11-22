@@ -1,3 +1,4 @@
+import { antigravityModuleConfigurationSchema, antigravityConnectionConfigurationSchema } from "./antigravity-configuration.js";
 import { opencodeModuleConfigurationSchema, opencodeConnectionDefaultsSchema } from "./opencode-configuration.js";
 import { piNativeModuleConfigurationSchema, piNativeConnectionConfigurationSchema } from "./pi-configuration.js";
 import { configuredEnvironmentVariablesSchema } from "./environment-variables.js";
@@ -92,6 +93,7 @@ const codexModule = z.strictObject({
 });
 const backendFields = { environmentVariables: configuredEnvironmentVariablesSchema.optional(), id: configurationIdSchema, label, enabled: z.boolean(), modelPolicy: configurationModelPolicySchema };
 export const configurationBackendSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ ...backendFields, kind: z.literal("antigravity"), moduleConfiguration: antigravityModuleConfigurationSchema }),
   z.strictObject({ ...backendFields, kind: z.literal("opencode"), moduleConfiguration: opencodeModuleConfigurationSchema }),
   z.strictObject({ ...backendFields, kind: z.literal("pi") }),
   z.strictObject({ ...backendFields, kind: z.literal("pi_native"), moduleConfiguration: piNativeModuleConfigurationSchema }),
@@ -108,6 +110,7 @@ export const configurationBackendSchema = z.discriminatedUnion("kind", [
 ]);
 const targetFields = { id: configurationIdSchema, label, backendInstanceId: configurationIdSchema, executionEnvironmentId: z.string().uuid(), enabled: z.boolean() };
 export const configurationTargetSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ ...targetFields, kind: z.literal("antigravity_acp"), moduleConfiguration: antigravityConnectionConfigurationSchema }),
   z.strictObject({ ...targetFields, kind: z.literal("opencode_http"), moduleConfiguration: z.strictObject({ defaults: opencodeConnectionDefaultsSchema }) }),
   z.strictObject({ ...targetFields, kind: z.literal("pi_sdk") }),
   z.strictObject({ ...targetFields, kind: z.literal("pi_rpc"), moduleConfiguration: piNativeConnectionConfigurationSchema }),
@@ -129,7 +132,7 @@ export const configurationDocumentSchema = z.strictObject({
   if (document.executionEnvironments.filter(item => item.kind === "local").length > 1) context.addIssue({ code: "custom", path: ["executionEnvironments"], message: "Only one local environment is supported." });
   const backends = new Map(document.backends.map(item => [item.id, item]));
   const environments = new Map(document.executionEnvironments.map(item => [item.id, item]));
-  const targetBackendKinds = { pi_sdk: "pi", pi_rpc: "pi_native", codex_app_server: "codex_app_server", claude_agent_sdk: "claude_agent_sdk", grok_acp: "grok_build", opencode_http: "opencode" } as const;
+  const targetBackendKinds = { pi_sdk: "pi", pi_rpc: "pi_native", codex_app_server: "codex_app_server", claude_agent_sdk: "claude_agent_sdk", grok_acp: "grok_build", opencode_http: "opencode", antigravity_acp: "antigravity" } as const;
   for (const [index, target] of document.targets.entries()) {
     const backend = backends.get(target.backendInstanceId);
     const environment = environments.get(target.executionEnvironmentId);
@@ -147,6 +150,7 @@ export const configurationDocumentSchema = z.strictObject({
     if (environment !== undefined && environment.kind !== "local" && target.kind === "grok_acp") context.addIssue({ code: "custom", path: ["targets", index], message: "Grok requires a local environment." });
     if (environment?.kind === "outbound" && environment.platform === "win32" && target.kind === "claude_agent_sdk" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "Claude requires a macOS or Linux execution host." });
     if (environment?.kind === "outbound" && environment.platform === "win32" && target.kind === "pi_rpc" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "Pi requires a macOS or Linux execution host." });
+    if (environment?.kind === "outbound" && environment.platform === "win32" && target.kind === "antigravity_acp" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "Antigravity requires a macOS or Linux execution host." });
     if (environment !== undefined && environment.kind !== "local" && target.enabled && target.kind === "pi_sdk" &&
       (environment.operations.kind !== "sidecar" || !environment.operations.enabledCapabilities.includes("workspace_tools"))) context.addIssue({ code: "custom", path: ["targets", index], message: "Remote Pi requires workspace tools and context capabilities." });
   }

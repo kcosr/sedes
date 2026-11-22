@@ -1067,6 +1067,106 @@ describe("ACP V1 binding conformance boundaries", () => {
     expect(authorityCalls).toBe(0);
   });
 
+  it("keeps an opted-in human decision pending beyond the ordinary reverse deadline", async () => {
+    const transport = new ConformanceTransport(); let release!: () => void, handling = false, authorityCalls = 0;
+    const registration = defineAcpReverseRequestHandler({ descriptor: ACP_CLIENT_REQUESTS.requestPermission, dispatchDeadlineMilliseconds: null,
+      authorize: () => { authorityCalls++; return true; }, handle: async (_request, context) => {
+        handling = true;
+        await Promise.race([new Promise<void>(resolve => { release = resolve; }), untilAborted(context.signal)]);
+        return { outcome: { outcome: "selected" as const, optionId: "deny" } };
+      } });
+    const binding = trackedBinding(transport, { reverseHandlers: [registration], limits: { reverseRequestDeadlineMilliseconds: 20 } });
+    await initialize(binding, transport); transport.emit(permissionRequest(1)); await waitFor(() => handling);
+    await new Promise(resolve => setTimeout(resolve, 60));
+    expect(binding.diagnostics()).toMatchObject({ closed: false, activeReverseRequests: 1, protocolFailures: 0 });
+    // Independent control delivery remains available during human input.
+    await binding.notify(ACP_AGENT_NOTIFICATIONS.cancelSession, { sessionId: "session" }); release();
+    await waitFor(() => binding.diagnostics().activeReverseRequests === 0);
+    expect(authorityCalls).toBe(2);
+    expect(transport.parsedWrite(2)).toMatchObject({ id: 1, result: { outcome: { outcome: "selected", optionId: "deny" } } });
+    expect(binding.diagnostics().closed).toBe(false);
+  });
+  it("keeps long human waits bounded by inventory, exact cancellation, and connection lifetime", async () => {
+    const transport = new ConformanceTransport(), signals: AbortSignal[] = []; let authorityCalls = 0;
+    const registration = defineAcpReverseRequestHandler({ descriptor: ACP_CLIENT_REQUESTS.requestPermission, dispatchDeadlineMilliseconds: null,
+      authorize: () => { authorityCalls++; return true; }, handle: async (_request, context) => {
+        signals.push(context.signal); await untilAborted(context.signal); return { outcome: { outcome: "cancelled" as const } };
+      } });
+    const binding = trackedBinding(transport, { reverseHandlers: [registration], limits: { reverseRequestDeadlineMilliseconds: 20, maximumReverseRequests: 1 } });
+    await initialize(binding, transport); transport.emit(permissionRequest(1)); await waitFor(() => signals.length === 1);
+    await new Promise(resolve => setTimeout(resolve, 50)); transport.emit(permissionRequest(2));
+    await waitFor(() => transport.writes.length === 2);
+    expect(transport.parsedWrite(1)).toMatchObject({ id: 2, error: { code: -32000 } }); expect(authorityCalls).toBe(1);
+    transport.emit({ jsonrpc: "2.0", method: "$/cancel_request", params: { requestId: 1 } });
+    await waitFor(() => binding.diagnostics().activeReverseRequests === 0);
+    expect(signals[0]!.aborted).toBe(true); expect(transport.parsedWrite(2)).toMatchObject({ id: 1, error: { code: -32800 } });
+    transport.emit(permissionRequest(3)); await waitFor(() => signals.length === 2);
+    await binding.close(); expect(signals[1]!.aborted).toBe(true);
+    expect(binding.diagnostics().activeReverseRequests).toBe(0);
+  });
+  it("does not extend authorization deadlines when human dispatch has no deadline", async () => {
+    const transport = new ConformanceTransport(); let handled = false;
+    const registration = defineAcpReverseRequestHandler({ descriptor: ACP_CLIENT_REQUESTS.requestPermission, dispatchDeadlineMilliseconds: null,
+      authorize: async (_request, context) => { await untilAborted(context.signal); return true; },
+      handle: () => { handled = true; return { outcome: { outcome: "cancelled" as const } }; } });
+    const binding = trackedBinding(transport, { reverseHandlers: [registration], limits: { reverseRequestDeadlineMilliseconds: 10 } });
+    await initialize(binding, transport); transport.emit(permissionRequest(1));
+    await expect(binding.closed).resolves.toMatchObject({ reason: "acp_reverse_request_deadline" });
+    expect(handled).toBe(false); expect(transport.writes).toHaveLength(1);
+  });
+  it("bounds reauthorization after a long human decision", async () => {
+    const transport = new ConformanceTransport(); let release!: () => void, handling = false, authorityCalls = 0;
+    const registration = defineAcpReverseRequestHandler({ descriptor: ACP_CLIENT_REQUESTS.requestPermission, dispatchDeadlineMilliseconds: null,
+      authorize: async (_request, context) => { if (++authorityCalls === 1) return true; await untilAborted(context.signal); return false; },
+      handle: async (_request, context) => { handling = true; await Promise.race([new Promise<void>(resolve => { release = resolve; }), untilAborted(context.signal)]);
+        return { outcome: { outcome: "cancelled" as const } }; } });
+    const binding = trackedBinding(transport, { reverseHandlers: [registration], limits: { reverseRequestDeadlineMilliseconds: 20 } });
+    await initialize(binding, transport); transport.emit(permissionRequest(1)); await waitFor(() => handling);
+    await new Promise(resolve => setTimeout(resolve, 50)); release();
+    await expect(binding.closed).resolves.toMatchObject({ reason: "acp_reverse_request_deadline" });
+    expect(authorityCalls).toBe(2); expect(transport.writes).toHaveLength(1);
+  });
+  it("denies a decision whose session authority changed while the person waited", async () => {
+    const transport = new ConformanceTransport(); let allowed = true, release!: () => void, handling = false;
+    const registration = defineAcpReverseRequestHandler({ descriptor: ACP_CLIENT_REQUESTS.requestPermission, dispatchDeadlineMilliseconds: null,
+      authorize: () => allowed, handle: async (_request, context) => { handling = true;
+        await Promise.race([new Promise<void>(resolve => { release = resolve; }), untilAborted(context.signal)]);
+        return { outcome: { outcome: "selected" as const, optionId: "deny" } }; } });
+    const binding = trackedBinding(transport, { reverseHandlers: [registration], limits: { reverseRequestDeadlineMilliseconds: 20 } });
+    await initialize(binding, transport); transport.emit(permissionRequest(1)); await waitFor(() => handling);
+    allowed = false; release(); await waitFor(() => binding.diagnostics().activeReverseRequests === 0);
+    expect(transport.parsedWrite(1)).toMatchObject({ id: 1, error: { code: -32601 } });
+    expect(binding.diagnostics()).toMatchObject({ closed: false, deniedReverseRequests: 1 });
+  });
+  it("bounds a stalled response write after an unbounded human wait", async () => {
+    const transport = new ConformanceTransport(); let release!: () => void, handling = false;
+    const registration = defineAcpReverseRequestHandler({ descriptor: ACP_CLIENT_REQUESTS.requestPermission, dispatchDeadlineMilliseconds: null,
+      authorize: () => true, handle: async (_request, context) => { handling = true;
+        await Promise.race([new Promise<void>(resolve => { release = resolve; }), untilAborted(context.signal)]);
+        return { outcome: { outcome: "cancelled" as const } }; } });
+    const binding = trackedBinding(transport, { reverseHandlers: [registration], limits: { reverseRequestDeadlineMilliseconds: 20 } });
+    await initialize(binding, transport); transport.emit(permissionRequest(1)); await waitFor(() => handling);
+    await new Promise(resolve => setTimeout(resolve, 50)); expect(binding.diagnostics().closed).toBe(false);
+    const releaseWrite = transport.blockNextSend(); release();
+    await expect(binding.closed).resolves.toMatchObject({ reason: "acp_reverse_request_deadline", delivery: "sent_outcome_unknown" });
+    expect(transport.writes).toHaveLength(2); releaseWrite();
+  });
+  it("rejects stale carrier authority after a human wait without publishing its result", async () => {
+    const transport = new ConformanceTransport(); let release!: () => void, handling = false;
+    const registration = defineAcpReverseRequestHandler({ descriptor: ACP_CLIENT_REQUESTS.requestPermission, dispatchDeadlineMilliseconds: null,
+      authorize: () => true, handle: async (_request, context) => { handling = true;
+        await Promise.race([new Promise<void>(resolve => { release = resolve; }), untilAborted(context.signal)]);
+        return { outcome: { outcome: "selected" as const, optionId: "deny" } }; } });
+    const binding = trackedBinding(transport, { reverseHandlers: [registration], limits: { reverseRequestDeadlineMilliseconds: 20 } });
+    await initialize(binding, transport); transport.emit(permissionRequest(1)); await waitFor(() => handling);
+    revokeFramedTransportAssurance(transport.assurance); release();
+    await expect(binding.closed).resolves.toMatchObject({ reason: "acp_transport_assurance_stale" }); expect(transport.writes).toHaveLength(1);
+  });
+  it("rejects an invalid per-registration dispatch timeout instead of silently weakening it", () => {
+    expect(() => defineAcpReverseRequestHandler({ descriptor: ACP_CLIENT_REQUESTS.requestPermission,
+      dispatchDeadlineMilliseconds: 86_400_000 as never, authorize: () => true,
+      handle: () => ({ outcome: { outcome: "cancelled" as const } }) })).toThrow("acp_reverse_request_registration_invalid");
+  });
   it("fences a reverse deadline without waiting on a blocked response send", async () => {
     const transport = new ConformanceTransport();
     const registration = defineAcpReverseRequestHandler({

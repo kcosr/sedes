@@ -37,7 +37,7 @@ export const threadStatusToolContract = {
         threadId: Type.String({ minLength: 1, maxLength: 128 }),
         backend: Type.String({
           maxLength: 32,
-          enum: ["pi", "pi_native", "codex_app_server", "claude_agent_sdk", "grok_build", "opencode"],
+          enum: ["pi", "pi_native", "codex_app_server", "claude_agent_sdk", "grok_build", "opencode", "antigravity"],
         }),
         lifecycle: Type.String({
           maxLength: 8,

@@ -1,4 +1,5 @@
 import type { SVGProps } from "react";
+import { Orbit } from "lucide-react";
 import type { BackendBrand } from "../../shared/index.js";
 
 /**
@@ -141,6 +142,7 @@ const BRAND_MARKS: Readonly<
   claude: ClaudeBrandIcon,
   grok: GrokBrandIcon,
   opencode: OpenCodeBrandIcon,
+  antigravity: ({ size = 15, ...props }) => <Orbit aria-hidden="true" size={size} {...props} />,
 };
 
 export const BackendBrandIcon = ({

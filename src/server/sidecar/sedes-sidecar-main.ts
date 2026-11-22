@@ -74,6 +74,8 @@ import { registerClaudePersistentRuntimeHost } from "../backends/claude/runtime/
 import { installEmbeddedClaudeWorker } from "../backends/claude/worker/claude-sidecar-worker-artifact.js";
 import { supportsClaudeRuntimeHost } from "../backends/claude/worker/claude-runtime-host-support.js";
 import { PersistentTerminalHost } from "./persistent-terminal-host.js";
+import { AntigravityHostRegistry } from "../backends/antigravity/host/host-registry.js";
+import { registerAntigravityHost } from "../backends/antigravity/sidecar/register-host.js";
 import { pruneSupersededSidecarArtifacts } from "./sidecar-artifact-retention.js";
 
 declare const __SEDES_SIDECAR_BUILD_ID__: string;
@@ -91,6 +93,7 @@ const compiledSidecarCapabilities = Object.freeze([
   Object.freeze({ capabilityId: "codex_runtime", majorVersion: 1 }),
   Object.freeze({ capabilityId: "opencode_runtime", majorVersion: 5 }),
   Object.freeze({ capabilityId: "pi_native_runtime", majorVersion: 3 }),
+  Object.freeze({ capabilityId: "antigravity_runtime", majorVersion: 1 }),
   Object.freeze({ capabilityId: "claude_persistent_runtime", majorVersion: 5 }),
   Object.freeze({ capabilityId: "codex_managed_tui", majorVersion: 3 }),
 ]);
@@ -145,6 +148,7 @@ async function main(): Promise<void> {
   const enabledSidecarCapabilities = Object.freeze(compiledSidecarCapabilities.filter(capability =>
     (process.platform === "linux" || capability.capabilityId !== "opencode_runtime") &&
     (process.platform !== "win32" || capability.capabilityId !== "pi_native_runtime") &&
+    (process.platform !== "win32" || capability.capabilityId !== "antigravity_runtime") &&
     (claudeRuntimeAvailable || capability.capabilityId !== "claude_persistent_runtime") &&
     (nativePtyAvailable || (capability.capabilityId !== "interactive_terminal" && capability.capabilityId !== "codex_managed_tui"))));
   const paths = await preparePersistentSidecarNamespace(input.scope);
@@ -185,9 +189,11 @@ async function main(): Promise<void> {
         hosts: openCodeHosts, services: serviceRegistry, controllerEpoch }) : () => undefined;
       const detachPi = process.platform !== "win32" ? registerPiNativeHost({ registry, channel: runtimeChannel,
         hosts: piHosts, services: serviceRegistry, controllerEpoch }) : () => undefined;
+      const detachAntigravity = process.platform !== "win32" ? registerAntigravityHost({ registry, channel: runtimeChannel,
+        hosts: antigravityHosts, services: serviceRegistry, controllerEpoch }) : () => undefined;
       const detachTui = nativePtyAvailable ? registerCodexManagedTuiHost({ registry, channel: runtimeChannel, hosts: codexHosts.managedTui, services: serviceRegistry, controllerEpoch }) : () => undefined;
       const unsubscribe = attachment.subscribe((event) => {
-        if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { detachTui(); detachCodex(); detachClaude(); detachOpenCode(); detachPi(); runtimeChannel.close(); unsubscribe(); }
+        if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { detachTui(); detachCodex(); detachClaude(); detachOpenCode(); detachPi(); detachAntigravity(); runtimeChannel.close(); unsubscribe(); }
       });
   registerWorkspaceFilesV8Operations(registry, workspaceFiles.handlers);
   registerWorkspaceToolsV2Operations(registry, workspaceTools.handlers);
@@ -277,6 +283,8 @@ async function main(): Promise<void> {
   const piHosts = new PiNativeHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, channels: environmentChannel,
     serviceDirectory: paths.serviceDirectory, services: serviceRegistry });
+  const antigravityHosts = new AntigravityHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
+    executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, channels: environmentChannel, services: serviceRegistry });
   const openCodeHosts = new OpenCodeRuntimeHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry,
     agentTools: {

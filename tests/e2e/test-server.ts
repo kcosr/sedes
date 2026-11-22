@@ -1,4 +1,5 @@
 import { ToolPolicyService } from "../../src/server/tool-policies/tool-policy-service.js";
+import { AntigravityProductionFixture } from "../support/antigravity-production-fixture.js";
 import { createAutomaticModelRetryRuntime } from "../../src/server/conversations/automatic-model-retry-runtime.js";
 import type { AutomaticModelRetryService } from "../../src/server/conversations/automatic-model-retry-service.js";
 import { MODEL_FAILURE_RETRY_DELAY_MS } from "../../src/server/backends/model-failure-retry.js";
@@ -6242,6 +6243,14 @@ async function main(): Promise<void> {
       response.json({ connected: input.connected });
     } catch (error) { next(error); }
   });
+  let antigravityProduction: Promise<AntigravityProductionFixture> | undefined;
+  app.post("/__e2e/antigravity", async (_request, response, next) => {
+    try {
+      antigravityProduction ??= AntigravityProductionFixture.create({ parentDirectory: config.stateDirectory });
+      const fixture = await antigravityProduction;
+      response.json({ origin: fixture.url, workspaceId: fixture.workspaceId, targetId: fixture.targetId });
+    } catch (error) { next(error); }
+  });
   // The scripted host skips pairing but retains production's server-derived
   // principal namespace for durable client state such as preview recovery.
   app.get("/api/auth/status", (_request, response) => response.json({
@@ -6352,6 +6361,12 @@ async function main(): Promise<void> {
   let closing: Promise<void> | undefined;
   const close = async () => {
     closing ??= (async () => {
+      // A failed fixture initialization already performs its own cleanup. Keep
+      // a production cleanup failure from skipping the scripted server's drain.
+      const antigravityCleanup = antigravityProduction?.then(
+        fixture => fixture.close().then(() => undefined, error => error),
+        () => undefined,
+      );
       drain.beginDrain();
       await terminalCarrier.close();
       await managedTerminalCarrier.close();
@@ -6384,6 +6399,8 @@ async function main(): Promise<void> {
       await notifications.close();
       clientControls.close();
       database.close();
+      const antigravityCleanupError: unknown = await antigravityCleanup;
+      if (antigravityCleanupError) throw antigravityCleanupError;
     })();
     await closing;
   };

@@ -17,6 +17,7 @@ import { codexExecutionClientFeature } from "./codex-execution.js";
 import { codexFastModeClientFeature } from "./codex-fast-mode.js";
 import { codexGoalClientFeature } from "./codex-goal.js";
 import { claudePermissionsClientFeature } from "./claude-permissions.js";
+import { antigravityModeClientFeature } from "./antigravity-mode.js";
 
 export interface ClientProviderFeatureModule {
   readonly ref: ProviderFeatureRef;
@@ -72,6 +73,7 @@ export class ClientProviderFeatureRegistry {
 }
 
 export const clientProviderFeatures = new ClientProviderFeatureRegistry([
+  antigravityModeClientFeature,
   claudePermissionsClientFeature,
   codexExecutionClientFeature,
   codexGoalClientFeature,

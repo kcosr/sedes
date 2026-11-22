@@ -637,7 +637,7 @@ const descriptorAvailabilityShape = {
  * (fail-closed). Every member must have a brand icon registered client-side
  * and a `BackendKind` mapping server-side.
  */
-export const backendBrandSchema = z.enum(["pi", "codex", "claude", "grok", "opencode"]);
+export const backendBrandSchema = z.enum(["pi", "codex", "claude", "grok", "opencode", "antigravity"]);
 export type BackendBrand = z.infer<typeof backendBrandSchema>;
 
 export const backendPresentationSchema = z.strictObject({

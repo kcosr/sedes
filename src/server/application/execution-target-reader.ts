@@ -342,6 +342,7 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
       case "claude_agent_sdk":
       case "grok_build":
       case "opencode":
+      case "antigravity":
         // These compiled backends have no consumer for workspace operations.
         return {
           eligible: true,

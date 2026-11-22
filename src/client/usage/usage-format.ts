@@ -39,6 +39,7 @@ const BACKEND_KINDS: Readonly<Record<string, { label: string; brand: BackendBran
   codex_app_server: { label: "Codex", brand: "codex" },
   claude_agent_sdk: { label: "Claude", brand: "claude" },
   grok_build: { label: "Grok", brand: "grok" },
+  antigravity: { label: "Antigravity", brand: "antigravity" },
 };
 const PROVIDERS: Readonly<Record<string, string>> = {
   anthropic: "Anthropic", firstParty: "Anthropic API", bedrock: "Amazon Bedrock", vertex: "Google Vertex AI",

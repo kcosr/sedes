@@ -27,6 +27,7 @@ import { OpenCodeBackendModule } from "../../src/server/backends/opencode/openco
 import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import { openCodeRuntimeNamespaceKey } from "../../src/server/backends/opencode/opencode-runtime.js";
 import * as environmentRuntime from "../../src/server/runtime/execution-environment-runtime.js";
+import * as agentToolCliAvailability from "../../src/server/runtime/agent-tool-cli-availability.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import { PiNativeHost } from "../../src/server/backends/pi/native/host/native-host.js";
 import { PiNativeHostRegistry } from "../../src/server/backends/pi/native/host/host-registry.js";
@@ -132,6 +133,32 @@ function addBackgroundOpenCode(configuration: ConfigurationDocument, environment
 }
 
 describe("production configuration reconciliation", () => {
+  it("publishes the bound ephemeral listener to local backend tool runtimes", async () => {
+    vi.spyOn(agentToolCliAvailability, "resolveLocalAgentToolCliAvailability").mockResolvedValue({
+      availability: "available", endpoint: "http://127.0.0.1:0", executableDirectory: "/fixture/bin", inheritedPath: "/usr/bin",
+    });
+    const contexts: BackendModuleRuntimeContext[] = [];
+    const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
+    vi.spyOn(compiledBackendModuleCatalog, "prepare").mockImplementation(input => prepare(input).map(prepared => ({
+      ...prepared,
+      createRuntime(context) { contexts.push(context); return prepared.createRuntime(context); },
+    })));
+    await fixture();
+    const address = application!.server.address();
+    if (!address || typeof address === "string") throw new Error("test_server_not_listening");
+    expect(address.port).toBeGreaterThan(0);
+    expect(contexts.length).toBeGreaterThan(0);
+    const authenticatedFetch = await authenticatedProductionFetch(application!);
+    for (const context of contexts) {
+      expect(context.agentToolCli.availability).toBe("available");
+      if (context.agentToolCli.availability !== "available") throw new Error("test_cli_unavailable");
+      expect(context.agentToolCli.endpoint).toBe(`http://127.0.0.1:${address.port}`);
+      const health = await authenticatedFetch(`${context.agentToolCli.endpoint}/api/health`);
+      expect(health.status).toBe(200);
+      expect(await health.json()).toMatchObject({ status: "ok" });
+    }
+  });
+
   it.each(["idle", "active", "cleanup_unproven", "carrier", "unreachable"] as const)("refreshes a replaced Pi sidecar only after %s retirement is safe", async disposition => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID(), backendId = "replaced-native-pi";

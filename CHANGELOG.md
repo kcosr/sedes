@@ -36,7 +36,7 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **176**. Chat excerpts captured from highlighted questions retain their quote
+  **177**. Antigravity targets add a normalized brand and execution configuration. Chat excerpts captured from highlighted questions retain their quote
   style in drafts and sent messages. Account quota snapshots now include the
   execution target's backend identity. Research settings now select Codex CLI.
   Remote environment configuration adds the required connection compression
@@ -92,6 +92,8 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
+
+- Run Google Antigravity through ACP on local or persistent SSH/outbound execution hosts, with native history, streaming, permission decisions, model and native mode selection, and background-work tracking. Agent context/status tools advance to schema 5, thread listing to schema 9, and Saved Agent `list/get/options/create/update` to schema 7 to include Antigravity. See [Antigravity setup](docs/operator/backends/antigravity.md).
 
 - Enable **Highlight questions in agent replies** under **Settings > Appearance
   > Chat formatting** to show completed questions in red with an underline.

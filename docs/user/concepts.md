@@ -39,9 +39,9 @@ where work actually runs.
 
 ## Backend and target
 
-A **backend** is a provider integration: Pi SDK, Codex, Claude, or Grok. A
-**target** is a configured backend connection paired with one execution
-environment. It determines which provider process or endpoint a thread uses.
+A **backend** is a [provider integration](provider-features.md). A **target**
+is a configured backend connection paired with one execution environment. It
+determines which provider process or endpoint a thread uses.
 
 Targets are configured in **Settings → Backends**. If several targets can serve a
 new thread, Sedes asks you to choose rather than guessing. A thread cannot be
@@ -83,8 +83,8 @@ creation, update, repair, and deletion workflow.
 
 A **Sedes thread** is the object shown in the sidebar. A newly created thread
 starts as a durable draft and does not yet have a provider conversation. The
-first successful **Send** creates and binds exactly one native Pi, Codex,
-Claude, or Grok conversation.
+first successful **Send** creates and binds one native conversation on the
+selected backend.
 
 After that first send:
 

@@ -110,6 +110,25 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
     summarizeTarget: () => "Pi catalog and thread defaults",
     describeConnection: () => [{ label: "Runs", value: "In the Sedes server process" }, { label: "Authentication", value: "The Sedes server account's Pi installation" }],
   },
+  antigravity: {
+    label: "Antigravity", description: "Runs the installed Antigravity CLI on the selected Linux or macOS execution host, locally, over SSH, or through an outbound connection.",
+    supportsProviderIds: false, supportsRemoteWorkspace: true,
+    createBackend: id => ({ ...commonBackend(id), kind: "antigravity", moduleConfiguration: { initializationTimeoutMs: 30_000 } }),
+    createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "antigravity_acp", moduleConfiguration: { defaults: {} } }),
+    renderConnection: props => props.value.kind === "antigravity" ? <AntigravityConnectionEditor {...props} value={props.value} /> : unsupportedEditor(),
+    renderTarget: props => props.value.kind === "antigravity_acp" ? <AntigravityTargetEditor {...props} value={props.value} /> : unsupportedEditor(),
+    summarizeTarget: value => {
+      if (value.kind !== "antigravity_acp") return "";
+      const { modelId, thinkingLevel, modeId } = value.moduleConfiguration.defaults;
+      return [modelId ?? "Native default model", thinkingLevel && `Reasoning ${thinkingLevel}`, modeId && `Mode ${modeId}`].filter(Boolean).join(" · ");
+    },
+    describeConnection: value => value.kind === "antigravity" ? [
+      { label: "Runs", value: "Antigravity CLI on the execution host" },
+      { label: "Executable", value: value.moduleConfiguration.executablePath ? <PathText value={value.moduleConfiguration.executablePath} /> : "agy from the execution host’s PATH" },
+      { label: "Native profile", value: value.moduleConfiguration.geminiDirectory ? <PathText value={value.moduleConfiguration.geminiDirectory} /> : "The account’s native Antigravity profile" },
+      { label: "Start timeout", value: `${value.moduleConfiguration.initializationTimeoutMs / 1000} s` },
+    ] : [],
+  },
   codex_app_server: {
     label: "Codex", description: "Connect to an existing app-server, or let the execution environment manage a stdio process.",
     supportsProviderIds: false, supportsRemoteWorkspace: true,
@@ -250,6 +269,7 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
 
 export function allowedEnvironments(backend: BackendDefinition, environments: readonly EnvironmentDefinition[]): EnvironmentDefinition[] {
   return environments.filter((environment) => (backendEditors[backend.kind].supportsRemoteWorkspace || environment.kind === "local")
+    && !(backend.kind === "antigravity" && environment.kind === "outbound" && environment.platform === "win32")
     && !(backend.kind === "pi_native" && environment.kind === "outbound" && environment.platform === "win32")
     && !(backend.kind === "claude_agent_sdk" && environment.kind === "outbound" && environment.platform === "win32")
     && !(backend.kind === "opencode" && environment.kind === "outbound" && environment.platform !== "linux"));
@@ -409,6 +429,44 @@ function PiNativeTargetEditor({ value, onChange, errors, disabled }: EditorProps
       options={[{ value: "native", label: "Native Pi default" }, ...piNativeThinkingLevelSchema.options.map(value => ({ value, label: value }))]}
       onChange={(thinkingLevel) => update({ ...defaults, thinkingLevel: thinkingLevel === "native" ? undefined : thinkingLevel })} />
   </div>;
+}
+
+function AntigravityConnectionEditor({ value, onChange, errors, disabled }: EditorProps<BackendOf<"antigravity">> & { readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {
+  const configuration = value.moduleConfiguration;
+  const update = (next: typeof configuration) => onChange({ ...value, moduleConfiguration: next });
+  const error = (field: string) => errors.under(`moduleConfiguration.${field}`);
+  return <>
+    <p className="execution-muted">Uses the Antigravity authentication and sessions of the execution host’s account.</p>
+    <AdvancedGroup summary="Executable, native profile, start timeout"
+      defaultOpen={Boolean(configuration.executablePath || configuration.geminiDirectory || configuration.initializationTimeoutMs !== 30_000)}
+      forceOpen={Boolean(error("executablePath") || error("geminiDirectory") || error("initializationTimeoutMs"))}>
+      <TextField label="Antigravity executable path" path disabled={disabled} value={configuration.executablePath ?? ""} error={error("executablePath")}
+        description="Optional absolute path on the execution host. Leave blank to find agy on that host’s PATH."
+        onChange={executablePath => update({ ...configuration, executablePath: executablePath || undefined })} />
+      <TextField label="Gemini directory" path disabled={disabled} value={configuration.geminiDirectory ?? ""} error={error("geminiDirectory")}
+        description="Optional absolute profile root on the execution host. Leave blank to use the account’s native Antigravity profile."
+        onChange={geminiDirectory => update({ ...configuration, geminiDirectory: geminiDirectory || undefined })} />
+      <TextField label="Initialization timeout" type="number" suffix="ms" disabled={disabled} value={String(configuration.initializationTimeoutMs)} error={error("initializationTimeoutMs")}
+        onChange={timeout => update({ ...configuration, initializationTimeoutMs: Number(timeout) })} />
+    </AdvancedGroup>
+  </>;
+}
+
+function AntigravityTargetEditor({ value, onChange, errors, disabled }: EditorProps<TargetOf<"antigravity_acp">> & { readonly onChange: (value: TargetDefinition) => void }): React.JSX.Element {
+  const defaults = value.moduleConfiguration.defaults;
+  const update = (next: typeof defaults) => onChange({ ...value, moduleConfiguration: { defaults: next } });
+  const error = (field: string) => errors.under(`moduleConfiguration.defaults.${field}`);
+  return <>
+    <p className="execution-muted">Use identifiers from the Antigravity catalog. Leave a field blank to use the provider’s default.</p>
+    <div className="execution-field-grid">
+      <TextField label="Default model identifier" layout="stacked" mono disabled={disabled} value={defaults.modelId ?? ""} error={error("modelId")}
+        onChange={modelId => update({ ...defaults, modelId: modelId || undefined })} />
+      <TextField label="Default reasoning effort identifier" layout="stacked" mono disabled={disabled} value={defaults.thinkingLevel ?? ""} error={error("thinkingLevel")}
+        onChange={thinkingLevel => update({ ...defaults, thinkingLevel: thinkingLevel || undefined })} />
+      <TextField label="Default mode identifier" layout="stacked" mono disabled={disabled} value={defaults.modeId ?? ""} error={error("modeId")}
+        onChange={modeId => update({ ...defaults, modeId: modeId || undefined })} />
+    </div>
+  </>;
 }
 
 function ClaudeConnectionEditor({ value, onChange, errors, disabled }: EditorProps<BackendOf<"claude_agent_sdk">> & { readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {

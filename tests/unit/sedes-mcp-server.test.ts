@@ -161,6 +161,16 @@ function raw(client: SedesToolClient = fakeClient(), mode: "progressive" | "indi
 }
 
 describe("sedes mcp server", () => {
+  it("classifies unsupported discovery before initialization without changing the negotiated protocol", async () => {
+    const session = raw();
+    expect(await session.exchange(JSON.stringify({ jsonrpc: "2.0", id: "discover", method: "server/discover",
+      params: { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } } })))
+      .toMatchObject({ id: "discover", error: { code: -32_601 } });
+    expect(await session.initialize("2025-11-25")).toMatchObject({ result: { protocolVersion: "2025-11-25" } });
+    expect(await session.exchange(JSON.stringify({ jsonrpc: "2.0", id: "tools", method: "tools/list" })))
+      .toHaveProperty("result.tools");
+    await session.server.close();
+  });
   it("delivers standard PNG blocks through the official MCP client", async () => {
     const media = { type: "image" as const, mimeType: "image/png" as const,
       data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3x8AAAAASUVORK5CYII=" };
@@ -204,7 +214,7 @@ describe("sedes mcp server", () => {
       inputSchema: { type: "object", additionalProperties: false },
       outputSchema: { type: "object", required: ["activity", "backend", "lifecycle", "pinned", "threadId"] },
       annotations: { readOnlyHint: true, openWorldHint: false },
-      _meta: { "sedes/toolId": "thread.status", "sedes/schemaVersion": 4 },
+      _meta: { "sedes/toolId": "thread.status", "sedes/schemaVersion": 5 },
     });
     expect(status.inputSchema).not.toHaveProperty("$schema");
     expect(status.outputSchema).not.toHaveProperty("$schema");
@@ -245,7 +255,7 @@ describe("sedes mcp server", () => {
     expect(client.invoke).toHaveBeenCalledWith(
       {
         toolId: "thread.status",
-        schemaVersion: 4,
+        schemaVersion: 5,
         requestId: "tool-request-1",
         input: { threadId },
       },
@@ -395,18 +405,18 @@ describe("sedes mcp server", () => {
       arguments: { action: "describe", toolIds: ["thread.status"] },
     });
     expect(described.structuredContent).toMatchObject({
-      tools: [{ id: "thread.status", schemaVersion: 4 }],
+      tools: [{ id: "thread.status", schemaVersion: 5 }],
     });
 
     const read = await mcp.callTool({
       name: "sedes_read",
-      arguments: { toolId: "thread.status", schemaVersion: 4, input: { threadId } },
+      arguments: { toolId: "thread.status", schemaVersion: 5, input: { threadId } },
     });
     expect(read.structuredContent).toMatchObject({ threadId, lifecycle: "active" });
 
     const wrongLane = await mcp.callTool({
       name: "sedes_act",
-      arguments: { toolId: "thread.status", schemaVersion: 4, input: { threadId } },
+      arguments: { toolId: "thread.status", schemaVersion: 5, input: { threadId } },
     });
     expect(wrongLane.isError).toBe(true);
     expect((wrongLane.content as { text: string }[])[0]!.text).toContain("sedes_read");

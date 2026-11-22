@@ -1,0 +1,149 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { chmod, copyFile, mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { SidecarFrameWriteError, SidecarOperationRegistry, SidecarProtocolPeer, controlHelloOperation, registerControlV2Operations,
+  type SidecarFrame, type SidecarFrameSendOptions, type SidecarFrameTransport, type SidecarTransportClosure } from "../../src/internal/sidecar-protocol/index.js";
+import { SidecarRuntimeChannel, type SidecarRuntimeLease } from "../../src/server/sidecar/runtime-channel.js";
+import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
+import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
+import { AntigravityHost } from "../../src/server/backends/antigravity/host/native-host.js";
+import { AntigravityHostRegistry } from "../../src/server/backends/antigravity/host/host-registry.js";
+import { AntigravityRemotePort } from "../../src/server/backends/antigravity/sidecar/remote-port.js";
+import { registerAntigravityHost } from "../../src/server/backends/antigravity/sidecar/register-host.js";
+import { AntigravityAcpConnection } from "../../src/server/backends/antigravity/acp-connection.js";
+import type { AntigravityRuntimeConfiguration } from "../../src/server/backends/antigravity/port.js";
+
+const scope = { tenantId: "tenant", principalId: "principal" };
+const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
+const cleanup: (() => Promise<unknown>)[] = [];
+afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
+async function fixture() {
+  const cwd = await realpath(await mkdtemp(path.join(tmpdir(), "sedes-antigravity-sidecar-test-")));
+  cleanup.push(() => rm(cwd, { recursive: true, force: true }));
+  const executablePath = path.join(cwd, "agy");
+  await copyFile(fileURLToPath(new URL("../fixtures/antigravity/fake-antigravity-acp-peer.mjs", import.meta.url)), executablePath); await chmod(executablePath, 0o755);
+  const configuration: AntigravityRuntimeConfiguration = { ...scope, backendInstanceId: "backend", executionEnvironmentId: "remote", executablePath, initializationTimeoutMs: 1000 };
+  const channels = new LocalEnvironmentChannelProvider({ scope, executionEnvironmentId: "remote", environment: process.env });
+  cleanup.push(async () => channels.close());
+  const services = new PersistentSidecarServiceRegistry({ scope: { ...scope, executionEnvironmentId: "remote", installationId: "installation" }, buildId: "test", artifactSha256: "a".repeat(64), runtimeWireVersion: 1, configuration: serviceConfiguration });
+  let failCleanup = false;
+  const launched = vi.fn();
+  const createHost = vi.fn((configuration: AntigravityRuntimeConfiguration) => {
+    const host = new AntigravityHost({ configuration, channels, environment: process.env, observationWaitMs: 5,
+      readHistory: async identity => ({ ...identity, native: { steps: [], revision: "a".repeat(64) } }),
+      launch: async input => {
+        launched(); const peer = await AntigravityAcpConnection.open(input); const close = peer.close.bind(peer);
+        vi.spyOn(peer, "close").mockImplementation(async () => { if (failCleanup) throw new Error("cleanup_uncertain"); await close(); }); return peer;
+      } });
+    cleanup.push(() => host.close()); return host;
+  });
+  const hosts = new AntigravityHostRegistry({ scope, executionEnvironmentId: "remote", channels, environment: process.env, services, createHost });
+  return { cwd, configuration, services, hosts, launched, createHost, failCleanup(value: boolean) { failCleanup = value; } };
+}
+async function attachment(f: Awaited<ReturnType<typeof fixture>>, mode: "normal" | "recovery" = "normal") {
+  const left = new Transport(), right = new Transport(); left.peer = right; right.peer = left;
+  const epoch = f.services.attach(serviceConfiguration, mode);
+  const leftRegistry = new SidecarOperationRegistry(), rightRegistry = new SidecarOperationRegistry();
+  const sedes = new SidecarProtocolPeer({ role: "sedes", transport: left, sessionNonce: "n".repeat(48), registry: leftRegistry });
+  const sidecar = new SidecarProtocolPeer({ role: "sidecar", transport: right, sessionNonce: "n".repeat(48), registry: rightRegistry });
+  const channel = new SidecarRuntimeChannel(sedes, leftRegistry), hostChannel = new SidecarRuntimeChannel(sidecar, rightRegistry);
+  const detach = registerAntigravityHost({ registry: rightRegistry, channel: hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: epoch });
+  const capabilities = rightRegistry.capabilities().map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion }));
+  registerControlV2Operations(rightRegistry, { buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: leftRegistry.capabilities() });
+  sedes.start(); sidecar.start();
+  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), authorizedSidecarCapabilities: capabilities, offeredSedesCapabilities: leftRegistry.capabilities() });
+  const release = vi.fn();
+  const lease: SidecarRuntimeLease = { channel, controllerEpoch: epoch, serviceIncarnation: f.services.serviceIncarnation, closed: left.closed, release };
+  let disconnected = false;
+  const disconnect = async () => { if (disconnected) return; disconnected = true;
+    detach(); f.services.detach(epoch); channel.close(); hostChannel.close(); await sedes.close("test_complete"); };
+  cleanup.push(disconnect); return { lease, channel, disconnect, epoch, release };
+}
+function proxy(f: Awaited<ReturnType<typeof fixture>>, getLease: () => SidecarRuntimeLease) {
+  const runtime = { acquire: vi.fn(async () => getLease()), acquireExisting: vi.fn(async () => getLease()) };
+  const port = new AntigravityRemotePort({ configuration: f.configuration, sidecarRuntime: runtime }); cleanup.push(() => port.close()); return { port, runtime };
+}
+describe("Antigravity persistent sidecar", () => {
+  it("keeps a turn alive across controller loss and resumes exact retained outcomes", async () => {
+    const f = await fixture(); const first = await attachment(f); let current = first.lease;
+    const { port } = proxy(f, () => current);
+    const identity = await port.create({ cwd: f.cwd, operationId: "create" }); const original = await port.attach(identity);
+    await port.request({ handleId: original.handleId, operationId: "send", command: { type: "prompt", prompt: [{ type: "text", text: "wait" }] } });
+    await first.disconnect();
+    const second = await attachment(f); current = second.lease;
+    const restored = await port.attachExisting(identity);
+    expect(restored).toMatchObject({ handleId: original.handleId, generation: original.generation }); expect(f.launched).toHaveBeenCalledOnce();
+    expect(await port.outcome({ handleId: original.handleId, operationId: "send" })).toEqual({ status: "pending" });
+    await port.request({ handleId: original.handleId, operationId: "cancel", command: { type: "cancel" } });
+    await vi.waitFor(async () => expect(await port.outcome({ handleId: original.handleId, operationId: "send" })).toMatchObject({ status: "completed", result: { stopReason: "cancelled" } }));
+    await port.close(); expect((await f.hosts.lookupRetained("backend", second.epoch))?.snapshot().retainedSessions).toHaveLength(1);
+  });
+  it("restores a new main-side proxy without launching a replacement or replaying input", async () => {
+    const f = await fixture(), first = await attachment(f); const initial = proxy(f, () => first.lease);
+    const identity = await initial.port.create({ cwd: f.cwd, operationId: "create" }); const original = await initial.port.attach(identity);
+    await initial.port.close(); await first.disconnect();
+    const second = await attachment(f); const resumed = proxy(f, () => second.lease);
+    expect(await resumed.port.attachExisting(identity)).toMatchObject({ handleId: original.handleId, generation: original.generation });
+    expect(resumed.runtime.acquire).not.toHaveBeenCalled(); expect(resumed.runtime.acquireExisting).toHaveBeenCalledOnce(); expect(f.launched).toHaveBeenCalledOnce();
+    // The same retained owner can regain ordinary authority only after exact
+    // current-configuration lookup; it never starts a competing runtime.
+    await resumed.port.request({ handleId: original.handleId, operationId: "send", command: { type: "prompt", prompt: [{ type: "text", text: "hello" }] } });
+    await vi.waitFor(async () => expect(await resumed.port.outcome({ handleId: original.handleId, operationId: "send" })).toMatchObject({ status: "completed" }));
+    expect(f.createHost).toHaveBeenCalledOnce();
+  });
+  it("fences a changed service incarnation rather than ensuring a replacement runtime", async () => {
+    const f = await fixture(), first = await attachment(f); let lease = first.lease; const { port } = proxy(f, () => lease);
+    const identity = await port.create({ cwd: f.cwd, operationId: "create" }); await first.disconnect();
+    const second = await attachment(f); lease = { ...second.lease, serviceIncarnation: "replacement-service" };
+    await expect(port.attachExisting(identity)).rejects.toMatchObject({ code: "antigravity_runtime_incarnation_changed", delivery: "sent_outcome_unknown" });
+    expect(f.createHost).toHaveBeenCalledOnce();
+  });
+  it("reacquires normal service authority before promoting a retained recovery carrier", async () => {
+    const f = await fixture(), first = await attachment(f), initial = proxy(f, () => first.lease);
+    const identity = await initial.port.create({ cwd: f.cwd, operationId: "create" }); const original = await initial.port.attach(identity);
+    await initial.port.close(); await first.disconnect();
+    const recovery = await attachment(f, "recovery"), resumed = proxy(f, () => recovery.lease);
+    expect(await resumed.port.attachExisting(identity)).toMatchObject({ handleId: original.handleId });
+    resumed.runtime.acquire.mockImplementationOnce(async () => (await attachment(f)).lease);
+    await resumed.port.request({ handleId: original.handleId, operationId: "send", command: { type: "prompt", prompt: [{ type: "text", text: "hello" }] } });
+    await vi.waitFor(async () => expect(await resumed.port.outcome({ handleId: original.handleId, operationId: "send" })).toMatchObject({ status: "completed" }));
+    expect(resumed.runtime.acquire).toHaveBeenCalledOnce(); expect(recovery.release).toHaveBeenCalledOnce(); expect(f.createHost).toHaveBeenCalledOnce();
+  });
+  it("denies wrong scope, unavailable runtime capability, and stale controllers before execution", async () => {
+    const f = await fixture(), connected = await attachment(f);
+    await expect(f.hosts.ensure({ ...f.configuration, principalId: "wrong" }, connected.epoch)).rejects.toMatchObject({ code: "antigravity_configuration_scope_denied" });
+    vi.spyOn(connected.channel, "supportsOperation").mockReturnValue(false);
+    const { port } = proxy(f, () => connected.lease);
+    await expect(port.create({ cwd: f.cwd, operationId: "create" })).rejects.toMatchObject({ code: "antigravity_remote_unsupported" });
+    expect(f.createHost).not.toHaveBeenCalled();
+  });
+  it("retains ownership after uncertain cleanup and rejects a competing replacement", async () => {
+    const f = await fixture(), connected = await attachment(f), { port } = proxy(f, () => connected.lease);
+    await port.create({ cwd: f.cwd, operationId: "create" }); const before = await port.inspect();
+    f.failCleanup(true);
+    try {
+      await expect(port.stop({ expectedRevision: before.revision, force: true })).rejects.toMatchObject({ code: "antigravity_cleanup_unproven" });
+      const retained = await port.inspect(); expect(retained.blockers).toContain("cleanup_unproven");
+      await expect(port.attach({ sessionId: "different", cwd: f.cwd })).rejects.toMatchObject({ code: "antigravity_cleanup_unproven", delivery: "not_sent" });
+      expect(f.createHost).toHaveBeenCalledOnce();
+    } finally { f.failCleanup(false); }
+  });
+});
+class Queue implements AsyncIterable<SidecarFrame> {
+  readonly values: SidecarFrame[] = []; readonly waiters: ((value: IteratorResult<SidecarFrame>) => void)[] = []; ended = false;
+  push(value: SidecarFrame) { const waiter = this.waiters.shift(); waiter ? waiter({ value, done: false }) : this.values.push(value); }
+  end() { this.ended = true; for (const waiter of this.waiters.splice(0)) waiter({ value: undefined, done: true }); }
+  [Symbol.asyncIterator](): AsyncIterator<SidecarFrame> { return { next: async () => { const value = this.values.shift(); return value ? { value, done: false } : this.ended ? { value: undefined, done: true } : await new Promise(resolve => this.waiters.push(resolve)); } }; }
+}
+class Transport implements SidecarFrameTransport {
+  readonly assurance = { kind: "memory", carrierGeneration: 1 }; readonly frames = new Queue(); readonly closed: Promise<SidecarTransportClosure>;
+  resolve!: (value: SidecarTransportClosure) => void; peer?: Transport;
+  constructor() { this.closed = new Promise(resolve => { this.resolve = resolve; }); }
+  commitCompression(_mode: "none" | "zstd") {}
+  async send(bytes: Uint8Array, _options: SidecarFrameSendOptions) {
+    if (!this.peer || this.frames.ended) throw new SidecarFrameWriteError("closed", "not_sent"); this.peer.frames.push({ bytes: Uint8Array.from(bytes) }); return { disposition: "sent" as const };
+  }
+  async close(reason: string) { this.frames.end(); this.resolve({ reason }); if (this.peer) { this.peer.frames.end(); this.peer.resolve({ reason }); } }
+}

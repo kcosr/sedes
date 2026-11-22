@@ -23,9 +23,9 @@ import type {
 } from "../execution/contracts.js";
 
 export type BackendKind =
-  "pi" | "pi_native" | "codex_app_server" | "claude_agent_sdk" | "grok_build" | "opencode";
+  "pi" | "pi_native" | "codex_app_server" | "claude_agent_sdk" | "grok_build" | "opencode" | "antigravity";
 export type ConnectionKind =
-  "pi_sdk" | "pi_rpc" | "codex_app_server" | "claude_agent_sdk" | "grok_acp" | "opencode_http";
+  "pi_sdk" | "pi_rpc" | "codex_app_server" | "claude_agent_sdk" | "grok_acp" | "opencode_http" | "antigravity_acp";
 
 /**
  * The single server-side mapping from a compiled backend's kind to its
@@ -42,6 +42,7 @@ export const BACKEND_BRANDS: Readonly<Record<BackendKind, BackendBrand>> = {
   claude_agent_sdk: "claude",
   grok_build: "grok",
   opencode: "opencode",
+  antigravity: "antigravity",
 };
 
 export interface AgentBackendInstance {

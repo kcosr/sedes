@@ -806,10 +806,18 @@ export async function startProductionApplication(
     resources.defer("viewed image capture", () => viewedImageCapture.close(), {
       mode: "ownership_critical",
     });
-    const localAgentToolCli = await resolveLocalAgentToolCliAvailability({
+    const resolvedLocalAgentToolCli = await resolveLocalAgentToolCliAvailability({
       endpoint: `http://127.0.0.1:${config.port}`,
       inheritedPath: environment.PATH,
     });
+    const localAgentToolCli: AgentToolCliAvailability = resolvedLocalAgentToolCli.availability === "available"
+      ? Object.freeze({ ...resolvedLocalAgentToolCli, get endpoint() {
+          const address = server?.address();
+          const port = address && typeof address !== "string" ? address.port : config.port;
+          if (!port) throw new Error("agent_tool_listener_not_ready");
+          return `http://127.0.0.1:${port}`;
+        } })
+      : resolvedLocalAgentToolCli;
     const agentToolCli = new Map<string, AgentToolCliAvailability>(
       backendConfigurationFile.executionEnvironments.map((configured) => [
         configured.id,

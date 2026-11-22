@@ -23,7 +23,8 @@ builds; `npm start` sets production mode for the application.
 - [Local and SSH execution environments](#execution-environments)
 - [Backends, targets, and model policy](#backends-and-targets)
 - [Multiple targets](#multiple-backends-and-targets)
-- [Pi SDK](#pi-sdk), [Pi native](#pi-native), [Claude](#claude), [Grok](#grok), and [Codex](#codex)
+- [Pi SDK](#pi-sdk), [Pi native](#pi-native), [Claude](#claude), [Grok](#grok),
+  [OpenCode v2](#opencode-v2), [Antigravity](#antigravity), and [Codex](#codex)
 - [Web search](#web-search-provider)
 - [Application terminal policy](#application-terminal-policy)
 - [Runtime lifecycle, apply, and restart](#runtime-lifecycle-apply-and-restart)
@@ -719,6 +720,18 @@ Targets choose a catalog default or exact provider-qualified model and a
 reviewed default/effort variant. Unqualified native variants require explicit
 repair before new work. See [OpenCode v2](backends/opencode.md) for capability
 limits and uncertain-input recovery.
+
+### Antigravity
+
+Choose **Antigravity** in Settings for a Linux/macOS local, SSH, or outbound
+execution environment. Install stable `agy` 1.5.14 or a newer stable
+major-1 release and sign in under the selected execution account. One enabled
+Antigravity backend per environment may serve multiple targets. Set an optional
+absolute executable and native profile path in the backend editor. Configure
+target defaults from that runtime's advertised model and reasoning options.
+Remote execution requires the negotiated `antigravity_runtime` capability 1.
+See [Antigravity](backends/antigravity.md) for fields, native mode semantics,
+and runtime ownership.
 
 ### Codex
 

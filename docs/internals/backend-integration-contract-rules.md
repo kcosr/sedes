@@ -1,8 +1,8 @@
 # Backend integration contract rules
 
 This is the normative contributor guide for adding a compiled conversation
-backend or changing a contract that reaches one. Sedes currently compiles Pi SDK, Pi,
-Codex, Claude, Grok, and OpenCode v2, but these rules are intentionally backend-neutral.
+backend or changing a contract that reaches one. It applies to each compiled
+backend: Pi SDK, Pi, Codex, Claude, Grok, OpenCode v2, and Antigravity.
 
 Sedes owns application identity, policy, durable overlays, and normalized
 browser presentation. A provider-private adapter or server-private standardized
@@ -15,7 +15,8 @@ For the system-level model, see [Architecture](architecture.md). For current
 operator-facing topologies, see [Configuration](../operator/configuration.md),
 [Pi SDK](../operator/backends/pi.md), [Pi](../operator/backends/pi-native.md),
 [Codex](../operator/backends/codex.md), [Claude](../operator/backends/claude.md),
-[Grok](../operator/backends/grok.md), and [OpenCode](../operator/backends/opencode.md).
+[Grok](../operator/backends/grok.md), [OpenCode](../operator/backends/opencode.md),
+and [Antigravity](../operator/backends/antigravity.md).
 
 ## Contents
 
@@ -77,6 +78,8 @@ prose differ, establish the production path and tests, then update the prose.
 
 ### Current compiled backends
 
+Antigravity is a compiled ACP backend with a passive native SQLite history reader; see [its integration contract](backends/antigravity.md). Native store identity fields must be verified from the provider schema: root ancestry and trajectory IDs must not be treated as aliases for a session ID. Pending reverse requests require an authoritative attach inventory independent of acknowledged event replay. Foreground readiness, background inventory, and terminal continuation receipts are separate evidence. Apply these invariants when auditing every backend.
+
 The Codex 0.169.0 compatibility update is provider-private. Its single generated
 profile validates native moderation, completion-token, executor-environment and
 audio-reference metadata without granting browser or additional-executor authority.
@@ -96,7 +99,7 @@ Grok, and OpenCode retain their existing parsers, capabilities, and state
 authority. Native Codex sections, archive restoration, and idle unloading do
 not change application-owned inventory or its scope.
 
-The production catalog contains exactly six backend modules. This table is a
+The production catalog contains exactly seven backend modules. This table is a
 navigation and audit baseline, not a substitute for the capability document
 of a configured target.
 
@@ -108,12 +111,13 @@ of a configured target.
 | Claude  | [`src/server/backends/claude`](../../src/server/backends/claude) | [Claude internals](backends/claude.md) | [Claude](../operator/backends/claude.md) |
 | Grok    | [`src/server/backends/grok`](../../src/server/backends/grok)     | [Grok internals](backends/grok.md)     | [Grok](../operator/backends/grok.md)     |
 | OpenCode | [`src/server/backends/opencode`](../../src/server/backends/opencode) | [OpenCode internals](backends/opencode.md) | [OpenCode](../operator/backends/opencode.md) |
+| Antigravity | [`src/server/backends/antigravity`](../../src/server/backends/antigravity) | [Antigravity internals](backends/antigravity.md) | [Antigravity](../operator/backends/antigravity.md) |
 
-Every backend-facing change must give all six an explicit implemented or
+Every backend-facing change must give all seven an explicit implemented or
 intentionally unsupported disposition.
 
 Account-quota observation is a required explicit runtime contribution. Codex
-implements the native reader; Pi SDK, Pi, Claude, Grok, and OpenCode contribute
+implements the native reader; Pi SDK, Pi, Claude, Grok, OpenCode, and Antigravity contribute
 the unsupported source. Observations belong to the authenticated principal's
 backend instance and execution environment and enter the existing application
 snapshot/event projection. Reading that projection never initiates provider
@@ -568,12 +572,12 @@ cannot open execution, publish the current inventory with a disconnected
 snapshot using cached presentation. Retirement must also release a passive
 runtime that completed establishment concurrently with cancellation.
 
-All six backends implement this split: Claude reads native session messages;
+All seven backends implement this split: Claude reads native session messages;
 Codex uses detached thread and turn/item reads; Pi SDK parses its exact stored
 session into an in-memory tree; native Pi reads bounded JSONL through its
 local or sidecar history port without attaching a process; Grok reads persisted session updates without
 loading a session; OpenCode captures native messages under a temporary observation
-and releases its infrastructure lease. Pi SDK's locally retained remote session store
+and releases its infrastructure lease; Antigravity reads bounded native SQLite/protobuf snapshots without starting ACP. Pi SDK's locally retained remote session store
 also permits reads without its worker or deleted isolated checkout. Pi v1 files
 requiring randomized-ID migration are explicitly refused without rewriting them.
 Provider unavailability, missing data, unsupported native versions and bounded
@@ -927,6 +931,18 @@ Keep active IDs and a bounded rolling window of recent completed or rejected IDs
 fail-closed against duplicates, but do not retain every ID for the connection
 lifetime or turn replay protection into a cumulative valid-traffic failure.
 Replay protection retains IDs only, never request payloads.
+
+A human permission decision may explicitly register
+`dispatchDeadlineMilliseconds: null` on its shared ACP reverse-request handler.
+This suspends only the authorized handler wait, rather than inventing a long
+wall-clock timeout. Initial authorization and terminal response delivery retain
+finite budgets; publishing a long-wait result requires fresh session/resource
+authorization and current transport authority. Request or connection cancellation
+must abort the wait, active-request capacity remains bounded, and non-cooperative
+continuations retain their ownership/cleanup blocker. A blocked response write
+still fences the connection. Antigravity opts in for native permissions; Grok
+intentionally retains its existing finite reverse-request policy. Pi, Codex,
+Claude, and OpenCode use their existing native permission protocols unchanged.
 
 Method stability and artifact profile are separate decisions. Enabling an
 experimental provider capability can add fields to otherwise stable methods,
@@ -2106,7 +2122,7 @@ the timeout as retryable normalized evidence. The browser may retry a
 classified transient failure only a bounded number of times before requiring
 an explicit user retry.
 
-Thread viewing has a 90-second outer runtime-acquisition budget for all six
+Thread viewing has a 90-second outer runtime-acquisition budget across the
 compiled backends. Codex establishment shares one 60-second cancellation
 deadline across metadata reads, resume or retained-session attachment,
 hydration, and stabilization retries, in both legacy and paginated history
@@ -2283,6 +2299,13 @@ discovery and receipt results change presentation only. Pi, Claude, Grok and
 OpenCode do not expose active Speed. Claude permissions and the other Codex
 features retain their existing mutation authorities.
 
+Antigravity's `antigravity.mode@1` uses the thread's desired-settings revision
+for mutation authority and separate live catalog evidence for available native
+modes. It exposes a next-turn preference without claiming effective permission
+state or mapping Plan/Auto to shared tool-access settings. Its clear action
+preserves the native choice. Every other backend intentionally omits this
+provider-specific feature.
+
 When a start receipt grants per-turn controls, distinguish compatible status
 hints from intervening ownership loss. Retain bounded evidence for that pending
 request: its original lifetime, generation, and any observed turn identity.
@@ -2439,7 +2462,7 @@ reports current authority only if the replacement succeeded. A failed
 replacement, and recovery after one, is loss of authority.
 Compose automatic-listen readiness with current durable availability, pending
 input/recovery, cached presentation settings, and normalized blocking
-interactions. This shared contract applies to all six backends; steering still
+interactions. This shared contract applies to all seven backends; steering still
 uses each backend's declared target and delivery capabilities.
 
 Automatic turn speech uses a separate durable, scoped `userInputRevision`.
@@ -2530,7 +2553,7 @@ Sidebar and peek presentation preserve failure and interaction priority, then
 main-turn activity, unseen completion, active subagents, and remaining commands
 or other tasks. One glyph represents the winning tier; completion acknowledgment
 reveals lower-priority ongoing work. Shared count labels retain the categories.
-This shared projection applies to all six compiled backends. Claude supplies
+This shared projection applies to all seven compiled backends. Claude supplies
 native subagent/command inventory; OpenCode supplies observed child sessions
 and session-attributed native shells. Codex, Pi SDK, Pi, and Grok intentionally
 contribute no counts.
@@ -3169,9 +3192,10 @@ The same disposition applies explicitly to completion-callback delivery. Pi SDK,
 Pi, and Codex use their already-audited application delivery correlation and
 exact-target Steer paths when the calling thread is active. Claude uses its
 conversation-targeted Steer path; OpenCode uses its exact private consumed-input
-correlation and conversation-targeted Steer; Grok uses shared durable Queue. All six
-consume the same normalized authoritative-completion observation and require
-no provider-native callback API. Grok's callback result is limited to ordinary
+correlation and conversation-targeted Steer. Antigravity uses its native
+consumption evidence and conversation-targeted Steer. Grok uses shared durable
+Queue. Every compiled backend consumes the same normalized
+authoritative-completion observation through the application. Grok's callback result is limited to ordinary
 assistant-message text finalized before its normalized terminal event; later
 tool-only enrichment is outside this callback contract and must not delay or
 rewrite the materialized result.
@@ -3322,7 +3346,7 @@ Text, context excerpts, attachments, and structured Task references are
 normalized application input, not provider-native IDs or browser-selected
 paths. Composer inputs admit up to 16 unique Task references; their captured
 content shares the existing 256 KiB input budget with text and context. These
-count limits apply to all six backends through shared application validation.
+count limits apply to all seven backends through shared application validation.
 Before provider delivery, the application materializes one immutable,
 ordered delivery snapshot containing the original text, context, Task
 snapshots, and path-free attachment descriptors. That snapshot and its
@@ -4011,7 +4035,7 @@ filters a collection or denies an explicit outside resource. No application
 access approval is requested. Provider-native permission handling remains
 private to the backend. Named policy sets and their Account → Environment →
 Backend → Agent → Thread selections resolve to independent creation snapshots
-for all six compiled backends. Preserve exact flags, IDs, presentation and
+for all seven compiled backends. Preserve exact flags, IDs, presentation and
 the current applied-set association across forks and same-settings copies.
 
 Auxiliary tool runtime availability must be read when building execution
@@ -4884,7 +4908,7 @@ surfaces that apply:
 | Discovery/import/create            | Are namespace, paging, binding, titles, partial success, and recovery covered?                                                                                                                                                                                                                                                                                       |
 | History and streaming              | Are snapshot bounds, ordering, correlation, reconnect, duplicates, and stale events covered?                                                                                                                                                                                                                                                                         |
 | Input lifecycle                    | Are send, steer, queue, stop, attachments, Task references, immutable acceptance snapshots, and active-turn races explicit? Does Stop return every accepted, unstarted Steer as not sent on exact per-input evidence, per the Stop rule? Can several Steers await materialization at once, each resolved on its own evidence, with serial provider calls and Submit never passing them?                                                                                                                                  |
-| Completion consumers               | Does each obligation bind one exact operation, register atomically, consume one immutable normalized terminal snapshot, materialize idempotently, recover after restart, retain authenticated provenance, and give Pi, Codex, Claude, Grok and OpenCode an explicit Steer, Queue, or unsupported disposition without provider-native leakage?                                 |
+| Completion consumers               | Does each obligation bind one exact operation, register atomically, consume one immutable normalized terminal snapshot, materialize idempotently, recover after restart, retain authenticated provenance, and give each compiled backend an explicit Steer, Queue, or unsupported disposition without provider-native leakage?                                 |
 | Provider output artifacts          | Are exact native completion and byte authority, image origin, immutable scoped storage, duplicate live/history observation, normalized metadata, content retrieval, bounds, unavailable projection, topology, path-capture authority and host attribution, in-band viewed-image publication, path-free view errors, and input/tool-result separation explicit?       |
 | Settings and provider features     | Are policy, desired/effective evidence, generation, turn-boundary application, persistence, native mapping, revisions, receipts, Saved Agents, and unsupported paths covered?                                                                                                                                                                                        |
 | Model policy                       | Is it backend-owned and fingerprinted? Are native provider/model/effort matcher dispositions, catalog intersection, defaults, every new provider-effect boundary, stale stored selections, empty intersections, denylist future admission, and receipt/reconciliation ordering covered?                                                                              |
@@ -4923,7 +4947,7 @@ This boundary applies equally to Pi, Codex, Claude,
 Grok, and OpenCode.
 
 Client response compression belongs after normalization and applies equally to
-all six backends. Select eligible JSON read routes explicitly; mutations, credentials, upload
+all seven backends. Select eligible JSON read routes explicitly; mutations, credentials, upload
 contracts, and exact-byte downloads retain their own transport rules. Thread
 and application SSE use one shared response writer for events, diagnostics,
 errors, drains, and shutdown. Preserve decoded frame and pending-byte limits,
@@ -4970,8 +4994,9 @@ disconnect, shutdown, and recovery.
 
 Then run the deterministic repository sequence in
 [Development](../developer/development.md). Authenticated Pi, Codex, Claude,
-Grok, and OpenCode (`test:live-opencode`) suites consume provider capacity and
-require explicit user authorization; never cite them as evidence unless they
+Grok, OpenCode (`test:live-opencode`), and Antigravity
+(`test:live-antigravity`) suites consume provider capacity and require explicit
+user authorization; never cite them as evidence unless they
 were actually run for the final change. OpenCode's separate
 `test:real-opencode` suite uses isolated stock binaries and loopback fixtures
 only and does not establish live-provider qualification.
