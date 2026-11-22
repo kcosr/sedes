@@ -100,7 +100,8 @@ User-facing changes are collected here before release. See the
   and native mode selection, Saved Agents, scoped Sedes tools, and background
   work tracking. Canceled permission requests recover from native execution
   receipts, and pending message reconciliation keeps current permissions
-  answerable across resnapshots and reconnects. Upgrade Antigravity execution
+  answerable across resnapshots and reconnects. Child cancellation and background
+  completion require native terminal evidence. Upgrade Antigravity execution
   sidecars with the server for runtime capability **2**.
   See [Antigravity setup](docs/operator/backends/antigravity.md).
   ([#144](https://github.com/kcosr/sedes/pull/144))

@@ -9,6 +9,7 @@ import { OwnedNdjsonStdioTransportFactory } from "../../../provider-protocol/tra
 import { AcpDeliveryError, AcpRemoteError } from "../../../provider-protocol/bindings/acp-v1/index.js";
 import { AntigravityAcpConnection } from "../acp-connection.js";
 import { antigravityNativeActivity } from "./native-activity.js";
+import { antigravityNativeTerminalOutcome } from "../native-execution.js";
 import { antigravityCommandSchema, antigravityAgentToolsSchema } from "../sidecar/wire.js";
 import { AntigravityError, type AntigravityPort, type AntigravityRuntimeConfiguration, type AntigravityIdentity,
   type AntigravitySetup, type AntigravityAttachment, type AntigravityEvent, type AntigravityOutcome,
@@ -574,7 +575,7 @@ export class AntigravityHost implements AntigravityPort {
     session.nativeHeadIndex = history.native.steps.at(-1)?.index ?? -1;
     for (const step of history.native.steps) if (step.tool && [3, 4, 5, 6, 7, 12].includes(step.status)) session.tools.delete(step.tool.id);
     if (!session.activePrompts.size && !state.active && !state.unknown && session.reconcileToolsAfterIndex !== undefined &&
-        history.native.steps.some(step => step.index > session.reconcileToolsAfterIndex! && step.response && [3, 6, 7, 12].includes(step.status) && [2, 11, 13, 16].includes(step.response.stopReason))) {
+        history.native.steps.some(step => step.index > session.reconcileToolsAfterIndex! && step.response && antigravityNativeTerminalOutcome(step) !== undefined)) {
       session.tools.clear(); session.reconcileToolsAfterIndex = undefined;
     }
     this.#completeCancellation(session, cancellationEpoch);

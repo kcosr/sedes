@@ -1,4 +1,5 @@
 import type { AntigravityNativeHistory } from "../native-schema.js";
+import { antigravityNativeTerminalOutcome } from "../native-execution.js";
 
 const activeStatuses = new Set([1, 2, 8, 9, 11]);
 const terminalStatuses = new Set([3, 4, 5, 6, 7, 12]);
@@ -7,7 +8,7 @@ export function antigravityNativeActivity(history: AntigravityNativeHistory): { 
   let active = false, unknown = false, foregroundActive = false, pendingContinuations = false;
   const agents = new Set<string>(), commands = new Set<string>(), other = new Set<string>();
   const commandTerminals = new Set(history.steps.flatMap(step => step.commandStatus && terminalStatuses.has(step.commandStatus.status) ? [step.commandStatus.commandId] : []));
-  const finalResponseAfter = (index: number) => history.steps.some(step => step.index > index && step.response && terminalStatuses.has(step.status) && [2, 11, 13, 16].includes(step.response.stopReason));
+  const finalResponseAfter = (index: number) => history.steps.some(step => step.index > index && step.response && antigravityNativeTerminalOutcome(step) !== undefined);
   const receiptConsumed = (sender: string, afterIndex: number) => history.steps.some(step => step.index > afterIndex && step.continuation?.sender === sender && finalResponseAfter(step.index));
   for (const step of history.steps) {
     if (activeStatuses.has(step.status)) active = true;

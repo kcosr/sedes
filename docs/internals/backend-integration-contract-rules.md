@@ -91,8 +91,10 @@ an earlier item gains another projected content part.
 This rule applies to Pi SDK, native Pi, Codex, Claude, Grok, OpenCode, and
 Antigravity when their advertised steering and interaction capabilities permit
 the combination; it grants neither capability to an unsupported backend.
-Antigravity additionally settles canceled foreground turns from its own durable
-executor receipt. Other backends retain their existing native terminal evidence.
+Antigravity additionally settles canceled foreground turns and child sessions
+from its own exact durable executor receipts. Its tool-call responses cannot
+prove background continuation completion or retire retained tool work. Other
+backends retain their existing native terminal evidence.
 
 The Codex 0.169.0 compatibility update is provider-private. Its single generated
 profile validates native moderation, completion-token, executor-environment and

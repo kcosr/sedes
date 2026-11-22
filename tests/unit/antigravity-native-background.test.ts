@@ -19,9 +19,9 @@ function field(number: number, value: string | number | Buffer): Buffer {
 }
 const proto = (...values: Buffer[]) => Buffer.concat(values);
 function response(status = 3, reason = 2) { return proto(field(1, 15), field(4, status), field(20, proto(field(1, "response"), field(12, reason)))); }
-function toolMetadata(name: string, source = 1) { return proto(field(4, proto(field(1, "tool-call"), field(2, name), field(3, JSON.stringify({ CommandLine: "sleep 1", IsDaemon: false })))), field(38, source)); }
-function generic(name: string, payload: Buffer, typeName: string, status = 3, source = 1) {
-  return proto(field(1, 132), field(4, status), field(5, toolMetadata(name, source)), field(140, field(2,
+function toolMetadata(name: string, source = 1, executionId?: string) { return proto(field(4, proto(field(1, "tool-call"), field(2, name), field(3, JSON.stringify({ CommandLine: "sleep 1", IsDaemon: false })))), field(38, source), ...(executionId ? [field(12, executionId)] : [])); }
+function generic(name: string, payload: Buffer, typeName: string, status = 3, source = 1, executionId?: string) {
+  return proto(field(1, 132), field(4, status), field(5, toolMetadata(name, source, executionId)), field(140, field(2,
     field(6, proto(field(1, `type.googleapis.com/exa.cortex.core.tools.${typeName}`), field(2, payload))))));
 }
 async function fixture() {
@@ -43,7 +43,112 @@ async function fixture() {
   const read = () => readAntigravityNativeHistory(configuration, { sessionId: parentId, cwd: root });
   return { root, directory, configuration, create, step, read, close: () => databases.forEach(database => database.close()) };
 }
+async function cancelledChildFixture(status = 6) {
+  const f = await fixture(), parent = f.create(parentId), child = f.create(childId, parentId);
+  const executionId = "child-execution";
+  f.step(parent, 0, 132, 3, generic("invoke_subagent", field(2, proto(field(1, childId), field(3, pathToFileURL(f.root).href))), "InvokeSubagent"));
+  f.step(child, 0, 15, 3, proto(field(1, 15), field(4, 3), field(5, field(12, executionId)), field(20,
+    proto(field(12, 2), field(7, proto(field(1, "tool-call"), field(2, "run_command"), field(3, "{}")))))));
+  f.step(child, 1, 132, status, generic("run_command", Buffer.alloc(0), "RunCommand", status, 1, executionId));
+  return { ...f, child, executionId };
+}
 describe("Antigravity native background authority", () => {
+  it.each([6, 12])("requires exact executor proof for a child ending at canceled tool status %s", async status => {
+    const f = await cancelledChildFixture(status);
+    try {
+      const before = await f.read();
+      expect(before.native.steps[0]?.subagents).toMatchObject([{ sessionId: childId, state: "unknown" }]);
+      expect(antigravityNativeActivity(before.native)).toMatchObject({ unknown: true, agents: 1 });
+      f.child.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, 2), field(3, 1), field(9, f.executionId)));
+      const after = await f.read();
+      expect(after.native.steps[0]?.subagents).toMatchObject([{ sessionId: childId, state: "cancelled" }]);
+      expect(after.native.revision).not.toBe(before.native.revision);
+      expect(antigravityNativeActivity(after.native)).toMatchObject({ active: false, unknown: false, agents: 0 });
+    } finally { f.close(); }
+  });
+  it.each(["wrong_execution", "wrong_head", "auto_continue", "conflict", "omitted"] as const)("keeps canceled child tools unknown with %s executor proof", async evidence => {
+    const f = await cancelledChildFixture();
+    try {
+      const receipt = proto(field(1, 2), field(3, evidence === "wrong_head" ? 0 : 1),
+        field(9, evidence === "wrong_execution" ? "other-execution" : f.executionId), ...(evidence === "auto_continue" ? [field(4, 1)] : []));
+      f.child.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(receipt);
+      if (evidence === "conflict") f.child.prepare("INSERT INTO executor_metadata VALUES (1, ?)").run(proto(field(1, 12), field(3, 1), field(9, f.executionId)));
+      if (evidence === "omitted") f.child.prepare("INSERT INTO executor_metadata VALUES (1, zeroblob(?))").run(8 * 1024 * 1024 + 1);
+      const history = await f.read();
+      expect(history.native.steps[0]?.subagents).toMatchObject([{ sessionId: childId, state: "unknown" }]);
+      expect(antigravityNativeActivity(history.native).unknown).toBe(true);
+    } finally { f.close(); }
+  });
+  it("does not mistake a child's tool-call response for its terminal response", async () => {
+    const f = await cancelledChildFixture();
+    try {
+      f.child.exec("DELETE FROM steps WHERE idx = 1");
+      const history = await f.read();
+      expect(history.native.steps[0]?.subagents).toMatchObject([{ sessionId: childId, state: "unknown" }]);
+      expect(antigravityNativeActivity(history.native).unknown).toBe(true);
+    } finally { f.close(); }
+  });
+  it("uses a late embedded executor receipt to settle an exact canceled subtrajectory", async () => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId), executionId = "embedded-execution";
+      const tool = generic("run_command", Buffer.alloc(0), "RunCommand", 6, 1, executionId);
+      const enclosing = generic("run_command", Buffer.alloc(0), "RunCommand");
+      const write = (receipts: Buffer[]) => {
+        f.step(parent, 0, 132, 3, proto(enclosing, field(6, proto(field(6, childId), field(2, tool), ...receipts.map(value => field(9, value))))));
+        parent.exec("UPDATE steps SET has_subtrajectory = 1 WHERE idx = 0");
+      };
+      write([]);
+      const before = await f.read();
+      expect(before.native.steps[0]?.subtrajectoryState).toBe("unknown");
+      expect(antigravityNativeActivity(before.native).unknown).toBe(true);
+      write([proto(field(1, 2), field(3, 0), field(9, executionId))]);
+      const after = await f.read();
+      expect(after.native.steps[0]?.subtrajectoryState).toBe("terminal");
+      expect(after.native.revision).not.toBe(before.native.revision);
+      expect(antigravityNativeActivity(after.native)).toMatchObject({ active: false, unknown: false });
+    } finally { f.close(); }
+  });
+  it.each(["missing", "wrong_execution", "wrong_head", "auto_continue", "conflict", "active_descendant"] as const)("keeps embedded cancellation unproven with %s evidence despite a canceled enclosing tool", async evidence => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId), executionId = "embedded-execution";
+      const receipt = proto(field(1, 2), field(3, evidence === "wrong_head" ? 1 : 0),
+        field(9, evidence === "wrong_execution" ? "other" : executionId), ...(evidence === "auto_continue" ? [field(4, 1)] : []));
+      const receipts = evidence === "missing" ? [] : [field(9, receipt)];
+      if (evidence === "conflict") receipts.push(field(9, proto(field(1, 12), field(3, 0), field(9, executionId))));
+      const tool = proto(generic("run_command", Buffer.alloc(0), "RunCommand", 6, 1, executionId),
+        ...(evidence === "active_descendant" ? [field(6, proto(field(6, "active-descendant"), field(2, response(2, 0))))] : []));
+      f.step(parent, 0, 132, 6, proto(generic("run_command", Buffer.alloc(0), "RunCommand", 6),
+        field(6, proto(field(6, childId), field(2, tool), ...receipts))));
+      parent.exec("UPDATE steps SET has_subtrajectory = 1 WHERE idx = 0");
+      const history = await f.read();
+      expect(history.native.steps[0]?.subtrajectoryState).toBe(evidence === "active_descendant" ? "active" : "unknown");
+      expect(antigravityNativeActivity(history.native)).toMatchObject(evidence === "active_descendant" ? { active: true } : { unknown: true });
+    } finally { f.close(); }
+  });
+  it("rejects a changed embedded executor field type instead of accepting enclosing cancellation", async () => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId);
+      f.step(parent, 0, 132, 6, proto(generic("run_command", Buffer.alloc(0), "RunCommand", 6),
+        field(6, proto(field(6, childId), field(2, generic("run_command", Buffer.alloc(0), "RunCommand", 6)), field(9, 2)))));
+      parent.exec("UPDATE steps SET has_subtrajectory = 1 WHERE idx = 0");
+      await expect(f.read()).rejects.toThrow("antigravity_native_field_type_changed");
+    } finally { f.close(); }
+  });
+  it("rejects an oversized embedded proof set without using a partially decoded cancellation receipt", async () => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId), executionId = "embedded-execution";
+      const receipt = field(9, proto(field(1, 2), field(3, 0), field(9, executionId)));
+      const excessive = Buffer.concat(Array.from({ length: 100_000 }, () => field(9, Buffer.alloc(0))));
+      f.step(parent, 0, 132, 6, proto(generic("run_command", Buffer.alloc(0), "RunCommand", 6),
+        field(6, proto(field(6, childId), field(2, generic("run_command", Buffer.alloc(0), "RunCommand", 6, 1, executionId)), receipt, excessive))));
+      parent.exec("UPDATE steps SET has_subtrajectory = 1 WHERE idx = 0");
+      await expect(f.read()).rejects.toThrow("antigravity_native_field_limit");
+    } finally { f.close(); }
+  });
   it("reads only reviewed executor proof and changes revision when a late terminal receipt is stored", async () => {
     const f = await fixture();
     try {
@@ -186,6 +291,28 @@ describe("Antigravity native background authority", () => {
     history.steps.push(final); expect(antigravityNativeActivity(history)).toMatchObject({ active: false, unknown: false, pendingContinuations: false, other: 0 });
     const cancelled = { ...task, schedule: { mode: "timer", outcome: "cancelled", iterations: 0 } };
     expect(antigravityNativeActivity({ ...history, steps: [cancelled] })).toMatchObject({ active: false, pendingContinuations: false });
+  });
+  it.each(["child", "timer"] as const)("keeps a %s wake outstanding through a response that still calls tools", kind => {
+    const launch: AntigravityNativeStep = { index: 0, type: 132, status: 3, hasSubtrajectory: false,
+      ...(kind === "child" ? { subagents: [{ sessionId: childId, state: "terminal" as const }] } : {
+        task: { id: childId, title: "Timer", description: "", daemon: false }, schedule: { mode: "timer", outcome: "fired", iterations: 0 } }) };
+    const wake: AntigravityNativeStep = { index: 1, type: 101, status: 3, hasSubtrajectory: false,
+      continuation: { id: "wake", recipient: parentId, sender: childId, kind: "task_notification", content: "done" } };
+    const calling: AntigravityNativeStep = { index: 2, type: 15, status: 3, hasSubtrajectory: false,
+      response: { text: "", thinking: "", stopReason: 2, toolCalls: [{ id: "follow-up", name: "run_command", argumentsJson: "{}" }] } };
+    const history = { revision: "a".repeat(64), executions: [], steps: [launch, wake, calling] };
+    expect(antigravityNativeActivity(history)).toMatchObject({ active: true, pendingContinuations: true });
+    history.steps.push({ ...calling, index: 3, response: { ...calling.response!, toolCalls: [] } });
+    expect(antigravityNativeActivity(history)).toMatchObject({ active: false, pendingContinuations: false });
+  });
+  it.each([11, 13, 16])("preserves explicit error/cancel response reason %s as terminal wake evidence", stopReason => {
+    const history = { revision: "a".repeat(64), executions: [], steps: [
+      { index: 0, type: 101, status: 3, hasSubtrajectory: false,
+        continuation: { id: "wake", recipient: parentId, sender: childId, kind: "task_notification" as const, content: "done" } },
+      { index: 1, type: 15, status: 3, hasSubtrajectory: false,
+        response: { text: "", thinking: "", stopReason, toolCalls: [{ id: "not-executed", name: "run_command", argumentsJson: "{}" }] } },
+    ] };
+    expect(antigravityNativeActivity(history)).toMatchObject({ active: false, pendingContinuations: false });
   });
   it("settles explicit cancelled children without fabricating a completion callback", () => {
     const step: AntigravityNativeStep = { index: 0, type: 132, status: 3, hasSubtrajectory: false, subagents: [{ sessionId: childId, state: "cancelled" }] };

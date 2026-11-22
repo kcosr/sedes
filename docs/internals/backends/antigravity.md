@@ -103,8 +103,8 @@ error evidence. A token-usage update, quiet interval, completed tool, or empty
 activity inventory does not prove turn completion.
 
 The reader also acquires bounded `executor_metadata` rows in the same SQLite
-snapshot and includes acquired bytes in the native revision. Executor evidence
-has a separate aggregate allowance of 100,000 rows and 32 MiB across root and
+snapshot and includes acquired bytes in the native revision. Executor table
+evidence has a separate aggregate allowance of 100,000 rows and 32 MiB across root and
 child sessions, with at most 8 MiB per row; it never reduces the 100,000-step,
 96 MiB history allowance. If a complete session's receipt set exceeds the
 remaining allowance, all of that session's receipts are omitted and a bounded
@@ -121,6 +121,20 @@ step, all steps in that execution are terminal, and no auto-continue or conflict
 receipt exists. A cancelled permission/tool step alone is insufficient. Remote
 history carries this required evidence through `antigravity_runtime` capability
 2; older peers fail capability negotiation rather than silently dropping it.
+
+Exact child-session reads apply the same executor proof before classifying a
+cancelled tool tail as a cancelled child. Missing, conflicting, or omitted proof
+keeps the child unknown and blocks quiescence. Embedded subtrajectories use
+their own `Trajectory.executor_metadatas` (field 9), verified against the same
+qualified native descriptor. Their bytes are already bounded and hashed inside
+the enclosing step; the decoder's shared byte, field-count, and depth limits
+apply to the complete embedded evidence, with no partial receipt set accepted.
+Nested descendants retain their own activity and proof requirements. An
+enclosing cancelled tool alone never establishes nested completion.
+Ordinary terminal responses must have no outstanding tool calls;
+explicit native failure and cancellation responses remain terminal evidence.
+The same response rule governs consumption of child/timer wakes and retirement
+of retained ACP tool work, so a tool-call response cannot bypass those fences.
 
 Typed system-message receipts can begin autonomous continuation turns without
 an application submission. They never consume a pending user operation merely

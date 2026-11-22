@@ -6,6 +6,7 @@ import type { AntigravityNativeHistory, AntigravityNativeStep } from "./native-s
 import { inspectAntigravityInput, type AntigravitySubmissionScope } from "./submission.js";
 import { antigravityNativeActivity } from "./host/native-activity.js";
 import { MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES, serializedUtf8Bytes } from "../../../shared/protocol/payload.js";
+import { antigravityCancelledExecutionHeads, antigravityNativeTerminalOutcome } from "./native-execution.js";
 
 export const antigravityTurnId = (index: number): string => `input:${index}`;
 export function antigravitySteerConsumed(native: AntigravityNativeHistory, index: number): boolean {
@@ -29,23 +30,6 @@ export interface AntigravityProjection { snapshot: BackendConversationSnapshot; 
 // A native step can acquire optional reasoning/text after later items have
 // appeared. Reserve immutable slots so that growth never renumbers an item.
 const itemSlots = { continuation: 0, user: 1, thinking: 2, assistant: 3, command: 4, tool: 4, error: 5 } as const;
-function cancelledExecutionHeads(native: AntigravityNativeHistory): ReadonlyMap<string, number> {
-  const heads = new Map<string, AntigravityNativeStep>(), unsettled = new Set<string>();
-  for (const step of native.steps) if (step.executionId) {
-    heads.set(step.executionId, step);
-    if (![3, 4, 5, 6, 7, 12].includes(step.status)) unsettled.add(step.executionId);
-  }
-  const receipts = new Map<string, AntigravityNativeHistory["executions"][number] | null>();
-  for (const receipt of native.executions) receipts.set(receipt.executionId, receipts.has(receipt.executionId) ? null : receipt);
-  const cancelled = new Map<string, number>();
-  for (const [id, receipt] of receipts) {
-    // USER_CANCELED is an executor outcome. A cancelled tool or a quiet native
-    // activity inventory alone cannot terminate the enclosing turn.
-    if (receipt?.terminationReason === 2 && !receipt.proceededWithAutoContinue &&
-        heads.get(id)?.index === receipt.lastStepIndex && !unsettled.has(id)) cancelled.set(id, receipt.lastStepIndex);
-  }
-  return cancelled;
-}
 export function projectAntigravityHistory(native: AntigravityNativeHistory, scope: AntigravitySubmissionScope): AntigravityProjection {
   const snapshot: BackendConversationSnapshot = { orderedBackendTurnIds: [], turnsById: {}, itemsById: {}, runState: "idle" };
   const stepTurns = new Map<number, string>();
@@ -53,16 +37,17 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
   let lastResponse: AntigravityNativeStep | undefined;
   let lastStep: AntigravityNativeStep | undefined;
   let executionId: string | undefined;
-  const cancelled = cancelledExecutionHeads(native);
+  const cancelled = antigravityCancelledExecutionHeads(native);
   const settle = () => {
     if (!turn) return;
     const last = lastResponse;
-    if (last?.error || last?.status === 7 || (last?.response && [11, 13, 17, 18, 19, 20].includes(last.response.stopReason))) {
+    const outcome = antigravityNativeTerminalOutcome(last);
+    if (outcome === "failed") {
       turn.status = "failed"; turn.endedBy = "failed";
-      if (last.error) turn.failure = { message: boundDisplayText(last.error) };
-    } else if (last?.status === 6 || last?.status === 12 || last?.response?.stopReason === 16) {
+      if (last?.error) turn.failure = { message: boundDisplayText(last.error) };
+    } else if (outcome === "interrupted") {
       turn.status = "interrupted"; turn.endedBy = "interrupted";
-    } else if (last?.response && last.status === 3 && [2, 3].includes(last.response.stopReason) && last.response.toolCalls.length === 0) {
+    } else if (outcome === "completed") {
       turn.status = "completed"; turn.endedBy = "agent_settled";
     }
     if (turn.status !== "in_progress" && last?.completedAt) turn.completedAt = last.completedAt;

@@ -941,6 +941,13 @@
         "label": 3,
         "type": 11,
         "typeName": ".gemini_coder.Step"
+      },
+      {
+        "name": "executor_metadatas",
+        "number": 9,
+        "label": 3,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.ExecutorMetadata"
       }
     ],
     ".google.protobuf.Any": [

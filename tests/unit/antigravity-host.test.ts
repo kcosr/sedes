@@ -63,6 +63,29 @@ describe("Antigravity execution host", () => {
     await host.acknowledgeOperation({ handleId, operationId: "send" }); await drain(host, handleId);
     expect(await host.retireSession(identity)).toBe("retired");
   });
+  it("does not retire ACP tool work from a native response that still calls tools", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" });
+    const { handleId } = await f.host.attach(identity);
+    const native: AntigravityHistory["native"] = { revision: "b".repeat(64), executions: [], steps: [{
+      index: 0, type: 15, status: 3, hasSubtrajectory: false,
+      response: { text: "", thinking: "", stopReason: 2, toolCalls: [{ id: "background", name: "run_command", argumentsJson: "{}" }] },
+    }] };
+    vi.spyOn(AntigravityAcpConnection.prototype, "prompt").mockImplementationOnce(async (_id, _prompt, settle) => {
+      f.emit({ sessionId: identity.sessionId, update: { sessionUpdate: "tool_call", toolCallId: "background", kind: "execute", title: "Command", status: "in_progress" } });
+      f.readHistory.mockResolvedValue({ ...identity, native });
+      const result = { stopReason: "end_turn" as const }; settle(result); return result;
+    });
+    await f.host.request({ handleId, operationId: "send", command: { type: "prompt", prompt: [{ type: "text", text: "hello" }] } });
+    await settled(f.host, handleId, "send"); await f.host.readHistory(identity);
+    expect(f.host.snapshot().blockers).toContain("active_work");
+    expect(await f.host.retireSession(identity)).toBe("busy");
+    native.steps.push({ index: 1, type: 15, status: 3, hasSubtrajectory: false,
+      response: { text: "Finished", thinking: "", stopReason: 2, toolCalls: [] } });
+    native.revision = "c".repeat(64); await f.host.readHistory(identity);
+    expect(f.host.snapshot().blockers).not.toContain("active_work");
+    await f.host.acknowledgeOperation({ handleId, operationId: "send" }); await drain(f.host, handleId);
+    expect(await f.host.retireSession(identity)).toBe("retired");
+  });
   it("keeps Stop serviceable during a long running prompt and retains the exact terminal", async () => {
     const { host, cwd } = await fixture(); const identity = await host.create({ cwd, operationId: "creation" }); const { handleId } = await host.attach(identity);
     expect(await host.request({ handleId, operationId: "send", command: { type: "prompt", prompt: [{ type: "text", text: "wait" }] } })).toEqual({ status: "pending" });

@@ -5,11 +5,12 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { antigravityNativeHistorySchema, type AntigravityNativeStep } from "./native-schema.js";
+import { antigravityNativeHistorySchema, type AntigravityNativeHistory, type AntigravityNativeStep } from "./native-schema.js";
 import { decodeAntigravityNativeMessage as decode, message, string, integer, repeated, bytes, type Message } from "./native-protobuf.js";
 import { AntigravityError, type AntigravityHistory, type AntigravityIdentity, type AntigravityRuntimeConfiguration } from "./port.js";
 import { assertAntigravityNativeSemantics } from "./native-guards.js";
 import { antigravityNativeActivity } from "./host/native-activity.js";
+import { antigravityCancelledExecutionHeads, antigravityNativeTerminalOutcome } from "./native-execution.js";
 
 const MAXIMUM_HISTORY_BYTES = 96 * 1024 * 1024;
 const MAXIMUM_ROWS = 100_000;
@@ -89,15 +90,10 @@ async function readNative(configuration: AntigravityRuntimeConfiguration, identi
             throw new AntigravityError("antigravity_history_executor_format_unsupported");
           const payload = decode(execution.data, ".exa.cortex_pb.ExecutorMetadata");
           hash.update(JSON.stringify(["executor_metadata", execution.idx, execution.data.byteLength])).update(execution.data);
-          const executionId = string(payload.execution_id);
           // An unset protobuf ID cannot match an execution. It contributes to
           // revision identity, but never supplies terminal evidence.
-          if (!executionId) continue;
-          const receipt = antigravityNativeHistorySchema.shape.executions.element.safeParse({ executionId,
-            lastStepIndex: integer(payload.last_step_idx), terminationReason: integer(payload.termination_reason),
-            proceededWithAutoContinue: payload.proceeded_with_auto_continue === true });
-          if (!receipt.success) throw new AntigravityError("antigravity_history_executor_format_unsupported");
-          executions.push(receipt.data);
+          const receipt = projectExecutionReceipt(payload);
+          if (receipt) executions.push(receipt);
         }
       } else {
         // Optional proof must not consume the step/child budget. Never acquire
@@ -144,7 +140,7 @@ async function readNative(configuration: AntigravityRuntimeConfiguration, identi
           let child: AntigravityHistory;
           try { child = await readNative(configuration, { sessionId: reference.sessionId, cwd: identity.cwd }, signal, budget, identity.sessionId); }
           finally { budget.ancestors = previousAncestors; }
-          const state = childState(child.native.steps);
+          const state = childState(child.native);
           step.subagents.push({ sessionId: reference.sessionId, state, revision: child.native.revision });
           aggregate.update(JSON.stringify([reference.sessionId, state, child.native.revision]));
         } catch {
@@ -257,12 +253,31 @@ function projectStep(index: number, hasSubtrajectory: boolean, value: Message, s
       const nestedId = string(message(value.subtrajectory).cascade_id);
       if (!nestedId) projected.subtrajectoryState = "unknown";
       else {
-        const nested = repeated(message(value.subtrajectory).steps).map((step, index) => projectStep(index, false, message(step), nestedId, cwd));
-        const state = childState(nested); projected.subtrajectoryState = state === "cancelled" ? "terminal" : state;
+        const trajectory = message(value.subtrajectory);
+        const nested = repeated(trajectory.steps).map((step, index) => {
+          const value = message(step); assertAntigravityNativeSemantics(value);
+          return projectStep(index, value.subtrajectory !== undefined, value, nestedId, cwd);
+        });
+        // These receipts belong to the embedded trajectory itself. All bytes
+        // were bounded, decoded and hashed with the enclosing native step.
+        const executions = repeated(trajectory.executor_metadatas).flatMap(value => {
+          const receipt = projectExecutionReceipt(message(value)); return receipt ? [receipt] : [];
+        });
+        const state = childState({ steps: nested, executions, revision: "0".repeat(64) });
+        projected.subtrajectoryState = state === "cancelled" ? "terminal" : state;
       }
     }
   }
   return projected;
+}
+function projectExecutionReceipt(payload: Message): AntigravityNativeHistory["executions"][number] | undefined {
+  const executionId = string(payload.execution_id);
+  if (!executionId) return undefined;
+  const receipt = antigravityNativeHistorySchema.shape.executions.element.safeParse({ executionId,
+    lastStepIndex: integer(payload.last_step_idx), terminationReason: integer(payload.termination_reason),
+    proceededWithAutoContinue: payload.proceeded_with_auto_continue === true });
+  if (!receipt.success) throw new AntigravityError("antigravity_history_executor_format_unsupported");
+  return receipt.data;
 }
 function genericPayload(value: Message, name: "RunCommand" | "InvokeSubagent" | "Schedule"): Message | undefined {
   const metadata = message(value.metadata), nativeTool = message(metadata.tool_call);
@@ -281,14 +296,18 @@ function childResults(value: Message): readonly ChildReference[] {
   return repeated(invocation.results).map(value => { const result = message(value); const sessionId = z.string().uuid().parse(string(result.conversation_id));
     return { sessionId, workspaceUris: repeated(result.workspace_uris).map(string) }; });
 }
-function childState(steps: readonly AntigravityNativeStep[]): "active" | "terminal" | "cancelled" | "unknown" {
+function childState(native: AntigravityNativeHistory): "active" | "terminal" | "cancelled" | "unknown" {
+  const { steps } = native;
   const active = new Set([1, 2, 8, 9, 11]), terminal = new Set([3, 4, 5, 6, 7, 12]);
-  const state = antigravityNativeActivity({ steps: [...steps], executions: [], revision: "0".repeat(64) });
+  const state = antigravityNativeActivity(native);
   if (state.active) return "active";
   if (state.unknown) return "unknown";
   if (steps.some(step => active.has(step.status) || step.subtrajectoryState === "active" || step.subagents?.some(child => child.state === "active"))) return "active";
   if (!steps.length || steps.some(step => !terminal.has(step.status) || (step.hasSubtrajectory && step.subtrajectoryState !== "terminal") || step.subagents?.some(child => child.state !== "terminal" && child.state !== "cancelled"))) return "unknown";
   const final = steps.at(-1);
-  if (final && [6, 12].includes(final.status)) return "cancelled";
-  return final?.response && [2, 11, 13, 16].includes(final.response.stopReason) ? "terminal" : "unknown";
+  const outcome = antigravityNativeTerminalOutcome(final);
+  if (outcome === "interrupted") return "cancelled";
+  if (outcome === "completed" || outcome === "failed") return "terminal";
+  if (final?.executionId && antigravityCancelledExecutionHeads(native).get(final.executionId) === final.index) return "cancelled";
+  return "unknown";
 }
