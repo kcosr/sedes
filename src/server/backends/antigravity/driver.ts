@@ -13,7 +13,7 @@ import { parseAntigravityBinding, serializeAntigravityBinding, type AntigravityB
 import { antigravityCapabilities, antigravityCatalog } from "./catalog.js";
 import { AntigravityHandle } from "./handle.js";
 import { antigravityHistoryPage, antigravityWindowSnapshot, antigravitySteerConsumed, locateAntigravityTurn, projectAntigravityHistory } from "./history.js";
-import type { AntigravityHistory, AntigravityPort, AntigravitySetup } from "./port.js";
+import { AntigravityError, type AntigravityHistory, type AntigravityPort, type AntigravitySetup } from "./port.js";
 import { antigravityReconciliationTag, inspectAntigravityInput } from "./submission.js";
 import type { AntigravityThreadRepository } from "./thread-repository.js";
 import type { AntigravityAgentToolService, AntigravityToolSource } from "./agent-tools.js";
@@ -32,6 +32,7 @@ export interface AntigravityDriverInput {
   readonly agentTools?: AntigravityAgentToolService;
   readonly modeCatalog?: { observe(setup: AntigravitySetup): void };
   readonly executionEnvironmentVariables?: (applicationThreadId: string) => EnvironmentVariableOverrides;
+  readonly isOperationAbandoned?: (applicationThreadId: string, operationId: string) => boolean;
 }
 export class AntigravityDriver implements ConversationBackendDriver {
   readonly instance; readonly connection;
@@ -219,7 +220,7 @@ export class AntigravityDriver implements ConversationBackendDriver {
           history = await this.input.port.readHistory({ sessionId: detail.sessionId, cwd: detail.canonicalWorkspacePath }).then(requireHistory);
           const consumed = accepted(); if (consumed) return consumed;
           await this.input.port.acknowledgeOperation({ handleId: retained.handleId, operationId: input.applicationOperationId });
-          return { status: "not_accepted", retryable: false, diagnostic: boundDisplayText("Antigravity withdrew this input when Stop was requested.") };
+          return { status: "not_accepted", retryable: false, diagnostic: boundDisplayText("Antigravity withdrew this input when the execution was cancelled.") };
         }
         if (receipt.status === "failed" && receipt.failure.delivery !== "sent_outcome_unknown") {
           await this.input.port.acknowledgeOperation({ handleId: retained.handleId, operationId: input.applicationOperationId });
@@ -231,8 +232,30 @@ export class AntigravityDriver implements ConversationBackendDriver {
   }
   async releaseConversationResidency(input: ReleaseConversationResidencyInput) {
     const detail = this.validate(input);
+    const retained = await this.input.port.attachExisting({ sessionId: detail.sessionId, cwd: detail.canonicalWorkspacePath });
+    if (retained) await this.acknowledgeAbandonedOperations(input.binding.applicationThreadId, retained.handleId, retained.retainedOperationIds);
     const result = await this.input.port.retireSession({ sessionId: detail.sessionId, cwd: detail.canonicalWorkspacePath });
     return result === "absent" || result === "retired" ? "released" as const : result;
+  }
+  async acknowledgeAbandonedOperations(threadId: string, handleId: string, operationIds: Iterable<string>, signal?: AbortSignal): Promise<{ acknowledged: string[]; pending: string[] }> {
+    const acknowledged: string[] = [], pending: string[] = [];
+    for (const operationId of operationIds) {
+      if (!this.input.isOperationAbandoned?.(threadId, operationId)) continue;
+      let outcome;
+      try { outcome = await this.input.port.outcome({ handleId, operationId }, signal); }
+      catch (error) {
+        if (error instanceof AntigravityError && error.code === "antigravity_operation_unknown") {
+          acknowledged.push(operationId); continue;
+        }
+        throw error;
+      }
+      // Force Reset abandons application recovery, never ongoing native work.
+      // A pending callback still owns its provider receipt until it settles.
+      if (outcome.status === "pending") { pending.push(operationId); continue; }
+      await this.input.port.acknowledgeOperation({ handleId, operationId }, signal);
+      acknowledged.push(operationId);
+    }
+    return { acknowledged, pending };
   }
   async close(): Promise<void> {
     this.#closed = true;

@@ -1752,6 +1752,78 @@ describe("ThreadView backend interaction modes", () => {
   });
 });
 
+describe("ThreadView Stop during delivery recovery", () => {
+  it.each([
+    "available",
+    "unsupported",
+    "disconnected",
+    "not authoritative",
+    "historical focus",
+    "archived",
+    "thread unavailable",
+    "action pending",
+  ] as const)("honors the %s Stop state and keeps Send disabled", condition => {
+    const base = makeSnapshot("interactive", "running");
+    const snapshot: NormalizedThreadSnapshot = {
+      ...base,
+      thread: {
+        ...base.thread,
+        available: condition !== "thread unavailable",
+        inventoryState: condition === "archived" ? "archived" : "active",
+      },
+      interactions: [],
+      queue: [],
+      recovery: {
+        kind: "operation_uncertain",
+        operationCategory: "delivery",
+        diagnostic: { text: "Steer is unconfirmed." },
+        submissionMayHaveBeenAccepted: true,
+        recoverable: true,
+      },
+      capabilities: {
+        ...base.capabilities,
+        operations: [{
+          id: "interrupt",
+          label: { text: "Stop" },
+          destructive: true,
+          available: condition !== "unsupported",
+          parameters: { kind: "none" },
+        }],
+      },
+    };
+    const { registry, applicationStore } = fixture(snapshot, [], {
+      connection: condition === "disconnected" ? "disconnected" : "connected",
+      authoritative: condition !== "not authoritative",
+      actionPending: condition === "action pending",
+    });
+    const stopActiveTurn = vi.fn(async () => undefined);
+    Object.assign(registry.get(snapshot.thread.id), { stopActiveTurn });
+
+    render(
+      <ThreadView
+        threadActive
+        threadId={snapshot.thread.id}
+        visible
+        focusTurnId={condition === "historical focus" ? "older-turn" : undefined}
+        registry={registry}
+        applicationStore={applicationStore}
+      />,
+    );
+
+    // A stale Send capability must not bypass the explicit recovery fence.
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toBeDisabled();
+    const stop = screen.getByRole("button", { name: "Stop" });
+    if (condition === "available") {
+      expect(stop).toBeEnabled();
+      fireEvent.click(stop);
+      expect(stopActiveTurn).toHaveBeenCalledOnce();
+    } else {
+      expect(stop).toBeDisabled();
+    }
+  });
+});
+
 function fixture(
   snapshot: NormalizedThreadSnapshot,
   pendingComposerTransfers: readonly PendingComposerTransfer[] = [],
@@ -2034,7 +2106,7 @@ function activityProjectionSnapshot(
 
 function makeSnapshot(
   interactionMode: "interactive" | "read_only",
-  runState: "idle" | "disconnected" | "reconciling",
+  runState: "idle" | "running" | "disconnected" | "reconciling",
 ): NormalizedThreadSnapshot {
   const interactive = interactionMode === "interactive";
   const transitioning =

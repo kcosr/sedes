@@ -52,6 +52,46 @@ describe("native history worker isolation and publication", () => {
     const next = value.read(identity), second = await request(running, 2);
     expect(second).not.toHaveProperty("knownRevision"); reply(running, second.id); await next;
   });
+  it("keeps an unrelated in-flight session cached when another session is forgotten", async () => {
+    const value = reader(), pending = value.read(identity), running = await worker(), first = await request(running, 0);
+    const forgotten = value.forget({ ...identity, sessionId: "8a54e222-1000-4000-8000-000000000002" });
+    const forget = await request(running, 1);
+    reply(running, first.id); await pending;
+    running.emit("message", { id: forget.id, kind: "done" }); await forgotten;
+    const next = value.read(identity), second = await request(running, 2);
+    expect(second).toHaveProperty("knownRevision", history.native.revision);
+    running.emit("message", { id: second.id, kind: "read", history: null, revision: history.native.revision, bytes: 0 });
+    await expect(next).resolves.toBe(history);
+  });
+  it("invalidates same-session reads started while forget is in flight", async () => {
+    const value = reader(), initial = value.read(identity), running = await worker(), first = await request(running, 0);
+    reply(running, first.id); await initial;
+    const forgotten = value.forget(identity), forget = await request(running, 1);
+    const racing = value.read(identity), raced = await request(running, 2);
+    running.emit("message", { id: forget.id, kind: "done" }); await forgotten;
+    reply(running, raced.id); await racing;
+    const next = value.read(identity), second = await request(running, 3);
+    expect(second).not.toHaveProperty("knownRevision"); reply(running, second.id); await next;
+  });
+  it("refreshes unchanged cache hits before evicting the least recently used session", async () => {
+    const value = reader(), pending = value.read(identity), running = await worker(), first = await request(running, 0);
+    const respond = (id: number, sessionId: string) => running.emit("message", { id, kind: "read", history: { ...history, sessionId },
+      revision: history.native.revision, bytes: 24 * 1024 * 1024 });
+    respond(first.id, identity.sessionId); await pending;
+    const secondId = "8a54e222-1000-4000-8000-000000000002";
+    const second = value.read({ ...identity, sessionId: secondId }), secondJob = await request(running, 1);
+    respond(secondJob.id, secondId); await second;
+    const hit = value.read(identity), hitJob = await request(running, 2);
+    expect(hitJob).toHaveProperty("knownRevision", history.native.revision);
+    running.emit("message", { id: hitJob.id, kind: "read", history: null, revision: history.native.revision, bytes: 0 }); await hit;
+    const extraId = "8a54e222-1000-4000-8000-000000000003";
+    const extra = value.read({ ...identity, sessionId: extraId }), extraJob = await request(running, 3);
+    respond(extraJob.id, extraId); await extra;
+    const retained = value.read(identity), retainedJob = await request(running, 4);
+    expect(retainedJob).toHaveProperty("knownRevision", history.native.revision); respond(retainedJob.id, identity.sessionId); await retained;
+    const evicted = value.read({ ...identity, sessionId: secondId }), evictedJob = await request(running, 5);
+    expect(evictedJob).not.toHaveProperty("knownRevision"); respond(evictedJob.id, secondId); await evicted;
+  });
   it("fences a response already delivered when close wins before its continuation", async () => {
     const value = reader(), pending = value.read(identity), rejected = expect(pending).rejects.toThrow("reader_closed");
     const running = await worker(), first = await request(running, 0);
@@ -102,5 +142,23 @@ describe("native history worker isolation and publication", () => {
     await expect(value.read(identity)).rejects.toThrow("worker_backoff"); expect(mocks.workers).toHaveLength(2);
     await value.close(); now += 60_000;
     await expect(value.read(identity)).rejects.toThrow("reader_closed"); expect(mocks.workers).toHaveLength(2);
+  });
+  it("retries failed close without allowing another read or losing worker ownership", async () => {
+    const value = reader(), pending = value.read(identity), running = await worker(), first = await request(running, 0);
+    reply(running, first.id); await pending;
+    running.terminated.mockRejectedValueOnce(new Error("termination unproven"));
+    await expect(value.close()).rejects.toThrow("termination unproven");
+    await expect(value.read(identity)).rejects.toThrow("reader_closed");
+    await expect(value.close()).resolves.toBeUndefined();
+    expect(running.terminated).toHaveBeenCalledTimes(2);
+    await value.close(); expect(running.terminated).toHaveBeenCalledTimes(2);
+  });
+  it("retains a failed crash retirement until close can positively terminate it", async () => {
+    const value = reader(), pending = value.read(identity), rejected = expect(pending).rejects.toThrow("worker_unavailable");
+    const running = await worker(); await request(running, 0);
+    running.terminated.mockRejectedValueOnce(new Error("termination unproven"));
+    running.emit("error", new Error("worker failure")); await rejected;
+    await vi.waitFor(() => expect(running.terminated).toHaveBeenCalledOnce());
+    await value.close(); expect(running.terminated).toHaveBeenCalledTimes(2);
   });
 });

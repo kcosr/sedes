@@ -36,7 +36,8 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
   let turn: BackendTurn | undefined;
   let lastResponse: AntigravityNativeStep | undefined;
   let lastStep: AntigravityNativeStep | undefined;
-  let executionId: string | undefined;
+  let inputExecutionId: string | undefined;
+  let lastExecutionId: string | undefined;
   const cancelled = antigravityCancelledExecutionHeads(native);
   const settle = () => {
     if (!turn) return;
@@ -51,8 +52,8 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
       turn.status = "completed"; turn.endedBy = "agent_settled";
     }
     if (turn.status !== "in_progress" && last?.completedAt) turn.completedAt = last.completedAt;
-    else if (turn.status === "in_progress" && executionId && lastStep?.executionId === executionId &&
-        cancelled.get(executionId) === lastStep.index) {
+    else if (turn.status === "in_progress" && lastStep?.executionId &&
+        cancelled.get(lastStep.executionId) === lastStep.index) {
       turn.status = "interrupted"; turn.endedBy = "interrupted";
       if (lastStep.completedAt) turn.completedAt = lastStep.completedAt;
     }
@@ -74,7 +75,8 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
           ...(step.createdAt ? { startedAt: step.createdAt } : {}) };
         snapshot.orderedBackendTurnIds.push(turn.backendTurnId); snapshot.turnsById[turn.backendTurnId] = turn;
         lastResponse = undefined;
-        executionId = step.executionId;
+        inputExecutionId = step.executionId;
+        lastExecutionId = undefined;
       }
       add(step, "continuation", { semanticKind: "collaboration", action: "message", agentLabel: boundDisplayText(
         step.continuation.kind === "agent_message" ? "Subagent" : "Background task"), summary: boundText(step.continuation.content) } as BackendItem, "completed");
@@ -88,14 +90,22 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
       // Several consumed steers can share one native response. Preserve every
       // operation correlation on that response's turn rather than leaving an
       // earlier steer forever in progress without its own planner step.
-      if (input.delivery === "steer" && turn?.status === "in_progress" && step.executionId && step.executionId === executionId) {
+      // A natively started/completed interrupting input can also continue the
+      // same logical turn under a new or omitted execution ID. Missing metadata
+      // does not erase the last known execution, and skipped queued input never
+      // contributes an execution identity to this turn.
+      if (input.delivery === "steer" && turn?.status === "in_progress" &&
+          (step.executionId && (step.executionId === inputExecutionId || step.executionId === lastExecutionId) ||
+            step.isInterruptingStep && step.startedAt && step.completedAt)) {
         if (input.operationId) turn.completionCorrelations = [...(turn.completionCorrelations ?? []), input.operationId];
       } else {
         turn = { backendTurnId: antigravityTurnId(step.index), status: "in_progress", orderedBackendItemIds: [],
           ...(step.createdAt ? { startedAt: step.createdAt } : {}), ...(input.operationId ? { completionCorrelations: [input.operationId] } : {}) };
         snapshot.orderedBackendTurnIds.push(turn.backendTurnId); snapshot.turnsById[turn.backendTurnId] = turn;
+        inputExecutionId = undefined;
+        lastExecutionId = undefined;
       }
-      executionId = step.executionId;
+      if (step.executionId) inputExecutionId = step.executionId;
       add(step, "user", { semanticKind: "user_message", content: input.content, ...(input.operationId ? { deliveryOperationId: input.operationId } : {}) } as BackendItem, "completed");
       lastResponse = undefined;
     }
@@ -118,6 +128,7 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
         arguments: boundValue(args), ...(step.tool.result !== undefined ? { result: { content: [{ kind: "text", value: boundText(step.tool.result) }], isError: status === "failed" } } : {}) } as BackendItem);
     }
     if (step.error) { lastResponse = step; add(step, "error", { semanticKind: "notice", tone: "error", text: boundText(step.error) } as BackendItem, "failed"); }
+    if (step.executionId) lastExecutionId = step.executionId;
     lastStep = step;
   }
   settle();

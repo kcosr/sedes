@@ -13,7 +13,7 @@ const runtimeSchema = z.strictObject({ runtimeId: z.string().uuid() });
 /** Disposable controller proxy. Provider work belongs to the persistent service. */
 export class AntigravityRemotePort implements AntigravityPort {
   #attachment?: Attachment;
-  #opening?: Promise<Attachment>;
+  #opening?: { readonly existingOnly: boolean; readonly promise: Promise<Attachment> };
   #identity?: { readonly runtimeId: string; readonly serviceIncarnation: string };
   #closed = false;
   readonly #handles = new Set<string>();
@@ -22,21 +22,20 @@ export class AntigravityRemotePort implements AntigravityPort {
     readonly sidecarRuntime: SidecarRuntimeProvider; readonly existingOnly?: boolean }) {}
   async #get(signal?: AbortSignal, existingOnly = false): Promise<Attachment> {
     signal?.throwIfAborted(); if (this.#closed) throw new AntigravityError("antigravity_remote_closed");
-    if (this.#attachment) {
-      const attachment = this.#attachment;
-      if (attachment.retained && !existingOnly && !this.input.existingOnly) {
-        // An existing-only lease may be a service-level recovery attachment.
-        // Config lookup cannot grant admission on that carrier. Reacquire normal
-        // authority, then #open checks the exact retained owner without ensure.
-        const opening = this.#opening ??= this.#open(false).then(result => {
-          this.#release(attachment); return result;
-        }).finally(() => { this.#opening = undefined; });
-        const result = await opening; signal?.throwIfAborted(); return result;
-      }
-      return attachment;
-    }
-    const opening = this.#opening ??= this.#open(existingOnly).finally(() => { this.#opening = undefined; });
-    const result = await opening; signal?.throwIfAborted(); return result;
+    const normal = !existingOnly && !this.input.existingOnly;
+    const attachment = this.#attachment;
+    if (attachment && (!attachment.retained || !normal)) return attachment;
+    const opening = this.#opening ??= { existingOnly, promise: this.#open(existingOnly).then(result => {
+      if (attachment) this.#release(attachment);
+      return result;
+    }).finally(() => { this.#opening = undefined; }) };
+    const result = await opening.promise; signal?.throwIfAborted();
+    // Join an in-flight recovery lookup, then acquire normal authority once.
+    // This also covers the interval after #open publishes its attachment but
+    // before its promise settles. A normal open may deliberately return a
+    // retained lease on configuration drift; that is not another retry.
+    if (opening.existingOnly && normal) return this.#get(signal, false);
+    return result;
   }
   async #open(existingOnly: boolean): Promise<Attachment> {
     let retained = existingOnly || (this.input.existingOnly ?? false);
@@ -84,7 +83,12 @@ export class AntigravityRemotePort implements AntigravityPort {
     try { const result = antigravityAttachmentSchema.nullable().parse(await this.#invoke("attach_existing", input, signal, true)); if (result) this.#handles.add(result.handleId); return result; }
     catch (error) { if (error instanceof AntigravityError && error.code === "antigravity_retained_runtime_missing") return null; throw error; }
   }
-  async request(input: Parameters<AntigravityPort["request"]>[0], signal?: AbortSignal) { return antigravityOutcomeSchema.parse(await this.#invoke("request", input, signal, ["cancel", "permission"].includes(input.command.type))); }
+  async request(input: Parameters<AntigravityPort["request"]>[0], signal?: AbortSignal) {
+    // Reject/cancel may drain retained work. A selected permission option can
+    // grant execution and must reacquire normal, configuration-checked authority.
+    const retained = input.command.type === "cancel" || input.command.type === "permission" && input.command.response.outcome.outcome === "cancelled";
+    return antigravityOutcomeSchema.parse(await this.#invoke("request", input, signal, retained));
+  }
   async outcome(input: Parameters<AntigravityPort["outcome"]>[0], signal?: AbortSignal) { return antigravityOutcomeSchema.parse(await this.#invoke("outcome", input, signal, true)); }
   async acknowledgeOperation(input: Parameters<AntigravityPort["acknowledgeOperation"]>[0], signal?: AbortSignal) { antigravitySuccessSchema.parse(await this.#invoke("acknowledge_operation", input, signal, true)); }
   async observe(input: Parameters<AntigravityPort["observe"]>[0], signal?: AbortSignal) { return antigravityObservationSchema.parse(await this.#invoke("observe", input, signal, true)); }
@@ -102,7 +106,7 @@ export class AntigravityRemotePort implements AntigravityPort {
   async close() {
     if (this.#closed) return; this.#closed = true; this.#lifetime.abort();
     if (this.#attachment) this.#discard(this.#attachment);
-    await Promise.allSettled([this.#opening]);
+    await Promise.allSettled([this.#opening?.promise]);
   }
 }
 async function call(lease: SidecarRuntimeLease, input: AntigravityHostCommandInput, signal?: AbortSignal): Promise<unknown> {

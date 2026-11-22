@@ -24,6 +24,7 @@ import { AntigravityThreadPresentation } from "./thread-presentation.js";
 import { AntigravityThreadRepository } from "./thread-repository.js";
 import { AntigravityAgentToolService } from "./agent-tools.js";
 import { AntigravityModeCatalog } from "./mode-catalog.js";
+import { ConversationOperationRepository } from "../../db/repositories/conversation-operation-repository.js";
 
 interface CreatePortInput {
   readonly context: BackendModuleRuntimeContext;
@@ -144,6 +145,7 @@ function createRuntime(
   const profiles = new Map(context.connections.map(connection => [connection.id, connection]));
   const drivers = new Map<string, AntigravityDriver>();
   const settings = new AntigravityThreadRepository(context.database);
+  const operations = new ConversationOperationRepository(context.database);
   const modeCatalog = new AntigravityModeCatalog();
   const agentTools = new AntigravityAgentToolService({ facade: context.agentTools, cli: context.agentToolCli,
     sourceCapabilities: context.agentToolSourceCapabilities, remote: context.environmentOperations.environmentKind !== "local" });
@@ -179,6 +181,7 @@ function createRuntime(
         if (!driver) {
           driver = new AntigravityDriver({ instance, connection, scope, port, settings,
             modelPolicy: prepared.modelPolicy, nativeNamespaceKey, correlationKey, usage: context.usage, agentTools, modeCatalog,
+            isOperationAbandoned: (threadId, operationId) => operations.isOperationAbandoned(scope, threadId, operationId),
             executionEnvironmentVariables: context.executionEnvironmentVariables });
           drivers.set(connection.id, driver);
         }

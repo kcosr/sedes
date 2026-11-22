@@ -45,6 +45,32 @@ async function fixture() {
 const payloadReads = (spy: { mock: { calls: readonly (readonly unknown[])[] } }) => spy.mock.calls.filter(([sql]) => typeof sql === "string" && (sql.includes("SELECT idx, step_type") || sql.includes("SELECT idx, data FROM executor_metadata"))).length;
 
 describe("retained Antigravity native history", () => {
+  it("measures each native revision once and reuses exact escaped UTF-8 wire sizes", async () => {
+    const f = await fixture(), db = f.create(); f.step(db, 0, response('escaped "text" \\ and café 🌎'));
+    const stringify = vi.spyOn(JSON, "stringify");
+    const history = await f.store.read(f.identity);
+    expect(stringify.mock.calls.filter(([value]) => value === history.native)).toHaveLength(1);
+    const bytes = f.store.serializedBytes(history);
+    expect(stringify.mock.calls.filter(([value]) => value === history.native || (value as { native?: unknown })?.native === history.native)).toHaveLength(1);
+    expect(bytes).toBe(Buffer.byteLength(JSON.stringify(history)));
+    stringify.mockClear();
+    expect((await f.store.read(f.identity)).native).toBe(history.native);
+    expect(f.store.serializedBytes(history)).toBe(bytes);
+    expect(stringify.mock.calls.some(([value]) => value === history.native)).toBe(false);
+  });
+  it("derives exact aggregate sizes without serializing a second whole parent transcript", async () => {
+    const f = await fixture(), parent = f.create(), child = f.create(childId, parentId);
+    f.step(parent, 0, invocation(f.root), 132); f.step(parent, 1, response("parent transcript"));
+    f.step(child, 0, response("child transcript", 2), 15, 2);
+    const stringify = vi.spyOn(JSON, "stringify");
+    const active = await f.store.read(f.identity);
+    expect(stringify.mock.calls.filter(([value]) => value && typeof value === "object" && "revision" in value && "steps" in value)).toHaveLength(2);
+    expect(f.store.serializedBytes(active)).toBe(Buffer.byteLength(JSON.stringify(active)));
+    f.step(child, 0, response("finished"));
+    const terminal = await f.store.read(f.identity);
+    expect(terminal.native.steps[0]?.subagents?.[0]?.state).toBe("terminal");
+    expect(f.store.serializedBytes(terminal)).toBe(Buffer.byteLength(JSON.stringify(terminal)));
+  });
   it("avoids payload acquisition and decoding on unchanged WAL snapshots, then notices an external commit", async () => {
     const f = await fixture(), db = f.create(); f.step(db, 0, response("before"));
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
@@ -102,6 +128,15 @@ describe("retained Antigravity native history", () => {
     expect(omitted.native.steps[0]?.subagents?.[0]?.state).toBe("unknown");
     expect((await f.store.read(f.identity)).native).toBe(omitted.native);
     parent.exec("DELETE FROM executor_metadata");
+    expect((await f.store.read(f.identity)).native.steps[0]?.subagents?.[0]?.state).toBe("cancelled");
+  });
+  it("keeps exact child cancellation proof with a trailing unstarted input", async () => {
+    const f = await fixture(), parent = f.create(), child = f.create(childId, parentId);
+    f.step(parent, 0, invocation(f.root), 132);
+    f.step(child, 0, proto(field(1, 132), field(4, 6), field(5, field(12, "child-execution")), field(140, Buffer.alloc(0))), 132, 6);
+    f.step(child, 1, proto(field(1, 14), field(4, 3), field(5, field(12, "child-execution")),
+      field(19, field(3, field(1, "Unstarted input")))), 14, 3);
+    child.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, 2), field(9, "child-execution")));
     expect((await f.store.read(f.identity)).native.steps[0]?.subagents?.[0]?.state).toBe("cancelled");
   });
   it("invalidates a replaced inode, rejects a symlink, and never reuses a different workspace identity", async () => {
@@ -174,6 +209,16 @@ describe("retained Antigravity native history", () => {
       await f.store.read({ ...f.identity, sessionId: id });
     }
     expect((await f.store.read(f.identity)).native).not.toBe(first.native);
+  });
+  it("does not double-charge a large parent when aggregate child state shares its transcript", async () => {
+    const f = await fixture(), parent = f.create(), child = f.create(childId, parentId);
+    f.step(parent, 0, invocation(f.root), 132);
+    f.step(parent, 1, response("a".repeat(17 * 1024 * 1024)));
+    f.step(parent, 2, response("b".repeat(17 * 1024 * 1024)));
+    f.step(child, 0, response("finished"));
+    const before = await f.store.read(f.identity), prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    expect((await f.store.read(f.identity)).native).toBe(before.native);
+    expect(payloadReads(prepare)).toBe(0);
   });
 });
 

@@ -19,6 +19,7 @@ export type NativeHistoryWorkerRequest = { id: number; kind: "read" | "forget"; 
 export type NativeHistoryWorkerResponse = { id: number; kind: "read"; history: AntigravityHistory | null; revision: string; bytes: number }
   | { id: number; kind: "done" } | { id: number; kind: "error"; code: string };
 type Pending = { resolve(value: NativeHistoryWorkerResponse): void; reject(error: unknown): void; cancellation: Int32Array; removeAbort(): void };
+type ReadingKey = { generation: symbol; pending: number };
 
 /** One worker belongs to one already-authorized backend runtime configuration.
  * No process-global cache or arbitrary filesystem path is accepted by reads. */
@@ -28,6 +29,8 @@ export function createAntigravityNativeHistoryReader(configuration: AntigravityR
 class NativeHistoryReader implements AntigravityNativeHistoryReader {
   readonly #pending = new Map<number, Pending>();
   readonly #cache = new Map<string, { history: AntigravityHistory; bytes: number }>();
+  // Retained only while reads are in flight; forget never accumulates per-key tombstones.
+  readonly #readingKeys = new Map<string, ReadingKey>();
   #cacheGeneration = Symbol();
   #cacheBytes = 0;
   #sequence = 0;
@@ -36,7 +39,7 @@ class NativeHistoryReader implements AntigravityNativeHistoryReader {
   #worker?: Promise<Worker>;
   #activeWorker?: Worker;
   #workerGeneration = Symbol();
-  readonly #retiring = new Set<Promise<number>>();
+  readonly #retiring = new Map<Worker, Promise<number> | undefined>();
   #failures = 0;
   #retryAt = 0;
   #closed = false;
@@ -50,7 +53,7 @@ class NativeHistoryReader implements AntigravityNativeHistoryReader {
     const generation = this.#workerGeneration = Symbol();
     const work = (async () => {
       // Passive worker replacement never overlaps an owned failed worker.
-      await Promise.all(this.#retiring);
+      await Promise.all([...this.#retiring.keys()].map(worker => this.#terminate(worker)));
       if (this.#closed) throw new AntigravityError("antigravity_history_reader_closed");
       const embedded = typeof __SEDES_ANTIGRAVITY_HISTORY_WORKER_SOURCE__ === "string";
       const directory = new URL("../../../../dist/antigravity-history-worker/", import.meta.url);
@@ -95,9 +98,20 @@ class NativeHistoryReader implements AntigravityNativeHistoryReader {
     this.#failures = Math.min(this.#failures + 1, 8);
     this.#retryAt = Date.now() + Math.min(250 * 2 ** (this.#failures - 1), 30_000);
     if (worker) {
-      const retirement = worker.terminate(); this.#retiring.add(retirement);
-      void retirement.catch(() => undefined).finally(() => this.#retiring.delete(retirement));
+      void this.#terminate(worker).catch(() => undefined);
     }
+  }
+  #terminate(worker: Worker): Promise<number> {
+    const existing = this.#retiring.get(worker);
+    if (existing) return existing;
+    const terminating = Promise.resolve().then(() => worker.terminate());
+    this.#retiring.set(worker, terminating);
+    void terminating.then(() => this.#retiring.delete(worker), () => {
+      // Keep ownership after a failed termination so replacement/close must
+      // retry it before considering cleanup proven.
+      if (this.#retiring.get(worker) === terminating) this.#retiring.set(worker, undefined);
+    });
+    return terminating;
   }
   async #request(kind: "read" | "forget", identity: AntigravityIdentity, signal?: AbortSignal, knownRevision?: string): Promise<NativeHistoryWorkerResponse> {
     signal?.throwIfAborted();
@@ -126,33 +140,48 @@ class NativeHistoryReader implements AntigravityNativeHistoryReader {
   }
   async read(identity: AntigravityIdentity, signal?: AbortSignal): Promise<AntigravityHistory> {
     const key = this.#key(identity), previous = this.#cache.get(key), generation = this.#cacheGeneration;
-    const response = await this.#request("read", identity, signal, previous?.history.native.revision);
-    signal?.throwIfAborted();
-    if (this.#closed) throw new AntigravityError("antigravity_history_reader_closed");
-    if (response.kind !== "read") throw new AntigravityError("antigravity_history_worker_response_invalid");
-    if (response.history === null) {
-      if (!previous || previous.history.native.revision !== response.revision) throw new AntigravityError("antigravity_history_worker_response_invalid");
-      return previous.history;
-    }
-    if (generation !== this.#cacheGeneration) return response.history;
-    const current = this.#cache.get(key); this.#cacheBytes -= current?.bytes ?? 0; this.#cache.delete(key);
-    if (response.bytes <= MAXIMUM_CACHE_BYTES) {
-      while (this.#cache.size >= 64 || this.#cacheBytes + response.bytes > MAXIMUM_CACHE_BYTES) {
-        const oldest = this.#cache.entries().next().value; if (!oldest) break;
-        this.#cache.delete(oldest[0]); this.#cacheBytes -= oldest[1].bytes;
+    const reading = this.#readingKeys.get(key) ?? { generation: Symbol(), pending: 0 };
+    const keyGeneration = reading.generation;
+    reading.pending++; this.#readingKeys.set(key, reading);
+    try {
+      const response = await this.#request("read", identity, signal, previous?.history.native.revision);
+      signal?.throwIfAborted();
+      if (this.#closed) throw new AntigravityError("antigravity_history_reader_closed");
+      if (response.kind !== "read") throw new AntigravityError("antigravity_history_worker_response_invalid");
+      if (response.history === null) {
+        if (!previous || previous.history.native.revision !== response.revision) throw new AntigravityError("antigravity_history_worker_response_invalid");
+        if (generation === this.#cacheGeneration && keyGeneration === reading.generation && this.#cache.get(key) === previous) {
+          this.#cache.delete(key); this.#cache.set(key, previous);
+        }
+        return previous.history;
       }
-      this.#cache.set(key, { history: response.history, bytes: response.bytes }); this.#cacheBytes += response.bytes;
+      if (generation !== this.#cacheGeneration || keyGeneration !== reading.generation) return response.history;
+      const current = this.#cache.get(key); this.#cacheBytes -= current?.bytes ?? 0; this.#cache.delete(key);
+      if (response.bytes <= MAXIMUM_CACHE_BYTES) {
+        while (this.#cache.size >= 64 || this.#cacheBytes + response.bytes > MAXIMUM_CACHE_BYTES) {
+          const oldest = this.#cache.entries().next().value; if (!oldest) break;
+          this.#cache.delete(oldest[0]); this.#cacheBytes -= oldest[1].bytes;
+        }
+        this.#cache.set(key, { history: response.history, bytes: response.bytes }); this.#cacheBytes += response.bytes;
+      }
+      return response.history;
+    } finally {
+      if (--reading.pending === 0 && this.#readingKeys.get(key) === reading) this.#readingKeys.delete(key);
     }
-    return response.history;
+  }
+  #forgetCache(key: string): void {
+    const reading = this.#readingKeys.get(key);
+    if (reading) reading.generation = Symbol();
+    const previous = this.#cache.get(key);
+    this.#cache.delete(key); this.#cacheBytes -= previous?.bytes ?? 0;
   }
   async forget(identity: AntigravityIdentity): Promise<void> {
-    const key = this.#key(identity), previous = this.#cache.get(key);
-    this.#cacheGeneration = Symbol();
-    this.#cache.delete(key); this.#cacheBytes -= previous?.bytes ?? 0;
+    const key = this.#key(identity);
+    this.#forgetCache(key);
     if (this.#closed || !this.#worker) return;
     try { await this.#request("forget", identity); }
     catch (error) { if (!this.#closed) throw error; }
-    const cached = this.#cache.get(key); this.#cache.delete(key); this.#cacheBytes -= cached?.bytes ?? 0;
+    this.#forgetCache(key);
   }
   #rejectPending(error: unknown) {
     for (const pending of this.#pending.values()) {
@@ -167,18 +196,32 @@ class NativeHistoryReader implements AntigravityNativeHistoryReader {
     this.#rejectPending(new AntigravityError("antigravity_history_reader_closed"));
     this.#cache.clear(); this.#cacheBytes = 0;
     this.#cacheGeneration = Symbol();
-    return this.#closing ??= (async () => {
+    if (this.#closing) return this.#closing;
+    const closing = (async () => {
       const worker = await this.#worker?.catch(() => undefined);
-      await Promise.allSettled(this.#retiring); if (!worker) return;
+      await Promise.all([...this.#retiring.keys()].filter(retiring => retiring !== worker).map(retiring => this.#terminate(retiring)));
+      if (!worker) return;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let listener: ((response: NativeHistoryWorkerResponse) => void) | undefined;
+      let exited: (() => void) | undefined;
       try {
         await Promise.race([new Promise<void>(resolve => {
           const id = ++this.#sequence;
-          const listener = (response: NativeHistoryWorkerResponse) => { if (response.id === id) { worker.off("message", listener); resolve(); } };
-          worker.on("message", listener); worker.once("exit", () => resolve()); worker.ref();
+          listener = response => { if (response.id === id) resolve(); };
+          exited = resolve;
+          worker.on("message", listener); worker.once("exit", exited); worker.ref();
           worker.postMessage({ id, kind: "close" } satisfies NativeHistoryWorkerRequest);
         }), new Promise<void>(resolve => { timer = setTimeout(resolve, 1000); })]);
-      } finally { if (timer) clearTimeout(timer); await worker.terminate(); }
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (listener) worker.off("message", listener);
+        if (exited) worker.off("exit", exited);
+        await this.#terminate(worker);
+        this.#worker = undefined; this.#activeWorker = undefined;
+      }
     })();
+    this.#closing = closing;
+    void closing.catch(() => { if (this.#closing === closing) this.#closing = undefined; });
+    return closing;
   }
 }

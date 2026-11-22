@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { backendConversationEventSchema, backendConversationSnapshotSchema, type BackendConversationEvent, type BackendConversationSnapshot,
@@ -27,6 +28,9 @@ export class AntigravityHandle implements ConversationHandle {
   readonly #listeners = new Set<BackendEventListener>();
   readonly #journal: SequencedBackendEvent[] = [];
   readonly #permissions = new Map<string, AntigravityAttachment["pendingPermissions"][number]>();
+  readonly #resolvedPermissions = new Set<string>();
+  #permissionReadChanges?: Set<string>;
+  #permissionSequence: number;
   readonly #receipts = new Map<string, AntigravityOutcome>();
   readonly #acknowledgedOperations = new Set<string>();
   readonly #receiptWaiters = new Set<() => void>();
@@ -64,6 +68,7 @@ export class AntigravityHandle implements ConversationHandle {
   constructor(readonly driver: AntigravityDriver, readonly attached: AttachConversationInput,
     readonly detail: AntigravityBinding, readonly attachment: AntigravityAttachment) {
     this.binding = attached.binding; this.#setup = attachment.setup; this.#after = attachment.retainedAfterSequence;
+    this.#permissionSequence = attachment.throughSequence;
     this.#configurationSequence = attachment.throughSequence;
     this.#accounting = new AntigravityUsage(driver.input.usage, this.binding, detail.nativeNamespaceKey);
     this.#control.signal.addEventListener("abort", () => this.#cancelDeferredHistoryRefresh(), { once: true });
@@ -104,6 +109,8 @@ export class AntigravityHandle implements ConversationHandle {
   }
   async #refresh(emit: boolean, force = false): Promise<void> {
     const previousUsage = this.#projection?.usage;
+    await this.#acknowledgeAbandoned(this.#lifetime.signal, force)
+      .catch(error => { throw antigravityReadError(error, this.#lifetime.signal); });
     // Operation outcomes have independent retention. A dropped event page must
     // not leave a completed request permanently pending in this handle.
     for (const [operationId, outcome] of this.#receipts) if (!this.#inFlightRequests.has(operationId) && (outcome.status === "pending" ||
@@ -212,12 +219,14 @@ export class AntigravityHandle implements ConversationHandle {
             this.#recovering = true; this.#streaming = false;
             this.#emit({ type: "resnapshot_required", reason: "sequence_gap" });
           }
-          for (const event of observed.events) this.#accept(event);
+          for (const event of observed.events) if (event.sequence > this.#after) this.#accept(event);
+          // ACP events have already entered the retained handle journal. Their
+          // acknowledgement is independent of passive SQLite acquisition.
+          this.#after = observed.throughSequence;
+          await this.driver.input.port.acknowledge({ handleId: this.attachment.handleId, throughSequence: this.#after }, this.#lifetime.signal);
           this.#disconnected = observed.closed;
           await this.#refresh(true, this.#recovering || observed.closed);
           this.#recovering = false;
-          this.#after = observed.throughSequence;
-          await this.driver.input.port.acknowledge({ handleId: this.attachment.handleId, throughSequence: this.#after }, this.#lifetime.signal);
         });
         if (observed.closed) { this.#control.abort(); this.#emit({ type: "resnapshot_required", reason: "provider_handle_closed" }); return; }
       } catch {
@@ -227,31 +236,55 @@ export class AntigravityHandle implements ConversationHandle {
         await this.#serialize(async () => this.#markDisconnected());
         // Reconnect only to retained authority; a missing owner cannot authorize
         // launching/replaying a prompt from this handle.
+        const changed = new Set<string>();
+        this.#permissionReadChanges = changed;
         try {
           const retained = await this.driver.input.port.attachExisting(this.identity, this.#lifetime.signal);
-          if (!retained || retained.handleId !== this.attachment.handleId || retained.generation !== this.attachment.generation) {
-            this.#control.abort(); this.#emit({ type: "resnapshot_required", reason: "provider_handle_closed" }); return;
-          }
-          this.#applyRetainedSetup(retained);
-          for (const id of this.#permissions.keys()) if (!retained.pendingPermissions.some(pending => pending.requestId === id))
-            this.#emit({ type: "interaction_resolved", backendInteractionId: id });
-          this.#permissions.clear();
-          for (const pending of retained.pendingPermissions) {
-            this.#permissions.set(pending.requestId, pending);
-            this.#emit({ type: "interaction_opened", interaction: permissionInteraction(pending) });
-          }
-          this.#disconnected = false;
+          await this.#serialize(async () => {
+            if (this.#closed || this.#control.signal.aborted) return;
+            if (!retained || retained.handleId !== this.attachment.handleId || retained.generation !== this.attachment.generation) {
+              this.#control.abort(); this.#emit({ type: "resnapshot_required", reason: "provider_handle_closed" }); return;
+            }
+            this.#applyRetainedSetup(retained);
+            if (retained.throughSequence >= this.#permissionSequence) {
+              const pendingIds = new Set(retained.pendingPermissions.map(pending => pending.requestId));
+              for (const id of this.#permissions.keys()) if (!changed.has(id) && !pendingIds.has(id)) this.#resolvePermission(id);
+              for (const pending of retained.pendingPermissions) if (!changed.has(pending.requestId)) this.#openPermission(pending);
+              // Inventory supersedes older permission events still awaiting
+              // delivery. A local response completed during this read wins.
+              this.#permissionSequence = retained.throughSequence;
+              for (const id of this.#resolvedPermissions) if (!pendingIds.has(id)) this.#resolvedPermissions.delete(id);
+            }
+            this.#disconnected = false;
+          });
+          if (this.#control.signal.aborted) return;
         } catch { /* Keep ownership unknown until exact retained lookup succeeds. */ }
+        finally { if (this.#permissionReadChanges === changed) this.#permissionReadChanges = undefined; }
         await delay(500, undefined, { signal: this.#lifetime.signal }).catch(() => undefined);
       }
     }
   }
+  #openPermission(pending: AntigravityAttachment["pendingPermissions"][number]): void {
+    if (this.#resolvedPermissions.has(pending.requestId)) return;
+    const current = this.#permissions.get(pending.requestId);
+    if (current && isDeepStrictEqual(permissionInteraction(current), permissionInteraction(pending))) return;
+    this.#permissionReadChanges?.add(pending.requestId);
+    this.#permissions.set(pending.requestId, pending);
+    this.#emit({ type: "interaction_opened", interaction: permissionInteraction(pending) });
+  }
+  #resolvePermission(id: string): void {
+    this.#permissionReadChanges?.add(id);
+    if (this.#permissions.delete(id)) this.#emit({ type: "interaction_resolved", backendInteractionId: id });
+  }
   #accept(event: AntigravityEvent): void {
     if (event.kind === "permission") {
-      this.#permissions.set(event.requestId, event);
-      this.#emit({ type: "interaction_opened", interaction: permissionInteraction(event) });
+      if (event.sequence <= this.#permissionSequence) return;
+      this.#permissionSequence = event.sequence;
+      this.#openPermission(event);
     } else if (event.kind === "permission_resolved") {
-      if (this.#permissions.delete(event.requestId)) this.#emit({ type: "interaction_resolved", backendInteractionId: event.requestId });
+      if (event.sequence <= this.#permissionSequence) return;
+      this.#permissionSequence = event.sequence;
+      this.#resolvePermission(event.requestId); this.#resolvedPermissions.delete(event.requestId);
     } else if (event.kind === "operation") {
       if (!this.#acknowledgedOperations.has(event.operationId)) this.#receipts.set(event.operationId, event.outcome);
       for (const wake of this.#receiptWaiters) wake();
@@ -493,31 +526,32 @@ export class AntigravityHandle implements ConversationHandle {
       this.driver.input.agentTools?.instructions(this.driver.toolSource(this.binding.applicationThreadId, this.attached.workspace.summary.id)), "steer");
     const outcome = await this.#request(input.applicationOperationId, { type: "steer", prompt });
     if (outcome.status === "failed") { await this.#ackReceipt(input.applicationOperationId).catch(() => undefined); throw outcomeError(outcome); }
+    this.#streaming = true;
     return this.#afterSubmissionDispatch(async (): Promise<SteerTurnResult> => {
       // Give asynchronous native enqueue a short evidence window, but release
       // the actor mailbox immediately when its provider needs a permission.
       // Host dispatch alone never proves native acceptance or authorizes replay.
       const deadline = Date.now() + 1000;
       let firstRead = true;
-      while (Date.now() < deadline) {
-        await this.#serialize(() => this.#refresh(true, firstRead)); firstRead = false;
+      while (true) {
+        const finalRead = Date.now() >= deadline;
+        await this.#serialize(() => this.#refresh(true, firstRead || finalRead || this.#permissions.size > 0)); firstRead = false;
         const turn = Object.values(this.#projection.snapshot.turnsById).find(value => value.completionCorrelations?.includes(input.applicationOperationId));
         if (turn) return { status: "accepted", reconciliationToken: input.reconciliationToken, completionCorrelation: input.applicationOperationId, backendTurnId: turn.backendTurnId };
         const staged = this.#native.native.steps.some(step => step.user && inspectAntigravityInput(this.scope, step.user.text).operationId === input.applicationOperationId);
         if (staged) return { status: "pending_materialization", reconciliationToken: input.reconciliationToken, completionCorrelation: input.applicationOperationId };
         const receipt = this.#receipts.get(input.applicationOperationId);
         if (receipt?.status === "failed") { await this.#ackReceipt(input.applicationOperationId); throw outcomeError(receipt); }
-        if (this.#permissions.size) throw unknown();
+        if (this.#permissions.size || finalRead) throw unknown();
         await this.#waitForReceipt(Math.min(50, deadline - Date.now()));
       }
-      throw unknown();
     });
   }
   async interrupt(input: InterruptConversationInput): Promise<void> {
     input.signal?.throwIfAborted();
     if (input.deadlineAt <= Date.now()) throw unknown();
     await this.#request(input.applicationOperationId, { type: "cancel" }); await this.#wait(input.applicationOperationId, input.deadlineAt);
-    await this.#serialize(() => this.#refresh(true)).catch(() => undefined);
+    await this.#serialize(() => this.#refresh(true, true)).catch(() => undefined);
     await this.#ackReceipt(input.applicationOperationId);
   }
   async reconcileInterrupt(input: InterruptConversationInput) { return this.#reconcileReceipt(input.applicationOperationId, "cancel"); }
@@ -547,8 +581,9 @@ export class AntigravityHandle implements ConversationHandle {
     if (input.kind !== "cancel" && !request.options.some(option => option.optionId === selected)) throw unsupported("The selected interaction response is invalid.");
     await this.#request(input.applicationOperationId, { type: "permission", requestId: input.interactionId,
       response: { outcome: input.kind === "cancel" ? { outcome: "cancelled" } : { outcome: "selected", optionId: selected! } } });
-    await this.#wait(input.applicationOperationId); this.#permissions.delete(input.interactionId);
-    this.#emit({ type: "interaction_resolved", backendInteractionId: input.interactionId });
+    await this.#wait(input.applicationOperationId);
+    if (this.#permissions.has(input.interactionId)) this.#resolvedPermissions.add(input.interactionId);
+    this.#resolvePermission(input.interactionId);
     await this.#ackReceipt(input.applicationOperationId);
   }
   async reconcileInteractionResponse(input: InteractionResponseInput) { return this.#reconcileReceipt(input.applicationOperationId, "permission"); }
@@ -567,9 +602,26 @@ export class AntigravityHandle implements ConversationHandle {
     catch { return { outcome: "unknown" as const }; }
   }
   subscribe(listener: (event: BackendConversationEvent) => void) { this.#rawListeners.add(listener); return () => { this.#rawListeners.delete(listener); }; }
+  async #acknowledgeAbandoned(signal?: AbortSignal, force = false): Promise<void> {
+    const now = Date.now();
+    const candidates = [...this.#receipts].filter(([id, outcome]) => !this.#inFlightRequests.has(id) &&
+      (force || now - (this.#receiptPolledAt.get(id) ?? 0) >= 1000 || outcome.status === "completed" ||
+        outcome.status === "failed" && outcome.failure.delivery !== "sent_outcome_unknown")).map(([id]) => id);
+    const { acknowledged, pending } = await this.driver.acknowledgeAbandonedOperations(this.binding.applicationThreadId,
+      this.attachment.handleId, candidates, signal);
+    for (const id of pending) { this.#receiptPolledAt.set(id, now); this.#receipts.set(id, { status: "pending" }); }
+    for (const id of acknowledged) {
+      this.#acknowledgedOperations.add(id); this.#receipts.delete(id); this.#receiptPolledAt.delete(id);
+      this.#ackReady.delete(id); this.#controlOperations.delete(id); this.#ackAttemptedAt.delete(id);
+      if (this.#pendingSubmit === id) this.#pendingSubmit = undefined;
+    }
+  }
   async close(): Promise<void> {
     if (this.#closeComplete) return;
     this.#closed = true; this.#lifetime.abort(); this.#control.abort(); await this.#loop;
+    // Receipt cleanup must not prevent releasing the handle on carrier loss.
+    // The retained owner keeps any outcomes whose acknowledgement was unproven.
+    await this.#acknowledgeAbandoned(AbortSignal.timeout(5000), true).catch(() => undefined);
     await this.driver.input.port.release({ handleId: this.attachment.handleId }).catch(error => { throw antigravityReadError(error); });
     this.#accounting.close(); this.#listeners.clear(); this.#rawListeners.clear(); this.driver.handles.delete(this); this.#closeComplete = true;
   }

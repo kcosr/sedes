@@ -219,6 +219,11 @@ function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+/** A separate receipt key preserves the original queued operation's identity. */
+export function queuedInputAbandonmentReceiptId(threadId: string, operationId: string): string {
+  return `force_reset_input:${fingerprint([1, threadId, operationId])}`;
+}
+
 function assertOperationNotAbandoned(
   row: ReceiptRow,
   operationKinds: ReadonlySet<string>,
@@ -916,6 +921,46 @@ export class ConversationOperationRepository {
         AND operation_kind <> 'conversation_steer' AND result_code = 'uncertain'
         AND (? IS NULL OR operation_kind <> 'conversation_interaction_response' OR mutation_id <> ?) LIMIT 1`)
       .get(scope.tenantId, scope.principalId, threadId, exceptInteractionResponseId ?? null, exceptInteractionResponseId ?? null) !== undefined;
+  }
+
+  findUncertainInteractionResponseForThread(scope: RequestScope, threadId: string): InteractionResponseOperationRecord | undefined {
+    const row = prepareCached(this.database, `SELECT ${rowColumns} FROM mutation_receipts
+      WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
+        AND operation_kind = 'conversation_interaction_response' AND result_code = 'uncertain'
+      ORDER BY created_at, mutation_id LIMIT 1`).get(scope.tenantId, scope.principalId, threadId) as ReceiptRow | undefined;
+    return row ? parseInteractionResponse(row) : undefined;
+  }
+
+  isOperationAbandoned(scope: RequestScope, threadId: string, operationId: string): boolean {
+    if (prepareCached(this.database, `SELECT 1 FROM mutation_receipts
+      WHERE tenant_id = ? AND principal_id = ? AND thread_id = ? AND mutation_id = ?
+        AND operation_kind <> 'queued_input_abandonment'
+        AND result_code = 'abandoned' LIMIT 1`).get(scope.tenantId, scope.principalId, threadId, operationId) !== undefined) return true;
+    // First Send uses the creation mutation ID as the backend operation ID,
+    // never the attempt ID or native conversation ID. Its explicit reset marker
+    // is durable abandonment evidence even when no mutation receipt exists.
+    if (prepareCached(this.database, `SELECT 1 FROM conversation_creation_attempts
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND mutation_id = ?
+        AND force_reset_at IS NOT NULL AND force_reset_mutation_id IS NOT NULL LIMIT 1`)
+      .get(scope.tenantId, scope.principalId, threadId, operationId) !== undefined) return true;
+    // Queue failures and their diagnostic text are not abandonment authority.
+    // Only the exact marker written atomically by Force Reset qualifies; its
+    // authority survives later dismissal or deletion of the original queue row.
+    return prepareCached(this.database, `SELECT 1 FROM mutation_receipts AS marker
+      JOIN thread_force_reset_affected_threads AS affected
+        ON affected.tenant_id = marker.tenant_id AND affected.principal_id = marker.principal_id
+          AND affected.thread_id = marker.thread_id
+          AND affected.reset_mutation_id = json_extract(marker.result_json, '$.forceResetMutationId')
+      WHERE marker.tenant_id = ? AND marker.principal_id = ? AND marker.thread_id = ? AND marker.mutation_id = ?
+        AND marker.operation_kind = 'queued_input_abandonment' AND marker.result_code = 'abandoned' AND marker.replayable = 0
+        AND length(CAST(marker.result_json AS BLOB)) <= 4096
+        AND json_type(marker.result_json, '$.version') = 'integer'
+        AND json_extract(marker.result_json, '$.version') = 1
+        AND json_extract(marker.result_json, '$.operationId') = ?
+        AND json_type(marker.result_json, '$.queuedInputId') = 'text'
+        AND length(json_extract(marker.result_json, '$.queuedInputId')) BETWEEN 1 AND 128
+        AND json_remove(marker.result_json, '$.version', '$.operationId', '$.queuedInputId', '$.forceResetMutationId') = '{}' LIMIT 1`)
+      .get(scope.tenantId, scope.principalId, threadId, queuedInputAbandonmentReceiptId(threadId, operationId), operationId) !== undefined;
   }
 
   prepareInterrupt(

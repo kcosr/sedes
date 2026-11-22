@@ -412,7 +412,7 @@ export function Composer({
   active = true,
   store,
   applicationStore,
-  disabled = false,
+  disabled: threadControlsDisabled = false,
   hidePendingInputs = false,
   optimisticTranscriptPresentationVisible = true,
   autoFocus = false,
@@ -445,6 +445,7 @@ export function Composer({
     sameSelectedFields,
   );
   const snapshot = state.snapshot;
+  const draftControlsDisabled = threadControlsDisabled || Boolean(snapshot?.recovery);
   const serverDraft = snapshot?.draft;
   const retainedComposerState = getRetainedComposerDeliveryState(store);
   const shouldVisuallyClearServerDraft = state.pendingComposerTransfers.some(
@@ -733,7 +734,7 @@ export function Composer({
   );
   const activeCommand = commandMatches[effectiveActiveCommandIndex];
   const commandMenuOpen =
-    !disabled &&
+    !draftControlsDisabled &&
     !skillPickerOpen &&
     !threadPickerOpen &&
     commandMatches.length > 0 &&
@@ -1503,15 +1504,15 @@ export function Composer({
   const missingTaskReferences = taskProjectionChecking
     ? []
     : taskReferences.filter(({ taskId }) => !currentTasks.has(taskId));
-  const effectiveDisabled =
-    disabled ||
+  const lacksMutationAuthority =
     !snapshot ||
     !state.authoritative ||
     state.connection !== "connected";
+  const effectiveDisabled = draftControlsDisabled || lacksMutationAuthority;
   // Local typing needs no mutation authority. Preserve focus across the live
   // run-state/capability handoff while Send, Stop and other actions stay fenced.
   const draftEditingDisabled =
-    disabled || !snapshot || state.connection !== "connected" ||
+    draftControlsDisabled || !snapshot || state.connection !== "connected" ||
     (!state.authoritative && !capabilitiesPending);
   useEffect(() => {
     if (
@@ -2962,7 +2963,7 @@ export function Composer({
     if (queueRestoreRunning.current) return;
     setAttachmentInputError(undefined);
     const pickerMayResumeAfterNativeSuspension =
-      preservePickerAdmission && !disabled && snapshot !== undefined;
+      preservePickerAdmission && !draftControlsDisabled && snapshot !== undefined;
     if (
       (effectiveDisabled && !pickerMayResumeAfterNativeSuspension) ||
       draftConflict
@@ -4163,7 +4164,8 @@ export function Composer({
                           className="send-button stop"
                           aria-label="Stop"
                           disabled={
-                            effectiveDisabled ||
+                            threadControlsDisabled ||
+                            lacksMutationAuthority ||
                             state.actionPending ||
                             snapshot.runState === "stopping" ||
                             !snapshot.capabilities.operations.some(

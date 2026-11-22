@@ -85,6 +85,11 @@ current provider interaction needed for progress. The scoped application receipt
 fence ordinary mutations; only an exact pending interaction may pass that fence,
 with its usual response receipt, ownership, and runtime-generation validation.
 Interaction controls use their own capability, independent of composer readiness.
+If that exact interaction response itself becomes uncertain behind an older
+Steer, recovery must reconcile the response first, without bypassing any other
+uncertain non-Steer operation or active creation recovery. Stop likewise uses
+its advertised control capability independently of message-entry recovery;
+authority, connection, archive, and historical-view fences still apply.
 Replaying a pending interaction must preserve its original identity metadata,
 including its opening timestamp. Item ordering metadata must remain stable when
 an earlier item gains another projected content part.
@@ -95,6 +100,12 @@ Antigravity additionally settles canceled foreground turns and child sessions
 from its own exact durable executor receipts. Its tool-call responses cannot
 prove background continuation completion or retire retained tool work. Other
 backends retain their existing native terminal evidence.
+
+Acknowledging accepted provider events must not depend on a subsequent passive
+history read succeeding. Reconnect inventories must be applied in serialization
+order and fenced against newer events and responses completed during the read.
+Application abandonment can release an exact scoped terminal provider receipt,
+but cannot establish native non-consumption or discard a pending callback.
 
 The Codex 0.169.0 compatibility update is provider-private. Its single generated
 profile validates native moderation, completion-token, executor-environment and

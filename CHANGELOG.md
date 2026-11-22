@@ -104,7 +104,9 @@ User-facing changes are collected here before release. See the
   and native mode selection, Saved Agents, scoped Sedes tools, and background
   work tracking. Canceled permission requests recover from native execution
   receipts, and pending message reconciliation keeps current permissions
-  answerable across resnapshots and reconnects. Child cancellation and background
+  answerable across resnapshots and reconnects. Permission-response recovery
+  takes precedence over a blocked Steer, and Stop remains available during
+  message recovery when the server permits it. Child cancellation and background
   completion require native terminal evidence. Unchanged history avoids repeated
   transcript processing, and native reads run outside the server event loop.
   Antigravity displays its official brand mark and reasoning effort labels such

@@ -1679,6 +1679,15 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         : { status: "completed" };
     }
     if (unresolved.operationKind === "conversation_steer") {
+      // A permission response can itself become uncertain while the provider
+      // waits to consume an earlier Steer. Reconcile that exact retained
+      // response first; another non-Steer uncertainty still fences replay.
+      const response = this.input.operations.findUncertainInteractionResponseForThread(scope, applicationThreadId);
+      if (response && !this.input.operations.hasUncertainNonSteerOperation(scope, applicationThreadId, response.operationId)) {
+        if (!response.response) throw new Error("uncertain_interaction_response_payload_missing");
+        return this.#respond(scope, applicationThreadId, { kind: "respond", operationId: response.operationId,
+          interactionId: response.interactionId, response: response.response });
+      }
       const steer = this.input.operations.getSteer(
         scope,
         unresolved.mutationId,

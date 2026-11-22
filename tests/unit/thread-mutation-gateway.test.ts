@@ -223,6 +223,7 @@ function fixture(input?: {
     listUncertainInterrupts: vi.fn(() => []),
     listUncertainBackendActions: vi.fn(() => []),
     listUncertainInteractionResponses: vi.fn(() => []),
+    findUncertainInteractionResponseForThread: vi.fn(() => undefined),
     rejectSteerBeforeAcceptance: vi.fn(),
     findSteer: vi.fn(() => input?.steerDeliveryReplay),
     expireInterrupts: vi.fn((_scope: RequestScope, now: number) => {
@@ -1559,6 +1560,7 @@ describe("ThreadMutationGateway several uncertain Steers", () => {
         findUncertainThreadOperation: vi.fn(() => uncertain[0]
           ? { threadId: "thread-1", mutationId: uncertain[0].mutationId, operationKind: "conversation_steer" }
           : undefined),
+        findUncertainInteractionResponseForThread: vi.fn(() => undefined),
         getSteer: vi.fn((_scope: RequestScope, mutationId: string) =>
           receipts.find((receipt) => receipt.mutationId === mutationId)),
       } as never,
@@ -3430,6 +3432,13 @@ function interactionResponseFixture(input?: {
     hasUncertainNonSteerOperation: vi.fn((requestScope: RequestScope, threadId: string, exceptOperationId?: string) =>
       requestScope.tenantId === scope.tenantId && requestScope.principalId === scope.principalId &&
       threadId === "thread-1" && state === "uncertain" && exceptOperationId !== operationId),
+    findUncertainInteractionResponseForThread: vi.fn((requestScope: RequestScope, threadId: string) =>
+      requestScope.tenantId === scope.tenantId && requestScope.principalId === scope.principalId &&
+      threadId === "thread-1" && state === "uncertain" ? record() : undefined),
+    getSteer: vi.fn(() => ({
+      source: "queued_input", mutationId: "older-steer", applicationOperationId: "older-steer",
+      queuedInputId: "queued-steer", expectedThreadRevision: 7,
+    })),
     findInteractionResponse: vi.fn((requestScope: RequestScope, requestedOperationId: string) =>
       requestScope.tenantId === scope.tenantId && requestScope.principalId === scope.principalId &&
       requestedOperationId === operationId ? record() : undefined),
@@ -3473,6 +3482,9 @@ function interactionResponseFixture(input?: {
     input?.publishThreadSnapshot ?? (async () => undefined),
   );
   const onThreadChanged = vi.fn(input?.onThreadChanged ?? (async () => undefined));
+  const steerUserInput = vi.fn(async () => ({
+    status: "recovery_required", retryable: true, threadRevision: 7, queue: [],
+  }));
   const gateway = new ThreadMutationGateway({
       actors: {} as never,
     bindings: { database } as never,
@@ -3486,7 +3498,7 @@ function interactionResponseFixture(input?: {
     } as never,
     lifecycle: { recoverActiveFirstSend: () => undefined } as never,
     forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
-    queue: {} as never,
+    queue: { steerUserInput } as never,
     operations: operations as never,
     completions: { database } as never,
     queueGateway: {} as never,
@@ -3517,6 +3529,7 @@ function interactionResponseFixture(input?: {
     operations,
     interactions,
     respond,
+    steerUserInput,
     reconcileInteractionResponse,
     publishThreadSnapshot,
     onThreadChanged,
@@ -3565,6 +3578,63 @@ describe("ThreadMutationGateway interaction-response recovery", () => {
     subject.interactions.listPending.mockReturnValue([]);
     await expect(subject.gateway.mutate(scope, "thread-1", subject.operation)).resolves.toEqual({ status: "completed" });
     expect(subject.reconcileInteractionResponse).toHaveBeenCalledOnce(); expect(subject.respond).not.toHaveBeenCalled();
+  });
+
+  it.each(["accepted", "not_applied", "unknown"] as const)("recovers the exact uncertain permission before an older Steer when its outcome is %s", async reconciliation => {
+    const subject = interactionResponseFixture({ initialState: "uncertain", reconciliation });
+    const steer = { threadId: "thread-1", mutationId: "older-steer", operationKind: "conversation_steer" };
+    subject.operations.findUncertainThreadOperation.mockReturnValue(steer);
+    // Recovery uses the persisted response even after the live popup disappears.
+    subject.interactions.listPending.mockReturnValue([]);
+
+    await expect(subject.gateway.mutate(scope, "thread-1", { kind: "recover_uncertain" }))
+      .resolves.toEqual(reconciliation === "unknown"
+        ? { status: "recovery_required", retryable: true }
+        : { status: "completed" });
+
+    expect(subject.operations.findUncertainInteractionResponseForThread).toHaveBeenCalledWith(scope, "thread-1");
+    expect(subject.operations.hasUncertainNonSteerOperation).toHaveBeenCalledWith(scope, "thread-1", subject.operation.operationId);
+    expect(subject.reconcileInteractionResponse).toHaveBeenCalledExactlyOnceWith({
+      applicationOperationId: subject.operation.operationId,
+      interactionId: "pi-interaction-1", kind: "confirmation", confirmed: true,
+    });
+    expect(subject.respond).toHaveBeenCalledTimes(reconciliation === "not_applied" ? 1 : 0);
+    if (reconciliation === "not_applied") {
+      expect(subject.respond).toHaveBeenCalledWith(scope, "thread-1", {
+        owner: "provider", persistence: "durable", backendResponse: {
+          applicationOperationId: subject.operation.operationId,
+          interactionId: "pi-interaction-1", kind: "confirmation", confirmed: true,
+        },
+      });
+    }
+    expect(subject.state()).toBe(reconciliation === "unknown" ? "uncertain" : "accepted");
+    expect(subject.operations.findUncertainThreadOperation()).toEqual(steer);
+    expect(subject.operations.getSteer).not.toHaveBeenCalled();
+    expect(subject.steerUserInput).not.toHaveBeenCalled();
+    expect(subject.interactions.prepareResponse).not.toHaveBeenCalled();
+    await subject.gateway.close();
+  });
+
+  it("does not recover a permission past a newer uncertain Stop hidden behind an older Steer", async () => {
+    const subject = interactionResponseFixture({ initialState: "uncertain", reconciliation: "not_applied" });
+    subject.operations.findUncertainThreadOperation.mockReturnValue({
+      threadId: "thread-1", mutationId: "older-steer", operationKind: "conversation_steer",
+    });
+    // Exempting this response still leaves the newer uncertain Stop.
+    subject.operations.hasUncertainNonSteerOperation.mockReturnValue(true);
+
+    await expect(subject.gateway.mutate(scope, "thread-1", { kind: "recover_uncertain" }))
+      .resolves.toMatchObject({ status: "queue_steer_recovery_required", operationId: "older-steer" });
+
+    expect(subject.operations.hasUncertainNonSteerOperation).toHaveBeenCalledWith(scope, "thread-1", subject.operation.operationId);
+    expect(subject.reconcileInteractionResponse).not.toHaveBeenCalled();
+    expect(subject.respond).not.toHaveBeenCalled();
+    expect(subject.operations.acceptInteractionResponse).not.toHaveBeenCalled();
+    expect(subject.state()).toBe("uncertain");
+    expect(subject.steerUserInput).toHaveBeenCalledWith(scope, "thread-1", "queued-steer", {
+      mutationId: "older-steer", expectedThreadRevision: 7,
+    });
+    await subject.gateway.close();
   });
 
   it.each(["tenantId", "principalId"] as const)("does not reuse a retained response across %s while a Steer is uncertain", async field => {

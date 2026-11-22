@@ -108,6 +108,11 @@ Caller cancellation and aggregate budget refusals preserve otherwise valid
 caches. Failed passive workers restart only on later reads, with exponential
 backoff from 250 ms up to 30 seconds. Explicit reader shutdown remains terminal;
 worker replacement never launches or replays provider requests.
+Cache hits refresh recency, and forgetting one session fences only that session's
+in-flight cache publication. Serialized native size is measured once per changed
+snapshot; aggregate accounting shares unchanged objects. Failed worker termination
+retains ownership and shutdown can retry without reopening admission. Packaged
+runtime verification performs an actual SQLite worker round trip.
 
 History requests may supply the caller's `knownRevision`. Only exact equality
 with the freshly checked native snapshot returns `null`; unconditional reads
@@ -115,7 +120,8 @@ must return a complete history. The same contract applies locally and over SSH
 or outbound sidecars, avoiding unchanged payload transfer. No ACP event or quiet
 interval substitutes for a native change check. The handle coalesces ordinary
 refreshes to at most one per 250 ms, with fresh reads for initial projection,
-submission anchors, recovery, and the first post-dispatch check. Idle polling
+submission anchors, recovery, the first post-dispatch check, Steer permission
+wakeups and its final deadline check, and completed Stop. Idle polling
 continues. One deferred refresh flushes a coalesced final event at the end of
 the cooldown even if the next provider observation is still waiting; close or
 loss of control authority cancels it. An unchanged native revision skips transcript projection, item
@@ -147,7 +153,10 @@ embedded native configuration and telemetry stay unprojected. A durable
 `USER_CANCELED` executor receipt can finish a turn as interrupted without a final
 assistant response when it matches that turn's exact execution and last native
 step, all steps in that execution are terminal, and no auto-continue or conflicting
-receipt exists. A cancelled permission/tool step alone is insufficient. Remote
+receipt exists. The final execution governs a multi-execution turn; trailing
+native inputs proven unstarted do not advance the executed head. The same proof
+settles background continuations and retires retained ACP tools only when no
+newer activity invalidates it. A cancelled permission/tool step alone is insufficient. Remote
 history carries this required evidence through `antigravity_runtime` capability
 3; older peers fail capability negotiation rather than silently dropping it.
 
@@ -175,13 +184,42 @@ row can be staged without consumption. Sedes requires native execution/start
 evidence before publishing it, and carries each signed operation correlation
 when several consumed inputs share one response. A short, one-second acceptance
 window accommodates asynchronous native enqueue, but a pending permission wakes
-and ends that wait immediately so the actor can publish and answer it. Missing
+and triggers a fresh evidence read before ending that wait so the actor can
+publish and answer it. Missing
 proof remains unconfirmed without replay; host dispatch is not acceptance.
 Stop fences new admission and
 drains its captured prompt set with repeated native cancellation until native
 quiescence is proved. Only then can a retained cancelled outcome plus a fresh
-native read return an unconsumed input as not sent. ACP callback ordering and
-usage fields never substitute for that evidence.
+native read return an unconsumed input as not sent. Permission rejection can
+also cancel queued prompts: the host records their cancellation proof only after
+all captured callbacks settle and a fresh native inventory proves quiescence
+without intervening work. ACP callback ordering and usage fields never substitute
+for that evidence. Force Reset acknowledges only terminal provider receipts whose
+application operations were explicitly abandoned in the same tenant, principal,
+and thread; it does not discard pending callbacks.
+Queued input resets record an explicit scoped abandonment receipt before clearing
+dispatch evidence, and First Send uses its creation mutation's reset marker.
+Ordinary failures and historical diagnostic-only queue rows do not prove
+abandonment. An absent provider operation can be cleared locally only after
+explicit application abandonment; loss of carrier authority preserves uncertainty.
+
+Stock `agy` 1.5.14 can cancel the original execution after a permission rejection
+without replying to a queued concurrent prompt. Live qualification observed an
+exact `USER_CANCELED` executor receipt and no queued input row while that prompt
+remained pending. Sedes retains the unresolved operation: native quiescence does
+not prove that the provider withdrew the queued request, and Force Reset does
+not fabricate that proof. Live qualification recovered this case with an explicit
+Stop, verifying the queued callback's cancellation receipt and subsequent prompt
+admission. The application does not issue a hidden Stop to turn permission
+rejection into cancellation of all work.
+
+Accepted ACP events advance and acknowledge their cursor before passive history
+acquisition, so a history-worker failure does not replay them. Reconnect applies
+the retained permission inventory under serialization, with sequence and local
+response fences preventing a stale attachment from reopening a resolved request.
+After an SSH recovery attachment, selected permission options reacquire normal
+configuration-checked authority on the same retained runtime. Cancel decisions
+remain available through the retained control path.
 
 ## Cross-backend audit
 
@@ -190,6 +228,11 @@ configuration, normalized brand, Saved Agent and automation adapters. Existing
 Pi SDK, native Pi, Codex, Claude, Grok and OpenCode retain their native protocols
 and capabilities. No other backend parses Antigravity data. Unsupported
 Antigravity operations return explicit errors and are absent from capabilities.
+The shared recovery selector prioritizes an exact uncertain interaction response
+behind an older uncertain Steer for all seven backends, only when no other
+non-Steer uncertainty blocks it. Each backend retains its existing response
+reconciliation implementation or explicit unsupported result. Shared client Stop
+controls honor existing interrupt capabilities; no new backend capability is granted.
 
 The [operator guide](../../operator/backends/antigravity.md) documents current
 capabilities and upgrade requirements. Qualification uses fixture ACP peers,

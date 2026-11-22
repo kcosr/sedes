@@ -33,3 +33,43 @@ describe("first-input recovery previews", () => {
     expect(attempt.initialInputText).toBe(initialInputText);
   });
 });
+
+describe("permission responses during recovery", () => {
+  it.each([
+    { creationKind: "first_input", phase: "first_submission_started", allowed: false },
+    { creationKind: "first_input", phase: "recovery_required", allowed: false },
+    { creationKind: "fork", phase: "recovery_required", allowed: false },
+    { creationKind: "first_input", phase: "bound", allowed: true },
+    { creationKind: undefined, phase: undefined, allowed: true },
+  ] as const)("keeps $creationKind/$phase recovery authoritative ahead of an uncertain Steer", async ({ creationKind, phase, allowed }) => {
+    const scope = { tenantId: "tenant", principalId: "principal" };
+    const database = {};
+    const creation = {
+      database, findActiveForThread: vi.fn(() => creationKind ? { creationKind, phase } : undefined),
+    };
+    const operations = {
+      database,
+      findUncertainThreadOperation: vi.fn(() => ({ operationKind: "conversation_steer" })),
+      hasUncertainNonSteerOperation: vi.fn(() => false),
+    };
+    const reader = new DatabaseThreadApplicationRecoveryReader({
+      creation: creation as unknown as ConversationCreationRepository,
+      operations: operations as unknown as ConversationOperationRepository,
+      targets: {} as ConversationLifecycleTargetResolver,
+      registry: {} as AgentBackendRegistry,
+      forks: { readRecovery: vi.fn() },
+    });
+
+    await expect(reader.canRespondDuringRecovery(scope, "thread")).resolves.toBe(allowed);
+    expect(creation.findActiveForThread).toHaveBeenCalledWith(scope, "thread");
+    if (allowed) {
+      expect(operations.findUncertainThreadOperation).toHaveBeenCalledWith(scope, "thread");
+      expect(operations.hasUncertainNonSteerOperation).toHaveBeenCalledWith(scope, "thread");
+      operations.hasUncertainNonSteerOperation.mockReturnValue(true);
+      await expect(reader.canRespondDuringRecovery(scope, "thread")).resolves.toBe(false);
+    } else {
+      expect(operations.findUncertainThreadOperation).not.toHaveBeenCalled();
+      expect(operations.hasUncertainNonSteerOperation).not.toHaveBeenCalled();
+    }
+  });
+});

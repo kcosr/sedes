@@ -9,7 +9,7 @@ import { OwnedNdjsonStdioTransportFactory } from "../../../provider-protocol/tra
 import { AcpDeliveryError, AcpRemoteError } from "../../../provider-protocol/bindings/acp-v1/index.js";
 import { AntigravityAcpConnection } from "../acp-connection.js";
 import { antigravityNativeActivity } from "./native-activity.js";
-import { antigravityNativeTerminalOutcome } from "../native-execution.js";
+import { antigravityCancelledExecutionHeads, antigravityNativeTerminalOutcome } from "../native-execution.js";
 import { antigravityCommandSchema, antigravityAgentToolsSchema, antigravityHistoryReadSchema } from "../sidecar/wire.js";
 import type { AntigravityNativeHistoryReader } from "../native-history.js";
 import { AntigravityError, type AntigravityPort, type AntigravityRuntimeConfiguration, type AntigravityIdentity,
@@ -29,7 +29,7 @@ type NativeEvidence = {
   readonly revision: string;
   readonly activity: ReturnType<typeof antigravityNativeActivity>;
   readonly terminalToolIds: ReadonlySet<string>;
-  readonly terminalResponseIndex: number;
+  readonly terminalExecutionIndex: number;
   readonly headIndex: number;
 };
 type Session = {
@@ -37,6 +37,7 @@ type Session = {
   peer: AntigravityAcpConnection; events: AntigravityEvent[]; sequence: number; offered: number; acknowledged: number;
   retainedAfter: number; eventBytes: number; attached: boolean; closed: boolean; cleanupUnproven: boolean;
   activePrompts: Set<string>; tools: Set<string>; permissions: Map<string, Permission>;
+  cancelledPrompts: Set<string>;
   nativeActive: boolean; nativeUnknown: boolean; nativeRevision?: string;
   nativeEvidence?: NativeEvidence;
   nativeForegroundActive: boolean;
@@ -285,7 +286,7 @@ export class AntigravityHost implements AntigravityPort {
       session = { identity: { sessionId, cwd }, handleId: randomUUID(), generation: randomUUID(),
         setup: { initialize: peer.initialize, session: response }, peer, events: [], sequence: 0, offered: 0, acknowledged: 0,
         retainedAfter: 0, eventBytes: 0, attached: true, closed: false, cleanupUnproven: false,
-        activePrompts: new Set(), tools: new Set(), permissions: new Map(), operations: new Map(), tombstones: new Map(), wake: new Set(), receiptBytes: 0, nativeActive: false, nativeUnknown: true, nativeForegroundActive: false, nativeReadable: false, nativeHeadIndex: -1, promptSettlementEpoch: 0, configurationObservation: 0, modeObservation: 0, uncertainSetters: new Map(), canceling: false, cancellationFailed: false, nativeCounts: { agents: 0, commands: 0, other: 0 },
+        activePrompts: new Set(), cancelledPrompts: new Set(), tools: new Set(), permissions: new Map(), operations: new Map(), tombstones: new Map(), wake: new Set(), receiptBytes: 0, nativeActive: false, nativeUnknown: true, nativeForegroundActive: false, nativeReadable: false, nativeHeadIndex: -1, promptSettlementEpoch: 0, configurationObservation: 0, modeObservation: 0, uncertainSetters: new Map(), canceling: false, cancellationFailed: false, nativeCounts: { agents: 0, commands: 0, other: 0 },
         environmentFingerprint: digest([input.executionEnvironment ?? {}, input.agentTools ?? null]) };
       this.#sessions.set(session.handleId, session); this.#revision++;
       this.#ephemeral.delete(peer);
@@ -329,11 +330,16 @@ export class AntigravityHost implements AntigravityPort {
   }
   #closeHistory(): Promise<void> {
     this.#historyClosed = true;
-    return this.#closingHistory ??= (async () => {
+    if (this.#closingHistory) return this.#closingHistory;
+    const closing = (async () => {
       try { await this.input.history.close(); }
       catch (error) { this.#historyCleanupUnproven = true; this.#revision++; throw error; }
       finally { await Promise.allSettled([...this.#historyReads]); }
+      if (this.#historyCleanupUnproven) { this.#historyCleanupUnproven = false; this.#revision++; }
     })();
+    this.#closingHistory = closing;
+    void closing.catch(() => { if (this.#closingHistory === closing) this.#closingHistory = undefined; });
+    return closing;
   }
   async #forgetHistory(identity: AntigravityIdentity): Promise<void> {
     // Evicting a passive cache is bounded hygiene, independent of native
@@ -396,7 +402,14 @@ export class AntigravityHost implements AntigravityPort {
     if (command.type === "steer" && ((!session.activePrompts.size && !session.nativeForegroundActive) || session.permissions.size)) throw new AntigravityError("antigravity_steering_target_unavailable");
     if (command.type === "steer" && session.activePrompts.size >= 32) throw new AntigravityError("antigravity_steering_capacity");
     if ((command.type === "set_config" || command.type === "set_mode") && (session.activePrompts.size || session.nativeForegroundActive || session.permissions.size)) throw new AntigravityError("antigravity_session_busy");
-    const nativeFrontier = session.nativeHeadIndex;
+    // Concurrent Steers share the active prompt's original frontier. Native
+    // cancellation may already be durable before its ACP callback arrives, so
+    // a joining Steer must not raise that frontier to the cancelled head. For
+    // autonomous foreground work, use prior terminal evidence: a waiting tool
+    // may become terminal in place without growing history.
+    const nativeFrontier = command.type === "steer"
+      ? session.activePrompts.size ? -1 : session.nativeEvidence?.terminalExecutionIndex ?? -1
+      : session.nativeHeadIndex;
     const operation: Operation = { fingerprint, outcome: { status: "pending" },
       ...(command.type === "set_config" ? { postcondition: { kind: "config" as const, id: command.configId, valueFingerprint: digest(command.value), after: session.configurationObservation } } : {}),
       ...(command.type === "set_mode" ? { postcondition: { kind: "mode" as const, valueFingerprint: digest(command.modeId), after: session.modeObservation } } : {}) };
@@ -415,6 +428,8 @@ export class AntigravityHost implements AntigravityPort {
       session.activePrompts.delete(input.operationId);
       if (command.type === "prompt" || command.type === "steer") {
         session.promptSettlementEpoch++;
+        if (outcome.status === "completed" && (outcome.result as { stopReason?: unknown } | null)?.stopReason === "cancelled")
+          session.cancelledPrompts.add(input.operationId);
         session.reconcileToolsAfterIndex = Math.max(session.reconcileToolsAfterIndex ?? -1, nativeFrontier);
         void this.#refreshNative(session);
       }
@@ -473,7 +488,14 @@ export class AntigravityHost implements AntigravityPort {
       session.modeObservation++; this.#reconcileSetters(session);
     }
     if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
-      if (update.status === "pending" || update.status === "in_progress" || (update.sessionUpdate === "tool_call" && update.status == null)) session.tools.add(update.toolCallId);
+      if (update.status === "pending" || update.status === "in_progress" || (update.sessionUpdate === "tool_call" && update.status == null)) {
+        session.tools.add(update.toolCallId);
+        // Autonomous continuations can produce tools after the initiating ACP
+        // prompt has finished. Only a later execution terminal can retire an
+        // unmatched tool; the previous turn's cached completion cannot do so.
+        if (!session.activePrompts.size && session.reconcileToolsAfterIndex === undefined)
+          session.reconcileToolsAfterIndex = session.nativeEvidence?.terminalExecutionIndex ?? -1;
+      }
       else if (update.status === "completed" || update.status === "failed") session.tools.delete(update.toolCallId);
     }
     this.#event(session, { kind: "update", notification });
@@ -588,21 +610,25 @@ export class AntigravityHost implements AntigravityPort {
     session.cancelDrain = draining; return draining;
   }
   #cancellationReadEpoch(session: Session): number | undefined {
-    return session.cancellation && [...session.cancellation.captured].every(id => !session.activePrompts.has(id)) ? session.promptSettlementEpoch : undefined;
+    return !session.activePrompts.size ? session.promptSettlementEpoch : undefined;
   }
   #completeCancellation(session: Session, epoch: number | undefined) {
     const attempt = session.cancellation;
-    if (!attempt || session.closed || epoch === undefined || epoch !== session.promptSettlementEpoch ||
-        [...attempt.captured].some(id => session.activePrompts.has(id)) || session.tools.size || session.permissions.size ||
+    if ((!attempt && !session.cancelledPrompts.size) || session.closed || epoch === undefined || epoch !== session.promptSettlementEpoch ||
+        session.activePrompts.size || session.tools.size || session.permissions.size ||
         !session.nativeReadable || session.nativeActive || session.nativeUnknown || !session.nativeRevision) return;
-    const result = { settledOperationIds: [...attempt.captured], nativeRevision: session.nativeRevision };
+    const result = { settledOperationIds: [...(attempt?.captured ?? [])], nativeRevision: session.nativeRevision };
     const updates: { operationId: string; operation: Operation; outcome: AntigravityOutcome }[] = [];
-    for (const operationId of attempt.captured) {
+    // Permission rejection can cancel every concurrent prompt without any
+    // explicit Stop. Exact cancelled callbacks plus a read begun after all of
+    // them settled provide the same drain proof, including absent queued rows.
+    // Retain the receipts until the application acknowledges its own outcome.
+    for (const operationId of session.cancelledPrompts) {
       const operation = session.operations.get(operationId) ?? session.tombstones.get(operationId);
       if (operation?.outcome.status === "completed" && (operation.outcome.result as { stopReason?: unknown } | null)?.stopReason === "cancelled")
         updates.push({ operationId, operation, outcome: { ...operation.outcome, cancelledAtNativeRevision: result.nativeRevision } });
     }
-    for (const operationId of attempt.operations) {
+    for (const operationId of attempt?.operations ?? []) {
       const operation = session.operations.get(operationId) ?? session.tombstones.get(operationId);
       if (operation && (operation.outcome.status === "pending" || operation.outcome.status === "failed" && operation.outcome.failure.delivery === "sent_outcome_unknown"))
         updates.push({ operationId, operation, outcome: { status: "completed", result } });
@@ -612,20 +638,24 @@ export class AntigravityHost implements AntigravityPort {
     if (session.receiptBytes + delta > 34 * 1024 * 1024) return;
     session.receiptBytes += delta;
     for (const update of updates) { update.operation.outcome = update.outcome; this.#event(session, { kind: "operation", operationId: update.operationId, outcome: update.outcome }); }
-    attempt.result = result; session.cancellation = undefined; session.canceling = false; session.cancellationFailed = false; this.#revision++;
+    session.cancelledPrompts.clear();
+    if (attempt) {
+      attempt.result = result; session.cancellation = undefined; session.canceling = false; session.cancellationFailed = false; this.#revision++;
+    }
   }
   #applyNative(session: Session, history: AntigravityHistory, cancellationEpoch?: number) {
     let evidence = session.nativeEvidence;
     if (!evidence || evidence.revision !== history.native.revision) {
       const terminalToolIds = new Set<string>();
-      let terminalResponseIndex = -1;
+      let terminalExecutionIndex = -1;
       for (const step of history.native.steps) {
         if (step.tool && [3, 4, 5, 6, 7, 12].includes(step.status)) terminalToolIds.add(step.tool.id);
         if (step.response && antigravityNativeTerminalOutcome(step) !== undefined)
-          terminalResponseIndex = Math.max(terminalResponseIndex, step.index);
+          terminalExecutionIndex = Math.max(terminalExecutionIndex, step.index);
       }
+      for (const index of antigravityCancelledExecutionHeads(history.native).values()) terminalExecutionIndex = Math.max(terminalExecutionIndex, index);
       evidence = { revision: history.native.revision, activity: antigravityNativeActivity(history.native), terminalToolIds,
-        terminalResponseIndex, headIndex: history.native.steps.at(-1)?.index ?? -1 };
+        terminalExecutionIndex, headIndex: history.native.steps.at(-1)?.index ?? -1 };
       session.nativeEvidence = evidence;
     }
     const state = evidence.activity;
@@ -636,7 +666,7 @@ export class AntigravityHost implements AntigravityPort {
     session.nativeHeadIndex = evidence.headIndex;
     for (const toolId of session.tools) if (evidence.terminalToolIds.has(toolId)) session.tools.delete(toolId);
     if (!session.activePrompts.size && !state.active && !state.unknown && session.reconcileToolsAfterIndex !== undefined &&
-        evidence.terminalResponseIndex > session.reconcileToolsAfterIndex) {
+        evidence.terminalExecutionIndex > session.reconcileToolsAfterIndex) {
       session.tools.clear(); session.reconcileToolsAfterIndex = undefined;
     }
     this.#completeCancellation(session, cancellationEpoch);

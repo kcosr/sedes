@@ -10,7 +10,7 @@ import { decodeAntigravityNativeMessage as decode, message, string, integer, rep
 import { AntigravityError, type AntigravityHistory, type AntigravityIdentity, type AntigravityRuntimeConfiguration } from "./port.js";
 import { assertAntigravityNativeSemantics } from "./native-guards.js";
 import { antigravityNativeActivity } from "./host/native-activity.js";
-import { antigravityCancelledExecutionHeads, antigravityNativeTerminalOutcome } from "./native-execution.js";
+import { antigravityCancelledExecutionHeads, antigravityNativeTerminalOutcome, antigravityUnstartedInputs } from "./native-execution.js";
 export { createAntigravityNativeHistoryReader, type AntigravityNativeHistoryReader } from "./native-history-reader.js";
 
 const MAXIMUM_HISTORY_BYTES = 96 * 1024 * 1024;
@@ -29,7 +29,8 @@ class NativeHistoryBudgetError extends Error {
 }
 type OwnHistory = { native: AntigravityNativeHistory; childReferences: Map<number, readonly ChildReference[]>;
   size: Size; executionSize: ExecutorSize; includesExecutions: boolean; version: number;
-  aggregate?: AntigravityNativeHistory; cachedBytes: number };
+  nativeBytes: number; childReferenceBytes: number; aggregate?: AntigravityNativeHistory;
+  cachedBytes: number };
 type Connection = { key: string; file: string; identity: string; database: DatabaseSync; own?: OwnHistory };
 const MAXIMUM_CONNECTIONS = 64;
 const MAXIMUM_CACHE_BYTES = 64 * 1024 * 1024;
@@ -38,6 +39,7 @@ const MAXIMUM_CACHE_BYTES = 64 * 1024 * 1024;
  * worker; the explicit one-shot utility below owns a short-lived instance. */
 export class AntigravityNativeHistoryStore {
   readonly #connections = new Map<string, Connection>();
+  readonly #serializedSizes = new WeakMap<AntigravityNativeHistory, number>();
   #closed = false;
   #cacheBytes = 0;
   #tail: Promise<unknown> = Promise.resolve();
@@ -87,18 +89,25 @@ export class AntigravityNativeHistoryStore {
     while (this.#connections.size > MAXIMUM_CONNECTIONS) this.#remove(this.#connections.values().next().value!);
     return entry;
   }
-  cache(entry: Connection, own: OwnHistory): void {
+  cache(entry: Connection, own: OwnHistory, cachedBytes: number): void {
     if (this.#connections.get(entry.key) !== entry) return;
     this.#cacheBytes -= entry.own?.cachedBytes ?? 0;
     entry.own = undefined;
-    own.cachedBytes = Buffer.byteLength(JSON.stringify(own.native)) + Buffer.byteLength(JSON.stringify([...own.childReferences])) + (own.aggregate && own.aggregate !== own.native
-      ? Buffer.byteLength(JSON.stringify(own.aggregate)) : 0);
+    own.cachedBytes = cachedBytes;
     if (own.cachedBytes > MAXIMUM_CACHE_BYTES) return;
     for (const previous of this.#connections.values()) {
       if (this.#cacheBytes + own.cachedBytes <= MAXIMUM_CACHE_BYTES) break;
       this.#cacheBytes -= previous.own?.cachedBytes ?? 0; previous.own = undefined;
     }
     entry.own = own; this.#cacheBytes += own.cachedBytes;
+  }
+  rememberSerializedSize(native: AntigravityNativeHistory, bytes: number): void { this.#serializedSizes.set(native, bytes); }
+  serializedBytes(history: AntigravityHistory): number {
+    const bytes = this.#serializedSizes.get(history.native);
+    if (bytes === undefined) throw new Error("antigravity_history_size_unknown");
+    // Only the small identity envelope is new; native history was measured
+    // once at acquisition, including exact JSON escaping and UTF-8 lengths.
+    return Buffer.byteLength(JSON.stringify({ ...history, native: null })) - 4 + bytes;
   }
   invalidate(entry: Connection): void { if (this.#connections.get(entry.key) === entry) this.#remove(entry); }
   #remove(entry: Connection) {
@@ -214,8 +223,11 @@ async function readNative(store: AntigravityNativeHistoryStore, identity: Antigr
       return antigravityNativeHistorySchema.parse({ steps, executions, revision: hash.digest("hex"), ...(parent ? { parentSessionId: parent } : {}) });
     })();
     database.exec("ROLLBACK"); transactionOpen = false;
-    own = { native, childReferences, size, executionSize, includesExecutions: includeExecutions, version, cachedBytes: 0 };
-    store.cache(entry, own);
+    const nativeBytes = Buffer.byteLength(JSON.stringify(native));
+    const childReferenceBytes = Buffer.byteLength(JSON.stringify([...childReferences]));
+    store.rememberSerializedSize(native, nativeBytes);
+    own = { native, childReferences, size, executionSize, includesExecutions: includeExecutions, version,
+      nativeBytes, childReferenceBytes, cachedBytes: nativeBytes + childReferenceBytes };
     }
     if (expectedParent && own.native.parentSessionId !== expectedParent) throw new Error("antigravity_history_child_parent_mismatch");
     const { native, childReferences } = own;
@@ -250,7 +262,25 @@ async function readNative(store: AntigravityNativeHistoryStore, identity: Antigr
     const revision = childReferences.size ? aggregate.digest("hex") : native.revision;
     if (own.aggregate?.revision === revision) return { ...identity, native: own.aggregate };
     const result = childReferences.size ? { ...native, revision, steps: native.steps.map(step => childSteps.get(step.index) ?? step) } : native;
-    own.aggregate = result; store.cache(entry, own);
+    let resultBytes = own.nativeBytes;
+    let retainedExtraBytes = 0;
+    if (childReferences.size) {
+      for (const step of native.steps) {
+        const replacement = childSteps.get(step.index);
+        if (!replacement) continue;
+        const replacementBytes = Buffer.byteLength(JSON.stringify(replacement));
+        resultBytes += replacementBytes - Buffer.byteLength(JSON.stringify(step));
+        retainedExtraBytes += replacementBytes;
+      }
+      // The aggregate shares unchanged steps and executor receipts with native.
+      // Charge its new wrappers/array and replaced steps, not a second copy of
+      // the whole transcript. These remain accounting bounds, not a heap meter.
+      retainedExtraBytes += native.steps.length * 8 + 128;
+    }
+    store.rememberSerializedSize(result, resultBytes);
+    own.aggregate = result;
+    const nextBytes = own.nativeBytes + own.childReferenceBytes + retainedExtraBytes;
+    store.cache(entry, own, nextBytes);
     return { ...identity, native: result };
   } catch (error) {
     // Neither caller cancellation nor a tighter aggregate allowance invalidates
@@ -422,7 +452,8 @@ function childState(native: AntigravityNativeHistory): "active" | "terminal" | "
   if (state.unknown) return "unknown";
   if (steps.some(step => active.has(step.status) || step.subtrajectoryState === "active" || step.subagents?.some(child => child.state === "active"))) return "active";
   if (!steps.length || steps.some(step => !terminal.has(step.status) || (step.hasSubtrajectory && step.subtrajectoryState !== "terminal") || step.subagents?.some(child => child.state !== "terminal" && child.state !== "cancelled"))) return "unknown";
-  const final = steps.at(-1);
+  const unstarted = antigravityUnstartedInputs(native);
+  const final = steps.findLast(step => !unstarted.has(step.index));
   const outcome = antigravityNativeTerminalOutcome(final);
   if (outcome === "interrupted") return "cancelled";
   if (outcome === "completed" || outcome === "failed") return "terminal";

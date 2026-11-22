@@ -1,22 +1,40 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { command, readPortHistory, localFixture, observer, untilNative, waitOutcome, quiescent } from "./qualification.js";
 import { antigravityNativeActivity } from "../../src/server/backends/antigravity/host/native-activity.js";
-import { projectAntigravityHistory } from "../../src/server/backends/antigravity/history.js";
+import { antigravitySteerConsumed, projectAntigravityHistory } from "../../src/server/backends/antigravity/history.js";
+import { buildAntigravityPrompt, inspectAntigravityInput, type AntigravitySubmissionScope } from "../../src/server/backends/antigravity/submission.js";
+import { antigravityCancelledExecutionHeads } from "../../src/server/backends/antigravity/native-execution.js";
 
-it("recovers a cancelled permission from durable executor evidence without a final assistant response", async () => {
+it("recovers a rejected permission and queued steer using exact native disposition or explicit Stop", async () => {
   const f = await localFixture();
   try {
     await command(f.host, f.attachment.handleId, { type: "set_mode", modeId: "default" });
-    const operationId = randomUUID();
-    await f.host.request({ handleId: f.attachment.handleId, operationId, command: { type: "prompt", prompt: [{ type: "text",
-      text: "This is a bounded permission cancellation test. Use run_command exactly once to run printf SEDES_PERMISSION_PROBE in the current temporary directory. Do not use any other tools. Stop if permission is denied." }] } });
+    const operationId = randomUUID(), steerId = randomUUID();
+    const scope: AntigravitySubmissionScope = { key: randomBytes(32), binding: {
+      version: 1, sessionId: f.identity.sessionId, canonicalWorkspacePath: f.cwd,
+      tenantId: f.configuration.tenantId, principalId: f.configuration.principalId,
+      backendInstanceId: f.configuration.backendInstanceId, executionEnvironmentId: f.configuration.executionEnvironmentId,
+      connectionProfileId: "live-qualification", nativeNamespaceKey: "live-qualification",
+    } };
+    const prompt = (id: string, text: string, delivery: "submit" | "steer") => buildAntigravityPrompt(scope, {
+      applicationOperationId: id, mutationId: id, reconciliationToken: randomUUID(), source: { kind: "user" },
+      text, contextExcerpts: [], taskContexts: [], attachments: [],
+    }, "", delivery);
+    const steerPrompt = await prompt(steerId, "Keep the pending bounded run_command permission probe unchanged. After its permission decision, reply SEDES_STEER_PROBE. Use no additional tools.", "steer");
+    await f.host.request({ handleId: f.attachment.handleId, operationId, command: { type: "prompt", prompt: await prompt(operationId,
+      "This is a bounded permission cancellation test. First output every integer from 1 to 600 on its own line, then use run_command exactly once to run printf SEDES_PERMISSION_PROBE in the current temporary directory. Do not use any other tools. Stop if permission is denied.", "submit") } });
     let afterSequence = f.attachment.retainedAfterSequence;
-    let cancelledPermission = false;
+    let cancelledPermission = false, steeredDuringGeneration = false;
     const deadline = Date.now() + 90_000;
     while (!cancelledPermission && Date.now() < deadline) {
       const observed = await f.host.observe({ handleId: f.attachment.handleId, afterSequence });
       afterSequence = observed.throughSequence;
+      if (!steeredDuringGeneration && !observed.events.some(event => event.kind === "permission") &&
+          observed.events.some(event => event.kind === "update" && ["agent_message_chunk", "agent_thought_chunk"].includes(event.notification.update.sessionUpdate))) {
+        await f.host.request({ handleId: f.attachment.handleId, operationId: steerId, command: { type: "steer", prompt: steerPrompt } });
+        steeredDuringGeneration = true;
+      }
       for (const event of observed.events) if (event.kind === "permission") {
         await command(f.host, f.attachment.handleId, { type: "permission", requestId: event.requestId,
           response: { outcome: { outcome: "cancelled" } } });
@@ -24,20 +42,83 @@ it("recovers a cancelled permission from durable executor evidence without a fin
       }
       await f.host.acknowledge({ handleId: f.attachment.handleId, throughSequence: afterSequence });
     }
+    expect(steeredDuringGeneration).toBe(true);
     expect(cancelledPermission).toBe(true);
-    await waitOutcome(f.host, f.attachment.handleId, operationId);
+    const evidence = async () => {
+      const history = await readPortHistory(f.host, f.identity);
+      const outcome = await f.host.outcome({ handleId: f.attachment.handleId, operationId: steerId });
+      const input = history.native.steps.find(step => step.user && inspectAntigravityInput(scope, step.user.text).operationId === steerId);
+      const primaryInput = history.native.steps.find(step => step.user && inspectAntigravityInput(scope, step.user.text).operationId === operationId);
+      const primaryCancelled = primaryInput?.executionId !== undefined && antigravityCancelledExecutionHeads(history.native).has(primaryInput.executionId);
+      const consumed = input !== undefined && antigravitySteerConsumed(history.native, input.index);
+      const stopReason = outcome.status === "completed" ? (outcome.result as { stopReason?: string }).stopReason : undefined;
+      const disposition = consumed && stopReason === "end_turn" ? "accepted" : stopReason === "cancelled" &&
+        outcome.status === "completed" && typeof outcome.cancelledAtNativeRevision === "string" ? "cancelled" : "unproven";
+      return { disposition, outcome, consumed, inputIndex: input?.index, primaryCancelled,
+        primaryOutcome: await f.host.outcome({ handleId: f.attachment.handleId, operationId }),
+        activity: antigravityNativeActivity(history.native), blockers: f.host.snapshot().blockers,
+        executions: history.native.executions.slice(-16),
+        steps: history.native.steps.slice(-16).map(step => ({ index: step.index, type: step.type, status: step.status,
+          executionId: step.executionId, startedAt: step.startedAt, toolId: step.tool?.id,
+          user: Boolean(step.user), response: step.response && { stopReason: step.response.stopReason, toolCalls: step.response.toolCalls.map(call => call.id) } })) };
+    };
+    // agy may consume a concurrent prompt before opening permission. Its normal
+    // end_turn callback is accepted only with the authenticated consumed row;
+    // a cancelled callback still needs the exact drained-native receipt.
+    let resolved = await evidence(), pendingProviderSteer = false;
+    try {
+      await expect.poll(async () => resolved = await evidence(), { timeout: 5_000 })
+        .toMatchObject({ disposition: expect.stringMatching(/^(accepted|cancelled)$/u) });
+    } catch (cause) {
+      resolved = await evidence();
+      // Stock agy 1.5.14 can omit the queued prompt's callback after rejecting
+      // permission. The deadline merely bounds observation; exact native
+      // cancellation plus the still-pending receipt proves this remains
+      // unresolved, never accepted or cancelled by elapsed quiet time.
+      if (resolved.primaryCancelled && resolved.primaryOutcome.status === "completed" &&
+          resolved.outcome.status === "pending" && resolved.inputIndex === undefined) pendingProviderSteer = true;
+      else throw new Error(`LIVE_ANTIGRAVITY_BLOCKER: rejected permission disposition ${JSON.stringify(resolved)}`, { cause });
+    }
     const history = await readPortHistory(f.host, f.identity);
     expect(history.native.executions.some(execution => execution.terminationReason === 2)).toBe(true);
-    const projection = projectAntigravityHistory(history.native, { key: Buffer.alloc(32, 1), binding: {
-      version: 1, sessionId: f.identity.sessionId, canonicalWorkspacePath: f.cwd,
-      tenantId: f.configuration.tenantId, principalId: f.configuration.principalId,
-      backendInstanceId: f.configuration.backendInstanceId, executionEnvironmentId: f.configuration.executionEnvironmentId,
-      connectionProfileId: "live-qualification", nativeNamespaceKey: "live-qualification",
-    } });
+    const projection = projectAntigravityHistory(history.native, scope);
     expect(projection.snapshot.runState).toBe("idle");
-    expect(Object.values(projection.snapshot.turnsById).at(-1)?.status).toBe("interrupted");
+    const turns = Object.values(projection.snapshot.turnsById);
+    const primaryTurn = turns.find(turn => turn.completionCorrelations?.includes(operationId));
+    expect(primaryTurn?.status).toBe("interrupted");
+    if (resolved.disposition === "accepted") {
+      const steerTurn = turns.find(turn => turn.completionCorrelations?.includes(steerId));
+      expect(steerTurn).toBeDefined();
+      // A consumed Steer can share the interrupted original execution or run
+      // as its own completed turn after the permission decision.
+      expect(steerTurn?.status).toBe(steerTurn?.backendTurnId === primaryTurn?.backendTurnId ? "interrupted" : "completed");
+    } else expect(turns.at(-1)?.status).toBe("interrupted");
     expect(quiescent(history)).toBe(true);
     expect(history.native.steps.filter(step => step.command).every(step => step.command?.output === "")).toBe(true);
+    if (pendingProviderSteer) {
+      expect(resolved.outcome).toEqual({ status: "pending" });
+      expect(resolved.outcome).not.toHaveProperty("cancelledAtNativeRevision");
+      expect(resolved.consumed).toBe(false);
+      expect(turns.some(turn => turn.completionCorrelations?.includes(steerId))).toBe(false);
+      expect(f.host.snapshot().blockers).toContain("unsettled_outcome");
+      await expect(f.host.request({ handleId: f.attachment.handleId, operationId: randomUUID(), command: { type: "prompt",
+        prompt: [{ type: "text", text: "Must not be delivered while the queued input is unresolved." }] } }))
+        .rejects.toMatchObject({ code: "antigravity_session_busy", delivery: "not_sent" });
+      const stopId = randomUUID();
+      await f.host.request({ handleId: f.attachment.handleId, operationId: stopId, command: { type: "cancel" } });
+      const stop = await waitOutcome(f.host, f.attachment.handleId, stopId);
+      if (stop.status !== "completed") throw new Error(`LIVE_ANTIGRAVITY_BLOCKER: explicit Stop after rejected permission ${JSON.stringify({ stop, evidence: await evidence() })}`);
+      const proof = stop.result as { settledOperationIds: string[]; nativeRevision: string };
+      expect(proof.settledOperationIds).toContain(steerId);
+      expect(await f.host.outcome({ handleId: f.attachment.handleId, operationId: steerId })).toMatchObject({
+        status: "completed", result: { stopReason: "cancelled" }, cancelledAtNativeRevision: proof.nativeRevision,
+      });
+      expect((await readPortHistory(f.host, f.identity)).native.revision).toBe(proof.nativeRevision);
+      for (const id of [operationId, steerId, stopId]) await f.host.acknowledgeOperation({ handleId: f.attachment.handleId, operationId: id });
+      await command(f.host, f.attachment.handleId, { type: "prompt", prompt: [{ type: "text", text: "Reply exactly SEDES_REJECT_STOP_REUSED. Use no tools." }] });
+      expect((await readPortHistory(f.host, f.identity)).native.steps.some(step => step.response?.text.includes("SEDES_REJECT_STOP_REUSED"))).toBe(true);
+    }
+    console.info(`LIVE_ANTIGRAVITY_QUALIFIED: permission rejection; steer=${pendingProviderSteer ? "pending; explicit Stop drain and subsequent admission proven" : resolved.disposition}`);
   } finally { await f.close(); }
 });
 

@@ -7,10 +7,12 @@ import { AntigravityHost } from "../../src/server/backends/antigravity/host/nati
 import { AntigravityAcpConnection } from "../../src/server/backends/antigravity/acp-connection.js";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import type { AntigravityEvent, AntigravityHistory, AntigravityRuntimeConfiguration } from "../../src/server/backends/antigravity/port.js";
-import type { SessionNotification } from "@agentclientprotocol/sdk";
+import type { SessionNotification, RequestPermissionRequest, RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import { antigravityAttachmentSchema, antigravityCommandSchema, antigravityHistorySchema } from "../../src/server/backends/antigravity/sidecar/wire.js";
 import { AcpDeliveryError, AcpRemoteError } from "../../src/server/provider-protocol/bindings/acp-v1/index.js";
 import * as nativeActivity from "../../src/server/backends/antigravity/host/native-activity.js";
+import { buildAntigravityPrompt } from "../../src/server/backends/antigravity/submission.js";
+import { projectAntigravityHistory } from "../../src/server/backends/antigravity/history.js";
 
 const roots: string[] = [], hosts: AntigravityHost[] = [];
 const realSetTimeout = globalThis.setTimeout;
@@ -25,9 +27,11 @@ async function fixture(cancellationDrainTimeoutMs = 1000) {
   const history = { read: readHistory, forget: vi.fn(async () => undefined), close: vi.fn(async () => undefined) };
   const removeProbe = vi.fn(async (_identity: { sessionId: string; cwd: string }) => undefined);
   let emit: ((notification: SessionNotification) => void) | undefined;
+  let permission: ((request: RequestPermissionRequest, signal: AbortSignal) => Promise<RequestPermissionResponse>) | undefined;
   const host = new AntigravityHost({ configuration, channels, environment: process.env, history, removeProbe, observationWaitMs: 5, cancellationPollIntervalMs: 5, cancellationDrainTimeoutMs,
-    launch: async input => { emit = input.update; return AntigravityAcpConnection.open(input); } }); hosts.push(host);
-  return { cwd, host, configuration, channels, readHistory, history, removeProbe, emit: (notification: SessionNotification) => emit!(notification) };
+    launch: async input => { emit = input.update; permission = input.permission; return AntigravityAcpConnection.open(input); } }); hosts.push(host);
+  return { cwd, host, configuration, channels, readHistory, history, removeProbe, emit: (notification: SessionNotification) => emit!(notification),
+    permission: (request: RequestPermissionRequest) => permission!(request, new AbortController().signal) };
 }
 async function settled(host: AntigravityHost, handleId: string, operationId: string) {
   await vi.waitFor(async () => expect((await host.outcome({ handleId, operationId })).status).not.toBe("pending"));
@@ -157,6 +161,10 @@ describe("Antigravity execution host", () => {
     expect(f.host.snapshot().blockers).toContain("cleanup_unproven");
     await expect(f.host.create({ cwd: f.cwd, operationId: "replacement" }))
       .rejects.toMatchObject({ code: "antigravity_cleanup_unproven", delivery: "not_sent" });
+    await f.host.close();
+    expect(f.history.close).toHaveBeenCalledTimes(2);
+    expect(f.host.snapshot().blockers).not.toContain("cleanup_unproven");
+    await expect(f.host.create({ cwd: f.cwd, operationId: "still-closed" })).rejects.toMatchObject({ code: "antigravity_runtime_closed" });
   });
   it("retains accepted work across detach and restores the exact handle without replay", async () => {
     const { host, cwd } = await fixture();
@@ -343,6 +351,243 @@ describe("Antigravity execution host", () => {
       expect(await f.host.outcome({ handleId, operationId })).toMatchObject({ status: "completed", result: { stopReason: "cancelled" }, cancelledAtNativeRevision: "a".repeat(64) });
     }
     expect(prompt).toHaveBeenCalledTimes(3);
+  });
+  it("reconciles permission-rejected prompts and unmatched tools from executor proof without an explicit Stop", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" });
+    const { handleId } = await f.host.attach(identity), replies: (() => void)[] = [];
+    vi.spyOn(AntigravityAcpConnection.prototype, "prompt").mockImplementation(async (_id, _prompt, settle) => new Promise(resolve => {
+      replies.push(() => { const result = { stopReason: "cancelled" as const }; settle(result); resolve(result); });
+    }));
+    const cancel = vi.spyOn(AntigravityAcpConnection.prototype, "cancel");
+    for (const operationId of ["primary", "queued-steer"]) await f.host.request({ handleId, operationId,
+      command: { type: operationId === "primary" ? "prompt" : "steer", prompt: [{ type: "text", text: operationId }] } });
+    f.emit({ sessionId: identity.sessionId, update: { sessionUpdate: "tool_call", toolCallId: "acp-only", title: "Run", status: "in_progress" } });
+    const permission = f.permission({ sessionId: identity.sessionId, toolCall: { toolCallId: "acp-only", title: "Run" },
+      options: [{ optionId: "deny", name: "Deny", kind: "reject_once" }] });
+    const requestId = (await f.host.attachExisting(identity))!.pendingPermissions[0]!.requestId;
+    await f.host.request({ handleId, operationId: "deny", command: { type: "permission", requestId,
+      response: { outcome: { outcome: "selected", optionId: "deny" } } } });
+    await permission;
+    const native: AntigravityHistory["native"] = { revision: "b".repeat(64), executions: [], steps: [
+      { index: 0, type: 14, status: 3, hasSubtrajectory: false, executionId: "execution", user: { text: "Primary" } },
+      { index: 1, type: 15, status: 3, hasSubtrajectory: false, executionId: "execution", response: { text: "", thinking: "", stopReason: 2,
+        toolCalls: [{ id: "native-only", name: "run_command", argumentsJson: "{}" }] } },
+      { index: 2, type: 132, status: 6, hasSubtrajectory: false, executionId: "execution", tool: { id: "native-only", name: "run_command", argumentsJson: "{}" } },
+    ] };
+    f.readHistory.mockResolvedValue({ ...identity, native });
+    for (const reply of replies) reply();
+    await f.host.readHistory(identity);
+    expect(await f.host.outcome({ handleId, operationId: "queued-steer" })).not.toHaveProperty("cancelledAtNativeRevision");
+    expect(f.host.snapshot().blockers).toContain("active_work");
+    native.executions.push({ executionId: "execution", lastStepIndex: 2, terminationReason: 2, proceededWithAutoContinue: false });
+    native.revision = "c".repeat(64);
+    await f.host.readHistory(identity);
+    for (const operationId of ["primary", "queued-steer"]) {
+      expect(await f.host.outcome({ handleId, operationId })).toMatchObject({ status: "completed", cancelledAtNativeRevision: native.revision });
+    }
+    expect(f.host.snapshot().blockers).not.toContain("active_work");
+    expect(f.host.snapshot().blockers).toContain("unsettled_outcome");
+    expect(cancel).not.toHaveBeenCalled();
+    for (const operationId of ["primary", "queued-steer", "deny"]) await f.host.acknowledgeOperation({ handleId, operationId });
+    await f.host.acknowledgeCreation({ ...identity, operationId: "creation" }); await drain(f.host, handleId);
+    expect(await f.host.retireSession(identity)).toBe("retired");
+  });
+  it("requires a native read begun after cancelled callback settlement even without explicit Stop", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" }); const { handleId } = await f.host.attach(identity);
+    let reply!: () => void;
+    vi.spyOn(AntigravityAcpConnection.prototype, "prompt").mockImplementationOnce(async (_id, _prompt, settle) => new Promise(resolve => {
+      reply = () => { const result = { stopReason: "cancelled" as const }; settle(result); resolve(result); };
+    }));
+    await f.host.request({ handleId, operationId: "primary", command: { type: "prompt", prompt: [{ type: "text", text: "wait" }] } });
+    let oldRead!: (value: AntigravityHistory) => void, freshRead!: (value: AntigravityHistory) => void;
+    f.readHistory.mockImplementationOnce(async () => new Promise(resolve => { oldRead = resolve; }))
+      .mockImplementationOnce(async () => new Promise(resolve => { freshRead = resolve; }));
+    const reading = f.host.readHistory(identity); reply();
+    const terminal = { ...identity, native: { revision: "b".repeat(64), executions: [], steps: [] } };
+    oldRead(terminal); await reading;
+    expect(await f.host.outcome({ handleId, operationId: "primary" })).not.toHaveProperty("cancelledAtNativeRevision");
+    freshRead(terminal);
+    await vi.waitFor(async () => expect(await f.host.outcome({ handleId, operationId: "primary" })).toMatchObject({ cancelledAtNativeRevision: terminal.native.revision }));
+  });
+  it("retires unmatched ACP tools when the active native step present at Steer dispatch is cancelled in place", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" });
+    const { handleId } = await f.host.attach(identity), replies: (() => void)[] = [];
+    vi.spyOn(AntigravityAcpConnection.prototype, "prompt").mockImplementation(async (_id, _prompt, settle) => new Promise(resolve => {
+      replies.push(() => { const result = { stopReason: "cancelled" as const }; settle(result); resolve(result); });
+    }));
+    await f.host.request({ handleId, operationId: "primary", command: { type: "prompt", prompt: [{ type: "text", text: "Primary" }] } });
+    const native: AntigravityHistory["native"] = { revision: "b".repeat(64), executions: [], steps: [
+      { index: 0, type: 14, status: 3, hasSubtrajectory: false, executionId: "execution", user: { text: "Primary" } },
+      { index: 1, type: 15, status: 3, hasSubtrajectory: false, executionId: "execution", response: { text: "", thinking: "", stopReason: 2,
+        toolCalls: [{ id: "native-only", name: "run_command", argumentsJson: "{}" }] } },
+      { index: 2, type: 132, status: 2, hasSubtrajectory: false, executionId: "execution", tool: { id: "native-only", name: "run_command", argumentsJson: "{}" } },
+    ] };
+    f.readHistory.mockResolvedValue({ ...identity, native });
+    f.emit({ sessionId: identity.sessionId, update: { sessionUpdate: "tool_call", toolCallId: "acp-only", title: "Run", status: "in_progress" } });
+    await f.host.request({ handleId, operationId: "steer", command: { type: "steer", prompt: [{ type: "text", text: "Queued input" }] } });
+    // Cancellation changes the existing head, without appending another step.
+    native.steps[2]!.status = 6;
+    native.executions.push({ executionId: "execution", lastStepIndex: 2, terminationReason: 2, proceededWithAutoContinue: false });
+    native.revision = "c".repeat(64);
+    for (const reply of replies) reply();
+    await f.host.readHistory(identity);
+
+    for (const operationId of ["primary", "steer"]) {
+      expect(await f.host.outcome({ handleId, operationId })).toMatchObject({ status: "completed", cancelledAtNativeRevision: native.revision });
+      await f.host.acknowledgeOperation({ handleId, operationId });
+    }
+    expect(f.host.snapshot().blockers).not.toContain("active_work");
+    await f.host.acknowledgeCreation({ ...identity, operationId: "creation" }); await drain(f.host, handleId);
+    expect(await f.host.retireSession(identity)).toBe("retired");
+  });
+  it("does not prove cancelled input withdrawal while a child or new prompt is still active", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" }); const { handleId } = await f.host.attach(identity);
+    const replies: (() => void)[] = [];
+    vi.spyOn(AntigravityAcpConnection.prototype, "prompt").mockImplementation(async (_id, _prompt, settle) => new Promise(resolve => {
+      replies.push(() => { const result = { stopReason: "cancelled" as const }; settle(result); resolve(result); });
+    }));
+    for (const operationId of ["primary", "steer"]) await f.host.request({ handleId, operationId,
+      command: { type: operationId === "primary" ? "prompt" : "steer", prompt: [{ type: "text", text: operationId }] } });
+    replies[0]!(); await f.host.readHistory(identity);
+    expect(await f.host.outcome({ handleId, operationId: "primary" })).not.toHaveProperty("cancelledAtNativeRevision");
+    f.readHistory.mockResolvedValue({ ...identity, native: { revision: "b".repeat(64), executions: [], steps: [
+      { index: 0, type: 132, status: 3, hasSubtrajectory: false, subagents: [{ sessionId: "8a54e222-1000-4000-8000-000000000002", state: "active" }] },
+    ] } });
+    replies[1]!(); await f.host.readHistory(identity);
+    expect(await f.host.outcome({ handleId, operationId: "primary" })).not.toHaveProperty("cancelledAtNativeRevision");
+    expect(f.host.snapshot().blockers).toContain("active_work");
+  });
+  it.each(["primary_first", "steer_first"] as const)("keeps the original prompt frontier when Steer arrives after durable cancellation (%s)", async order => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" });
+    const { handleId } = await f.host.attach(identity), replies: (() => void)[] = [];
+    const native: AntigravityHistory["native"] = { revision: "b".repeat(64), executions: [], steps: [
+      { index: 0, type: 14, status: 3, hasSubtrajectory: false, executionId: "previous", user: { text: "Previous input" } },
+      { index: 1, type: 15, status: 3, hasSubtrajectory: false, executionId: "previous", response: { text: "Done", thinking: "", stopReason: 2, toolCalls: [] } },
+    ] };
+    f.readHistory.mockResolvedValue({ ...identity, native });
+    vi.spyOn(AntigravityAcpConnection.prototype, "prompt").mockImplementation(async (_id, _prompt, settle) => new Promise(resolve => {
+      replies.push(() => { const result = { stopReason: "cancelled" as const }; settle(result); resolve(result); });
+    }));
+    await f.host.request({ handleId, operationId: "primary", command: { type: "prompt", prompt: [{ type: "text", text: "Primary" }] } });
+    f.emit({ sessionId: identity.sessionId, update: { sessionUpdate: "tool_call", toolCallId: "acp-only", title: "Run", status: "in_progress" } });
+    native.steps.push(
+      { index: 2, type: 14, status: 3, hasSubtrajectory: false, executionId: "current", user: { text: "Primary" } },
+      { index: 3, type: 15, status: 3, hasSubtrajectory: false, executionId: "current", response: { text: "", thinking: "", stopReason: 2,
+        toolCalls: [{ id: "native-only", name: "run_command", argumentsJson: "{}" }] } },
+      { index: 4, type: 132, status: 6, hasSubtrajectory: false, executionId: "current", tool: { id: "native-only", name: "run_command", argumentsJson: "{}" } },
+    );
+    native.executions.push({ executionId: "current", lastStepIndex: 4, terminationReason: 2, proceededWithAutoContinue: false });
+    native.revision = "c".repeat(64);
+    // The executor outcome is already durable, but its primary ACP callback
+    // has not settled. A concurrent Steer still belongs to that prompt set.
+    await f.host.request({ handleId, operationId: "steer", command: { type: "steer", prompt: [{ type: "text", text: "Queued input" }] } });
+    expect(await f.host.outcome({ handleId, operationId: "primary" })).toEqual({ status: "pending" });
+    expect(f.host.snapshot().blockers).toContain("active_work");
+    for (const index of order === "primary_first" ? [0, 1] : [1, 0]) replies[index]!();
+    await f.host.readHistory(identity);
+    for (const operationId of ["primary", "steer"]) {
+      expect(await f.host.outcome({ handleId, operationId })).toMatchObject({ status: "completed", cancelledAtNativeRevision: native.revision });
+      await f.host.acknowledgeOperation({ handleId, operationId });
+    }
+    expect(f.host.snapshot().blockers).not.toContain("active_work");
+    await f.host.acknowledgeCreation({ ...identity, operationId: "creation" }); await drain(f.host, handleId);
+    expect(await f.host.retireSession(identity)).toBe("retired");
+  });
+  it.each([
+    { execution: "same", outcome: "completed" }, { execution: "interrupting", outcome: "completed" },
+    { execution: "continued", outcome: "completed" },
+    { execution: "same", outcome: "cancelled" }, { execution: "interrupting", outcome: "cancelled" },
+  ] as const)("settles a child continuation after a consumed $execution-execution Steer is $outcome", async ({ execution, outcome }) => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" });
+    const { handleId } = await f.host.attach(identity), childId = "8a54e222-1000-4000-8000-000000000002";
+    const scope = { key: Buffer.alloc(32, 1), binding: { version: 1 as const, ...f.configuration,
+      sessionId: identity.sessionId, canonicalWorkspacePath: f.cwd, connectionProfileId: "test", nativeNamespaceKey: "test" } };
+    const prompt = await buildAntigravityPrompt(scope, { applicationOperationId: "steer", mutationId: "steer",
+      reconciliationToken: "receipt", source: { kind: "user" }, text: "Continue", contextExcerpts: [], taskContexts: [], attachments: [] }, "", "steer");
+    if (prompt[0]?.type !== "text") throw new Error("missing_steer_text");
+    const executionId = execution === "same" ? "continuation" : execution === "continued" ? "auto-continued" : "interrupted-continuation";
+    const precedingExecutionId = execution === "continued" ? executionId : "continuation";
+    const native: AntigravityHistory["native"] = { revision: "b".repeat(64), executions: [], steps: [
+      { index: 0, type: 132, status: 3, hasSubtrajectory: false, subagents: [{ sessionId: childId, state: "terminal" }] },
+      { index: 1, type: 101, status: 3, hasSubtrajectory: false, executionId: "continuation", continuation: { id: "receipt", sender: childId,
+        recipient: identity.sessionId, kind: "agent_message", content: "Child finished" } },
+      { index: 2, type: 15, status: 3, hasSubtrajectory: false, executionId: precedingExecutionId, response: { text: "", thinking: "", stopReason: 2,
+        toolCalls: [{ id: "tool", name: "run_command", argumentsJson: "{}" }] } },
+      { index: 3, type: 132, status: 3, hasSubtrajectory: false, executionId: precedingExecutionId, tool: { id: "tool", name: "run_command", argumentsJson: "{}" } },
+      { index: 4, type: 14, status: 3, hasSubtrajectory: false, executionId, user: { text: prompt[0].text },
+        ...(outcome === "cancelled" || execution === "interrupting" ? { isInterruptingStep: true as const,
+          startedAt: "2026-11-22T00:00:01.000Z", completedAt: "2026-11-22T00:00:01.001Z" } : {}) },
+    ] };
+    if (outcome === "completed") native.steps.push({ index: 5, type: 15, status: 3, hasSubtrajectory: false, executionId,
+      response: { text: "Finished", thinking: "", stopReason: 2, toolCalls: [] } });
+    else {
+      native.steps.push({ index: 5, type: 132, status: 6, hasSubtrajectory: false, executionId });
+      native.executions.push({ executionId, lastStepIndex: 5, terminationReason: 2, proceededWithAutoContinue: false });
+    }
+    expect(nativeActivity.antigravityNativeActivity(native)).toEqual({ active: false, unknown: false, foregroundActive: false,
+      pendingContinuations: false, agents: 0, commands: 0, other: 0 });
+    const projection = projectAntigravityHistory(native, scope);
+    expect(projection.snapshot.runState).toBe("idle");
+    expect(projection.snapshot.turnsById["continuation:1"]).toMatchObject({
+      status: outcome === "completed" ? "completed" : "interrupted", completionCorrelations: ["steer"],
+    });
+    f.readHistory.mockResolvedValue({ ...identity, native }); await f.host.readHistory(identity);
+    expect(f.host.snapshot().blockers).not.toContain("active_work");
+    await f.host.request({ handleId, operationId: "next", command: { type: "prompt", prompt: [{ type: "text", text: "hello" }] } });
+    expect(await settled(f.host, handleId, "next")).toMatchObject({ status: "completed" });
+    await f.host.acknowledgeOperation({ handleId, operationId: "next" });
+    await f.host.acknowledgeCreation({ ...identity, operationId: "creation" }); await drain(f.host, handleId);
+    expect(await f.host.retireSession(identity)).toBe("retired");
+  });
+  it("settles cancelled child continuations and retires their unmatched ACP tools from executor receipts", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" }); const { handleId } = await f.host.attach(identity);
+    const childId = "8a54e222-1000-4000-8000-000000000002";
+    f.emit({ sessionId: identity.sessionId, update: { sessionUpdate: "tool_call", toolCallId: "continuation-tool", title: "Continue", status: "in_progress" } });
+    const native: AntigravityHistory["native"] = { revision: "b".repeat(64), executions: [], steps: [
+      { index: 0, type: 132, status: 3, hasSubtrajectory: false, subagents: [{ sessionId: childId, state: "terminal" }] },
+      { index: 1, type: 101, status: 3, hasSubtrajectory: false, executionId: "continuation", continuation: { id: "receipt", sender: childId,
+        recipient: identity.sessionId, kind: "agent_message", content: "Child finished" } },
+      { index: 2, type: 132, status: 6, hasSubtrajectory: false, executionId: "continued-execution", tool: { id: "native-tool", name: "run_command", argumentsJson: "{}" } },
+    ] };
+    f.readHistory.mockResolvedValue({ ...identity, native }); await f.host.readHistory(identity);
+    expect(nativeActivity.antigravityNativeActivity(native)).toMatchObject({ active: true, pendingContinuations: true });
+    native.executions.push({ executionId: "continued-execution", lastStepIndex: 2, terminationReason: 2, proceededWithAutoContinue: false });
+    native.revision = "c".repeat(64); await f.host.readHistory(identity);
+    expect(nativeActivity.antigravityNativeActivity(native)).toMatchObject({ active: false, unknown: false, foregroundActive: false, pendingContinuations: false, agents: 0 });
+    expect(f.host.snapshot().blockers).not.toContain("active_work");
+    await f.host.acknowledgeCreation({ ...identity, operationId: "creation" }); await drain(f.host, handleId);
+    expect(await f.host.retireSession(identity)).toBe("retired");
+  });
+  it.each([true, false])("does not settle a continuation using a later independent input's cancelled execution (planner response: %s)", hasPlanner => {
+    const native: AntigravityHistory["native"] = { revision: "a".repeat(64), executions: [
+      { executionId: "later", lastStepIndex: 3, terminationReason: 2, proceededWithAutoContinue: false },
+    ], steps: [
+      { index: 0, type: 101, status: 3, hasSubtrajectory: false, executionId: "earlier", continuation: { id: "receipt", sender: "child",
+        recipient: "parent", kind: "agent_message", content: "Child finished" } },
+      { index: 1, type: 14, status: 3, hasSubtrajectory: false, executionId: "later", user: { text: "Independent input" } },
+      { index: 2, type: 15, status: 3, hasSubtrajectory: false, executionId: "later", response: { text: "", thinking: "", stopReason: 2,
+        toolCalls: [{ id: "tool", name: "run_command", argumentsJson: "{}" }] } },
+      { index: 3, type: 132, status: 6, hasSubtrajectory: false, executionId: "later" },
+    ] };
+    if (!hasPlanner) {
+      native.steps.splice(2);
+      native.executions[0]!.lastStepIndex = 1;
+    }
+    expect(nativeActivity.antigravityNativeActivity(native)).toMatchObject({ active: true, foregroundActive: true, pendingContinuations: true });
+  });
+  it("does not retire a new autonomous tool using a previously cached cancelled execution", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" });
+    const native: AntigravityHistory["native"] = { revision: "b".repeat(64), executions: [
+      { executionId: "previous", lastStepIndex: 0, terminationReason: 2, proceededWithAutoContinue: false },
+    ], steps: [{ index: 0, type: 132, status: 6, hasSubtrajectory: false, executionId: "previous" }] };
+    f.readHistory.mockResolvedValue({ ...identity, native }); await f.host.readHistory(identity);
+    f.emit({ sessionId: identity.sessionId, update: { sessionUpdate: "tool_call", toolCallId: "new-autonomous-tool", title: "Continue", status: "in_progress" } });
+    await f.host.readHistory(identity);
+    expect(f.host.snapshot().blockers).toContain("active_work");
+    native.steps.push({ index: 1, type: 132, status: 6, hasSubtrajectory: false, executionId: "new-execution" });
+    native.executions.push({ executionId: "new-execution", lastStepIndex: 1, terminationReason: 2, proceededWithAutoContinue: false });
+    native.revision = "c".repeat(64); await f.host.readHistory(identity);
+    expect(f.host.snapshot().blockers).not.toContain("active_work");
   });
   it("distinguishes child uncertainty from an unreadable foreground native store", async () => {
     const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" }); const { handleId } = await f.host.attach(identity);

@@ -68,6 +68,77 @@ function proxy(f: Awaited<ReturnType<typeof fixture>>, getLease: () => SidecarRu
   const port = new AntigravityRemotePort({ configuration: f.configuration, sidecarRuntime: runtime }); cleanup.push(() => port.close()); return { port, runtime };
 }
 describe("Antigravity persistent sidecar", () => {
+  it.each([
+    { outcome: "selected", concurrent: false }, { outcome: "selected", concurrent: true },
+    { outcome: "selected", concurrent: "published" }, { outcome: "cancelled", concurrent: false },
+  ] as const)("uses truthful carrier authority for a $outcome permission after reconnect (concurrent: $concurrent)", async ({ outcome, concurrent }) => {
+    const f = await fixture(), first = await attachment(f), initial = proxy(f, () => first.lease);
+    const identity = await initial.port.create({ cwd: f.cwd, operationId: "create" });
+    const original = await initial.port.attach(identity);
+    await initial.port.request({ handleId: original.handleId, operationId: "send", command: { type: "prompt", prompt: [{ type: "text", text: "permission" }] } });
+    let requestId: string | undefined;
+    await vi.waitFor(async () => { requestId = (await initial.port.attachExisting(identity))?.pendingPermissions[0]?.requestId; expect(requestId).toBeDefined(); });
+    await initial.port.close(); await first.disconnect();
+    const recovery = await attachment(f, "recovery");
+    let answering: Promise<unknown> | undefined;
+    const resumed = proxy(f, () => concurrent === "published" ? { ...recovery.lease, get closed() {
+      // #open has published its attachment but its opening promise has not
+      // settled yet. An approval must still join and promote that recovery.
+      answering = answer();
+      return recovery.lease.closed;
+    } } : recovery.lease);
+    const answer = () => resumed.port.request({ handleId: original.handleId, operationId: "answer", command: { type: "permission", requestId: requestId!,
+      response: { outcome: outcome === "selected" ? { outcome: "selected", optionId: "allow" } : { outcome: "cancelled" } } } });
+    let finish!: (lease: SidecarRuntimeLease) => void;
+    if (concurrent === true) resumed.runtime.acquireExisting.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const reconnect = resumed.port.attachExisting(identity);
+    if (concurrent === true) await vi.waitFor(() => expect(finish).toBeDefined());
+    else if (!concurrent) expect(await reconnect).toMatchObject({ handleId: original.handleId });
+    resumed.runtime.acquire.mockImplementationOnce(async () => {
+      // Drain the old carrier's read before replacing its controller epoch.
+      if (concurrent) await reconnect;
+      return (await attachment(f)).lease;
+    });
+    if (concurrent !== "published") answering = answer();
+    if (concurrent === true) finish(recovery.lease);
+    await reconnect;
+    expect(answering).toBeDefined();
+    await answering;
+    await vi.waitFor(async () => expect(await resumed.port.outcome({ handleId: original.handleId, operationId: "answer" })).toMatchObject({ status: "completed" }));
+    expect(resumed.runtime.acquire).toHaveBeenCalledTimes(outcome === "selected" ? 1 : 0);
+    expect(f.launched).toHaveBeenCalledOnce(); expect(f.createHost).toHaveBeenCalledOnce();
+  });
+  it("uses one retained fallback when normal reconnect encounters configuration drift", async () => {
+    const f = await fixture(), first = await attachment(f); let current = first.lease;
+    const { port, runtime } = proxy(f, () => current);
+    const identity = await port.create({ cwd: f.cwd, operationId: "create" });
+    await first.disconnect();
+    const recovery = await attachment(f, "recovery"); current = recovery.lease;
+    runtime.acquire.mockClear();
+    runtime.acquire.mockRejectedValueOnce(new Error("sidecar_revision_changed"));
+    await expect(port.readHistory(identity)).resolves.toMatchObject({ sessionId: identity.sessionId });
+    expect(runtime.acquire).toHaveBeenCalledTimes(2);
+    expect(runtime.acquire).toHaveBeenNthCalledWith(2, expect.any(AbortSignal), { existingOnly: true });
+    expect(runtime.acquireExisting).not.toHaveBeenCalled();
+    expect(recovery.release).not.toHaveBeenCalled();
+    expect(f.createHost).toHaveBeenCalledOnce();
+  });
+  it("does not promote a proxy restricted to retained authority", async () => {
+    const f = await fixture(), first = await attachment(f), initial = proxy(f, () => first.lease);
+    const identity = await initial.port.create({ cwd: f.cwd, operationId: "create" });
+    const original = await initial.port.attach(identity);
+    await initial.port.close(); await first.disconnect();
+    const recovery = await attachment(f, "recovery");
+    const runtime = { acquire: vi.fn(async () => recovery.lease), acquireExisting: vi.fn(async () => recovery.lease) };
+    const port = new AntigravityRemotePort({ configuration: f.configuration, sidecarRuntime: runtime, existingOnly: true });
+    cleanup.push(() => port.close());
+    expect(await port.attachExisting(identity)).toMatchObject({ handleId: original.handleId });
+    await expect(port.request({ handleId: original.handleId, operationId: "send", command: { type: "prompt", prompt: [{ type: "text", text: "must not execute" }] } }))
+      .rejects.toMatchObject({ code: "antigravity_recovery_read_only" });
+    expect(runtime.acquire).not.toHaveBeenCalled();
+    expect(runtime.acquireExisting).toHaveBeenCalledOnce();
+    expect(f.createHost).toHaveBeenCalledOnce();
+  });
   it("transfers history only when the exact native revision changes", async () => {
     const f = await fixture(), connected = await attachment(f), { port } = proxy(f, () => connected.lease);
     const identity = { sessionId: "native-session", cwd: f.cwd };

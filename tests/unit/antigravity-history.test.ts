@@ -92,6 +92,66 @@ describe("Antigravity native projection and exact delivery evidence", () => {
     expect(snapshot.turnsById["input:0"]).toMatchObject({ status: "interrupted", endedBy: "interrupted", completedAt: "2026-11-22T13:28:42.334Z" });
     expect(snapshot.itemsById["step:2:command"]).toMatchObject({ semanticKind: "command", status: "interrupted", phase: "interrupted" });
   });
+  it.each(["initial_without_execution", "auto_continued_execution"] as const)("settles the final execution of a cancelled turn with %s", mode => {
+    const history = cancelledCommandHistory();
+    if (mode === "initial_without_execution") delete history.steps[0]!.executionId;
+    else {
+      history.steps[0]!.executionId = "initial-execution";
+      history.steps[1]!.executionId = "initial-execution";
+      history.executions.unshift({ executionId: "initial-execution", lastStepIndex: 1, terminationReason: 7, proceededWithAutoContinue: true });
+    }
+    expect(projectAntigravityHistory(history, scope).snapshot.turnsById["input:0"]?.status).toBe("interrupted");
+  });
+  it.each([2, 3])("preserves cancellation proof when an unconsumed Steer follows the command and the receipt head is %s", async lastStepIndex => {
+    const history = cancelledCommandHistory();
+    history.steps.push({ ...base, index: 3, type: 14, executionId: "cancelled-execution", user: { text: await steerText("queued") } });
+    history.executions[0]!.lastStepIndex = lastStepIndex;
+    const { snapshot } = projectAntigravityHistory(history, scope);
+    expect(snapshot.runState).toBe("idle");
+    expect(snapshot.turnsById["input:0"]?.status).toBe("interrupted");
+    expect(snapshot.itemsById["step:3:user"]).toBeUndefined();
+    expect(snapshot.turnsById["input:0"]?.completionCorrelations ?? []).not.toContain("queued");
+  });
+  it("settles a submitted input cancelled before its first planner step", () => {
+    const history: AntigravityNativeHistory = { revision: "a".repeat(64), steps: [
+      { ...base, index: 0, type: 14, executionId: "cancelled-execution", user: { text: "User input" } },
+    ], executions: [{ executionId: "cancelled-execution", lastStepIndex: 0, terminationReason: 2, proceededWithAutoContinue: false }] };
+    expect(projectAntigravityHistory(history, scope).snapshot.turnsById["input:0"]?.status).toBe("interrupted");
+  });
+  it.each([0, 1])("settles the original input before its first planner despite an unconsumed Steer at receipt head %s", async lastStepIndex => {
+    const history: AntigravityNativeHistory = { revision: "a".repeat(64), steps: [
+      { ...base, index: 0, type: 14, executionId: "cancelled-execution", user: { text: "User input" } },
+      { ...base, index: 1, type: 14, executionId: "cancelled-execution", user: { text: await steerText("queued") } },
+    ], executions: [{ executionId: "cancelled-execution", lastStepIndex, terminationReason: 2, proceededWithAutoContinue: false }] };
+    const { snapshot } = projectAntigravityHistory(history, scope);
+    expect(snapshot.runState).toBe("idle");
+    expect(snapshot.orderedBackendTurnIds).toEqual(["input:0"]);
+    expect(snapshot.turnsById["input:0"]?.status).toBe("interrupted");
+    expect(snapshot.itemsById["step:1:user"]).toBeUndefined();
+  });
+  it("does not ignore a started or active later input when proving an execution cancelled", async () => {
+    for (const extra of [{ startedAt: "2026-11-22T13:28:42.335Z" }, { status: 1 }]) {
+      const history = cancelledCommandHistory();
+      history.steps.push({ ...base, index: 3, type: 14, executionId: "cancelled-execution", user: { text: await steerText("queued") }, ...extra });
+      expect(projectAntigravityHistory(history, scope).snapshot.turnsById["input:0"]?.status).toBe("in_progress");
+    }
+  });
+  it.each(["interrupting", "started", "completed"] as const)("does not merge a different-execution Steer without its native %s proof", async missing => {
+    const history = native("Original input");
+    history.steps[0]!.executionId = "original";
+    history.steps[1]!.executionId = "original";
+    history.steps[1]!.response!.toolCalls = [{ id: "tool", name: "run_command", argumentsJson: "{}" }];
+    history.steps.push({ ...base, index: 2, type: 14, executionId: "different", user: { text: await steerText("steer") },
+      ...(missing === "interrupting" ? {} : { isInterruptingStep: true as const }),
+      ...(missing === "started" ? {} : { startedAt: "2026-11-22T00:00:01.000Z" }),
+      ...(missing === "completed" ? {} : { completedAt: "2026-11-22T00:00:01.001Z" }) },
+    { ...base, index: 3, executionId: "different", response: { text: "Finished", thinking: "", stopReason: 2, toolCalls: [] } });
+    const { snapshot } = projectAntigravityHistory(history, scope);
+    expect(snapshot.orderedBackendTurnIds).toEqual(["input:0", "input:2"]);
+    expect(snapshot.turnsById["input:0"]?.completionCorrelations ?? []).not.toContain("steer");
+    expect(snapshot.turnsById["input:0"]?.status).toBe("in_progress");
+    expect(snapshot.turnsById["input:2"]?.status).toBe("completed");
+  });
   it.each(["missing", "wrong_execution", "wrong_head", "auto_continue", "early_continue", "later_step", "active_step", "conflicting_receipt"] as const)(
     "does not infer whole-turn cancellation from a cancelled tool with %s executor evidence", evidence => {
       const history = cancelledCommandHistory(), receipt = history.executions[0]!;
@@ -119,6 +179,100 @@ describe("Antigravity native projection and exact delivery evidence", () => {
     expect(snapshot.orderedBackendTurnIds).toEqual(["input:0"]);
     expect(snapshot.runState).toBe("idle");
     expect(snapshot.itemsById["step:2:user"]).toBeUndefined();
+  });
+  it.each(["continuation", "tool"] as const)("keeps a consumed Steer in its own turn after a foreign-execution %s", async foreign => {
+    const original = await buildAntigravityPrompt(scope, { ...input, applicationOperationId: "original" });
+    if (original[0]?.type !== "text") throw new Error("missing_original_text");
+    const history = native(original[0].text);
+    history.steps[0]!.executionId = "original-execution";
+    history.steps[1]!.executionId = "original-execution";
+    history.steps[1]!.response!.toolCalls = [{ id: "original-tool", name: "run_command", argumentsJson: "{}" }];
+    history.steps.push(
+      { ...base, index: 2, type: 132, executionId: "original-execution", tool: { id: "original-tool", name: "run_command", argumentsJson: "{}" } },
+      foreign === "continuation"
+        ? { ...base, index: 3, type: 101, executionId: "foreign-execution", continuation: {
+          id: "foreign-receipt", recipient: binding.sessionId, sender: "foreign-task", kind: "task_notification", content: "Background result" } }
+        : { ...base, index: 3, type: 132, executionId: "foreign-execution", tool: { id: "foreign-tool", name: "run_command", argumentsJson: "{}" } },
+      { ...base, index: 4, type: 14, executionId: "original-execution", user: { text: await steerText("steer") } },
+      { ...base, index: 5, executionId: "original-execution", response: { text: "Finished", thinking: "", stopReason: 2, toolCalls: [] } },
+    );
+    expect(antigravitySteerConsumed(history, 4)).toBe(true);
+    const { snapshot } = projectAntigravityHistory(history, scope);
+    expect(snapshot.orderedBackendTurnIds).toEqual(["input:0"]);
+    expect(snapshot.turnsById["input:0"]).toMatchObject({ status: "completed", completionCorrelations: ["original", "steer"] });
+    expect(snapshot.itemsById["step:4:user"]).toMatchObject({ backendTurnId: "input:0", deliveryOperationId: "steer" });
+    expect(snapshot.runState).toBe("idle");
+  });
+  it.each(["metadata", "unconsumed_steer"] as const)("keeps the last executed identity across %s before a consumed Steer", async gap => {
+    const history = native("Original input");
+    history.steps[0]!.executionId = "original-execution";
+    history.steps[1]!.executionId = "original-execution";
+    history.steps[1]!.response!.toolCalls = [{ id: "tool", name: "run_command", argumentsJson: "{}" }];
+    history.steps.push(
+      { ...base, index: 2, type: 132, executionId: "continued-execution", tool: { id: "tool", name: "run_command", argumentsJson: "{}" } },
+      gap === "metadata" ? { ...base, index: 3, type: 0 }
+        : { ...base, index: 3, type: 14, executionId: "unconsumed-execution", user: { text: await steerText("unconsumed") } },
+      { ...base, index: 4, type: 14, executionId: "continued-execution", user: { text: await steerText("steer") } },
+      { ...base, index: 5, executionId: "continued-execution", response: { text: "Finished", thinking: "", stopReason: 2, toolCalls: [] } },
+    );
+    const { snapshot } = projectAntigravityHistory(history, scope);
+    expect(snapshot.orderedBackendTurnIds).toEqual(["input:0"]);
+    expect(snapshot.turnsById["input:0"]).toMatchObject({ status: "completed", completionCorrelations: ["steer"] });
+    expect(snapshot.itemsById["step:3:user"]).toBeUndefined();
+    expect(snapshot.itemsById["step:4:user"]).toMatchObject({ backendTurnId: "input:0", deliveryOperationId: "steer" });
+    expect(snapshot.runState).toBe("idle");
+  });
+  it("merges an exactly consumed interrupting Steer even when its execution ID is omitted", async () => {
+    const history = native("Original input");
+    history.steps[0]!.executionId = "original-execution";
+    history.steps[1]!.executionId = "original-execution";
+    history.steps[1]!.response!.toolCalls = [{ id: "tool", name: "run_command", argumentsJson: "{}" }];
+    history.steps.push(
+      { ...base, index: 2, type: 14, user: { text: await steerText("steer") }, isInterruptingStep: true,
+        startedAt: "2026-11-22T00:00:01.000Z", completedAt: "2026-11-22T00:00:01.001Z" },
+      { ...base, index: 3, response: { text: "Finished", thinking: "", stopReason: 2, toolCalls: [] } },
+    );
+    expect(antigravitySteerConsumed(history, 2)).toBe(true);
+    const { snapshot } = projectAntigravityHistory(history, scope);
+    expect(snapshot.orderedBackendTurnIds).toEqual(["input:0"]);
+    expect(snapshot.turnsById["input:0"]).toMatchObject({ status: "completed", completionCorrelations: ["steer"] });
+    expect(snapshot.itemsById["step:2:user"]).toMatchObject({ backendTurnId: "input:0", deliveryOperationId: "steer" });
+    expect(snapshot.runState).toBe("idle");
+  });
+  it.each(["interrupting", "started", "completed"] as const)("does not publish an ID-less Steer without native %s proof", async missing => {
+    const history = native("Original input");
+    history.steps[1]!.response!.toolCalls = [{ id: "tool", name: "run_command", argumentsJson: "{}" }];
+    history.steps.push(
+      { ...base, index: 2, type: 14, user: { text: await steerText("steer") },
+        ...(missing === "interrupting" ? {} : { isInterruptingStep: true as const }),
+        ...(missing === "started" ? {} : { startedAt: "2026-11-22T00:00:01.000Z" }),
+        ...(missing === "completed" ? {} : { completedAt: "2026-11-22T00:00:01.001Z" }) },
+      { ...base, index: 3, response: { text: "Finished", thinking: "", stopReason: 2, toolCalls: [] } },
+    );
+    expect(antigravitySteerConsumed(history, 2)).toBe(false);
+    const { snapshot } = projectAntigravityHistory(history, scope);
+    expect(snapshot.itemsById["step:2:user"]).toBeUndefined();
+    expect(snapshot.turnsById["input:0"]?.completionCorrelations ?? []).not.toContain("steer");
+  });
+  it.each(["user", "continuation"] as const)("does not carry execution identity from a completed turn into a new %s turn", async kind => {
+    const history = native("Completed original input");
+    history.steps[0]!.executionId = "old-execution";
+    history.steps[1]!.executionId = "old-execution";
+    history.steps.push(
+      kind === "user" ? { ...base, index: 2, type: 14, user: { text: "Independent input" } }
+        : { ...base, index: 2, type: 101, continuation: { id: "receipt", recipient: binding.sessionId,
+          sender: "task", kind: "task_notification", content: "Background result" } },
+      { ...base, index: 3, response: { text: "", thinking: "", stopReason: 2,
+        toolCalls: [{ id: "tool", name: "run_command", argumentsJson: "{}" }] } },
+      { ...base, index: 4, type: 14, executionId: "old-execution", user: { text: await steerText("steer") } },
+      { ...base, index: 5, executionId: "old-execution", response: { text: "Finished", thinking: "", stopReason: 2, toolCalls: [] } },
+    );
+    const { snapshot } = projectAntigravityHistory(history, scope);
+    const current = `${kind === "user" ? "input" : "continuation"}:2`;
+    expect(snapshot.orderedBackendTurnIds).toEqual(["input:0", current, "input:4"]);
+    expect(snapshot.turnsById[current]?.status).toBe("in_progress");
+    expect(snapshot.turnsById[current]?.completionCorrelations ?? []).not.toContain("steer");
+    expect(snapshot.turnsById["input:4"]).toMatchObject({ status: "completed", completionCorrelations: ["steer"] });
   });
   it.each([true, false])("correlates several consumed steers to their one shared response (native start stamps: %s)", async stamped => {
     const history = native("original");

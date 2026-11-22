@@ -133,7 +133,7 @@ export const AntigravityBrandIcon = ({ size = 15, ...props }: IconProps): React.
   const id = useId();
   const filter = (index: number) => `url(#${id}-f${index})`;
   return (
-    <svg aria-hidden="true" viewBox="0 0 180 180" height={size} width={size} fill="none" {...props}>
+    <svg aria-hidden="true" viewBox="22 28 136 125" height={size} width={size} fill="none" {...props}>
       <path d={antigravityOutline} fill="#3186FF" />
       <mask id={`${id}-mask`} style={{ maskType: "alpha" }} maskUnits="userSpaceOnUse" x="22" y="28" width="136" height="125">
         <path d={antigravityOutline} fill="white" />
@@ -142,7 +142,7 @@ export const AntigravityBrandIcon = ({ size = 15, ...props }: IconProps): React.
         <g filter={filter(0)}><ellipse cx="36.6225" cy="43.0872" rx="36.6225" ry="43.0872" transform="matrix(-0.112784 0.99362 -0.99362 -0.112781 106.557 -26.4847)" fill="#FFE432" /></g>
         <g filter={filter(1)}><ellipse cx="155.163" cy="54.9292" rx="47.4118" ry="48.4541" transform="rotate(76.9243 155.163 54.9292)" fill="#FC413D" /></g>
         <g filter={filter(2)}><ellipse cx="14.6006" cy="65.4425" rx="49.5515" ry="64.192" transform="rotate(74.1257 14.6006 65.4425)" fill="#00B95C" /></g>
-        <g filter={filter(3)}><ellipse cx="14.6006" cy="65.4425" rx="49.5515" ry="64.192" transform="rotate(74.1257 14.6006 65.4425)" fill="#00B95C" /></g>
+        <g filter={filter(2)}><ellipse cx="14.6006" cy="65.4425" rx="49.5515" ry="64.192" transform="rotate(74.1257 14.6006 65.4425)" fill="#00B95C" /></g>
         <g filter={filter(4)}><ellipse cx="18.1226" cy="67.414" rx="48.5679" ry="53.4688" transform="rotate(45.6065 18.1226 67.414)" fill="#00B95C" /></g>
         <g filter={filter(5)}><ellipse cx="121.837" cy="166.945" rx="46.6356" ry="44.9084" transform="rotate(76.9243 121.837 166.945)" fill="#3186FF" /></g>
         <g filter={filter(6)}><ellipse cx="53.9456" cy="56.8997" rx="53.9456" ry="56.8997" transform="matrix(-0.409539 0.912293 -0.912294 -0.409537 162.811 -25.895)" fill="#FBBC04" /></g>
@@ -155,7 +155,6 @@ export const AntigravityBrandIcon = ({ size = 15, ...props }: IconProps): React.
         <filter id={`${id}-f0`} x="4.09591" y="-44.1761" width="111.037" height="98.4416" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB"><feGaussianBlur stdDeviation="6.25234" /></filter>
         <filter id={`${id}-f1`} x="46.2974" y="-53.0009" width="217.731" height="215.86" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB"><feGaussianBlur stdDeviation="30.2268" /></filter>
         <filter id={`${id}-f2`} x="-100.018" y="-36.7558" width="229.238" height="204.397" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB"><feGaussianBlur stdDeviation="25.6957" /></filter>
-        <filter id={`${id}-f3`} x="-100.018" y="-36.7558" width="229.238" height="204.397" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB"><feGaussianBlur stdDeviation="25.6957" /></filter>
         <filter id={`${id}-f4`} x="-84.3985" y="-35.003" width="205.042" height="204.834" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB"><feGaussianBlur stdDeviation="25.6957" /></filter>
         <filter id={`${id}-f5`} x="27.9915" y="71.5493" width="187.691" height="190.791" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB"><feGaussianBlur stdDeviation="24.4184" /></filter>
         <filter id={`${id}-f6`} x="-11.8808" y="-98.7085" width="201.38" height="197.45" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB"><feGaussianBlur stdDeviation="22.1301" /></filter>

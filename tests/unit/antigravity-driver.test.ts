@@ -74,6 +74,155 @@ function fixture(policy: BackendModelPolicy = { type: "catalog" }, usage?: Usage
 }
 
 describe("Antigravity driver authority and projection", () => {
+  it.each([false, true])("reads fresh Steer evidence after a permission wakes the throttled wait (consumed: %s)", async consumed => {
+    const f = fixture();
+    const pending = { requestId: "permission", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId,
+      toolCall: { toolCallId: "tool", title: "Permission" }, options: [{ optionId: "deny", name: "Deny", kind: "reject_once" as const }] } };
+    let text: string | undefined, written = false;
+    const read = vi.mocked(f.port.readHistory).getMockImplementation()!;
+    vi.mocked(f.port.readHistory).mockImplementation(async input => {
+      const result = await read(input);
+      if (text && !written) {
+        written = true;
+        f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, executionId: "steered", user: { text } });
+        if (consumed) f.native.steps.push({ index: 1, type: 15, status: 2, hasSubtrajectory: false, executionId: "steered",
+          response: { text: "Following steer", thinking: "", stopReason: 0, toolCalls: [] } });
+        f.emit({ kind: "permission", ...pending });
+      }
+      return result;
+    });
+    const handle = await f.driver.attach(f.attached);
+    vi.mocked(f.port.request).mockImplementationOnce(async ({ command }) => {
+      if (command.type !== "steer" || command.prompt[0]?.type !== "text") throw new Error("Expected steer");
+      text = command.prompt[0].text; return { status: "pending" };
+    });
+    await expect(handle.steer({ ...submit, target: { kind: "conversation" } })).resolves.toMatchObject({
+      status: consumed ? "accepted" : "pending_materialization",
+    });
+    expect(f.port.readHistory).toHaveBeenCalledTimes(3);
+  });
+  it("makes one fresh final Steer read before declaring the deadline uncertain", async () => {
+    const f = fixture(); let now = 1_000_000, text: string | undefined, written = false;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const read = vi.mocked(f.port.readHistory).getMockImplementation()!;
+    vi.mocked(f.port.readHistory).mockImplementation(async input => {
+      const result = await read(input);
+      if (text && !written) {
+        written = true; now += 1001;
+        f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text } });
+      }
+      return result;
+    });
+    const handle = await f.driver.attach(f.attached);
+    vi.mocked(f.port.request).mockImplementationOnce(async ({ command }) => {
+      if (command.type !== "steer" || command.prompt[0]?.type !== "text") throw new Error("Expected steer");
+      text = command.prompt[0].text; return { status: "pending" };
+    });
+    await expect(handle.steer({ ...submit, target: { kind: "conversation" } })).resolves.toMatchObject({ status: "pending_materialization" });
+    expect(f.port.readHistory).toHaveBeenCalledTimes(3);
+  });
+  it("refreshes terminal history before Stop returns inside the ordinary throttle interval", async () => {
+    const f = fixture();
+    f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text: "input" } },
+      { index: 1, type: 15, status: 2, hasSubtrajectory: false, response: { text: "working", thinking: "", stopReason: 0, toolCalls: [] } });
+    const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    vi.mocked(f.port.request).mockImplementationOnce(async () => {
+      f.native.steps[1] = { ...f.native.steps[1]!, status: 6, response: { text: "interrupted", thinking: "", stopReason: 16, toolCalls: [] } };
+      return { status: "completed", result: {} };
+    });
+    await handle.interrupt({ applicationOperationId: "stop", deadlineAt: Date.now() + 1000 });
+    expect(events).toContainEqual(expect.objectContaining({ type: "turn_completed", turn: expect.objectContaining({ status: "interrupted" }) }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "run_state_changed", state: "idle" }));
+  });
+  it("does not resurrect a permission resolved during a retained attachment read", async () => {
+    const f = fixture();
+    const pending = { requestId: "permission", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId,
+      toolCall: { toolCallId: "tool", title: "Permission" }, options: [{ optionId: "deny", name: "Deny", kind: "reject_once" as const }] } };
+    const attachment = { ...f.attachment, pendingPermissions: [pending] };
+    vi.mocked(f.port.attach).mockResolvedValue(attachment);
+    let finish!: (value: AntigravityAttachment) => void;
+    vi.mocked(f.port.attachExisting).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    vi.mocked(f.port.observe).mockRejectedValueOnce(new Error("transient"));
+    const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    await vi.waitFor(() => expect(f.port.attachExisting).toHaveBeenCalledOnce());
+    vi.mocked(f.port.request).mockResolvedValueOnce({ status: "completed", result: {} });
+    await handle.respond({ applicationOperationId: "deny", interactionId: pending.requestId, kind: "cancel" });
+    finish(attachment);
+    await vi.waitFor(() => expect(vi.mocked(f.port.observe).mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 2000 });
+    expect(events.filter(event => event.type === "interaction_resolved")).toHaveLength(1);
+    expect(events.filter(event => event.type === "interaction_opened")).toHaveLength(0);
+    await expect(handle.respond({ applicationOperationId: "duplicate", interactionId: pending.requestId, kind: "cancel" }))
+      .rejects.toMatchObject({ category: "invalid_state" });
+  });
+  it("acknowledges accepted ACP events even when passive history fails, without replaying permissions", async () => {
+    const f = fixture();
+    const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    const pending = { requestId: "permission", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId,
+      toolCall: { toolCallId: "tool", title: "Permission" }, options: [{ optionId: "deny", name: "Deny", kind: "reject_once" as const }] } };
+    vi.mocked(f.port.attachExisting).mockResolvedValue({ ...f.attachment, throughSequence: 1, pendingPermissions: [pending] });
+    vi.mocked(f.port.readHistory).mockRejectedValue(new AntigravityError("antigravity_history_worker_backoff"));
+    f.emit({ kind: "permission", ...pending });
+    await vi.waitFor(() => expect(f.port.attachExisting).toHaveBeenCalled(), { timeout: 2000 });
+    expect(f.port.acknowledge).toHaveBeenCalledWith({ handleId: "handle", throughSequence: 1 }, expect.any(AbortSignal));
+    await vi.waitFor(() => expect(vi.mocked(f.port.attachExisting).mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 2500 });
+    expect(events.filter(event => event.type === "interaction_opened")).toHaveLength(1);
+    expect(vi.mocked(f.port.observe).mock.calls.at(-1)?.[0].afterSequence).toBe(1);
+  });
+  it.each([false, true])("only releases terminal retained receipts abandoned by this application thread (abandoned: %s)", async abandoned => {
+    const f = fixture();
+    Object.assign(f.driver.input, { isOperationAbandoned: (threadId: string, operationId: string) => abandoned && threadId === "thread" && operationId === "withdrawn" });
+    vi.mocked(f.port.attach).mockResolvedValue({ ...f.attachment, retainedOperationIds: ["withdrawn", "still-pending"] });
+    f.receipts.set("withdrawn", { status: "completed", result: { stopReason: "cancelled" }, cancelledAtNativeRevision: f.native.revision });
+    const handle = await f.driver.attach(f.attached);
+    await handle.close();
+    expect(f.port.acknowledgeOperation).toHaveBeenCalledTimes(abandoned ? 1 : 0);
+    if (abandoned) expect(f.port.acknowledgeOperation).toHaveBeenCalledWith({ handleId: "handle", operationId: "withdrawn" }, expect.any(AbortSignal));
+  });
+  it("clears an explicitly abandoned synthetic receipt before polling the missing host operation", async () => {
+    const f = fixture(); let abandoned = false;
+    Object.assign(f.driver.input, { isOperationAbandoned: (_threadId: string, operationId: string) => abandoned && operationId === "send" });
+    const handle = await f.driver.attach(f.attached);
+    vi.mocked(f.port.request).mockRejectedValue(new AntigravityError("antigravity_sidecar_unavailable", "sent_outcome_unknown"));
+    vi.mocked(f.port.outcome).mockRejectedValue(new AntigravityError("antigravity_operation_unknown", "sent_outcome_unknown"));
+    await expect(handle.submit(submit)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    abandoned = true;
+    await expect(handle.establishProjection({ signal: new AbortController().signal })).resolves.toBeDefined();
+    expect(f.port.outcome).toHaveBeenCalledWith({ handleId: "handle", operationId: "send" }, expect.any(AbortSignal));
+    expect(f.port.acknowledgeOperation).not.toHaveBeenCalled();
+    await handle.close(); expect(f.port.release).toHaveBeenCalled();
+  });
+  it("releases a closed handle even when abandoned-receipt cleanup loses the carrier", async () => {
+    const f = fixture(); let abandoned = false;
+    Object.assign(f.driver.input, { isOperationAbandoned: () => abandoned });
+    vi.mocked(f.port.attach).mockResolvedValue({ ...f.attachment, retainedOperationIds: ["withdrawn"] });
+    f.receipts.set("withdrawn", { status: "completed", result: { stopReason: "cancelled" } });
+    const handle = await f.driver.attach(f.attached); abandoned = true;
+    vi.mocked(f.port.outcome).mockRejectedValue(new AntigravityError("antigravity_sidecar_unavailable", "sent_outcome_unknown"));
+    await expect(handle.close()).resolves.toBeUndefined();
+    expect(f.port.release).toHaveBeenCalled(); expect(f.driver.handles.size).toBe(0);
+    expect(f.port.acknowledgeOperation).not.toHaveBeenCalled();
+  });
+  it("throttles pending abandoned outcomes across streaming chunks and normalizes projection read failures", async () => {
+    const f = fixture();
+    Object.assign(f.driver.input, { isOperationAbandoned: () => true });
+    vi.mocked(f.port.attach).mockResolvedValue({ ...f.attachment, retainedOperationIds: ["pending"] });
+    const handle = await f.driver.attach(f.attached);
+    await vi.waitFor(() => expect(vi.mocked(f.port.outcome).mock.calls.length).toBeGreaterThanOrEqual(2));
+    const before = vi.mocked(f.port.outcome).mock.calls.length;
+    for (let index = 1; index <= 3; index++) {
+      f.emit({ kind: "update", notification: { sessionId: identity.sessionId,
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "chunk" } } } });
+      await vi.waitFor(() => expect(f.port.acknowledge).toHaveBeenCalledWith({ handleId: "handle", throughSequence: index }, expect.any(AbortSignal)));
+    }
+    expect(vi.mocked(f.port.outcome).mock.calls.length).toBe(before);
+    vi.mocked(f.port.outcome).mockRejectedValue(new AntigravityError("antigravity_sidecar_unavailable", "sent_outcome_unknown"));
+    await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toMatchObject({
+      category: "unavailable", crossedSubmissionBoundary: false, backendCode: "antigravity_sidecar_unavailable",
+    });
+  });
   it("polls idle native changes without reprojecting or accounting unchanged history", async () => {
     const project = vi.spyOn(historyProjection, "projectAntigravityHistory");
     const capture = { ...NO_USAGE_CAPTURE, registerTurns: vi.fn(), reconcile: vi.fn(() => true) };

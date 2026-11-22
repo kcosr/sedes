@@ -20,11 +20,11 @@ port.on("message", (request: NativeHistoryWorkerRequest) => {
         const history = await store.read(request.identity, signal); signal.throwIfAborted();
         response = { id: request.id, kind: "read", revision: history.native.revision,
           history: request.knownRevision === history.native.revision ? null : history,
-          bytes: request.knownRevision === history.native.revision ? 0 : Buffer.byteLength(JSON.stringify(history)) };
+          bytes: request.knownRevision === history.native.revision ? 0 : store.serializedBytes(history) };
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
-      response = { id: request.id, kind: "error", code: /^antigravity_[a-z_]+$/u.test(message) ? message : "antigravity_history_read_failed" };
+      response = { id: request.id, kind: "error", code: /^antigravity_[a-z0-9_]{1,100}$/u.test(message) ? message : "antigravity_history_read_failed" };
     }
     port.postMessage(response);
   }).catch(() => { port.close(); });

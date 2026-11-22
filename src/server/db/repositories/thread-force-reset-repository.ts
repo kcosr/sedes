@@ -18,6 +18,7 @@ import {
 } from "../../../shared/protocol/conversation.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
+import { queuedInputAbandonmentReceiptId } from "./conversation-operation-repository.js";
 
 const MAXIMUM_AFFECTED_THREADS = 10_000;
 const BLOCKER_KIND_ORDER: readonly ThreadForceResetBlockerKind[] = [
@@ -321,6 +322,29 @@ export class ThreadForceResetRepository {
           ...threadIds,
           ...threadIds,
         );
+
+      // Persist exact operation abandonment before clearing dispatch evidence.
+      // A failed queue row or a human diagnostic alone cannot authorize cleanup
+      // of an unresolved native submission. The namespaced receipt is separate
+      // from any existing operation receipt; a key collision aborts this reset.
+      const insertAbandonedInput = this.database.prepare(`INSERT INTO mutation_receipts(
+        tenant_id, principal_id, thread_id, mutation_id, operation_kind,
+        request_fingerprint, result_code, result_json, replayable, created_at
+      ) VALUES (?, ?, ?, ?, 'queued_input_abandonment', ?, 'abandoned', ?, 0, ?)`);
+      const readAbandonedInput = this.database.prepare(`SELECT mutation_id AS operationId
+        FROM queued_inputs WHERE tenant_id = ? AND owner_principal_id = ?
+          AND application_thread_id = ? AND id = ?
+          AND state IN ('pending', 'retry_wait', 'dispatching', 'uncertain')`);
+      for (const blocker of capture.blockers) {
+        if (blocker.kind !== "queued_input" || blocker.state === "failed") continue;
+        const row = readAbandonedInput.get(scope.tenantId, scope.principalId, blocker.threadId, blocker.id) as { readonly operationId: string } | undefined;
+        if (!row) throw new DomainError("conflict", "The queued input changed during Force Reset.");
+        insertAbandonedInput.run(scope.tenantId, scope.principalId, blocker.threadId,
+          queuedInputAbandonmentReceiptId(blocker.threadId, row.operationId),
+          hash(["queued_input_abandonment", 1, blocker.threadId, blocker.id, row.operationId, input.mutationId]),
+          JSON.stringify({ version: 1, operationId: row.operationId, queuedInputId: blocker.id, forceResetMutationId: input.mutationId }),
+          input.now);
+      }
 
       this.database
         .prepare(
