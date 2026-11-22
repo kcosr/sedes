@@ -84,10 +84,14 @@ describe.skipIf(process.platform !== "linux")("OpenCode persisted owner recovery
 
   it("releases a positively dead external attachment without native controls or signals", async () => {
     const f = await fixture("external"); await killedOwner(f, "external", false);
+    const { record } = await inspectOpenCodeRuntimeOwner(f.target);
     const signal = vi.spyOn(process, "kill");
     const lease = await f.lifecycle.acquire();
-    expect(lease.processMarker).toBeNull(); expect(signal).not.toHaveBeenCalled();
+    expect(lease.processMarker).toBeNull();
     await lease.release();
+    // Linux corroborates a missing procfs entry with a signal-zero probe.
+    expect(signal).toHaveBeenCalledWith(record.process.pid, 0);
+    for (const call of signal.mock.calls) expect(call).toEqual([record.process.pid, 0]);
   });
 
   it("refuses surviving marked descendants after SIGKILL and recovers only the inspected tree", async () => {
