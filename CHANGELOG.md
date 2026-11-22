@@ -99,6 +99,7 @@ User-facing changes are collected here before release. See the
   execution hosts, with native history, streaming, permission decisions, model
   and native mode selection, Saved Agents, scoped Sedes tools, and background
   work tracking. See [Antigravity setup](docs/operator/backends/antigravity.md).
+  ([#144](https://github.com/kcosr/sedes/pull/144))
 
 - Enable **Highlight questions in agent replies** under **Settings > Appearance
   > Chat formatting** to show completed questions in red with an underline.
@@ -381,6 +382,7 @@ User-facing changes are collected here before release. See the
 
 - Local Sedes tools use the actual listener address when the server selects an
   ephemeral port with `PORT=0`, including restored backends during startup.
+  ([#144](https://github.com/kcosr/sedes/pull/144))
 
 - Larger Claude threads reopen after idle eviction or reconnection without
   repeatedly expiring their history snapshot. Update execution sidecars with
