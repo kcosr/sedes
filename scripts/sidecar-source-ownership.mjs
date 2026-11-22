@@ -29,6 +29,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/backends/antigravity/native-protobuf.ts",
   "src/server/backends/antigravity/native-guards.ts",
   "src/server/backends/antigravity/native-history.ts",
+  "src/server/backends/antigravity/native-execution.ts",
   "src/server/backends/antigravity/host/native-activity.ts",
   "src/server/backends/antigravity/host/native-host.ts",
   "src/server/backends/antigravity/host/host-registry.ts",
