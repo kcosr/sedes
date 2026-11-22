@@ -11,6 +11,7 @@ User-facing changes are collected here before release. See the
   Drain retained native Pi work using the currently installed main and sidecar
   before upgrading both to native Pi runtime capability **3**.
   See [native Pi setup](docs/operator/backends/pi-native.md).
+  ([#143](https://github.com/kcosr/sedes/pull/143))
 
 - Codex app-servers and managed TUI commands now require **0.169.0 or newer**.
   Upgrade every execution host and rebuild execution sidecars with the server.
