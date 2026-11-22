@@ -1,4 +1,4 @@
-import { SidecarConnectionError, SidecarProvisionerCleanupError, SidecarServiceManagementError, SidecarServiceStagingError, type SidecarProvisioner, type SidecarServiceControlInput, type SidecarServiceControlBoundary, type SidecarArtifactInstallation, type PersistentSidecarByteStream } from "./sidecar-provisioner.js";
+import { inspectForSidecarLaunch, SidecarConnectionError, SidecarProvisionerCleanupError, SidecarServiceManagementError, SidecarServiceStagingError, type SidecarProvisioner, type SidecarServiceControlInput, type SidecarServiceControlBoundary, type SidecarArtifactInstallation, type PersistentSidecarByteStream } from "./sidecar-provisioner.js";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SidecarByteStream } from "../../internal/sidecar-protocol/contracts.js";
@@ -385,7 +385,7 @@ export class SshSidecarArtifactInstaller implements SidecarProvisioner {
     ) {
       throw new Error("sidecar_carrier_generation_invalid");
     }
-    let existing = await this.inspect(signal);
+    let existing = await inspectForSidecarLaunch(this.inspect(signal));
     for (
       let attempt = 0;
       existing &&

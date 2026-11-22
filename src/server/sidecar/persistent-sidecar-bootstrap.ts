@@ -1,18 +1,18 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, open, readFile, realpath, rename, rm, rmdir, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, realpath, rename, rm, rmdir, unlink } from "node:fs/promises";
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { SIDECAR_WIRE_VERSION } from "../../internal/sidecar-protocol/envelopes.js";
 import { readSidecarManagementRecord, writeSidecarManagementRecord } from "../../internal/sidecar-protocol/service-management-channel.js";
-import { SIDECAR_MANAGEMENT_VERSION, sidecarManagementResponseSchema, sidecarServiceScopeSchema,
+import { SIDECAR_MANAGEMENT_VERSION, sameSidecarServiceScope, sidecarManagementResponseSchema, sidecarServiceScopeSchema,
   type SidecarServiceConfiguration, type SidecarServiceScope, type SidecarServiceStatus } from "../../internal/sidecar-protocol/service-management-v1.js";
 import { darwinSidecarPlatform } from "./sidecar-darwin-platform.js";
 import { windowsSidecarPlatform } from "./sidecar-windows-platform.js";
 import { windowsSidecarIpc } from "./sidecar-windows-ipc.js";
-import { persistentSidecarPaths } from "./persistent-sidecar-paths.js";
+import { assertSidecarLaunchesRetired, assertSidecarLaunchRetirementRecorded, cleanupStoppedSidecarLaunchLedger, createSidecarLaunchLedger, recordSidecarLaunchRetirement } from "./sidecar-launch-ledger.js";
+import { persistentSidecarPaths, sidecarServiceKey } from "./persistent-sidecar-paths.js";
 import { sidecarSocketByteStream } from "./sidecar-socket-byte-stream.js";
 import { sidecarProcessOwnership, type SidecarLegacyStoppedDescriptor, type SidecarTargetLifetime, type SidecarProcessIdentity } from "./sidecar-process-ownership.js";
 
@@ -67,28 +67,37 @@ export async function ensurePersistentSidecar(input: PersistentSidecarBootstrapI
     const current = await inspectAtEndpoint(paths.endpointPath, input.scope);
     input.signal?.throwIfAborted();
     if (current && current.state !== "stopped") return paths.endpointPath;
+    let previous: Awaited<ReturnType<typeof inspectPreviousDescriptor>>;
     for (let attempt = 0; ; attempt += 1) {
       input.signal?.throwIfAborted();
-      try { await assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath); break; }
+      try { previous = await inspectPreviousDescriptor(paths.descriptorPath); break; }
       catch (error) {
         if (!(error instanceof Error) || error.message !== "sidecar_service_retirement_in_progress" || attempt >= 149) throw error;
-        // A daemon that recorded "stopped" already proved its resource cleanup;
-        // only its own exit is outstanding. Prompt it after a grace period so a
-        // straggling handle cannot block replacement.
-        const pid = (error as { retiringPid?: number }).retiringPid;
-        if (process.platform === "linux" && pid !== undefined && (attempt === 30 || attempt === 100)) {
-          try { process.kill(pid, attempt === 30 ? "SIGTERM" : "SIGKILL"); } catch { /* already exited */ }
-        }
+        // A clean stop has settled its resources; wait for that owner to exit.
         await pause(100);
       }
     }
     input.signal?.throwIfAborted();
     await verifyOwnArtifact(input.executablePath, input.expectedDigest);
     input.signal?.throwIfAborted();
+    // The lock serializes bootstraps across versions. Validate the exact descriptor
+    // again after artifact I/O, before certifying retirement and replacing it.
+    const revalidate = async () => {
+      if (await readDescriptorBytes(paths.descriptorPath) !== previous.bytes) throw new Error("sidecar_service_recovery_required");
+    };
+    await revalidate();
+    if (previous.recoverable) {
+      await recordSidecarLaunchRetirement(paths.serviceDirectory, previous.recoverable, revalidate);
+    }
+    await removeStaleEndpoint(paths.endpointPath);
+    input.signal?.throwIfAborted();
     // Persist intent before spawn. A bootstrap crash in the spawn/ready window
     // must never make a second caller assume no children were launched.
     const startupIncarnation = randomUUID();
-    await recordPersistentSidecar(input.scope, startupIncarnation, "starting");
+    await recordPersistentSidecar(input.scope, startupIncarnation, "starting", async () => {
+      if (previous.recoverable) await assertSidecarLaunchRetirementRecorded(paths.serviceDirectory, previous.recoverable);
+      await revalidate();
+    });
     if (input.signal?.aborted) {
       await settleFailedStartup(input.scope, paths.descriptorPath, startupIncarnation);
       input.signal.throwIfAborted();
@@ -139,19 +148,24 @@ async function settleFailedStartup(scope: SidecarServiceScope, descriptorPath: s
   }
 }
 
-export async function recordPersistentSidecar(scope: SidecarServiceScope, serviceIncarnation: string, state: "starting" | "running" | "stopped"): Promise<void> {
+export async function recordPersistentSidecar(scope: SidecarServiceScope, serviceIncarnation: string, state: "starting" | "running" | "stopped", beforePublish?: () => Promise<void>) {
   const paths = await preparePersistentSidecarNamespace(scope);
   const identity = await readProcessIdentity(process.pid);
   if (!identity) throw new Error("sidecar_service_process_identity_unavailable");
   const lifetime = await sidecarProcessOwnership.readTargetLifetime();
   const descriptor = serviceDescriptorSchema.parse({ version: 3, scope, state, process: identity, lifetime, serviceIncarnation });
+  const launchLedger = state === "running" && process.platform !== "win32"
+    ? await createSidecarLaunchLedger(paths.serviceDirectory, descriptor)
+    : undefined;
   const temporary = `${paths.descriptorPath}.${randomUUID()}`;
   const handle = await open(temporary, "wx", 0o600);
   try {
-    if (process.platform === "win32") await windowsSidecarPlatform.privacy(temporary, "secure-file");
-    await handle.writeFile(JSON.stringify(descriptor)); await handle.sync(); }
-  finally { await handle.close(); }
-  try {
+    try {
+      if (process.platform === "win32") await windowsSidecarPlatform.privacy(temporary, "secure-file");
+      await handle.writeFile(JSON.stringify(descriptor));
+      await handle.sync();
+    } finally { await handle.close(); }
+    await beforePublish?.();
     await rename(temporary, paths.descriptorPath);
     if (process.platform !== "win32") {
       const directory = await open(paths.serviceDirectory, "r");
@@ -159,6 +173,12 @@ export async function recordPersistentSidecar(scope: SidecarServiceScope, servic
     }
   }
   finally { await unlink(temporary).catch(() => undefined); }
+  if (state === "stopped" && process.platform !== "win32") {
+    // Clean shutdown is already durable. Preserve outstanding claims and treat
+    // failures to remove this exact owner's finished ledger as housekeeping.
+    await cleanupStoppedSidecarLaunchLedger(paths.serviceDirectory, descriptor).catch(() => undefined);
+  }
+  return launchLedger;
 }
 
 export async function inspectAtEndpoint(endpointPath: string, scope: SidecarServiceScope): Promise<SidecarServiceStatus | undefined> {
@@ -182,41 +202,56 @@ export async function inspectAtEndpoint(endpointPath: string, scope: SidecarServ
     const requestId = randomUUID();
     await writeSidecarManagementRecord(stream, { managementVersion: SIDECAR_MANAGEMENT_VERSION, requestId, scope, operation: "status" });
     const { value } = await readSidecarManagementRecord(stream, sidecarManagementResponseSchema, AbortSignal.timeout(5_000));
-    if (value.requestId !== requestId || value.outcome !== "ok") throw new Error("sidecar_service_identity_unproven");
+    if (value.requestId !== requestId || value.outcome !== "ok" || !sameSidecarServiceScope(value.status.scope, scope)) throw new Error("sidecar_service_identity_unproven");
     return value.status;
   } finally { socket.destroy(); }
 }
 
-export async function assertPreviousServiceRetired(descriptorPath: string, endpointPath: string): Promise<void> {
-  let descriptor: ServiceDescriptor | undefined;
-  let legacyStopped: SidecarLegacyStoppedDescriptor | undefined;
+async function readDescriptorBytes(descriptorPath: string): Promise<string | undefined> {
   try {
     await assertPrivateFile(descriptorPath);
-    const raw: unknown = JSON.parse(await readFile(descriptorPath, "utf8"));
-    const parsed = serviceDescriptorSchema.safeParse(raw);
-    if (parsed.success) descriptor = parsed.data;
-    else if (sidecarProcessOwnership.validLegacyStoppedDescriptor(raw)) legacyStopped = raw;
-    else throw new Error("sidecar_service_recovery_required");
+    return await readFile(descriptorPath, "utf8");
   } catch (error) {
-    if (!hasCode(error, "ENOENT")) throw error;
+    if (hasCode(error, "ENOENT")) return undefined;
+    throw error;
   }
-  if (legacyStopped) {
-    // A predecessor's clean shutdown proved its resource cleanup before writing
-    // "stopped"; only its own exit remains to be observed before replacement.
-    if (await sidecarProcessOwnership.legacyProcessMatches(legacyStopped.process)) throw retirementInProgress(legacyStopped.process.pid);
+}
+
+async function inspectPreviousDescriptor(descriptorPath: string): Promise<{ bytes: string | undefined; recoverable?: ServiceDescriptor }> {
+  const bytes = await readDescriptorBytes(descriptorPath);
+  if (bytes === undefined) return { bytes };
+  let raw: unknown;
+  try { raw = JSON.parse(bytes); } catch { throw new Error("sidecar_service_recovery_required"); }
+  const parsed = serviceDescriptorSchema.safeParse(raw);
+  const legacy = sidecarProcessOwnership.validLegacyStoppedDescriptor(raw);
+  if (!parsed.success && !legacy) throw new Error("sidecar_service_recovery_required");
+  const descriptor = parsed.success ? parsed.data : raw as SidecarLegacyStoppedDescriptor;
+  const serviceDirectory = path.dirname(descriptorPath);
+  if (sidecarServiceKey(sidecarServiceScopeSchema.parse(descriptor.scope)) !== path.basename(serviceDirectory)) {
+    throw new Error("sidecar_service_recovery_required");
   }
-  if (descriptor) {
-    const retired = await sidecarProcessOwnership.lifetimeEnded(descriptor.lifetime);
-    if (!retired && (descriptor.state === "running" || descriptor.state === "starting")) {
-      // A live owner with a broken management socket needs different recovery
-      // from a dead owner whose descendants remain unproven. Neither permits
-      // replacement until resource cleanup or target retirement is established.
-      throw new Error(await sidecarProcessOwnership.unavailableServiceCode(descriptor.process));
-    }
-    if (!retired && descriptor.state === "stopped" && await sidecarProcessOwnership.processMatches(descriptor.process)) {
-      throw retirementInProgress(descriptor.process.pid);
-    }
+  if (!parsed.success) {
+    if (await sidecarProcessOwnership.legacyProcessMatches(descriptor.process)) throw new Error("sidecar_service_retirement_in_progress");
+    return { bytes };
   }
+  const owner = parsed.data;
+  if (await sidecarProcessOwnership.lifetimeEnded(owner.lifetime)) return { bytes };
+  if (owner.state === "running" && (process.platform === "linux" || process.platform === "darwin")) {
+    await assertSidecarLaunchesRetired(serviceDirectory, owner);
+    return { bytes, recoverable: owner };
+  }
+  if (owner.state !== "stopped") throw new Error(await sidecarProcessOwnership.unavailableServiceCode(owner.process));
+  if (await sidecarProcessOwnership.processMatches(owner.process)) throw new Error("sidecar_service_retirement_in_progress");
+  return { bytes };
+}
+
+/** Observation preserves both the descriptor and the socket. A recoverable
+ * crash can proceed through ensure; only its lock holder may retire it. */
+export async function assertPreviousServiceRetired(descriptorPath: string): Promise<void> {
+  if ((await inspectPreviousDescriptor(descriptorPath)).recoverable) throw new Error("sidecar_service_replacement_ready");
+}
+
+async function removeStaleEndpoint(endpointPath: string): Promise<void> {
   if (process.platform === "win32") return; // Named pipes disappear with their owning server.
   const metadata = await lstat(endpointPath).catch((error: unknown) => {
     if (hasCode(error, "ENOENT")) return undefined;
@@ -304,9 +339,6 @@ async function retireStartupLock(directory: string, expected: z.infer<typeof sta
   } finally { await handle.close(); }
 }
 
-function retirementInProgress(retiringPid: number): Error {
-  return Object.assign(new Error("sidecar_service_retirement_in_progress"), { retiringPid });
-}
 const readProcessIdentity = sidecarProcessOwnership.readProcess;
 const sameProcess = sidecarProcessOwnership.sameProcess;
 export async function assertOwnedDirectory(directory: string, strict: boolean): Promise<void> {

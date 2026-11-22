@@ -7,6 +7,7 @@ import type { SidecarRuntimeChannel } from "../../../sidecar/runtime-channel.js"
 import { sidecarRuntimeBodySchema } from "../../../sidecar/runtime-body-channel.js";
 import type { PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import { codexRuntimeConnectionSchema } from "../codex-backend-configuration.js";
+import { codexNativeStoreRefusal } from "../codex-native-store-ownership.js";
 import { CODEX_APP_SERVER_RELEASE } from "../codex-release-guard.js";
 import type { CodexRpcRequestReceipt } from "../rpc/codex-rpc-client.js";
 import { CodexRpcDeliveryError, CodexRpcProtocolError, CodexRpcRemoteError } from "../rpc/errors.js";
@@ -117,8 +118,14 @@ export function registerCodexRuntimeHost(input: {
   };
   input.registry.register(codexRuntimeEnsureOperation, async ({ configuration }) => {
     if (detached) throw new Error("codex_runtime_attachment_detached");
-    const host = await input.hosts.ensure(configuration, input.controllerEpoch);
-    return { runtimeId: host.runtimeId };
+    try {
+      const host = await input.hosts.ensure(configuration, input.controllerEpoch);
+      return { runtimeId: host.runtimeId };
+    } catch (error) {
+      const refusal = codexNativeStoreRefusal(error);
+      if (refusal) throw new SidecarOperationError(refusal.code, false, { cause: error });
+      throw error;
+    }
   });
   input.registry.register(codexRuntimeLookupOperation, async ({ configuration }) => {
     if (detached) throw new Error("codex_runtime_attachment_detached");

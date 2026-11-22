@@ -27,23 +27,6 @@ function hasExpectedFileMode(metadata, expectedMode) {
     : (metadata.mode & 0o777) === expectedMode);
 }
 
-const canonicalInputs = {
-  "src/cli/opencode-owner-cli.ts": {},
-  "src/cli/sedes-dynamic-tool-command.ts": {},
-  "src/cli/sedes-cli.ts": {},
-  "src/cli/sedes-mcp.ts": {},
-  "src/cli/sedes-mcp-server.ts": {},
-  "src/cli/sedes-opencode-mcp.ts": {},
-  "src/cli/sedes-tool-local-client.ts": {},
-  "src/shared/workpad-content-limits.ts": {},
-  "src/server/composer-attachments/execution-attachment-staging-engine.ts": {},
-  "src/server/workspace-files/workspace-files-engine.ts": {},
-  "src/server/workspace-files/git-environment.ts": {},
-  "src/server/workspace-files/workspace-file-policy.ts": {},
-  "src/server/workspace-files/canonical-mutation-serializer.ts": {},
-  "src/server/workspace-tools/workspace-tool-engine.ts": {},
-  "src/server/workspace-context/workspace-context-discovery.ts": {},
-};
 const syntheticOutputPath = path.join(
   repositoryRoot,
   "dist",
@@ -73,6 +56,9 @@ const canonicalOutputInputs = {
     bytesInOutput: 1,
   },
 };
+const canonicalInputs = Object.fromEntries(
+  Object.keys(canonicalOutputInputs).map(source => [source, { imports: [] }]),
+);
 const ownershipMetafile = (inputs, outputInputs = canonicalOutputInputs) => ({
   inputs,
   outputs: {
@@ -87,8 +73,8 @@ assertSidecarSourceOwnership(
 assertSidecarSourceOwnership(
   ownershipMetafile({
     ...canonicalInputs,
-    "src/server/backends/contracts.ts": {},
-    "src/server/backends/claude/claude-interrupt-operation.ts": {},
+    "src/server/backends/contracts.ts": { imports: [] },
+    "src/server/backends/claude/claude-interrupt-operation.ts": { imports: [] },
   }),
   repositoryRoot,
   syntheticOutputPath,
@@ -159,6 +145,34 @@ for (const forbiddenSource of [
       [forbiddenSource]: {},
     }),
     "sidecar_build_source_forbidden",
+  );
+}
+for (const builtin of ["node:worker_threads", "worker_threads"]) {
+  assertSidecarSourceOwnership(
+    ownershipMetafile({
+      ...canonicalInputs,
+      "src/server/backends/antigravity/native-history-reader.ts": {
+        imports: [{ path: builtin, kind: "import-statement", external: true }],
+      },
+    }),
+    repositoryRoot,
+    syntheticOutputPath,
+  );
+}
+for (const launchImport of [
+  { path: "node:child_process", kind: "import-statement", external: true },
+  { path: "child_process", kind: "require-call", external: true },
+  { path: "node_modules/node-pty/lib/index.js", kind: "dynamic-import", original: "node-pty" },
+  { path: "worker_threads", kind: "import-statement", external: true },
+]) {
+  // An existing sidecar multiplexer can gain a launch without changing its
+  // module name, capability major, operation name, or bundle-wide externals.
+  expectOwnershipFailure(
+    ownershipMetafile({
+      ...canonicalInputs,
+      "src/server/backends/opencode/opencode-sidecar-runtime.ts": { imports: [launchImport] },
+    }),
+    "sidecar_build_process_launch_import_unreviewed",
   );
 }
 expectOwnershipFailure(

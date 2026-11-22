@@ -1318,6 +1318,11 @@ describe("production configuration reconciliation", () => {
       expect((await service.get(scope)).runtimes.find(value => value.resourceKind === "environment" && value.resourceId === environmentId))
         .toMatchObject({ connectionState: "recovery_required", lastError: expect.stringContaining(message) });
     }
+    inspect.mockRejectedValue(new SidecarServiceManagementError("sidecar_service_replacement_ready"));
+    await service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "start", expectedRevision: revision });
+    expect((await service.get(scope)).runtimes.find(value => value.resourceKind === "environment" && value.resourceId === environmentId))
+      .toMatchObject({ connectionState: "disconnected", supportedActions: ["connect", "disconnect", "start"], lastError: expect.stringContaining("permit replacement") });
+    expect(connect).not.toHaveBeenCalled();
     inspect.mockRejectedValue(new Error("connection refused"));
     await service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "stop", expectedRevision: revision });
     expect((await service.get(scope)).runtimes.find(value => value.resourceKind === "environment" && value.resourceId === environmentId)).toMatchObject({ connectionState: "unreachable", lastError: expect.stringContaining("host is unreachable") });

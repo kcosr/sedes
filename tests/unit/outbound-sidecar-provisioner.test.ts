@@ -44,6 +44,27 @@ describe('outbound lifecycle provisioning', () => {
     expect(registry.openRuntime).not.toHaveBeenCalled();
   });
 
+  it('takes a proved same-boot crash through locked startup only for a new launch', async () => {
+    const { registry, provisioner } = setup(async (_scope, _environment, _operation, raw) => ({
+      managementVersion: 1, requestId: (raw as SidecarManagementRequest).requestId, outcome: 'error', code: 'sidecar_service_replacement_ready',
+    }));
+    await expect(provisioner.attachExisting(1, 'd'.repeat(64), signal())).rejects.toThrow('sidecar_service_replacement_ready');
+    expect(registry.openRuntime).not.toHaveBeenCalled();
+    await expect(provisioner.launch(1, 'd'.repeat(64), signal())).rejects.toThrow('test_attachment_reached');
+    expect(registry.openRuntime).toHaveBeenCalledWith(scope, scope.executionEnvironmentId,
+      expect.objectContaining({ expectedDigest: artifact.artifactSha256, startIfAbsent: true }), expect.any(AbortSignal));
+  });
+
+  it('preserves an ownership fence discovered by the host during locked recovery', async () => {
+    const { registry, provisioner } = setup(async (_scope, _environment, _operation, raw) => ({
+      managementVersion: 1, requestId: (raw as SidecarManagementRequest).requestId, outcome: 'error', code: 'sidecar_service_replacement_ready',
+    }));
+    registry.openRuntime.mockRejectedValue(new Error('sidecar_service_launch_evidence_invalid'));
+    await expect(provisioner.launch(1, 'd'.repeat(64), signal())).rejects.toMatchObject({
+      name: 'SidecarServiceManagementError', code: 'sidecar_service_launch_evidence_invalid',
+    });
+  });
+
   it('reattaches a compatible busy predecessor without granting permission to respawn that old build', async () => {
     const observed = status({ buildId: 'old', artifactSha256: 'e'.repeat(64), resources: [{ resourceId: 'provider', kind: 'provider', state: 'active', revision: '1', blockers: ['active_work'] }] });
     const { registry, provisioner } = setup(async (_scope, _environment, _operation, raw) => {

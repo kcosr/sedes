@@ -67,15 +67,43 @@ int main(int argc, char **argv) {
 }
 `;
 
+// This capture-only ABI is separate from the management helper. An SSH carrier
+// can still inspect a service installed before launch tracking was introduced.
+const DARWIN_LAUNCH_HELPER_SOURCE = String.raw`
+#include <inttypes.h>
+#include <libproc.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/proc.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  char *end; long pid = strtol(argv[1], &end, 10);
+  if (*end || pid < 1 || pid > 2147483647) return 1;
+  struct proc_bsdinfo info = {0};
+  // arg=1 includes unreaped zombies. The owning Node event loop is paused
+  // while its direct child's birth identity is sampled.
+  int size = proc_pidinfo((int)pid, PROC_PIDTBSDINFO, 1, &info, sizeof info);
+  if (size != (int)sizeof info || info.pbi_pid != (uint32_t)pid || info.pbi_start_tvusec >= 1000000) return 1;
+  printf("%u %u %d %d %" PRIu64 "%06" PRIu64 "\n", info.pbi_ppid, info.pbi_pgid,
+    !!(info.pbi_flags & PROC_FLAG_SLEADER), info.pbi_status == SZOMB, info.pbi_start_tvsec, info.pbi_start_tvusec);
+  return 0;
+}
+`;
+let launchHelperPromise: Promise<string> | undefined;
+export function prepareDarwinSidecarLaunchHelper(): Promise<string> {
+  launchHelperPromise ??= buildHelper(DARWIN_LAUNCH_HELPER_SOURCE).catch(error => { launchHelperPromise = undefined; throw error; });
+  return launchHelperPromise;
+}
+
 let helperPromise: Promise<string> | undefined;
 export async function prepareDarwinSidecarHelper(): Promise<string> {
-  helperPromise ??= buildHelper().catch((error: unknown) => { helperPromise = undefined; throw error; });
+  helperPromise ??= buildHelper(DARWIN_SIDECAR_HELPER_SOURCE).catch((error: unknown) => { helperPromise = undefined; throw error; });
   return helperPromise;
 }
-async function buildHelper(): Promise<string> {
+async function buildHelper(sourceText: string): Promise<string> {
   if (process.platform !== "darwin") throw new Error("sidecar_service_platform_unsupported");
   const home = await realpath(homedir());
-  const digest = createHash("sha256").update(DARWIN_SIDECAR_HELPER_SOURCE).digest("hex");
+  const digest = createHash("sha256").update(sourceText).digest("hex");
   let directory = home;
   for (const entry of [".local", "state", "sedes", "sidecar", "platform", `darwin-${process.arch}-${digest}`]) {
     directory = path.join(directory, entry);
@@ -103,7 +131,7 @@ async function buildHelper(): Promise<string> {
   try {
     const source = path.join(staging, "helper.c");
     const binary = path.join(staging, "helper");
-    await writeFile(source, DARWIN_SIDECAR_HELPER_SOURCE, { flag: "wx", mode: 0o600 });
+    await writeFile(source, sourceText, { flag: "wx", mode: 0o600 });
     try { await execute("/usr/bin/cc", ["-std=c11", "-D_DARWIN_C_SOURCE", "-O2", "-Wall", "-Wextra", "-Werror", source, "-lproc", "-o", binary], { timeout: 60_000, maxBuffer: 64 * 1024, env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: home } }); }
     catch (error) { throw new Error("sidecar_macos_command_line_tools_required", { cause: error }); }
     await chmod(binary, 0o500);

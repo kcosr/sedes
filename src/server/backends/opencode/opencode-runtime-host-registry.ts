@@ -35,6 +35,7 @@ export class OpenCodeRuntimeHostRegistry {
     readonly environment: Readonly<NodeJS.ProcessEnv>;
     readonly services: PersistentSidecarServiceRegistry;
     readonly agentTools?: OpenCodeRuntimeInput["agentTools"];
+    readonly beforeOwnedLaunch?: () => Promise<void>;
     readonly createRuntime?: (input: OpenCodeRuntimeInput) => OpenCodeRuntime;
   }) {
     input.services.assertScope({ ...input.services.scope, ...input.scope, executionEnvironmentId: input.executionEnvironmentId });
@@ -209,6 +210,10 @@ export class OpenCodeRuntimeHostRegistry {
       environmentChannel: this.input.environmentChannel, environment: this.input.environment,
       ...(this.input.agentTools ? { agentTools: this.input.agentTools } : {}) });
     this.input.services.assertAdmission(controllerEpoch);
+    if (configuration.connection.ownership === "owned" && this.input.beforeOwnedLaunch) {
+      await this.input.beforeOwnedLaunch();
+      this.input.services.assertAdmission(controllerEpoch);
+    }
     let resident: Resident;
     const runtime = (this.input.createRuntime ?? (input => new OpenCodeRuntime(input)))({ ...resolved,
       assertLaunchAdmission: () => {

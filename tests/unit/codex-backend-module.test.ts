@@ -388,6 +388,16 @@ function fakeDependencies() {
 }
 
 describe("CodexBackendModule", () => {
+  it("preserves actionable store recovery guidance through startup wrappers", () => {
+    const module = new CodexBackendModule();
+    const error = new Error("remote startup failed at /private/path", {
+      cause: new Error("codex_native_store_exclusivity_requires_operator"),
+    });
+    const diagnostic = module.runtimeDiagnostic(error);
+    expect(diagnostic).toMatchObject({ connectionState: "recovery_required", message: expect.stringContaining("Check for other users of CODEX_HOME") });
+    expect(diagnostic?.message).not.toContain("/private/path");
+    expect(module.runtimeDiagnostic(new Error("unknown provider failure"))).toBeUndefined();
+  });
   it.each(["close", "stopBeforeConversationCleanup"] as const)("ends quota polling before %s tears down the transport", async method => {
     const workingDirectory = await temporaryDirectory();
     const fakes = fakeDependencies();

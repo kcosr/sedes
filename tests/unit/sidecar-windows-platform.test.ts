@@ -1,10 +1,13 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { once } from "node:events";
 import { promisify } from "node:util";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createWindowsSidecarPlatform } from "../../src/server/sidecar/sidecar-windows-platform.js";
+import { createWindowsSidecarPlatform, windowsSidecarPlatform } from "../../src/server/sidecar/sidecar-windows-platform.js";
+import { sidecarServiceKey } from "../../src/server/sidecar/persistent-sidecar-paths.js";
+import { assertPreviousServiceRetired } from "../../src/server/sidecar/persistent-sidecar-bootstrap.js";
 import { verifyWindowsSidecarPrivacyBatch } from "../helpers/windows-sidecar-privacy-contract.js";
 
 const sid = "S-1-5-21-100-200-300-1001";
@@ -14,6 +17,36 @@ const bootId = "windows-142d90b9-bfbe-4533-a919-15472ff10309";
 const startTicks = "639301234567890123";
 
 describe("Windows sidecar platform", () => {
+  it.runIf(process.platform === "win32")("keeps a same-boot crashed sidecar manual and recognizes the exact owner's clean stop", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sd-win-owner-"));
+    const scope = { installationId: "fixture", tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote" };
+    const directory = path.join(root, sidecarServiceKey(scope));
+    const descriptorPath = path.join(directory, "service.json");
+    const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], { stdio: ["pipe", "ignore", "ignore"] });
+    const closed = once(child, "close");
+    try {
+      await once(child, "spawn");
+      const processIdentity = await windowsSidecarPlatform.readProcess(child.pid!);
+      const lifetime = await windowsSidecarPlatform.readTargetLifetime();
+      expect(processIdentity?.pid).toBe(child.pid);
+      await windowsSidecarPlatform.privacy(directory, "ensure-directory");
+      const descriptor = { version: 3, state: "running", serviceIncarnation: "fixture-incarnation", scope, process: processIdentity, lifetime };
+      const bytes = JSON.stringify(descriptor);
+      await writeFile(descriptorPath, bytes);
+      await windowsSidecarPlatform.privacy(descriptorPath, "secure-file");
+      await expect(assertPreviousServiceRetired(descriptorPath)).rejects.toThrow("sidecar_service_owner_unreachable");
+      child.stdin.end();
+      await closed;
+      await expect(assertPreviousServiceRetired(descriptorPath)).rejects.toThrow("sidecar_service_orphan_cleanup_unproven");
+      expect(await readFile(descriptorPath, "utf8")).toBe(bytes);
+      await writeFile(descriptorPath, JSON.stringify({ ...descriptor, state: "stopped" }));
+      await expect(assertPreviousServiceRetired(descriptorPath)).resolves.toBeUndefined();
+    } finally {
+      child.stdin.end();
+      await closed;
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 180_000);
   it.skipIf(process.platform !== "win32")(
     "preserves native empty, singleton and mixed ACL batches and rejects a foreign owner",
     async () => {

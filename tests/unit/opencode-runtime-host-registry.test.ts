@@ -23,7 +23,7 @@ const configuration: OpenCodeRuntimeConfiguration = {
   connection: { ownership: "owned", channel: { type: "process_stdio", executablePath: "/bin/opencode2", workingDirectory: "/workspace" } },
 };
 function deferred() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
-function fixture(createHost?: (runtimeId: string) => OpenCodeNativeHost) {
+function fixture(createHost?: (runtimeId: string) => OpenCodeNativeHost, beforeOwnedLaunch?: () => Promise<void>) {
   const archive = vi.fn(async (_record: unknown) => {});
   const services = new PersistentSidecarServiceRegistry({ scope: { ...scope, installationId: "installation", executionEnvironmentId }, buildId: "build", artifactSha256: "a".repeat(64), runtimeWireVersion: 1, configuration: serviceConfiguration, recordAbandonment: archive });
   const epoch = services.attach(serviceConfiguration), owners: FakeRuntime[] = [];
@@ -75,6 +75,7 @@ function fixture(createHost?: (runtimeId: string) => OpenCodeNativeHost) {
   }
   const environmentChannel = { scope, executionEnvironmentId, resolveSecret: vi.fn(async () => ({ value: "secret", discard: vi.fn() })) } as unknown as ExecutionEnvironmentChannelProvider;
   const hosts = new OpenCodeRuntimeHostRegistry({ scope, executionEnvironmentId, environmentChannel, environment: { HOME: "/native", HOST_VALUE: "host value" }, services,
+    ...(beforeOwnedLaunch ? { beforeOwnedLaunch } : {}),
     createRuntime: input => new FakeRuntime(input) as unknown as OpenCodeRuntime });
   const serviceStop = (force: boolean) => services.stop({ expectedServiceIncarnation: services.serviceIncarnation, controllerEpoch: services.controllerEpoch,
     expectedConfiguration: serviceConfiguration, expectedResourcesFingerprint: services.status().resourcesFingerprint, force, reason: "upgrade" });
@@ -82,6 +83,15 @@ function fixture(createHost?: (runtimeId: string) => OpenCodeNativeHost) {
 }
 
 describe("resident OpenCode runtime registry", () => {
+  it("fences owned process startup after an existing-only lookup", async () => {
+    const beforeOwnedLaunch = vi.fn(async () => { throw new Error("coverage_write_failed"); });
+    const f = fixture(undefined, beforeOwnedLaunch);
+    await expect(f.hosts.lookup(configuration, f.epoch)).resolves.toBeUndefined();
+    expect(beforeOwnedLaunch).not.toHaveBeenCalled();
+    await expect(f.hosts.ensure(configuration, f.epoch)).rejects.toThrow("coverage_write_failed");
+    expect(beforeOwnedLaunch).toHaveBeenCalledOnce();
+    expect(f.controls.created).not.toHaveBeenCalled();
+  });
   it("captures a known CLI route without controller admission or capability decoding", async () => {
     const f = fixture(); const runtime = await f.hosts.ensure(configuration, f.epoch), owner = f.owners[0]!;
     const stamp: OpenCodeToolInvocationStamp = { authority: { ...scope, executionEnvironmentId,

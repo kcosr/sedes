@@ -22,7 +22,7 @@ export class FakePersistentPty implements InteractiveTerminalProcess {
   exit(exit: InteractiveTerminalExit = { disposition: "exited", exitCode: 0, signal: null, cleanupConfirmed: true }): void { for (const listener of this.exits) listener(exit); }
 }
 
-export function terminalHostFixture(options: { maximumTerminals?: number; maximumSuffixBytes?: number } = {}) {
+export function terminalHostFixture(options: { maximumTerminals?: number; maximumSuffixBytes?: number; beforeLaunch?: () => Promise<void> } = {}) {
   const processes: FakePersistentPty[] = [];
   const resources = new Map<string, TerminalResourceParticipant>();
   const openTerminal = vi.fn(async () => { const process = new FakePersistentPty(); processes.push(process); return process; });

@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { ChildProcess, execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants, symlinkSync, unlinkSync } from "node:fs";
 import {
@@ -166,6 +166,77 @@ describe("LocalEnvironmentChannelProvider", () => {
       kill.mockRestore();
       await channel.close("test_complete");
     }
+  });
+
+  it.skipIf(process.platform === "win32")("requires a durable intent before spawning a sidecar-owned process", async () => {
+    const provider = new LocalEnvironmentChannelProvider({
+      scope, executionEnvironmentId: scope.executionEnvironmentId,
+      launchRecorder: {
+        armOwnedProcess: async () => { throw new Error("intent_write_failed"); },
+        markUnsupported: vi.fn(),
+      },
+    });
+    const prepared = await provider.prepareOwnedProcess(scope, { executablePath: process.execPath, workingDirectory: process.cwd() });
+    const spawn = vi.spyOn(ChildProcess.prototype as unknown as { spawn(): number }, "spawn");
+    await expect(provider.openOwnedProcess(scope, {
+      prepared, arguments: ["--version"], environment: {}, cleanup: cleanupPolicy,
+    }, new AbortController().signal)).rejects.toThrow("intent_write_failed");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === "win32")("rejects failed identity publication and cleans only its direct child handle", async () => {
+    let pid: number | undefined;
+    const provider = new LocalEnvironmentChannelProvider({
+      scope, executionEnvironmentId: scope.executionEnvironmentId,
+      launchRecorder: {
+        armOwnedProcess: async () => ({ recordSpawn: async childPid => {
+          pid = childPid;
+          throw new Error("identity_write_failed");
+        } }),
+        markUnsupported: vi.fn(),
+      },
+    });
+    const prepared = await provider.prepareOwnedProcess(scope, { executablePath: process.execPath, workingDirectory: process.cwd() });
+    const kill = vi.spyOn(process, "kill");
+    await expect(provider.openOwnedProcess(scope, {
+      prepared, arguments: ["-e", "setInterval(() => {}, 1000)"], environment: {}, cleanup: cleanupPolicy,
+    }, new AbortController().signal)).rejects.toThrow("identity_write_failed");
+    expect(kill).not.toHaveBeenCalled();
+    expect(pid).toBeDefined();
+    expect(processExists(pid!)).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("keeps fast probe output and exit while waiting for durable child identity", async () => {
+    let release!: () => void;
+    let identify!: (pid: number) => void;
+    const captured = new Promise<number>(resolve => { identify = resolve; });
+    const durable = new Promise<void>(resolve => { release = resolve; });
+    const provider = new LocalEnvironmentChannelProvider({
+      scope, executionEnvironmentId: scope.executionEnvironmentId,
+      launchRecorder: {
+        armOwnedProcess: async () => ({ recordSpawn: pid => { identify(pid); return durable; } }),
+        markUnsupported: vi.fn(),
+      },
+    });
+    const prepared = await provider.prepareOwnedProcess(scope, { executablePath: "/bin/sh", workingDirectory: process.cwd() });
+    let exposed = false;
+    const opened = provider.openOwnedProcess(scope, {
+      prepared, arguments: ["-c", "printf version; printf warning >&2; exit 3"], environment: {}, cleanup: cleanupPolicy,
+    }, new AbortController().signal).then(channel => { exposed = true; return channel; });
+    const pid = await captured;
+    try {
+      await vi.waitFor(() => expect(processExists(pid)).toBe(false));
+      expect(exposed).toBe(false);
+    } finally { release(); }
+    const channel = await opened;
+    try {
+      const stdout: Buffer[] = [], stderr: Buffer[] = [];
+      for await (const chunk of channel.stdout) stdout.push(Buffer.from(chunk));
+      for await (const chunk of channel.stderr) stderr.push(Buffer.from(chunk));
+      expect(Buffer.concat(stdout).toString()).toBe("version");
+      expect(Buffer.concat(stderr).toString()).toBe("warning");
+      await expect(channel.closed).resolves.toMatchObject({ exitCode: 3 });
+    } finally { await channel.close("test_complete"); }
   });
 
   it("resolves operator executables from PATH unless an explicit path is configured", async () => {
