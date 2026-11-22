@@ -66,6 +66,19 @@ function proxy(f: Awaited<ReturnType<typeof fixture>>, getLease: () => SidecarRu
   const port = new AntigravityRemotePort({ configuration: f.configuration, sidecarRuntime: runtime }); cleanup.push(() => port.close()); return { port, runtime };
 }
 describe("Antigravity persistent sidecar", () => {
+  it("publishes normalized provider ownership through service status", async () => {
+    const f = await fixture(), connected = await attachment(f);
+    const host = await f.hosts.ensure(f.configuration, connected.epoch);
+    const resource = () => f.services.status().resources.find(value => value.resourceId === host.runtimeId);
+    expect(resource()).toEqual({ resourceId: host.runtimeId, kind: "provider", state: "idle", revision: host.snapshot().revision, blockers: [] });
+    const { port } = proxy(f, () => connected.lease);
+    await port.create({ cwd: f.cwd, operationId: "create" });
+    const retained = host.snapshot();
+    expect(retained.retainedSessions).toHaveLength(1);
+    expect(retained.blockers).toContain("unsettled_outcome");
+    expect(resource()).toEqual({ resourceId: host.runtimeId, kind: "provider", state: retained.state,
+      revision: retained.revision, blockers: retained.blockers });
+  });
   it("keeps a turn alive across controller loss and resumes exact retained outcomes", async () => {
     const f = await fixture(); const first = await attachment(f); let current = first.lease;
     const { port } = proxy(f, () => current);

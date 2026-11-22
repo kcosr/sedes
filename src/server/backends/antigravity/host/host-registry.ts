@@ -30,7 +30,10 @@ export class AntigravityHostRegistry {
       removeProbe: session => removeAntigravityProbeSession(configuration, session),
     });
     let unregister = () => {};
-    unregister = this.input.services.register({ resourceId: host.runtimeId, kind: "provider", snapshot: () => host.snapshot(),
+    unregister = this.input.services.register({ resourceId: host.runtimeId, kind: "provider", snapshot: () => {
+      const { state, revision, blockers } = host.snapshot();
+      return { state, revision, blockers };
+    },
       onDetach: () => host.detach(), stop: async (reason, context) => {
         const inspection = await host.inspect();
         const retained = new Set(inspection.retainedSessions.map(session => session.handleId));
