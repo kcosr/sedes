@@ -66,6 +66,7 @@ export class PersistentTerminalHost {
   readonly #scope: RequestScope;
   readonly #environmentId: string;
   readonly #open: OpenTerminal;
+  readonly #beforeLaunch?: () => Promise<void>;
   readonly #registerResource: (resource: TerminalResourceParticipant) => () => void;
   readonly #recordAbandonment: (record: SidecarAbandonmentRecord) => Promise<void>;
   readonly #assertAdmission: () => void;
@@ -80,6 +81,7 @@ export class PersistentTerminalHost {
     readonly scope: RequestScope;
     readonly environmentId: string;
     readonly openTerminal?: OpenTerminal;
+    readonly beforeLaunch?: () => Promise<void>;
     readonly registerResource?: (resource: TerminalResourceParticipant) => () => void;
     readonly recordAbandonment?: (record: SidecarAbandonmentRecord) => Promise<void>;
     readonly assertAdmission?: () => void;
@@ -95,6 +97,7 @@ export class PersistentTerminalHost {
       cleanupOnNaturalExit: true,
       ...(input.environment ? { environment: input.environment } : {}),
     });
+    if (input.beforeLaunch) this.#beforeLaunch = input.beforeLaunch;
     this.#open = input.openTerminal ?? ((request) => provider!.openTerminal(request));
     this.#registerResource = input.registerResource ?? (() => () => undefined);
     this.#recordAbandonment = input.recordAbandonment ?? (async () => {});
@@ -260,6 +263,10 @@ export class PersistentTerminalHost {
     let process: InteractiveTerminalProcess;
     let emulator: TerminalHeadlessEmulator | undefined;
     try {
+      if (this.#beforeLaunch) {
+        await this.#beforeLaunch();
+        admit();
+      }
       emulator = new TerminalHeadlessEmulator({ rows: input.rows, columns: input.columns,
         onData: (bytes) => { void process.write(bytes).catch(() => undefined); },
       });

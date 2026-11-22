@@ -201,14 +201,21 @@ describe("persistent SSH target lifetime", () => {
       .rejects.toThrow("sidecar_service_recovery_required");
   });
 
+  it("keeps a hidden live owner fenced when procfs reports its stat missing", async () => {
+    const { ownership } = fixture();
+    const owner = { pid: process.pid, startTime: "200", bootId: "host-boot", pidNamespace: "pid:[456]" };
+    await expect(ownership.processMatches(owner)).rejects.toThrow("sidecar_service_recovery_required");
+    await expect(ownership.legacyProcessMatches(owner)).rejects.toThrow("sidecar_service_recovery_required");
+  });
+
   it("recognizes exit racing with the namespace lookup after rechecking stat", async () => {
     const { ownership, files, entries } = fixture();
-    entries.set("/proc/77/stat", stat(77, "200", 1));
+    entries.set("/proc/2147483647/stat", stat(2147483647, "200", 1));
     vi.spyOn(files, "readlink").mockImplementation(async () => {
-      entries.delete("/proc/77/stat");
+      entries.delete("/proc/2147483647/stat");
       throw Object.assign(new Error("gone"), { code: "ENOENT" });
     });
-    expect(await ownership.processMatches({ pid: 77, startTime: "200", bootId: "host-boot", pidNamespace: "pid:[456]" })).toBe(false);
+    expect(await ownership.processMatches({ pid: 2147483647, startTime: "200", bootId: "host-boot", pidNamespace: "pid:[456]" })).toBe(false);
   });
 
   it("rejects malformed and obsolete lifetime shapes without a compatibility parser", async () => {

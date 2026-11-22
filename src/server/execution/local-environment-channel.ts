@@ -15,6 +15,7 @@ import { constants as osConstants } from "node:os";
 import path from "node:path";
 import { connect as createTlsConnection, type TLSSocket } from "node:tls";
 import type { IPty } from "node-pty";
+import type { SidecarLaunchRecorder } from "../sidecar/sidecar-launch-ledger.js";
 import { spawnWindowsOwnedProcess } from "./windows-owned-process.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type { SidecarByteStream } from "../../internal/sidecar-protocol/contracts.js";
@@ -300,6 +301,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
   readonly #assuredTcpChannels = new Set<EnvironmentAssuredTcpStreamChannel>();
   readonly #ownedPtyChannels = new Set<EnvironmentOwnedPtyChannel>();
   readonly #environment: Readonly<Record<string, string | undefined>>;
+  readonly #launchRecorder?: Pick<SidecarLaunchRecorder, "armOwnedProcess" | "markUnsupported">;
   readonly #secretIdentityKey = randomBytes(32);
   readonly #activeSecrets = new Set<EnvironmentSecretIdentity>();
   #closed = false;
@@ -308,6 +310,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     readonly scope: RequestScope;
     readonly executionEnvironmentId: string;
     readonly environment?: Readonly<Record<string, string | undefined>>;
+    readonly launchRecorder?: Pick<SidecarLaunchRecorder, "armOwnedProcess" | "markUnsupported">;
   }) {
     if (
       !input.executionEnvironmentId ||
@@ -321,6 +324,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     // Resolve environment-backed connection secrets on each generation so an
     // operator can rotate the value without changing or fingerprinting config.
     this.#environment = input.environment ?? process.env;
+    if (input.launchRecorder) this.#launchRecorder = input.launchRecorder;
   }
 
   async reportRuntimeAvailability(
@@ -505,6 +509,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
       throw new Error("environment_owned_process_preparation_invalid");
     }
     if (signal.aborted) throw signal.reason;
+    let identityRecorded: Promise<void> | undefined;
     let child: ChildProcessWithoutNullStreams;
     let windowsOwnership:
       Awaited<ReturnType<typeof spawnWindowsOwnedProcess>> | undefined;
@@ -518,6 +523,11 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
       });
       child = windowsOwnership.child;
     } else {
+      const intent = this.#launchRecorder ? await this.#launchRecorder.armOwnedProcess() : undefined;
+      if (intent) {
+        this.#assertScope(scope);
+        signal.throwIfAborted();
+      }
       child = spawn(
         input.prepared.executable.canonicalPath,
         [...input.arguments],
@@ -530,6 +540,12 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
           windowsHide: true,
         },
       ) as ChildProcessWithoutNullStreams;
+      if (intent && child.pid) {
+        // Capture while this stack still owns an unreaped PID, including a
+        // short --version probe. The durable write may finish asynchronously.
+        identityRecorded = intent.recordSpawn(child.pid);
+        void identityRecorded.catch(() => undefined);
+      }
       const outcome = await waitForSpawn(child, signal);
       if (outcome.kind === "failed") {
         await cleanupSpawnFailure(child, input.cleanup);
@@ -543,9 +559,28 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
       windowsOwnership,
       cleanup: input.cleanup,
     });
-    if (signal.aborted) {
+    if (identityRecorded) {
+      // Node drains unobserved child pipes on exit. Keep fast probe output
+      // under stream backpressure until the channel can be returned.
+      const retainOutput = () => {};
+      child.stdout.on("readable", retainOutput);
+      child.stderr.on("readable", retainOutput);
+      try { await identityRecorded; }
+      catch (error) {
+        // We cannot claim a group here. Only the just-spawned direct child
+        // has a live libuv handle. Its armed intent survives this failure.
+        child.stdin.destroy();
+        child.kill("SIGKILL");
+        await raceWithCleanupDelay(channel.closed, input.cleanup.killMilliseconds);
+        throw error;
+      } finally {
+        child.stdout.off("readable", retainOutput);
+        child.stderr.off("readable", retainOutput);
+      }
+    }
+    if (signal.aborted || (identityRecorded && this.#closed)) {
       await channel.close("environment_owned_process_open_aborted");
-      throw signal.reason;
+      throw signal.aborted ? signal.reason : new Error("execution_environment_channel_unavailable");
     }
     return channel;
   }
@@ -576,6 +611,11 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     let pty: IPty;
     try {
       const { spawn: spawnPty } = await import("node-pty");
+      if (this.#launchRecorder) {
+        await this.#launchRecorder.markUnsupported("owned_pty");
+        this.#assertScope(scope);
+        signal.throwIfAborted();
+      }
       pty = spawnPty(
         input.prepared.executable.canonicalPath,
         [...input.arguments],

@@ -9,7 +9,8 @@ import { sameSidecarServiceConfiguration, sameSidecarServiceScope, sidecarManage
 import { OutboundCarrierError, type OutboundConnectionRegistry } from '../outbound/outbound-connection-registry.js';
 import { assertSidecarArtifactRegistration, type SidecarArtifactRegistration } from './sidecar-artifact.js';
 import { outboundArtifactManifest } from './local-sidecar-artifact-installer.js';
-import { SidecarConnectionError, SidecarServiceManagementError, SidecarServiceStagingError,
+import { isSidecarOwnershipRecoveryCode } from './sidecar-ownership-recovery-diagnostic.js';
+import { inspectForSidecarLaunch, SidecarConnectionError, SidecarServiceManagementError, SidecarServiceStagingError,
   type PersistentSidecarByteStream, type SidecarArtifactInstallation, type SidecarProvisioner, type SidecarServiceControlInput, type SidecarServiceControlBoundary } from './sidecar-provisioner.js';
 
 /** Server-side strategy. All paths and process operations are resolved by the paired host. */
@@ -53,7 +54,7 @@ export class OutboundSidecarProvisioner implements SidecarProvisioner {
   }
 
   async launch(carrierGeneration: number, sessionNonce: string, signal: AbortSignal): Promise<PersistentSidecarByteStream> {
-    let existing = await this.inspect(signal);
+    let existing = await inspectForSidecarLaunch(this.inspect(signal));
     for (let attempt = 0; existing && this.#outdated(existing); attempt += 1) {
       if (existing.resources.some(resource => resource.state === 'active' || resource.state === 'unknown' || resource.blockers.length > 0)) {
         if (existing.runtimeWireVersion !== SIDECAR_WIRE_VERSION) throw new SidecarServiceManagementError('sidecar_runtime_upgrade_required', existing);
@@ -170,6 +171,9 @@ export class OutboundSidecarProvisioner implements SidecarProvisioner {
     try { return await operation(); }
     catch (error) {
       if (error instanceof OutboundCarrierError) throw new SidecarConnectionError({ cause: error }, error.message);
+      // A connector can reject the runtime ticket before opening a stream. Carry
+      // the target's ownership diagnosis through that command failure too.
+      if (error instanceof Error && isSidecarOwnershipRecoveryCode(error.message)) throw new SidecarServiceManagementError(error.message);
       throw error;
     }
   }

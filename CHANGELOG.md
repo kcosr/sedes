@@ -372,6 +372,12 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Linux and macOS sidecars can restart on the same boot after a crash before
+  any owned process launch. Codex stdio now reports why a native-store lock
+  blocks startup and preserves the store while its operator checks for other
+  writers. See [sidecar recovery](docs/operator/operations.md#persistent-remote-services)
+  and [Codex stdio store recovery](docs/operator/backends/codex.md#stdio-store-recovery).
+
 - Larger Claude threads reopen after idle eviction or reconnection without
   repeatedly expiring their history snapshot. Update execution sidecars with
   the server. See [Claude troubleshooting](docs/operator/backends/claude.md#troubleshooting).

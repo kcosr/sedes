@@ -13,6 +13,14 @@ import { terminalHostFixture } from "../helpers/persistent-terminal-fixture.js";
 afterEach(() => vi.restoreAllMocks());
 
 describe("PersistentTerminalHost", () => {
+  it("cannot open a terminal before the uncovered launch marker is durable", async () => {
+    const beforeLaunch = vi.fn(async () => { throw new Error("coverage_write_failed"); });
+    const fixture = terminalHostFixture({ beforeLaunch });
+    await expect(fixture.create()).rejects.toThrow("terminal_spawn_failed");
+    expect(beforeLaunch).toHaveBeenCalledOnce();
+    expect(fixture.openTerminal).not.toHaveBeenCalled();
+    expect(fixture.resources.size).toBe(0);
+  });
   it("force stop proves PTY cleanup and releases unacknowledged history without a viewer", async () => {
     const fixture = terminalHostFixture();
     const { process } = await fixture.create();

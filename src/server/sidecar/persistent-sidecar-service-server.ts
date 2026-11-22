@@ -2,7 +2,7 @@ import { windowsSidecarIpc } from "./sidecar-windows-ipc.js";
 import { chmod, lstat, unlink } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { LengthPrefixedSidecarFrameTransport } from "../../internal/sidecar-protocol/length-prefixed-frame-transport.js";
-import { SidecarOperationRegistry } from "../../internal/sidecar-protocol/operation-registry.js";
+import { SidecarOperationRegistry, type SidecarOperationKey } from "../../internal/sidecar-protocol/operation-registry.js";
 import { SidecarProtocolPeer } from "../../internal/sidecar-protocol/protocol-peer.js";
 import { readSidecarManagementRecord, writeSidecarManagementRecord } from "../../internal/sidecar-protocol/service-management-channel.js";
 import {
@@ -39,6 +39,7 @@ export class PersistentSidecarServiceServer {
   readonly #endpointPath: string;
   readonly #onRuntimeAttachment: (input: PersistentSidecarRuntimeAttachmentContext) => void;
   readonly #receipts: PersistentSidecarManagementReceipts;
+  readonly #beforeRuntimeOperation?: (key: SidecarOperationKey) => void | Promise<void>;
   readonly #onStopped: () => Promise<void>;
   readonly #server: Server;
   readonly #sockets = new Set<Socket>();
@@ -54,12 +55,14 @@ export class PersistentSidecarServiceServer {
     readonly endpointPath: string;
     readonly onRuntimeAttachment: (input: PersistentSidecarRuntimeAttachmentContext) => void;
     readonly receipts: PersistentSidecarManagementReceipts;
+    readonly beforeRuntimeOperation?: (key: SidecarOperationKey) => void | Promise<void>;
     readonly onStopped: () => Promise<void>;
   }) {
     this.#registry = input.registry;
     this.#endpointPath = input.endpointPath;
     this.#onRuntimeAttachment = input.onRuntimeAttachment;
     this.#receipts = input.receipts;
+    if (input.beforeRuntimeOperation) this.#beforeRuntimeOperation = input.beforeRuntimeOperation;
     this.#onStopped = input.onStopped;
     let resolveClosed!: () => void;
     this.closed = new Promise((resolve) => { resolveClosed = resolve; });
@@ -216,7 +219,10 @@ export class PersistentSidecarServiceServer {
       if (request.runtimeWireVersion !== status.runtimeWireVersion) throw new Error("sidecar_runtime_upgrade_required");
       const controllerEpoch = this.#registry.attach(request.configuration, request.mode);
       admittedControllerEpoch = controllerEpoch;
-      const registry = new SidecarOperationRegistry({ beforeDispatch: () => this.#registry.assertController(controllerEpoch) });
+      const registry = new SidecarOperationRegistry({
+        beforeDispatch: () => this.#registry.assertController(controllerEpoch),
+        ...(this.#beforeRuntimeOperation ? { prepareDispatch: this.#beforeRuntimeOperation } : {}),
+      });
       // There is no provider/session lifetime in this carrier. Even protocol
       // errors must detach resource callbacks before peer cancellation runs.
       const transport = new LengthPrefixedSidecarFrameTransport({

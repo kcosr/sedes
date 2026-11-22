@@ -221,6 +221,30 @@ teardown. Sidecar-hosted work survives main-server and carrier disconnects;
 unacknowledged outcomes and retained remote threads prevent idle retirement.
 Remote eviction requires sidecar runtime protocol 8.
 
+#### Stdio store recovery
+
+When a sidecar reports a native-store refusal during startup, inspect
+`.harness-codex-runtime.lock` under the resolved `CODEX_HOME` on the execution
+host. The directory coordinates Sedes instances. An independently operated
+Codex app-server can use the same store without taking that lock.
+
+- `codex_native_store_already_locked` means a recorded owner appears live.
+  Identify it from its service records and leave its work running.
+- `codex_native_store_stale_lock_requires_operator` means Sedes cannot
+  safely retire the saved claim. Older locks contain only a PID and nonce.
+  Inspect the exact sidecar, its children and the host that owns the store.
+- `codex_native_store_exclusivity_requires_operator` means Sedes established
+  that the previous sidecar claim ended. The lock directory still fences
+  stdio startup while the operator checks for other users of the store.
+
+Check the configured home and running work through the owning Codex service,
+including any other host or container with access to that filesystem.
+If another daemon uses the home, coordinate a graceful shutdown with its
+operator once its work is idle. After confirming exclusive use, pause
+competing Sedes starts, quarantine the inspected lock directory intact, and
+retry the existing stdio backend. Its saved connection and thread bindings
+continue to use the same native history.
+
 ### Local Unix WebSocket
 
 The socket modes are a capability boundary. Sedes requires a canonical,
@@ -518,7 +542,7 @@ mutation safe to repeat.
 | A console window briefly flashes when a Windows turn starts  | Current Codex Windows releases may create a visible PowerShell command-safety helper even when Sedes starts `codex.exe` without a console window. This is provider-runtime behavior; upgrade Codex when its Windows child-process fix is available.                                                                                                                    |
 | A configured MCP server's tools are missing on Windows      | Upgrade the Windows sidecar or Managed Local server and restart the Codex backend. A configured server must complete its startup handshake before its tools are available; thread warnings identify failed servers without exposing native error details. |
 | Codex reports that login is required                         | Authenticate the same service account using its intended `HOME`/`CODEX_HOME`. Sedes does not translate API credentials or perform login.                                                                                                                                                                 |
-| Native store is already locked                               | Another owned Codex/Sedes process is using the same store. Stop the other owner; do not remove the lock blindly or operate one native store concurrently.                                                                                                                                                |
+| Native store is already locked                               | Inspect the reported owner and confirm exclusive use with the store's operator. See [stdio store recovery](#stdio-store-recovery).                                                                                                                                                                       |
 | Local UDS fails route assurance                              | Start the external daemon first, then verify that the socket parent is owned and mode `0700`, the filesystem socket is owned and mode `0600`, and the configured path is exact.                                                                                                                          |
 | TCP connection receives `401` or `403`                       | Confirm the capability bearer is available to the Sedes service and matches the daemon. It is required in addition to provider authentication.                                                                                                                                                           |
 | WebSocket URL is rejected                                    | Plain `ws://` accepts only literal loopback. `wss://` requires platform-trusted TLS, hostname verification, and TLS 1.2 or newer. Use a persistent-sidecar target for a remote execution environment.                                                                                                                        |

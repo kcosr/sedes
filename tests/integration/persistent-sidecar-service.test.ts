@@ -5,6 +5,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { sidecarLaunchLedgerDirectory } from "../../src/server/sidecar/sidecar-launch-ledger.js";
 import { persistentSidecarPaths } from "../../src/server/sidecar/persistent-sidecar-paths.js";
 import { sidecarSocketByteStream } from "../../src/server/sidecar/sidecar-socket-byte-stream.js";
 import { readSidecarManagementRecord, writeSidecarManagementRecord } from "../../src/internal/sidecar-protocol/service-management-channel.js";
@@ -301,15 +302,37 @@ describe("bundled persistent sidecar service", () => {
     }
   }, 30_000);
 
-  it("does not spawn a replacement after an unconfirmed supervisor death", async () => {
+  it.each(["complete", "missing"])("recovers a crashed unused sidecar only with %s launch evidence", async evidence => {
     const service = await fixture();
     const first = await service.launch();
-    const descriptor = JSON.parse(await readFile(service.paths.descriptorPath, "utf8"));
+    const directory = sidecarLaunchLedgerDirectory(service.paths.serviceDirectory, first.serviceIncarnation);
+    const descriptorBytes = await readFile(service.paths.descriptorPath, "utf8");
+    const descriptor = JSON.parse(descriptorBytes);
     expect(descriptor.serviceIncarnation).toBe(first.serviceIncarnation);
     process.kill(descriptor.process.pid, "SIGKILL");
     await vi.waitFor(async () => { await expect(service.status()).rejects.toMatchObject({ code: "ECONNREFUSED" }); });
-    await expect(service.launch()).rejects.toThrow("sidecar_service_orphan_cleanup_unproven");
-    expect(JSON.parse(await readFile(service.paths.descriptorPath, "utf8")).serviceIncarnation).toBe(first.serviceIncarnation);
+    // A version-3 predecessor could publish this exact descriptor with no ledger.
+    if (evidence === "missing") await rm(directory, { recursive: true });
+    const installer = localInstaller(service);
+    const signal = AbortSignal.timeout(20_000);
+    await installer.install(signal);
+    const code = evidence === "complete" ? "sidecar_service_replacement_ready" : "sidecar_service_orphan_cleanup_unproven";
+    await expect(installer.inspect(signal)).rejects.toMatchObject({ code });
+    await expect(installer.attachExisting(1, "n".repeat(48), signal)).rejects.toMatchObject({ code });
+    await expect(readFile(path.join(directory, "retired.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(service.paths.descriptorPath, "utf8")).toBe(descriptorBytes);
+    if (evidence === "missing") {
+      await expect(installer.launch(1, "n".repeat(48), signal)).rejects.toMatchObject({ code });
+      await expect(service.launch()).rejects.toThrow(code);
+      expect(await readFile(service.paths.descriptorPath, "utf8")).toBe(descriptorBytes);
+    } else {
+      const stream = await installer.launch(1, "n".repeat(48), signal);
+      try {
+        expect(stream.serviceStatus.serviceIncarnation).not.toBe(first.serviceIncarnation);
+        expect((await installer.inspect(signal))?.serviceIncarnation).toBe(stream.serviceStatus.serviceIncarnation);
+        expect(JSON.parse(await readFile(path.join(directory, "retired.json"), "utf8")).retiredOwner.incarnation).toBe(first.serviceIncarnation);
+      } finally { await stream.close("test_complete"); }
+    }
   }, 30_000);
 
   it("installs the native bundle and replays completed controls without stopping their replacement", async () => {

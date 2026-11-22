@@ -206,6 +206,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/sidecar/sanitized-sidecar-environment.ts",
   "src/server/sidecar/persistent-sidecar-bootstrap.ts",
   "src/server/sidecar/sidecar-process-ownership.ts",
+  "src/server/sidecar/sidecar-launch-ledger.ts",
   "src/server/sidecar/sidecar-darwin-platform.ts",
   "src/server/sidecar/sidecar-windows-platform.ts",
   "src/server/sidecar/sidecar-windows-ipc.ts",
@@ -214,6 +215,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/sidecar/persistent-sidecar-management-receipts.ts",
   "src/server/sidecar/sidecar-abandonment-archive.ts",
   "src/server/sidecar/sidecar-runtime-attachment.ts",
+  "src/server/sidecar/sidecar-runtime-launch-coverage.ts",
   "src/server/sidecar/runtime-channel.ts",
   "src/server/sidecar/persistent-terminal-host.ts",
   "src/server/execution/local-interactive-terminal-provider.ts",
@@ -333,6 +335,60 @@ const FORBIDDEN_DATABASE_IMPORTS = Object.freeze([
   "@prisma/client",
 ]);
 
+// A new launch dependency in an already-admitted provider action or operation
+// must enter the sidecar ownership audit before it can ship.
+const processLaunchImporters = new Map([
+  ["child_process", new Set([
+    // Stdio launches, startup, and read-only OS ownership inspection.
+    "src/server/execution/local-environment-channel.ts",
+    "src/server/runtime/process-table.ts",
+    "src/server/sidecar/persistent-sidecar-bootstrap.ts",
+    "src/server/sidecar/sidecar-darwin-platform.ts",
+    "src/server/sidecar/sidecar-launch-ledger.ts",
+    // Backend probes and OpenCode's explicitly marked owned runtime.
+    "src/server/backends/codex/codex-release-guard.ts",
+    "src/server/backends/opencode/opencode-owned-process.ts",
+    "src/server/backends/opencode/opencode-release.ts",
+    // Shell, Git, watcher, and search launches require the uncovered marker.
+    "src/server/sidecar/workspace-tools-shell-host.ts",
+    "src/server/workspace-files/git-environment.ts",
+    "src/server/workspace-files/local-workspace-file-watcher.ts",
+    "src/server/workspace-files/workspace-diffs-engine.ts",
+    "src/server/workspace-files/workspace-files-engine.ts",
+    "src/server/workspace-tools/trusted-search-executables.ts",
+    // Windows has no automatic same-boot reclamation.
+    "src/server/composer-attachments/windows-staging-privacy.ts",
+    "src/server/execution/windows-owned-process.ts",
+    "src/server/sidecar/sidecar-windows-platform.ts",
+    "src/server/workspace-tools/trusted-search-windows.ts",
+  ])],
+  ["node-pty", new Set([
+    "src/server/execution/local-environment-channel.ts",
+    "src/server/execution/local-interactive-terminal-provider.ts",
+    "src/server/sidecar/sedes-sidecar-main.ts", // Native capability probe.
+  ])],
+  ["worker_threads", new Set()], // Only the bundled node-pty dependency uses workers.
+]);
+
+function assertProcessLaunchImports(inputs, repositoryRoot) {
+  for (const [inputPath, metadata] of Object.entries(inputs)) {
+    const source = path.relative(repositoryRoot, path.resolve(repositoryRoot, inputPath)).split(path.sep).join("/");
+    if (!source.startsWith("src/")) continue;
+    if (!Array.isArray(metadata.imports)) throw new Error("sidecar_build_metafile_invalid");
+    for (const entry of metadata.imports) {
+      // esbuild records builtins as externals and resolves bundled node-pty
+      // imports to files under node_modules, including dynamic imports.
+      const dependency = entry.original === "node-pty" || /(?:^|\/)node-pty(?:\/|$)/u.test(entry.path)
+        ? "node-pty"
+        : entry.path.replace(/^node:/u, "");
+      const approved = processLaunchImporters.get(dependency);
+      if (approved && !approved.has(source)) {
+        throw new Error("sidecar_build_process_launch_import_unreviewed", { cause: { source, dependency } });
+      }
+    }
+  }
+}
+
 /** Proves the dual-purpose bundle contains only its reviewed CLI/sidecar sources. */
 export function assertSidecarSourceOwnership(
   metafile,
@@ -393,6 +449,7 @@ export function assertSidecarSourceOwnership(
       ),
     });
   }
+  assertProcessLaunchImports(metafile.inputs, repositoryRoot);
   const output = Object.entries(metafile.outputs).find(
     ([outputPath]) =>
       path.resolve(repositoryRoot, outputPath) ===

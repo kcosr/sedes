@@ -1,5 +1,19 @@
 import type { BackendNativeStoreLease } from "../module.js";
 
+const nativeStoreRefusals = new Map([
+  ["codex_native_store_already_locked", "The Codex store lock records an owner that appears live. Verify its identity and work on the execution host."],
+  ["codex_native_store_stale_lock_requires_operator", "Codex stdio is blocked by a native-store lock whose ownership is unproven. Inspect the lock and its owner's processes on the execution host."],
+  ["codex_native_store_exclusivity_requires_operator", "The previous sidecar's Codex store claim has been retired. Check for other users of CODEX_HOME and quarantine the inspected lock before restarting stdio."],
+]);
+
+export function codexNativeStoreRefusal(error: unknown): { code: string; message: string } | undefined {
+  for (let depth = 0; depth < 8 && error instanceof Error; depth++, error = error.cause) {
+    const message = nativeStoreRefusals.get(error.message);
+    if (message) return { code: error.message, message };
+  }
+  return undefined;
+}
+
 export const CODEX_CLEANUP_UNCERTAINTIES = [
   "orphaned_process_group",
   "process_cleanup_failed",

@@ -91,11 +91,22 @@ export function createSidecarProcessOwnership(files: typeof fs, platform?: Sidec
       return { pid, startTime: stat.startTime, bootId: await boot(), pidNamespace: await namespace(pid, root) };
     } catch (error) { if (code(error, "ENOENT")) return undefined; throw error; }
   };
+  const inspectPid = async (pid: number) => {
+    try { return await readStat(pid, "/proc"); }
+    catch (error) {
+      if (!code(error, "ENOENT")) throw error;
+      // hidepid and restricted proc mounts can hide the stat of a live process.
+      // Only kernel ESRCH for this PID confirms absence; signal zero delivers nothing.
+      try { process.kill(pid, 0); }
+      catch (probe) { if (code(probe, "ESRCH")) return undefined; throw probe; }
+      throw invalid();
+    }
+  };
   const processMatches = async (expected: SidecarProcessIdentity): Promise<boolean> => {
     try {
       if (platform) return sameProcess(await platform.readProcess(expected.pid), expected);
       if (await boot() !== expected.bootId) return false;
-      const stat = await readStat(expected.pid, "/proc").catch(error => { if (code(error, "ENOENT")) return undefined; throw error; });
+      const stat = await inspectPid(expected.pid);
       if (!stat || stat.startTime !== expected.startTime) return false;
       // An unreaped owner with no sibling threads cannot execute further work.
       // This retires only a lock owner/already-stopped daemon; namespace lifetime
@@ -106,7 +117,7 @@ export function createSidecarProcessOwnership(files: typeof fs, platform?: Sidec
       try { return await namespace(expected.pid, "/proc") === expected.pidNamespace; }
       catch (error) {
         if (code(error, "ENOENT")) {
-          const current = await readStat(expected.pid, "/proc").catch(statError => { if (code(statError, "ENOENT")) return undefined; throw statError; });
+          const current = await inspectPid(expected.pid);
           if (!current || current.startTime !== expected.startTime) return false;
         }
         // Permission denial (or an absent namespace link with a matching stat)
@@ -136,7 +147,7 @@ export function createSidecarProcessOwnership(files: typeof fs, platform?: Sidec
   const legacyProcessMatches = async (expected: SidecarLegacyProcessIdentity): Promise<boolean> => {
     try {
       if (await boot() !== expected.bootId) return false;
-      const stat = await readStat(expected.pid, "/proc").catch(error => { if (code(error, "ENOENT")) return undefined; throw error; });
+      const stat = await inspectPid(expected.pid);
       if (!stat || stat.startTime !== expected.startTime) return false;
       return !(stat.dead && stat.threadCount === 1);
     } catch (error) { throw new Error("sidecar_service_recovery_required", { cause: error }); }

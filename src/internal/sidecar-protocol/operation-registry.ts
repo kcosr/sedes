@@ -34,8 +34,15 @@ export interface RegisteredSidecarOperation {
 export class SidecarOperationRegistry {
   readonly #operations = new Map<string, RegisteredSidecarOperation>();
   readonly #beforeDispatch: (() => void) | undefined;
+  readonly #prepareDispatch: ((key: SidecarOperationKey) => void | Promise<void>) | undefined;
 
-  constructor(input?: { readonly beforeDispatch?: () => void }) { this.#beforeDispatch = input?.beforeDispatch; }
+  constructor(input?: {
+    readonly beforeDispatch?: () => void;
+    readonly prepareDispatch?: (key: SidecarOperationKey) => void | Promise<void>;
+  }) {
+    this.#beforeDispatch = input?.beforeDispatch;
+    this.#prepareDispatch = input?.prepareDispatch;
+  }
 
   /** Each attachment adds its own framed streams to an immutable handler base. */
   fork(): SidecarOperationRegistry {
@@ -57,6 +64,12 @@ export class SidecarOperationRegistry {
       definition: definition as SidecarOperationDefinition<unknown, unknown>,
       handler: ((request, context) => {
         this.#beforeDispatch?.();
+        const ready = this.#prepareDispatch?.(definition);
+        if (ready) return ready.then(() => {
+          this.#beforeDispatch?.();
+          context.signal.throwIfAborted();
+          return handler(request as Request, context);
+        });
         return handler(request as Request, context);
       }) as SidecarOperationHandler<unknown, unknown>,
     });

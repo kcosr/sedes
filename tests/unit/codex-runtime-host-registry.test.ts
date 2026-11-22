@@ -2,7 +2,7 @@ import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed
 import { CodexRemoteRuntimeSupervisor } from "../../src/server/backends/codex/runtime/codex-remote-runtime-supervisor.js";
 import { CodexServerRequestRouter } from "../../src/server/backends/codex/codex-server-request-router.js";
 import { codexRuntimeMethod } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -49,6 +49,35 @@ function fixture() {
   return { services, hosts, epoch, archive };
 }
 beforeEach(() => { native.launches = 0; native.closes = 0; native.cleanupFailure = false; });
+
+it("reports native-store refusals over runtime.ensure before launch and keeps private failures off the wire", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-ensure-lock-"));
+  const lock = path.join(directory, ".harness-codex-runtime.lock");
+  const owner = path.join(lock, "owner.json");
+  const f = fixture();
+  const carrier = await createSidecarFramedCarrier();
+  const detach = registerCodexRuntimeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel,
+    hosts: f.hosts, services: f.services, controllerEpoch: f.epoch, onDetach: () => f.services.detach(f.epoch) });
+  const connection = new CodexSidecarRuntimeConnection(carrier.mainChannel);
+  const owned = { ...configuration, connection: { ownership: "owned" as const,
+    channel: { type: "process_stdio" as const, executablePath: process.execPath, workingDirectory: directory, codexHome: directory } } };
+  try {
+    await mkdir(lock, { mode: 0o700 });
+    await carrier.start();
+    for (const [pid, code] of [[process.pid, "codex_native_store_already_locked"], [0, "codex_native_store_stale_lock_requires_operator"]] as const) {
+      const record = JSON.stringify({ version: 1, pid, nonce: "legacy" });
+      await writeFile(owner, record, { mode: 0o600 });
+      await expect(connection.ensure(owned)).rejects.toMatchObject({ code, retryable: false });
+      expect(await readFile(owner, "utf8")).toBe(record);
+    }
+    const ensure = vi.spyOn(f.hosts, "ensure");
+    ensure.mockRejectedValueOnce(new Error("codex_native_store_exclusivity_requires_operator"));
+    await expect(connection.ensure(owned)).rejects.toMatchObject({ code: "codex_native_store_exclusivity_requires_operator" });
+    ensure.mockRejectedValueOnce(new Error("codex_native_store_private_path=/home/provider"));
+    await expect(connection.ensure(owned)).rejects.toMatchObject({ code: "sidecar_operation_failed" });
+    expect(native.launches).toBe(0);
+  } finally { connection.close(); detach(); await carrier.close(); await rm(directory, { recursive: true, force: true }); }
+});
 
 it("forces an external unknown runtime closed with retained outcomes, preserving scoped abandonment evidence", async () => {
   const f = fixture();
