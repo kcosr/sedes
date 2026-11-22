@@ -47,7 +47,8 @@ AgentBackendRegistry ── normalized backend contracts
         ├── Codex backend ── Codex app-server
         ├── Claude backend ─ local worker or persistent SSH/outbound runtime / Claude Code CLI
         ├── Grok backend ─── Grok ACP
-        └── OpenCode backend ─ stock v2 daemon over HTTP/SSE
+        ├── OpenCode backend ─ stock v2 daemon over HTTP/SSE
+        └── Antigravity backend ─ owned ACP process, local or persistent sidecar
 
 ExecutionEnvironment
   ├── Local: paths, processes, channels, PTYs, and Files
@@ -67,8 +68,9 @@ Provider state
 
 [`src/server/backends/compiled-module-catalog.ts`](../../src/server/backends/compiled-module-catalog.ts)
 is the sole shared production composition point that imports provider modules.
-It compiles Pi SDK, Pi, Codex, Claude, Grok, and OpenCode. Shared services depend on normalized
-module and driver contracts and never import provider SDK or protocol types.
+It compiles Pi SDK, Pi, Codex, Claude, Grok, OpenCode, and Antigravity. Shared
+services depend on normalized module and driver contracts. Provider SDK and
+protocol types stay in their backend modules.
 
 ## Authority and ownership
 
@@ -336,8 +338,7 @@ transaction. A stale revision, changed confirmation count, invalid target, or
 single blocker aborts the complete database mutation; publications occur only
 after commit. Park and unpark leave Tasks attached to their threads and do not
 confirm or limit open Tasks; bulk archive alone can move or complete them.
-Pi, Codex, Claude, Grok, and OpenCode therefore share this exact path and
-need no provider-specific implementation or capability. Bulk archive retains
+All compiled backends share this path through the application. Bulk archive retains
 isolated execution workspaces because filesystem deletion cannot join the
 database transaction, and archived threads have no bulk-stack restore path.
 Archive additionally takes the affected per-thread coordinator and
@@ -355,8 +356,8 @@ changed membership or edits reject completion before any changes commit.
 Completion sets Task completion/update timestamps and advances revisions without
 moving ownership. The durable receipt's existing `movedTaskIds` field records
 all changed Tasks, including completions, for post-commit and replay publication.
-Pi, Codex, Claude, Grok, and OpenCode share this application-owned behavior
-without native provider calls. The agent archive tool intentionally offers only move/keep:
+All compiled backends share this application-owned behavior without native
+provider calls. The agent archive tool intentionally offers only move/keep:
 it has no reviewed-impact token and must not synthesize completion consent.
 
 The browser's requested delivery intent and the server's admitted mode are
@@ -365,11 +366,10 @@ turn, Submit resolves to Steer only when the backend advertises a Steer
 delivery mode and its declared `steerTarget` can be proven: a turn-scoped
 target requires the exact active turn, while a conversation-scoped target
 requires only the bound conversation. Otherwise it resolves to Queue. Explicit
-Queue stays Queue. Pi and Codex steer the exact active turn; Claude's Steer is
-conversation-scoped and is delivered at the provider's next native
-opportunity, so it may join the active turn or open the next one and never
-interrupts current work; Grok advertises no Steer, so its active-turn input
-stays in Queue. Transitional, disconnected, stale-target, and recovery states
+Queue stays Queue. Pi and Codex steer the exact active turn. Claude, OpenCode,
+and Antigravity Steer targets the conversation at the next native opportunity.
+It can join the active turn or start the next one without interrupting current
+work. Grok uses Queue for active-turn input. Transitional, disconnected, stale-target, and recovery states
 fail closed or retain work durably rather than guessing.
 
 New Sedes threads exist before native creation. First send reserves creation,

@@ -100,7 +100,11 @@ export class PiNativeHostRegistry {
     let unregister = () => {};
     const entry: Entry = { host, fingerprint: identity(configuration), unregister: () => unregister() };
     unregister = this.input.services.register({ resourceId: host.runtimeId, kind: "provider",
-      snapshot: () => host.snapshot(), onDetach: () => host.detach(),
+      snapshot: () => {
+        const { state, revision, blockers } = host.snapshot();
+        return { state, revision, blockers };
+      },
+      onDetach: () => host.detach(),
       stop: async (reason, { force }) => {
         await host.stop({ expectedRevision: host.snapshot().revision, force }, undefined, undefined,
           evidence => this.input.services.recordAbandonment({ resourceId: host.runtimeId, kind: "pi_native", reason, evidence }));

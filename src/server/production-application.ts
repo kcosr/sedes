@@ -806,10 +806,18 @@ export async function startProductionApplication(
     resources.defer("viewed image capture", () => viewedImageCapture.close(), {
       mode: "ownership_critical",
     });
-    const localAgentToolCli = await resolveLocalAgentToolCliAvailability({
+    const resolvedLocalAgentToolCli = await resolveLocalAgentToolCliAvailability({
       endpoint: `http://127.0.0.1:${config.port}`,
       inheritedPath: environment.PATH,
     });
+    const localAgentToolCli: AgentToolCliAvailability = resolvedLocalAgentToolCli.availability === "available"
+      ? Object.freeze({ ...resolvedLocalAgentToolCli, get endpoint() {
+          const address = server?.address();
+          const port = address && typeof address !== "string" ? address.port : config.port;
+          if (!port) throw new Error("agent_tool_listener_not_ready");
+          return `http://127.0.0.1:${port}`;
+        } })
+      : resolvedLocalAgentToolCli;
     const agentToolCli = new Map<string, AgentToolCliAvailability>(
       backendConfigurationFile.executionEnvironments.map((configured) => [
         configured.id,
@@ -1071,7 +1079,14 @@ export async function startProductionApplication(
     for (const configured of backendConfigurationFile.backends) {
       const preference = desiredConfiguration.runtimes.find(item => item.resourceKind === "backend" && item.resourceId === configured.id)?.preference;
       if (!preference || preference === "automatic") {
-        if (compiledBackendModuleCatalog.requireModule(configured.kind).startupPolicy === "connect_provider") hasDeferredBackendStartup = true;
+        // An ephemeral local endpoint is not known until listen completes.
+        // Runtime composition may legitimately snapshot its CLI environment
+        // (Codex does), so defer it rather than exposing port0 or throwing from
+        // a late getter before the listener has acquired its actual address.
+        const needsBoundLocalEndpoint = config.port === 0 && resolvedLocalAgentToolCli.availability === "available" &&
+          backendConfigurationFile.targets.some(target => target.backendInstanceId === configured.id && target.enabled &&
+            environmentOperations.get(target.executionEnvironmentId)?.environmentKind === "local");
+        if (needsBoundLocalEndpoint || compiledBackendModuleCatalog.requireModule(configured.kind).startupPolicy === "connect_provider") hasDeferredBackendStartup = true;
         else await applyBackendRuntime(configured.id);
       }
     }

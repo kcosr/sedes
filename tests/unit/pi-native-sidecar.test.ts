@@ -110,6 +110,26 @@ function recoveryContext(lease: SidecarRuntimeLease): BackendRuntimeRecoveryCont
 }
 
 describe("native Pi persistent sidecar", () => {
+  it("publishes idle and unsettled native Pi resources through service status", async () => {
+    const f = await fixture(), connection = await attachment(f), { port } = proxy(connection.lease);
+    const initial = await port.inspect();
+    const resource = () => f.services.status().resources.find(value => value.resourceId === initial.runtimeId);
+    expect(resource()).toEqual({ resourceId: initial.runtimeId, kind: "provider", state: "idle",
+      revision: initial.revision, blockers: [] });
+
+    const { handleId } = await port.attach(identity);
+    const operation = { handleId, operationId: "retained" };
+    await port.request({ ...operation, retainOutcome: true, command: { channel: "rpc", command: { type: "get_state" } } });
+    const retained = await port.inspect();
+    expect(retained.retainedSessions[0]?.retainedOperationIds).toEqual([operation.operationId]);
+    expect(resource()).toEqual({ resourceId: initial.runtimeId, kind: "provider", state: "active",
+      revision: retained.revision, blockers: ["unsettled_outcome"] });
+
+    await port.acknowledgeOperation(operation);
+    expect(resource()).toEqual({ resourceId: initial.runtimeId, kind: "provider", state: "idle",
+      revision: (await port.inspect()).revision, blockers: [] });
+  });
+
   it.skipIf(process.platform === "win32")("preserves the last admitted version during a concurrent real probe and after its cancellation", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "pi-probe-held-"));
     cleanup.push(() => rm(directory, { recursive: true, force: true }));

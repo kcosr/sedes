@@ -2,8 +2,24 @@ import { describe, expect, it, vi } from "vitest";
 import { controlHelloOperation } from "../../src/internal/sidecar-protocol/control-v2.js";
 import { SidecarOperationRegistry } from "../../src/internal/sidecar-protocol/operation-registry.js";
 import { recordUncoveredRuntimeOperation } from "../../src/server/sidecar/sidecar-runtime-launch-coverage.js";
+import { antigravityRuntimeOperations } from "../../src/server/backends/antigravity/sidecar/wire.js";
 
 describe("sidecar runtime launch coverage", () => {
+  it("covers audited Antigravity operations while fencing new operations and versions", async () => {
+    const recorder = { markUnsupported: vi.fn(async () => {}) };
+    for (const operation of antigravityRuntimeOperations) {
+      expect(recordUncoveredRuntimeOperation(recorder, operation)).toBeUndefined();
+      await recordUncoveredRuntimeOperation(recorder, { ...operation, majorVersion: operation.majorVersion + 1 });
+    }
+    await recordUncoveredRuntimeOperation(recorder, {
+      capabilityId: "antigravity_runtime", majorVersion: 4, operation: "runtime.future",
+    });
+    expect(recorder.markUnsupported.mock.calls).toEqual([
+      ...antigravityRuntimeOperations.map(operation => [`antigravity_runtime:5:${operation.operation}`]),
+      ["antigravity_runtime:4:runtime.future"],
+    ]);
+  });
+
   it("keeps a connected idle service unused and fences direct Git, search and future launches", async () => {
     const recorder = { markUnsupported: vi.fn(async () => {}) };
     for (const key of [

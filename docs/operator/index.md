@@ -35,7 +35,8 @@ Provider and packaged-client details are separate references:
 
 - [Pi](backends/pi-native.md), [Pi SDK](backends/pi.md),
   [Codex](backends/codex.md), [Claude](backends/claude.md),
-  [Grok](backends/grok.md), and [OpenCode](backends/opencode.md)
+  [Grok](backends/grok.md), [OpenCode](backends/opencode.md), and
+  [Antigravity](backends/antigravity.md)
 - [Android](clients/android.md) and [Electron](clients/electron.md)
 
 ## Before installing

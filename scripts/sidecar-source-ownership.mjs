@@ -19,6 +19,31 @@ const REQUIRED_SHARED_SOURCES = Object.freeze([
 ]);
 
 const ALLOWED_REPOSITORY_SOURCES = new Set([
+  // Antigravity's provider-owned ACP runtime and passive native store reader.
+  // Application repositories, signing/presentation and driver code stay on main.
+  "src/server/backends/antigravity/port.ts",
+  "src/server/backends/antigravity/release-profile.ts",
+  "src/server/backends/antigravity/acp-connection.ts",
+  "src/server/backends/antigravity/native-schema.ts",
+  "src/server/backends/antigravity/native-projection.json",
+  "src/server/backends/antigravity/native-protobuf.ts",
+  "src/server/backends/antigravity/native-guards.ts",
+  "src/server/backends/antigravity/native-history.ts",
+  "src/server/backends/antigravity/native-history-reader.ts",
+  "src/server/backends/antigravity/native-execution.ts",
+  "src/server/backends/antigravity/host/native-activity.ts",
+  "src/server/backends/antigravity/host/native-host.ts",
+  "src/server/backends/antigravity/host/host-registry.ts",
+  "src/server/backends/antigravity/sidecar/register-host.ts",
+  "src/server/backends/antigravity/sidecar/wire.ts",
+  "src/server/provider-protocol/bindings/acp-v1/schema.ts",
+  "src/server/provider-protocol/bindings/acp-v1/projection.ts",
+  "src/server/provider-protocol/bindings/acp-v1/generated/1.3.0/validators.ts",
+  "src/server/provider-protocol/bindings/acp-v1/generated/1.3.0/projectors.ts",
+  "src/server/provider-protocol/bindings/acp-v1/descriptors.ts",
+  "src/server/provider-protocol/bindings/acp-v1/errors.ts",
+  "src/server/provider-protocol/bindings/acp-v1/acp-binding.ts",
+  "src/server/provider-protocol/bindings/acp-v1/index.ts",
   // Native Pi RPC host: provider process/store ownership, no main repositories.
   "src/server/backends/pi/native/command-policy.ts",
   "src/server/backends/pi/native/launch-environment.ts",
@@ -255,6 +280,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
 ]);
 
 const ALLOWED_SOURCE_PREFIXES = Object.freeze([
+  "node_modules/@agentclientprotocol/sdk/dist/",
   "src/internal/agent-tool-cli-protocol/",
   "src/internal/agent-tool-mcp/",
   "src/internal/sidecar-protocol/",
@@ -279,6 +305,7 @@ const ALLOWED_SOURCE_PREFIXES = Object.freeze([
 ]);
 
 const ALLOWED_EXTERNAL_IMPORTS = new Set([
+  "node:sqlite", // Importer restricted to the native Antigravity reader below.
   "node:zlib",
   "node:timers/promises",
   "node:async_hooks",
@@ -296,6 +323,7 @@ const ALLOWED_EXTERNAL_IMPORTS = new Set([
   "node:url",
   "node:module",
   "node:events",
+  "node:worker_threads",
   "node:stream",
   "fs",
   "path",
@@ -367,7 +395,11 @@ const processLaunchImporters = new Map([
     "src/server/execution/local-interactive-terminal-provider.ts",
     "src/server/sidecar/sedes-sidecar-main.ts", // Native capability probe.
   ])],
-  ["worker_threads", new Set()], // Only the bundled node-pty dependency uses workers.
+  ["worker_threads", new Set([
+    // Passive SQLite worker stays inside the sidecar process; its separately
+    // audited bundle cannot launch OS processes or outlive that process.
+    "src/server/backends/antigravity/native-history-reader.ts",
+  ])],
 ]);
 
 function assertProcessLaunchImports(inputs, repositoryRoot) {
@@ -458,6 +490,12 @@ export function assertSidecarSourceOwnership(
   if (!output?.inputs || typeof output.inputs !== "object") {
     throw new Error("sidecar_build_output_metafile_missing");
   }
+  const nativeSqliteReader = "src/server/backends/antigravity/native-history.ts";
+  const sqliteImporters = Object.entries(metafile.inputs).filter(([, entry]) =>
+    entry?.imports?.some(imported => imported.path === "node:sqlite"),
+  ).map(([inputPath]) => path.relative(repositoryRoot, path.resolve(repositoryRoot, inputPath)).split(path.sep).join("/"));
+  const admittedNativeSqlite = sqliteImporters.length === 1 && sqliteImporters[0] === nativeSqliteReader;
+  if (sqliteImporters.length && !admittedNativeSqlite) throw new Error("sidecar_build_database_import_forbidden");
   if (
     Array.isArray(output.imports) &&
     output.imports.some(
@@ -465,6 +503,7 @@ export function assertSidecarSourceOwnership(
         entry &&
         typeof entry === "object" &&
         typeof entry.path === "string" &&
+        !(entry.path === "node:sqlite" && admittedNativeSqlite) &&
         FORBIDDEN_DATABASE_IMPORTS.some(
           (specifier) =>
             entry.path === specifier || entry.path.startsWith(`${specifier}/`),

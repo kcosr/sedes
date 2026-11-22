@@ -116,10 +116,11 @@ boundary or necessary coverage justifies it. Run E2E through the npm
 coordinator scripts, not raw Playwright, so ports, state, artifacts, and process
 cleanup remain isolated.
 
-Do not run live-provider Pi, Codex, Claude, Grok, or OpenCode suites by default.
-These include `test:real-pi*`, `test:live-pi-native`, `test:real-codex*`, `test:real-claude*`,
-`test:real-grok*`, and `test:live-opencode`. They consume live provider capacity
-and may require authenticated external services. When work materially changes
+Do not run live-provider Pi, Codex, Claude, Grok, OpenCode, or Antigravity suites
+by default. These include `test:real-pi*`, `test:live-pi-native`,
+`test:real-codex*`, `test:real-claude*`, `test:real-grok*`, `test:live-opencode`,
+and `test:live-antigravity`. They consume live provider capacity and may require
+authenticated external services. When work materially changes
 a backend's protocol handling, streaming, history, lifecycle, tools, or provider
 integration behavior, ask the user whether to run its relevant live suite
 before doing so. If a relevant live suite is not run, explicitly call that out
@@ -144,6 +145,12 @@ The native gate also requires `SEDES_RUN_LIVE_PI_NATIVE=1` and an absolute
 `SEDES_LIVE_PI_NATIVE_EXECUTABLE` selecting isolated stock stable Pi >=1.4.0. It uses
 temporary agent/session/workspace directories and references native auth/model
 files without copying credentials. Keep it separate from offline qualification.
+
+When the user authorizes `test:live-antigravity`, preserve its explicit opt-in,
+absolute stock executable and selected model, disposable workspace, and fresh
+native session gates. The loopback SSH case also requires
+`SEDES_LIVE_ANTIGRAVITY_SSH=1`. See
+[Antigravity qualification](docs/internals/backends/antigravity.md#cross-backend-audit).
 
 For live delivery or client-rendering debugging, use only the implemented,
 gated diagnostics documented in

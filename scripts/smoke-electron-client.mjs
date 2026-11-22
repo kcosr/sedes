@@ -66,6 +66,7 @@ function sessionFor(label) {
 function snapshotFor(label) {
   return normalizedApplicationSnapshotSchema.parse({
     advisories: [],
+    accountUsages: [],
     environments: [
       {
         id: `${label}-environment`,
@@ -80,6 +81,7 @@ function snapshotFor(label) {
     executionTargets: [
       {
         id: `${label}-target`,
+        backendInstanceId: `${label}-backend`,
         environmentId: `${label}-environment`,
         label: { text: `Smoke ${label}` },
         backend: { label: { text: "Smoke" }, brand: "pi" },

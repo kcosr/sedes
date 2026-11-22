@@ -18,6 +18,11 @@ export interface DiscoveredBackendThreadPersistence {
     connection: AgentConnectionProfile,
     input: { readonly backendConversationId: string; readonly opaqueBindingDetail: string },
   ): boolean;
+  /** True when Sedes owns a local title override that native discovery must not overwrite. */
+  preservesLocalTitle?(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): boolean;
   initializeThread(
     scope: RequestScope,
     applicationThreadId: string,
@@ -406,11 +411,18 @@ export class BackendDiscoveryService {
               existing.applicationThreadId,
               discovered.opaqueBindingDetail,
             );
+            const preserveTitle =
+              persistence.preservesLocalTitle?.(
+                scope,
+                existing.applicationThreadId,
+              ) === true;
             input.inventory.markDiscoveredAvailable(
               scope,
               existing.applicationThreadId,
               {
-                ...(discovered.title ? { title: discovered.title } : {}),
+                ...(!preserveTitle && discovered.title
+                  ? { title: discovered.title }
+                  : {}),
                 updatedAt,
                 now: this.#now(),
               },

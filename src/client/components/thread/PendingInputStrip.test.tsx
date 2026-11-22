@@ -735,6 +735,7 @@ describe("PendingInputStrip", () => {
       pendingQueuedSteers: [
         {
           operationId: "queued-steer-operation",
+          sourceOperationId: "queued-input-operation",
           queuedInputId: "queued-1",
           preview: "Move this into the turn",
           attachmentCount: 0,
@@ -776,6 +777,7 @@ describe("PendingInputStrip", () => {
           operationId: "queued-steer-operation",
           queuedInputId: "queued-1",
           preview: "Prompt queued-1",
+          sourceOperationId: "queued-input-operation",
           attachmentCount: 2,
           taskCount: 1,
           startedAt: 1,

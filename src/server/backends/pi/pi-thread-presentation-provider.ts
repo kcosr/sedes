@@ -4,6 +4,7 @@ import type {
   ComposerSkillDescriptor,
   SettingDescriptor,
 } from "../../../shared/protocol/conversation.js";
+import { reasoningEffortLabel } from "../../../shared/reasoning-effort-label.js";
 import type { PiConversationRepository } from "./pi-conversation-repository.js";
 import type { ThreadBackendPresentationProvider } from "../../conversations/database-thread-application-readers.js";
 import type { ThreadApplicationPresentation } from "../../conversations/thread-application-service.js";
@@ -21,18 +22,6 @@ export const piThinkingLevels = [
   "xhigh",
   "max",
 ] as const;
-
-const thinkingLevelLabels: Readonly<
-  Record<(typeof piThinkingLevels)[number], string>
-> = {
-  off: "Off",
-  minimal: "Minimal",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra High",
-  max: "Maximum",
-};
 
 export function requirePiThinkingLevel(value: string): string {
   if (!(piThinkingLevels as readonly string[]).includes(value)) {
@@ -241,16 +230,19 @@ export class PiThreadPresentationProvider implements ThreadBackendPresentationPr
         // the browser cannot request a value Pi would silently clamp. Without
         // a known selected model no support claim exists, so every canonical
         // level stays available.
-        options: piThinkingLevels.map((value) => ({
-          value,
-          label: boundDisplayText(
-            value === presentedThinkingLevel && selectedTupleDeniedByPolicy
-              ? `${thinkingLevelLabels[value]} (not allowed by backend policy)`
-              : thinkingLevelLabels[value],
-          ),
-          available:
-            selectedModel?.supportedReasoningEfforts?.includes(value) ?? true,
-        })),
+        options: piThinkingLevels.map((value) => {
+          const label = reasoningEffortLabel(value);
+          return {
+            value,
+            label: boundDisplayText(
+              value === presentedThinkingLevel && selectedTupleDeniedByPolicy
+                ? `${label} (not allowed by backend policy)`
+                : label,
+            ),
+            available:
+              selectedModel?.supportedReasoningEfforts?.includes(value) ?? true,
+          };
+        }),
       },
       {
         id: "tool_access",

@@ -1,0 +1,1000 @@
+{
+  "source": {
+    "agentVersion": "1.5.14",
+    "descriptorFiles": [
+      {
+        "name": "third_party/jetski/cortex_pb/custom_extensions.proto",
+        "package": "exa.cortex_pb",
+        "sha256": "8d450f469ee8768e5a9b60b340d3b4c145ba1602fed3013f90e912ead60dde6c",
+        "length": 112
+      },
+      {
+        "name": "third_party/jetski/cortex_pb/options.proto",
+        "package": "exa.cortex_pb",
+        "sha256": "b979535711106e15203adfcb987bf65db3a683c70f2b32e30c56066e78387104",
+        "length": 201
+      },
+      {
+        "name": "third_party/jetski/cortex/modelapi/proto/safety_signals_extension.proto",
+        "package": "exa.cortex_pb",
+        "sha256": "5c8c97c75ac31cafa7f9c3e5c60da1608e38350bb3f007fa9ad27d3f2713875d",
+        "length": 404
+      },
+      {
+        "name": "third_party/jetski/cortex_pb/model_native_tool_type.proto",
+        "package": "exa.cortex_pb",
+        "sha256": "982f97d3bc39ab0a32fe1d728c6f2c115f9e69319c1c165398e71628f93d4d16",
+        "length": 570
+      },
+      {
+        "name": "third_party/gemini_coder/proto/service.proto",
+        "package": "gemini_coder",
+        "sha256": "2e4b8b6f13259f5fc5ddee6d193d61b420b6a3335dcb5f135d6c93f10db92181",
+        "length": 2702
+      },
+      {
+        "name": "third_party/gemini_coder/proto/trajectory.proto",
+        "package": "gemini_coder",
+        "sha256": "0a6ac2c7c925c34c6e255809057baacab02064422187be825f070cdaf36ab5a4",
+        "length": 13713
+      },
+      {
+        "name": "third_party/jetski/codeium_common_pb/codeium_common.proto",
+        "package": "exa.codeium_common_pb",
+        "sha256": "841938a08467f1565c98716e4e1071bcc981f2c7cdfe604fd6f8361ee7e8cbef",
+        "length": 188522
+      },
+      {
+        "name": "third_party/jetski/cortex_pb/cortex.proto",
+        "package": "exa.cortex_pb",
+        "sha256": "aaff3ef04c9ac0f98b3034cbd5eeaa43fb46c088468640eb6523a8dc75a31d69",
+        "length": 220566
+      },
+      {
+        "name": "google/protobuf/any.proto",
+        "package": "google.protobuf",
+        "sha256": "865923ed32e4eca5ff0086a48b4eecacc00a5ce32f0534f6f5ccb25ab3fd5fd5",
+        "length": 223
+      },
+      {
+        "name": "third_party/jetski/cortex/core/tools_pb/tools.proto",
+        "package": "exa.cortex.core.tools",
+        "sha256": "89b86fa676cf90bfd9ce62ecd408a77b189773387ea77798a10b9eda87f4b318",
+        "length": 3926
+      }
+    ]
+  },
+  "messages": {
+    ".gemini_coder.Step": [
+      {
+        "name": "type",
+        "number": 1,
+        "label": 1,
+        "type": 14,
+        "typeName": ".exa.cortex_pb.CortexStepType"
+      },
+      {
+        "name": "status",
+        "number": 4,
+        "label": 1,
+        "type": 14,
+        "typeName": ".exa.cortex_pb.CortexStepStatus"
+      },
+      {
+        "name": "metadata",
+        "number": 5,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexStepMetadata"
+      },
+      {
+        "name": "error",
+        "number": 31,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexErrorDetails"
+      },
+      {
+        "name": "generic",
+        "number": 140,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexStepGeneric"
+      },
+      {
+        "name": "finish",
+        "number": 12,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexStepFinish"
+      },
+      {
+        "name": "error_message",
+        "number": 24,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexStepErrorMessage"
+      },
+      {
+        "name": "run_command",
+        "number": 28,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexStepRunCommand"
+      },
+      {
+        "name": "command_status",
+        "number": 37,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexStepCommandStatus"
+      },
+      {
+        "name": "mcp_tool",
+        "number": 47,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexStepMcpTool"
+      },
+      {
+        "name": "user_input",
+        "number": 19,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexStepUserInput"
+      },
+      {
+        "name": "planner_response",
+        "number": 20,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexStepPlannerResponse"
+      },
+      {
+        "name": "task_details",
+        "number": 148,
+        "label": 1,
+        "type": 11,
+        "typeName": ".gemini_coder.TaskDetails"
+      },
+      {
+        "name": "system_message",
+        "number": 114,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexStepSystemMessage"
+      },
+      {
+        "name": "invoke_subagent",
+        "number": 143,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexStepInvokeSubagent"
+      },
+      {
+        "name": "subtrajectory",
+        "number": 6,
+        "label": 1,
+        "type": 11,
+        "typeName": ".gemini_coder.Trajectory"
+      }
+    ],
+    ".exa.cortex_pb.CortexStepMetadata": [
+      {
+        "name": "created_at",
+        "number": 1,
+        "label": 1,
+        "type": 11,
+        "typeName": ".google.protobuf.Timestamp"
+      },
+      {
+        "name": "finished_generating_at",
+        "number": 7,
+        "label": 1,
+        "type": 11,
+        "typeName": ".google.protobuf.Timestamp"
+      },
+      {
+        "name": "started_at",
+        "number": 32,
+        "label": 1,
+        "type": 11,
+        "typeName": ".google.protobuf.Timestamp"
+      },
+      {
+        "name": "completed_at",
+        "number": 8,
+        "label": 1,
+        "type": 11,
+        "typeName": ".google.protobuf.Timestamp"
+      },
+      {
+        "name": "tool_call",
+        "number": 4,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.codeium_common_pb.ChatToolCall"
+      },
+      {
+        "name": "model_usage",
+        "number": 9,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.codeium_common_pb.ModelUsageStats"
+      },
+      {
+        "name": "execution_id",
+        "number": 12,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "tool_summary",
+        "number": 30,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "tool_action",
+        "number": 31,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "source",
+        "number": 3,
+        "label": 1,
+        "type": 14,
+        "typeName": ".exa.cortex_pb.CortexStepSource"
+      },
+      {
+        "name": "is_interrupting_step",
+        "number": 33,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      },
+      {
+        "name": "tool_source",
+        "number": 38,
+        "label": 1,
+        "type": 14,
+        "typeName": ".exa.cortex_pb.CortexComponentSource"
+      }
+    ],
+    ".exa.cortex_pb.CortexStepUserInput": [
+      {
+        "name": "items",
+        "number": 3,
+        "label": 3,
+        "type": 11,
+        "typeName": ".exa.codeium_common_pb.TextOrScopeItem"
+      },
+      {
+        "name": "client_message_id",
+        "number": 19,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "is_queued_message",
+        "number": 6,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      }
+    ],
+    ".exa.codeium_common_pb.TextOrScopeItem": [
+      {
+        "name": "text",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.CortexStepPlannerResponse": [
+      {
+        "name": "response",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "thinking",
+        "number": 3,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "message_id",
+        "number": 6,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "tool_calls",
+        "number": 7,
+        "label": 3,
+        "type": 11,
+        "typeName": ".exa.codeium_common_pb.ChatToolCall"
+      },
+      {
+        "name": "stop_reason",
+        "number": 12,
+        "label": 1,
+        "type": 14,
+        "typeName": ".exa.codeium_common_pb.StopReason"
+      }
+    ],
+    ".exa.codeium_common_pb.ChatToolCall": [
+      {
+        "name": "id",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "name",
+        "number": 2,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "arguments_json",
+        "number": 3,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      }
+    ],
+    ".exa.codeium_common_pb.ModelUsageStats": [
+      {
+        "name": "input_tokens",
+        "number": 2,
+        "label": 1,
+        "type": 4,
+        "typeName": null
+      },
+      {
+        "name": "output_tokens",
+        "number": 3,
+        "label": 1,
+        "type": 4,
+        "typeName": null
+      },
+      {
+        "name": "thinking_output_tokens",
+        "number": 9,
+        "label": 1,
+        "type": 4,
+        "typeName": null
+      },
+      {
+        "name": "cache_write_tokens",
+        "number": 4,
+        "label": 1,
+        "type": 4,
+        "typeName": null
+      },
+      {
+        "name": "cache_read_tokens",
+        "number": 5,
+        "label": 1,
+        "type": 4,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.CortexErrorDetails": [
+      {
+        "name": "user_error_message",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "short_error",
+        "number": 2,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "is_benign",
+        "number": 4,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.CortexStepErrorMessage": [
+      {
+        "name": "error",
+        "number": 3,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexErrorDetails"
+      }
+    ],
+    ".exa.cortex_pb.CortexStepRunCommand": [
+      {
+        "name": "command_line",
+        "number": 23,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "cwd",
+        "number": 2,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "run_persistent",
+        "number": 28,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      },
+      {
+        "name": "is_daemon",
+        "number": 32,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      },
+      {
+        "name": "command_id",
+        "number": 13,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "exit_code",
+        "number": 6,
+        "label": 1,
+        "type": 5,
+        "typeName": null
+      },
+      {
+        "name": "combined_output",
+        "number": 21,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.RunCommandOutput"
+      },
+      {
+        "name": "combined_output_snapshot",
+        "number": 26,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.RunCommandOutput"
+      }
+    ],
+    ".exa.cortex_pb.RunCommandOutput": [
+      {
+        "name": "full",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "truncated",
+        "number": 2,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "num_lines_above",
+        "number": 3,
+        "label": 1,
+        "type": 13,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.CortexStepCommandStatus": [
+      {
+        "name": "command_id",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "status",
+        "number": 2,
+        "label": 1,
+        "type": 14,
+        "typeName": ".exa.cortex_pb.CortexStepStatus"
+      },
+      {
+        "name": "combined",
+        "number": 9,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "exit_code",
+        "number": 5,
+        "label": 1,
+        "type": 5,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.CortexStepGeneric": [
+      {
+        "name": "args",
+        "number": 1,
+        "label": 3,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexStepGeneric.ArgsEntry"
+      },
+      {
+        "name": "result",
+        "number": 2,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.GenericStepResult"
+      }
+    ],
+    ".exa.cortex_pb.CortexStepGeneric.ArgsEntry": [
+      {
+        "name": "key",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "value",
+        "number": 2,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.GenericStepResult": [
+      {
+        "name": "result",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "payload",
+        "number": 6,
+        "label": 1,
+        "type": 11,
+        "typeName": ".google.protobuf.Any"
+      }
+    ],
+    ".exa.cortex_pb.CortexStepMcpTool": [
+      {
+        "name": "server_name",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "tool_call",
+        "number": 2,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.codeium_common_pb.ChatToolCall"
+      },
+      {
+        "name": "result_string",
+        "number": 3,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "user_rejected",
+        "number": 7,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.CortexStepFinish": [],
+    ".exa.cortex_pb.CortexWorkspaceMetadata": [
+      {
+        "name": "workspace_folder_absolute_uri",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.CortexTrajectoryMetadata": [
+      {
+        "name": "workspaces",
+        "number": 1,
+        "label": 3,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.CortexWorkspaceMetadata"
+      },
+      {
+        "name": "created_at",
+        "number": 2,
+        "label": 1,
+        "type": 11,
+        "typeName": ".google.protobuf.Timestamp"
+      },
+      {
+        "name": "parent_conversation_id",
+        "number": 5,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "root_conversation_id",
+        "number": 6,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "workspace_uris",
+        "number": 7,
+        "label": 3,
+        "type": 9,
+        "typeName": null
+      }
+    ],
+    ".google.protobuf.Timestamp": [
+      {
+        "name": "seconds",
+        "number": 1,
+        "label": 1,
+        "type": 3,
+        "typeName": null
+      },
+      {
+        "name": "nanos",
+        "number": 2,
+        "label": 1,
+        "type": 5,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.CortexStepSystemMessage": [
+      {
+        "name": "event_type",
+        "number": 3,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "agent_message",
+        "number": 4,
+        "label": 1,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.AgentMessage"
+      }
+    ],
+    ".exa.cortex_pb.AgentMessage": [
+      {
+        "name": "id",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "recipient",
+        "number": 2,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "sender",
+        "number": 3,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "content",
+        "number": 4,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      }
+    ],
+    ".gemini_coder.TaskDetails": [
+      {
+        "name": "id",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "description",
+        "number": 4,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "is_daemon",
+        "number": 6,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      },
+      {
+        "name": "title",
+        "number": 7,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "moved_to_background_at",
+        "number": 8,
+        "label": 1,
+        "type": 11,
+        "typeName": ".google.protobuf.Timestamp"
+      }
+    ],
+    ".exa.cortex.core.tools.RunCommand": [
+      {
+        "name": "exit_code",
+        "number": 1,
+        "label": 1,
+        "type": 5,
+        "typeName": null
+      },
+      {
+        "name": "timed_out",
+        "number": 2,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      },
+      {
+        "name": "command_line",
+        "number": 6,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "cwd",
+        "number": 7,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "exit_code_unknown",
+        "number": 8,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex.core.tools.Schedule": [
+      {
+        "name": "mode",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "outcome",
+        "number": 2,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "iterations",
+        "number": 3,
+        "label": 1,
+        "type": 3,
+        "typeName": null
+      },
+      {
+        "name": "cancelled_by",
+        "number": 4,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "fire_time",
+        "number": 5,
+        "label": 1,
+        "type": 11,
+        "typeName": ".google.protobuf.Timestamp"
+      }
+    ],
+    ".exa.cortex.core.tools.InvokeSubagent": [
+      {
+        "name": "subagents",
+        "number": 1,
+        "label": 3,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.SubagentSpec"
+      },
+      {
+        "name": "results",
+        "number": 2,
+        "label": 3,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.SubagentResult"
+      },
+      {
+        "name": "task_mode",
+        "number": 3,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.CortexStepInvokeSubagent": [
+      {
+        "name": "subagents",
+        "number": 9,
+        "label": 3,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.SubagentSpec"
+      },
+      {
+        "name": "task_mode",
+        "number": 11,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      },
+      {
+        "name": "results",
+        "number": 10,
+        "label": 3,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.SubagentResult"
+      },
+      {
+        "name": "conversation_id",
+        "number": 5,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.SubagentResult": [
+      {
+        "name": "conversation_id",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "workspace_uris",
+        "number": 3,
+        "label": 3,
+        "type": 9,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.SubagentSpec": [
+      {
+        "name": "role",
+        "number": 2,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "workspace_uri",
+        "number": 6,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "run_as_task",
+        "number": 9,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      }
+    ],
+    ".gemini_coder.Trajectory": [
+      {
+        "name": "cascade_id",
+        "number": 6,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "steps",
+        "number": 2,
+        "label": 3,
+        "type": 11,
+        "typeName": ".gemini_coder.Step"
+      },
+      {
+        "name": "executor_metadatas",
+        "number": 9,
+        "label": 3,
+        "type": 11,
+        "typeName": ".exa.cortex_pb.ExecutorMetadata"
+      }
+    ],
+    ".google.protobuf.Any": [
+      {
+        "name": "type_url",
+        "number": 1,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      },
+      {
+        "name": "value",
+        "number": 2,
+        "label": 1,
+        "type": 12,
+        "typeName": null
+      }
+    ],
+    ".exa.cortex_pb.ExecutorMetadata": [
+      {
+        "name": "termination_reason",
+        "number": 1,
+        "label": 1,
+        "type": 14,
+        "typeName": ".exa.cortex_pb.ExecutorTerminationReason"
+      },
+      {
+        "name": "last_step_idx",
+        "number": 3,
+        "label": 1,
+        "type": 5,
+        "typeName": null
+      },
+      {
+        "name": "proceeded_with_auto_continue",
+        "number": 4,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      },
+      {
+        "name": "execution_id",
+        "number": 9,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      }
+    ]
+  }
+}

@@ -68,6 +68,10 @@ export const test = base.extend<{
               // navigating away from its view deliberately cancels the read.
               (request.method() === "POST" &&
                 /^\/api\/threads\/[^/]+\/usage\/turn-availability$/u.test(new URL(request.url()).pathname)) ||
+              // Exact input-abandonment lookup is read-only. Materialization,
+              // loss of authority, or closing the thread aborts the stale read.
+              (request.method() === "POST" &&
+                /^\/api\/threads\/[^/]+\/abandoned-input-operations$/u.test(new URL(request.url()).pathname)) ||
               // Page frames are deliberately unloaded offscreen, and changing
               // revisions or closing the library cancels stale reads/admissions.
               (request.method() === "GET" &&

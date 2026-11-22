@@ -135,7 +135,7 @@ const threadItemSchema = Type.Object(
       },
     ),
     backend: Type.String({
-      enum: ["pi", "pi_native", "codex_app_server", "claude_agent_sdk", "grok_build", "opencode"],
+      enum: ["pi", "pi_native", "codex_app_server", "claude_agent_sdk", "grok_build", "opencode", "antigravity"],
       maxLength: 32,
     }),
     lifecycle: Type.String({

@@ -6,7 +6,7 @@ accounts, credentials, and failure modes, and none of them implies another:
 1. **Client connection** — how a browser, Electron, or Android client reaches a
    Sedes server.
 2. **Provider runtime connection** — how that Sedes server talks to each
-   provider runtime (Pi, Codex, Claude, Grok, OpenCode v2).
+   provider runtime (Pi SDK, Pi, Codex, Claude, Grok, OpenCode v2, or Antigravity).
 3. **Execution environment** — where workspace operations, Files, agent tools,
    and terminals actually run for a thread.
 
@@ -73,6 +73,8 @@ flowchart LR
   SC --> RPI[Native Pi RPC process on that host]
   S --> OCL[OpenCode v2 on local Linux<br/>owned or external HTTP/SSE]
   SC --> OCR[OpenCode v2 on Linux host<br/>owned or external HTTP/SSE]
+  S --> AGL[Antigravity ACP over stdio<br/>Sedes owns]
+  SC --> AGR[Antigravity ACP on that host<br/>sidecar owns]
 ```
 
 These are alternatives for one backend instance, not consecutive hops. Sedes
@@ -109,6 +111,7 @@ and provider-native connections. See
 | [Claude](backends/claude.md) | Managed worker on the Sedes host, or the persistent sidecar's host | Sedes-owned worker child process locally; the same runtime protocol carried over SSH stdio or the outbound connector | Local and remote on Linux/macOS only; native Windows Claude is unsupported | Provider terminals and managed TUI are unsupported for every route. Files, attachments, and the agent-tool relay (CLI or Native MCP) are separate grants. |
 | [OpenCode v2](backends/opencode.md) | Sedes host or persistent sidecar host; Linux, same native account | Owned stdio lifetime/readiness plus HTTP/SSE, or an external authenticated loopback HTTP/SSE endpoint resolved on that host | Local, SSH sidecar, outbound sidecar; stable stock `opencode2` 2.2.6 or newer (tested through 2.2.6) | Shared runtime and evidence recovery. Native Progressive MCP for admitted roots; CLI additionally requires owned mode. Remote tools, Files, and attachments require their own grants. No managed TUI. |
 | [Grok](backends/grok.md) | Always the Sedes host | Sedes-owned ACP stdio | Local only, on Linux x64 or macOS arm64/x64. SSH and outbound environments are rejected | Sedes CLI agent tools on an active local thread. No managed TUI, no remote route, no external or shared daemon. |
+| [Antigravity](backends/antigravity.md) | Sedes host or persistent sidecar host on Linux/macOS | Owned `agy acp` over stdio | Local, SSH sidecar, outbound sidecar | Native authentication and history stay on the selected host. Remote Files, attachments, and Sedes agent tools require their own grants. |
 
 The authoritative per-feature comparison stays in
 [Capability differences](backends/index.md#capability-differences). What each
@@ -119,7 +122,7 @@ execution environment grants is the same for every backend that can run there:
 | Directory browsing, Files, Compare | Within the saved local workspace roots | `directory_browser` and `workspace_files` |
 | Composer attachments | Within the saved local workspace roots | `composer_attachments` |
 | Pi SDK workspace tools and context | Built in | `workspace_tools` plus `workspace_context`; `workspace_skills` for remote skills |
-| Sedes agent-tool CLI | Eligible local Pi, Pi SDK, Codex, Claude, Grok, and owned OpenCode threads | `agent_tools_cli`, for Pi, Codex, Claude, and qualified owned OpenCode threads |
+| Sedes agent-tool CLI | Eligible local Pi, Pi SDK, Codex, Claude, Grok, Antigravity, and owned OpenCode threads | `agent_tools_cli` for eligible Pi, Codex, Claude, Antigravity, and owned OpenCode threads |
 | Application terminals | PTY from the service account | `interactive_terminal` plus native PTY assets on that host; see [Supported environments](terminals.md#supported-environments) |
 | Codex managed TUI | External UDS/TCP connection with PTY support | Negotiated `codex_managed_tui` operations on the sidecar |
 
@@ -141,9 +144,8 @@ local terminals interrupted; their retained history stays readable. See
 ### Desktop Electron Local
 
 Layer 1 is Managed Local; layers 2 and 3 are the desktop account. Configuration
-and state live in Electron's `managed-local` user-data subtree, while Codex,
-Claude, and Grok executables, logins, and native stores remain external to the
-package. Quitting Electron stops the server, so active agents and terminals
+and state live in Electron's `managed-local` user-data subtree. Provider
+executables, logins, and native stores stay outside the package. Quitting Electron stops the server, so active agents and terminals
 end with the application session. This is the one route where "Local" in the
 client chooser and "local" in an execution environment mean the same machine.
 

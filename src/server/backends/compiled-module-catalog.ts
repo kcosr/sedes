@@ -5,6 +5,7 @@ import { PiNativeBackendModule } from "./pi/native/pi-native-backend-module.js";
 import { ClaudeBackendModule } from "./claude/claude-backend-module.js";
 import { GrokBackendModule } from "./grok/grok-backend-module.js";
 import { OpenCodeBackendModule } from "./opencode/opencode-backend-module.js";
+import { AntigravityBackendModule } from "./antigravity/module.js";
 
 /**
  * Sole build-time provider catalog. Shared composition imports this value and
@@ -17,4 +18,5 @@ export const compiledBackendModuleCatalog = new BackendModuleCatalog([
   new ClaudeBackendModule(),
   new GrokBackendModule(),
   new OpenCodeBackendModule(),
+  new AntigravityBackendModule(),
 ]);

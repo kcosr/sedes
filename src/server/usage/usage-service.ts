@@ -17,7 +17,7 @@ import { costSplit, increaseOverBaseline, rebuildUsageTimeline, snapshotFact, sn
 const identifier = z.string().min(1).max(2048);
 const usageSupport: Readonly<Record<BackendKind, UsageReport["support"]>> = {
   pi: "supported", pi_native: "supported", codex_app_server: "supported", claude_agent_sdk: "supported",
-  grok_build: "unsupported", opencode: "supported",
+  grok_build: "unsupported", opencode: "supported", antigravity: "supported",
 };
 const factSchema = z.strictObject({
   id: identifier, kind: z.enum(["operation", "auxiliary", "cumulative", "turn_aggregate"]),

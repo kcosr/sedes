@@ -71,8 +71,9 @@ Escape closes an open editor before it leaves the page.
 ## Environments, backends, and targets
 
 **Environments** lists this machine, SSH hosts, and paired outbound hosts.
-**Backends** lists Pi, Pi SDK, Codex, Claude, local Grok, and OpenCode backends, grouped
-by environment. Both pages show a list and the selected item.
+**Backends** lists the configured provider runtimes by environment. Both pages
+show a list and the selected item. See
+[Provider features](provider-features.md) for the supported backends.
 
 ### List and detail
 
@@ -216,8 +217,8 @@ work settles. Only an incompatible sidecar needs an explicit upgrade. While a co
 is still running, Sedes checks its outcome automatically and keeps other
 actions paused; **Refresh status** checks immediately. An unavailable or
 unknown response does not mean the service stopped. Backend **Disconnect** is
-available only for a remote provider runtime. Local Pi SDK, Codex, Claude, and
-Grok use the impact-confirmed **Stop** or **Restart** controls instead.
+available only for a remote provider runtime. Local runtimes use the
+impact-confirmed **Stop** or **Restart** controls.
 
 These controls do not provide tenant or user administration. All requests use
 the current server-derived account. Claude supports local and persistent remote

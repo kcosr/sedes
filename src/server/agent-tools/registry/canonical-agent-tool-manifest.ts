@@ -201,7 +201,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "agent.context": threadOnlyManifestEntry({
     environmentAuthority: { kind: "source_only" },
     id: "agent.context",
-    schemaVersion: 4,
+    schemaVersion: 5,
     description: "Returns the Sedes source thread, workspace, project, and backend.",
     catalog: { groupId: "context", label: "Agent context", order: 10 },
     effects: { application: "read", modelUsage: "none", external: "none" },
@@ -269,7 +269,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "thread.status": manifestEntry({
     environmentAuthority: { kind: "direct_resource", resource: "thread" },
     id: "thread.status",
-    schemaVersion: 4,
+    schemaVersion: 5,
     description:
       "Returns bounded lifecycle, activity, and read-only pin state for a Sedes thread.",
     catalog: { groupId: "threads", label: "Thread status", order: 10 },
@@ -278,7 +278,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "thread.list": manifestEntry({
     environmentAuthority: { kind: "scoped_query", resource: "thread" },
     id: "thread.list",
-    schemaVersion: 8,
+    schemaVersion: 9,
     description:
       "Searches admitted principal-owned Sedes threads, including read-only pin state, defaulting to the caller's configured environment with newest activity first.",
     catalog: { groupId: "threads", label: "List threads", order: 20 },
@@ -361,7 +361,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "saved_agent.list": manifestEntry({
     environmentAuthority: { kind: "environment_neutral" },
     id: "saved_agent.list",
-    schemaVersion: 6,
+    schemaVersion: 7,
     description:
       "Lists bounded database-backed summaries of principal-owned saved Agents.",
     catalog: { groupId: "agents", label: "List Agents", order: 10 },
@@ -371,7 +371,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     environmentAuthority: { kind: "direct_resource", resource: "saved_agent", inputField: "agentId",
     },
     id: "saved_agent.get",
-    schemaVersion: 6,
+    schemaVersion: 7,
     description: "Returns one complete principal-owned saved Agent definition.",
     catalog: { groupId: "agents", label: "Get Agent", order: 20 },
     effects: { application: "read", modelUsage: "none", external: "none" },
@@ -383,7 +383,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       inputField: "workspaceId",
     },
     id: "saved_agent.options",
-    schemaVersion: 6,
+    schemaVersion: 7,
     description:
       "Returns bounded dynamic authoring options for a workspace and optional target.",
     catalog: { groupId: "agents", label: "Agent options", order: 30 },
@@ -396,7 +396,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       inputField: "authoringContext.workspaceId",
     },
     id: "saved_agent.create",
-    schemaVersion: 6,
+    schemaVersion: 7,
     description:
       "Creates a principal-owned saved Agent after validating one authoring context.",
     catalog: { groupId: "agents", label: "Create Agent", order: 40 },
@@ -410,7 +410,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       defaultToSource: false,
     },
     id: "saved_agent.update",
-    schemaVersion: 6,
+    schemaVersion: 7,
     description:
       "Revision-checks and atomically updates selected saved Agent fields.",
     catalog: { groupId: "agents", label: "Update Agent", order: 50 },

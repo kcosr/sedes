@@ -36,7 +36,9 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **176**. Chat excerpts captured from highlighted questions retain their quote
+  **178**. Clients can verify exact abandoned inputs after Force Reset.
+  Antigravity targets add a normalized brand and execution configuration.
+  Chat excerpts captured from highlighted questions retain their quote
   style in drafts and sent messages. Account quota snapshots now include the
   execution target's backend identity. Research settings now select Codex CLI.
   Remote environment configuration adds the required connection compression
@@ -46,9 +48,10 @@ User-facing changes are collected here before release. See the
   Codex Speed uses its strict v3 action/result contract. Sedes tool policies replace cross-boundary approval modes with
   independent project/environment limits: queries filter to scope and direct
   outside requests are denied. Legacy thread-only policies are disabled for
-  review rather than broadened. Saved Agent and thread-create tool contracts
-  advance to version 6; thread-message transcripts advance to version 5 to
-  identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
+  review rather than broadened. Saved Agent `list/get/options/create/update`
+  contracts advance to version 7 and thread-create to version 6. Agent context
+  and thread status advance to version 5, and thread listing to version 9.
+  Thread-message transcripts advance to version 5 to identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
   ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112), [#116](https://github.com/kcosr/sedes/pull/116), [#142](https://github.com/kcosr/sedes/pull/142))
 
 - Upgrade execution sidecars with the server for runtime wire version **17**
@@ -92,6 +95,27 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
+
+- Use **Command+Shift+P** or **Ctrl+Shift+P** to switch between the two most
+  recently opened threads in the current client session.
+  ([#144](https://github.com/kcosr/sedes/pull/144))
+
+- Run Google Antigravity through ACP on local or persistent SSH/outbound
+  execution hosts, with native history, streaming, permission decisions, model
+  and native mode selection, Saved Agents, scoped Sedes tools, and background
+  work tracking. Canceled permission requests recover from native execution
+  receipts, and pending message reconciliation keeps current permissions
+  answerable across resnapshots and reconnects. Permission-response recovery
+  takes precedence over a blocked Steer, and Stop remains available during
+  message recovery when the server permits it. Child cancellation and background
+  completion require native terminal evidence. Unchanged history avoids repeated
+  transcript processing, and native reads run outside the server event loop.
+  Bound threads support Sedes-local titles that survive native rediscovery;
+  Antigravity displays its official brand mark and reasoning effort labels such
+  as **Extra High**. Codex Saved Agents use the same reasoning labels as threads.
+  Upgrade Antigravity execution sidecars with the server for runtime capability **4**.
+  See [Antigravity setup](docs/operator/backends/antigravity.md).
+  ([#144](https://github.com/kcosr/sedes/pull/144))
 
 - Enable **Highlight questions in agent replies** under **Settings > Appearance
   > Chat formatting** to show completed questions in red with an underline.
@@ -372,6 +396,20 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Antigravity tool errors no longer prematurely complete agent work or send
+  empty failure callbacks while the agent is still working. Genuine failed and
+  canceled executions still settle from native terminal evidence.
+  ([#144](https://github.com/kcosr/sedes/pull/144))
+
+- Accepted Steers remain visible until their matching message arrives. Force
+  Reset and queue withdrawal clear stale Steer cards across clients and release
+  draft autosave even after missed queue updates or late responses.
+  ([#144](https://github.com/kcosr/sedes/pull/144))
+
+- Local Sedes tools use the actual listener address when the server selects an
+  ephemeral port with `PORT=0`, including restored backends during startup.
+  ([#144](https://github.com/kcosr/sedes/pull/144))
+
 - Linux and macOS sidecars can restart on the same boot after a crash before
   any owned process launch. Codex stdio now reports why a native-store lock
   blocks startup and preserves the store while its operator checks for other
@@ -398,8 +436,9 @@ User-facing changes are collected here before release. See the
   ([#132](https://github.com/kcosr/sedes/pull/132))
 
 - Idle remote backends recover after their sidecar is replaced, allowing Pi
-  conversation history to reopen without restarting Sedes. Active work and
-  unproven cleanup still prevent automatic replacement. See
+  conversation history to reopen without restarting Sedes. Sidecar management
+  recognizes idle native Pi runtimes for automatic upgrades. Active work,
+  unsettled outcomes, and unproven cleanup prevent automatic replacement. See
   [Pi recovery](docs/operator/backends/pi-native.md#ownership-reconnect-and-recovery).
   ([#130](https://github.com/kcosr/sedes/pull/130))
 

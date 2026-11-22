@@ -46,6 +46,7 @@ const sourceThreadIds: Record<BackendKind, string> = {
   claude_agent_sdk: "019196f7-a0a8-7bc4-a89b-8cf013978412",
   grok_build: "019196f7-a0a8-7bc4-a89b-8cf013978413",
   opencode: "019196f7-a0a8-7bc4-a89b-8cf013978414",
+  antigravity: "019196f7-a0a8-7bc4-a89b-8cf013978416",
 };
 const targetThreadId = "019196f7-a0a8-7bc4-a89b-8cf013978420";
 const childThreadId = "019196f7-a0a8-7bc4-a89b-8cf013978421";
@@ -621,7 +622,7 @@ describe("agent control tools through canonical adapters", () => {
       )
       .send({
         toolId: "thread.status",
-        schemaVersion: 4,
+        schemaVersion: 5,
         requestId: "status-parent",
         input: { threadId: targetThreadId },
       })

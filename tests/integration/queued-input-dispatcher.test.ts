@@ -1,3 +1,11 @@
+import { projectAntigravityHistory } from "../../src/server/backends/antigravity/history.js";
+import { antigravityCapabilities } from "../../src/server/backends/antigravity/catalog.js";
+import { buildAntigravityPrompt } from "../../src/server/backends/antigravity/submission.js";
+import type { AntigravityNativeHistory } from "../../src/server/backends/antigravity/native-schema.js";
+import type { AntigravitySubmissionScope } from "../../src/server/backends/antigravity/submission.js";
+import { ConversationActor } from "../../src/server/conversations/conversation-actor.js";
+import { ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
+import type { BackendEventListener, ConversationHandle } from "../../src/server/backends/contracts.js";
 import type { SteerTarget } from "../../src/shared/protocol/conversation.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
@@ -1069,6 +1077,135 @@ describe("ConversationOperationRepository interrupt rejection", () => {
 });
 
 describe("ThreadCompletionCallbackDispatcher", () => {
+  it.each(["completed", "failed", "executor_failed", "budget_exhausted"] as const)("waits through recoverable Antigravity tool errors before publishing one %s callback", async terminal => {
+    const outcome = terminal === "completed" ? "completed" : "failed";
+    const fixture = createFixture();
+    const [callerThreadId, targetThreadId] = fixture.threadIds;
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    gateway.authoritativelySettled = false;
+    const { dispatcher: queue } = createDispatcher(repository, gateway, { now: { value: 700 } });
+    const callbacks = new ThreadCompletionCallbackRepository(fixture.database);
+    const completion = new SubmissionCompletionRepository(fixture.database);
+    const dispatcher = new ThreadCompletionCallbackDispatcher({
+      callbacks, inventory: new InventoryRepository(fixture.database), repository, gateway, queue, now: () => 700,
+    });
+    const binding = new ConversationBindingRepository(fixture.database).getBinding(fixture.scope, targetThreadId)!;
+    const submissionScope: AntigravitySubmissionScope = { key: Buffer.alloc(32, 9), binding: {
+      version: 1, sessionId: "21387b54-cd12-4e16-a3d4-632ba3304f80", tenantId: fixture.scope.tenantId,
+      principalId: fixture.scope.principalId, backendInstanceId: binding.backendInstanceId,
+      connectionProfileId: binding.connectionProfileId, executionEnvironmentId: binding.executionEnvironmentId,
+      canonicalWorkspacePath: "/workspace", nativeNamespaceKey: "callback-fixture",
+    } };
+    const operationId = "antigravity-review";
+    const prompt = await buildAntigravityPrompt(submissionScope, { applicationOperationId: operationId,
+      mutationId: operationId, source: { kind: "user" }, reconciliationToken: operationId, text: "Review the change",
+      contextExcerpts: [], taskContexts: [], attachments: [] });
+    if (prompt[0]?.type !== "text") throw new Error("expected_native_text_prompt");
+    const step = { status: 3, hasSubtrajectory: false, executionId: "review-execution" };
+    const native: AntigravityNativeHistory = { revision: "a".repeat(64), executions: [], steps: [
+      { ...step, index: 0, type: 14, user: { text: prompt[0].text } },
+      { ...step, index: 1, type: 15, response: { text: "", thinking: "", stopReason: 2,
+        toolCalls: [{ id: "read", name: "read_file", argumentsJson: "{}" }] } },
+    ] };
+    let listener: BackendEventListener | undefined;
+    let establishments = 0;
+    const pendingObservations: Promise<unknown>[] = [];
+    const unexpected = async (): Promise<never> => { throw new Error("unexpected_callback_fixture_mutation"); };
+    const handle: ConversationHandle = {
+      binding: { ...binding, createdAt: new Date(binding.createdAt).toISOString() }, automaticEviction: "requires_quiescence",
+      async establishProjection() {
+        establishments++;
+        return { handleSequence: -1, snapshot: projectAntigravityHistory(native, submissionScope).snapshot,
+          history: { operational: true }, subscribeFromNext: value => { listener = value; return () => { listener = undefined; }; } };
+      },
+      backendCapabilities: async () => antigravityCapabilities(undefined, binding.connectionProfileId), usage: async () => ({}),
+      history: unexpected, locateTurn: unexpected, captureSubmissionRetryAnchor: unexpected,
+      submit: unexpected, steer: unexpected, interrupt: unexpected, reconcileInterrupt: unexpected,
+      perform: unexpected, reconcileAction: unexpected, respond: unexpected, reconcileInteractionResponse: unexpected,
+      subscribe: () => () => undefined, close: async () => undefined,
+    };
+    const actor = new ConversationActor({ handle, attachmentDelivery: {} as never,
+      projector: new ConversationProjector({ backendInstanceId: binding.backendInstanceId, bindingIdentity: targetThreadId }),
+      initialObserver(event) {
+        if (event.type === "authoritative_completion") {
+          pendingObservations.push(queue.onAuthoritativeCompletion(fixture.scope, targetThreadId, event));
+        }
+      },
+    });
+    const drain = async () => {
+      await actor.captureSnapshotState();
+      await Promise.all(pendingObservations.splice(0));
+      await dispatcher.deliverReady(fixture.scope);
+    };
+    const refresh = async () => {
+      const before = establishments;
+      listener!({ handleSequence: 0, event: { type: "resnapshot_required", reason: "history_changed" } });
+      await vi.waitFor(() => expect(establishments).toBe(before + 1));
+      await drain();
+    };
+    try {
+      await queue.recover(fixture.scope);
+      completion.recordAccepted(fixture.scope, targetThreadId, { operationId, backendCorrelation: operationId, acceptedAt: 500 });
+      const callback = callbacks.register(fixture.scope, { callerThreadId, targetThreadId, targetOperationId: operationId, registeredAt: 550 }).callback;
+      await actor.start({ signal: new AbortController().signal });
+      await drain();
+      // The real incident had no ordinary assistant text yet. A failed read is
+      // a tool result the model can recover from, not a durable turn outcome.
+      native.steps.push({ ...step, index: 2, type: 16, status: 7, error: "file does not exist",
+        tool: { id: "read", name: "read_file", argumentsJson: "{}", result: "file does not exist" } });
+      await refresh();
+      expect(Object.values(actor.timeline.turnsById).at(-1)?.status).toBe("in_progress");
+      expect(Object.values(actor.timeline.itemsById)).toContainEqual(expect.objectContaining({ kind: "tool", status: "failed" }));
+      expect(completion.get(fixture.scope, targetThreadId, operationId)?.completionObservedAt).toBeNull();
+      expect(callbacks.get(fixture.scope, callback.id).state).toBe("registered");
+      expect(gateway.steered).toHaveLength(0);
+      expect(callbacks.listReadyForMaterialization(fixture.scope)).toEqual([]);
+
+      native.steps.push({ ...step, index: 3, type: 15, status: 2,
+        response: { text: "", thinking: "Trying a valid path", stopReason: 0, toolCalls: [] } });
+      await refresh();
+      expect(completion.get(fixture.scope, targetThreadId, operationId)?.completionObservedAt).toBeNull();
+      expect(callbacks.get(fixture.scope, callback.id).state).toBe("registered");
+      expect(gateway.steered).toHaveLength(0);
+
+      if (terminal === "executor_failed" || terminal === "budget_exhausted") {
+        // A standalone executor failure has no terminal planner response. Its
+        // exact durable ERROR receipt must still finalize a legitimate failure.
+        native.steps[3] = { ...step, index: 3, type: 15,
+          response: { text: "", thinking: "", stopReason: 10, toolCalls: [] } };
+        native.steps.push({ ...step, index: 4, type: 17, status: 7, error: "Executor failed" });
+        await refresh();
+        expect(completion.get(fixture.scope, targetThreadId, operationId)?.completionObservedAt).toBeNull();
+        expect(callbacks.get(fixture.scope, callback.id).state).toBe("registered");
+        native.executions.push({ executionId: step.executionId, lastStepIndex: 4, terminationReason: terminal === "executor_failed" ? 1 : 11, proceededWithAutoContinue: false });
+      } else {
+        native.steps[3] = { ...step, index: 3, type: 15, status: outcome === "completed" ? 3 : 7,
+          ...(outcome === "failed" ? { error: "Planner execution failed" } : {}),
+          response: { text: outcome === "completed" ? "Clean review after checking the correct file." : "", thinking: "",
+            stopReason: outcome === "completed" ? 2 : 13, toolCalls: [] } };
+      }
+      await refresh();
+      await vi.waitFor(() => expect(repository.get(fixture.scope, callerThreadId, callback.id).state).toBe("accepted"));
+      const expectedText = outcome === "completed" ? "Clean review after checking the correct file." : "No assistant text was produced.";
+      expect(completion.get(fixture.scope, targetThreadId, operationId)).toMatchObject({
+        lastCompletionIdentity: `input:0:${outcome}`, completionOutcome: outcome,
+        assistantResult: { text: outcome === "completed" ? expectedText : "" },
+      });
+      expect(callbacks.get(fixture.scope, callback.id)).toMatchObject({ state: "materialized", completionIdentity: `input:0:${outcome}` });
+      expect(gateway.steered).toHaveLength(1);
+      expect(gateway.steered[0]?.text).toContain(`(${outcome}):\n\n${expectedText}`);
+      // Reattachment/replay must not deliver a second result or overwrite the
+      // immutable terminal record, including a legitimate empty failed result.
+      await actor.replayAuthoritativeCompletions();
+      await drain();
+      await refresh();
+      expect(gateway.steered).toHaveLength(1);
+    } finally {
+      await actor.close(); await dispatcher.close(); await queue.close(); fixture.database.close();
+    }
+  });
+
   it("materializes a callback registered after completion without rewriting its replayed observation", async () => {
     const fixture = createFixture();
     const [callerThreadId, targetThreadId] = fixture.threadIds;

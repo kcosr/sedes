@@ -39,7 +39,7 @@ const catalog = {
       id: "gpt-fast",
       label: "GPT Fast",
       inputModalities: ["text"],
-      supportedReasoningEfforts: ["low", "high"],
+      supportedReasoningEfforts: ["low", "high", "xhigh"],
       defaultReasoningEffort: "low",
       serviceTiers: {
         offered: [{ selection: "fast" }],
@@ -182,6 +182,8 @@ describe("Codex SavedAgent configuration", () => {
       reasoningEffort: "low",
       serviceTier: "fast",
     });
+    expect(resolved.fields.find(({ id }) => id === "reasoning_effort")?.options)
+      .toContainEqual({ value: "xhigh", label: "Extra High", available: true });
   });
 
   it("rejects duplicate, unknown, catalog-invalid, and model-policy overrides", () => {

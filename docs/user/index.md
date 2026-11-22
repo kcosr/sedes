@@ -2,7 +2,7 @@
 
 Sedes is a workspace for running and organizing coding-agent conversations. It
 keeps drafts, queued messages, Tasks, files, and organization available across
-browser refreshes while Pi, Codex, Claude, or Grok supplies the underlying
+browser refreshes while the selected provider supplies the underlying
 conversation.
 
 If Sedes is not running yet, begin with [Getting started](getting-started.md).

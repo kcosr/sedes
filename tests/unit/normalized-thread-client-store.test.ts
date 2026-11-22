@@ -12,7 +12,7 @@ import { CODEX_SPEED_REF, speedArgumentsValue } from "../../src/shared/provider-
 import { largeDirectInputText } from "../support/large-direct-input.js";
 import {
   DeliveryRecoveryRequiredError,
-  ThreadClientStore,
+  ThreadClientStore as ProductionThreadClientStore,
 } from "../../src/client/stores/ThreadClientStore.js";
 import type {
   ActivityDetailMode,
@@ -40,7 +40,20 @@ import {
 
 const hubId = "10000000-0000-4000-8000-000000000001";
 
+const stores = new Set<ProductionThreadClientStore>();
+/** Most fixtures have no abandoned operations; individual tests supply exact evidence. */
+class ThreadClientStore extends ProductionThreadClientStore {
+  constructor(threadId: string, api: ApiClient, transport: EventStreamTransport, activityDetail: ActivityDetailMode = "full") {
+    super(threadId, Object.assign({
+      readAbandonedInputOperations: async (id: string) => ({ threadId: id, abandonedOperationIds: [] }),
+    }, api) as unknown as ApiClient, transport, activityDetail);
+    stores.add(this);
+  }
+}
+
 afterEach(() => {
+  for (const store of stores) store.dispose();
+  stores.clear();
   clearDiagnostics();
   resetThreadLoadAttemptsForTests();
   localStorage.clear();
@@ -1008,6 +1021,190 @@ describe("ThreadClientStore normalized operations", () => {
     expect(store.getSnapshot().pendingComposerTransfers[0]).toMatchObject({
       steerTarget: { kind: "conversation" }, authorityState: "client_only",
     });
+    store.dispose();
+  });
+
+  it.each(["queue event", "snapshot", "batched reset"])("hands a conversation Steer to its exact durable row via %s", async (delivery) => {
+    let resolveRequest!: (value: ThreadApplicationMutationResult) => void;
+    const operateThread = vi.fn(() => new Promise<ThreadApplicationMutationResult>(resolve => { resolveRequest = resolve; }));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { operateThread } as unknown as ApiClient, transport);
+    await store.start();
+    const current = snapshotWithDeliveryModes("running");
+    current.capabilities.deliveryModes = current.capabilities.deliveryModes.map(mode => ({
+      ...mode, steerTarget: mode.id === "steer" ? "conversation" : null,
+    }));
+    installSnapshot(transport, current);
+    const draft = composerDraft("Do not resend this uncertain input");
+    store.stageComposerTransfer("conversation-steer", "steer", draft);
+    const request = store.deliver("steer", draft, "conversation-steer").catch(error => error);
+    await vi.waitFor(() => expect(operateThread).toHaveBeenCalledOnce());
+    const queued: QueuedInputSummary = { ...serverQueueRow("dispatching"), id: "steer-row",
+      deliveryOperationId: "conversation-steer", resolvedDeliveryMode: "steer", requestedDeliveryMode: "steer", deliveryMode: "steer", preview: { text: draft.text } };
+    emitServerQueue(transport, 1, [queued]);
+    await vi.waitFor(() => expect(store.getSnapshot().pendingComposerTransfers[0]?.authorityState).toBe("queue_owned"));
+    const uncertain = { ...queued, state: "uncertain" as const };
+    if (delivery !== "snapshot") {
+      emitServerQueue(transport, 2, [uncertain]);
+      if (delivery === "batched reset") emitServerQueue(transport, 3, []);
+    }
+    else transport.thread!.onEnvelope({ eventId: `${hubId}.2`, projectionGeneration: "projection-1", event: {
+      type: "snapshot", generation: "projection-1", snapshot: { ...store.getSnapshot().snapshot!, queue: [uncertain] },
+    } });
+    await vi.waitFor(() => expect(store.getSnapshot().pendingComposerTransfers).toEqual([]));
+    expect(store.getSnapshot().snapshot!.queue).toEqual(
+      delivery === "batched reset" ? [] : [uncertain],
+    );
+    // Reset/dismissal owns removal. A late failed HTTP result must not recreate
+    // the card or restore possibly-consumed text into the composer.
+    if (delivery !== "batched reset") emitServerQueue(transport, 3, []);
+    resolveRequest({ status: "recovery_required", retryable: false, draft });
+    expect(await request).toBeInstanceOf(DeliveryRecoveryRequiredError);
+    expect(store.getSnapshot().pendingComposerTransfers).toEqual([]);
+    store.dispose();
+  });
+
+
+  it.each(["accepted", "queued", "lost response"])("keeps a %s composer Steer after queue removal until its exact message", async (receipt) => {
+    let finish!: () => void;
+    const draft = composerDraft("Keep this visible until materialization");
+    const cleared = { text: "" as const, contextExcerpts: [] as [], attachments: [] as [], taskReferences: [] as [], revision: 5, updatedAt: "2026-08-13T22:00:00.000Z" };
+    const operateThread = vi.fn(() => new Promise<ThreadApplicationMutationResult>((resolve, reject) => {
+      finish = () => receipt === "lost response" ? reject(new TypeError("lost response")) : resolve(receipt === "queued"
+        ? { status: "delivery_queued", resolvedDeliveryMode: "steer", queuedInputId: "steer-row", threadRevision: 8, draft: cleared }
+        : { status: "delivery_accepted", resolvedDeliveryMode: "steer", operationId: "retained-steer", threadRevision: 8, draft: cleared });
+    }));
+    const readAbandonedInputOperations = vi.fn(async (threadId: string) => ({ threadId, abandonedOperationIds: [] }));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { operateThread, readAbandonedInputOperations } as unknown as ApiClient, transport);
+    await store.start(); installSnapshot(transport, snapshotWithDeliveryModes("running"));
+    store.stageComposerTransfer("retained-steer", "steer", draft);
+    const request = store.deliver("steer", draft, "retained-steer").catch(error => error);
+    await vi.waitFor(() => expect(operateThread).toHaveBeenCalledOnce());
+    emitServerQueue(transport, 1, [{ ...serverQueueRow("dispatching"), id: "steer-row", deliveryOperationId: "retained-steer", resolvedDeliveryMode: "steer", deliveryMode: "steer" }]);
+    await vi.waitFor(() => expect(store.getSnapshot().pendingComposerTransfers[0]?.authorityState).toBe("queue_owned"));
+    finish(); await request; emitServerQueue(transport, 2, []);
+    await vi.waitFor(() => expect(store.getSnapshot().snapshot!.thread.threadRevision).toBe(9));
+    expect(store.getSnapshot().pendingComposerTransfers).toMatchObject([{ operationId: "retained-steer", rollbackRequired: false }]);
+    expect(store.getSnapshot().snapshot!.itemsById).toEqual({});
+    await vi.waitFor(() => expect(readAbandonedInputOperations).toHaveBeenCalled());
+    expect(store.getSnapshot().pendingComposerTransfers).toHaveLength(1);
+    emitMaterializedSteer(transport, "retained-steer", 3);
+    await vi.waitFor(() => expect(store.getSnapshot().pendingComposerTransfers).toEqual([]));
+  });
+
+  it("retires a queue-owned Steer withdrawn by another client while the turn stays running", async () => {
+    const draft = composerDraft("Withdraw this pending Steer elsewhere");
+    const operateThread = vi.fn(async () => ({ status: "delivery_queued", resolvedDeliveryMode: "steer", queuedInputId: "withdrawn-row", threadRevision: 8,
+      draft: { text: "", contextExcerpts: [], attachments: [], taskReferences: [], revision: 5, updatedAt: "2026-08-13T22:00:00.000Z" } }));
+    let withdrawn = false;
+    const readAbandonedInputOperations = vi.fn(async (threadId: string, ids: string[]) => ({ threadId,
+      abandonedOperationIds: withdrawn ? ids.filter(id => id === "withdrawn-steer") : [] }));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { operateThread, readAbandonedInputOperations } as unknown as ApiClient, transport);
+    await store.start(); installSnapshot(transport, snapshotWithDeliveryModes("running"));
+    store.stageComposerTransfer("withdrawn-steer", "steer", draft);
+    await store.deliver("steer", draft, "withdrawn-steer");
+    emitServerQueue(transport, 1, [{ ...serverQueueRow("pending"), id: "withdrawn-row", deliveryOperationId: "withdrawn-steer",
+      requestedDeliveryMode: "steer", resolvedDeliveryMode: "steer" }]);
+    await vi.waitFor(() => expect(store.getSnapshot().pendingComposerTransfers[0]?.authorityState).toBe("queue_owned"));
+    withdrawn = true;
+    emitServerQueue(transport, 2, []);
+    await vi.waitFor(() => expect(store.getSnapshot().pendingComposerTransfers).toEqual([]));
+    expect(store.getSnapshot().snapshot?.runState).toBe("running");
+    expect(store.getSnapshot().snapshot?.itemsById).toEqual({});
+    expect(operateThread).toHaveBeenCalledOnce();
+    expect(readAbandonedInputOperations).toHaveBeenCalledWith("thread-1", ["withdrawn-steer"], expect.any(AbortSignal));
+  });
+
+  it.each(["dispatching", "missed queue", "lost response"])("retires only exact abandoned composer Steers after reset: %s", async (race) => {
+    const draft = composerDraft("Never resend the abandoned text");
+    const operateThread = vi.fn(async () => {
+      if (race === "lost response") throw new TypeError("lost response");
+      return { status: "delivery_queued", resolvedDeliveryMode: "steer", queuedInputId: "steer-row", threadRevision: 8, draft: { ...draft, text: "", revision: 5 } };
+    });
+    let abandoned = false;
+    const readAbandonedInputOperations = vi.fn(async (threadId: string, ids: string[]) => ({ threadId,
+      abandonedOperationIds: abandoned ? ids.filter(id => id === "reset-steer") : [] }));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { operateThread, readAbandonedInputOperations } as unknown as ApiClient, transport);
+    await store.start();
+    const current = snapshotWithDeliveryModes("running");
+    current.capabilities.deliveryModes = current.capabilities.deliveryModes.map(mode => ({ ...mode, steerTarget: mode.id === "steer" ? "conversation" : null }));
+    installSnapshot(transport, current); store.stageComposerTransfer("reset-steer", "steer", draft);
+    await store.deliver("steer", draft, "reset-steer").catch(() => undefined);
+    if (race === "dispatching") {
+      emitServerQueue(transport, 1, [{ ...serverQueueRow("dispatching"), id: "steer-row", deliveryOperationId: "reset-steer", resolvedDeliveryMode: "steer", deliveryMode: "steer" }]);
+      await vi.waitFor(() => expect(store.getSnapshot().pendingComposerTransfers[0]?.authorityState).toBe("queue_owned"));
+    }
+    abandoned = true;
+    transport.thread!.onEnvelope({ eventId: `${hubId}.${race === "dispatching" ? 2 : 1}`, projectionGeneration: "projection-1", event: {
+      type: "snapshot", generation: "projection-1", snapshot: { ...snapshotWithDeliveryModes("idle"), queue: [],
+        capabilities: { ...snapshotWithDeliveryModes("idle").capabilities, revision: current.capabilities.revision + 1 },
+        thread: { ...current.thread, runState: "idle", threadRevision: 20 } },
+    } });
+    transport.thread!.onLive?.(); transport.thread!.onConnection("connected");
+    await vi.waitFor(() => expect(store.getSnapshot().authoritative).toBe(true));
+    await vi.waitFor(() => expect(store.getSnapshot().pendingComposerTransfers).toEqual([]));
+    expect(readAbandonedInputOperations).toHaveBeenCalledWith("thread-1", ["reset-steer"], expect.any(AbortSignal));
+    expect(operateThread).toHaveBeenCalledOnce();
+  });
+
+  it.each(["pending receipt", "late recovery receipt", "failed source input"])("retires a queued Steer reset without an uncertain event: %s", async (race) => {
+    let resolve!: (value: ThreadApplicationMutationResult) => void;
+    const operateThread = vi.fn(() => new Promise<ThreadApplicationMutationResult>(done => { resolve = done; }));
+    let abandoned: string | undefined;
+    const readAbandonedInputOperations = vi.fn(async (threadId: string, ids: string[]) => ({ threadId,
+      abandonedOperationIds: ids.filter(id => id === abandoned) }));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { operateThread, readAbandonedInputOperations } as unknown as ApiClient, transport);
+    await store.start(); const current = snapshotWithDeliveryModes("running");
+    const queued: QueuedInputSummary = { ...serverQueueRow(), id: "queued-reset", requestedDeliveryMode: "queue", resolvedDeliveryMode: "queue",
+      ...(race === "failed source input" ? { deliveryOperationId: "question:20000000-0000-4000-8000-000000000001:2" } : {}) };
+    current.queue = [queued]; current.thread = { ...current.thread, queuedInputCount: 1 }; installSnapshot(transport, current);
+    const request = store.steerQueuedInput(queued.id).catch(error => error);
+    await vi.waitFor(() => expect(operateThread).toHaveBeenCalledOnce());
+    const operationId = store.getSnapshot().pendingQueuedSteers[0]!.operationId;
+    if (race !== "late recovery receipt") {
+      resolve({ status: "queue_steer_pending_materialization", queuedInputId: queued.id, operationId, threadRevision: 8,
+        queue: [{ ...queued, deliveryOperationId: operationId, state: "dispatching", resolvedDeliveryMode: "steer", deliveryMode: "steer" }] });
+      await request;
+    }
+    abandoned = race === "failed source input" ? queued.deliveryOperationId : operationId;
+    transport.thread!.onEnvelope({ eventId: `${hubId}.1`, projectionGeneration: "projection-1",
+      event: { type: "queue_changed", generation: "projection-1", threadRevision: 9, items: [] } });
+    transport.thread!.onLive?.(); transport.thread!.onConnection("connected");
+    await vi.waitFor(() => expect(store.getSnapshot().pendingQueuedSteers).toEqual([]));
+    if (race === "late recovery receipt") {
+      resolve({ status: "queue_steer_recovery_required", queuedInputId: queued.id, operationId, retryable: true, threadRevision: 9, queue: [] });
+      expect(await request).toBeInstanceOf(Error);
+    }
+    expect(store.getSnapshot().pendingQueuedSteers).toEqual([]);
+    expect(operateThread).toHaveBeenCalledOnce();
+  });
+
+  it("does not retire or restore an uncertain conversation Steer from idle or an unrelated queue row", async () => {
+    const operateThread = vi.fn(async () => { throw new TypeError("lost response"); });
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { operateThread } as unknown as ApiClient, transport);
+    await store.start();
+    const current = snapshotWithDeliveryModes("running");
+    current.capabilities.deliveryModes = current.capabilities.deliveryModes.map(mode => ({
+      ...mode, steerTarget: mode.id === "steer" ? "conversation" : null,
+    }));
+    installSnapshot(transport, current);
+    const draft = composerDraft("Keep exact uncertainty");
+    store.stageComposerTransfer("conversation-steer", "steer", draft);
+    await expect(store.deliver("steer", draft, "conversation-steer")).rejects.toThrow("lost response");
+    emitServerQueue(transport, 1, [{ ...serverQueueRow("uncertain"), resolvedDeliveryMode: "steer", requestedDeliveryMode: "steer", deliveryMode: "steer" }]);
+    transport.thread!.onEnvelope({ eventId: `${hubId}.2`, projectionGeneration: "projection-1", event: {
+      type: "snapshot", generation: "projection-1", snapshot: { ...snapshotWithDeliveryModes("idle"), queue: [],
+        thread: { ...current.thread, runState: "idle", threadRevision: 100 } },
+    } });
+    await vi.waitFor(() => expect(store.getSnapshot().snapshot?.runState).toBe("idle"));
+    expect(store.getSnapshot().pendingComposerTransfers).toMatchObject([
+      { operationId: "conversation-steer", steerPhase: "unconfirmed", rollbackRequired: false },
+    ]);
     store.dispose();
   });
 
@@ -2897,6 +3094,40 @@ describe("ThreadClientStore normalized operations", () => {
     expect(() =>
       store.stageComposerTransfer("queue-after-fence", "queue", retained),
     ).not.toThrow();
+  });
+
+  it.each(["queue event", "snapshot", "batched reset", "failed"])("hands queued-input Steer recovery to its exact durable row via %s", async (delivery) => {
+    let resolveRequest!: (value: ThreadApplicationMutationResult) => void;
+    const operateThread = vi.fn(() => new Promise<ThreadApplicationMutationResult>(resolve => { resolveRequest = resolve; }));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { operateThread } as unknown as ApiClient, transport);
+    await store.start();
+    const current = snapshotWithDeliveryModes("running");
+    const queued: QueuedInputSummary = { ...serverQueueRow(), id: "queued-1", requestedDeliveryMode: "queue", resolvedDeliveryMode: "queue" };
+    current.queue = [queued]; current.thread = { ...current.thread, queuedInputCount: 1 };
+    installSnapshot(transport, current);
+    const request = store.steerQueuedInput(queued.id);
+    await vi.waitFor(() => expect(operateThread).toHaveBeenCalledOnce());
+    const operationId = store.getSnapshot().pendingQueuedSteers[0]!.operationId;
+    // A different operation on the same queue ID cannot take this card.
+    emitServerQueue(transport, 1, [{ ...queued, state: "uncertain", resolvedDeliveryMode: "steer", deliveryMode: "steer" }]);
+    await vi.waitFor(() => expect(store.getSnapshot().snapshot!.queue[0]?.state).toBe("uncertain"));
+    expect(store.getSnapshot().pendingQueuedSteers).toHaveLength(1);
+    const uncertain: QueuedInputSummary = { ...queued, deliveryOperationId: operationId, resolvedDeliveryMode: "steer",
+      ...(delivery === "failed" ? { state: "failed" as const } : { state: "uncertain" as const, deliveryMode: "steer" as const }) };
+    if (delivery === "snapshot") transport.thread!.onEnvelope({ eventId: `${hubId}.2`, projectionGeneration: "projection-1", event: {
+      type: "snapshot", generation: "projection-1", snapshot: { ...store.getSnapshot().snapshot!, queue: [uncertain] },
+    } });
+    else {
+      emitServerQueue(transport, 2, [uncertain]);
+      if (delivery === "batched reset") emitServerQueue(transport, 3, []);
+    }
+    await vi.waitFor(() => expect(store.getSnapshot().pendingQueuedSteers).toEqual([]));
+    if (delivery !== "batched reset") emitServerQueue(transport, 3, []);
+    resolveRequest({ status: "queue_steer_recovery_required", queuedInputId: queued.id, operationId, retryable: true, threadRevision: 10, queue: [] });
+    await expect(request).rejects.toThrow("Steer delivery is unconfirmed");
+    expect(store.getSnapshot().pendingQueuedSteers).toEqual([]);
+    store.dispose();
   });
 
   it("keeps a Queue-to-Steer notification until exact materialization", async () => {

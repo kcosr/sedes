@@ -209,6 +209,8 @@ env -u NODE_ENV npm run build:pi-sandbox-worker
 env -u NODE_ENV npm run check:pi-sandbox-worker-build-repeatability
 env -u NODE_ENV npm run build:claude-runtime-worker
 env -u NODE_ENV npm run check:claude-runtime-worker-build-repeatability
+env -u NODE_ENV npm run build:antigravity-history-worker
+env -u NODE_ENV npm run check:antigravity-history-worker-build-repeatability
 ```
 
 A source development server configured for the managed SSH sidecar requires an
@@ -217,6 +219,11 @@ it. The Pi sandbox worker is likewise a pinned, self-contained artifact; its
 repeatability check rebuilds it twice and verifies identical bytes, manifest,
 digest, size, and restrictive modes. The standard production `build` gate runs
 that check before cleaning and creating the final build outputs.
+
+Antigravity's native-history worker is also required for local source runs.
+`npm run dev`, `npm test`, and the production build prepare it automatically.
+After changing its reader or build helper, rebuild the worker before invoking
+individual tests directly. Sidecars embed the same verified worker artifact.
 
 Remote terminal assets require the matching architecture, Node ABI, and glibc
 profile. Follow [Sidecar native builds](sidecar-native-build.md) to build and
@@ -324,7 +331,8 @@ release-artifact contract.
 ## Live-provider suites
 
 Do not run commands matching `test:real-pi*`, `test:real-codex*`,
-`test:real-claude*`, `test:real-grok*`, `test:live-pi-native`, or `test:live-opencode` by default.
+`test:real-claude*`, `test:real-grok*`, `test:live-pi-native`, `test:live-opencode`,
+or `test:live-antigravity` by default.
 They consume live provider capacity or exercise authenticated external state
 and require explicit user authorization for the relevant backend change.
 The `test:real-pi-native` offline exception is described below; it makes no
@@ -404,6 +412,11 @@ a loopback model: it checks exclusive wire token-limit fields, canary content
 in the model's tool result after the allowed read, and a denied
 read outside the canary path without external inference. This rehearsal does
 not qualify a real provider or its billing behavior.
+
+The [Antigravity qualification instructions](../internals/backends/antigravity.md#cross-backend-audit)
+cover the separate stock CLI gate, `test:live-antigravity`, and its optional
+loopback SSH case. The suite builds the production application before testing
+against disposable native conversations.
 
 When a backend-specific change affects protocol handling, streaming, history,
 lifecycle, tools, interactions, or provider integration, ask whether to run the

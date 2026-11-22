@@ -1,6 +1,6 @@
 # Backend operator guide
 
-Sedes ships six compiled conversation backends. Choose a backend for its
+Sedes ships seven compiled conversation backends. Choose a backend for its
 provider, execution topology, and controls—not only for the model names it
 currently lists. The live catalog and the backend `modelPolicy`
 remain authoritative after startup.
@@ -32,6 +32,7 @@ state, and backups.
 | [Claude](claude.md) | Managed Claude Agent SDK worker plus Claude Code            | Linux/macOS local; persistent-sidecar runtime over SSH or outbound                                        | Submit, Steer, Queue, Stop, rename, compact        | Permission modes, prompts, native questions, skills, usage, background-work status, selected-completed-turn forks, native image input                                         |
 | [Grok](grok.md)     | Sedes-owned Grok ACP process                                | Local Linux x64 or macOS arm64/x64                                                              | Submit, Queue, Stop, rename                 | Plans, tool and collaboration rendering, file/image input, completed `ImageGen` and `ImageEdit` artifacts                              |
 | [OpenCode v2](opencode.md) | Owned resident daemon or external HTTP/SSE server | Local, SSH or outbound Linux host; same host account | Submit, Steer, Queue, Stop, rename | Native history, reviewed model/effort selection, approvals/forms, observed background work |
+| [Antigravity](antigravity.md) | Owned official `agy acp` process | Linux/macOS local, SSH or outbound | Submit, Steer, Queue, Stop, Sedes-local rename | Native history, model/reasoning selection, permissions, background continuations, file/image input |
 
 `Queue` is a provider-neutral Sedes feature: while a turn is active, Sedes
 retains the next input and submits it only after authoritative settlement. It
@@ -43,32 +44,33 @@ This matrix is the authoritative capability reference for Sedes. The user
 guide and the maintainer contracts restate it in their own terms and must not
 contradict it.
 
-| Capability | Pi SDK | Pi | Codex | Claude | Grok | OpenCode v2 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Mid-turn Steer | Turn-scoped | Turn-scoped | Turn-scoped | Conversation-scoped | No; Queue only | Conversation-scoped |
-| Manual compact | Yes | Yes | Yes | Yes; idle bound thread | No | Yes; exact native outcome |
-| Exact completed-turn fork | Yes | Yes | Yes | Yes; source must be idle | No | No |
-| Latest provider snapshot fork | No | No | Yes | No | No | No |
-| Structured questions | No | No | Questionnaires and MCP forms | Native multiple-choice questions | No | Expressible forms and questionnaires |
-| Provider permission interaction | Primitive prompts | Primitive prompts and tool decisions | Approvals | Permission prompts | Not exposed | Allow once or Deny and stop |
-| Skills | Yes | Yes | Yes | Eligible native skills | No | Explicit native selection |
-| Sedes agent-tool surfaces | Native SDK tools; CLI on eligible local | Native companion tools; CLI with an eligible host endpoint | CLI or Native through a per-thread MCP server | CLI or Native through a per-query MCP server | CLI on local threads | Native Progressive bridge; CLI on owned Sedes-created roots |
-| Background-work status | No | No | No | Subagents and commands | No | Observed child sessions and attributed shells |
-| Managed provider terminal | No | No | Eligible external connections | No | No | No |
-| Local image input | Model dependent | Model dependent | Model dependent | PNG, JPEG, GIF, WebP | Model dependent | Model dependent |
-| Native generated-image artifact | No | Native in-band raster images | Completed in-band PNG | No | Completed local `ImageGen`/`ImageEdit` JPEG | No |
-| SSH or outbound workspace target | Managed tools/context; optional sidecar skills | Persistent runtime; independently granted Files/CLI | Persistent runtime; independently granted Files/CLI | Persistent runtime; independently granted Files/CLI | No | Linux persistent runtime; independently granted Files/CLI |
+| Capability | Pi SDK | Pi | Codex | Claude | Grok | OpenCode v2 | Antigravity |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Mid-turn Steer | Turn-scoped | Turn-scoped | Turn-scoped | Conversation-scoped | No; Queue only | Conversation-scoped | Conversation-scoped |
+| Manual compact | Yes | Yes | Yes | Yes; idle bound thread | No | Yes; exact native outcome | No |
+| Exact completed-turn fork | Yes | Yes | Yes | Yes; source must be idle | No | No | No |
+| Latest provider snapshot fork | No | No | Yes | No | No | No | No |
+| Structured questions | No | No | Questionnaires and MCP forms | Native multiple-choice questions | No | Expressible forms and questionnaires | Native choice questions |
+| Provider permission interaction | Primitive prompts | Primitive prompts and tool decisions | Approvals | Permission prompts | Not exposed | Allow once or Deny and stop | Native permission decisions |
+| Skills | Yes | Yes | Yes | Eligible native skills | No | Explicit native selection | Native provider discovery only |
+| Sedes agent-tool surfaces | Native SDK tools; CLI on eligible local | Native companion tools; CLI with an eligible host endpoint | CLI or Native through a per-thread MCP server | CLI or Native through a per-query MCP server | CLI on local threads | Native Progressive bridge; CLI on owned Sedes-created roots | Native MCP or CLI through a scoped host endpoint |
+| Background-work status | No | No | No | Subagents and commands | No | Observed child sessions and attributed shells | Native commands, timers and subagents |
+| Managed provider terminal | No | No | Eligible external connections | No | No | No | No |
+| Local image input | Model dependent | Model dependent | Model dependent | PNG, JPEG, GIF, WebP | Model dependent | Model dependent | ACP image input |
+| Native generated-image artifact | No | Native in-band raster images | Completed in-band PNG | No | Completed local `ImageGen`/`ImageEdit` JPEG | No | No |
+| SSH or outbound workspace target | Managed tools/context; optional sidecar skills | Persistent runtime; independently granted Files/CLI | Persistent runtime; independently granted Files/CLI | Persistent runtime; independently granted Files/CLI | No | Linux persistent runtime; independently granted Files/CLI | Linux/macOS persistent runtime; independently granted Files/CLI |
 
 Notes on individual rows:
 
-- **Steer.** Turn-scoped Steer targets the exact active turn. Claude and OpenCode Steer is
+- **Steer.** Turn-scoped Steer targets the exact active turn. Claude, OpenCode, and Antigravity Steer is
   conversation-scoped: it is delivered at the provider's next native opportunity and
   may join the current turn or start the next one, and it never interrupts
   work. Grok advertises no Steer, so active-turn input stays in Sedes Queue.
 - **Local image input.** Sedes accepts PNG, JPEG, GIF, and WebP composer
   images. Claude always admits them; Pi, Codex, and Grok advertise native image
   input only when the selected model declares image input, and Grok also
-  requires a runtime that supports the image path.
+  requires a runtime that supports the image path. Antigravity advertises
+  native image input when the ACP runtime reports image support.
 - **Managed provider terminal.** Codex additionally requires an external
   connection, a catalog model policy, and either a local endpoint with PTY
   support or a persistent sidecar whose runtime channel negotiated the
@@ -94,6 +96,7 @@ an unsupported action and the backend rejects it again if called directly.
 | Claude  | `0.3.319` Agent SDK             | Stable Claude Code `>=2.1.287`, excluding reviewed incompatible releases | Claude Code `2.1.319` |
 | Grok    | `1.x` ACP compatibility profile | Stable `>=1.0.4`, excluding reviewed incompatible releases               | `1.0.4`               |
 | OpenCode v2 | `2.2.6` HTTP/SSE profile | Stable stock `>=2.2.6` | `2.2.6` |
+| Antigravity | `1.5.14` CLI, ACP 1 | Stable `>=1.5.14` within major 1, with the required ACP session capabilities | `1.5.14` reference profile |
 
 Pi, Codex, Claude, Grok, and OpenCode may admit a stable runtime newer than the release most
 recently exercised by this repository. Sedes shows an installation advisory
@@ -120,14 +123,14 @@ runtimes are not equivalent to exercised runtimes.
 | Claude | August 2026 | Agent SDK `0.3.319`: Claude Code `2.1.319` passed 33 loopback native and nine first-party subscription cases; retained minimum `2.1.287` passed 33 loopback native cases on Linux x64 on 2026-11-08. See the [profile evidence](../../../protocol/claude-agent-sdk/0.3.319/README.md) for scope and limits | `test:real-claude` (native loopback and authenticated cases) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
 | Grok | August 2026 | Grok Build `1.0.4` against the compiled `1.x` ACP profile | `test:real-grok` (three files) | Local Linux x64 or macOS only |
 | OpenCode v2 | October 2026 | Stock `opencode2` 2.2.6 loopback history, mutation, sidecar, image and accounting fixtures; one bounded AW Qwen read-only live canary passed on Linux x64 on 2026-11-08. See the [profile evidence](../../../protocol/opencode-http/2.2.6/README.md) for coverage and historical limits | `test:real-opencode` and authorized `test:live-opencode` | Owned or external HTTP/SSE on a Linux execution host; local, SSH and outbound |
+| Antigravity | November 2026 | Fixture ACP peers and native history databases for the `1.5.14` reference profile. See [Antigravity qualification](../../internals/backends/antigravity.md#cross-backend-audit) for live gate scope. | Authorized `test:live-antigravity` | Owned ACP process on Linux/macOS, local or persistent SSH/outbound sidecar |
 
-Version-pinned qualification evidence for each external runtime is kept under
-`protocol/` beside its compiled profile. Live suites are opt-in. Pi SDK, Codex, Claude, and Grok suites consume provider
-capacity; native Pi's `test:real-pi-native` and OpenCode's `test:real-opencode` use isolated loopback fixtures, and
-`test:live-pi-native` and `test:live-opencode` require separate provider authorization. Pi's
-live results cover only the exact AW Qwen provider/model with low reasoning and
-read-only tools, not other providers or platforms. The deterministic suite exercises every backend through
-recorded fixtures on each change.
+The deterministic suite exercises every backend through recorded fixtures.
+Version-pinned evidence, where available, lives under `protocol/` beside the
+compiled profile. Native Pi's `test:real-pi-native` and OpenCode's
+`test:real-opencode` use isolated loopback fixtures. Every live-provider suite
+requires explicit user authorization. Pi's live results cover the exact AW
+Qwen provider/model with low reasoning and read-only tools.
 
 Maintainer positioning, stated as judgment rather than measurement: Pi SDK and
 Codex are the primary integrations and carry the broadest feature set and the
@@ -157,6 +160,9 @@ topology named.
 
 - Choose **OpenCode v2** for a stock OpenCode installation on a Linux execution host, native model
   catalog, or an existing local daemon with native session history.
+- Choose **Antigravity** for the stock Google Antigravity CLI, its native
+  conversation history, or its background work on a local or persistent
+  SSH/outbound execution host.
 
 You may configure multiple backend instances and targets. Each instance has
 its own model policy; a thread remains bound to its original backend,
@@ -208,6 +214,7 @@ invariants live separately from these operator runbooks:
 | Claude  | [Configure and operate Claude](claude.md) | [Claude internals](../../internals/backends/claude.md) |
 | Grok    | [Configure and operate Grok](grok.md)     | [Grok internals](../../internals/backends/grok.md)     |
 | OpenCode v2 | [Configure and operate OpenCode](opencode.md) | [OpenCode internals](../../internals/backends/opencode.md) |
+| Antigravity | [Configure Antigravity](antigravity.md) | [Antigravity internals](../../internals/backends/antigravity.md) |
 
 Contributors must start at the
 [backend maintainer index](../../internals/backends/index.md) and follow the

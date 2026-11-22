@@ -74,6 +74,7 @@ export interface AcpReverseContext {
 export interface AcpReverseRegistration {
   readonly descriptor: AcpDescriptor;
   readonly kind: "request" | "notification";
+  readonly dispatchDeadlineMilliseconds?: null;
   readonly notificationDisposition?: (params: unknown) => "dispatch" | "ignore";
   readonly inlineNotification?: {
     authorize(params: unknown, context: AcpReverseContext): boolean;
@@ -91,6 +92,9 @@ const reverseRegistrationBrands = new WeakSet<object>();
  */
 export function defineAcpReverseRequestHandler<Request, Response>(input: {
   readonly descriptor: AcpRequestDescriptor<Request, Response>;
+  /** Human decisions may wait until request/connection cancellation. Only the
+   * dispatch wait is unbounded; authorization and terminal writes stay bounded. */
+  readonly dispatchDeadlineMilliseconds?: null;
   readonly authorize: (
     request: Request,
     context: AcpReverseContext,
@@ -103,13 +107,15 @@ export function defineAcpReverseRequestHandler<Request, Response>(input: {
   if (
     !isAcpDescriptor(input.descriptor) ||
     input.descriptor.kind !== "request" ||
-    input.descriptor.direction !== "agent_to_client"
+    input.descriptor.direction !== "agent_to_client" ||
+    (input.dispatchDeadlineMilliseconds !== undefined && input.dispatchDeadlineMilliseconds !== null)
   ) {
     throw new Error("acp_reverse_request_registration_invalid");
   }
   const registration: AcpReverseRegistration = Object.freeze({
     descriptor: input.descriptor as AcpDescriptor,
     kind: "request",
+    ...(input.dispatchDeadlineMilliseconds === null ? { dispatchDeadlineMilliseconds: null } : {}),
     authorize: async (params: unknown, context: AcpReverseContext) =>
       await input.authorize(params as Request, context),
     dispatch: async (params: unknown, context: AcpReverseContext) =>
@@ -1624,20 +1630,33 @@ export class AcpBinding {
     }
     const controller = new AbortController();
     this.#activeReverse.set(envelope.id, controller);
-    const deadlineAt =
+    let deadlineAt =
       performance.now() + this.#limits.reverseRequestDeadlineMilliseconds;
     let workSettled = true;
     let lifecycleFinished = false;
     let responseDelivery: FrameDelivery | undefined;
-    const hardDeadline = setTimeout(() => {
-      controller.abort(new AcpBindingError("acp_binding_request_deadline"));
-      void this.#failProtocol("acp_reverse_request_deadline", responseDelivery);
-    }, this.#limits.reverseRequestDeadlineMilliseconds);
-    hardDeadline.unref?.();
+    let hardDeadline: NodeJS.Timeout | undefined;
+    const armDeadline = () => {
+      hardDeadline = setTimeout(() => {
+        controller.abort(new AcpBindingError("acp_binding_request_deadline"));
+        void this.#failProtocol("acp_reverse_request_deadline", responseDelivery);
+      }, remainingDeadline(deadlineAt));
+      hardDeadline.unref?.();
+    };
+    const pauseDispatchDeadline = () => {
+      clearTimeout(hardDeadline); hardDeadline = undefined; deadlineAt = Infinity;
+    };
+    const resumeResponseDeadline = () => {
+      if (Number.isFinite(deadlineAt)) return;
+      deadlineAt = performance.now() + this.#limits.reverseRequestDeadlineMilliseconds;
+      armDeadline();
+    };
+    armDeadline();
     const sendTerminalError = async (
       code: number,
       message: string,
     ): Promise<void> => {
+      resumeResponseDeadline();
       responseDelivery = "sent_outcome_unknown";
       await this.#sendError(
         envelope.id,
@@ -1703,9 +1722,27 @@ export class AcpBinding {
           context,
         );
         if (!authorized) return { kind: "denied" as const };
+        if (registration.dispatchDeadlineMilliseconds === null) {
+          // A slow authority check must never acquire permission to disable its
+          // own admission deadline. Recheck lifetime and exact carrier before
+          // entering the explicitly registered human-decision wait.
+          if (performance.now() >= deadlineAt) throw new AcpBindingError("acp_binding_request_deadline");
+          if (controller.signal.aborted) throw controller.signal.reason;
+          this.#requireActiveAssurance();
+          pauseDispatchDeadline();
+        }
+        const value = await registration.dispatch(projectedRequest, context);
+        if (registration.dispatchDeadlineMilliseconds === null) {
+          resumeResponseDeadline();
+          if (controller.signal.aborted) throw controller.signal.reason;
+          this.#requireActiveAssurance();
+          // Session/resource authority may have changed while a person decided.
+          // Reauthorization shares the finite response-delivery phase budget.
+          if (!await registration.authorize(projectedRequest, context)) return { kind: "denied" as const };
+        }
         return {
           kind: "response" as const,
-          value: await registration.dispatch(projectedRequest, context),
+          value,
         };
       })();
       void reverseWork.then(
@@ -1733,7 +1770,7 @@ export class AcpBinding {
       const response = await boundedReverseWork(
         reverseWork,
         controller,
-        remainingDeadline(deadlineAt),
+        registration.dispatchDeadlineMilliseconds === null ? null : remainingDeadline(deadlineAt),
       );
       if (performance.now() >= deadlineAt) {
         controller.abort(new AcpBindingError("acp_binding_request_deadline"));
@@ -2769,12 +2806,12 @@ function safeCloseReason(reason: string): string {
 async function boundedReverseWork<T>(
   work: Promise<T>,
   controller: AbortController,
-  milliseconds: number,
+  milliseconds: number | null,
 ): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   let abortListener: (() => void) | undefined;
   try {
-    return await Promise.race([
+    const waiting: Promise<T>[] = [
       work,
       new Promise<never>((_resolve, reject) => {
         abortListener = () =>
@@ -2791,14 +2828,18 @@ async function boundedReverseWork<T>(
           });
         }
       }),
-      new Promise<never>((_resolve, reject) => {
+    ];
+    if (milliseconds !== null) {
+      const duration = milliseconds;
+      waiting.push(new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
           controller.abort(new AcpBindingError("acp_binding_request_deadline"));
           reject(new AcpBindingError("acp_binding_request_deadline"));
-        }, milliseconds);
+        }, duration);
         timer.unref?.();
-      }),
-    ]);
+      }));
+    }
+    return await Promise.race(waiting);
   } finally {
     if (timer) clearTimeout(timer);
     if (abortListener) {

@@ -23,6 +23,7 @@ export default defineConfig({
       "tests/real-pi-cli/**",
       "tests/real-pi-native/**",
       "tests/live-pi-native/**",
+      "tests/live-antigravity/**",
       "tests/real-codex-agent-tools/**",
       "tests/real-claude/**",
       "tests/real-grok/**",

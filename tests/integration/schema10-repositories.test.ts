@@ -6033,11 +6033,28 @@ describe("inactive schema-10 repositories", () => {
           now: 600,
         },
       );
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, fixture.threadId)).toBe(false);
+      expect(repository.findUncertainInteractionResponseForThread(fixture.scope, fixture.threadId)).toBeUndefined();
+      expect(repository.isOperationAbandoned(fixture.scope, fixture.threadId, operationId)).toBe(false);
       repository.markInteractionResponseStarted(fixture.scope, operationId);
+      expect(repository.findUncertainInteractionResponseForThread(fixture.scope, fixture.threadId)).toMatchObject({
+        operationId, interactionId: "interaction-1", state: "uncertain",
+        response: { kind: "text_input", value: "private response text" },
+      });
+      expect(repository.isOperationAbandoned(fixture.scope, fixture.threadId, operationId)).toBe(false);
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, fixture.threadId)).toBe(true);
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, fixture.threadId, operationId)).toBe(false);
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, fixture.threadId, "another-operation")).toBe(true);
+      expect(repository.hasUncertainNonSteerOperation({ ...fixture.scope, tenantId: "another-tenant" }, fixture.threadId)).toBe(false);
+      expect(repository.hasUncertainNonSteerOperation({ ...fixture.scope, principalId: "another-principal" }, fixture.threadId)).toBe(false);
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, "another-thread")).toBe(false);
       const accepted = repository.acceptInteractionResponse(
         fixture.scope,
         operationId,
       );
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, fixture.threadId)).toBe(false);
+      expect(repository.findUncertainInteractionResponseForThread(fixture.scope, fixture.threadId)).toBeUndefined();
+      expect(repository.isOperationAbandoned(fixture.scope, fixture.threadId, operationId)).toBe(false);
 
       expect(accepted).toMatchObject({
         operationId,
@@ -6076,6 +6093,88 @@ describe("inactive schema-10 repositories", () => {
     } finally {
       fixture.database.close();
     }
+  });
+
+  it.each([
+    { name: "Stop", operation: null },
+    { name: "settings", operation: { action: "set_setting", settingId: "model", value: "native-model" } },
+    { name: "rename", operation: { action: "rename", title: "A title" } },
+    { name: "compaction", operation: { action: "compact" } },
+  ] as const)("does not let an older uncertain Steer hide a newer uncertain $name", ({ operation }) => {
+    const fixture = createFixture();
+    try {
+      bindDiscovered(fixture);
+      const repository = new ConversationOperationRepository(fixture.database);
+      const draft = new ConversationDraftRepository(fixture.database).get(fixture.scope, fixture.threadId);
+      repository.prepareSteer(fixture.scope, fixture.threadId, { mutationId: "older-steer", text: draft.text,
+        contextExcerpts: draft.contextExcerpts, attachmentIds: [], taskReferences: draft.taskReferences,
+        expectedThreadRevision: threadRevision(fixture), expectedDraftRevision: draft.revision, now: 600 });
+      repository.markSteerSubmissionStarted(fixture.scope, "older-steer", { kind: "turn", turnId: "native-turn" });
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, fixture.threadId)).toBe(false);
+      if (operation === null) {
+        repository.prepareInterrupt(fixture.scope, fixture.threadId, { operationId: "newer-operation", now: 700 });
+        repository.markInterruptStarted(fixture.scope, "newer-operation");
+      } else {
+        repository.prepareBackendAction(fixture.scope, fixture.threadId, { mutationId: "newer-operation", operation,
+          expectedThreadRevision: threadRevision(fixture), ...(operation.action === "set_setting" ? { expectedSettingsRevision: 0 } : {}), now: 700 });
+        repository.markBackendActionStarted(fixture.scope, "newer-operation");
+      }
+      expect(repository.findUncertainThreadOperation(fixture.scope, fixture.threadId)?.mutationId).toBe("older-steer");
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, fixture.threadId)).toBe(true);
+      // An arbitrary supplied operation ID must never exempt Stop/settings.
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, fixture.threadId, "newer-operation")).toBe(true);
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, fixture.threadId, "older-steer")).toBe(true);
+      expect(repository.hasUncertainNonSteerOperation({ ...fixture.scope, tenantId: "foreign" }, fixture.threadId)).toBe(false);
+      expect(repository.hasUncertainNonSteerOperation({ ...fixture.scope, principalId: "foreign" }, fixture.threadId)).toBe(false);
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, "foreign-thread")).toBe(false);
+    } finally { fixture.database.close(); }
+  });
+
+  it("finds the oldest scoped uncertain permission independently of an older Steer and preserves a later Stop fence", () => {
+    const fixture = createFixture();
+    try {
+      bindDiscovered(fixture);
+      const repository = new ConversationOperationRepository(fixture.database);
+      const draft = new ConversationDraftRepository(fixture.database).get(fixture.scope, fixture.threadId);
+      repository.prepareSteer(fixture.scope, fixture.threadId, {
+        mutationId: "older-steer", text: draft.text, contextExcerpts: draft.contextExcerpts,
+        attachmentIds: [], taskReferences: draft.taskReferences,
+        expectedThreadRevision: threadRevision(fixture), expectedDraftRevision: draft.revision, now: 500,
+      });
+      repository.markSteerSubmissionStarted(fixture.scope, "older-steer", { kind: "conversation" });
+      const response = { kind: "confirmation" as const, confirmed: false };
+      const earliest = "00000000-0000-4000-8000-000000000001";
+      const next = "00000000-0000-4000-8000-000000000002";
+      const later = "00000000-0000-4000-8000-000000000003";
+      // Insert out of order to exercise both creation time and operation-ID ordering.
+      for (const [operationId, now] of [[later, 700], [next, 600], [earliest, 600]] as const) {
+        repository.prepareRecoverableInteractionResponse(fixture.scope, fixture.threadId, {
+          operationId, interactionId: `interaction-${operationId}`, response,
+          backendResponse: { applicationOperationId: operationId, interactionId: `provider-${operationId}`, ...response }, now,
+        });
+        repository.markInteractionResponseStarted(fixture.scope, operationId);
+      }
+      expect(repository.findUncertainThreadOperation(fixture.scope, fixture.threadId)?.mutationId).toBe("older-steer");
+      expect(repository.findUncertainInteractionResponseForThread(fixture.scope, fixture.threadId)).toMatchObject({
+        operationId: earliest, interactionId: `interaction-${earliest}`, response,
+        backendResponse: { applicationOperationId: earliest, interactionId: `provider-${earliest}`, ...response },
+      });
+      expect(repository.findUncertainInteractionResponseForThread({ ...fixture.scope, tenantId: "foreign" }, fixture.threadId)).toBeUndefined();
+      expect(repository.findUncertainInteractionResponseForThread({ ...fixture.scope, principalId: "foreign" }, fixture.threadId)).toBeUndefined();
+      expect(repository.findUncertainInteractionResponseForThread(fixture.scope, fixture.secondThreadId)).toBeUndefined();
+
+      repository.acceptInteractionResponse(fixture.scope, earliest);
+      expect(repository.findUncertainInteractionResponseForThread(fixture.scope, fixture.threadId)?.operationId).toBe(next);
+      repository.acceptInteractionResponse(fixture.scope, next);
+      expect(repository.findUncertainInteractionResponseForThread(fixture.scope, fixture.threadId)?.operationId).toBe(later);
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, fixture.threadId, later)).toBe(false);
+
+      repository.prepareInterrupt(fixture.scope, fixture.threadId, { operationId: "newer-stop", now: 800 });
+      repository.markInterruptStarted(fixture.scope, "newer-stop");
+      expect(repository.hasUncertainNonSteerOperation(fixture.scope, fixture.threadId, later)).toBe(true);
+      expect(repository.findUncertainThreadOperation(fixture.scope, fixture.threadId)?.mutationId).toBe("older-steer");
+      expect(repository.findUncertainInteractionResponseForThread(fixture.scope, fixture.threadId)?.operationId).toBe(later);
+    } finally { fixture.database.close(); }
   });
 
   it("CAS-accepts only the exact uncertain interaction response and preserves abandonment", () => {
@@ -6178,6 +6277,12 @@ describe("inactive schema-10 repositories", () => {
       expect(() =>
         repository.getInteractionResponse(fixture.scope, abandonedOperationId),
       ).toThrow("explicitly abandoned");
+      expect(repository.findUncertainInteractionResponseForThread(fixture.scope, fixture.threadId)).toBeUndefined();
+      expect(repository.isOperationAbandoned(fixture.scope, fixture.threadId, abandonedOperationId)).toBe(true);
+      expect(repository.isOperationAbandoned({ ...fixture.scope, tenantId: "foreign" }, fixture.threadId, abandonedOperationId)).toBe(false);
+      expect(repository.isOperationAbandoned({ ...fixture.scope, principalId: "foreign" }, fixture.threadId, abandonedOperationId)).toBe(false);
+      expect(repository.isOperationAbandoned(fixture.scope, fixture.secondThreadId, abandonedOperationId)).toBe(false);
+      expect(repository.isOperationAbandoned(fixture.scope, fixture.threadId, "missing-operation")).toBe(false);
     } finally {
       fixture.database.close();
     }
@@ -6234,6 +6339,10 @@ describe("inactive schema-10 repositories", () => {
         expect(testCase.replay).toThrow(
           new DomainError("conflict", testCase.message),
         );
+        expect(repository.isOperationAbandoned(fixture.scope, fixture.threadId, testCase.mutationId)).toBe(true);
+        expect(repository.isOperationAbandoned({ ...fixture.scope, tenantId: "foreign" }, fixture.threadId, testCase.mutationId)).toBe(false);
+        expect(repository.isOperationAbandoned({ ...fixture.scope, principalId: "foreign" }, fixture.threadId, testCase.mutationId)).toBe(false);
+        expect(repository.isOperationAbandoned(fixture.scope, fixture.secondThreadId, testCase.mutationId)).toBe(false);
       }
     } finally {
       fixture.database.close();

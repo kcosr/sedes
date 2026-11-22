@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { directInputRequestSchema, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
+import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import { BackendError } from "../../src/server/backends/contracts.js";
 import { ThreadActivityService } from "../../src/server/conversations/thread-activity-service.js";
 import { AutomaticModelRetryService } from "../../src/server/conversations/automatic-model-retry-service.js";
@@ -30,6 +31,33 @@ async function settled(harness: Harness, threadId: string) {
 }
 
 describe("direct thread input admission", { timeout: 30_000 }, () => {
+  it("authorizes abandonment lookups without acquiring a conversation runtime", async () => {
+    const h = await createInMemoryThreadRuntimeHarness();
+    try {
+      const threadId = (await draft(h)).applicationThreadId;
+      const otherThreadId = (await draft(h, "Other thread")).applicationThreadId;
+      const pendingId = randomUUID();
+      const unknownId = randomUUID();
+      const operations = new ConversationOperationRepository(h.database);
+      operations.prepareInterrupt(h.scope, threadId, { operationId: pendingId, now: 500 });
+      const acquire = vi.spyOn(h.runtimes, "acquire").mockRejectedValue(new Error("Lookup must not acquire a runtime"));
+      const actorAcquire = vi.spyOn(h.actors, "acquire");
+      expect(await h.threads.readAbandonedInputOperations(h.scope, threadId, [pendingId, unknownId]))
+        .toEqual({ threadId, abandonedOperationIds: [] });
+      await expect(h.threads.readAbandonedInputOperations({ ...h.scope, principalId: "foreign" }, threadId, [unknownId]))
+        .rejects.toThrow();
+      await expect(h.threads.readAbandonedInputOperations({ ...h.scope, tenantId: "foreign" }, threadId, [unknownId]))
+        .rejects.toThrow();
+      expect(() => h.mutations.readAbandonedInputOperations({ ...h.scope, principalId: "foreign" }, threadId, [unknownId]))
+        .toThrow();
+      expect(h.mutations.readAbandonedInputOperations(h.scope, otherThreadId, [pendingId]))
+        .toEqual({ threadId: otherThreadId, abandonedOperationIds: [] });
+      expect(() => h.mutations.readAbandonedInputOperations(h.scope, threadId, [unknownId, unknownId])).toThrow();
+      expect(acquire).not.toHaveBeenCalled();
+      expect(actorAcquire).not.toHaveBeenCalled();
+    } finally { vi.restoreAllMocks(); await h.close(); }
+  });
+
   it("admits a new Send during a pending retry and cancels only after commit, while replay preserves a later retry", async () => {
     let retries: AutomaticModelRetryService | undefined;
     const observedNewReceipts: string[] = [];

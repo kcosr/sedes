@@ -4,8 +4,10 @@ import { codexGoalFeatureModule } from "../backends/codex/codex-goal-feature.js"
 import { codexTuiFeatureModule } from "../backends/codex/codex-tui-feature.js";
 import { claudePermissionsFeatureModule } from "../backends/claude/claude-permissions-feature.js";
 import { ProviderFeatureRegistry } from "./provider-feature-registry.js";
+import { antigravityModeFeatureModule } from "../backends/antigravity/mode-feature.js";
 
 export const compiledProviderFeatureRegistry = new ProviderFeatureRegistry([
+  antigravityModeFeatureModule,
   claudePermissionsFeatureModule,
   codexExecutionFeatureModule,
   codexFastModeFeatureModule,

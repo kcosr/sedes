@@ -219,8 +219,8 @@ Do not claim either platform verified when its gate was not run.
 
 ## 5. Decide live-provider verification
 
-Real Pi, Codex, Claude, and Grok suites consume provider capacity or touch
-authenticated external state. They are never implied by the deterministic
+Live-provider suites for Pi, Codex, Claude, Grok, OpenCode, and Antigravity
+consume provider capacity or touch authenticated external state. They are never implied by the deterministic
 suite and require explicit authorization for the relevant backend.
 
 For each backend materially changed in protocol handling, streaming, history,

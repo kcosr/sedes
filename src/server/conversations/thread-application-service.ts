@@ -54,7 +54,7 @@ import type { ComposerAttachmentDeliveryService } from "../composer-attachments/
 import { COMPOSER_ATTACHMENT_POLICY } from "../../shared/protocol/composer-attachments.js";
 import { hasDeliverableComposerInput } from "../../shared/protocol/conversation.js";
 import { interactionRunState } from "./thread-interaction-run-state.js";
-import type { DirectInputRequest, DirectInputReceipt, DirectInputReceiptLookup, ThreadInputContext } from "../../shared/protocol/thread-input.js";
+import type { AbandonedInputOperationsResult, DirectInputRequest, DirectInputReceipt, DirectInputReceiptLookup, ThreadInputContext } from "../../shared/protocol/thread-input.js";
 
 type InventoryThread = Omit<
   NormalizedThreadSummary,
@@ -227,6 +227,8 @@ export interface ThreadApplicationRecoveryReader {
     scope: RequestScope,
     applicationThreadId: string,
   ): Promise<NormalizedThreadRecovery | undefined>;
+  /** An exact unresolved Steer must not prevent its provider's pending permission answer. */
+  canRespondDuringRecovery(scope: RequestScope, applicationThreadId: string): Promise<boolean>;
   /**
    * A legacy draft-source Steer awaiting materialization. It keeps its
    * exclusive barrier on every delivery mode. Queue-owned Steers awaiting
@@ -249,6 +251,7 @@ export interface ThreadApplicationInteractionReader {
 export interface ThreadApplicationMutationGateway {
   admitInput(scope: RequestScope, applicationThreadId: string, input: DirectInputRequest): Promise<DirectInputReceipt>;
   readInputReceipt(scope: RequestScope, mutationId: string): DirectInputReceiptLookup;
+  readAbandonedInputOperations(scope: RequestScope, applicationThreadId: string, operationIds: readonly string[]): AbandonedInputOperationsResult;
   inputContext(scope: RequestScope, applicationThreadId: string): Promise<ThreadInputContext>;
   mutate(
     scope: RequestScope,
@@ -600,7 +603,7 @@ export class ThreadApplicationService {
     capture: ThreadConversationCapture,
     presentationSource: "fresh" | "cached" = "fresh",
   ) {
-    const [queue, presentation, recovery, exclusivePendingSteer] = await Promise.all([
+    const [queue, presentation, recovery, exclusivePendingSteer, interactionResponseRecovery] = await Promise.all([
       this.#queue.list(scope, applicationThreadId),
       this.#presentation[
         presentationSource === "fresh" && inventory.thread.inventoryState !== "archived"
@@ -614,6 +617,7 @@ export class ThreadApplicationService {
       ),
       this.#recovery.read(scope, applicationThreadId),
       this.#recovery.hasExclusivePendingSteer(scope, applicationThreadId),
+      this.#recovery.canRespondDuringRecovery(scope, applicationThreadId),
     ]);
     const interactions = this.#interactions.listPending(
       scope,
@@ -638,6 +642,7 @@ export class ThreadApplicationService {
     if (!actionPersistence) {
       throw new Error("thread_application_action_persistence_missing");
     }
+    const localRename = actionPersistence.persistLocalRename !== undefined;
     const historyOperational = this.#history?.operational(actor) === true;
     const capabilities = composeCapabilities({
       inventory,
@@ -652,7 +657,9 @@ export class ThreadApplicationService {
       presentation,
       recovery,
       exclusivePendingSteer,
+      interactionResponseRecovery,
       interactions,
+      localRename,
       providerFeatureConcurrency: (feature, actionId) =>
         actionPersistence.providerFeatureConcurrency(feature, actionId),
       historyOperational,
@@ -882,6 +889,12 @@ export class ThreadApplicationService {
     return this.#mutations.readInputReceipt(scope, mutationId);
   }
 
+  async readAbandonedInputOperations(scope: RequestScope, applicationThreadId: string, operationIds: readonly string[]): Promise<AbandonedInputOperationsResult> {
+    await this.#authorize(scope, applicationThreadId);
+    if (!this.#mutations) throw new Error("thread_application_mutations_unavailable");
+    return this.#mutations.readAbandonedInputOperations(scope, applicationThreadId, operationIds);
+  }
+
   readQueuedInput(
     scope: RequestScope,
     applicationThreadId: string,
@@ -969,7 +982,9 @@ function composeCapabilities(input: {
   readonly presentation: ThreadApplicationPresentation;
   readonly recovery?: NormalizedThreadRecovery;
   readonly exclusivePendingSteer: boolean;
+  readonly interactionResponseRecovery: boolean;
   readonly interactions: readonly BackendInteraction[];
+  readonly localRename?: boolean;
   readonly providerFeatureConcurrency: ThreadActionPersistenceProvider["providerFeatureConcurrency"];
   readonly historyOperational: boolean;
   readonly attachmentStagingAvailable: boolean;
@@ -1004,8 +1019,11 @@ function composeCapabilities(input: {
   const canReconcileQueue = bound && backendCanSubmit;
   const backendCanSteer =
     interactive && input.backendCapabilities.deliveryModes.includes("steer");
+  const localRenameAvailable = bound && input.localRename === true;
   const backendCanRename =
-    unbound || input.backendCapabilities.actions.includes("rename");
+    unbound ||
+    input.backendCapabilities.actions.includes("rename") ||
+    localRenameAvailable;
   const turnControllable = new Set<ThreadRunState>([
     "running",
     "waiting_for_approval",
@@ -1260,10 +1278,7 @@ function composeCapabilities(input: {
   });
   const supportedOperations = operations.filter((operation) => {
     if (operation.id === "rename") {
-      return (
-        interactive &&
-        (unbound || input.backendCapabilities.actions.includes("rename"))
-      );
+      return interactive && backendCanRename;
     }
     if (operation.id === "move_draft") return interactive && unbound;
     if (operation.id === "compact") {
@@ -1382,6 +1397,8 @@ function composeCapabilities(input: {
         interactions: input.interactions.map(({ id, kind }) => [id, kind]),
         recovery: input.recovery,
         exclusivePendingSteer: input.exclusivePendingSteer,
+        interactionResponseRecovery: input.interactionResponseRecovery,
+        localRename: input.localRename === true,
         historyOperational: input.historyOperational,
         attachmentStagingAvailable: input.attachmentStagingAvailable,
       }),
@@ -1448,14 +1465,13 @@ function composeCapabilities(input: {
             ...input.backendCapabilities.interactionKinds,
             ...input.interactions.map(({ kind }) => kind),
           ]),
-        ].map((kind) => ({
-          kind,
-          available: available && bound && !backendTransitioning,
-          ...reason(
-            available && bound && !backendTransitioning,
-            "The backend interaction is unavailable in the current thread state.",
-          ),
-        }))
+        ].map((kind) => {
+          const pendingSteerControl = input.interactionResponseRecovery && input.interactions.some(interaction => interaction.kind === kind);
+          const canRespond = available && bound && !archived && input.actualRunState !== "disconnected" &&
+            (!backendTransitioning || pendingSteerControl) && (input.recovery === undefined || pendingSteerControl);
+          return { kind, available: canRespond,
+            ...reason(canRespond, "The backend interaction is unavailable in the current thread state.") };
+        })
       : [],
     history: {
       available: input.historyOperational,

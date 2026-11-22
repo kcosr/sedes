@@ -90,7 +90,7 @@ Claude, Grok, and OpenCode share this publication path.
 
 Named policy management is a browser/API operation; ordinary tool callers
 select an existing policy through `thread.create@6` or Saved Agent contracts.
-`saved_agent.list/get/options/create/update@6` use `toolPolicySelection` and
+`saved_agent.list/get/options/create/update@7` use `toolPolicySelection` and
 optional `toolPresentation` instead of an embedded policy. Environment-variable
 bindings remain user-managed browser/API configuration: canonical Saved Agent
 tools neither accept them nor expose stored literal values or secret references.
@@ -204,7 +204,7 @@ environments under [Resource scope](#resource-scope).
 - `workspace.list@5` adds each workspace's `project: { id, name }`. Its
   continuation fingerprint names the new version, so an earlier cursor is
   rejected.
-- `agent.context@4` adds `projectId`, the caller's project as admitted for
+- `agent.context@5` adds `projectId`, the caller's project as admitted for
   that call.
 - `workspace.open@3` returns the workspace's `projectId` and accepts an
   optional `projectId`. Without it, a directory Sedes does not know becomes a
@@ -283,8 +283,8 @@ Grok, and OpenCode across all supported tool presentations.
 the change retired a finished one-time reminder, so the definition they return
 has left the collection; a replay of the same mutation returns the same result.
 
-`thread.status@4` and `thread.list@8` include the current principal's read-only
-`pinned` flag. Along with `agent.context@4`, their backend
+`thread.status@5` and `thread.list@9` include the current principal's read-only
+`pinned` flag. Along with `agent.context@5`, their backend
 field distinguishes native `pi_native` from embedded `pi`. There is no
 thread-pin mutation tool.
 
@@ -1044,7 +1044,7 @@ A Pi SDK SSH target never receives the CLI in remote Bash. The Pi SDK model loop
 native session stay on the Sedes host while only its seven built-in workspace
 tools execute remotely. See [Remote Pi workspace tools](pi-remote-workspace-tools.md).
 
-`thread.create@6` and `saved_agent.list/get/options/create/update@6` expose
+`thread.create@6` and `saved_agent.list/get/options/create/update@7` expose
 `toolPolicySelection` and optional `toolPresentation` in their contracts.
 Earlier schemas are no longer admitted; callers must describe the
 current tool before invocation. `saved_agent.delete` retains its version because

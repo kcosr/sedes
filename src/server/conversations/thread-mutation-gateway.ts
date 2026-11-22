@@ -3,6 +3,8 @@ import type { SteerTarget } from "../../shared/protocol/conversation.js";
 import { randomUUID } from "node:crypto";
 import {
   directInputRequestSchema,
+  abandonedInputOperationsRequestSchema,
+  type AbandonedInputOperationsResult,
   type DirectInputRequest,
   type DirectInputReceipt,
   type DirectInputReceiptLookup,
@@ -158,6 +160,12 @@ export interface ProviderFeatureMutationContext {
 export interface ThreadActionPersistenceProvider {
   /** Backend-owned best-effort feature lifecycle work after accepted Stop. */
   afterInterruptAccepted(actor: ProviderFeatureMutationActor): Promise<boolean>;
+  /** Presence advertises application-owned rename. Runs inside the receipt transaction; no provider calls. */
+  persistLocalRename?(
+    scope: RequestScope,
+    applicationThreadId: string,
+    input: { readonly title: string; readonly expectedThreadRevision: number; readonly now: number },
+  ): void;
   /** Local next-turn settings never cross a provider boundary at mutation time. */
   isLocalOperation?(operation: PerformOperation["operation"]): boolean;
   driverAction(
@@ -381,6 +389,15 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
 
   readInputReceipt(scope: RequestScope, mutationId: string): DirectInputReceiptLookup {
     return new DirectInputRepository(this.input.bindings.database).lookup(scope, mutationId);
+  }
+
+  readAbandonedInputOperations(scope: RequestScope, applicationThreadId: string, operationIds: readonly string[]): AbandonedInputOperationsResult {
+    const request = abandonedInputOperationsRequestSchema.parse({ operationIds });
+    this.input.inventory.getThread(scope, applicationThreadId);
+    return {
+      threadId: applicationThreadId,
+      abandonedOperationIds: this.input.operations.listAbandonedOperations(scope, applicationThreadId, request.operationIds),
+    };
   }
 
   admitInput(scope: RequestScope, applicationThreadId: string, request: DirectInputRequest): Promise<DirectInputReceipt> {
@@ -929,10 +946,27 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       unresolvedOperation.mutationId !== operation.mutationId &&
       this.input.operations.findSteer(scope, unresolvedOperation.mutationId)
         ?.source === "queued_input";
+    // The active provider may need a permission answer before it can consume
+    // an uncertain Steer. Keep ordinary writes fenced, but let the exact
+    // interaction (or its retained response receipt) use its own authority and
+    // idempotency checks. Never resend the Steer to unblock a reverse request.
+    const respondsBehindUncertainSteer =
+      unresolvedOperation?.operationKind === "conversation_steer" &&
+      operation.kind === "respond" &&
+      (() => {
+        const response = this.input.operations.findInteractionResponse(scope, operation.operationId);
+        const exactResponse = response?.operationId === operation.operationId && response.threadId === applicationThreadId &&
+          response.interactionId === operation.interactionId;
+        if (this.input.operations.hasUncertainNonSteerOperation(scope, applicationThreadId, exactResponse ? response.operationId : undefined)) return false;
+        return exactResponse || this.input.interactions.listPending(scope, applicationThreadId).some(
+          interaction => interaction.id === operation.interactionId,
+        );
+      })();
     if (
       unresolvedOperation &&
       !retriesUncertainOperation &&
-      !admitsBehindQueuedSteer
+      !admitsBehindQueuedSteer &&
+      !respondsBehindUncertainSteer
     ) {
       throw new DomainError(
         "operation_outcome_uncertain",
@@ -1662,6 +1696,15 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         : { status: "completed" };
     }
     if (unresolved.operationKind === "conversation_steer") {
+      // A permission response can itself become uncertain while the provider
+      // waits to consume an earlier Steer. Reconcile that exact retained
+      // response first; another non-Steer uncertainty still fences replay.
+      const response = this.input.operations.findUncertainInteractionResponseForThread(scope, applicationThreadId);
+      if (response && !this.input.operations.hasUncertainNonSteerOperation(scope, applicationThreadId, response.operationId)) {
+        if (!response.response) throw new Error("uncertain_interaction_response_payload_missing");
+        return this.#respond(scope, applicationThreadId, { kind: "respond", operationId: response.operationId,
+          interactionId: response.interactionId, response: response.response });
+      }
       const steer = this.input.operations.getSteer(
         scope,
         unresolved.mutationId,
@@ -2828,6 +2871,78 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         operation.operation,
       );
       await this.#publishThreadSnapshot(scope, applicationThreadId);
+      return {
+        status: "accepted",
+        operationId: receipt.applicationOperationId,
+      };
+    }
+    if (
+      operation.operation.action === "rename" &&
+      provider?.persistLocalRename !== undefined
+    ) {
+      if (
+        aggregate.thread.backingState !== "unbound" &&
+        aggregate.thread.backingState !== "bound"
+      ) {
+        throw new DomainError(
+          "invalid_transition",
+          "The thread cannot be renamed while its conversation is being created.",
+        );
+      }
+      const receipt = this.input.operations.prepareBackendAction(
+        scope,
+        applicationThreadId,
+        {
+          mutationId: operation.mutationId,
+          expectedThreadRevision: operation.expectedThreadRevision,
+          operation: operation.operation,
+          now: this.#now(),
+        },
+      );
+      if (receipt.state === "accepted") {
+        return {
+          status: "accepted",
+          operationId: receipt.applicationOperationId,
+        };
+      }
+      if (
+        receipt.state !== "prepared" ||
+        aggregate.thread.revision !== operation.expectedThreadRevision
+      ) {
+        if (receipt.state === "prepared") {
+          this.input.operations.rejectBackendActionProvenNotApplied(
+            scope,
+            operation.mutationId,
+          );
+        }
+        throw new DomainError(
+          "conflict",
+          "The thread changed in another client.",
+        );
+      }
+      const persistLocalRename = provider.persistLocalRename.bind(provider);
+      const title = operation.operation.title;
+      try {
+        this.input.operations.database.transaction(() => {
+          persistLocalRename(scope, applicationThreadId, {
+            title,
+            expectedThreadRevision: operation.expectedThreadRevision,
+            now: this.#now(),
+          });
+          this.input.operations.acceptBackendAction(
+            scope,
+            operation.mutationId,
+          );
+        })();
+      } catch (error) {
+        this.input.operations.rejectBackendActionProvenNotApplied(
+          scope,
+          operation.mutationId,
+        );
+        throw error;
+      }
+      await this.#publishThreadSnapshot(scope, applicationThreadId);
+      await this.#changed(scope, applicationThreadId);
       return {
         status: "accepted",
         operationId: receipt.applicationOperationId,

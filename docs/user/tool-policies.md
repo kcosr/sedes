@@ -110,8 +110,8 @@ New thread can request an explicit supported presentation independently.
 In **New thread → Tool presentation**, choose **Inherit** or one of the target's
 supported modes. A template remembers that choice; if a different target does
 not support it, choose Inherit or another available mode before creating.
-Pi, Codex, Claude, Grok, and OpenCode use the shared policy and scope checks;
-their supported Native/CLI modes and runtime prerequisites still differ. See
+Every backend uses the shared policy and scope checks. Supported Native and
+CLI modes and their runtime prerequisites vary by backend. See
 [provider features](provider-features.md#let-an-agent-use-sedes-tools).
 
 ## Upgrading existing policies

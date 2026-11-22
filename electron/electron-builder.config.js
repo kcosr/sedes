@@ -20,6 +20,8 @@ async function restoreManagedRuntimeModes(context) {
       ['pi-sandbox-worker', 'sedes-pi-sandbox-worker.mjs', 0o500],
       ['claude-runtime-worker', 'manifest.json', 0o400],
       ['claude-runtime-worker', 'sedes-claude-runtime-worker.mjs', 0o500],
+      ['antigravity-history-worker', 'manifest.json', 0o400],
+      ['antigravity-history-worker', 'sedes-antigravity-history-worker.mjs', 0o500],
     ].map(([directory, filename, mode]) =>
       chmod(path.join(runtimeRoot, directory, filename), mode),
     ),

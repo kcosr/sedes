@@ -145,3 +145,42 @@ export const DEFAULT_THREAD_OPEN_COMMAND = {
   scope: "global",
   defaultBinding: { key: "H", modifiers: ["primary", "shift"] },
 } as const satisfies KeyboardShortcutCommand;
+
+export const PREVIOUS_THREAD_OPEN_COMMAND = {
+  id: "thread.previous.open",
+  scope: "global",
+  defaultBinding: { key: "P", modifiers: ["primary", "shift"] },
+} as const satisfies KeyboardShortcutCommand;
+
+/** Open a thread from a shortcut when a destination is available. */
+export function installThreadNavigationShortcut(
+  target: Window,
+  binding: KeyboardShortcutBinding,
+  open: () => boolean,
+): () => void {
+  const claim = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.isComposing || event.repeat ||
+        !matchesKeyboardShortcut(event, binding)) return false;
+    const dialog = event.target instanceof Element
+      ? event.target.closest('[role="dialog"], [role="alertdialog"]') : null;
+    if (dialog || !open()) return false;
+    event.preventDefault();
+    return true;
+  };
+  const insideTerminal = (event: KeyboardEvent) => event.target instanceof Element &&
+    event.target.closest(".terminal-panel-emulator") !== null;
+  // Terminals consume key events before they bubble. Other focused widgets
+  // get first claim on their keys.
+  const capture = (event: KeyboardEvent) => {
+    if (insideTerminal(event) && claim(event)) event.stopPropagation();
+  };
+  const bubble = (event: KeyboardEvent) => {
+    if (!insideTerminal(event)) claim(event);
+  };
+  target.addEventListener("keydown", capture, true);
+  target.addEventListener("keydown", bubble);
+  return () => {
+    target.removeEventListener("keydown", capture, true);
+    target.removeEventListener("keydown", bubble);
+  };
+}

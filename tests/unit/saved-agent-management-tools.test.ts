@@ -301,7 +301,7 @@ describe("Saved Agent canonical tools", () => {
       "saved_agent.create",
       "saved_agent.update",
     ]) {
-      expect(registry.get(id, 6).schemaVersion).toBe(6);
+      expect(registry.get(id, 7).schemaVersion).toBe(7);
       expect(() => registry.get(id, 4)).toThrow();
     }
     expect(

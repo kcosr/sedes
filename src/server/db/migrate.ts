@@ -2,6 +2,9 @@ import { piNativeBackendKindMigration } from "./migrations/159-pi-native-backend
 import { piNativePersistenceMigration } from "./migrations/160-pi-native-persistence.js";
 import { piSessionClaimsMigration } from "./migrations/161-pi-session-claims.js";
 import { claudeDesiredSettingsRevisionMigration } from "./migrations/162-claude-desired-settings-revision.js";
+import { antigravityBackendKindMigration } from "./migrations/163-antigravity-backend-kind.js";
+import { antigravityPersistenceMigration } from "./migrations/164-antigravity-persistence.js";
+import { antigravityLocalTitleMigration } from "./migrations/165-antigravity-local-title.js";
 import { automaticModelRetryMigration } from "./migrations/155-automatic-model-retry.js";
 import { modelFailureRetryStateMigration } from "./migrations/156-model-failure-retry-state.js";
 import { connectionCompressionMigration } from "./migrations/157-connection-compression.js";
@@ -338,6 +341,9 @@ export const backendNormalizedMigrations = [
   piNativePersistenceMigration,
   piSessionClaimsMigration,
   claudeDesiredSettingsRevisionMigration,
+  antigravityBackendKindMigration,
+  antigravityPersistenceMigration,
+  antigravityLocalTitleMigration,
 ] as const;
 
 export type DatabaseMigration = {

@@ -8,8 +8,8 @@ and workflow summary, not a replacement for it.
 
 ## The boundary
 
-Sedes compiles Pi SDK, native Pi, Codex, Claude, Grok and OpenCode behind normalized contracts. A
-backend owns its SDK/protocol types, native IDs, history interpretation,
+Sedes compiles Pi SDK, native Pi, Codex, Claude, Grok, OpenCode, and Antigravity
+behind normalized contracts. A backend owns its SDK/protocol types, native IDs, history interpretation,
 correlation, settings conversion, transports, and provider process topology.
 The browser consumes only normalized shared protocol types or a closed,
 versioned provider-feature envelope.
@@ -45,7 +45,7 @@ model ID, transport, or transcript wording.
 | Change class | Required scope |
 | --- | --- |
 | Private provider correction | Keep the code and fixtures inside that backend; confirm normalized output is unchanged or deliberately updated. |
-| Normalized contract change | Update the shared contract and audit all six compiled backends plus every browser/server consumer. |
+| Normalized contract change | Update the shared contract and audit every compiled backend plus every browser/server consumer. |
 | Provider-feature envelope change | Update the registered server envelope, strict version/schema, client renderer, unknown-version behavior, and only the backend that owns it. |
 | Execution-environment or transport change | Audit local and SSH authority, target compatibility, lifecycle ownership, unavailable behavior, and sidecar implications. |
 | History, projection, or event change | Audit baseline/live handoff, ordering, identity, pagination, replay, resnapshot, cancellation, restart, and byte/count bounds. |
@@ -76,8 +76,8 @@ representation.
 
 A change to shared backend contracts, conversation lifecycle, settings,
 attachments, artifacts, forks, interactions, agent tools, or browser feature
-selection requires an explicit audit of every compiled backend. For Pi SDK, native Pi, Codex,
-Claude, Grok and OpenCode, record:
+selection requires an explicit audit of every compiled backend. Record the
+following for each module in the compiled catalog:
 
 - implemented behavior and capability;
 - intentionally unsupported behavior and its fail-closed result;

@@ -44,6 +44,11 @@ export function presentationOptionsForBackend(
       return [
         { surface: "cli", modes: ["progressive", "individual"] },
       ];
+    case "antigravity":
+      return [
+        { surface: "native", modes: ["individual", "progressive"] },
+        { surface: "cli", modes: ["progressive", "individual"] },
+      ];
     default: {
       const unsupportedBackend: never = backendKind;
       throw new Error(

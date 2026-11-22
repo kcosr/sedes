@@ -121,8 +121,8 @@ export const savedAgentBackendPresentationToolSchema = Type.Object(
     typeId: savedAgentBackendTypeIdToolSchema,
     label: savedAgentDisplayTextToolSchema,
     brand: Type.String({
-      enum: ["pi", "codex", "claude", "grok", "opencode"],
-      maxLength: 8,
+      enum: ["pi", "codex", "claude", "grok", "opencode", "antigravity"],
+      maxLength: 11,
     }),
   },
   { additionalProperties: false, maxProperties: 3 },

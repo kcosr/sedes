@@ -15,7 +15,7 @@ import { BackendCheckpointRepository } from "../../src/server/db/repositories/ba
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { ConversationCreationRepository } from "../../src/server/db/repositories/conversation-creation-repository.js";
 import { ConversationDraftRepository } from "../../src/server/db/repositories/conversation-draft-repository.js";
-import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
+import { ConversationOperationRepository, queuedInputAbandonmentReceiptId } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { ProviderFeatureMutationRepository } from "../../src/server/db/repositories/provider-feature-mutation-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
@@ -417,6 +417,209 @@ function archiveService(
 }
 
 describe("thread force-reset repository", () => {
+  it.each(["pending_materialization", "failed_unknown", "not_sent"] as const)("looks up composer and queued Steer abandonment after Force Reset: %s", state => {
+    const current = fixture();
+    try {
+      bind(current, current.rootId);
+      const queue = new QueuedInputRepository(current.database);
+      const operations = new ConversationOperationRepository(current.database);
+      const draft = new ConversationDraftRepository(current.database).get(current.scope, current.rootId);
+      const queued = queue.enqueue(current.scope, current.rootId, {
+        id: "composer-steer-row", mutationId: "composer-steer-operation", text: draft.text,
+        contextExcerpts: draft.contextExcerpts, taskReferences: draft.taskReferences, attachmentIds: [],
+        source: { kind: "composer", requestedDeliveryMode: "steer", requestedSteerTarget: { kind: "conversation" },
+          resolvedDeliveryMode: "steer", resolvedSteerTarget: { kind: "conversation" },
+          expectedThreadRevision: revision(current, current.rootId), expectedDraftRevision: draft.revision }, now: 500,
+      }).item;
+      const expectedThreadRevision = revision(current, current.rootId);
+      const reservation = queue.reserveHeadForSteer(current.scope, current.rootId, queued.id, {
+        steerOperationId: "queued-steer-operation", expectedThreadRevision, now: 510,
+      });
+      operations.prepareQueuedInputSteer(current.scope, current.rootId, {
+        mutationId: "queued-steer-operation", queuedInputId: queued.id, text: queued.text,
+        contextExcerpts: queued.contextExcerpts, attachmentIds: [], taskContexts: queued.taskContexts,
+        expectedThreadRevision, priorQueueState: reservation.priorState,
+        priorNextAttemptAt: reservation.priorNextAttemptAt, priorDiagnostic: reservation.priorDiagnostic, now: 511,
+      });
+      operations.markSteerSubmissionStarted(current.scope, "queued-steer-operation", { kind: "conversation" });
+      operations.markSteerPendingMaterialization(current.scope, "queued-steer-operation", 512);
+      const diagnostic = "Steer tracking ended before explicit abandonment.";
+      if (state === "failed_unknown") {
+        operations.failSteerUnknown(current.scope, "queued-steer-operation", diagnostic, 520);
+        queue.failSteerUnknown(current.scope, current.rootId, queued.id, {
+          steerOperationId: "queued-steer-operation", expectedState: "dispatching", diagnostic, now: 520,
+        });
+      } else if (state === "not_sent") {
+        operations.rejectSteerBeforeAcceptance(current.scope, "queued-steer-operation");
+        queue.failSteerNotSent(current.scope, current.rootId, queued.id, {
+          steerOperationId: "queued-steer-operation", expectedState: "dispatching", diagnostic, now: 520,
+        });
+      }
+      const terminalReceipt = current.database.prepare("SELECT result_code, result_json FROM mutation_receipts WHERE mutation_id = ?")
+        .get("queued-steer-operation");
+      const markerId = queuedInputAbandonmentReceiptId(current.rootId, queued.mutationId);
+      const requested = [queued.mutationId, "queued-steer-operation", markerId, "reset-steers", "missing"];
+      expect(operations.listAbandonedOperations(current.scope, current.rootId, requested)).toEqual([]);
+      const resets = new ThreadForceResetRepository(current.database);
+      resets.forceReset(current.scope, current.rootId, {
+        expectedBlockerFingerprint: resets.impact(current.scope, current.rootId).blockerFingerprint,
+        mutationId: "reset-steers", now: 600,
+      });
+      expect(queue.get(current.scope, current.rootId, queued.id)).toMatchObject({
+        state: "failed", failureAcknowledgedAt: 600, reconciliationToken: null,
+      });
+      expect(operations.listAbandonedOperations(current.scope, current.rootId, requested))
+        .toEqual(state === "pending_materialization" ? [queued.mutationId, "queued-steer-operation"] : [queued.mutationId]);
+      if (state !== "pending_materialization") {
+        // The source queue operation proves explicit presentation abandonment;
+        // native unknown/never-sent evidence retains its original meaning.
+        expect(queue.get(current.scope, current.rootId, queued.id)).toMatchObject({
+          resolvedAt: 520, diagnostic, failureReason: state === "not_sent" ? "not_sent" : null,
+        });
+        expect(current.database.prepare("SELECT result_code, result_json FROM mutation_receipts WHERE mutation_id = ?")
+          .get("queued-steer-operation")).toEqual(terminalReceipt);
+      }
+      expect(operations.listAbandonedOperations(current.scope, current.childId, requested)).toEqual([]);
+      expect(operations.listAbandonedOperations({ ...current.scope, tenantId: "foreign" }, current.rootId, requested)).toEqual([]);
+      expect(operations.listAbandonedOperations({ ...current.scope, principalId: "foreign" }, current.rootId, requested)).toEqual([]);
+    } finally { current.database.close(); }
+  });
+
+  it("preserves the exact question-response source identity through Force Reset", () => {
+    const current = fixture();
+    try {
+      bind(current, current.rootId);
+      const questionId = "20000000-0000-4000-8000-000000000001";
+      const operationId = `question:${questionId}:1`;
+      new QueuedInputRepository(current.database).enqueue(current.scope, current.rootId, {
+        id: "question-response-row", mutationId: operationId, text: "User responded: Yes",
+        contextExcerpts: [], taskReferences: [], attachmentIds: [],
+        source: {
+          kind: "question_response", resolvedDeliveryMode: "queue", expectedThreadRevision: revision(current, current.rootId),
+          inputOrigin: { kind: "question_response", requestId: questionId, sourceItemId: "question-tool",
+            answers: [{ questionIndex: 0, question: "Continue?", answer: "Yes" }] },
+        }, now: 500,
+      });
+      const operations = new ConversationOperationRepository(current.database);
+      expect(operations.listAbandonedOperations(current.scope, current.rootId, [operationId])).toEqual([]);
+      const resets = new ThreadForceResetRepository(current.database);
+      resets.forceReset(current.scope, current.rootId, {
+        expectedBlockerFingerprint: resets.impact(current.scope, current.rootId).blockerFingerprint,
+        mutationId: "reset-question-response", now: 600,
+      });
+      expect(operations.listAbandonedOperations(current.scope, current.rootId, [operationId, `question:${questionId}:2`, questionId]))
+        .toEqual([operationId]);
+      expect(operations.listAbandonedOperations(current.scope, current.childId, [operationId])).toEqual([]);
+    } finally { current.database.close(); }
+  });
+
+  it("recognizes only the exact scoped First Send mutation after explicit force reset", () => {
+    const current = fixture();
+    try {
+      const creation = new ConversationCreationRepository(current.database);
+      const operations = new ConversationOperationRepository(current.database);
+      creation.prepare(current.scope, current.rootId, {
+        attemptId: "first-send-attempt", mutationId: "first-send-operation",
+        expectedThreadRevision: revision(current, current.rootId),
+        creationKind: "first_input", sourceKind: "direct_input",
+        initialInputText: "First input", initialAttachmentIds: [],
+        backendCreationCorrelation: "first-send-correlation", now: 500,
+      });
+      creation.markExternalCallStarted(current.scope, current.rootId, "first-send-attempt", 510);
+      creation.markRecoveryRequired(current.scope, current.rootId, "first-send-attempt", {
+        expected: "external_call_started", diagnostic: "Creation acceptance unknown", now: 520,
+      });
+      expect(operations.isOperationAbandoned(current.scope, current.rootId, "first-send-operation")).toBe(false);
+      const resets = new ThreadForceResetRepository(current.database);
+      resets.forceReset(current.scope, current.rootId, {
+        expectedBlockerFingerprint: resets.impact(current.scope, current.rootId).blockerFingerprint,
+        mutationId: "reset-first-send", now: 600,
+      });
+      expect(operations.isOperationAbandoned(current.scope, current.rootId, "first-send-operation")).toBe(true);
+      expect(operations.listAbandonedOperations(current.scope, current.rootId, ["first-send-operation", "first-send-attempt"]))
+        .toEqual(["first-send-operation"]);
+      for (const operationId of ["first-send-attempt", "first-send-correlation", "reset-first-send", "other-operation"]) {
+        expect(operations.isOperationAbandoned(current.scope, current.rootId, operationId)).toBe(false);
+      }
+      expect(operations.isOperationAbandoned(current.scope, current.childId, "first-send-operation")).toBe(false);
+      expect(operations.isOperationAbandoned({ ...current.scope, principalId: "another-principal" }, current.rootId, "first-send-operation")).toBe(false);
+      expect(operations.isOperationAbandoned({ ...current.scope, tenantId: "another-tenant" }, current.rootId, "first-send-operation")).toBe(false);
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("does not expose an abandoned fork creation as abandoned input", () => {
+    const current = fixture();
+    try {
+      bind(current, current.rootId);
+      prepareForkCreation(current);
+      const resets = new ThreadForceResetRepository(current.database);
+      resets.forceReset(current.scope, current.rootId, {
+        expectedBlockerFingerprint: resets.impact(current.scope, current.rootId).blockerFingerprint,
+        mutationId: "reset-fork-input-lookup", now: 600,
+      });
+      const operations = new ConversationOperationRepository(current.database);
+      expect(operations.isOperationAbandoned(current.scope, current.childId, "fork-root-child")).toBe(true);
+      expect(operations.listAbandonedOperations(current.scope, current.childId, ["fork-root-child"])).toEqual([]);
+    } finally { current.database.close(); }
+  });
+
+  it.each(["dispatching", "failed"] as const)("rolls back Force Reset when a %s queue abandonment marker would collide with another receipt", state => {
+    const current = fixture();
+    try {
+      const seeded = prepareRootBlockers(current);
+      const queue = new QueuedInputRepository(current.database);
+      if (state === "failed") queue.handleCleanFailure(current.scope, current.rootId, seeded.queueId, {
+        expectedState: "dispatching", retryable: false, diagnostic: "Rejected before reset.", now: 640,
+        retryPolicy: { maximumRetries: 1, baseDelayMilliseconds: 100, maximumDelayMilliseconds: 1_000 },
+      });
+      const operations = new ConversationOperationRepository(current.database);
+      const markerId = queuedInputAbandonmentReceiptId(current.rootId, "reset-queue-mutation");
+      operations.prepareInterrupt(current.scope, current.rootId, { operationId: markerId, now: 650 });
+      const resets = new ThreadForceResetRepository(current.database);
+      expect(() => resets.forceReset(current.scope, current.rootId, {
+        expectedBlockerFingerprint: resets.impact(current.scope, current.rootId).blockerFingerprint,
+        mutationId: "reset-marker-collision", now: 700,
+      })).toThrow("UNIQUE constraint failed");
+      expect(operations.findInterrupt(current.scope, markerId)?.state).toBe("prepared");
+      expect(operations.isOperationAbandoned(current.scope, current.rootId, "reset-queue-mutation")).toBe(false);
+      expect(queue.get(current.scope, current.rootId, seeded.queueId)).toMatchObject({ state, failureAcknowledgedAt: null });
+      expect(current.database.prepare("SELECT 1 FROM thread_force_reset_receipts WHERE mutation_id = ?").get("reset-marker-collision")).toBeUndefined();
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("retains exact operation abandonment after the original queued input is deleted", () => {
+    const current = fixture();
+    try {
+      bind(current, current.rootId);
+      const queue = new QueuedInputRepository(current.database);
+      const operations = new ConversationOperationRepository(current.database);
+      const enqueue = (id: string, operationId: string, now: number) => queue.enqueue(current.scope, current.rootId, {
+        id, mutationId: operationId, text: "Queued input", contextExcerpts: [], taskReferences: [], attachmentIds: [],
+        source: { kind: "direct_input", resolvedDeliveryMode: "queue", expectedThreadRevision: revision(current, current.rootId) },
+        now,
+      });
+      enqueue("old-queue", "old-operation", 500);
+      queue.claimHead(current.scope, current.rootId, "old-anchor", 510);
+      const resets = new ThreadForceResetRepository(current.database);
+      resets.forceReset(current.scope, current.rootId, {
+        expectedBlockerFingerprint: resets.impact(current.scope, current.rootId).blockerFingerprint,
+        mutationId: "reset-old-queue", now: 600,
+      });
+      expect(operations.isOperationAbandoned(current.scope, current.rootId, "old-operation")).toBe(true);
+      current.database.prepare("DELETE FROM queued_inputs WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND id = ?")
+        .run(current.scope.tenantId, current.scope.principalId, current.rootId, "old-queue");
+      enqueue("new-queue", "new-operation", 700);
+      expect(operations.isOperationAbandoned(current.scope, current.rootId, "old-operation")).toBe(true);
+      expect(operations.isOperationAbandoned(current.scope, current.rootId, "new-operation")).toBe(false);
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("blocks archive at both callback endpoints and atomically cancels registered callbacks", () => {
     const current = fixture();
     try {
@@ -659,6 +862,8 @@ describe("thread force-reset repository", () => {
       const current = fixture();
       try {
         const seeded = prepareRootBlockers(current);
+        const operations = new ConversationOperationRepository(current.database);
+        expect(operations.isOperationAbandoned(current.scope, current.rootId, "reset-queue-mutation")).toBe(false);
         const resets = new ThreadForceResetRepository(current.database);
         const invokedThreadId =
           invocation === "source" ? current.rootId : current.childId;
@@ -703,6 +908,14 @@ describe("thread force-reset repository", () => {
           resolvedAt: 700,
           failureAcknowledgedAt: 700,
         });
+        expect(operations.isOperationAbandoned(current.scope, current.rootId, "reset-queue-mutation")).toBe(true);
+        expect(operations.isOperationAbandoned(current.scope, current.rootId, seeded.interruptId)).toBe(true);
+        for (const operationId of [seeded.queueId, `force-reset-${invocation}`, "other-operation", queuedInputAbandonmentReceiptId(current.rootId, "reset-queue-mutation")]) {
+          expect(operations.isOperationAbandoned(current.scope, current.rootId, operationId)).toBe(false);
+        }
+        expect(operations.isOperationAbandoned(current.scope, current.childId, "reset-queue-mutation")).toBe(false);
+        expect(operations.isOperationAbandoned({ ...current.scope, principalId: "another-principal" }, current.rootId, "reset-queue-mutation")).toBe(false);
+        expect(operations.isOperationAbandoned({ ...current.scope, tenantId: "another-tenant" }, current.rootId, "reset-queue-mutation")).toBe(false);
         expect(
           current.database
             .prepare(
@@ -1118,7 +1331,7 @@ describe("thread force-reset repository", () => {
     }
   });
 
-  it("acknowledges an existing failed queue item without rewriting its failure evidence", () => {
+  it.each(["Original provider rejection diagnostic.", "The user force-reset this unresolved Sedes input."])("writes abandonment only when Force Reset acknowledges a failed queue item: %s", (diagnostic) => {
     const current = fixture();
     try {
       bind(current, current.rootId);
@@ -1148,7 +1361,7 @@ describe("thread force-reset repository", () => {
       queue.handleCleanFailure(current.scope, current.rootId, queued.id, {
         expectedState: "dispatching",
         retryable: false,
-        diagnostic: "Original provider rejection diagnostic.",
+        diagnostic,
         now: 520,
         retryPolicy: {
           maximumRetries: 1,
@@ -1160,10 +1373,13 @@ describe("thread force-reset repository", () => {
         {
           state: "failed",
           resolvedAt: 520,
-          diagnostic: "Original provider rejection diagnostic.",
+          diagnostic,
           failureAcknowledgedAt: null,
         },
       );
+      const operations = new ConversationOperationRepository(current.database);
+      expect(operations.isOperationAbandoned(current.scope, current.rootId, queued.mutationId)).toBe(false);
+      expect(operations.listAbandonedOperations(current.scope, current.rootId, [queued.mutationId])).toEqual([]);
 
       const resets = new ThreadForceResetRepository(current.database);
       const impact = resets.impact(current.scope, current.rootId);
@@ -1178,10 +1394,12 @@ describe("thread force-reset repository", () => {
         {
           state: "failed",
           resolvedAt: 520,
-          diagnostic: "Original provider rejection diagnostic.",
+          diagnostic,
           failureAcknowledgedAt: 700,
         },
       );
+      expect(operations.isOperationAbandoned(current.scope, current.rootId, queued.mutationId)).toBe(true);
+      expect(operations.listAbandonedOperations(current.scope, current.rootId, [queued.mutationId])).toEqual([queued.mutationId]);
     } finally {
       current.database.close();
     }

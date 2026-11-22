@@ -1,7 +1,7 @@
 # Developer overview
 
 Sedes is a TypeScript application that puts one normalized application layer
-in front of Pi, Codex, Claude, and Grok conversations. The browser works with
+in front of conversations across the compiled provider backends. The browser works with
 Sedes identities and protocol types. Provider-native history, identifiers,
 events, transports, and process topology remain private to the corresponding
 server backend.
@@ -26,7 +26,7 @@ projection model, read [Architecture](../internals/architecture.md).
 | `src/server/domain/`                                                   | Application-owned behavior such as tasks, inventory, automations, prompts, bookmarks, and attention.                                  |
 | `src/server/conversations/`                                            | Thread lifecycle, actor serialization, normalized projection, delivery, history, queueing, and interactions.                          |
 | `src/server/events/`                                                   | Application/thread SSE, replay, snapshot publication, and runtime coordination.                                                       |
-| `src/server/backends/`                                                 | Normalized backend contracts plus provider-private Pi, Codex, Claude, and Grok modules.                                               |
+| `src/server/backends/`                                                 | Normalized backend contracts and provider-private modules.                                               |
 | `src/server/config/`                                                   | Strict installation configuration parsing, schema, fingerprints, and backend/target preparation.                                      |
 | `src/server/identity/`, `src/server/security/`                         | Server-derived request scope, HTTP defenses, installation secrets, and process/file locking.                                          |
 | `src/server/agent-tools/`                                              | Canonical agent-tool catalog, scoped invocation authority, HTTP/sidecar adapters, and generated schemas.                              |
@@ -63,7 +63,7 @@ React view
   -> scoped application service or thread mutation gateway
   -> serialized ConversationActor for that Sedes thread
   -> normalized ConversationBackendDriver contract
-  -> provider-private Pi, Codex, Claude, or Grok driver
+  -> provider-private driver
   -> normalized turns, items, settings, interactions, and capabilities
   -> in-memory projection + application overlay
   -> snapshot/replay/delta over thread SSE
@@ -282,7 +282,7 @@ before handoff when risk warrants it.
 | React component/store              | Relevant component/store tests                                                                   | A relevant E2E spec for cross-view or persisted behavior; inspect screenshots for layout changes.                                              |
 | Shared API/SSE protocol            | Producer/consumer unit and integration tests                                                     | Protocol version/rejection coverage, relevant E2E, full standard verification.                                                                 |
 | Database migration/repository      | Migration-from-prior and fresh-database tests; repository/service tests                          | Restart reconstruction, scope/race/integrity tests, full standard verification.                                                                |
-| Backend protocol/history/lifecycle | Backend unit/integration fixtures and cross-backend capability audit                             | Ask before the relevant `test:real-*`; report when it was not run.                                                                             |
+| Backend protocol/history/lifecycle | Backend unit/integration fixtures and cross-backend capability audit                             | Ask before the relevant live-provider suite and record its verification status.                                                                             |
 | E2E spec add/rename/remove         | Spec alone through coordinator                                                                   | Successful full suite and explicit timing-baseline refresh.                                                                                    |
 | Shared client code                 | Client tests and standard build                                                                  | Both `npm run android:verify` and `npm run electron:verify`.                                                                                   |
 | Android-only native/configuration  | Relevant native/client tests and standard build                                                  | `npm run android:verify`.                                                                                                                      |

@@ -5,9 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { createRuntimeDependencyProbe, readRuntimeEntrypoints, verifyRuntime } from '../../scripts/verify-server-package.mjs';
+import { createRuntimeDependencyProbe, readRuntimeEntrypoints, verifyRuntime, verifyAntigravityHistoryWorker } from '../../scripts/verify-server-package.mjs';
+import { buildAntigravityHistoryWorkerArtifact } from '../../scripts/build-antigravity-history-worker-artifact.mjs';
 import { discoverRuntimeEntrypoints, writeRuntimeEntrypoints } from '../../scripts/check-server-runtime.mjs';
 import { verifyPackageIntegrity, writePackageIntegrity } from '../../scripts/server-package-integrity.mjs';
+import { writePackagedAntigravityHistoryWorker } from '../helpers/packaged-antigravity-history-worker.mjs';
 
 const temporary = [];
 afterEach(async () => {
@@ -16,6 +18,19 @@ afterEach(async () => {
 });
 
 describe('package verification executable isolation', () => {
+  it('runs the actual Antigravity worker against disposable SQLite and validates its round trips', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sedes-worker-probe-')); temporary.push(root);
+    const directory = path.join(root, 'dist/antigravity-history-worker'); await mkdir(directory, {recursive:true});
+    const artifact = await buildAntigravityHistoryWorkerArtifact(fileURLToPath(new URL('../../', import.meta.url)), 'test-probe');
+    await writeFile(path.join(directory, artifact.manifest.filename), artifact.artifact);
+    await verifyAntigravityHistoryWorker(root);
+  });
+  it('rejects a packaged history worker which cannot start', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sedes-worker-probe-broken-')); temporary.push(root);
+    const directory = path.join(root, 'dist/antigravity-history-worker'); await mkdir(directory, {recursive:true});
+    await writeFile(path.join(directory, 'sedes-antigravity-history-worker.mjs'), 'throw new Error("worker-startup-failed");');
+    await expect(verifyAntigravityHistoryWorker(root)).rejects.toThrow('worker-startup-failed');
+  });
   it.skipIf(process.platform === 'win32')('executes the CLI through a symlink and refuses an invalid release', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sedes-verifier-cli-'));
     temporary.push(root);
@@ -36,6 +51,7 @@ describe('package verification executable isolation', () => {
     temporary.push(root);
     for (const directory of ['server', 'cli', 'shared', 'internal']) await mkdir(path.join(root, 'dist', directory), { recursive: true });
     await writeRuntimeEntrypoints(root);
+    await writePackagedAntigravityHistoryWorker(root);
     const executable = path.join(root, 'selected-runtime');
     await writeFile(executable, `#!${process.execPath}
 console.error(JSON.stringify({ selected: true, electron: process.env.ELECTRON_RUN_AS_NODE ?? null, home: process.env.HOME, secret: process.env.SEDES_TEST_PROVIDER_SECRET ?? null, nodeOptions: process.env.NODE_OPTIONS ?? null, args: process.argv.slice(2) }));

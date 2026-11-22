@@ -1106,6 +1106,48 @@ describe("InteractionBroker", () => {
     expect(broker.listPending(scope, "thread-1")).toEqual([]);
   });
 
+  it.each(["release", "detach"] as const)("reopens an abandoned live permission after failed cancellation and binding %s", async end => {
+    const conversation = new FakeConversation();
+    conversation.respond = vi.fn(async (input: InteractionResponseInput) => {
+      conversation.responses.push(input);
+      throw new Error("cancel_delivery_unavailable");
+    });
+    const publisher = { opened: vi.fn(), resolved: vi.fn() };
+    const broker = new InteractionBroker({ publisher });
+    const binding = broker.bind(scope, "thread-1", conversation);
+    const event = opened("retained-permission");
+    conversation.emit(event);
+    const original = broker.listPending(scope, "thread-1")[0]!;
+
+    await broker.abandonPending(scope, "thread-1", [original.id]);
+    expect(conversation.responses).toEqual([{
+      applicationOperationId: `force-reset:${original.id}`,
+      interactionId: "retained-permission",
+      kind: "cancel",
+    }]);
+    // A failed cancellation remains abandoned within its original binding.
+    conversation.emit(event);
+    expect(broker.listPending(scope, "thread-1")).toEqual([]);
+    expect(publisher.opened).toHaveBeenCalledOnce();
+
+    await binding[end]();
+    const replacement = new FakeConversation();
+    const replacementBinding = broker.bind(scope, "thread-1", replacement);
+    // The retained provider can replay the very same unanswered request. A
+    // new binding must show that gate without interpreting reset as an answer.
+    replacement.emit(event);
+    const restored = broker.listPending(scope, "thread-1");
+    expect(restored).toHaveLength(1);
+    expect(restored[0]!.id).not.toBe(original.id);
+    expect(restored[0]).toMatchObject({ title: { text: "Choose" }, kind: "choice" });
+    expect(publisher.opened).toHaveBeenCalledTimes(2);
+    expect(replacement.responses).toEqual([]);
+    expect(conversation.respond).toHaveBeenCalledOnce();
+
+    replacementBinding.detach();
+    await broker.close();
+  });
+
   it("leaves pending interactions intact when force-reset evidence changed", () => {
     const conversation = new FakeConversation();
     const publisher = { opened: vi.fn(), resolved: vi.fn() };

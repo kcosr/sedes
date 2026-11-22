@@ -17,6 +17,7 @@ export function backendLifecycleActions(
     case "codex_app_server":
     case "claude_agent_sdk":
     case "grok_build":
+    case "antigravity":
       return definition.enabled
         ? ["connect", ...(remote ? ["disconnect" as const] : []), "start", "stop", "restart"]
         : [...(remote ? ["disconnect" as const] : []), "stop"];

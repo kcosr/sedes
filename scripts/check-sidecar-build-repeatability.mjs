@@ -130,6 +130,8 @@ for (const forbiddenSource of [
   "src/server/db/repositories/inventory-repository.ts",
   "src/server/backends/opencode/opencode-backend-module.ts",
   "src/server/backends/opencode/opencode-thread-repository.ts",
+  "src/server/backends/antigravity/thread-repository.ts",
+  "src/server/backends/antigravity/driver.ts",
   "src/server/backends/pi/pi-sdk-session.ts",
   "src/client/workspace-files/WorkspaceFilesPanel.tsx",
   "src/server/normalized-app.ts",
@@ -143,6 +145,18 @@ for (const forbiddenSource of [
       [forbiddenSource]: {},
     }),
     "sidecar_build_source_forbidden",
+  );
+}
+for (const builtin of ["node:worker_threads", "worker_threads"]) {
+  assertSidecarSourceOwnership(
+    ownershipMetafile({
+      ...canonicalInputs,
+      "src/server/backends/antigravity/native-history-reader.ts": {
+        imports: [{ path: builtin, kind: "import-statement", external: true }],
+      },
+    }),
+    repositoryRoot,
+    syntheticOutputPath,
   );
 }
 for (const launchImport of [
@@ -180,6 +194,17 @@ expectOwnershipFailure(
   }),
   "sidecar_build_source_forbidden",
 );
+// Provider-owned read-only SQLite has one reviewed importer. Merely importing
+// the same builtin from another allowed sidecar source does not grant SQL access.
+const nativeReader = "src/server/backends/antigravity/native-history.ts";
+const sqliteImport = { path: "node:sqlite", kind: "import-statement", external: true };
+const providerSqliteMetafile = {
+  inputs: { ...canonicalInputs, [nativeReader]: { imports: [sqliteImport] } },
+  outputs: { "dist/sidecar/test.mjs": { inputs: { ...canonicalOutputInputs, [nativeReader]: { bytesInOutput: 1 } }, imports: [sqliteImport] } },
+};
+assertSidecarSourceOwnership(providerSqliteMetafile, repositoryRoot, syntheticOutputPath);
+expectOwnershipFailure({ ...providerSqliteMetafile, inputs: { ...providerSqliteMetafile.inputs,
+  "src/cli/sedes-cli.ts": { imports: [sqliteImport] } } }, "sidecar_build_database_import_forbidden");
 expectOwnershipFailure(
   {
     inputs: canonicalInputs,

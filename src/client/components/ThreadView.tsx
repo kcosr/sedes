@@ -369,7 +369,6 @@ export const ThreadView = memo(function ThreadView({
     !snapshot.thread.available ||
     backendTransitioning ||
     snapshot.thread.inventoryState === "archived" ||
-    Boolean(snapshot.recovery) ||
     Boolean(focusTurnId);
   const disabled =
     composerDisabled ||
@@ -394,11 +393,14 @@ export const ThreadView = memo(function ThreadView({
     interactionReturnFocus.current = null;
   }
   const interactionUnavailable =
-    showInteractionTakeover && (!interactionCapability?.available || disabled);
+    showInteractionTakeover && (!interactionCapability?.available ||
+      !snapshot.thread.available || snapshot.runState === "disconnected" || state.connection !== "connected" || !state.authoritative);
   const interactionUnavailableReason =
     interactionCapability?.unavailableReason?.text ??
     (state.connection !== "connected"
       ? "Reconnect to answer this request."
+      : !state.authoritative
+        ? "Syncing this thread. The request will remain open."
       : backendTransitioning
         ? "The backend is reconnecting. This request will remain open."
         : snapshot.recovery

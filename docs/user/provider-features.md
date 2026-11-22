@@ -1,27 +1,28 @@
 # Provider features
 
-Sedes gives Pi, Pi SDK, Codex, Claude, Grok, and OpenCode v2 a common thread,
-composer, pending-input, Tasks, Files, and organization experience. Provider capabilities still differ.
+Sedes gives Pi, Pi SDK, Codex, Claude, Grok, OpenCode v2, and Antigravity a
+common thread, composer, pending-input, Tasks, Files, and organization
+experience. Provider capabilities still differ.
 The interface hides an operation when the current backend, model, topology, or
 thread state does not support it.
 
 ## Compare providers
 
-| Capability | Pi SDK | Pi | Codex | Claude | Grok | OpenCode v2 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Mid-turn Steer | Yes, aimed at the current turn | Yes, aimed at the current turn | Yes, aimed at the current turn | Yes, delivered to the conversation | No; Queue instead | Yes, delivered to the conversation |
-| Stop | Yes | Yes | Yes | Yes | Yes | Yes; pending native inputs may remain unconfirmed |
-| Background work indicator above composer | No | No | No | Subagents and commands | No | Child sessions and attributed shells |
-| Manual compact | Yes | Yes | Yes | Yes; idle bound thread | No | Yes; exact native outcome |
-| Exact completed-turn fork | Yes | Yes | Yes | Yes, idle source | No | No |
-| Latest provider snapshot fork | No | No | Yes | No | No | No |
-| Skills | Yes | Yes | Yes | Yes, eligible skills | Not currently | Explicit native skill selection |
-| Structured questions | No | No | Questionnaires and MCP forms | Multiple-choice questions | Not exposed | Supported forms and questionnaires |
-| Provider permission interaction | Primitive prompts | Primitive prompts and tool decisions | Approvals | Permission prompts | Not exposed | Allow once or Deny and stop |
-| Native image input | Model dependent | Model dependent | Model dependent | PNG, JPEG, GIF, WebP | Model dependent | Model dependent |
-| Generated-image display | No native artifact | Native in-band raster images | Completed in-band PNG | No native artifact | Completed local ImageGen/ImageEdit JPEG | No native artifact |
-| Remote (SSH or outbound) workspace | Managed workspace tools/context | Persistent runtime; separately granted Files/CLI | Persistent runtime; separately granted Files/CLI | Persistent runtime; separately granted Files/CLI | No | Linux persistent runtime; separately granted Files/CLI |
-| Managed provider terminal | No | No | Eligible external connections | No | No | No |
+| Capability | Pi SDK | Pi | Codex | Claude | Grok | OpenCode v2 | Antigravity |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Mid-turn Steer | Yes, aimed at the current turn | Yes, aimed at the current turn | Yes, aimed at the current turn | Yes, delivered to the conversation | No; Queue instead | Yes, delivered to the conversation | Yes, delivered to the conversation |
+| Stop | Yes | Yes | Yes | Yes | Yes | Yes; pending native inputs may remain unconfirmed | Yes, with confirmation when native cancellation is proven |
+| Background work indicator above composer | No | No | No | Subagents and commands | No | Child sessions and attributed shells | Native commands, timers, and subagents |
+| Manual compact | Yes | Yes | Yes | Yes; idle bound thread | No | Yes; exact native outcome | No |
+| Exact completed-turn fork | Yes | Yes | Yes | Yes, idle source | No | No | No |
+| Latest provider snapshot fork | No | No | Yes | No | No | No | No |
+| Skills | Yes | Yes | Yes | Yes, eligible skills | Not currently | Explicit native skill selection | Native provider discovery |
+| Structured questions | No | No | Questionnaires and MCP forms | Multiple-choice questions | Not exposed | Supported forms and questionnaires | Native choice questions |
+| Provider permission interaction | Primitive prompts | Primitive prompts and tool decisions | Approvals | Permission prompts | Not exposed | Allow once or Deny and stop | Native permission decisions |
+| Native image input | Model dependent | Model dependent | Model dependent | PNG, JPEG, GIF, WebP | Model dependent | Model dependent | Depends on ACP image support |
+| Generated-image display | No native artifact | Native in-band raster images | Completed in-band PNG | No native artifact | Completed local ImageGen/ImageEdit JPEG | No native artifact | No native artifact |
+| Remote (SSH or outbound) workspace | Managed workspace tools/context | Persistent runtime; separately granted Files/CLI | Persistent runtime; separately granted Files/CLI | Persistent runtime; separately granted Files/CLI | No | Linux persistent runtime; separately granted Files/CLI | Linux/macOS persistent runtime with separately granted Files and CLI |
+| Managed provider terminal | No | No | Eligible external connections | No | No | No | No |
 
 This table is the plain-language summary. The
 [capability matrix](../operator/backends/index.md#capability-differences) in the
@@ -29,9 +30,10 @@ operator guide is authoritative and carries the exact conditions; if the two
 ever appear to disagree, the operator matrix is correct.
 
 Steer means different things per provider. Pi and Codex steer the exact turn
-that is running. Claude and OpenCode deliver Steer to the conversation at its next
-native opportunity: it may join the running turn or start the next one, and it
-never interrupts work. Grok has no Steer, so active-turn input waits in Queue.
+that is running. Claude, OpenCode, and Antigravity deliver Steer to the
+conversation at its next native opportunity. It may join the running turn or
+start the next one without interrupting work. Grok keeps active-turn input in
+Queue.
 
 Queue, durable drafts, stashes, Tasks, attachments in supported topologies,
 saved Agents, templates, search, bookmarks, and inventory organization are
@@ -55,6 +57,12 @@ permissions, or execution settings.
 
 Settings are generally applied at a turn boundary. Controls may be disabled
 while a turn is active or when a provider runtime is unavailable.
+
+Antigravity threads offer **Thread actions > Antigravity mode**. Default,
+Accept edits, Auto, and Plan retain their native provider meanings and are
+selectable only when advertised. The choice applies before the next turn.
+**Keep native mode** preserves Antigravity's current mode instead of requesting
+a particular one.
 
 ## Respond to approvals and questions
 
@@ -115,8 +123,9 @@ with sensitive values redacted. The JSON response editor is separate: an empty
 
 Codex supports approvals and structured questionnaires. Claude supports its
 permission decisions and eligible questions. OpenCode supports Allow once,
-Deny and stop, and forms and questionnaires it can represent faithfully. Pi uses the decision panel for
-its supported mutating-tool approval. Grok does not currently expose a
+Deny and stop, and supported forms and questionnaires. Antigravity supports
+native permission decisions and choice questions. Pi uses the decision panel
+for supported mutating-tool approvals. Grok does not currently expose a
 blocking-interaction UI.
 
 ## Let an agent use Sedes tools
@@ -132,7 +141,7 @@ Presentation has two controls:
 - **Surface** chooses Native tools or the generated CLI. This selector appears
   only when the target supports more than one surface: eligible local Pi SDK,
   Pi with an available CLI endpoint, and Codex and Claude threads, plus
-  qualified owned-local OpenCode roots.
+  qualified owned-local OpenCode roots and eligible Antigravity threads.
 - **Mode** chooses Progressive discovery or Individual named tools/commands.
   Progressive keeps the initial surface compact and describes operations on
   demand. Individual presents each granted operation directly with typed
@@ -151,7 +160,9 @@ single CLI surface,
 so its surface selector is hidden. OpenCode supports Native Progressive through
 its bundled shared MCP bridge for Sedes-created local root threads, plus both
 CLI modes for qualified owned-local roots. Imported sessions and native
-children cannot use another thread's Sedes tools.
+children cannot use another thread's Sedes tools. Antigravity supports both
+modes through Native MCP and through the CLI when the execution host provides
+a scoped endpoint.
 An unavailable combination is omitted
 rather than silently replaced with another surface or mode.
 
@@ -548,11 +559,26 @@ can also use CLI tools. Owned threads support scoped shell environment
 variables, with limits on native child spawning because those variables are
 not inherited by children. Initial MCP discovery may lag the first prompt.
 
-Forks, native commands, managed terminals, native image generation, and remote
-execution are unavailable. See the operator guide for approval provenance,
+OpenCode also runs on supported Linux SSH and outbound hosts. Forks, native
+commands, managed terminals, and native image generation are unavailable. See the operator guide for approval provenance,
 registration cleanup, and image proof limits.
 
 See the [OpenCode operator guide](../operator/backends/opencode.md).
+
+## Antigravity
+
+Antigravity runs the installed Google CLI on the selected Linux or macOS
+execution host, including persistent SSH and outbound hosts. Sedes reads
+native conversation history when you view a thread. Sending starts or resumes
+the provider session.
+
+Threads support conversation Steer, Queue, Stop, model and reasoning
+selection, native permissions and choice questions, and supported attachments.
+The background work indicator can show native commands, timers, and subagents
+that continue after the prompt finishes. When cancellation is uncertain, Sedes
+shows that state and blocks further input until it can prove the Stop result.
+
+See the [Antigravity operator guide](../operator/backends/antigravity.md).
 
 ## Why a control can disappear
 

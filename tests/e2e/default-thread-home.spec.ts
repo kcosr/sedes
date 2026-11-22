@@ -22,6 +22,12 @@ test("Home opens the default chat and connection changes leave the toolbar in pl
   await page.getByRole("menuitem", { name: "Make default thread", exact: true }).click();
   await expect(home).toBeVisible();
   await createDraftThread(page, "Other destination");
+  await expect(page).not.toHaveURL(homePath);
+  const otherPath = new URL(page.url()).pathname;
+  await page.keyboard.press("Meta+Shift+P");
+  await expect(page).toHaveURL(homePath);
+  await page.keyboard.press("Meta+Shift+P");
+  await expect(page).toHaveURL(otherPath);
   await home.click();
   await expect(page).toHaveURL(homePath);
   const composer = page.getByRole("textbox", { name: "Message Scripted agent", exact: true });
@@ -35,6 +41,11 @@ test("Home opens the default chat and connection changes leave the toolbar in pl
   await expect(page).toHaveURL(homePath);
   await expect(stagePanel(page, "Chat")).toBeVisible();
   await expect(composer).toBeFocused();
+  // Reopening Chat on the same route preserves the previous thread.
+  await page.keyboard.press("Control+Shift+P");
+  await expect(page).toHaveURL(otherPath);
+  await page.keyboard.press("Control+Shift+P");
+  await expect(page).toHaveURL(homePath);
   await capture(page, testInfo, "default-home-desktop.png");
 
   await page.setViewportSize({ width: 320, height: 740 });

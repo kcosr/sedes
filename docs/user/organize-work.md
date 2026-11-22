@@ -236,6 +236,13 @@ filter, and return to Ctrl+Shift+Up/Down sidebar navigation.
 Use [Find in thread](conversations.md#find-text-in-a-thread) for text inside one
 conversation; sidebar search and transcript search serve different purposes.
 
+## Switch between recent threads
+
+Press **Command+Shift+P** on macOS or **Ctrl+Shift+P** to return to the previous
+thread. Press it again to switch back. From a page outside a thread, the
+shortcut opens the most recently viewed thread. Each client session remembers
+its own pair of threads.
+
 ## Pin important threads
 
 Pin or unpin a thread with its row action, context menu, or the pin toggle in

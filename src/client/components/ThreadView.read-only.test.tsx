@@ -1718,6 +1718,110 @@ describe("ThreadView backend interaction modes", () => {
       ).toBeDisabled();
     },
   );
+
+  it.each(["idle", "reconciling"] as const)("uses the permission capability during delivery recovery while %s", async runState => {
+    const base = makeSnapshot("interactive", runState);
+    const snapshot: NormalizedThreadSnapshot = { ...base,
+      recovery: { kind: "operation_uncertain", operationCategory: "delivery", diagnostic: { text: "Steer is unconfirmed." },
+        submissionMayHaveBeenAccepted: true, recoverable: true },
+      capabilities: { ...base.capabilities, interactions: [{ kind: "confirmation", available: true }] } };
+    const state = fixture(snapshot);
+    const respond = vi.fn(async () => undefined);
+    Object.assign(state.registry.get(snapshot.thread.id), { respond });
+    render(<ThreadView threadActive threadId={snapshot.thread.id} visible registry={state.registry} applicationStore={state.applicationStore} />);
+    const approve = screen.getByRole("button", { name: "Approve" });
+    expect(approve).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toBeDisabled();
+    fireEvent.click(approve);
+    await waitFor(() => expect(respond).toHaveBeenCalledWith("interaction-1", { kind: "confirmation", confirmed: true }));
+  });
+
+  it.each(["capability", "connection", "authority", "availability", "backend disconnected"] as const)("keeps the %s permission fence during delivery recovery", reason => {
+    // A native disconnect can precede the next capability document while the
+    // browser's application transport and cached authority are still current.
+    const base = makeSnapshot("interactive", reason === "backend disconnected" ? "disconnected" : "idle");
+    const snapshot: NormalizedThreadSnapshot = { ...base,
+      thread: { ...base.thread, available: reason !== "availability" },
+      recovery: { kind: "operation_uncertain", operationCategory: "delivery", diagnostic: { text: "Steer is unconfirmed." },
+        submissionMayHaveBeenAccepted: true, recoverable: true },
+      capabilities: { ...base.capabilities, interactions: [{ kind: "confirmation", available: reason !== "capability" }] } };
+    const state = fixture(snapshot, [], { ...(reason === "connection" ? { connection: "disconnected" } : {}),
+      ...(reason === "authority" ? { authoritative: false } : {}) });
+    render(<ThreadView threadActive threadId={snapshot.thread.id} visible registry={state.registry} applicationStore={state.applicationStore} />);
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+  });
+});
+
+describe("ThreadView Stop during delivery recovery", () => {
+  it.each([
+    "available",
+    "unsupported",
+    "disconnected",
+    "not authoritative",
+    "historical focus",
+    "archived",
+    "thread unavailable",
+    "action pending",
+  ] as const)("honors the %s Stop state and keeps Send disabled", condition => {
+    const base = makeSnapshot("interactive", "running");
+    const snapshot: NormalizedThreadSnapshot = {
+      ...base,
+      thread: {
+        ...base.thread,
+        available: condition !== "thread unavailable",
+        inventoryState: condition === "archived" ? "archived" : "active",
+      },
+      interactions: [],
+      queue: [],
+      recovery: {
+        kind: "operation_uncertain",
+        operationCategory: "delivery",
+        diagnostic: { text: "Steer is unconfirmed." },
+        submissionMayHaveBeenAccepted: true,
+        recoverable: true,
+      },
+      capabilities: {
+        ...base.capabilities,
+        operations: [{
+          id: "interrupt",
+          label: { text: "Stop" },
+          destructive: true,
+          available: condition !== "unsupported",
+          parameters: { kind: "none" },
+        }],
+      },
+    };
+    const { registry, applicationStore } = fixture(snapshot, [], {
+      connection: condition === "disconnected" ? "disconnected" : "connected",
+      authoritative: condition !== "not authoritative",
+      actionPending: condition === "action pending",
+    });
+    const stopActiveTurn = vi.fn(async () => undefined);
+    Object.assign(registry.get(snapshot.thread.id), { stopActiveTurn });
+
+    render(
+      <ThreadView
+        threadActive
+        threadId={snapshot.thread.id}
+        visible
+        focusTurnId={condition === "historical focus" ? "older-turn" : undefined}
+        registry={registry}
+        applicationStore={applicationStore}
+      />,
+    );
+
+    // A stale Send capability must not bypass the explicit recovery fence.
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toBeDisabled();
+    const stop = screen.getByRole("button", { name: "Stop" });
+    if (condition === "available") {
+      expect(stop).toBeEnabled();
+      fireEvent.click(stop);
+      expect(stopActiveTurn).toHaveBeenCalledOnce();
+    } else {
+      expect(stop).toBeDisabled();
+    }
+  });
 });
 
 function fixture(
@@ -2002,7 +2106,7 @@ function activityProjectionSnapshot(
 
 function makeSnapshot(
   interactionMode: "interactive" | "read_only",
-  runState: "idle" | "disconnected" | "reconciling",
+  runState: "idle" | "running" | "disconnected" | "reconciling",
 ): NormalizedThreadSnapshot {
   const interactive = interactionMode === "interactive";
   const transitioning =

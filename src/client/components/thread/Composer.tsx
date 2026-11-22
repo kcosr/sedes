@@ -38,6 +38,7 @@ import { composerInputUtf8Bytes, composerTaskInputUtf8Bytes, MAXIMUM_THREAD_INPU
 import type { NativeVoiceComposerHandoff } from "../../voice/native-voice-plugin.js";
 import {
   DeliveryRecoveryRequiredError,
+  hasSteerDraftBarrier,
   useThreadStore,
   type ThreadClientStore,
 } from "../../stores/ThreadClientStore.js";
@@ -412,7 +413,7 @@ export function Composer({
   active = true,
   store,
   applicationStore,
-  disabled = false,
+  disabled: threadControlsDisabled = false,
   hidePendingInputs = false,
   optimisticTranscriptPresentationVisible = true,
   autoFocus = false,
@@ -445,6 +446,7 @@ export function Composer({
     sameSelectedFields,
   );
   const snapshot = state.snapshot;
+  const draftControlsDisabled = threadControlsDisabled || Boolean(snapshot?.recovery);
   const serverDraft = snapshot?.draft;
   const retainedComposerState = getRetainedComposerDeliveryState(store);
   const shouldVisuallyClearServerDraft = state.pendingComposerTransfers.some(
@@ -733,7 +735,7 @@ export function Composer({
   );
   const activeCommand = commandMatches[effectiveActiveCommandIndex];
   const commandMenuOpen =
-    !disabled &&
+    !draftControlsDisabled &&
     !skillPickerOpen &&
     !threadPickerOpen &&
     commandMatches.length > 0 &&
@@ -1007,13 +1009,7 @@ export function Composer({
     return true;
   };
 
-  const steerDraftBarrierPending = state.pendingComposerTransfers.some(
-    (transfer) =>
-      transfer.mode === "steer" &&
-      ((transfer.authorityState === "client_only" &&
-        transfer.steerPhase === "unconfirmed") ||
-        (transfer.rollbackRequired && !transfer.rollbackApplied)),
-  );
+  const steerDraftBarrierPending = hasSteerDraftBarrier(state.pendingComposerTransfers);
   useEffect(() => {
     draftQueue.current!.setBlocked(steerDraftBarrierPending);
   }, [steerDraftBarrierPending]);
@@ -1287,13 +1283,7 @@ export function Composer({
       } else {
         clearRetainedComposerDeliveryState(store);
       }
-      const blockedBySteer = transfers.some(
-        (transfer) =>
-          transfer.mode === "steer" &&
-          ((transfer.authorityState === "client_only" &&
-            transfer.steerPhase === "unconfirmed") ||
-            (transfer.rollbackRequired && !transfer.rollbackApplied)),
-      );
+      const blockedBySteer = hasSteerDraftBarrier(transfers);
       if (dirtyRef.current && !blockedBySteer) {
         void persistDepartingDraft().catch(() => undefined);
       }
@@ -1503,15 +1493,15 @@ export function Composer({
   const missingTaskReferences = taskProjectionChecking
     ? []
     : taskReferences.filter(({ taskId }) => !currentTasks.has(taskId));
-  const effectiveDisabled =
-    disabled ||
+  const lacksMutationAuthority =
     !snapshot ||
     !state.authoritative ||
     state.connection !== "connected";
+  const effectiveDisabled = draftControlsDisabled || lacksMutationAuthority;
   // Local typing needs no mutation authority. Preserve focus across the live
   // run-state/capability handoff while Send, Stop and other actions stay fenced.
   const draftEditingDisabled =
-    disabled || !snapshot || state.connection !== "connected" ||
+    draftControlsDisabled || !snapshot || state.connection !== "connected" ||
     (!state.authoritative && !capabilitiesPending);
   useEffect(() => {
     if (
@@ -2461,7 +2451,7 @@ export function Composer({
               transfer.steerPhase === "unconfirmed" &&
               !transfer.rollbackRequired
             ) {
-              draftQueue.current!.setBlocked(true);
+              draftQueue.current!.setBlocked(hasSteerDraftBarrier(store.getSnapshot().pendingComposerTransfers));
             } else if (
               transfer &&
               !transfer.rollbackApplied &&
@@ -2513,7 +2503,9 @@ export function Composer({
           // The provider boundary was crossed or is unknown. Keep the captured
           // contribution solely in the unconfirmed Steer row and keep all
           // post-clear autosaves behind this operation's barrier.
-          draftQueue.current!.setBlocked(true);
+          // A reset or exact queue handoff may have retired this transfer
+          // before its HTTP response. Do not resurrect its autosave barrier.
+          draftQueue.current!.setBlocked(hasSteerDraftBarrier(store.getSnapshot().pendingComposerTransfers));
           throw recoveryError;
         }
         const visibleAuthoritative =
@@ -2962,7 +2954,7 @@ export function Composer({
     if (queueRestoreRunning.current) return;
     setAttachmentInputError(undefined);
     const pickerMayResumeAfterNativeSuspension =
-      preservePickerAdmission && !disabled && snapshot !== undefined;
+      preservePickerAdmission && !draftControlsDisabled && snapshot !== undefined;
     if (
       (effectiveDisabled && !pickerMayResumeAfterNativeSuspension) ||
       draftConflict
@@ -4163,7 +4155,8 @@ export function Composer({
                           className="send-button stop"
                           aria-label="Stop"
                           disabled={
-                            effectiveDisabled ||
+                            threadControlsDisabled ||
+                            lacksMutationAuthority ||
                             state.actionPending ||
                             snapshot.runState === "stopping" ||
                             !snapshot.capabilities.operations.some(

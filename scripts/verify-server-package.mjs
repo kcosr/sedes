@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFile, fork } from 'node:child_process';
 import { mkdtemp, mkdir, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -102,6 +103,79 @@ export async function verifyRuntimePty(pty, root) {
   }
 }
 
+/** Self-contained and executed inside the selected packaged Node/Electron runtime. */
+export async function verifyAntigravityHistoryWorker(root) {
+  const assert = (await import('node:assert/strict')).default;
+  const {mkdtemp, mkdir, rm} = await import('node:fs/promises');
+  const {tmpdir} = await import('node:os');
+  const path = await import('node:path');
+  const {pathToFileURL} = await import('node:url');
+  const {DatabaseSync} = await import('node:sqlite');
+  const {Worker} = await import('node:worker_threads');
+  const temporary = await mkdtemp(path.join(tmpdir(), 'sedes-history-worker-probe-'));
+  let worker;
+  const varint = value => {
+    let n = BigInt(value); const bytes = [];
+    do { const byte = Number(n & 127n); n >>= 7n; bytes.push(n ? byte | 128 : byte); } while (n);
+    return Buffer.from(bytes);
+  };
+  const field = (number, value) => {
+    if (typeof value === 'number') return Buffer.concat([varint(number * 8), varint(value)]);
+    const bytes = typeof value === 'string' ? Buffer.from(value) : value;
+    return Buffer.concat([varint(number * 8 + 2), varint(bytes.length), bytes]);
+  };
+  try {
+    const identity = {sessionId:'8a54e222-1000-4000-8000-000000000001', cwd:temporary};
+    const directory = path.join(temporary, 'antigravity-cli/conversations');
+    await mkdir(directory, {recursive:true});
+    const database = new DatabaseSync(path.join(directory, `${identity.sessionId}.db`));
+    try {
+      database.exec("CREATE TABLE trajectory_meta (cascade_id TEXT); CREATE TABLE trajectory_metadata_blob (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE executor_metadata (idx INTEGER PRIMARY KEY, data BLOB); CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, has_subtrajectory INTEGER, step_format INTEGER, step_payload BLOB)");
+      database.prepare('INSERT INTO trajectory_meta VALUES (?)').run(identity.sessionId);
+      database.prepare("INSERT INTO trajectory_metadata_blob VALUES ('main', ?)").run(field(1, field(1, pathToFileURL(temporary).href)));
+      database.prepare('INSERT INTO steps VALUES (0, 15, 3, 0, 0, ?)').run(Buffer.concat([
+        field(1, 15), field(4, 3), field(20, Buffer.concat([field(1, 'packaged-history-worker-ok'), field(12, 2)])),
+      ]));
+    } finally { database.close(); }
+    worker = new Worker(pathToFileURL(path.join(root, 'dist/antigravity-history-worker/sedes-antigravity-history-worker.mjs')), {
+      workerData:{tenantId:'probe', principalId:'probe', backendInstanceId:'probe', executionEnvironmentId:'probe', geminiDirectory:temporary, initializationTimeoutMs:1000},
+      env:{}, execArgv:[],
+    });
+    // Keep an error listener between individual exchanges and during cleanup;
+    // each active exchange still reports startup/read errors to its caller.
+    let workerError;
+    worker.on('error', error => { workerError = error; });
+    const exited = new Promise(resolve => worker.once('exit', code => resolve(code)));
+    const exchange = request => new Promise((resolve, reject) => {
+      const cleanup = () => { clearTimeout(timer); worker.off('message', message); worker.off('error', error); worker.off('exit', exit); };
+      const message = response => { if (response.id === request.id) { cleanup(); resolve(response); } };
+      const error = failure => { cleanup(); reject(failure); };
+      const exit = code => error(new Error(`Antigravity history worker exited before its response: ${code}`));
+      const timer = setTimeout(() => error(new Error('Antigravity history worker round-trip timed out')), 5000);
+      worker.on('message', message); worker.once('error', error); worker.once('exit', exit);
+      try { worker.postMessage(request); } catch (failure) { error(failure); }
+    });
+    const first = await exchange({id:1, kind:'read', identity, cancellation:new SharedArrayBuffer(4)});
+    assert.equal(first.kind, 'read', 'Packaged Antigravity history worker must read native SQLite');
+    assert.equal(first.history.sessionId, identity.sessionId);
+    assert.equal(first.history.cwd, identity.cwd);
+    assert.equal(first.history.native.steps[0].response.text, 'packaged-history-worker-ok');
+    assert.equal(first.bytes, Buffer.byteLength(JSON.stringify(first.history)));
+    const unchanged = await exchange({id:2, kind:'read', identity, knownRevision:first.revision, cancellation:new SharedArrayBuffer(4)});
+    assert.deepEqual(unchanged, {id:2, kind:'read', history:null, revision:first.revision, bytes:0});
+    assert.deepEqual(await exchange({id:3, kind:'forget', identity, cancellation:new SharedArrayBuffer(4)}), {id:3, kind:'done'});
+    assert.deepEqual(await exchange({id:4, kind:'close'}), {id:4, kind:'done'});
+    let timer;
+    try {
+      assert.equal(await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Antigravity history worker shutdown timed out')), 5000); })]), 0);
+      if (workerError) throw workerError;
+    } finally { clearTimeout(timer); }
+  } finally {
+    try { if (worker) await worker.terminate(); }
+    finally { await rm(temporary, {recursive:true, force:true}); }
+  }
+}
+
 const nativeProbe = entrypoints => `
 import {createRequire} from 'node:module';
 const require = createRequire(import.meta.url);
@@ -111,6 +185,7 @@ const {pathToFileURL} = require('node:url');
 const root = process.argv[1];
 const requirePackage = require('node:module').createRequire(path.join(root, 'package.json'));
 ${verifyRuntimePty.toString()}
+${verifyAntigravityHistoryWorker.toString()}
 (async () => {
   await (async () => { ${createRuntimeDependencyProbe(entrypoints)} })();
   const {openOverlayDatabaseConnection} = await import(pathToFileURL(path.join(root, 'dist/server/db/database.js')));
@@ -129,6 +204,7 @@ ${verifyRuntimePty.toString()}
   const transformed = requirePi('esbuild').transformSync('const answer: number = 42', {loader:'ts'});
   assert.ok(transformed.code.includes('42'), 'Pi esbuild target executable failed');
   await verifyRuntimePty(requirePackage('node-pty'), root);
+  await verifyAntigravityHistoryWorker(root);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 `;
 
@@ -141,6 +217,14 @@ export function requestRuntimeShutdown(server) {
 }
 
 export async function verifyRuntime(root, { nodeExecutable = process.execPath, electronRunAsNode = false } = {}) {
+  const nativeHistoryWorkerRoot = path.join(root, 'dist/antigravity-history-worker');
+  const nativeHistoryWorkerManifest = JSON.parse(await readFile(path.join(nativeHistoryWorkerRoot, 'manifest.json'), 'utf8'));
+  const nativeHistoryWorker = await readFile(path.join(nativeHistoryWorkerRoot, 'sedes-antigravity-history-worker.mjs'));
+  assert.equal(nativeHistoryWorkerManifest.schemaVersion, 1);
+  assert.equal(nativeHistoryWorkerManifest.artifactId, 'openai.sedes.antigravity-history-worker');
+  assert.equal(nativeHistoryWorkerManifest.filename, 'sedes-antigravity-history-worker.mjs');
+  assert.equal(nativeHistoryWorkerManifest.bytes, nativeHistoryWorker.byteLength);
+  assert.equal(nativeHistoryWorkerManifest.sha256, createHash('sha256').update(nativeHistoryWorker).digest('hex'));
   // Worker entry guards compare argv to import.meta.url. Resolve installation
   // aliases such as `current` before launching their executable entry points.
   root = await realpath(root);
@@ -218,7 +302,7 @@ export async function verifyRuntime(root, { nodeExecutable = process.execPath, e
     requestRuntimeShutdown(server);
     const exit = await boundedExit(exited, 15_000);
     assert.deepEqual(exit, {code:0, signal:null}, `Server shutdown failed: ${logs}`);
-    return ['sqlite-query-and-migrations', 'real-pty', 'pi-esbuild', 'provider-module-imports', 'pi-esbuild-target-binary', 'sidecar-and-worker-argument-guards', 'connector-help', 'isolated-server-startup', 'browser-http-and-static-assets', 'graceful-shutdown'];
+    return ['sqlite-query-and-migrations', 'real-pty', 'pi-esbuild', 'provider-module-imports', 'pi-esbuild-target-binary', 'antigravity-history-worker-round-trip', 'sidecar-and-worker-argument-guards', 'connector-help', 'isolated-server-startup', 'browser-http-and-static-assets', 'graceful-shutdown'];
   } finally {
     try {
       if (server && server.exitCode === null && server.signalCode === null) { server.kill('SIGKILL'); await boundedExit(exited, 5000); }
