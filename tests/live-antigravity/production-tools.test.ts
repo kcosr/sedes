@@ -59,8 +59,9 @@ it.skipIf(topology === "ssh" && process.env.SEDES_LIVE_ANTIGRAVITY_SSH !== "1").
     expect(evidence.some(item => {
       const value = JSON.stringify(item);
       return value.includes(threadId) && /\\?"backend\\?"\s*:\s*\\?"antigravity\\?"/u.test(value);
-    })).toBe(true);
-    if (surface === "cli") expect(evidence.every(item => item.kind !== "command" || item.command.text === command)).toBe(true);
+    }), `Persisted test tool evidence: ${JSON.stringify(evidence)}`.slice(0, 24_000)).toBe(true);
+    if (surface === "cli") expect(evidence.every(item => item.kind !== "command" || item.command.text === command),
+      `Expected test command: ${command}\nActual test commands: ${JSON.stringify(evidence.filter(item => item.kind === "command").map(item => item.command.text))}`.slice(0, 24_000)).toBe(true);
     if (topology === "ssh") {
       // Native history can settle before the terminal ACP receipt reaches main.
       // Retiring an MCP session requires both quiet work and drained receipts.
