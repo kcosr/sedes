@@ -1079,7 +1079,14 @@ export async function startProductionApplication(
     for (const configured of backendConfigurationFile.backends) {
       const preference = desiredConfiguration.runtimes.find(item => item.resourceKind === "backend" && item.resourceId === configured.id)?.preference;
       if (!preference || preference === "automatic") {
-        if (compiledBackendModuleCatalog.requireModule(configured.kind).startupPolicy === "connect_provider") hasDeferredBackendStartup = true;
+        // An ephemeral local endpoint is not known until listen completes.
+        // Runtime composition may legitimately snapshot its CLI environment
+        // (Codex does), so defer it rather than exposing port0 or throwing from
+        // a late getter before the listener has acquired its actual address.
+        const needsBoundLocalEndpoint = config.port === 0 && resolvedLocalAgentToolCli.availability === "available" &&
+          backendConfigurationFile.targets.some(target => target.backendInstanceId === configured.id && target.enabled &&
+            environmentOperations.get(target.executionEnvironmentId)?.environmentKind === "local");
+        if (needsBoundLocalEndpoint || compiledBackendModuleCatalog.requireModule(configured.kind).startupPolicy === "connect_provider") hasDeferredBackendStartup = true;
         else await applyBackendRuntime(configured.id);
       }
     }

@@ -36,7 +36,8 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **177**. Antigravity targets add a normalized brand and execution configuration. Chat excerpts captured from highlighted questions retain their quote
+  **177**. Antigravity targets add a normalized brand and execution configuration.
+  Chat excerpts captured from highlighted questions retain their quote
   style in drafts and sent messages. Account quota snapshots now include the
   execution target's backend identity. Research settings now select Codex CLI.
   Remote environment configuration adds the required connection compression
@@ -46,9 +47,10 @@ User-facing changes are collected here before release. See the
   Codex Speed uses its strict v3 action/result contract. Sedes tool policies replace cross-boundary approval modes with
   independent project/environment limits: queries filter to scope and direct
   outside requests are denied. Legacy thread-only policies are disabled for
-  review rather than broadened. Saved Agent and thread-create tool contracts
-  advance to version 6; thread-message transcripts advance to version 5 to
-  identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
+  review rather than broadened. Saved Agent `list/get/options/create/update`
+  contracts advance to version 7 and thread-create to version 6. Agent context
+  and thread status advance to version 5, and thread listing to version 9.
+  Thread-message transcripts advance to version 5 to identify automatic follow-ups. See [tool policy sets](docs/user/tool-policies.md).
   ([#96](https://github.com/kcosr/sedes/pull/96), [#112](https://github.com/kcosr/sedes/pull/112), [#116](https://github.com/kcosr/sedes/pull/116), [#142](https://github.com/kcosr/sedes/pull/142))
 
 - Upgrade execution sidecars with the server for runtime wire version **17**
@@ -93,7 +95,10 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
-- Run Google Antigravity through ACP on local or persistent SSH/outbound execution hosts, with native history, streaming, permission decisions, model and native mode selection, and background-work tracking. Agent context/status tools advance to schema 5, thread listing to schema 9, and Saved Agent `list/get/options/create/update` to schema 7 to include Antigravity. See [Antigravity setup](docs/operator/backends/antigravity.md).
+- Run Google Antigravity through ACP on local or persistent SSH/outbound
+  execution hosts, with native history, streaming, permission decisions, model
+  and native mode selection, Saved Agents, scoped Sedes tools, and background
+  work tracking. See [Antigravity setup](docs/operator/backends/antigravity.md).
 
 - Enable **Highlight questions in agent replies** under **Settings > Appearance
   > Chat formatting** to show completed questions in red with an underline.
@@ -373,6 +378,9 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Local Sedes tools use the actual listener address when the server selects an
+  ephemeral port with `PORT=0`, including restored backends during startup.
 
 - Larger Claude threads reopen after idle eviction or reconnection without
   repeatedly expiring their history snapshot. Update execution sidecars with

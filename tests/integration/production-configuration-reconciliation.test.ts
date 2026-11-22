@@ -138,26 +138,42 @@ describe("production configuration reconciliation", () => {
       availability: "available", endpoint: "http://127.0.0.1:0", executableDirectory: "/fixture/bin", inheritedPath: "/usr/bin",
     });
     const contexts: BackendModuleRuntimeContext[] = [];
+    const endpoints: string[] = [];
     const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
     vi.spyOn(compiledBackendModuleCatalog, "prepare").mockImplementation(input => prepare(input).map(prepared => ({
       ...prepared,
-      createRuntime(context) { contexts.push(context); return prepared.createRuntime(context); },
+      createRuntime(context) {
+        contexts.push(context);
+        // Runtime consumers may eagerly snapshot available CLI metadata, as
+        // Codex does. Do not defer this read until the assertion after listen.
+        if (context.agentToolCli.availability === "available") endpoints.push(({ ...context.agentToolCli }).endpoint);
+        return prepared.createRuntime(context);
+      },
     })));
     await fixture();
-    const address = application!.server.address();
-    if (!address || typeof address === "string") throw new Error("test_server_not_listening");
-    expect(address.port).toBeGreaterThan(0);
-    expect(contexts.length).toBeGreaterThan(0);
-    const authenticatedFetch = await authenticatedProductionFetch(application!);
-    for (const context of contexts) {
-      expect(context.agentToolCli.availability).toBe("available");
-      if (context.agentToolCli.availability !== "available") throw new Error("test_cli_unavailable");
-      expect(context.agentToolCli.endpoint).toBe(`http://127.0.0.1:${address.port}`);
-      const health = await authenticatedFetch(`${context.agentToolCli.endpoint}/api/health`);
-      expect(health.status).toBe(200);
-      expect(await health.json()).toMatchObject({ status: "ok" });
-    }
-  });
+    const assertBoundEndpoints = async () => {
+      const address = application!.server.address();
+      if (!address || typeof address === "string") throw new Error("test_server_not_listening");
+      expect(address.port).toBeGreaterThan(0);
+      await vi.waitFor(() => expect(contexts.map(context => context.instance.id)).toEqual(expect.arrayContaining(["idle-pi", "busy-claude"])));
+      expect(endpoints).toHaveLength(contexts.length);
+      const authenticatedFetch = await authenticatedProductionFetch(application!);
+      for (const [index, context] of contexts.entries()) {
+        expect(context.agentToolCli.availability).toBe("available");
+        if (context.agentToolCli.availability !== "available") throw new Error("test_cli_unavailable");
+        expect(context.agentToolCli.endpoint).toBe(`http://127.0.0.1:${address.port}`);
+        expect(endpoints[index]).toBe(context.agentToolCli.endpoint);
+        const health = await authenticatedFetch(`${endpoints[index]}/api/health`);
+        expect(health.status).toBe(200);
+        expect(await health.json()).toMatchObject({ status: "ok" });
+      }
+    };
+    await assertBoundEndpoints();
+    await application!.close(); application = undefined;
+    contexts.length = 0; endpoints.length = 0;
+    await openApplication();
+    await assertBoundEndpoints();
+  }, 15_000);
 
   it.each(["idle", "active", "cleanup_unproven", "carrier", "unreachable"] as const)("refreshes a replaced Pi sidecar only after %s retirement is safe", async disposition => {
     const { service, scope, snapshot } = await fixture();
@@ -818,6 +834,12 @@ describe("production configuration reconciliation", () => {
     await application!.close(); application = undefined;
     applied.mockClear();
     const reopened = await openApplication();
+    if (kind === "codex") {
+      const results = await Promise.all(applied.mock.calls.flatMap(([plan], index) => plan.context.instance.id === backendId
+        ? [applied.mock.results[index]!.value] : []));
+      expect(results.flatMap(result => result.status === "failed" ? [result.error instanceof Error ? result.error.message : "unknown_startup_failure"] : []))
+        .toEqual([]);
+    }
     await vi.waitFor(async () => expect((await reopened.service.get(reopened.scope)).runtimes.find(runtime => runtime.resourceId === backendId)?.applyState).toBe("applied"));
     assertConnections();
     // Two full production boots plus configuration saves and runtime stop/start
