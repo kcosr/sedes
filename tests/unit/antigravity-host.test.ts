@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmod, copyFile, mkdtemp, realpath, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import type { AntigravityEvent, AntigravityHistory, AntigravityRuntimeConfigurat
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { antigravityAttachmentSchema, antigravityCommandSchema, antigravityHistorySchema } from "../../src/server/backends/antigravity/sidecar/wire.js";
 import { AcpDeliveryError, AcpRemoteError } from "../../src/server/provider-protocol/bindings/acp-v1/index.js";
+import * as nativeActivity from "../../src/server/backends/antigravity/host/native-activity.js";
 
 const roots: string[] = [], hosts: AntigravityHost[] = [];
 const realSetTimeout = globalThis.setTimeout;
@@ -21,10 +22,12 @@ async function fixture(cancellationDrainTimeoutMs = 1000) {
   const configuration: AntigravityRuntimeConfiguration = { tenantId: "tenant", principalId: "principal", backendInstanceId: "backend", executionEnvironmentId: "environment", executablePath, initializationTimeoutMs: 1000 };
   const channels = new LocalEnvironmentChannelProvider({ scope: { tenantId: configuration.tenantId, principalId: configuration.principalId }, executionEnvironmentId: configuration.executionEnvironmentId, environment: process.env });
   const readHistory = vi.fn(async (identity: { sessionId: string; cwd: string }): Promise<AntigravityHistory> => ({ ...identity, native: { steps: [], executions: [], revision: "a".repeat(64) } }));
+  const history = { read: readHistory, forget: vi.fn(async () => undefined), close: vi.fn(async () => undefined) };
+  const removeProbe = vi.fn(async (_identity: { sessionId: string; cwd: string }) => undefined);
   let emit: ((notification: SessionNotification) => void) | undefined;
-  const host = new AntigravityHost({ configuration, channels, environment: process.env, readHistory, observationWaitMs: 5, cancellationPollIntervalMs: 5, cancellationDrainTimeoutMs,
+  const host = new AntigravityHost({ configuration, channels, environment: process.env, history, removeProbe, observationWaitMs: 5, cancellationPollIntervalMs: 5, cancellationDrainTimeoutMs,
     launch: async input => { emit = input.update; return AntigravityAcpConnection.open(input); } }); hosts.push(host);
-  return { cwd, host, configuration, channels, readHistory, emit: (notification: SessionNotification) => emit!(notification) };
+  return { cwd, host, configuration, channels, readHistory, history, removeProbe, emit: (notification: SessionNotification) => emit!(notification) };
 }
 async function settled(host: AntigravityHost, handleId: string, operationId: string) {
   await vi.waitFor(async () => expect((await host.outcome({ handleId, operationId })).status).not.toBe("pending"));
@@ -35,6 +38,126 @@ async function drain(host: AntigravityHost, handleId: string): Promise<Antigravi
   await host.acknowledge({ handleId, throughSequence: observed.throughSequence }); return [...observed.events];
 }
 describe("Antigravity execution host", () => {
+  it("retires a proven-closed native session despite passive cache eviction failure", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
+    const { handleId } = await f.host.attach(identity);
+    await f.host.acknowledgeCreation({ ...identity, operationId: "create" }); await drain(f.host, handleId);
+    f.history.forget.mockRejectedValueOnce(new Error("passive_cache_capacity"));
+    expect(await f.host.retireSession(identity)).toBe("retired");
+    expect(f.host.snapshot().retainedSessions).toHaveLength(0);
+    expect(f.host.snapshot().blockers).not.toContain("cleanup_unproven");
+    expect(await f.host.attachExisting(identity)).toBeNull();
+  });
+  it("bounds a stalled passive cache eviction without retaining proven-closed native ownership", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
+    const { handleId } = await f.host.attach(identity);
+    await f.host.acknowledgeCreation({ ...identity, operationId: "create" }); await drain(f.host, handleId);
+    f.history.forget.mockImplementationOnce(async () => new Promise(() => {}));
+    expect(await f.host.retireSession(identity)).toBe("retired");
+    expect(f.host.snapshot().retainedSessions).toHaveLength(0);
+    expect(f.host.snapshot().blockers).not.toContain("cleanup_unproven");
+  });
+  it("cleans a catalog probe after proven peer closure when passive cache eviction fails", async () => {
+    const f = await fixture(); f.history.forget.mockRejectedValueOnce(new Error("passive_cache_post_message_failed"));
+    await expect(f.host.catalog({ cwd: f.cwd })).resolves.toMatchObject({ initialize: { protocolVersion: 1 } });
+    expect(f.removeProbe).toHaveBeenCalledOnce();
+    await expect(stat(f.removeProbe.mock.calls[0]![0].cwd)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(f.host.snapshot().blockers).not.toContain("cleanup_unproven");
+  });
+  it("reconciles late ACP tool IDs from unchanged cached native terminal evidence", async () => {
+    const activity = vi.spyOn(nativeActivity, "antigravityNativeActivity");
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
+    const { handleId } = await f.host.attach(identity);
+    activity.mockClear();
+    const native: AntigravityHistory["native"] = { revision: "b".repeat(64), executions: [], steps: [
+      { index: 0, type: 132, status: 3, hasSubtrajectory: false, tool: { id: "native-tool", name: "read_file", argumentsJson: "{}" } },
+    ] };
+    f.readHistory.mockResolvedValue({ ...identity, native });
+    await f.host.readHistory(identity); expect(activity).toHaveBeenCalledOnce();
+    f.emit({ sessionId: identity.sessionId, update: { sessionUpdate: "tool_call", toolCallId: "native-tool", title: "Read", status: "in_progress" } });
+    expect(f.host.snapshot().blockers).toContain("active_work");
+    await expect(f.host.readHistory({ ...identity, knownRevision: native.revision })).resolves.toBeNull();
+    expect(activity).toHaveBeenCalledOnce(); expect(f.host.snapshot().blockers).not.toContain("active_work");
+    await f.host.acknowledgeCreation({ ...identity, operationId: "create" }); await drain(f.host, handleId);
+    expect(await f.host.retireSession(identity)).toBe("retired"); expect(activity).toHaveBeenCalledOnce();
+  });
+  it("settles a late prompt callback and unmatched ACP tool from unchanged cached final-response evidence", async () => {
+    const activity = vi.spyOn(nativeActivity, "antigravityNativeActivity");
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
+    const { handleId } = await f.host.attach(identity);
+    let reply!: () => void;
+    vi.spyOn(AntigravityAcpConnection.prototype, "prompt").mockImplementationOnce(async (_id, _prompt, settle) => new Promise(resolve => {
+      reply = () => { const result = { stopReason: "end_turn" as const }; settle(result); resolve(result); };
+    }));
+    await f.host.request({ handleId, operationId: "prompt", command: { type: "prompt", prompt: [{ type: "text", text: "hello" }] } });
+    const native: AntigravityHistory["native"] = { revision: "b".repeat(64), executions: [], steps: [
+      { index: 0, type: 15, status: 3, hasSubtrajectory: false, response: { text: "Done", thinking: "", stopReason: 2, toolCalls: [] } },
+    ] };
+    f.readHistory.mockResolvedValue({ ...identity, native }); await f.host.readHistory(identity);
+    f.emit({ sessionId: identity.sessionId, update: { sessionUpdate: "tool_call", toolCallId: "acp-only-tool", title: "Read", status: "in_progress" } });
+    await f.host.readHistory({ ...identity, knownRevision: native.revision });
+    expect(f.host.snapshot().blockers).toContain("active_work"); expect(activity).toHaveBeenCalledTimes(2);
+    reply(); await settled(f.host, handleId, "prompt");
+    await vi.waitFor(() => expect(f.host.snapshot().blockers).not.toContain("active_work"));
+    await f.host.acknowledgeOperation({ handleId, operationId: "prompt" });
+    await f.host.acknowledgeCreation({ ...identity, operationId: "create" }); await drain(f.host, handleId);
+    expect(await f.host.retireSession(identity)).toBe("retired"); expect(activity).toHaveBeenCalledTimes(2);
+  });
+  it("returns no unchanged snapshot after reading native activity and rechecking authority", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
+    const native: AntigravityHistory["native"] = { revision: "b".repeat(64), executions: [], steps: [
+      { index: 0, type: 132, status: 2, hasSubtrajectory: false, command: { commandId: "background", persistent: true, command: "sleep 1", cwd: f.cwd, output: "" } },
+    ] };
+    f.readHistory.mockResolvedValue({ ...identity, native });
+    await expect(f.host.readHistory({ ...identity, knownRevision: native.revision })).resolves.toBeNull();
+    expect(f.readHistory).toHaveBeenLastCalledWith(identity, undefined);
+    expect(f.host.snapshot().blockers).toContain("active_work");
+    await expect(f.host.readHistory({ ...identity, knownRevision: "c".repeat(64) })).resolves.toMatchObject({ native });
+    let current = true;
+    f.readHistory.mockImplementationOnce(async () => { current = false; return { ...identity, native }; });
+    await expect(f.host.readHistory({ ...identity, knownRevision: native.revision }, undefined, {
+      assertAdmission() {}, assertCurrent() { if (!current) throw new Error("stale_authority"); },
+    })).rejects.toThrow("stale_authority");
+  });
+  it("forgets retired history and closes its reader only after Stop enters native cleanup", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
+    await expect(f.host.stop({ expectedRevision: f.host.snapshot().revision, force: false }))
+      .rejects.toMatchObject({ code: "antigravity_runtime_busy" });
+    expect(f.history.close).not.toHaveBeenCalled();
+    await f.host.acknowledgeCreation({ ...identity, operationId: "create" });
+    expect(await f.host.retireSession(identity)).toBe("retired");
+    expect(f.history.forget).toHaveBeenCalledWith(identity);
+    expect(f.history.close).not.toHaveBeenCalled();
+    await f.host.close(); expect(f.history.close).toHaveBeenCalledOnce();
+    await expect(f.host.readHistory(identity)).rejects.toMatchObject({ code: "antigravity_runtime_closed" });
+  });
+  it("closes its reader while retaining an unproven native owner for forced cleanup retry", async () => {
+    const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "create" });
+    vi.spyOn(AntigravityAcpConnection.prototype, "close").mockRejectedValueOnce(new Error("cleanup_unproven"));
+    await expect(f.host.close()).rejects.toMatchObject({ code: "antigravity_cleanup_unproven" });
+    expect(f.history.close).toHaveBeenCalledOnce();
+    expect(f.host.snapshot().blockers).toContain("cleanup_unproven");
+    await expect(f.host.readHistory(identity)).rejects.toMatchObject({ code: "antigravity_runtime_closed" });
+    await f.host.close(); expect(f.history.close).toHaveBeenCalledOnce();
+    expect(f.history.forget).toHaveBeenCalledWith(identity);
+  });
+  it("settles admitted history reads through worker shutdown without accepting new reads", async () => {
+    const f = await fixture(), identity = { sessionId: "native-session", cwd: f.cwd };
+    let rejectRead!: (error: Error) => void;
+    f.readHistory.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRead = reject; }));
+    const reading = expect(f.host.readHistory(identity)).rejects.toThrow("reader_closed");
+    f.history.close.mockImplementationOnce(async () => { rejectRead(new Error("reader_closed")); });
+    await f.host.close(); await reading;
+    expect(f.history.close).toHaveBeenCalledOnce();
+    await expect(f.host.readHistory(identity)).rejects.toMatchObject({ code: "antigravity_runtime_closed" });
+  });
+  it("retains a cleanup blocker when the reader worker cannot prove shutdown", async () => {
+    const f = await fixture(); f.history.close.mockRejectedValueOnce(new Error("worker_cleanup_unproven"));
+    await expect(f.host.close()).rejects.toMatchObject({ code: "antigravity_cleanup_unproven" });
+    expect(f.host.snapshot().blockers).toContain("cleanup_unproven");
+    await expect(f.host.create({ cwd: f.cwd, operationId: "replacement" }))
+      .rejects.toMatchObject({ code: "antigravity_cleanup_unproven", delivery: "not_sent" });
+  });
   it("retains accepted work across detach and restores the exact handle without replay", async () => {
     const { host, cwd } = await fixture();
     const identity = await host.create({ cwd, operationId: "creation" });
@@ -108,7 +231,7 @@ describe("Antigravity execution host", () => {
     const { host, cwd, readHistory, channels, configuration } = await fixture(); const identity = { sessionId: "native-session", cwd };
     expect(await host.readHistory(identity)).toMatchObject({ native: { steps: [] } }); expect(readHistory).toHaveBeenCalledOnce();
     expect(host.runtimeVersion).toBeNull();
-    expect(() => new AntigravityHost({ configuration: { ...configuration, principalId: "wrong" }, channels, environment: {}, readHistory })).toThrow("antigravity_runtime_scope_denied");
+    expect(() => new AntigravityHost({ configuration: { ...configuration, principalId: "wrong" }, channels, environment: {}, history: { read: readHistory, forget: async () => undefined, close: async () => undefined } })).toThrow("antigravity_runtime_scope_denied");
   });
   it("validates exact prompt and native-history wire schemas", () => {
     expect(antigravityCommandSchema.parse({ type: "prompt", prompt: [{ type: "text", text: "hello" }] })).toEqual({ type: "prompt", prompt: [{ type: "text", text: "hello" }] });
@@ -273,7 +396,7 @@ describe("Antigravity execution host", () => {
   it("recovers an uncertain Stop from later native quiescence and retains the exact refreshed receipts", async () => {
     const f = await fixture(20), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" }); const { handleId } = await f.host.attach(identity);
     await f.host.request({ handleId, operationId: "primary", command: { type: "prompt", prompt: [{ type: "text", text: "wait" }] } });
-    f.readHistory.mockResolvedValue({ ...identity, native: { revision: "a".repeat(64), executions: [], steps: [{ index: 1, type: 132, status: 2, hasSubtrajectory: false,
+    f.readHistory.mockResolvedValue({ ...identity, native: { revision: "c".repeat(64), executions: [], steps: [{ index: 1, type: 132, status: 2, hasSubtrajectory: false,
       command: { command: "sleep", cwd: f.cwd, commandId: "background", output: "", persistent: false } }] } });
     await f.host.request({ handleId, operationId: "stop", command: { type: "cancel" } });
     expect(await settled(f.host, handleId, "stop")).toMatchObject({ status: "failed", failure: { code: "antigravity_cancel_unproven" } });

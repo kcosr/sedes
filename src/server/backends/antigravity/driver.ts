@@ -13,7 +13,7 @@ import { parseAntigravityBinding, serializeAntigravityBinding, type AntigravityB
 import { antigravityCapabilities, antigravityCatalog } from "./catalog.js";
 import { AntigravityHandle } from "./handle.js";
 import { antigravityHistoryPage, antigravityWindowSnapshot, antigravitySteerConsumed, locateAntigravityTurn, projectAntigravityHistory } from "./history.js";
-import type { AntigravityPort, AntigravitySetup } from "./port.js";
+import type { AntigravityHistory, AntigravityPort, AntigravitySetup } from "./port.js";
 import { antigravityReconciliationTag, inspectAntigravityInput } from "./submission.js";
 import type { AntigravityThreadRepository } from "./thread-repository.js";
 import type { AntigravityAgentToolService, AntigravityToolSource } from "./agent-tools.js";
@@ -127,7 +127,7 @@ export class AntigravityDriver implements ConversationBackendDriver {
       if (!date) {
         if (fallbackReads >= 4) break;
         fallbackReads++;
-        const history = await this.input.port.readHistory(session, input.signal).catch(error => { throw antigravityReadError(error, input.signal); });
+        const history = await this.input.port.readHistory({ sessionId: session.sessionId, cwd: session.cwd }, input.signal).then(requireHistory).catch(error => { throw antigravityReadError(error, input.signal); });
         date = history.native.steps.at(-1)?.completedAt ?? history.native.steps.at(-1)?.createdAt;
       }
       if (!date) continue;
@@ -169,7 +169,7 @@ export class AntigravityDriver implements ConversationBackendDriver {
   async openHistory(input: ReadConversationInput): Promise<ConversationHistoryReader> {
     const detail = this.validate(input);
     const projection = await this.input.port.readHistory({ sessionId: detail.sessionId, cwd: detail.canonicalWorkspacePath }, input.signal)
-      .then(native => projectAntigravityHistory(native.native, { binding: detail, key: this.input.correlationKey }))
+      .then(requireHistory).then(native => projectAntigravityHistory(native.native, { binding: detail, key: this.input.correlationKey }))
       .catch(error => { throw antigravityReadError(error, input.signal); });
     const capabilities: BackendCapabilityDocument = antigravityCapabilities(undefined, this.connection.id);
     let closed = false;
@@ -191,7 +191,7 @@ export class AntigravityDriver implements ConversationBackendDriver {
     this.assertScope(input.scope);
     if (!input.binding || !input.opaqueBindingDetail) return { status: "unresolved", diagnostic: boundDisplayText("The native session identity is not yet known.") };
     const detail = this.validate({ ...input, binding: input.binding, opaqueBindingDetail: input.opaqueBindingDetail });
-    let history = await this.input.port.readHistory({ sessionId: detail.sessionId, cwd: detail.canonicalWorkspacePath })
+    let history = await this.input.port.readHistory({ sessionId: detail.sessionId, cwd: detail.canonicalWorkspacePath }).then(requireHistory)
       .catch(error => { throw antigravityReadError(error); });
     const scope = { binding: detail, key: this.input.correlationKey };
     const findInput = () => history.native.steps.find(value => {
@@ -216,7 +216,7 @@ export class AntigravityDriver implements ConversationBackendDriver {
           // A prompt callback alone can precede the native write or describe a
           // different queued request. Require host drain proof, then reread the
           // durable transcript; consumption always wins over cancellation.
-          history = await this.input.port.readHistory({ sessionId: detail.sessionId, cwd: detail.canonicalWorkspacePath });
+          history = await this.input.port.readHistory({ sessionId: detail.sessionId, cwd: detail.canonicalWorkspacePath }).then(requireHistory);
           const consumed = accepted(); if (consumed) return consumed;
           await this.input.port.acknowledgeOperation({ handleId: retained.handleId, operationId: input.applicationOperationId });
           return { status: "not_accepted", retryable: false, diagnostic: boundDisplayText("Antigravity withdrew this input when Stop was requested.") };
@@ -241,6 +241,10 @@ export class AntigravityDriver implements ConversationBackendDriver {
     const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
     if (errors.length) throw new AggregateError(errors, "Antigravity handles could not all be released.");
   }
+}
+function requireHistory(history: AntigravityHistory | null): AntigravityHistory {
+  if (history === null) throw new Error("antigravity_unconditional_history_missing");
+  return history;
 }
 export function unsupported(message: string): BackendError {
   return new BackendError({ category: "invalid_state", retryable: false, crossedSubmissionBoundary: false, safeMessage: message });

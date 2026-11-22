@@ -11,6 +11,7 @@ import { AntigravityError, type AntigravityHistory, type AntigravityIdentity, ty
 import { assertAntigravityNativeSemantics } from "./native-guards.js";
 import { antigravityNativeActivity } from "./host/native-activity.js";
 import { antigravityCancelledExecutionHeads, antigravityNativeTerminalOutcome } from "./native-execution.js";
+export { createAntigravityNativeHistoryReader, type AntigravityNativeHistoryReader } from "./native-history-reader.js";
 
 const MAXIMUM_HISTORY_BYTES = 96 * 1024 * 1024;
 const MAXIMUM_ROWS = 100_000;
@@ -20,6 +21,90 @@ const MAXIMUM_EXECUTOR_ROWS = 100_000;
 type ChildReference = { sessionId: string; workspaceUris: readonly string[] };
 type ReadBudget = { remainingBytes: number; remainingRows: number; remainingExecutorBytes: number; remainingExecutorRows: number;
   remainingSessions: number; ancestors: ReadonlySet<string> };
+export type NativeReadCancellation = Pick<AbortSignal, "throwIfAborted">;
+type Size = { count: number; bytes: number };
+type ExecutorSize = Size & { maximum: number };
+class NativeHistoryBudgetError extends Error {
+  constructor() { super("antigravity_history_capacity_exceeded"); }
+}
+type OwnHistory = { native: AntigravityNativeHistory; childReferences: Map<number, readonly ChildReference[]>;
+  size: Size; executionSize: ExecutorSize; includesExecutions: boolean; version: number;
+  aggregate?: AntigravityNativeHistory; cachedBytes: number };
+type Connection = { key: string; file: string; identity: string; database: DatabaseSync; own?: OwnHistory };
+const MAXIMUM_CONNECTIONS = 64;
+const MAXIMUM_CACHE_BYTES = 64 * 1024 * 1024;
+
+/** Execution-host private state. Production owns this store inside its reader
+ * worker; the explicit one-shot utility below owns a short-lived instance. */
+export class AntigravityNativeHistoryStore {
+  readonly #connections = new Map<string, Connection>();
+  #closed = false;
+  #cacheBytes = 0;
+  #tail: Promise<unknown> = Promise.resolve();
+  constructor(readonly configuration: AntigravityRuntimeConfiguration) {}
+  read(identity: AntigravityIdentity, signal?: NativeReadCancellation): Promise<AntigravityHistory> {
+    return this.#serialize(async () => {
+      if (this.#closed) throw new AntigravityError("antigravity_history_reader_closed");
+      return readNative(this, identity, signal, { remainingBytes: MAXIMUM_HISTORY_BYTES, remainingRows: MAXIMUM_ROWS,
+        remainingExecutorBytes: MAXIMUM_EXECUTOR_BYTES, remainingExecutorRows: MAXIMUM_EXECUTOR_ROWS,
+        remainingSessions: 32, ancestors: new Set() });
+    });
+  }
+  forget(identity: AntigravityIdentity): Promise<void> {
+    return this.#serialize(async () => { const entry = this.#connections.get(this.#key(identity)); if (entry) this.#remove(entry); });
+  }
+  async close(): Promise<void> {
+    this.#closed = true;
+    await this.#serialize(async () => { for (const entry of this.#connections.values()) this.#remove(entry); });
+  }
+  #serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const work = this.#tail.then(operation); this.#tail = work.catch(() => undefined); return work;
+  }
+  #key(identity: AntigravityIdentity) { return JSON.stringify([identity.sessionId, identity.cwd]); }
+  async connection(identity: AntigravityIdentity): Promise<Connection> {
+    const key = this.#key(identity), existing = this.#connections.get(key);
+    let file: string, fingerprint: string;
+    try {
+      file = await nativePath(this.configuration, identity);
+      const info = await lstat(file, { bigint: true });
+      fingerprint = `${info.dev}:${info.ino}`;
+      if (!info.isFile() || info.isSymbolicLink() || process.getuid && info.uid !== BigInt(process.getuid())) throw new Error("antigravity_history_file_invalid");
+    } catch (error) { if (existing) this.#remove(existing); throw error; }
+    if (existing && existing.file === file && existing.identity === fingerprint) {
+      this.#connections.delete(key); this.#connections.set(key, existing); return existing;
+    }
+    if (existing) this.#remove(existing);
+    const database = new DatabaseSync(file, { readOnly: true });
+    try {
+      // Connection-local settings only: never mutate the native database.
+      database.exec("PRAGMA busy_timeout = 1000; PRAGMA query_only = ON; PRAGMA cache_size = -1024");
+      const after = await lstat(file, { bigint: true });
+      if (`${after.dev}:${after.ino}` !== fingerprint || !after.isFile() || after.isSymbolicLink() || process.getuid && after.uid !== BigInt(process.getuid()))
+        throw new Error("antigravity_history_file_changed");
+    } catch (error) { database.close(); throw error; }
+    const entry = { key, file, identity: fingerprint, database };
+    this.#connections.set(key, entry);
+    while (this.#connections.size > MAXIMUM_CONNECTIONS) this.#remove(this.#connections.values().next().value!);
+    return entry;
+  }
+  cache(entry: Connection, own: OwnHistory): void {
+    if (this.#connections.get(entry.key) !== entry) return;
+    this.#cacheBytes -= entry.own?.cachedBytes ?? 0;
+    entry.own = undefined;
+    own.cachedBytes = Buffer.byteLength(JSON.stringify(own.native)) + Buffer.byteLength(JSON.stringify([...own.childReferences])) + (own.aggregate && own.aggregate !== own.native
+      ? Buffer.byteLength(JSON.stringify(own.aggregate)) : 0);
+    if (own.cachedBytes > MAXIMUM_CACHE_BYTES) return;
+    for (const previous of this.#connections.values()) {
+      if (this.#cacheBytes + own.cachedBytes <= MAXIMUM_CACHE_BYTES) break;
+      this.#cacheBytes -= previous.own?.cachedBytes ?? 0; previous.own = undefined;
+    }
+    entry.own = own; this.#cacheBytes += own.cachedBytes;
+  }
+  invalidate(entry: Connection): void { if (this.#connections.get(entry.key) === entry) this.#remove(entry); }
+  #remove(entry: Connection) {
+    this.#connections.delete(entry.key); this.#cacheBytes -= entry.own?.cachedBytes ?? 0; entry.database.close();
+  }
+}
 
 export function antigravityConversationsDirectory(configuration: AntigravityRuntimeConfiguration): string {
   return path.join(configuration.geminiDirectory ?? path.join(homedir(), ".gemini"), "antigravity-cli", "conversations");
@@ -40,24 +125,32 @@ async function nativePath(configuration: AntigravityRuntimeConfiguration, identi
  * SQLite's read transaction pins one consistent snapshot including its WAL. */
 export async function readAntigravityNativeHistory(configuration: AntigravityRuntimeConfiguration,
   identity: AntigravityIdentity, signal?: AbortSignal): Promise<AntigravityHistory> {
-  return readNative(configuration, identity, signal, { remainingBytes: MAXIMUM_HISTORY_BYTES, remainingRows: MAXIMUM_ROWS,
-    remainingExecutorBytes: MAXIMUM_EXECUTOR_BYTES, remainingExecutorRows: MAXIMUM_EXECUTOR_ROWS,
-    remainingSessions: 32, ancestors: new Set() });
+  const store = new AntigravityNativeHistoryStore(configuration);
+  try { return await store.read(identity, signal); } finally { await store.close(); }
 }
-async function readNative(configuration: AntigravityRuntimeConfiguration, identity: AntigravityIdentity, signal: AbortSignal | undefined,
+async function readNative(store: AntigravityNativeHistoryStore, identity: AntigravityIdentity, signal: NativeReadCancellation | undefined,
   budget: ReadBudget, expectedParent?: string): Promise<AntigravityHistory> {
-  signal?.throwIfAborted();
+  let cancelled = false;
+  const checkCancellation = () => { try { signal?.throwIfAborted(); } catch (error) { cancelled = true; throw error; } };
+  checkCancellation();
   if (budget.ancestors.has(identity.sessionId) || budget.ancestors.size >= 4 || --budget.remainingSessions < 0)
     throw new Error("antigravity_history_child_limit");
   const ancestors = new Set([...budget.ancestors, identity.sessionId]);
-  const childReferences = new Map<number, readonly ChildReference[]>();
-  const file = await nativePath(configuration, identity);
-  signal?.throwIfAborted();
-  const database = new DatabaseSync(file, { readOnly: true });
+  const entry = await store.connection(identity), database = entry.database;
+  checkCancellation();
   let transactionOpen = false;
   try {
-    database.exec("PRAGMA busy_timeout = 1000");
+    // Only values from this retained connection are comparable. Sample before
+    // the transaction: a racing external commit must invalidate the next read,
+    // never label an older snapshot with a later connection version.
+    const version = (database.prepare("PRAGMA data_version").get() as { data_version: number }).data_version;
+    let own = entry.own;
+    if (own && (own.version !== version || own.includesExecutions !== includesExecutions(own.executionSize, budget))) own = undefined;
+    if (own) chargeBudget(own.size, own.executionSize, own.includesExecutions, budget);
+    else {
+    const childReferences = new Map<number, readonly ChildReference[]>();
     database.exec("BEGIN"); transactionOpen = true;
+    let size!: Size, executionSize!: ExecutorSize, includeExecutions = false;
     const native = (() => {
       const identities = database.prepare("SELECT cascade_id FROM trajectory_meta").all() as { cascade_id: string }[];
       if (identities.length !== 1 || identities[0]?.cascade_id !== identity.sessionId)
@@ -70,21 +163,18 @@ async function readNative(configuration: AntigravityRuntimeConfiguration, identi
       const workspaces = repeated(metadata.workspaces).map(value => string(message(value).workspace_folder_absolute_uri));
       if (workspaces.length !== 1 || nativeWorkspace(workspaces[0]!) !== identity.cwd)
         throw new Error("antigravity_history_workspace_mismatch");
-      const size = database.prepare("SELECT count(*) AS count, coalesce(sum(length(step_payload)), 0) AS bytes FROM steps").get() as { count: number; bytes: number };
+      size = database.prepare("SELECT count(*) AS count, coalesce(sum(length(step_payload)), 0) AS bytes FROM steps").get() as Size;
       if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'executor_metadata'").get())
         throw new AntigravityError("antigravity_history_executor_format_unsupported");
-      const executionSize = database.prepare("SELECT count(*) AS count, coalesce(sum(length(data)), 0) AS bytes, coalesce(max(length(data)), 0) AS maximum FROM executor_metadata")
-        .get() as { count: number; bytes: number; maximum: number };
-      if (size.count > budget.remainingRows || size.bytes > budget.remainingBytes)
-        throw new Error("antigravity_history_capacity_exceeded");
-      budget.remainingRows -= size.count; budget.remainingBytes -= size.bytes;
+      executionSize = database.prepare("SELECT count(*) AS count, coalesce(sum(length(data)), 0) AS bytes, coalesce(max(length(data)), 0) AS maximum FROM executor_metadata")
+        .get() as ExecutorSize;
+      includeExecutions = includesExecutions(executionSize, budget);
+      chargeBudget(size, executionSize, includeExecutions, budget);
       const hash = createHash("sha256").update(row.data);
       const executions = [];
-      if (executionSize.count <= budget.remainingExecutorRows && executionSize.bytes <= budget.remainingExecutorBytes &&
-          executionSize.maximum <= MAXIMUM_EXECUTOR_ROW_BYTES) {
-        budget.remainingExecutorRows -= executionSize.count; budget.remainingExecutorBytes -= executionSize.bytes;
+      if (includeExecutions) {
         for (const value of database.prepare("SELECT idx, data FROM executor_metadata ORDER BY idx").iterate()) {
-          signal?.throwIfAborted();
+          checkCancellation();
           const execution = value as { idx: number; data: Uint8Array };
           if (!Number.isSafeInteger(execution.idx) || execution.idx < 0 || !(execution.data instanceof Uint8Array))
             throw new AntigravityError("antigravity_history_executor_format_unsupported");
@@ -102,7 +192,7 @@ async function readNative(configuration: AntigravityRuntimeConfiguration, identi
       }
       const steps: AntigravityNativeStep[] = [];
       for (const value of database.prepare("SELECT idx, step_type, status, has_subtrajectory, step_format, step_payload FROM steps ORDER BY idx").iterate()) {
-        signal?.throwIfAborted();
+        checkCancellation();
         const step = value as { idx: number; step_type: number; status: number; has_subtrajectory: number; step_format: number; step_payload: Uint8Array };
         if (step.step_format !== 0 || !Number.isSafeInteger(step.idx) || step.idx < 0 || !(step.step_payload instanceof Uint8Array))
           throw new Error("antigravity_history_format_unsupported");
@@ -124,37 +214,65 @@ async function readNative(configuration: AntigravityRuntimeConfiguration, identi
       return antigravityNativeHistorySchema.parse({ steps, executions, revision: hash.digest("hex"), ...(parent ? { parentSessionId: parent } : {}) });
     })();
     database.exec("ROLLBACK"); transactionOpen = false;
+    own = { native, childReferences, size, executionSize, includesExecutions: includeExecutions, version, cachedBytes: 0 };
+    store.cache(entry, own);
+    }
+    if (expectedParent && own.native.parentSessionId !== expectedParent) throw new Error("antigravity_history_child_parent_mismatch");
+    const { native, childReferences } = own;
     // Child databases are read passively under the same aggregate bounds.
     // A launch result grants only its exact native child, never an arbitrary path.
     const aggregate = createHash("sha256").update(native.revision);
+    const childSteps = new Map<number, AntigravityNativeStep>();
     for (const step of native.steps) {
       const references = childReferences.get(step.index);
       if (!references) continue;
-      step.subagents = [];
+      const childStep = { ...step, subagents: [] as NonNullable<AntigravityNativeStep["subagents"]> };
+      childSteps.set(step.index, childStep);
       for (const reference of references) {
-        signal?.throwIfAborted();
+        checkCancellation();
         try {
           if (reference.workspaceUris.length !== 1 || nativeWorkspace(reference.workspaceUris[0]!) !== identity.cwd)
             throw new Error("antigravity_history_child_workspace_mismatch");
           const previousAncestors = budget.ancestors; budget.ancestors = ancestors;
           let child: AntigravityHistory;
-          try { child = await readNative(configuration, { sessionId: reference.sessionId, cwd: identity.cwd }, signal, budget, identity.sessionId); }
+          try { child = await readNative(store, { sessionId: reference.sessionId, cwd: identity.cwd }, signal, budget, identity.sessionId); }
           finally { budget.ancestors = previousAncestors; }
           const state = childState(child.native);
-          step.subagents.push({ sessionId: reference.sessionId, state, revision: child.native.revision });
+          childStep.subagents.push({ sessionId: reference.sessionId, state, revision: child.native.revision });
           aggregate.update(JSON.stringify([reference.sessionId, state, child.native.revision]));
         } catch {
-          signal?.throwIfAborted(); step.subagents.push({ sessionId: reference.sessionId, state: "unknown" });
+          checkCancellation(); childStep.subagents.push({ sessionId: reference.sessionId, state: "unknown" });
           aggregate.update(JSON.stringify([reference.sessionId, "unknown"]));
         }
       }
     }
-    signal?.throwIfAborted();
-    return { ...identity, native: antigravityNativeHistorySchema.parse({ ...native, revision: childReferences.size ? aggregate.digest("hex") : native.revision }) };
-  } finally {
-    try { if (transactionOpen) database.exec("ROLLBACK"); }
-    finally { database.close(); }
+    checkCancellation();
+    const revision = childReferences.size ? aggregate.digest("hex") : native.revision;
+    if (own.aggregate?.revision === revision) return { ...identity, native: own.aggregate };
+    const result = childReferences.size ? { ...native, revision, steps: native.steps.map(step => childSteps.get(step.index) ?? step) } : native;
+    own.aggregate = result; store.cache(entry, own);
+    return { ...identity, native: result };
+  } catch (error) {
+    // Neither caller cancellation nor a tighter aggregate allowance invalidates
+    // a previously acquired snapshot. Failed rollback does invalidate its SQL
+    // connection, even when the triggering error was otherwise harmless.
+    let invalid = !cancelled && !(error instanceof NativeHistoryBudgetError);
+    if (transactionOpen) {
+      transactionOpen = false;
+      try { database.exec("ROLLBACK"); } catch { invalid = true; }
+    }
+    if (invalid) store.invalidate(entry);
+    throw error;
   }
+}
+
+function includesExecutions(size: ExecutorSize, budget: ReadBudget): boolean {
+  return size.count <= budget.remainingExecutorRows && size.bytes <= budget.remainingExecutorBytes && size.maximum <= MAXIMUM_EXECUTOR_ROW_BYTES;
+}
+function chargeBudget(size: Size, executions: ExecutorSize, included: boolean, budget: ReadBudget): void {
+  if (size.count > budget.remainingRows || size.bytes > budget.remainingBytes) throw new NativeHistoryBudgetError();
+  budget.remainingRows -= size.count; budget.remainingBytes -= size.bytes;
+  if (included) { budget.remainingExecutorRows -= executions.count; budget.remainingExecutorBytes -= executions.bytes; }
 }
 
 /** Only the caller's freshly-created empty catalog probe may be removed.

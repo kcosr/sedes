@@ -14,7 +14,7 @@ import { AntigravityRemotePort } from "../../src/server/backends/antigravity/sid
 import { registerAntigravityHost } from "../../src/server/backends/antigravity/sidecar/register-host.js";
 import { AntigravityAcpConnection } from "../../src/server/backends/antigravity/acp-connection.js";
 import { antigravityHistorySchema, antigravityRuntimeCapability } from "../../src/server/backends/antigravity/sidecar/wire.js";
-import type { AntigravityRuntimeConfiguration } from "../../src/server/backends/antigravity/port.js";
+import type { AntigravityHistory, AntigravityIdentity, AntigravityRuntimeConfiguration } from "../../src/server/backends/antigravity/port.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" };
 const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
@@ -31,9 +31,10 @@ async function fixture() {
   const services = new PersistentSidecarServiceRegistry({ scope: { ...scope, executionEnvironmentId: "remote", installationId: "installation" }, buildId: "test", artifactSha256: "a".repeat(64), runtimeWireVersion: 1, configuration: serviceConfiguration });
   let failCleanup = false;
   const launched = vi.fn();
+  const readHistory = vi.fn(async (identity: AntigravityIdentity): Promise<AntigravityHistory> => ({ ...identity, native: { steps: [], executions: [], revision: "a".repeat(64) } }));
   const createHost = vi.fn((configuration: AntigravityRuntimeConfiguration) => {
     const host = new AntigravityHost({ configuration, channels, environment: process.env, observationWaitMs: 5,
-      readHistory: async identity => ({ ...identity, native: { steps: [], executions: [], revision: "a".repeat(64) } }),
+      history: { read: readHistory, forget: async () => undefined, close: async () => undefined },
       launch: async input => {
         launched(); const peer = await AntigravityAcpConnection.open(input); const close = peer.close.bind(peer);
         vi.spyOn(peer, "close").mockImplementation(async () => { if (failCleanup) throw new Error("cleanup_uncertain"); await close(); }); return peer;
@@ -41,7 +42,7 @@ async function fixture() {
     cleanup.push(() => host.close()); return host;
   });
   const hosts = new AntigravityHostRegistry({ scope, executionEnvironmentId: "remote", channels, environment: process.env, services, createHost });
-  return { cwd, configuration, services, hosts, launched, createHost, failCleanup(value: boolean) { failCleanup = value; } };
+  return { cwd, configuration, services, hosts, launched, createHost, readHistory, failCleanup(value: boolean) { failCleanup = value; } };
 }
 async function attachment(f: Awaited<ReturnType<typeof fixture>>, mode: "normal" | "recovery" = "normal") {
   const left = new Transport(), right = new Transport(); left.peer = right; right.peer = left;
@@ -67,8 +68,30 @@ function proxy(f: Awaited<ReturnType<typeof fixture>>, getLease: () => SidecarRu
   const port = new AntigravityRemotePort({ configuration: f.configuration, sidecarRuntime: runtime }); cleanup.push(() => port.close()); return { port, runtime };
 }
 describe("Antigravity persistent sidecar", () => {
+  it("transfers history only when the exact native revision changes", async () => {
+    const f = await fixture(), connected = await attachment(f), { port } = proxy(f, () => connected.lease);
+    const identity = { sessionId: "native-session", cwd: f.cwd };
+    const first = await port.readHistory(identity);
+    expect(first?.native.revision).toBe("a".repeat(64));
+    const encoded = vi.spyOn(SidecarRuntimeChannel.prototype, "encodeBody");
+    f.readHistory.mockClear();
+    await expect(port.readHistory({ ...identity, knownRevision: "a".repeat(64) })).resolves.toBeNull();
+    expect(f.readHistory).toHaveBeenCalledOnce();
+    expect(encoded).toHaveBeenLastCalledWith({ status: "ok", runtimeVersion: null, value: null });
+    f.readHistory.mockResolvedValue({ ...identity, native: { steps: [], executions: [], revision: "b".repeat(64) } });
+    await expect(port.readHistory({ ...identity, knownRevision: "a".repeat(64) })).resolves.toMatchObject({ native: { revision: "b".repeat(64) } });
+    await expect(port.readHistory(identity)).resolves.toMatchObject({ native: { revision: "b".repeat(64) } });
+    expect(f.launched).not.toHaveBeenCalled();
+  });
+  it("rejects an unchanged response without a caller revision", async () => {
+    const f = await fixture(), connected = await attachment(f), { port } = proxy(f, () => connected.lease);
+    const host = await f.hosts.ensure(f.configuration, connected.epoch);
+    vi.spyOn(host, "readHistory").mockResolvedValue(null);
+    await expect(port.readHistory({ sessionId: "native-session", cwd: f.cwd }))
+      .rejects.toMatchObject({ code: "antigravity_history_revision_unproven" });
+  });
   it("requires executor evidence inventory in its versioned private history contract", () => {
-    expect(antigravityRuntimeCapability.majorVersion).toBe(2);
+    expect(antigravityRuntimeCapability.majorVersion).toBe(3);
     const history = { sessionId: "session", cwd: "/workspace", native: { steps: [], revision: "a".repeat(64) } };
     expect(antigravityHistorySchema.safeParse(history).success).toBe(false);
     expect(antigravityHistorySchema.safeParse({ ...history, native: { ...history.native, executions: [] } }).success).toBe(true);

@@ -94,6 +94,35 @@ connection and an explicit read transaction. Its source-ownership audit admits
 other database importers, and native SQLite addons remain forbidden in the
 sidecar bundle.
 
+Each scoped backend host owns a bounded native-history reader worker. Retained
+read-only SQLite connections compare
+[`PRAGMA data_version`](https://www.sqlite.org/pragma.html#pragma_data_version)
+on the same connection; file identity and scope are checked before reuse.
+Referenced child databases are checked independently, including previously
+unreadable children. A parent database staying unchanged is not proof that its
+descendants stayed unchanged. Cached reads retain the same aggregate evidence
+budgets and fail-closed rules as cold reads. The worker owns SQLite acquisition,
+protobuf decoding, hashing, and native validation; runtime retirement releases
+its retained state and host shutdown closes it.
+Caller cancellation and aggregate budget refusals preserve otherwise valid
+caches. Failed passive workers restart only on later reads, with exponential
+backoff from 250 ms up to 30 seconds. Explicit reader shutdown remains terminal;
+worker replacement never launches or replays provider requests.
+
+History requests may supply the caller's `knownRevision`. Only exact equality
+with the freshly checked native snapshot returns `null`; unconditional reads
+must return a complete history. The same contract applies locally and over SSH
+or outbound sidecars, avoiding unchanged payload transfer. No ACP event or quiet
+interval substitutes for a native change check. The handle coalesces ordinary
+refreshes to at most one per 250 ms, with fresh reads for initial projection,
+submission anchors, recovery, and the first post-dispatch check. Idle polling
+continues. One deferred refresh flushes a coalesced final event at the end of
+the cooldown even if the next provider observation is still waiting; close or
+loss of control authority cancels it. An unchanged native revision skips transcript projection, item
+comparison, and successfully completed usage accounting, while transport state,
+pending permissions, context usage, and retained operation receipts still
+advance. Failed usage ingestion is retried against the retained snapshot.
+
 Native step indices and fixed semantic slots provide stable timeline identities
 and item ordering even when an earlier step acquires optional reasoning or text.
 Ordering arithmetic rejects values outside the safe integer range. Antigravity writes
@@ -120,7 +149,7 @@ assistant response when it matches that turn's exact execution and last native
 step, all steps in that execution are terminal, and no auto-continue or conflicting
 receipt exists. A cancelled permission/tool step alone is insufficient. Remote
 history carries this required evidence through `antigravity_runtime` capability
-2; older peers fail capability negotiation rather than silently dropping it.
+3; older peers fail capability negotiation rather than silently dropping it.
 
 Exact child-session reads apply the same executor proof before classifying a
 cancelled tool tail as a cancelled child. Missing, conflicting, or omitted proof

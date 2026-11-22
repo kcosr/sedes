@@ -5,7 +5,7 @@ import { configurationFingerprint } from "../../../config/configuration-fingerpr
 import { AntigravityError, type AntigravityRuntimeConfiguration } from "../port.js";
 import { antigravityConfigurationSchema } from "../sidecar/wire.js";
 import { AntigravityHost, type AntigravityHostAuthority } from "./native-host.js";
-import { readAntigravityNativeHistory, removeAntigravityProbeSession } from "../native-history.js";
+import { createAntigravityNativeHistoryReader, removeAntigravityProbeSession } from "../native-history.js";
 
 type Entry = { readonly host: AntigravityHost; readonly fingerprint: string; readonly unregister: () => void };
 export class AntigravityHostRegistry {
@@ -26,7 +26,7 @@ export class AntigravityHostRegistry {
     this.input.services.assertAdmission(epoch);
     const host = this.input.createHost?.(configuration) ?? new AntigravityHost({ configuration,
       channels: this.input.channels, environment: this.input.environment,
-      readHistory: (session, signal) => readAntigravityNativeHistory(configuration, session, signal),
+      history: createAntigravityNativeHistoryReader(configuration),
       removeProbe: session => removeAntigravityProbeSession(configuration, session),
     });
     let unregister = () => {};

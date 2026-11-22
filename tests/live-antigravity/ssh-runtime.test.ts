@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
-import { command, newSession, observer, quiescent, untilNative, waitOutcome } from "./qualification.js";
+import { command, readPortHistory, newSession, observer, quiescent, untilNative, waitOutcome } from "./qualification.js";
 import { sshFixture } from "./ssh-fixture.js";
 
 it.skipIf(process.env.SEDES_LIVE_ANTIGRAVITY_SSH !== "1")("preserves the same native owner, operation and durable history across actual SSH loss and controller replacement", async () => {
@@ -20,9 +20,9 @@ it.skipIf(process.env.SEDES_LIVE_ANTIGRAVITY_SSH !== "1")("preserves the same na
     await port.acknowledgeOperation({ handleId: attachment.handleId, operationId });
     await port.close(); port = f.newPort();
     const afterRestart = await port.attachExisting(identity); expect(afterRestart?.handleId).toBe(attachment.handleId);
-    expect((await port.readHistory(identity)).native).toEqual(history.native);
+    expect((await readPortHistory(port, identity)).native).toEqual(history.native);
     expect((await port.outcome({ handleId: attachment.handleId, operationId })).status).toBe("completed");
     await command(port, attachment.handleId, { type: "prompt", prompt: [{ type: "text", text: "Respond exactly SSH_REATTACHED. Use no tools." }] });
-    expect((await port.readHistory(identity)).native.steps.some(step => step.response?.text.includes("SSH_REATTACHED"))).toBe(true);
+    expect((await readPortHistory(port, identity)).native.steps.some(step => step.response?.text.includes("SSH_REATTACHED"))).toBe(true);
   } finally { await f.close(); }
 });

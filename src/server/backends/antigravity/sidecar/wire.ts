@@ -34,6 +34,7 @@ export const antigravityIdentitySchema = z.strictObject({ sessionId: id, cwd: ho
 export const antigravitySetupSchema = z.strictObject({ initialize: acp<InitializeResponse>(decodeInitializeResponse), session: acp<LoadSessionResponse>(decodeLoadSessionResponse),
   modelOptions: z.array(z.strictObject({ modelId: id, thinkingLevels: z.array(id).max(100), defaultThinkingLevel: id.optional() })).max(1000).optional() });
 export const antigravityHistorySchema = antigravityIdentitySchema.extend({ setup: antigravitySetupSchema.optional(), native: antigravityNativeHistorySchema });
+export const antigravityHistoryReadSchema = antigravityIdentitySchema.extend({ knownRevision: z.string().regex(/^[a-f0-9]{64}$/u).optional() });
 export const antigravityCommandSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("prompt"), prompt: acp<PromptRequest>(value => decodePromptRequest({ sessionId: "validation", prompt: value })).transform(value => value.prompt) }),
   z.strictObject({ type: z.literal("steer"), prompt: acp<PromptRequest>(value => decodePromptRequest({ sessionId: "validation", prompt: value })).transform(value => value.prompt) }),
@@ -57,7 +58,7 @@ export const antigravityHostCommandSchema = z.discriminatedUnion("action", [
   command("create", z.strictObject({ cwd: hostPath, operationId: id, title: z.string().max(4096).optional(), executionEnvironment: environmentVariableOverridesSchema.optional(), agentTools: antigravityAgentToolsSchema.optional() })),
   command("acknowledge_creation", antigravityIdentitySchema.extend({ operationId: id })),
   command("list", z.strictObject({ cwd: hostPath, cursor: id.optional() })),
-  command("history", antigravityIdentitySchema),
+  command("history", antigravityHistoryReadSchema),
   command("attach", antigravityIdentitySchema.extend({ executionEnvironment: environmentVariableOverridesSchema.optional(), agentTools: antigravityAgentToolsSchema.optional() })),
   command("attach_existing", antigravityIdentitySchema),
   command("request", operation.extend({ command: antigravityCommandSchema })),
@@ -70,7 +71,7 @@ export const antigravityHostCommandSchema = z.discriminatedUnion("action", [
 export type AntigravityHostCommand = z.infer<typeof antigravityHostCommandSchema>;
 export type AntigravityHostCommandInput = AntigravityHostCommand extends infer Command
   ? Command extends AntigravityHostCommand ? Omit<Command, "controllerEpoch" | "serviceIncarnation"> : never : never;
-const capability = { capabilityId: "antigravity_runtime", majorVersion: 2 } as const;
+const capability = { capabilityId: "antigravity_runtime", majorVersion: 3 } as const;
 export const antigravityExecuteOperation = { ...capability, operation: "runtime.execute", requestSchema: sidecarRuntimeBodySchema,
   responseSchema: sidecarRuntimeBodySchema, lane: "operation", maximumDeadlineMilliseconds: 120_000,
 } satisfies SidecarOperationDefinition<z.infer<typeof sidecarRuntimeBodySchema>, z.infer<typeof sidecarRuntimeBodySchema>>;

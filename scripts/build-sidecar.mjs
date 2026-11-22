@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { build } from "esbuild";
 import { buildClaudeRuntimeWorkerArtifact } from "./build-claude-runtime-worker-artifact.mjs";
+import { buildAntigravityHistoryWorkerArtifact } from "./build-antigravity-history-worker-artifact.mjs";
 import { assertSidecarSourceOwnership } from "./sidecar-source-ownership.mjs";
 import {
   collectSidecarNativeArtifacts,
@@ -36,6 +37,7 @@ const packageMetadata = JSON.parse(
 );
 const buildId = `sedes-${packageMetadata.version}`;
 const claudeWorker = await buildClaudeRuntimeWorkerArtifact(repositoryRoot, buildId);
+const antigravityHistoryWorker = await buildAntigravityHistoryWorkerArtifact(repositoryRoot, buildId);
 const require = createRequire(import.meta.url);
 const { nativeAssets, sources } = await collectSidecarNativeArtifacts({
   nodePtyRoot: process.env.SEDES_PACKAGE_NODE_PTY_ROOT ?? path.dirname(require.resolve("node-pty/package.json")),
@@ -82,6 +84,8 @@ const result = await build({
     __SEDES_SIDECAR_BUILD_ID__: JSON.stringify(buildId),
     __SEDES_CLAUDE_WORKER_SOURCE__: JSON.stringify(Buffer.from(claudeWorker.artifact).toString("utf8")),
     __SEDES_CLAUDE_WORKER_MANIFEST__: JSON.stringify(JSON.stringify(claudeWorker.manifest)),
+    __SEDES_ANTIGRAVITY_HISTORY_WORKER_SOURCE__: JSON.stringify(Buffer.from(antigravityHistoryWorker.artifact).toString("utf8")),
+    __SEDES_ANTIGRAVITY_HISTORY_WORKER_MANIFEST__: JSON.stringify(JSON.stringify(antigravityHistoryWorker.manifest)),
     "process.env.WS_NO_BUFFER_UTIL": "true",
     "process.env.WS_NO_UTF_8_VALIDATE": "true",
   },

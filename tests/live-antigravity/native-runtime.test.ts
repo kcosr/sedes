@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
-import { command, localFixture, observer, untilNative, waitOutcome, quiescent } from "./qualification.js";
+import { command, readPortHistory, localFixture, observer, untilNative, waitOutcome, quiescent } from "./qualification.js";
 import { antigravityNativeActivity } from "../../src/server/backends/antigravity/host/native-activity.js";
 import { projectAntigravityHistory } from "../../src/server/backends/antigravity/history.js";
 
@@ -26,7 +26,7 @@ it("recovers a cancelled permission from durable executor evidence without a fin
     }
     expect(cancelledPermission).toBe(true);
     await waitOutcome(f.host, f.attachment.handleId, operationId);
-    const history = await f.host.readHistory(f.identity);
+    const history = await readPortHistory(f.host, f.identity);
     expect(history.native.executions.some(execution => execution.terminationReason === 2)).toBe(true);
     const projection = projectAntigravityHistory(history.native, { key: Buffer.alloc(32, 1), binding: {
       version: 1, sessionId: f.identity.sessionId, canonicalWorkspacePath: f.cwd,
@@ -56,7 +56,7 @@ it("qualifies stock streaming, exact retained steering cancellation, and passive
       if (outcome.status === "completed" && (outcome.result as { stopReason?: string }).stopReason === "cancelled") expect(outcome.cancelledAtNativeRevision).toBe(result.nativeRevision);
       await f.host.acknowledgeOperation({ handleId: f.attachment.handleId, operationId }); expect(await f.host.outcome({ handleId: f.attachment.handleId, operationId })).toEqual(outcome);
     }
-    const first = await f.host.readHistory(f.identity), second = await f.host.readHistory(f.identity);
+    const first = await readPortHistory(f.host, f.identity), second = await readPortHistory(f.host, f.identity);
     expect(second.native).toEqual(first.native); expect(quiescent(second)).toBe(true);
     expect(observe.events.some(event => event.kind === "update" && event.notification.update.sessionUpdate === "agent_message_chunk")).toBe(true);
   } finally { await f.close(); }
@@ -97,7 +97,7 @@ it.each(["command", "timer", "subagent"] as const)("qualifies native %s Stop evi
     if (kind === "subagent") await waitOutcome(f.host, f.attachment.handleId, operationId);
     const cancelId = randomUUID(); await f.host.request({ handleId: f.attachment.handleId, operationId: cancelId, command: { type: "cancel" } });
     await waitOutcome(f.host, f.attachment.handleId, cancelId);
-    const history = await f.host.readHistory(f.identity);
+    const history = await readPortHistory(f.host, f.identity);
     const outcome = await f.host.outcome({ handleId: f.attachment.handleId, operationId: cancelId });
     await f.host.acknowledgeOperation({ handleId: f.attachment.handleId, operationId: cancelId });
     if (kind === "subagent" && outcome.status === "failed") {
@@ -115,6 +115,6 @@ it.each(["command", "timer", "subagent"] as const)("qualifies native %s Stop evi
     if (kind === "subagent") expect(history.native.steps.flatMap(step => step.subagents ?? []).every(child => child.state === "cancelled" || child.state === "terminal")).toBe(true);
     if (kind === "timer") expect(history.native.steps.some(step => step.schedule?.outcome === "cancelled")).toBe(true);
     await command(f.host, f.attachment.handleId, { type: "prompt", prompt: [{ type: "text", text: "Reply exactly STOP_REUSED. Use no tools." }] });
-    expect((await f.host.readHistory(f.identity)).native.steps.some(step => step.response?.text.includes("STOP_REUSED"))).toBe(true);
+    expect((await readPortHistory(f.host, f.identity)).native.steps.some(step => step.response?.text.includes("STOP_REUSED"))).toBe(true);
   } finally { await f.close(); }
 });

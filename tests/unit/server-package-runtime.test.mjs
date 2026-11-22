@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { createRuntimeDependencyProbe, readRuntimeEntrypoints, verifyRuntime } from '../../scripts/verify-server-package.mjs';
 import { discoverRuntimeEntrypoints, writeRuntimeEntrypoints } from '../../scripts/check-server-runtime.mjs';
 import { verifyPackageIntegrity, writePackageIntegrity } from '../../scripts/server-package-integrity.mjs';
+import { writePackagedAntigravityHistoryWorker } from '../helpers/packaged-antigravity-history-worker.mjs';
 
 const temporary = [];
 afterEach(async () => {
@@ -36,6 +37,7 @@ describe('package verification executable isolation', () => {
     temporary.push(root);
     for (const directory of ['server', 'cli', 'shared', 'internal']) await mkdir(path.join(root, 'dist', directory), { recursive: true });
     await writeRuntimeEntrypoints(root);
+    await writePackagedAntigravityHistoryWorker(root);
     const executable = path.join(root, 'selected-runtime');
     await writeFile(executable, `#!${process.execPath}
 console.error(JSON.stringify({ selected: true, electron: process.env.ELECTRON_RUN_AS_NODE ?? null, home: process.env.HOME, secret: process.env.SEDES_TEST_PROVIDER_SECRET ?? null, nodeOptions: process.env.NODE_OPTIONS ?? null, args: process.argv.slice(2) }));

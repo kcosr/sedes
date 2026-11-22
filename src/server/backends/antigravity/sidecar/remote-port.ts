@@ -72,7 +72,11 @@ export class AntigravityRemotePort implements AntigravityPort {
   async create(input: Parameters<AntigravityPort["create"]>[0], signal?: AbortSignal) { return antigravityIdentitySchema.parse(await this.#invoke("create", input, signal)); }
   async acknowledgeCreation(input: Parameters<AntigravityPort["acknowledgeCreation"]>[0], signal?: AbortSignal) { antigravitySuccessSchema.parse(await this.#invoke("acknowledge_creation", input, signal, true)); }
   async listSessions(input: Parameters<AntigravityPort["listSessions"]>[0], signal?: AbortSignal) { return antigravityListSchema.parse(await this.#invoke("list", input, signal)); }
-  async readHistory(input: Parameters<AntigravityPort["readHistory"]>[0], signal?: AbortSignal) { return antigravityHistorySchema.parse(await this.#invoke("history", input, signal)); }
+  async readHistory(input: Parameters<AntigravityPort["readHistory"]>[0], signal?: AbortSignal) {
+    const history = antigravityHistorySchema.nullable().parse(await this.#invoke("history", input, signal));
+    if (history === null && input.knownRevision === undefined) throw new AntigravityError("antigravity_history_revision_unproven", "sent_outcome_unknown");
+    return history;
+  }
   async attach(input: Parameters<AntigravityPort["attach"]>[0], signal?: AbortSignal) {
     const result = antigravityAttachmentSchema.parse(await this.#invoke("attach", input, signal)); this.#handles.add(result.handleId); return result;
   }

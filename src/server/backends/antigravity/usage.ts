@@ -11,11 +11,11 @@ export class AntigravityUsage {
     this.capture = (sink ?? NO_USAGE_SINK).open({ binding, nativeNamespace: namespace, nativeSession: binding.backendConversationId,
       epoch: "native_steps", normalizationVersion: "antigravity-1.5/usage-v1", initialBaseline: "unknown" });
   }
-  update(history: AntigravityNativeHistory, projection: AntigravityProjection, provenance: "history" | "live"): void {
+  update(history: AntigravityNativeHistory, projection: AntigravityProjection, provenance: "history" | "live"): boolean {
     this.capture.registerTurns(Object.values(projection.snapshot.turnsById));
     // Imported child baselines are not independent additive usage until their
     // native ancestry/copy boundary has been qualified.
-    if (history.parentSessionId) { this.capture.gap("inherited_baseline_unknown"); return; }
+    if (history.parentSessionId) { this.capture.gap("inherited_baseline_unknown"); return true; }
     const observations: UsageObservation[] = history.steps.flatMap(step => {
       if (!step.usage || step.status !== 3) return [];
       const id = `step:${step.index}:usage`;
@@ -34,10 +34,10 @@ export class AntigravityUsage {
     });
     for (let index = 0; index < observations.length; index += 64) {
       const batch = observations.slice(index, index + 64);
-      if (!this.capture.capture(batch)) return;
+      if (!this.capture.capture(batch)) return false;
       for (const observation of batch) this.#committed.set(observation.id, observation.revision);
     }
-    this.capture.reconcile();
+    return this.capture.reconcile();
   }
   close(): void { this.capture.seal("detached"); }
 }

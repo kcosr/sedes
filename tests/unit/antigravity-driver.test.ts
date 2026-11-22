@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setTimeout as delay } from "node:timers/promises";
+import { createHash } from "node:crypto";
 import type { BackendConversationEvent } from "../../src/shared/protocol/backend.js";
 import type { AgentBackendInstance, AgentConnectionProfile, AttachConversationInput, SubmitTurnInput } from "../../src/server/backends/contracts.js";
 import type { ValidatedWorkspace } from "../../src/server/execution/contracts.js";
@@ -8,21 +9,25 @@ import { AntigravityError, type AntigravityAttachment, type AntigravityEvent, ty
 import type { AntigravityNativeHistory } from "../../src/server/backends/antigravity/native-schema.js";
 import { compileBackendModelPolicy, type BackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import { buildAntigravityPrompt } from "../../src/server/backends/antigravity/submission.js";
+import * as historyProjection from "../../src/server/backends/antigravity/history.js";
+import { NO_USAGE_CAPTURE, NO_USAGE_SINK, type UsageSink } from "../../src/server/usage/contracts.js";
+import { antigravityHistoryReadSchema } from "../../src/server/backends/antigravity/sidecar/wire.js";
 
 const disposals: (() => Promise<void>)[] = [];
-afterEach(async () => { for (const dispose of disposals.splice(0)) await dispose(); });
+afterEach(async () => { for (const dispose of disposals.splice(0)) await dispose(); vi.restoreAllMocks(); });
 const scope = { tenantId: "tenant", principalId: "principal" };
 const identity = { sessionId: "4c8ece79-6741-451f-8aa5-e01d576ed055", cwd: "/workspace" };
 const submit: SubmitTurnInput = { applicationOperationId: "send", mutationId: "mutation", reconciliationToken: "private-token", source: { kind: "user" },
   text: "  exact input\n", attachments: [], contextExcerpts: [], taskContexts: [] };
 
-function fixture(policy: BackendModelPolicy = { type: "catalog" }) {
+function fixture(policy: BackendModelPolicy = { type: "catalog" }, usage?: UsageSink) {
   const instance: AgentBackendInstance = { id: "backend", tenantId: scope.tenantId, kind: "antigravity", label: "Antigravity", enabled: true, configurationRevision: 0, protocolRelease: "1.5.14" };
   const connection: AgentConnectionProfile = { id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, backendInstanceId: instance.id,
     templateId: "template", executionEnvironmentId: "environment", kind: "antigravity_acp", label: "Antigravity", enabled: true, configurationRevision: 0 };
   const workspace: ValidatedWorkspace = { canonicalPath: identity.cwd, authorityRevision: 0, summary: { id: "workspace", environmentId: "environment",
     displayName: "Workspace", displayPath: identity.cwd, availability: "available", trustState: "trusted", revision: 0 } };
   const native: AntigravityNativeHistory = { revision: "a".repeat(64), steps: [], executions: [] };
+  let nativeContents = JSON.stringify({ steps: native.steps, executions: native.executions });
   const attachment: AntigravityAttachment = { ...identity, handleId: "handle", generation: "generation", retainedAfterSequence: 0, throughSequence: 0,
     retainedOperationIds: [], pendingPermissions: [], createdByOperationId: "creation", setup: { initialize: { protocolVersion: 1, agentCapabilities: { loadSession: true } },
       session: { configOptions: [
@@ -35,7 +40,11 @@ function fixture(policy: BackendModelPolicy = { type: "catalog" }) {
   const port: AntigravityPort = {
     connect: vi.fn(async () => ({ runtimeId: "runtime", version: "1.5.14" })), catalog: vi.fn(async () => attachment.setup),
     create: vi.fn(async () => identity), acknowledgeCreation: vi.fn(async () => {}), listSessions: vi.fn(async () => ({ sessions: [] })),
-    readHistory: vi.fn(async () => ({ ...identity, native: structuredClone(native) })), attach: vi.fn(async () => attachment),
+    readHistory: vi.fn(async input => {
+      const contents = JSON.stringify({ steps: native.steps, executions: native.executions });
+      if (contents !== nativeContents) { native.revision = createHash("sha256").update(contents).digest("hex"); nativeContents = contents; }
+      return input.knownRevision === native.revision ? null : { ...identity, native: structuredClone(native) };
+    }), attach: vi.fn(async () => attachment),
     attachExisting: vi.fn(async () => attachment),
     request: vi.fn(async ({ operationId, command }) => {
       if (command.type !== "prompt") throw new Error("Unexpected fixture operation");
@@ -55,7 +64,7 @@ function fixture(policy: BackendModelPolicy = { type: "catalog" }) {
   const desired = { backendInstanceId: instance.id, connectionProfileId: connection.id, executionEnvironmentId: connection.executionEnvironmentId,
     revision: 0, modelId: "model", thinkingLevel: "low", modeId: null };
   const driver = new AntigravityDriver({ instance, connection, scope, port, settings: { get: () => desired, assertConnection: vi.fn() },
-    modelPolicy: compileBackendModelPolicy(policy, "model_effort"), nativeNamespaceKey: "namespace", correlationKey: Buffer.alloc(32, 7) });
+    modelPolicy: compileBackendModelPolicy(policy, "model_effort"), nativeNamespaceKey: "namespace", correlationKey: Buffer.alloc(32, 7), usage });
   disposals.push(() => driver.close());
   const attached: AttachConversationInput = { scope, workspace, binding: { tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
     applicationThreadId: "thread", backendInstanceId: instance.id, connectionProfileId: connection.id, executionEnvironmentId: connection.executionEnvironmentId,
@@ -65,6 +74,104 @@ function fixture(policy: BackendModelPolicy = { type: "catalog" }) {
 }
 
 describe("Antigravity driver authority and projection", () => {
+  it("polls idle native changes without reprojecting or accounting unchanged history", async () => {
+    const project = vi.spyOn(historyProjection, "projectAntigravityHistory");
+    const capture = { ...NO_USAGE_CAPTURE, registerTurns: vi.fn(), reconcile: vi.fn(() => true) };
+    const f = fixture({ type: "catalog" }, { ...NO_USAGE_SINK, open: () => capture });
+    const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    await delay(550);
+    expect(f.port.observe).toHaveBeenCalled();
+    expect(vi.mocked(f.port.readHistory).mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(vi.mocked(f.port.readHistory).mock.calls.length).toBeLessThanOrEqual(4);
+    expect(project).toHaveBeenCalledOnce(); expect(capture.registerTurns).toHaveBeenCalledOnce(); expect(capture.reconcile).toHaveBeenCalledOnce();
+    f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text: "External input without ACP events" } },
+      { index: 1, type: 15, status: 3, hasSubtrajectory: false, response: { text: "External answer", thinking: "", stopReason: 2, toolCalls: [] } });
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "turn_completed", turn: expect.objectContaining({ status: "completed" }) })));
+    expect(project).toHaveBeenCalledTimes(2); expect(capture.reconcile).toHaveBeenCalledTimes(2);
+    await handle.close(); project.mockRestore();
+  });
+  it("publishes permission and context events promptly while native history is unchanged", async () => {
+    const project = vi.spyOn(historyProjection, "projectAntigravityHistory");
+    const f = fixture();
+    f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text: "Ongoing input" } });
+    const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    for (let index = 0; index < 30; index++) f.emit({ kind: "update", notification: { sessionId: identity.sessionId,
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Streaming" } } } });
+    f.emit({ kind: "update", notification: { sessionId: identity.sessionId,
+      update: { sessionUpdate: "usage_update", used: 100, size: 1000 } } });
+    f.emit({ kind: "permission", requestId: "permission", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId,
+      toolCall: { toolCallId: "tool", title: "Run command" }, options: [{ optionId: "deny", name: "Deny", kind: "reject_once" }] } });
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "interaction_opened" })), { timeout: 200, interval: 10 });
+    expect(events).toContainEqual(expect.objectContaining({ type: "usage_changed", usage: expect.objectContaining({ context: { usedTokens: 100, windowTokens: 1000, percent: 10 } }) }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "run_state_changed", state: "running" }));
+    expect(project).toHaveBeenCalledOnce();
+    await handle.close(); project.mockRestore();
+  });
+  it("flushes a coalesced final update while the next observation is still waiting", async () => {
+    const f = fixture();
+    let first = true;
+    vi.mocked(f.port.observe).mockImplementation(async ({ afterSequence }, signal) => {
+      // Hold the next observation until close aborts it. This proves the
+      // trailing refresh is independent of another provider poll, without a
+      // wall-clock race against the test host's scheduling load.
+      await delay(first ? 20 : 60_000, undefined, { signal }); first = false;
+      return { events: afterSequence === 0 ? [{ sequence: 1, kind: "update", notification: { sessionId: identity.sessionId,
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Final answer" } } } }] : [],
+        throughSequence: 1, retainedAfterSequence: 0, closed: false };
+    });
+    const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text: "External input" } },
+      { index: 1, type: 15, status: 3, hasSubtrajectory: false, response: { text: "Final answer", thinking: "", stopReason: 2, toolCalls: [] } });
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "turn_completed" })), { timeout: 3000 });
+    expect(f.port.observe).toHaveBeenCalledTimes(2); await handle.close();
+    const reads = vi.mocked(f.port.readHistory).mock.calls.length;
+    await delay(300); expect(f.port.readHistory).toHaveBeenCalledTimes(reads);
+  });
+  it("retries failed usage reconciliation without requiring a new native revision", async () => {
+    const capture = { ...NO_USAGE_CAPTURE, reconcile: vi.fn().mockReturnValueOnce(false).mockReturnValue(true) };
+    const f = fixture({ type: "catalog" }, { ...NO_USAGE_SINK, open: () => capture });
+    const handle = await f.driver.attach(f.attached);
+    await vi.waitFor(() => expect(capture.reconcile).toHaveBeenCalledTimes(2));
+    await delay(300); expect(capture.reconcile).toHaveBeenCalledTimes(2); await handle.close();
+  });
+  it("cancels a pending trailing refresh when the handle closes", async () => {
+    const f = fixture(), handle = await f.driver.attach(f.attached);
+    f.emit({ kind: "update", notification: { sessionId: identity.sessionId,
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Chunk" } } } });
+    await vi.waitFor(() => expect(f.port.acknowledge).toHaveBeenCalled());
+    await handle.close(); const reads = vi.mocked(f.port.readHistory).mock.calls.length;
+    await delay(300); expect(f.port.readHistory).toHaveBeenCalledTimes(reads);
+  });
+  it("marks failed trailing reads disconnected instead of retaining a ready snapshot", async () => {
+    const f = fixture(); let first = true;
+    vi.mocked(f.port.observe).mockImplementation(async (_, signal) => {
+      await delay(first ? 20 : 60_000, undefined, { signal }); first = false;
+      return { events: [], throughSequence: 0, retainedAfterSequence: 0, closed: false };
+    });
+    const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    vi.mocked(f.port.readHistory).mockRejectedValueOnce(new Error("native read failed"));
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "run_state_changed", state: "disconnected" })), { timeout: 3000 });
+    expect(f.port.attachExisting).not.toHaveBeenCalled(); await handle.close();
+  });
+  it("acknowledges a late prompt outcome against an unchanged terminal native snapshot", async () => {
+    const f = fixture(), handle = await f.driver.attach(f.attached);
+    vi.mocked(f.port.request).mockImplementationOnce(async ({ command, operationId }) => {
+      if (command.type !== "prompt" || command.prompt[0]?.type !== "text") throw new Error("Expected prompt");
+      f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text: command.prompt[0].text } },
+        { index: 1, type: 15, status: 3, hasSubtrajectory: false, response: { text: "Answer", thinking: "", stopReason: 2, toolCalls: [] } });
+      const pending = { status: "pending" as const }; f.receipts.set(operationId, pending); return pending;
+    });
+    await expect(handle.submit(submit)).resolves.toMatchObject({ accepted: true });
+    expect(f.port.acknowledgeOperation).not.toHaveBeenCalled();
+    const outcome = { status: "completed" as const, result: { stopReason: "end_turn" } };
+    f.receipts.set(submit.applicationOperationId, outcome); f.emit({ kind: "operation", operationId: submit.applicationOperationId, outcome });
+    await vi.waitFor(() => expect(f.port.acknowledgeOperation).toHaveBeenCalledWith({ handleId: "handle", operationId: submit.applicationOperationId }, expect.any(AbortSignal)));
+    await handle.close();
+  });
   it("discovers timestamped native sessions without loading their transcripts", async () => {
     const f = fixture();
     vi.mocked(f.port.listSessions).mockResolvedValue({ sessions: [{ ...identity, updatedAt: "2026-11-22T00:00:00Z", title: "Native session" }] });
@@ -74,6 +181,19 @@ describe("Antigravity driver authority and projection", () => {
     vi.mocked(f.port.listSessions).mockRejectedValue(new Error("sensitive-native-path"));
     await expect(f.driver.discover({ scope, workspace: f.attached.workspace, signal: new AbortController().signal, limit: 50 }))
       .rejects.toMatchObject({ category: "unavailable", crossedSubmissionBoundary: false });
+  });
+  it("derives missing timestamps for titled sessions through the strict history identity contract", async () => {
+    const f = fixture();
+    vi.mocked(f.port.listSessions).mockResolvedValue({ sessions: [{ ...identity, title: "Native title" }] });
+    vi.mocked(f.port.readHistory).mockImplementation(async input => {
+      const parsed = antigravityHistoryReadSchema.parse(input);
+      return { sessionId: parsed.sessionId, cwd: parsed.cwd, native: { ...f.native, steps: [
+        { index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text: "Native input" }, createdAt: "2026-11-22T00:00:00Z" },
+      ] } };
+    });
+    await expect(f.driver.discover({ scope, workspace: f.attached.workspace, signal: new AbortController().signal, limit: 50 }))
+      .resolves.toMatchObject({ conversations: [{ backendConversationId: identity.sessionId, title: "Native title", updatedAt: "2026-11-22T00:00:00Z" }] });
+    expect(f.port.readHistory).toHaveBeenCalledExactlyOnceWith(identity, expect.any(AbortSignal));
   });
   it("pages every missing-timestamp session within the fallback budget and rejects cross-workspace cursors", async () => {
     const f = fixture();
@@ -310,6 +430,7 @@ describe("Antigravity driver authority and projection", () => {
       status: consumed ? "accepted" : "pending_materialization", completionCorrelation: submit.applicationOperationId,
     });
     expect(f.port.request).toHaveBeenCalledOnce();
+    expect(vi.mocked(f.port.readHistory).mock.calls.length).toBeLessThanOrEqual(6);
     expect(f.port.acknowledgeOperation).not.toHaveBeenCalled();
   });
   it.each([false, true])("prefers fresh exact Steer evidence over a pending permission mirror (consumed: %s)", async consumed => {
@@ -597,6 +718,8 @@ describe("Antigravity driver authority and projection", () => {
     const unsubscribeReplacement = replacement.subscribeFromNext(event => events.push(event.event));
     vi.mocked(f.port.observe).mockRejectedValueOnce(new AntigravityError("carrier_lost", "not_sent"));
     await vi.waitFor(() => expect(f.port.attachExisting).toHaveBeenCalled());
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "run_state_changed", state: "idle" })));
+    expect(events).toContainEqual(expect.objectContaining({ type: "run_state_changed", state: "disconnected" }));
     expect(events.filter(event => event.type === "interaction_opened").length).toBeGreaterThan(2);
     for (const event of events.filter(event => event.type === "interaction_opened")) expect(event).toEqual(original);
     expect(events.some(event => event.type === "interaction_resolved")).toBe(false); expect(f.port.request).not.toHaveBeenCalled();

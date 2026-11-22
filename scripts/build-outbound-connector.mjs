@@ -2,19 +2,21 @@ import { build } from 'esbuild';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildAntigravityHistoryWorkerArtifact } from './build-antigravity-history-worker-artifact.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 if (args.length && (args.length !== 2 || args[0] !== '--output-directory' || !path.isAbsolute(args[1]))) throw new Error('outbound_connector_build_arguments_invalid');
 const directory = args[1] ?? path.join(root, 'dist', 'connector');
 const metadata = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+const antigravityHistoryWorker = await buildAntigravityHistoryWorkerArtifact(root, `sedes-${metadata.version}`);
 await mkdir(directory, { recursive: true });
 await build({
   entryPoints: [path.join(root, 'src/server/sidecar/outbound-connector-main.ts')],
   outfile: path.join(directory, 'sedes-sidecar.mjs'),
   bundle: true, platform: 'node', format: 'esm', target: 'node22', packages: 'bundle',
   banner: { js: "import { createRequire as connectorCreateRequire } from 'node:module'; const require = connectorCreateRequire(import.meta.url);" },
-  define: { __SEDES_CONNECTOR_VERSION__: JSON.stringify(metadata.version), 'process.env.WS_NO_BUFFER_UTIL': '"true"', 'process.env.WS_NO_UTF_8_VALIDATE': '"true"' },
+  define: { __SEDES_CONNECTOR_VERSION__: JSON.stringify(metadata.version), __SEDES_ANTIGRAVITY_HISTORY_WORKER_SOURCE__: JSON.stringify(Buffer.from(antigravityHistoryWorker.artifact).toString('utf8')), __SEDES_ANTIGRAVITY_HISTORY_WORKER_MANIFEST__: JSON.stringify(JSON.stringify(antigravityHistoryWorker.manifest)), 'process.env.WS_NO_BUFFER_UTIL': '"true"', 'process.env.WS_NO_UTF_8_VALIDATE': '"true"' },
   sourcemap: false, legalComments: 'none',
 });
 await writeFile(path.join(directory, 'sedes-sidecar'), '#!/bin/sh\nexec node "$(dirname "$0")/sedes-sidecar.mjs" "$@"\n', { mode: 0o755 });

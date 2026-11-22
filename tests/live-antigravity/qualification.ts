@@ -5,7 +5,8 @@ import path from "node:path";
 import { expect } from "vitest";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import { AntigravityHost } from "../../src/server/backends/antigravity/host/native-host.js";
-import { readAntigravityNativeHistory, removeAntigravityQualificationSession } from "./session-cleanup.js";
+import { removeAntigravityQualificationSession } from "./session-cleanup.js";
+import { createAntigravityNativeHistoryReader } from "../../src/server/backends/antigravity/native-history.js";
 import { antigravityNativeActivity } from "../../src/server/backends/antigravity/host/native-activity.js";
 import type { AntigravityAttachment, AntigravityEvent, AntigravityHistory, AntigravityIdentity, AntigravityOutcome, AntigravityPort, AntigravityRuntimeConfiguration } from "../../src/server/backends/antigravity/port.js";
 
@@ -23,7 +24,7 @@ export async function localFixture() {
   const configuration: AntigravityRuntimeConfiguration = { tenantId: randomUUID(), principalId: randomUUID(), backendInstanceId: randomUUID(), executionEnvironmentId: randomUUID(),
     executablePath: selected.executablePath, geminiDirectory: selected.geminiDirectory, initializationTimeoutMs: 30_000 };
   const channels = new LocalEnvironmentChannelProvider({ scope: configuration, executionEnvironmentId: configuration.executionEnvironmentId, environment: process.env });
-  const host = new AntigravityHost({ configuration, channels, environment: process.env, readHistory: (identity, signal) => readAntigravityNativeHistory(configuration, identity, signal), observationWaitMs: 50 });
+  const host = new AntigravityHost({ configuration, channels, environment: process.env, history: createAntigravityNativeHistoryReader(configuration), observationWaitMs: 50 });
   let identity: AntigravityIdentity | undefined;
   try {
     const created = await newSession(host, cwd, value => { identity = value; });
@@ -87,8 +88,14 @@ export function observer(port: AntigravityPort, attachment: AntigravityAttachmen
 }
 export async function untilNative(port: AntigravityPort, identity: AntigravityIdentity, observe: ReturnType<typeof observer>, predicate: (history: AntigravityHistory) => boolean) {
   const end = performance.now() + 90_000; let last: AntigravityHistory | undefined;
-  while (performance.now() < end) { await observe.poll(); const history = last = await port.readHistory(identity); if (predicate(history)) return history; await new Promise(resolve => setTimeout(resolve, 50)); }
+  while (performance.now() < end) { await observe.poll(); const history = last = await readPortHistory(port, identity); if (predicate(history)) return history; await new Promise(resolve => setTimeout(resolve, 50)); }
   const diagnostic = last?.native.steps.map(step => ({ index: step.index, type: step.type, status: step.status, subagents: step.subagents, task: step.task?.id, continuation: step.continuation && { kind: step.continuation.kind, sender: step.continuation.sender, recipient: step.continuation.recipient }, tool: step.tool?.name }));
   throw new Error(`LIVE_ANTIGRAVITY_BLOCKER: bounded native history deadline ${JSON.stringify({ activity: last && antigravityNativeActivity(last.native), steps: diagnostic })}`);
 }
 export const quiescent = (history: AntigravityHistory) => { const activity = antigravityNativeActivity(history.native); return !activity.active && !activity.unknown; };
+
+export async function readPortHistory(port: AntigravityPort, identity: AntigravityIdentity): Promise<AntigravityHistory> {
+  const history = await port.readHistory(identity);
+  if (history === null) throw new Error("LIVE_ANTIGRAVITY_BLOCKER: unconditional native history missing");
+  return history;
+}

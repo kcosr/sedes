@@ -12,7 +12,7 @@ import { AntigravityAutomationPolicy } from "./automation-policy.js";
 import { parseAntigravityBackendConfiguration } from "./backend-configuration.js";
 import { AntigravityDriver } from "./driver.js";
 import { AntigravityHost } from "./host/native-host.js";
-import { readAntigravityNativeHistory, removeAntigravityProbeSession } from "./native-history.js";
+import { createAntigravityNativeHistoryReader, removeAntigravityProbeSession } from "./native-history.js";
 import { AntigravityError, type AntigravityPort, type AntigravityRuntimeConfiguration } from "./port.js";
 import { ANTIGRAVITY_PROTOCOL_RELEASE } from "./release-profile.js";
 import { antigravityAdministration, recoverAntigravityAdministration } from "./runtime-administration.js";
@@ -40,7 +40,7 @@ function createPort({ context, configuration, environment }: CreatePortInput): A
     configuration,
     channels: context.environmentChannel,
     environment,
-    readHistory: (identity, signal) => readAntigravityNativeHistory(configuration, identity, signal),
+    history: createAntigravityNativeHistoryReader(configuration),
     removeProbe: identity => removeAntigravityProbeSession(configuration, identity),
   });
 }

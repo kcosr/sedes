@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildAntigravityHistoryWorkerArtifact } from "./build-antigravity-history-worker-artifact.mjs";
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const first = await buildAntigravityHistoryWorkerArtifact(root, "repeatability");
+const second = await buildAntigravityHistoryWorkerArtifact(root, "repeatability");
+assert.deepEqual(first.manifest, second.manifest);
+assert.deepEqual(first.artifact, second.artifact);
+console.log("Antigravity history worker source ownership and repeatability verified.");

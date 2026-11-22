@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { assertBuildTarget, buildNativeAddons, prunePlatformPackages } from '../../scripts/server-package-native.mjs';
 import { verifyRuntime } from '../../scripts/verify-server-package.mjs';
+import { writePackagedAntigravityHistoryWorker } from '../helpers/packaged-antigravity-history-worker.mjs';
 
 const temporary = [];
 afterEach(async () => { for (const directory of temporary.splice(0)) await rm(directory, { recursive: true, force: true }); });
@@ -212,6 +213,7 @@ describe('server package native targets', () => {
     await pkg(path.join(root, 'node_modules'), 'ancestor-only', { main: 'index.js' });
     await put(root, 'node_modules/ancestor-only/index.js', 'module.exports = {};');
     const release = path.join(root, 'releases/example');
+    await writePackagedAntigravityHistoryWorker(release);
     await put(release, 'package.json', JSON.stringify({ dependencies: { 'ancestor-only': '1.0.0' } }));
     await put(release, 'runtime-entrypoints.json', JSON.stringify({ version: 1, entrypoints: [
       { package: 'ancestor-only', specifier: 'ancestor-only', kind: 'require' },

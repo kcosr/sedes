@@ -10,7 +10,8 @@ import { AcpDeliveryError, AcpRemoteError } from "../../../provider-protocol/bin
 import { AntigravityAcpConnection } from "../acp-connection.js";
 import { antigravityNativeActivity } from "./native-activity.js";
 import { antigravityNativeTerminalOutcome } from "../native-execution.js";
-import { antigravityCommandSchema, antigravityAgentToolsSchema } from "../sidecar/wire.js";
+import { antigravityCommandSchema, antigravityAgentToolsSchema, antigravityHistoryReadSchema } from "../sidecar/wire.js";
+import type { AntigravityNativeHistoryReader } from "../native-history.js";
 import { AntigravityError, type AntigravityPort, type AntigravityRuntimeConfiguration, type AntigravityIdentity,
   type AntigravitySetup, type AntigravityAttachment, type AntigravityEvent, type AntigravityOutcome,
   type AntigravityHistory, type AntigravityInspection, type AntigravityFailure } from "../port.js";
@@ -24,12 +25,20 @@ type CancellationResult = { settledOperationIds: readonly string[]; nativeRevisi
 type Cancellation = { captured: Set<string>; operations: Set<string>; result?: CancellationResult };
 type Creation = { fingerprint: string; result: Promise<AntigravityIdentity>; identity?: AntigravityIdentity; crossed: boolean };
 type OpenHandlers = { authorizeSession(id: string): boolean; update(notification: SessionNotification): void; permission(request: RequestPermissionRequest, signal?: AbortSignal): Promise<RequestPermissionResponse> };
+type NativeEvidence = {
+  readonly revision: string;
+  readonly activity: ReturnType<typeof antigravityNativeActivity>;
+  readonly terminalToolIds: ReadonlySet<string>;
+  readonly terminalResponseIndex: number;
+  readonly headIndex: number;
+};
 type Session = {
   identity: AntigravityIdentity; handleId: string; generation: string; setup: AntigravitySetup;
   peer: AntigravityAcpConnection; events: AntigravityEvent[]; sequence: number; offered: number; acknowledged: number;
   retainedAfter: number; eventBytes: number; attached: boolean; closed: boolean; cleanupUnproven: boolean;
   activePrompts: Set<string>; tools: Set<string>; permissions: Map<string, Permission>;
   nativeActive: boolean; nativeUnknown: boolean; nativeRevision?: string;
+  nativeEvidence?: NativeEvidence;
   nativeForegroundActive: boolean;
   nativeReadable: boolean;
   nativeHeadIndex: number; reconcileToolsAfterIndex?: number;
@@ -60,6 +69,10 @@ export class AntigravityHost implements AntigravityPort {
   readonly #pendingWork = new Set<Promise<void>>();
   readonly #orphanedTransports = new Set<Awaited<ReturnType<OwnedNdjsonStdioTransportFactory["open"]>>>();
   readonly #launchControllers = new Set<AbortController>();
+  readonly #historyReads = new Set<Promise<AntigravityHistory>>();
+  #historyClosed = false;
+  #historyCleanupUnproven = false;
+  #closingHistory: Promise<void> | undefined;
   #establishing = 0;
   #launchCleanupUnproven = false;
   #generation = 0;
@@ -70,7 +83,7 @@ export class AntigravityHost implements AntigravityPort {
     readonly configuration: AntigravityRuntimeConfiguration;
     readonly channels: ExecutionEnvironmentChannelProvider;
     readonly environment: Readonly<Record<string, string | undefined>>;
-    readonly readHistory: (identity: AntigravityIdentity, signal?: AbortSignal) => Promise<AntigravityHistory>;
+    readonly history: AntigravityNativeHistoryReader;
     readonly removeProbe?: (identity: AntigravityIdentity) => Promise<void>;
     readonly launch?: (input: Parameters<typeof AntigravityAcpConnection.open>[0]) => Promise<AntigravityAcpConnection>;
     readonly observationWaitMs?: number;
@@ -84,8 +97,9 @@ export class AntigravityHost implements AntigravityPort {
   #admit(authority: AntigravityHostAuthority, signal?: AbortSignal) {
     authority.assertAdmission(); signal?.throwIfAborted();
     if (this.#closed || this.#frozen) throw new AntigravityError("antigravity_runtime_closed");
-    if (this.#launchCleanupUnproven || this.#orphanedTransports.size || [...this.#sessions.values()].some(session => session.cleanupUnproven))
+    if (this.#launchCleanupUnproven || this.#historyCleanupUnproven || this.#orphanedTransports.size || [...this.#sessions.values()].some(session => session.cleanupUnproven))
       throw new AntigravityError("antigravity_cleanup_unproven", "not_sent");
+    if (this.#historyClosed) throw new AntigravityError("antigravity_runtime_closed");
   }
   #current(authority: AntigravityHostAuthority, signal?: AbortSignal) { authority.assertCurrent(); signal?.throwIfAborted(); }
   #get(handleId: string): Session {
@@ -181,7 +195,10 @@ export class AntigravityHost implements AntigravityPort {
       if (peer) try { await this.#closeEphemeral(peer); released = true; } catch (error) { errors.push(error); }
       // A failed process close retains its workspace and ownership for Stop.
       if (released) {
-        if (identity) try { await this.input.removeProbe?.(identity); } catch (error) { errors.push(error); }
+        if (identity) {
+          await this.#forgetHistory(identity);
+          try { await this.input.removeProbe?.(identity); } catch (error) { errors.push(error); }
+        }
         try { await rm(directory, { recursive: true, force: true }); } catch (error) { errors.push(error); }
       }
       if (errors.length) throw new AggregateError(errors, "Antigravity catalog cleanup is incomplete.");
@@ -294,11 +311,42 @@ export class AntigravityHost implements AntigravityPort {
         ...(response.nextCursor ? { cursor: response.nextCursor } : {}) };
     } finally { await this.#closeEphemeral(peer); }
   }
-  async readHistory(input: AntigravityIdentity, signal?: AbortSignal, authority = localAuthority) {
+  async readHistory(input: Parameters<AntigravityPort["readHistory"]>[0], signal?: AbortSignal, authority = localAuthority): Promise<AntigravityHistory | null> {
     this.#current(authority, signal);
-    const session = this.#find(input), cancellationEpoch = session && !session.cancelDrain ? this.#cancellationReadEpoch(session) : undefined;
-    const history = await this.input.readHistory(input, signal); this.#current(authority, signal);
-    if (session) this.#applyNative(session, history, cancellationEpoch); return history;
+    const { sessionId, cwd, knownRevision } = antigravityHistoryReadSchema.parse(input);
+    const identity = { sessionId, cwd };
+    const session = this.#find(identity), cancellationEpoch = session && !session.cancelDrain ? this.#cancellationReadEpoch(session) : undefined;
+    const history = await this.#readNative(identity, signal); this.#current(authority, signal);
+    if (session) this.#applyNative(session, history, cancellationEpoch);
+    return knownRevision === history.native.revision ? null : history;
+  }
+  #readNative(identity: AntigravityIdentity, signal?: AbortSignal): Promise<AntigravityHistory> {
+    if (this.#historyClosed) return Promise.reject(new AntigravityError("antigravity_runtime_closed"));
+    const reading = this.input.history.read(identity, signal);
+    this.#historyReads.add(reading);
+    void reading.finally(() => this.#historyReads.delete(reading)).catch(() => undefined);
+    return reading;
+  }
+  #closeHistory(): Promise<void> {
+    this.#historyClosed = true;
+    return this.#closingHistory ??= (async () => {
+      try { await this.input.history.close(); }
+      catch (error) { this.#historyCleanupUnproven = true; this.#revision++; throw error; }
+      finally { await Promise.allSettled([...this.#historyReads]); }
+    })();
+  }
+  async #forgetHistory(identity: AntigravityIdentity): Promise<void> {
+    // Evicting a passive cache is bounded hygiene, independent of native
+    // process closure. A rejected or stalled eviction cannot revoke that proof.
+    // Host shutdown separately requires the worker itself to close.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.resolve().then(() => this.input.history.forget(identity)),
+        new Promise<void>(resolve => { timer = setTimeout(resolve, 1000); timer.unref(); }),
+      ]);
+    } catch { /* The reader's bounded cache and eventual worker close own eviction. */ }
+    finally { if (timer) clearTimeout(timer); }
   }
   async attach(input: Parameters<AntigravityPort["attach"]>[0], signal?: AbortSignal, authority = localAuthority) {
     this.#admit(authority, signal);
@@ -567,28 +615,42 @@ export class AntigravityHost implements AntigravityPort {
     attempt.result = result; session.cancellation = undefined; session.canceling = false; session.cancellationFailed = false; this.#revision++;
   }
   #applyNative(session: Session, history: AntigravityHistory, cancellationEpoch?: number) {
-    const state = antigravityNativeActivity(history.native);
+    let evidence = session.nativeEvidence;
+    if (!evidence || evidence.revision !== history.native.revision) {
+      const terminalToolIds = new Set<string>();
+      let terminalResponseIndex = -1;
+      for (const step of history.native.steps) {
+        if (step.tool && [3, 4, 5, 6, 7, 12].includes(step.status)) terminalToolIds.add(step.tool.id);
+        if (step.response && antigravityNativeTerminalOutcome(step) !== undefined)
+          terminalResponseIndex = Math.max(terminalResponseIndex, step.index);
+      }
+      evidence = { revision: history.native.revision, activity: antigravityNativeActivity(history.native), terminalToolIds,
+        terminalResponseIndex, headIndex: history.native.steps.at(-1)?.index ?? -1 };
+      session.nativeEvidence = evidence;
+    }
+    const state = evidence.activity;
     if (session.nativeRevision !== history.native.revision || session.nativeUnknown !== state.unknown || session.nativeActive !== state.active) this.#revision++;
     session.nativeRevision = history.native.revision; session.nativeActive = state.active; session.nativeUnknown = state.unknown;
     session.nativeForegroundActive = state.foregroundActive; session.nativeReadable = true;
     session.nativeCounts = { agents: state.agents, commands: state.commands, other: state.other };
-    session.nativeHeadIndex = history.native.steps.at(-1)?.index ?? -1;
-    for (const step of history.native.steps) if (step.tool && [3, 4, 5, 6, 7, 12].includes(step.status)) session.tools.delete(step.tool.id);
+    session.nativeHeadIndex = evidence.headIndex;
+    for (const toolId of session.tools) if (evidence.terminalToolIds.has(toolId)) session.tools.delete(toolId);
     if (!session.activePrompts.size && !state.active && !state.unknown && session.reconcileToolsAfterIndex !== undefined &&
-        history.native.steps.some(step => step.index > session.reconcileToolsAfterIndex! && step.response && antigravityNativeTerminalOutcome(step) !== undefined)) {
+        evidence.terminalResponseIndex > session.reconcileToolsAfterIndex) {
       session.tools.clear(); session.reconcileToolsAfterIndex = undefined;
     }
     this.#completeCancellation(session, cancellationEpoch);
   }
   async #refreshNative(session: Session, completeDrain = false) {
     const epoch = !session.cancelDrain || completeDrain ? this.#cancellationReadEpoch(session) : undefined;
-    try { this.#applyNative(session, await this.input.readHistory(session.identity), epoch); }
+    try { this.#applyNative(session, await this.#readNative(session.identity), epoch); }
     catch { if (!session.nativeUnknown) this.#revision++; session.nativeUnknown = true; session.nativeReadable = false; }
   }
   async #retire(session: Session) {
     try { await session.peer.close(); session.closed = true; session.cleanupUnproven = false; this.#sessions.delete(session.handleId);
       this.#released.add(session.handleId); while (this.#released.size > 4096) this.#released.delete(this.#released.values().next().value!); this.#revision++; }
     catch (error) { session.cleanupUnproven = true; throw error; }
+    await this.#forgetHistory(session.identity);
   }
   async #closeEphemeral(peer: AntigravityAcpConnection) {
     try { await peer.close(); this.#ephemeral.delete(peer); this.#failedEphemeral.delete(peer); }
@@ -597,6 +659,7 @@ export class AntigravityHost implements AntigravityPort {
   detach() { for (const session of this.#sessions.values()) session.attached = false; }
   snapshot(): AntigravityInspection {
     const blockers = new Set<AntigravityInspection["blockers"][number]>();
+    if (this.#historyCleanupUnproven) blockers.add("cleanup_unproven");
     for (const session of this.#sessions.values()) {
       if (session.canceling || session.activePrompts.size || session.tools.size || session.nativeActive) blockers.add("active_work");
       if (session.nativeUnknown || session.cancellationFailed) blockers.add("unknown_state");
@@ -659,7 +722,9 @@ export class AntigravityHost implements AntigravityPort {
         ...[...this.#orphanedTransports].map(async transport => { await transport.close("antigravity_stop"); this.#orphanedTransports.delete(transport); }),
       ]);
       await Promise.allSettled(cancellations);
-      if (outcomes.some(outcome => outcome.status === "rejected") || this.#launchCleanupUnproven) throw new AntigravityError("antigravity_cleanup_unproven", "sent_outcome_unknown");
+      const historyClosed = await Promise.allSettled([this.#closeHistory()]);
+      if (outcomes.some(outcome => outcome.status === "rejected") || historyClosed.some(outcome => outcome.status === "rejected") || this.#launchCleanupUnproven)
+        throw new AntigravityError("antigravity_cleanup_unproven", "sent_outcome_unknown");
       if (input.force && before.blockers.length) await record("after_shutdown");
       // Unidentified crossed creations are never adopted or replayed. Explicit
       // forced retirement clears their uncertainty only after every owned

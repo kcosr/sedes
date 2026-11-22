@@ -77,7 +77,8 @@ export interface AntigravityPort {
   create(input: { readonly cwd: string; readonly operationId: string; readonly title?: string; readonly executionEnvironment?: EnvironmentVariableOverrides; readonly agentTools?: AntigravityAgentTools }, signal?: AbortSignal): Promise<AntigravityIdentity>;
   acknowledgeCreation(input: AntigravityIdentity & { readonly operationId: string }, signal?: AbortSignal): Promise<void>;
   listSessions(input: { readonly cwd: string; readonly cursor?: string }, signal?: AbortSignal): Promise<{ readonly sessions: readonly AntigravitySessionSummary[]; readonly cursor?: string }>;
-  readHistory(input: AntigravityIdentity, signal?: AbortSignal): Promise<AntigravityHistory>;
+  /** Null proves the exact requested native revision is still current. */
+  readHistory(input: AntigravityIdentity & { readonly knownRevision?: string }, signal?: AbortSignal): Promise<AntigravityHistory | null>;
   attach(input: AntigravityIdentity & { readonly executionEnvironment?: EnvironmentVariableOverrides; readonly agentTools?: AntigravityAgentTools }, signal?: AbortSignal): Promise<AntigravityAttachment>;
   attachExisting(input: AntigravityIdentity, signal?: AbortSignal): Promise<AntigravityAttachment | null>;
   request(input: { readonly handleId: string; readonly operationId: string; readonly command: AntigravityCommand }, signal?: AbortSignal): Promise<AntigravityOutcome>;

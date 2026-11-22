@@ -92,10 +92,18 @@ requests. Pending work and undelivered outcomes block ordinary runtime
 retirement. A disconnected runtime is not evidence that work stopped.
 
 Remote instances require an execution sidecar advertising
-`antigravity_runtime` capability 2. Upgrade main and the sidecar together before
+`antigravity_runtime` capability 3. Upgrade main and the sidecar together before
 enabling this backend. There is no local fallback when a remote host is offline.
 Reconnect restores exact retained session authority; it does not replay an
 uncertain submission or silently create another session.
+
+Attached idle threads continue checking for native changes so background work
+remains observable. Unchanged history reuses its validated snapshot and avoids
+repeated transcript projection, usage accounting, and full-history SSH transfer.
+SQLite reading and decoding run in a dedicated worker on the execution host.
+Streaming refreshes are coalesced; permission and operation events are still
+processed promptly. This optimization does not mark background work complete
+or turn an uncertain submission into an accepted one.
 
 Receipts have explicit bounds: a runtime retains at most 256 unacknowledged
 creations and 4096 total creation identities; a resident session retains 4096

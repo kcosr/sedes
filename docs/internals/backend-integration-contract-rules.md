@@ -1633,6 +1633,18 @@ inherit the behavior.
 
 ## Normalize history and live events
 
+Provider-private history caches must retain their exact principal, backend,
+execution environment, workspace, and native-session scope. Suppressing an
+unchanged transcript must not suppress permission events, operation receipts,
+transport recovery, or independently changing child activity. Use authoritative
+change evidence for every dependency; quiet foreground state and absent provider
+notifications cannot establish that a native store is unchanged. Bound retained
+resources and release them on owner shutdown. Antigravity implements this with
+execution-host reader workers, SQLite connection revisions, and conditional
+history transfer. Pi SDK, native Pi, Codex, Claude, Grok, and OpenCode retain their
+existing native acquisition contracts; they do not consume this private protocol
+or acquire an Antigravity cache.
+
 Establishing an unmaterialized conversation from metadata must refresh any
 scoped, generation-bound capability needed to admit its first input. An empty
 transcript does not refresh feature authority or confirm native execution

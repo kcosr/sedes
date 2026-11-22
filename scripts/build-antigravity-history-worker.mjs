@@ -1,0 +1,13 @@
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildAntigravityHistoryWorkerArtifact } from "./build-antigravity-history-worker-artifact.mjs";
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const metadata = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+const { artifact, manifest } = await buildAntigravityHistoryWorkerArtifact(root, `sedes-${metadata.version}`);
+const directory = path.join(root, "dist", "antigravity-history-worker");
+await mkdir(directory, { recursive: true });
+const artifactPath = path.join(directory, manifest.filename), manifestPath = path.join(directory, "manifest.json");
+await rm(artifactPath, { force: true }); await rm(manifestPath, { force: true });
+await writeFile(artifactPath, artifact, { mode: 0o500 }); await chmod(artifactPath, 0o500);
+await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o400 }); await chmod(manifestPath, 0o400);

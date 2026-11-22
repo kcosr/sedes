@@ -516,6 +516,8 @@ async function verifyPackaged() {
       ["dist/pi-sandbox-worker/sedes-pi-sandbox-worker.mjs", 0o500],
       ["dist/claude-runtime-worker/manifest.json", 0o400],
       ["dist/claude-runtime-worker/sedes-claude-runtime-worker.mjs", 0o500],
+      ["dist/antigravity-history-worker/manifest.json", 0o400],
+      ["dist/antigravity-history-worker/sedes-antigravity-history-worker.mjs", 0o500],
     ]) {
       const metadata = await stat(path.join(localServerRoot, relative));
       if ((metadata.mode & 0o777) !== expectedMode) {

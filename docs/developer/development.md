@@ -209,6 +209,8 @@ env -u NODE_ENV npm run build:pi-sandbox-worker
 env -u NODE_ENV npm run check:pi-sandbox-worker-build-repeatability
 env -u NODE_ENV npm run build:claude-runtime-worker
 env -u NODE_ENV npm run check:claude-runtime-worker-build-repeatability
+env -u NODE_ENV npm run build:antigravity-history-worker
+env -u NODE_ENV npm run check:antigravity-history-worker-build-repeatability
 ```
 
 A source development server configured for the managed SSH sidecar requires an
@@ -217,6 +219,11 @@ it. The Pi sandbox worker is likewise a pinned, self-contained artifact; its
 repeatability check rebuilds it twice and verifies identical bytes, manifest,
 digest, size, and restrictive modes. The standard production `build` gate runs
 that check before cleaning and creating the final build outputs.
+
+Antigravity's native-history worker is also required for local source runs.
+`npm run dev`, `npm test`, and the production build prepare it automatically.
+After changing its reader or build helper, rebuild the worker before invoking
+individual tests directly. Sidecars embed the same verified worker artifact.
 
 Remote terminal assets require the matching architecture, Node ABI, and glibc
 profile. Follow [Sidecar native builds](sidecar-native-build.md) to build and

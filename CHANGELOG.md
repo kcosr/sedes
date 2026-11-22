@@ -101,8 +101,10 @@ User-facing changes are collected here before release. See the
   work tracking. Canceled permission requests recover from native execution
   receipts, and pending message reconciliation keeps current permissions
   answerable across resnapshots and reconnects. Child cancellation and background
-  completion require native terminal evidence. Upgrade Antigravity execution
-  sidecars with the server for runtime capability **2**.
+  completion require native terminal evidence. Unchanged history avoids repeated
+  transcript processing, and native reads run outside the server event loop.
+  Antigravity now displays its official brand mark.
+  Upgrade Antigravity execution sidecars with the server for runtime capability **3**.
   See [Antigravity setup](docs/operator/backends/antigravity.md).
   ([#144](https://github.com/kcosr/sedes/pull/144))
 

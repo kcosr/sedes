@@ -16,7 +16,6 @@ import { type AntigravityAttachment, type AntigravityCommand, type AntigravityEv
   type AntigravityHistory, type AntigravityOutcome, type AntigravitySetup } from "./port.js";
 import { buildAntigravityPrompt, inspectAntigravityInput } from "./submission.js";
 import { AntigravityUsage } from "./usage.js";
-import { antigravityNativeActivity } from "./host/native-activity.js";
 import { antigravityFailureError, antigravityReadError, antigravityTransportError } from "./errors.js";
 
 export class AntigravityHandle implements ConversationHandle {
@@ -42,7 +41,12 @@ export class AntigravityHandle implements ConversationHandle {
   readonly #configurationApplications = new Map<string, Promise<void>>();
   readonly #accounting;
   #native!: AntigravityHistory;
+  #nativeProjection!: AntigravityProjection;
   #projection!: AntigravityProjection;
+  #lastHistoryReadAt = -Infinity;
+  #accountedRevision?: string;
+  #lastAccountingAttemptAt = -Infinity;
+  #deferredHistoryRefresh?: ReturnType<typeof setTimeout>;
   #setup: AntigravitySetup;
   #sequence = 0;
   #journalBytes = 0;
@@ -62,6 +66,7 @@ export class AntigravityHandle implements ConversationHandle {
     this.binding = attached.binding; this.#setup = attachment.setup; this.#after = attachment.retainedAfterSequence;
     this.#configurationSequence = attachment.throughSequence;
     this.#accounting = new AntigravityUsage(driver.input.usage, this.binding, detail.nativeNamespaceKey);
+    this.#control.signal.addEventListener("abort", () => this.#cancelDeferredHistoryRefresh(), { once: true });
   }
   get retirementBlocked(): boolean { return !!this.#pendingSubmit || this.#ackReady.size > 0 || [...this.#controlOperations].some(([id, kind]) =>
     (kind === "set_config" || kind === "set_mode") && this.#requestedSetters.has(id) && !this.#appliedSetters.has(id)) || [...this.#receipts.values()].some(value =>
@@ -97,7 +102,7 @@ export class AntigravityHandle implements ConversationHandle {
     for (const listener of this.#listeners) { try { listener(sequenced); } catch { /* Independent observer boundary. */ } }
     if (event.type === "interaction_opened") for (const wake of this.#receiptWaiters) wake();
   }
-  async #refresh(emit: boolean): Promise<void> {
+  async #refresh(emit: boolean, force = false): Promise<void> {
     const previousUsage = this.#projection?.usage;
     // Operation outcomes have independent retention. A dropped event page must
     // not leave a completed request permanently pending in this handle.
@@ -105,9 +110,27 @@ export class AntigravityHandle implements ConversationHandle {
       outcome.status === "failed" && outcome.failure.delivery === "sent_outcome_unknown")) await this.#pollReceipt(operationId);
     await this.#settleControls();
     for (const operationId of this.#ackReady) await this.#ackReceipt(operationId, true, true);
-    const history = await this.driver.input.port.readHistory(this.identity, this.#lifetime.signal)
-      .catch(error => { throw antigravityReadError(error, this.#lifetime.signal); });
-    const projection = projectAntigravityHistory(history.native, this.scope);
+    // Notifications and receipt waits share one bounded history cadence. They
+    // still process control events immediately; native history also polls when
+    // no ACP events arrive, because children and continuations can write it.
+    let changed = false, checkedHistory = false;
+    if (force || !this.#native || performance.now() - this.#lastHistoryReadAt >= 250) {
+      this.#cancelDeferredHistoryRefresh();
+      const history = await this.driver.input.port.readHistory({ ...this.identity,
+        ...(this.#native ? { knownRevision: this.#native.native.revision } : {}) }, this.#lifetime.signal)
+        .catch(error => { throw antigravityReadError(error, this.#lifetime.signal); });
+      this.#lastHistoryReadAt = performance.now();
+      checkedHistory = true;
+      if (history && history.native.revision !== this.#native?.native.revision) {
+        const projected = projectAntigravityHistory(history.native, this.scope);
+        this.#native = history; this.#nativeProjection = projected; changed = true;
+      }
+      if (!this.#nativeProjection) throw unavailable("Antigravity did not supply an initial history snapshot.");
+    } else this.#deferHistoryRefresh();
+    // Keep native evidence separate from transient transport, permission and
+    // usage state so unchanged history can still publish those transitions.
+    const projection = { ...this.#nativeProjection, snapshot: { ...this.#nativeProjection.snapshot },
+      usage: { ...this.#nativeProjection.usage } };
     if (this.#contextUsage) projection.usage.context = this.#contextUsage;
     if (projection.snapshot.runState === "reconciling" && this.#streaming) projection.snapshot.runState = "running";
     if (this.#permissions.size && (projection.snapshot.runState === "running" || projection.snapshot.runState === "reconciling"))
@@ -115,22 +138,55 @@ export class AntigravityHandle implements ConversationHandle {
     if (this.#disconnected) projection.snapshot.runState = "disconnected";
     if (this.#pendingSubmit && projection.snapshot.runState === "idle" && !Object.values(projection.snapshot.turnsById).some(
       turn => turn.completionCorrelations?.includes(this.#pendingSubmit!))) projection.snapshot.runState = "starting";
-    const activity = antigravityNativeActivity(history.native);
-    projection.snapshot.backgroundActivity = { state: activity.unknown || this.#disconnected ? "unknown" : "known",
-      agents: activity.agents, commands: activity.commands, other: activity.other };
+    if (this.#disconnected && projection.snapshot.backgroundActivity)
+      projection.snapshot.backgroundActivity = { ...projection.snapshot.backgroundActivity, state: "unknown" };
     if (emit && this.#projection) this.#diff(this.#projection.snapshot, projection.snapshot);
-    this.#native = history; this.#projection = projection;
+    this.#projection = projection;
     if (projection.snapshot.runState === "idle") this.#streaming = false;
     if (emit && JSON.stringify(previousUsage) !== JSON.stringify(projection.usage)) this.#emit({ type: "usage_changed", usage: projection.usage });
-    this.#accounting.update(history.native, projection, emit ? "live" : "history");
+    if (this.#accountedRevision !== this.#native.native.revision && (changed || performance.now() - this.#lastAccountingAttemptAt >= 250)) {
+      this.#lastAccountingAttemptAt = performance.now();
+      if (this.#accounting.update(this.#native.native, projection, emit ? "live" : "history")) this.#accountedRevision = this.#native.native.revision;
+    }
     for (const turn of Object.values(projection.snapshot.turnsById)) for (const correlation of turn.completionCorrelations ?? []) {
       if (this.#pendingSubmit === correlation) this.#pendingSubmit = undefined;
-      this.attached.onSubmissionObserved?.({ backendCorrelation: correlation });
+      // Publication is asynchronous and may need retry even after the provider
+      // outcome was acknowledged; native equality is not application receipt
+      // acknowledgement. Retry at the bounded history-check cadence.
+      if (checkedHistory || this.#receipts.has(correlation)) this.attached.onSubmissionObserved?.({ backendCorrelation: correlation });
       if (turn.status !== "in_progress" && this.#receipts.get(correlation)?.status !== "pending") await this.#ackReceipt(correlation, true);
     }
   }
+  #cancelDeferredHistoryRefresh(): void {
+    if (this.#deferredHistoryRefresh !== undefined) clearTimeout(this.#deferredHistoryRefresh);
+    this.#deferredHistoryRefresh = undefined;
+  }
+  #deferHistoryRefresh(): void {
+    if (this.#deferredHistoryRefresh !== undefined || this.#closed || this.#control.signal.aborted) return;
+    // Flush the trailing event even if the provider goes quiet and observe()
+    // enters its one-second long poll. Repeated chunks never postpone the flush.
+    const timer = setTimeout(() => {
+      void this.#serialize(async () => {
+        if (this.#deferredHistoryRefresh !== timer || this.#closed || this.#control.signal.aborted) return;
+        this.#deferredHistoryRefresh = undefined;
+        try { await this.#refresh(true); }
+        catch { this.#markDisconnected(); }
+      }).catch(() => undefined);
+    }, Math.max(1, Math.ceil(250 - (performance.now() - this.#lastHistoryReadAt))));
+    this.#deferredHistoryRefresh = timer; timer.unref();
+  }
+  #markDisconnected(): void {
+    if (this.#closed || this.#control.signal.aborted) return;
+    this.#cancelDeferredHistoryRefresh();
+    this.#disconnected = true; this.#recovering = true; this.#streaming = false;
+    const before = this.#projection.snapshot;
+    const snapshot: BackendConversationSnapshot = { ...before, runState: "disconnected",
+      ...(before.backgroundActivity ? { backgroundActivity: { ...before.backgroundActivity, state: "unknown" } } : {}) };
+    this.#projection = { ...this.#projection, snapshot };
+    this.#diff(before, snapshot);
+  }
   #diff(before: BackendConversationSnapshot, after: BackendConversationSnapshot): void {
-    for (const id of after.orderedBackendTurnIds) {
+    if (before.turnsById !== after.turnsById || before.itemsById !== after.itemsById) for (const id of after.orderedBackendTurnIds) {
       const turn = after.turnsById[id]!; const previous = before.turnsById[id];
       if (!previous) this.#emit({ type: "turn_started", turn: { ...turn, status: "in_progress", endedBy: undefined, completedAt: undefined, failure: undefined } });
       for (const itemId of turn.orderedBackendItemIds) {
@@ -158,7 +214,7 @@ export class AntigravityHandle implements ConversationHandle {
           }
           for (const event of observed.events) this.#accept(event);
           this.#disconnected = observed.closed;
-          await this.#refresh(true);
+          await this.#refresh(true, this.#recovering || observed.closed);
           this.#recovering = false;
           this.#after = observed.throughSequence;
           await this.driver.input.port.acknowledge({ handleId: this.attachment.handleId, throughSequence: this.#after }, this.#lifetime.signal);
@@ -166,9 +222,9 @@ export class AntigravityHandle implements ConversationHandle {
         if (observed.closed) { this.#control.abort(); this.#emit({ type: "resnapshot_required", reason: "provider_handle_closed" }); return; }
       } catch {
         if (this.#closed) return;
-        this.#disconnected = true;
-        this.#recovering = true; this.#streaming = false;
-        this.#emit({ type: "run_state_changed", state: "disconnected" });
+        // Store the emitted state as well: an unchanged native revision on
+        // reconnect must still produce the restoring state transition.
+        await this.#serialize(async () => this.#markDisconnected());
         // Reconnect only to retained authority; a missing owner cannot authorize
         // launching/replaying a prompt from this handle.
         try {
@@ -216,7 +272,7 @@ export class AntigravityHandle implements ConversationHandle {
   }
   async establishProjection(input: EstablishProjectionInput) {
     return this.#serialize(async () => {
-      input.signal.throwIfAborted(); await this.#refresh(true); input.signal.throwIfAborted();
+      input.signal.throwIfAborted(); await this.#refresh(true, true); input.signal.throwIfAborted();
       const sequence = this.#sequence;
       const page = antigravityHistoryPage(this.#projection.snapshot, { limit: 50, signal: input.signal });
       const { previousCursor } = page;
@@ -238,7 +294,7 @@ export class AntigravityHandle implements ConversationHandle {
   async usage() { this.#assert(); return this.#projection.usage; }
   isNativeRecoveryTurn(backendTurnId: string): boolean { return backendTurnId.startsWith("continuation:"); }
   async captureSubmissionRetryAnchor(): Promise<string> {
-    this.#assert(); await this.#serialize(() => this.#refresh(true));
+    this.#assert(); await this.#serialize(() => this.#refresh(true, true));
     if (this.#projection.snapshot.runState !== "idle" || this.#pendingSubmit) throw unsupported("Wait for the current Antigravity turn to settle.");
     return this.#native.native.revision;
   }
@@ -416,8 +472,9 @@ export class AntigravityHandle implements ConversationHandle {
     if (outcome.status === "failed") { this.#pendingSubmit = undefined; await this.#ackReceipt(input.applicationOperationId).catch(() => undefined); throw outcomeError(outcome); }
     return this.#afterSubmissionDispatch(async () => {
       const deadline = Date.now() + 30_000;
+      let firstRead = true;
       while (Date.now() < deadline) {
-        await this.#serialize(() => this.#refresh(true));
+        await this.#serialize(() => this.#refresh(true, firstRead)); firstRead = false;
         const turn = Object.values(this.#projection.snapshot.turnsById).find(value => value.completionCorrelations?.includes(input.applicationOperationId));
         if (turn) return { accepted: true as const, reconciliationToken: input.reconciliationToken,
           completionCorrelation: input.applicationOperationId, backendTurnId: turn.backendTurnId };
@@ -441,8 +498,9 @@ export class AntigravityHandle implements ConversationHandle {
       // the actor mailbox immediately when its provider needs a permission.
       // Host dispatch alone never proves native acceptance or authorizes replay.
       const deadline = Date.now() + 1000;
+      let firstRead = true;
       while (Date.now() < deadline) {
-        await this.#serialize(() => this.#refresh(true));
+        await this.#serialize(() => this.#refresh(true, firstRead)); firstRead = false;
         const turn = Object.values(this.#projection.snapshot.turnsById).find(value => value.completionCorrelations?.includes(input.applicationOperationId));
         if (turn) return { status: "accepted", reconciliationToken: input.reconciliationToken, completionCorrelation: input.applicationOperationId, backendTurnId: turn.backendTurnId };
         const staged = this.#native.native.steps.some(step => step.user && inspectAntigravityInput(this.scope, step.user.text).operationId === input.applicationOperationId);

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFile, fork } from 'node:child_process';
 import { mkdtemp, mkdir, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -141,6 +142,14 @@ export function requestRuntimeShutdown(server) {
 }
 
 export async function verifyRuntime(root, { nodeExecutable = process.execPath, electronRunAsNode = false } = {}) {
+  const nativeHistoryWorkerRoot = path.join(root, 'dist/antigravity-history-worker');
+  const nativeHistoryWorkerManifest = JSON.parse(await readFile(path.join(nativeHistoryWorkerRoot, 'manifest.json'), 'utf8'));
+  const nativeHistoryWorker = await readFile(path.join(nativeHistoryWorkerRoot, 'sedes-antigravity-history-worker.mjs'));
+  assert.equal(nativeHistoryWorkerManifest.schemaVersion, 1);
+  assert.equal(nativeHistoryWorkerManifest.artifactId, 'openai.sedes.antigravity-history-worker');
+  assert.equal(nativeHistoryWorkerManifest.filename, 'sedes-antigravity-history-worker.mjs');
+  assert.equal(nativeHistoryWorkerManifest.bytes, nativeHistoryWorker.byteLength);
+  assert.equal(nativeHistoryWorkerManifest.sha256, createHash('sha256').update(nativeHistoryWorker).digest('hex'));
   // Worker entry guards compare argv to import.meta.url. Resolve installation
   // aliases such as `current` before launching their executable entry points.
   root = await realpath(root);
