@@ -3368,6 +3368,43 @@ describe("Composer delivery guards", () => {
     }
   });
 
+
+  it.each(["already unconfirmed", "late recovery response", "queue-owned network failure"])("resumes next-draft autosave after exact abandonment: %s", async (race) => {
+    vi.useFakeTimers();
+    try {
+      const active = snapshot("running");
+      active.capabilities.deliveryModes = [{ id: "steer", steerTarget: "conversation", label: { text: "Steer" }, available: true }];
+      const store = new FakeComposerStore(active, "abandoned contribution");
+      let rejectDelivery!: () => void;
+      store.deliver.mockImplementationOnce((_mode, draft, operationId) => new Promise<NormalizedDraft>((_resolve, reject) => {
+        rejectDelivery = () => {
+          store.updateTransfer(operationId, { requestState: "request_failed", steerPhase: "unconfirmed" });
+          reject(race === "queue-owned network failure" ? new TypeError("lost response") :
+            new DeliveryRecoveryRequiredError(false, { ...draft, text: "", revision: draft.revision + 1 }));
+        };
+      }));
+      render(<Composer store={store as unknown as ThreadClientStore} />);
+      fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+      const operationId = store.state.pendingComposerTransfers[0]!.operationId;
+      if (race === "queue-owned network failure") {
+        act(() => store.updateTransfer(operationId, { authorityState: "queue_owned" }));
+      }
+      if (race !== "late recovery response") {
+        await act(async () => rejectDelivery());
+        expect(screen.getByText("Steer unconfirmed")).toBeVisible();
+      }
+      type("Only the new draft");
+      act(() => store.abandonComposerTransfer(operationId));
+      if (race === "late recovery response") await act(async () => rejectDelivery());
+      await act(async () => vi.advanceTimersByTimeAsync(2_000));
+      expect(screen.queryByText("Steer unconfirmed")).toBeNull();
+      expect(screen.getByRole("textbox")).toHaveValue("Only the new draft");
+      expect(store.saveDraft).toHaveBeenLastCalledWith(expect.objectContaining({ text: "Only the new draft" }));
+      expect(store.deliver).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("keeps Pi's retained draft as the sync base while remounting a blank composer", async () => {
     const active = snapshot("running");
     active.capabilities.deliveryModes = [

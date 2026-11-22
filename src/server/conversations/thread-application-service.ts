@@ -54,7 +54,7 @@ import type { ComposerAttachmentDeliveryService } from "../composer-attachments/
 import { COMPOSER_ATTACHMENT_POLICY } from "../../shared/protocol/composer-attachments.js";
 import { hasDeliverableComposerInput } from "../../shared/protocol/conversation.js";
 import { interactionRunState } from "./thread-interaction-run-state.js";
-import type { DirectInputRequest, DirectInputReceipt, DirectInputReceiptLookup, ThreadInputContext } from "../../shared/protocol/thread-input.js";
+import type { AbandonedInputOperationsResult, DirectInputRequest, DirectInputReceipt, DirectInputReceiptLookup, ThreadInputContext } from "../../shared/protocol/thread-input.js";
 
 type InventoryThread = Omit<
   NormalizedThreadSummary,
@@ -251,6 +251,7 @@ export interface ThreadApplicationInteractionReader {
 export interface ThreadApplicationMutationGateway {
   admitInput(scope: RequestScope, applicationThreadId: string, input: DirectInputRequest): Promise<DirectInputReceipt>;
   readInputReceipt(scope: RequestScope, mutationId: string): DirectInputReceiptLookup;
+  readAbandonedInputOperations(scope: RequestScope, applicationThreadId: string, operationIds: readonly string[]): AbandonedInputOperationsResult;
   inputContext(scope: RequestScope, applicationThreadId: string): Promise<ThreadInputContext>;
   mutate(
     scope: RequestScope,
@@ -886,6 +887,12 @@ export class ThreadApplicationService {
   readInputReceipt(scope: RequestScope, mutationId: string): DirectInputReceiptLookup {
     if (!this.#mutations) throw new Error("thread_application_mutations_unavailable");
     return this.#mutations.readInputReceipt(scope, mutationId);
+  }
+
+  async readAbandonedInputOperations(scope: RequestScope, applicationThreadId: string, operationIds: readonly string[]): Promise<AbandonedInputOperationsResult> {
+    await this.#authorize(scope, applicationThreadId);
+    if (!this.#mutations) throw new Error("thread_application_mutations_unavailable");
+    return this.#mutations.readAbandonedInputOperations(scope, applicationThreadId, operationIds);
   }
 
   readQueuedInput(

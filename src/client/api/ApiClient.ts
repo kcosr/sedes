@@ -13,6 +13,8 @@ import {
 import { turnReplySpeechSchema, type TurnReplySpeech } from "../../shared/protocol/turn-reply-speech.js";
 import {
   directInputReceiptSchema, directInputReceiptLookupSchema, directInputRequestBodySchema,
+  abandonedInputOperationsRequestSchema, abandonedInputOperationsResultSchema,
+  type AbandonedInputOperationsResult,
   type DirectInputRequest, type DirectInputReceipt, type DirectInputReceiptLookup,
 } from "../../shared/protocol/thread-input.js";
 import {
@@ -2228,6 +2230,18 @@ export class ApiClient {
     );
     if (result.status === "found" && (result.receipt.threadId !== threadId || result.receipt.mutationId !== mutationId))
       throw new ApiError(502, "invalid_response", "The input receipt did not match this response.", true);
+    return result;
+  }
+
+  async readAbandonedInputOperations(threadId: string, operationIds: readonly string[], signal?: AbortSignal): Promise<AbandonedInputOperationsResult> {
+    const body = abandonedInputOperationsRequestSchema.parse({ operationIds });
+    const result = await this.#mutation(
+      `/api/threads/${encodeURIComponent(threadId)}/abandoned-input-operations`, abandonedInputOperationsResultSchema,
+      { method: "POST", body: JSON.stringify(body), signal },
+    );
+    if (result.threadId !== threadId || result.abandonedOperationIds.some(id => !body.operationIds.includes(id))) {
+      throw new ApiError(502, "invalid_response", "The abandoned input operations did not match this lookup.", true);
+    }
     return result;
   }
 

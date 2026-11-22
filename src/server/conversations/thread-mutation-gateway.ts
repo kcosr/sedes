@@ -3,6 +3,8 @@ import type { SteerTarget } from "../../shared/protocol/conversation.js";
 import { randomUUID } from "node:crypto";
 import {
   directInputRequestSchema,
+  abandonedInputOperationsRequestSchema,
+  type AbandonedInputOperationsResult,
   type DirectInputRequest,
   type DirectInputReceipt,
   type DirectInputReceiptLookup,
@@ -387,6 +389,15 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
 
   readInputReceipt(scope: RequestScope, mutationId: string): DirectInputReceiptLookup {
     return new DirectInputRepository(this.input.bindings.database).lookup(scope, mutationId);
+  }
+
+  readAbandonedInputOperations(scope: RequestScope, applicationThreadId: string, operationIds: readonly string[]): AbandonedInputOperationsResult {
+    const request = abandonedInputOperationsRequestSchema.parse({ operationIds });
+    this.input.inventory.getThread(scope, applicationThreadId);
+    return {
+      threadId: applicationThreadId,
+      abandonedOperationIds: this.input.operations.listAbandonedOperations(scope, applicationThreadId, request.operationIds),
+    };
   }
 
   admitInput(scope: RequestScope, applicationThreadId: string, request: DirectInputRequest): Promise<DirectInputReceipt> {

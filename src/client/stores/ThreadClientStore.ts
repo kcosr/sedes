@@ -60,6 +60,7 @@ import {
   type NormalizedThreadApplyResult,
 } from "./NormalizedThreadStore.js";
 import { ServerSubmissionTracker } from "./ServerSubmissionTracker.js";
+import { SteerAbandonmentLookup } from "./SteerAbandonmentLookup.js";
 import type { NativeVoiceInputSubmitted } from "../voice/native-voice-plugin.js";
 export type { PendingServerSubmission } from "./ServerSubmissionTracker.js";
 
@@ -147,6 +148,8 @@ export type ThreadProjectionViewportAnchor =
 
 export interface PendingQueuedSteer {
   readonly operationId: string;
+  /** Original queued input identity, retained after the separate Steer receipt is gone. */
+  readonly sourceOperationId: string;
   readonly queuedInputId: string;
   readonly preview: string;
   readonly attachmentCount: number;
@@ -202,6 +205,12 @@ export interface PendingComposerTransfer {
   readonly lateMaterializationRequiresComposerReconciliation: boolean;
   /** Retain a nonvisual tombstone after rollback so late evidence is harmless. */
   readonly retainTombstoneAfterRollback: boolean;
+}
+
+export function hasSteerDraftBarrier(transfers: readonly PendingComposerTransfer[]): boolean {
+  return transfers.some(transfer => transfer.mode === "steer" &&
+    ((transfer.authorityState === "client_only" && transfer.steerPhase === "unconfirmed") ||
+      (transfer.rollbackRequired && !transfer.rollbackApplied)));
 }
 
 export type TurnForkAttempt =
@@ -313,6 +322,7 @@ export class ThreadClientStore {
   readonly #api: ApiClient;
   readonly #transport: EventStreamTransport;
   readonly #serverSubmissions: ServerSubmissionTracker;
+  readonly #steerAbandonment: SteerAbandonmentLookup;
   #state = initialState;
   readonly #listeners = new Set<() => void>();
   readonly #activityDetailWillChangeListeners = new Set<
@@ -377,6 +387,16 @@ export class ThreadClientStore {
     this.usage = new UsageQueryCache(threadId, api);
     this.#transport = transport;
     this.#activityDetail = activityDetail;
+    this.#steerAbandonment = new SteerAbandonmentLookup({
+      read: (operationIds, signal) => this.#api.readAbandonedInputOperations(threadId, [...operationIds], signal),
+      retire: operationIds => {
+        this.#setPendingComposerTransfers(this.#state.pendingComposerTransfers.filter(transfer =>
+          !operationIds.has(transfer.operationId) || transfer.rollbackRequired || transfer.rollbackApplied ||
+          transfer.lateMaterializationRequiresComposerReconciliation || transfer.authorityState === "materialized"));
+        this.#setPendingQueuedSteers(this.#state.pendingQueuedSteers.filter(steer =>
+          !operationIds.has(steer.operationId) && !operationIds.has(steer.sourceOperationId)));
+      },
+    });
     this.#serverSubmissions = new ServerSubmissionTracker({
       threadId,
       read: (queuedInputId, signal) => this.#api.readQueuedInput(threadId, queuedInputId, { signal }),
@@ -563,6 +583,7 @@ export class ThreadClientStore {
   pause(reason: "inactive"): void {
     if (this.#disposed || this.#paused) return;
     this.#paused = true;
+    this.#steerAbandonment.suspend();
     this.#subscriptionEpoch += 1;
     this.#cancelEnvelopeFlush();
     this.#pendingEnvelopes = [];
@@ -592,6 +613,7 @@ export class ThreadClientStore {
 
   dispose(): void {
     this.#disposed = true;
+    this.#steerAbandonment.dispose();
     this.#providerFeatureAttempts.clear();
     this.#serverSubmissions.dispose();
     this.usage.dispose();
@@ -1324,6 +1346,7 @@ export class ThreadClientStore {
         ...this.#state.pendingQueuedSteers,
         {
           operationId: mutationId,
+          sourceOperationId: stagedItem.deliveryOperationId,
           queuedInputId,
           preview: stagedItem.preview.text,
           attachmentCount: stagedItem.attachmentCount,
@@ -2972,6 +2995,7 @@ export class ThreadClientStore {
       this.#reconcileComposerTransfers(snapshot);
       this.#reconcilePendingQueuedSteers(snapshot);
     }
+    this.#observeSteerAbandonment();
     const pendingDeliveryThreadRevision =
       this.#state.pendingDeliveryThreadRevision !== undefined &&
       (!snapshot ||
@@ -3179,11 +3203,6 @@ export class ThreadClientStore {
               ? ("steering" as const)
               : transfer.steerPhase,
         };
-      } else if (currentMode === "steer" && transfer.authorityState === "queue_owned") {
-        // We already observed this exact durable row. Its authoritative removal
-        // retires the local presentation, not the input's delivery evidence.
-        // Never restore text or retry a send from queue absence.
-        return [];
       }
 
       const requestTerminal =
@@ -3195,6 +3214,7 @@ export class ThreadClientStore {
 
       if (
         currentMode === "steer" &&
+        transfer.authorityState === "client_only" &&
         transfer.acceptanceEvidence === "none" &&
         requestTerminal &&
         settled &&
@@ -3390,6 +3410,33 @@ export class ThreadClientStore {
 
   #setPendingQueuedSteers(pending: readonly PendingQueuedSteer[]): void {
     this.#replaceState({ ...this.#state, pendingQueuedSteers: pending });
+    this.#observeSteerAbandonment();
+  }
+
+  #observeSteerAbandonment(): void {
+    if (this.#state.pendingComposerTransfers.length === 0 && this.#state.pendingQueuedSteers.length === 0) {
+      this.#steerAbandonment.suspend();
+      return;
+    }
+    const { snapshot, authoritative, generation } = this.normalized.state;
+    const queueOperations = new Set(snapshot?.queue.map(item => item.deliveryOperationId));
+    const composers = this.#state.pendingComposerTransfers.filter(transfer =>
+      (transfer.resolvedDeliveryMode ?? transfer.mode) === "steer" &&
+      transfer.requestState !== "saving" && !transfer.rollbackRequired && !transfer.rollbackApplied &&
+      !transfer.lateMaterializationRequiresComposerReconciliation &&
+      (transfer.authorityState === "client_only" || transfer.authorityState === "queue_owned") &&
+      !queueOperations.has(transfer.operationId));
+    const queued = this.#state.pendingQueuedSteers.filter(steer => !queueOperations.has(steer.operationId));
+    // Reads follow durable projection/receipt changes, never text chunks.
+    // Absence only asks for exact reset evidence; normal acceptance must keep
+    // the card until the corresponding user message arrives.
+    this.#steerAbandonment.observe(
+      [...composers.map(item => item.operationId), ...queued.flatMap(item => [item.operationId, item.sourceOperationId])],
+      JSON.stringify([generation, snapshot?.thread.threadRevision,
+        composers.map(item => [item.requestState, item.steerPhase]),
+        queued.map(item => [item.requestState, item.phase])]),
+      Boolean(snapshot && authoritative && !this.#paused && !this.#disposed),
+    );
   }
 
   /**
@@ -3476,6 +3523,7 @@ export class ThreadClientStore {
       ...this.#state,
       pendingComposerTransfers: transfers,
     });
+    this.#observeSteerAbandonment();
   }
 
   #recordComposerTransferFailure(

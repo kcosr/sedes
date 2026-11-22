@@ -931,6 +931,29 @@ export class ConversationOperationRepository {
     return row ? parseInteractionResponse(row) : undefined;
   }
 
+  /** Browser input cleanup excludes unrelated abandoned actions and fork attempts. */
+  listAbandonedOperations(scope: RequestScope, threadId: string, operationIds: readonly string[]): string[] {
+    return operationIds.filter(operationId => {
+      // Explicit cancellation, restoration, failure dismissal, and explicit
+      // retry retire this application input even when another client performed
+      // them. This is presentation authority, never proof of native nonreceipt.
+      if (prepareCached(this.database, `SELECT 1 FROM queued_inputs
+        WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND mutation_id = ?
+          AND (state = 'cancelled' OR (state = 'failed' AND failure_acknowledged_at IS NOT NULL)) LIMIT 1`)
+        .get(scope.tenantId, scope.principalId, threadId, operationId) !== undefined) return true;
+      if (prepareCached(this.database, `SELECT 1 FROM mutation_receipts
+        WHERE tenant_id = ? AND principal_id = ? AND thread_id = ? AND mutation_id = ?
+          AND operation_kind = 'conversation_steer' AND result_code = 'abandoned' LIMIT 1`)
+        .get(scope.tenantId, scope.principalId, threadId, operationId) !== undefined) return true;
+      if (prepareCached(this.database, `SELECT 1 FROM conversation_creation_attempts
+        WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND mutation_id = ?
+          AND creation_kind = 'first_input'
+          AND force_reset_at IS NOT NULL AND force_reset_mutation_id IS NOT NULL LIMIT 1`)
+        .get(scope.tenantId, scope.principalId, threadId, operationId) !== undefined) return true;
+      return this.#isQueuedInputAbandoned(scope, threadId, operationId);
+    });
+  }
+
   isOperationAbandoned(scope: RequestScope, threadId: string, operationId: string): boolean {
     if (prepareCached(this.database, `SELECT 1 FROM mutation_receipts
       WHERE tenant_id = ? AND principal_id = ? AND thread_id = ? AND mutation_id = ?
@@ -943,6 +966,10 @@ export class ConversationOperationRepository {
       WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND mutation_id = ?
         AND force_reset_at IS NOT NULL AND force_reset_mutation_id IS NOT NULL LIMIT 1`)
       .get(scope.tenantId, scope.principalId, threadId, operationId) !== undefined) return true;
+    return this.#isQueuedInputAbandoned(scope, threadId, operationId);
+  }
+
+  #isQueuedInputAbandoned(scope: RequestScope, threadId: string, operationId: string): boolean {
     // Queue failures and their diagnostic text are not abandonment authority.
     // Only the exact marker written atomically by Force Reset qualifies; its
     // authority survives later dismissal or deletion of the original queue row.

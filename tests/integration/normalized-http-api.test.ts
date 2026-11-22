@@ -85,6 +85,7 @@ import { ConversationTurnBookmarkRepository } from "../../src/server/db/reposito
 import { CannedPromptRepository } from "../../src/server/db/repositories/canned-prompt-repository.js";
 import { ThreadGroupRepository } from "../../src/server/db/repositories/thread-group-repository.js";
 import { ThreadForceResetRepository } from "../../src/server/db/repositories/thread-force-reset-repository.js";
+import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import { PrincipalApplicationPreferenceRepository } from "../../src/server/db/repositories/principal-application-preference-repository.js";
 import { WorkspaceFileRootRepository } from "../../src/server/db/repositories/workspace-file-root-repository.js";
 import { WorkspaceFileLinkedWorktreeRepository } from "../../src/server/db/repositories/workspace-file-linked-worktree-repository.js";
@@ -775,6 +776,10 @@ async function fixture(
     },
     readInputReceipt(scope: RequestScope, mutationId: string) {
       return directInputs.lookup(scope, mutationId);
+    },
+    readAbandonedInputOperations(scope: RequestScope, threadId: string, operationIds: readonly string[]) {
+      repository.getThread(scope, threadId);
+      return { threadId, abandonedOperationIds: new ConversationOperationRepository(database).listAbandonedOperations(scope, threadId, operationIds) };
     },
     readQueuedInput(scope: RequestScope, threadId: string, queuedInputId: string,
     ) {
@@ -5200,6 +5205,121 @@ describe("normalized HTTP application contract", () => {
         .send({ expectedDraftRevision: 2, mutationId: randomUUID() }).expect(200);
       expect(restored.body).toMatchObject({ draft: { text: value.text, revision: 3 }, stashes: [],
       });
+    } finally { current.close(); }
+  });
+
+  it("reads only exact scoped abandonment evidence without provider hydration", async () => {
+    const current = await fixture({ runtimeAcquireError: new Error("Abandonment lookup must not acquire a provider.") });
+    try {
+      const workspace = await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } }).expect(201);
+      const create = async () => (await current.mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Abandonment lookup" }).expect(201)).body.threadId as string;
+      const threadId = await create();
+      const otherThreadId = await create();
+      current.bindThread(threadId);
+      current.questions.observe(current.owner, threadId, "lookup-question", {
+        questions: [{ title: "Continue?", options: ["Yes", "No"] }],
+      });
+      const question = current.questions.list(current.owner, threadId).requests[0]!;
+      const reply = await current.questions.respond(current.owner, threadId, question.id, {
+        revision: question.revision, answers: [{ questionIndex: 0, answer: "Yes" }],
+      });
+      const questionOperationId = `question:${question.id}:${question.revision}`;
+      expect(reply.deliveryOperationId).toBe(questionOperationId);
+      const resets = new ThreadForceResetRepository(current.database);
+      resets.forceReset(current.owner, threadId, {
+        expectedBlockerFingerprint: resets.impact(current.owner, threadId).blockerFingerprint,
+        mutationId: randomUUID(), now: Date.now(),
+      });
+      const ids = { abandoned: randomUUID(), accepted: randomUUID(), pending: randomUUID(), foreign: randomUUID(), missing: randomUUID() };
+      const insert = current.database.prepare(`INSERT INTO mutation_receipts(
+        tenant_id, principal_id, thread_id, mutation_id, operation_kind, request_fingerprint, result_code, result_json, replayable, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 0, 100)`);
+      for (const [operationId, state, ownerThread] of [
+        [ids.abandoned, "abandoned", threadId], [ids.accepted, "accepted", threadId],
+        [ids.pending, "pending_materialization", threadId], [ids.foreign, "abandoned", otherThreadId],
+      ]) insert.run(current.owner.tenantId, current.owner.principalId, ownerThread!, operationId!, "conversation_steer", "a".repeat(64), state!);
+      const nonInputIds = ["conversation_interrupt", "conversation_rename", "conversation_settings", "conversation_interaction_response"].map(kind => {
+        const operationId = randomUUID();
+        insert.run(current.owner.tenantId, current.owner.principalId, threadId, operationId, kind, "a".repeat(64), "abandoned");
+        // Native cleanup keeps its generic operation-abandonment contract.
+        expect(new ConversationOperationRepository(current.database).isOperationAbandoned(current.owner, threadId, operationId)).toBe(true);
+        return operationId;
+      });
+      const path = `/api/threads/${threadId}/abandoned-input-operations`;
+      const body = { operationIds: [ids.abandoned, questionOperationId, `question:${question.id}:${question.revision + 1}`,
+        ids.accepted, ids.pending, ids.foreign, ids.missing, ...nonInputIds] };
+      await current.withHost(request(current.app).post(path)).send(body).expect(403);
+      const response = await current.mutate(request(current.app).post(path)).send(body).expect(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.body).toEqual({ threadId, abandonedOperationIds: [ids.abandoned, questionOperationId] });
+      await current.mutate(request(current.app).post(path)).set("X-Test-Foreign-Principal", "yes").send(body).expect(404);
+      await current.mutate(request(current.app).post(`/api/threads/${randomUUID()}/abandoned-input-operations`)).send(body).expect(404);
+      for (const invalid of [{ operationIds: [] }, { operationIds: [""] }, { operationIds: ["x".repeat(161)] },
+        { operationIds: [ids.missing, ids.missing] }, { operationIds: Array.from({ length: 101 }, () => randomUUID()) }, { ...body, tenantId: current.owner.tenantId }]) {
+        await current.mutate(request(current.app).post(path)).send(invalid).expect(400);
+      }
+      expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
+    } finally { current.close(); }
+  });
+
+  it.each(["cancel", "restore", "dismiss", "retry"] as const)("reads explicit queue withdrawal performed by another client: %s", async action => {
+    const current = await fixture({ runtimeAcquireError: new Error("Withdrawal lookup must not acquire a provider.") });
+    try {
+      const workspace = await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } }).expect(201);
+      const create = async () => (await current.mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" }, title: "Withdrawal lookup" }).expect(201)).body.threadId as string;
+      const threadId = await create();
+      const otherThreadId = await create();
+      current.bindThread(threadId);
+      const queue = new QueuedInputRepository(current.database);
+      const revision = () => current.repository.getThread(current.owner, threadId).thread.revision;
+      const enqueue = (text: string) => queue.enqueue(current.owner, threadId, {
+        mutationId: randomUUID(), text, contextExcerpts: [], taskReferences: [], attachmentIds: [],
+        source: { kind: "direct_input", resolvedDeliveryMode: "queue", expectedThreadRevision: revision() }, now: Date.now(),
+      }).item;
+      const accepted = enqueue("Already accepted input");
+      expect(queue.claimHead(current.owner, threadId, "accepted-input-anchor", Date.now())?.id).toBe(accepted.id);
+      queue.markAccepted(current.owner, threadId, accepted.id, { expectedState: "dispatching", acceptedAt: Date.now() });
+      const withdrawn = enqueue("Input withdrawn in another browser");
+      const withdrawalMutationId = randomUUID();
+      const ids = [withdrawn.mutationId, accepted.mutationId, withdrawalMutationId, randomUUID()];
+      const lookup = async (targetThreadId = threadId) => (await current.mutate(request(current.app)
+        .post(`/api/threads/${targetThreadId}/abandoned-input-operations`)).send({ operationIds: ids }).expect(200)).body;
+      // Queue ownership, acceptance, and absence are not withdrawal evidence.
+      expect(await lookup()).toEqual({ threadId, abandonedOperationIds: [] });
+      if (action === "dismiss" || action === "retry") {
+        expect(queue.claimHead(current.owner, threadId, "failed-input-anchor", Date.now())?.id).toBe(withdrawn.id);
+        queue.handleCleanFailure(current.owner, threadId, withdrawn.id, {
+          expectedState: "dispatching", retryable: false, diagnostic: "Provider failure alone is not withdrawal.", now: Date.now(),
+          retryPolicy: { maximumRetries: 1, baseDelayMilliseconds: 100, maximumDelayMilliseconds: 1_000 },
+        });
+        expect(await lookup()).toEqual({ threadId, abandonedOperationIds: [] });
+      }
+      // A separate repository represents an action made by another client;
+      // the observer only receives a later read, with no intermediate queue row.
+      const otherClient = new QueuedInputRepository(current.database);
+      if (action === "cancel") otherClient.cancelIdempotently(current.owner, threadId, withdrawn.id, {
+        mutationId: withdrawalMutationId, expectedThreadRevision: revision(), now: Date.now(),
+      });
+      else if (action === "restore") otherClient.restoreIdempotently(current.owner, threadId, withdrawn.id, {
+        mutationId: withdrawalMutationId, expectedThreadRevision: revision(),
+        expectedDraftRevision: new ConversationDraftRepository(current.database).get(current.owner, threadId).revision, now: Date.now(),
+      });
+      else if (action === "dismiss") otherClient.acknowledgeFailure(current.owner, threadId, withdrawn.id, Date.now());
+      else otherClient.retryFailed(current.owner, threadId, withdrawn.id, { mutationId: withdrawalMutationId, now: Date.now() });
+      expect(await lookup()).toEqual({ threadId, abandonedOperationIds: [withdrawn.mutationId] });
+      expect(await lookup(otherThreadId)).toEqual({ threadId: otherThreadId, abandonedOperationIds: [] });
+      await current.mutate(request(current.app).post(`/api/threads/${threadId}/abandoned-input-operations`))
+        .set("X-Test-Foreign-Principal", "yes").send({ operationIds: ids }).expect(404);
+      const operations = new ConversationOperationRepository(current.database);
+      expect(operations.listAbandonedOperations({ ...current.owner, tenantId: "foreign" }, threadId, ids)).toEqual([]);
+      // Presentation withdrawal does not authorize native operation cleanup.
+      expect(operations.isOperationAbandoned(current.owner, threadId, withdrawn.mutationId)).toBe(false);
+      expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
     } finally { current.close(); }
   });
 

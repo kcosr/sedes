@@ -36,7 +36,8 @@ User-facing changes are collected here before release. See the
   ([#121](https://github.com/kcosr/sedes/pull/121))
 
 - Upgrade server and browser/packaged clients together for client protocol
-  **177**. Antigravity targets add a normalized brand and execution configuration.
+  **178**. Clients can verify exact abandoned inputs after Force Reset.
+  Antigravity targets add a normalized brand and execution configuration.
   Chat excerpts captured from highlighted questions retain their quote
   style in drafts and sent messages. Account quota snapshots now include the
   execution target's backend identity. Research settings now select Codex CLI.
@@ -110,7 +111,6 @@ User-facing changes are collected here before release. See the
   completion require native terminal evidence. Unchanged history avoids repeated
   transcript processing, and native reads run outside the server event loop.
   Bound threads support Sedes-local titles that survive native rediscovery;
-  uncertain Steer cards follow their durable queue entry through recovery and reset.
   Antigravity displays its official brand mark and reasoning effort labels such
   as **Extra High**. Codex Saved Agents use the same reasoning labels as threads.
   Upgrade Antigravity execution sidecars with the server for runtime capability **3**.
@@ -395,6 +395,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Accepted Steers remain visible until their matching message arrives. Force
+  Reset and queue withdrawal clear stale Steer cards across clients and release
+  draft autosave even after missed queue updates or late responses.
+  ([#144](https://github.com/kcosr/sedes/pull/144))
 
 - Local Sedes tools use the actual listener address when the server selects an
   ephemeral port with `PORT=0`, including restored backends during startup.

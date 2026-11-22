@@ -325,8 +325,10 @@ export class ThreadForceResetRepository {
 
       // Persist exact operation abandonment before clearing dispatch evidence.
       // A failed queue row or a human diagnostic alone cannot authorize cleanup
-      // of an unresolved native submission. The namespaced receipt is separate
-      // from any existing operation receipt; a key collision aborts this reset.
+      // of an unresolved native submission. Force Reset explicitly abandons
+      // failed rows too when it acknowledges them. The namespaced receipt is
+      // separate from any existing operation receipt; a key collision aborts
+      // this reset without changing a terminal native outcome.
       const insertAbandonedInput = this.database.prepare(`INSERT INTO mutation_receipts(
         tenant_id, principal_id, thread_id, mutation_id, operation_kind,
         request_fingerprint, result_code, result_json, replayable, created_at
@@ -334,9 +336,10 @@ export class ThreadForceResetRepository {
       const readAbandonedInput = this.database.prepare(`SELECT mutation_id AS operationId
         FROM queued_inputs WHERE tenant_id = ? AND owner_principal_id = ?
           AND application_thread_id = ? AND id = ?
-          AND state IN ('pending', 'retry_wait', 'dispatching', 'uncertain')`);
+          AND (state IN ('pending', 'retry_wait', 'dispatching', 'uncertain')
+            OR (state = 'failed' AND failure_acknowledged_at IS NULL))`);
       for (const blocker of capture.blockers) {
-        if (blocker.kind !== "queued_input" || blocker.state === "failed") continue;
+        if (blocker.kind !== "queued_input") continue;
         const row = readAbandonedInput.get(scope.tenantId, scope.principalId, blocker.threadId, blocker.id) as { readonly operationId: string } | undefined;
         if (!row) throw new DomainError("conflict", "The queued input changed during Force Reset.");
         insertAbandonedInput.run(scope.tenantId, scope.principalId, blocker.threadId,

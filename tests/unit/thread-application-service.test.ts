@@ -465,6 +465,7 @@ function createService(input?: {
       mutate,
       admitInput: vi.fn(),
       readInputReceipt: vi.fn(),
+      readAbandonedInputOperations: vi.fn(),
       inputContext: vi.fn(),
     },
   });

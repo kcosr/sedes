@@ -107,6 +107,25 @@ order and fenced against newer events and responses completed during the read.
 Application abandonment can release an exact scoped terminal provider receipt,
 but cannot establish native non-consumption or discard a pending callback.
 
+Client protocol 178 exposes a bounded application-owned lookup for explicit
+input abandonment at `POST /api/threads/:threadId/abandoned-input-operations`.
+It reads exact persisted operation IDs under the authenticated tenant,
+principal, and thread; it never queries a provider. Positive evidence includes
+Force Reset receipts and exact queue records withdrawn by cancellation,
+restoration, or acknowledgement of a failed input (including explicit retry
+under a new operation ID). This application presentation evidence does not
+broaden native operation abandonment or prove non-consumption.
+Omitted IDs, queue absence, and an idle thread
+prove nothing about acceptance or consumption. Accepted Steer presentation
+remains until its exact user item materializes; abandonment retires stale
+presentation without restoring or resending the text. Existing draft rollback
+and late-materialization obligations must still complete. Lookups are bounded,
+triggered by authoritative projection/receipt changes rather than streaming
+chunks, and suspended when the client loses authority or closes the thread.
+Pi SDK, native Pi, Codex, Claude, OpenCode, and Antigravity share this application
+path without provider-specific changes. Grok intentionally does not advertise
+Steer; the lookup grants no new delivery capability.
+
 The Codex 0.169.0 compatibility update is provider-private. Its single generated
 profile validates native moderation, completion-token, executor-environment and
 audio-reference metadata without granting browser or additional-executor authority.

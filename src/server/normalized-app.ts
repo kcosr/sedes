@@ -35,7 +35,7 @@ import {
 } from "../shared/protocol/projects.js";
 import { projectIdSchema, mutationIdSchema } from "../shared/protocol/domain.js";
 import { MAXIMUM_DRAFT_REQUEST_BYTES } from "../shared/protocol/api.js";
-import { directInputRequestBodySchema, threadInputContextSchema, MAX_DIRECT_INPUT_REQUEST_BYTES } from "../shared/protocol/thread-input.js";
+import { abandonedInputOperationsRequestSchema, abandonedInputOperationsResultSchema, directInputRequestBodySchema, threadInputContextSchema, MAX_DIRECT_INPUT_REQUEST_BYTES } from "../shared/protocol/thread-input.js";
 import { LocationConflictError, ProjectRemovalBlockedError } from "./db/repositories/inventory-repository.js";
 import { respondToQuestionResultSchema } from "../shared/protocol/api.js";
 import type { QuestionRequestService } from "./domain/question-request-service.js";
@@ -1429,6 +1429,21 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const mutationId = mutationIdSchema.parse(request.params.mutationId);
     response.setHeader("Cache-Control", "no-store");
     response.json(dependencies.threads.readInputReceipt(requestScope, mutationId));
+  });
+
+  routes.post("/api/threads/:threadId/abandoned-input-operations", async (request, response) => {
+    const requestScope = await scope(request);
+    const { threadId } = threadRouteParametersSchema.parse(request.params);
+    const input = abandonedInputOperationsRequestSchema.parse(request.body);
+    const result = abandonedInputOperationsResultSchema.safeParse(
+      await dependencies.threads.readAbandonedInputOperations(requestScope, threadId, input.operationIds),
+    );
+    if (!result.success || result.data.threadId !== threadId ||
+        result.data.abandonedOperationIds.some(id => !input.operationIds.includes(id))) {
+      throw new Error("abandoned_input_operations_unpresentable");
+    }
+    response.setHeader("Cache-Control", "no-store");
+    response.json(result.data);
   });
 
   routes.get("/api/threads/:threadId/queued-inputs/:queuedInputId", async (request, response) => {

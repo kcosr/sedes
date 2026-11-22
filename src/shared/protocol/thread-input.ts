@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { mutationIdSchema, threadIdSchema, applicationTurnIdSchema } from "./domain.js";
-import { steerTargetSchema, threadRunStateSchema } from "./conversation.js";
+import { queuedInputSummarySchema, steerTargetSchema, threadRunStateSchema } from "./conversation.js";
 import { MAXIMUM_THREAD_INPUT_BYTES } from "./context-excerpts.js";
 import { boundedDisplayTextSchema } from "./payload.js";
 import { PAGE_RESPONSE_MAX_BYTES, pageResponseReferenceSchema } from "./pages.js";
@@ -72,6 +72,21 @@ export const directInputReceiptLookupSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("notObserved") }),
 ]);
 export type DirectInputReceiptLookup = z.infer<typeof directInputReceiptLookupSchema>;
+
+export const MAX_ABANDONED_INPUT_OPERATION_LOOKUP = 100;
+const uniqueOperationIdsSchema = z.array(queuedInputSummarySchema.shape.deliveryOperationId)
+  .max(MAX_ABANDONED_INPUT_OPERATION_LOOKUP)
+  .refine(ids => new Set(ids).size === ids.length, "Operation IDs must be unique.");
+
+/** Read-only lookup of explicit application abandonment; absence is not an outcome. */
+export const abandonedInputOperationsRequestSchema = z.strictObject({
+  operationIds: uniqueOperationIdsSchema.refine(ids => ids.length > 0, "At least one operation ID is required."),
+});
+export const abandonedInputOperationsResultSchema = z.strictObject({
+  threadId: threadIdSchema,
+  abandonedOperationIds: uniqueOperationIdsSchema,
+});
+export type AbandonedInputOperationsResult = z.infer<typeof abandonedInputOperationsResultSchema>;
 
 export const threadInputContextSchema = z.strictObject({
   threadId: threadIdSchema,

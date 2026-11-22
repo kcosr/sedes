@@ -38,6 +38,7 @@ import { composerInputUtf8Bytes, composerTaskInputUtf8Bytes, MAXIMUM_THREAD_INPU
 import type { NativeVoiceComposerHandoff } from "../../voice/native-voice-plugin.js";
 import {
   DeliveryRecoveryRequiredError,
+  hasSteerDraftBarrier,
   useThreadStore,
   type ThreadClientStore,
 } from "../../stores/ThreadClientStore.js";
@@ -1008,13 +1009,7 @@ export function Composer({
     return true;
   };
 
-  const steerDraftBarrierPending = state.pendingComposerTransfers.some(
-    (transfer) =>
-      transfer.mode === "steer" &&
-      ((transfer.authorityState === "client_only" &&
-        transfer.steerPhase === "unconfirmed") ||
-        (transfer.rollbackRequired && !transfer.rollbackApplied)),
-  );
+  const steerDraftBarrierPending = hasSteerDraftBarrier(state.pendingComposerTransfers);
   useEffect(() => {
     draftQueue.current!.setBlocked(steerDraftBarrierPending);
   }, [steerDraftBarrierPending]);
@@ -1288,13 +1283,7 @@ export function Composer({
       } else {
         clearRetainedComposerDeliveryState(store);
       }
-      const blockedBySteer = transfers.some(
-        (transfer) =>
-          transfer.mode === "steer" &&
-          ((transfer.authorityState === "client_only" &&
-            transfer.steerPhase === "unconfirmed") ||
-            (transfer.rollbackRequired && !transfer.rollbackApplied)),
-      );
+      const blockedBySteer = hasSteerDraftBarrier(transfers);
       if (dirtyRef.current && !blockedBySteer) {
         void persistDepartingDraft().catch(() => undefined);
       }
@@ -2462,7 +2451,7 @@ export function Composer({
               transfer.steerPhase === "unconfirmed" &&
               !transfer.rollbackRequired
             ) {
-              draftQueue.current!.setBlocked(true);
+              draftQueue.current!.setBlocked(hasSteerDraftBarrier(store.getSnapshot().pendingComposerTransfers));
             } else if (
               transfer &&
               !transfer.rollbackApplied &&
@@ -2514,7 +2503,9 @@ export function Composer({
           // The provider boundary was crossed or is unknown. Keep the captured
           // contribution solely in the unconfirmed Steer row and keep all
           // post-clear autosaves behind this operation's barrier.
-          draftQueue.current!.setBlocked(true);
+          // A reset or exact queue handoff may have retired this transfer
+          // before its HTTP response. Do not resurrect its autosave barrier.
+          draftQueue.current!.setBlocked(hasSteerDraftBarrier(store.getSnapshot().pendingComposerTransfers));
           throw recoveryError;
         }
         const visibleAuthoritative =
