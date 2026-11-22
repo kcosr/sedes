@@ -53,6 +53,39 @@ async function cancelledChildFixture(status = 6) {
   return { ...f, child, executionId };
 }
 describe("Antigravity native background authority", () => {
+  it.each((["child", "embedded"] as const).flatMap(kind => [1, 3, 6, 11].map(reason => ({ kind, reason }))))("keeps a failed tool tail in a $kind unknown until execution receipt $reason", async ({ kind, reason }) => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId), child = kind === "child" ? f.create(childId, parentId) : undefined;
+      const executionId = "failed-read-execution";
+      const failedRead = proto(generic("read_file", Buffer.alloc(0), "ReadFile", 7, 1, executionId),
+        field(31, field(1, "file does not exist")));
+      const enclosing = generic("invoke_subagent", field(2, proto(field(1, childId), field(3, pathToFileURL(f.root).href))), "InvokeSubagent");
+      const write = (final?: Buffer, receipt?: Buffer) => {
+        if (child) {
+          f.step(parent, 0, 132, 3, enclosing);
+          f.step(child, 0, 132, 7, failedRead);
+          if (final) f.step(child, 1, 15, 3, final);
+          if (receipt) child.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(receipt);
+        } else {
+          f.step(parent, 0, 132, 3, proto(enclosing, field(6, proto(field(6, childId), field(2, failedRead),
+            ...(final ? [field(2, final)] : []), ...(receipt ? [field(9, receipt)] : [])))));
+          parent.exec("UPDATE steps SET has_subtrajectory = 1 WHERE idx = 0");
+        }
+      };
+      const state = async () => {
+        const history = (await f.read()).native;
+        return kind === "child" ? history.steps[0]?.subagents?.[0]?.state : history.steps[0]?.subtrajectoryState;
+      };
+      write();
+      expect(await state()).toBe("unknown");
+      write(undefined, proto(field(1, reason), field(9, executionId)));
+      expect(await state()).toBe("terminal");
+      if (child) child.exec("DELETE FROM executor_metadata");
+      write(response());
+      expect(await state()).toBe("terminal");
+    } finally { f.close(); }
+  });
   it.each([6, 12])("requires exact executor proof for a child ending at canceled tool status %s", async status => {
     const f = await cancelledChildFixture(status);
     try {

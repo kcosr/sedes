@@ -113,7 +113,7 @@ User-facing changes are collected here before release. See the
   Bound threads support Sedes-local titles that survive native rediscovery;
   Antigravity displays its official brand mark and reasoning effort labels such
   as **Extra High**. Codex Saved Agents use the same reasoning labels as threads.
-  Upgrade Antigravity execution sidecars with the server for runtime capability **3**.
+  Upgrade Antigravity execution sidecars with the server for runtime capability **4**.
   See [Antigravity setup](docs/operator/backends/antigravity.md).
   ([#144](https://github.com/kcosr/sedes/pull/144))
 
@@ -395,6 +395,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Antigravity tool errors no longer prematurely complete agent work or send
+  empty failure callbacks while the agent is still working. Genuine failed and
+  canceled executions still settle from native terminal evidence.
+  ([#144](https://github.com/kcosr/sedes/pull/144))
 
 - Accepted Steers remain visible until their matching message arrives. Force
   Reset and queue withdrawal clear stale Steer cards across clients and release

@@ -729,7 +729,7 @@ major-1 release and sign in under the selected execution account. One enabled
 Antigravity backend per environment may serve multiple targets. Set an optional
 absolute executable and native profile path in the backend editor. Configure
 target defaults from that runtime's advertised model and reasoning options.
-Remote execution requires the negotiated `antigravity_runtime` capability 3.
+Remote execution requires the negotiated `antigravity_runtime` capability 4.
 See [Antigravity](backends/antigravity.md) for fields, native mode semantics,
 and runtime ownership.
 

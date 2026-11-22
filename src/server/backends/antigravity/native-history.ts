@@ -10,7 +10,7 @@ import { decodeAntigravityNativeMessage as decode, message, string, integer, rep
 import { AntigravityError, type AntigravityHistory, type AntigravityIdentity, type AntigravityRuntimeConfiguration } from "./port.js";
 import { assertAntigravityNativeSemantics } from "./native-guards.js";
 import { antigravityNativeActivity } from "./host/native-activity.js";
-import { antigravityCancelledExecutionHeads, antigravityNativeTerminalOutcome, antigravityUnstartedInputs } from "./native-execution.js";
+import { antigravityTerminatedExecutionHeads, antigravityNativeTerminalOutcome, antigravityUnstartedInputs } from "./native-execution.js";
 export { createAntigravityNativeHistoryReader, type AntigravityNativeHistoryReader } from "./native-history-reader.js";
 
 const MAXIMUM_HISTORY_BYTES = 96 * 1024 * 1024;
@@ -457,6 +457,7 @@ function childState(native: AntigravityNativeHistory): "active" | "terminal" | "
   const outcome = antigravityNativeTerminalOutcome(final);
   if (outcome === "interrupted") return "cancelled";
   if (outcome === "completed" || outcome === "failed") return "terminal";
-  if (final?.executionId && antigravityCancelledExecutionHeads(native).get(final.executionId) === final.index) return "cancelled";
+  const execution = final?.executionId ? antigravityTerminatedExecutionHeads(native).get(final.executionId) : undefined;
+  if (execution && execution.index === final?.index) return execution.outcome === "interrupted" ? "cancelled" : "terminal";
   return "unknown";
 }

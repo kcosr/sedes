@@ -92,7 +92,7 @@ requests. Pending work and undelivered outcomes block ordinary runtime
 retirement. A disconnected runtime is not evidence that work stopped.
 
 Remote instances require an execution sidecar advertising
-`antigravity_runtime` capability 3. Upgrade main and the sidecar together before
+`antigravity_runtime` capability 4. Upgrade main and the sidecar together before
 enabling this backend. There is no local fallback when a remote host is offline.
 Reconnect restores exact retained session authority; it does not replay an
 uncertain submission or silently create another session.

@@ -99,7 +99,13 @@ the combination; it grants neither capability to an unsupported backend.
 Antigravity additionally settles canceled foreground turns and child sessions
 from its own exact durable executor receipts. Its tool-call responses cannot
 prove background continuation completion or retire retained tool work. Other
-backends retain their existing native terminal evidence.
+backends retain their existing native terminal evidence. A tool failure or
+standalone error diagnostic is not a whole-turn outcome. Completion observers
+and agent callbacks must only receive backend-proven terminal turns; preserve
+legitimate empty failures and immutable completion receipts. Antigravity uses
+terminal planner responses or exact fatal/canceled executor receipts, including
+remote child classifications; Pi SDK, native Pi, Codex, Claude, Grok, and OpenCode
+retain their existing provider terminal events and history rules.
 
 Acknowledging accepted provider events must not depend on a subsequent passive
 history read succeeding. Reconnect inventories must be applied in serialization

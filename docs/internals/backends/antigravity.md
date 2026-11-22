@@ -140,9 +140,12 @@ Native step indices and fixed semantic slots provide stable timeline identities
 and item ordering even when an earlier step acquires optional reasoning or text.
 Ordering arithmetic rejects values outside the safe integer range. Antigravity writes
 incremental output to SQLite during streaming, so live and historical views
-share one projection. Prompt completion requires terminal native response or
-error evidence. A token-usage update, quiet interval, completed tool, or empty
-activity inventory does not prove turn completion.
+share one projection. Prompt completion requires a terminal native planner
+response or an exact executor termination receipt. Tool and standalone error diagnostics remain visible
+without settling a turn or delivering its completion callback; the planner may
+continue after a missing file, invalid range, or failed command. A token-usage
+update, quiet interval, completed tool, or empty activity inventory does not prove
+turn completion.
 
 The reader also acquires bounded `executor_metadata` rows in the same SQLite
 snapshot and includes acquired bytes in the native revision. Executor table
@@ -151,25 +154,46 @@ child sessions, with at most 8 MiB per row; it never reduces the 100,000-step,
 96 MiB history allowance. If a complete session's receipt set exceeds the
 remaining allowance, all of that session's receipts are omitted and a bounded
 capacity marker enters the revision. Partial receipt sets cannot prove
-cancellation because an omitted row could contradict them. ID-less protobuf
+termination because an omitted row could contradict them. ID-less protobuf
 defaults are hashed but supply no evidence. Malformed acquired records and a
 missing executor table are unsupported native formats, not legacy fallbacks.
 Only execution ID,
 last step index, termination reason, and auto-continue disposition are decoded;
 embedded native configuration and telemetry stay unprojected. A durable
-`USER_CANCELED` executor receipt can finish a turn as interrupted without a final
-assistant response when it matches that turn's exact execution and last native
-step, all steps in that execution are terminal, and no auto-continue or conflicting
+`USER_CANCELED` executor receipt can finish a turn as interrupted, and an
+`ERROR` receipt can finish it as failed, without a final assistant response when
+it matches that turn's exact execution and last native step, all steps in that execution are terminal, and no auto-continue or conflicting
 receipt exists. The final execution governs a multi-execution turn; trailing
 native inputs proven unstarted do not advance the executed head. The same proof
 settles background continuations and retires retained ACP tools only when no
-newer activity invalidates it. A cancelled permission/tool step alone is insufficient. Remote
-history carries this required evidence through `antigravity_runtime` capability
-3; older peers fail capability negotiation rather than silently dropping it.
+newer activity invalidates it. A failed or cancelled tool step alone is
+insufficient. Remote history carries this required evidence through `antigravity_runtime` capability
+4; older peers fail capability negotiation because their derived child states
+can mistake recoverable tool errors for whole-execution failure.
+
+Executor termination reasons have explicit dispositions. The same exact
+identity, frontier, terminal-step and no-auto-continue checks apply to every
+supported receipt:
+
+| Native reason | Receipt-only disposition |
+| --- | --- |
+| `ERROR` (1) | Failed |
+| `USER_CANCELED` (2) | Interrupted |
+| `MAX_INVOCATIONS` (3), `MAX_FORCED_INVOCATIONS` (6), `MAX_TOKEN_BUDGET_EXCEEDED` (11) | Failed; the executor exhausted its limit |
+| `NO_TOOL_CALL` (4) | No receipt-only outcome; require the terminal planner response |
+| `EARLY_CONTINUE` (7), `CHAINED` (12) | No receipt-only outcome; execution may continue |
+| `TERMINAL_STEP_TYPE` (8), `TERMINAL_CUSTOM_HOOK` (9), `INJECTED_RESPONSE` (10) | Intentionally unsupported as receipt-only outcomes; the enum does not establish success, failure, or cancellation |
+| `UNSPECIFIED` (0), reserved 5, or unrecognized values | No terminal proof |
+
+Unsupported receipts leave incomplete turns reconciling and children unknown
+unless a separate supported terminal response proves the outcome. Error text
+never fills that evidence gap. A failed executor uses its standalone/planner
+error diagnostic when present at the executed head, otherwise a generic failure;
+it does not attribute the execution failure to an ordinary tool diagnostic.
 
 Exact child-session reads apply the same executor proof before classifying a
-cancelled tool tail as a cancelled child. Missing, conflicting, or omitted proof
-keeps the child unknown and blocks quiescence. Embedded subtrajectories use
+cancelled tool tail as a cancelled child or a failed tail as terminal. Missing,
+conflicting, or omitted proof keeps the child unknown and blocks quiescence. Embedded subtrajectories use
 their own `Trajectory.executor_metadatas` (field 9), verified against the same
 qualified native descriptor. Their bytes are already bounded and hashed inside
 the enclosing step; the decoder's shared byte, field-count, and depth limits

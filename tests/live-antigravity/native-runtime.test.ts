@@ -4,7 +4,7 @@ import { command, readPortHistory, localFixture, observer, untilNative, waitOutc
 import { antigravityNativeActivity } from "../../src/server/backends/antigravity/host/native-activity.js";
 import { antigravitySteerConsumed, projectAntigravityHistory } from "../../src/server/backends/antigravity/history.js";
 import { buildAntigravityPrompt, inspectAntigravityInput, type AntigravitySubmissionScope } from "../../src/server/backends/antigravity/submission.js";
-import { antigravityCancelledExecutionHeads } from "../../src/server/backends/antigravity/native-execution.js";
+import { antigravityTerminatedExecutionHeads } from "../../src/server/backends/antigravity/native-execution.js";
 
 it("recovers a rejected permission and queued steer using exact native disposition or explicit Stop", async () => {
   const f = await localFixture();
@@ -49,7 +49,7 @@ it("recovers a rejected permission and queued steer using exact native dispositi
       const outcome = await f.host.outcome({ handleId: f.attachment.handleId, operationId: steerId });
       const input = history.native.steps.find(step => step.user && inspectAntigravityInput(scope, step.user.text).operationId === steerId);
       const primaryInput = history.native.steps.find(step => step.user && inspectAntigravityInput(scope, step.user.text).operationId === operationId);
-      const primaryCancelled = primaryInput?.executionId !== undefined && antigravityCancelledExecutionHeads(history.native).has(primaryInput.executionId);
+      const primaryCancelled = primaryInput?.executionId !== undefined && antigravityTerminatedExecutionHeads(history.native).get(primaryInput.executionId)?.outcome === "interrupted";
       const consumed = input !== undefined && antigravitySteerConsumed(history.native, input.index);
       const stopReason = outcome.status === "completed" ? (outcome.result as { stopReason?: string }).stopReason : undefined;
       const disposition = consumed && stopReason === "end_turn" ? "accepted" : stopReason === "cancelled" &&

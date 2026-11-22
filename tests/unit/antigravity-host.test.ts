@@ -539,7 +539,7 @@ describe("Antigravity execution host", () => {
     await f.host.acknowledgeCreation({ ...identity, operationId: "creation" }); await drain(f.host, handleId);
     expect(await f.host.retireSession(identity)).toBe("retired");
   });
-  it("settles cancelled child continuations and retires their unmatched ACP tools from executor receipts", async () => {
+  it.each([1, 2, 3, 6, 11])("settles child continuations and retires unmatched ACP tools from executor reason %s", async terminationReason => {
     const f = await fixture(), identity = await f.host.create({ cwd: f.cwd, operationId: "creation" }); const { handleId } = await f.host.attach(identity);
     const childId = "8a54e222-1000-4000-8000-000000000002";
     f.emit({ sessionId: identity.sessionId, update: { sessionUpdate: "tool_call", toolCallId: "continuation-tool", title: "Continue", status: "in_progress" } });
@@ -547,11 +547,11 @@ describe("Antigravity execution host", () => {
       { index: 0, type: 132, status: 3, hasSubtrajectory: false, subagents: [{ sessionId: childId, state: "terminal" }] },
       { index: 1, type: 101, status: 3, hasSubtrajectory: false, executionId: "continuation", continuation: { id: "receipt", sender: childId,
         recipient: identity.sessionId, kind: "agent_message", content: "Child finished" } },
-      { index: 2, type: 132, status: 6, hasSubtrajectory: false, executionId: "continued-execution", tool: { id: "native-tool", name: "run_command", argumentsJson: "{}" } },
+      { index: 2, type: 132, status: terminationReason === 2 ? 6 : 7, hasSubtrajectory: false, executionId: "continued-execution", error: "tool did not finish", tool: { id: "native-tool", name: "run_command", argumentsJson: "{}" } },
     ] };
     f.readHistory.mockResolvedValue({ ...identity, native }); await f.host.readHistory(identity);
     expect(nativeActivity.antigravityNativeActivity(native)).toMatchObject({ active: true, pendingContinuations: true });
-    native.executions.push({ executionId: "continued-execution", lastStepIndex: 2, terminationReason: 2, proceededWithAutoContinue: false });
+    native.executions.push({ executionId: "continued-execution", lastStepIndex: 2, terminationReason, proceededWithAutoContinue: false });
     native.revision = "c".repeat(64); await f.host.readHistory(identity);
     expect(nativeActivity.antigravityNativeActivity(native)).toMatchObject({ active: false, unknown: false, foregroundActive: false, pendingContinuations: false, agents: 0 });
     expect(f.host.snapshot().blockers).not.toContain("active_work");

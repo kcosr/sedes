@@ -6,7 +6,7 @@ import type { AntigravityNativeHistory, AntigravityNativeStep } from "./native-s
 import { inspectAntigravityInput, type AntigravitySubmissionScope } from "./submission.js";
 import { antigravityNativeActivity } from "./host/native-activity.js";
 import { MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES, serializedUtf8Bytes } from "../../../shared/protocol/payload.js";
-import { antigravityCancelledExecutionHeads, antigravityNativeTerminalOutcome } from "./native-execution.js";
+import { antigravityTerminatedExecutionHeads, antigravityNativeTerminalOutcome } from "./native-execution.js";
 
 export const antigravityTurnId = (index: number): string => `input:${index}`;
 export function antigravitySteerConsumed(native: AntigravityNativeHistory, index: number): boolean {
@@ -38,7 +38,7 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
   let lastStep: AntigravityNativeStep | undefined;
   let inputExecutionId: string | undefined;
   let lastExecutionId: string | undefined;
-  const cancelled = antigravityCancelledExecutionHeads(native);
+  const terminated = antigravityTerminatedExecutionHeads(native);
   const settle = () => {
     if (!turn) return;
     const last = lastResponse;
@@ -52,10 +52,15 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
       turn.status = "completed"; turn.endedBy = "agent_settled";
     }
     if (turn.status !== "in_progress" && last?.completedAt) turn.completedAt = last.completedAt;
-    else if (turn.status === "in_progress" && lastStep?.executionId &&
-        cancelled.get(lastStep.executionId) === lastStep.index) {
-      turn.status = "interrupted"; turn.endedBy = "interrupted";
-      if (lastStep.completedAt) turn.completedAt = lastStep.completedAt;
+    else if (turn.status === "in_progress" && lastStep?.executionId) {
+      const terminal = terminated.get(lastStep.executionId);
+      if (terminal?.index === lastStep.index) {
+        turn.status = terminal.outcome; turn.endedBy = terminal.outcome;
+        if (terminal.outcome === "failed") turn.failure = { message: boundDisplayText(
+          lastStep.error && !lastStep.tool && !lastStep.command && (lastStep.response || lastStep.type === 17)
+            ? lastStep.error : "Antigravity execution stopped before completing.") };
+        if (lastStep.completedAt) turn.completedAt = lastStep.completedAt;
+      }
     }
   };
   const add = (step: AntigravityNativeStep, suffix: keyof typeof itemSlots, part: Omit<BackendItem, "backendItemId" | "backendTurnId" | "status" | "sourceOrder">, status = antigravityStepStatus(step.status)) => {
@@ -127,7 +132,7 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
       add(step, "tool", { semanticKind: "tool", phase, toolName: boundDisplayText(step.tool.name), title: boundDisplayText(step.tool.summary || step.tool.name), category: "other",
         arguments: boundValue(args), ...(step.tool.result !== undefined ? { result: { content: [{ kind: "text", value: boundText(step.tool.result) }], isError: status === "failed" } } : {}) } as BackendItem);
     }
-    if (step.error) { lastResponse = step; add(step, "error", { semanticKind: "notice", tone: "error", text: boundText(step.error) } as BackendItem, "failed"); }
+    if (step.error) add(step, "error", { semanticKind: "notice", tone: "error", text: boundText(step.error) } as BackendItem, "failed");
     if (step.executionId) lastExecutionId = step.executionId;
     lastStep = step;
   }

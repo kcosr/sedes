@@ -9,7 +9,7 @@ import { OwnedNdjsonStdioTransportFactory } from "../../../provider-protocol/tra
 import { AcpDeliveryError, AcpRemoteError } from "../../../provider-protocol/bindings/acp-v1/index.js";
 import { AntigravityAcpConnection } from "../acp-connection.js";
 import { antigravityNativeActivity } from "./native-activity.js";
-import { antigravityCancelledExecutionHeads, antigravityNativeTerminalOutcome } from "../native-execution.js";
+import { antigravityTerminatedExecutionHeads, antigravityNativeTerminalOutcome } from "../native-execution.js";
 import { antigravityCommandSchema, antigravityAgentToolsSchema, antigravityHistoryReadSchema } from "../sidecar/wire.js";
 import type { AntigravityNativeHistoryReader } from "../native-history.js";
 import { AntigravityError, type AntigravityPort, type AntigravityRuntimeConfiguration, type AntigravityIdentity,
@@ -653,7 +653,7 @@ export class AntigravityHost implements AntigravityPort {
         if (step.response && antigravityNativeTerminalOutcome(step) !== undefined)
           terminalExecutionIndex = Math.max(terminalExecutionIndex, step.index);
       }
-      for (const index of antigravityCancelledExecutionHeads(history.native).values()) terminalExecutionIndex = Math.max(terminalExecutionIndex, index);
+      for (const { index } of antigravityTerminatedExecutionHeads(history.native).values()) terminalExecutionIndex = Math.max(terminalExecutionIndex, index);
       evidence = { revision: history.native.revision, activity: antigravityNativeActivity(history.native), terminalToolIds,
         terminalExecutionIndex, headIndex: history.native.steps.at(-1)?.index ?? -1 };
       session.nativeEvidence = evidence;

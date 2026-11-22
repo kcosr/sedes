@@ -162,7 +162,7 @@ describe("Antigravity persistent sidecar", () => {
       .rejects.toMatchObject({ code: "antigravity_history_revision_unproven" });
   });
   it("requires executor evidence inventory in its versioned private history contract", () => {
-    expect(antigravityRuntimeCapability.majorVersion).toBe(3);
+    expect(antigravityRuntimeCapability.majorVersion).toBe(4);
     const history = { sessionId: "session", cwd: "/workspace", native: { steps: [], revision: "a".repeat(64) } };
     expect(antigravityHistorySchema.safeParse(history).success).toBe(false);
     expect(antigravityHistorySchema.safeParse({ ...history, native: { ...history.native, executions: [] } }).success).toBe(true);
