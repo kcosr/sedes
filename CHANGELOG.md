@@ -401,8 +401,9 @@ User-facing changes are collected here before release. See the
   ([#132](https://github.com/kcosr/sedes/pull/132))
 
 - Idle remote backends recover after their sidecar is replaced, allowing Pi
-  conversation history to reopen without restarting Sedes. Active work and
-  unproven cleanup still prevent automatic replacement. See
+  conversation history to reopen without restarting Sedes. Sidecar management
+  recognizes idle native Pi runtimes for automatic upgrades. Active work,
+  unsettled outcomes, and unproven cleanup prevent automatic replacement. See
   [Pi recovery](docs/operator/backends/pi-native.md#ownership-reconnect-and-recovery).
   ([#130](https://github.com/kcosr/sedes/pull/130))
 
