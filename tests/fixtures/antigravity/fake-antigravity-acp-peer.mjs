@@ -22,7 +22,7 @@ function configOptions() {
     { id: "model", name: "Model", category: "model", type: "select", currentValue: currentModel,
       options: [{ value: "fixture-model", name: "Fixture Model" }, { value: "fixture-alt", name: "Fixture Alternate" }] },
     { id: "thought_level", name: "Reasoning effort", category: "thought_level", type: "select", currentValue: thinking,
-      options: [{ value: "low", name: "Low" }, { value: "high", name: "High" }] },
+      options: [{ value: "low", name: "Low" }, { value: "high", name: "High" }, { value: "xhigh", name: "xhigh" }] },
     { id: "mode", name: "Mode", category: "mode", type: "select", currentValue: mode,
       options: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }] },
   ];

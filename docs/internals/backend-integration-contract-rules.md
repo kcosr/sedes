@@ -4499,6 +4499,11 @@ boundary. Never compare policy to labels or to a normalized connection
 namespace that merely occupies the browser's provider field. Backends without
 a truthful native provider dimension reject configured provider matchers.
 
+Use the shared reasoning effort formatter for common picker labels in Codex,
+Pi SDK, native Pi, and Antigravity. Labels are display text. Retain exact
+catalog values in options and apply policy to those values. Claude, Grok, and
+OpenCode retain their own effort presentation.
+
 Catalog projection and authoritative mutation checks must compile and consume
 the same policy semantics. Filter every advertised model/effort selection, do
 not fabricate configured-but-unavailable values, and do not substitute another

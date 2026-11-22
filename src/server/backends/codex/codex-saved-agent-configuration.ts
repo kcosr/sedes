@@ -15,6 +15,7 @@ import {
   type CodexExecutionPolicyAllowlist,
 } from "./codex-execution-policy.js";
 import type { CodexExecutionSettingsTuple } from "./codex-thread-execution-settings-repository.js";
+import { reasoningLabel } from "./codex-reasoning-label.js";
 import {
   codexModelOffersServiceTier,
   codexServiceTierSelectionSchema,
@@ -335,7 +336,7 @@ export class CodexSavedAgentConfiguration {
         input.selectedModel.defaultReasoningEffort ?? input.settings.reasoningEffort,
         input.settings.reasoningEffort,
         (input.selectedModel.supportedReasoningEfforts ?? []).map((value) =>
-          option(value, humanize(value)),
+          option(value, reasoningLabel(value)),
         ),
       ),
       field(

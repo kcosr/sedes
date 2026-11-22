@@ -77,7 +77,7 @@ describe("Antigravity persistence", () => {
         defaultsForConnection: () => ({}), nativeNamespaceKey, now: () => 230 });
       const catalog: BackendCatalog = { models: [
         { provider: connection.id, id: "model-a", label: "Model A", inputModalities: ["text"], isDefault: true,
-          supportedReasoningEfforts: ["low", "high", "max"], defaultReasoningEffort: "low" },
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "provider-specific"], defaultReasoningEffort: "low" },
       ], commands: [], skills: [], notices: [] };
       persistence.initializeNewThread(scope, thread.id, connection, catalog);
       expect(settings.get(scope, thread.id)).toMatchObject({ modelId: "model-a", thinkingLevel: "low", revision: 0 });
@@ -92,8 +92,10 @@ describe("Antigravity persistence", () => {
       const backend = profiles.listBackends(scope).find(candidate => candidate.kind === "antigravity")!;
       const presentation = new AntigravityThreadPresentation(settings, policy);
       const presentationInput = { scope, applicationThreadId: thread.id, backend: { ...backend, enabled: backend.enabled === 1 }, connection, catalog };
-      expect((await presentation.read(presentationInput)).settingDescriptors.find(item => item.id === "thinking_level")?.options.map(option => option.value))
-        .toEqual(["low", "high"]);
+      expect((await presentation.read(presentationInput)).settingDescriptors.find(item => item.id === "thinking_level")
+        ?.options.map(({ value, label }) => [value, label.text])).toEqual([
+        ["low", "Low"], ["medium", "Medium"], ["high", "High"], ["xhigh", "Extra High"], ["provider-specific", "provider-specific"],
+      ]);
 
       const action = new AntigravityActionPersistence(settings, scope, "ag", policy);
       const stage = (thinkingLevel: string) => action.persistAccepted(scope, thread.id, {
@@ -102,12 +104,16 @@ describe("Antigravity persistence", () => {
         operation: { action: "set_setting", settingId: "thinking_level", value: thinkingLevel },
       });
       expect(() => stage("max")).toThrow(/unavailable/);
-      stage("high");
+      stage("xhigh");
       expect(() => stage("low")).toThrow(/changed/);
-      expect(settings.get(scope, thread.id)).toMatchObject({ thinkingLevel: "high", revision: 1 });
+      expect(settings.get(scope, thread.id)).toMatchObject({ thinkingLevel: "xhigh", revision: 1 });
       expect((await presentation.read(presentationInput)).settings.values[0]).toMatchObject({
-        desiredValue: encodeAntigravityModelSetting(connection.id, "model-a", "high"), effectiveValue: null, applicationState: "draft",
+        desiredValue: encodeAntigravityModelSetting(connection.id, "model-a", "xhigh"), effectiveValue: null, applicationState: "draft",
       });
+      expect((await presentation.read({ ...presentationInput, catalog: undefined })).settingDescriptors
+        .find(item => item.id === "thinking_level")?.options).toEqual([
+        { value: "xhigh", label: { text: "Extra High" }, available: false },
+      ]);
 
       const modes = new AntigravityModeCatalog();
       const modeAction = new AntigravityActionPersistence(settings, scope, "ag", policy, modes);
@@ -127,7 +133,7 @@ describe("Antigravity persistence", () => {
       expect(feature.mutationRevision).toBe(1);
       expect((await modePresentation.read(presentationInput)).providerFeatureStates[0]?.revision).toBe(feature.revision);
       const acceptedMode = await modeAction.performProviderFeature(scope, thread.id, modeInput);
-      expect(settings.get(scope, thread.id)).toMatchObject({ modeId: "plan", modelId: "model-a", thinkingLevel: "high", revision: 2 });
+      expect(settings.get(scope, thread.id)).toMatchObject({ modeId: "plan", modelId: "model-a", thinkingLevel: "xhigh", revision: 2 });
       modes.observe({ initialize: { protocolVersion: 1 }, session: {} });
       // Accepted application receipts replay even after native options change.
       expect(await modeAction.performProviderFeature(scope, thread.id, modeInput)).toEqual(acceptedMode);
@@ -171,11 +177,14 @@ describe("Antigravity persistence", () => {
       });
       const catalog: BackendCatalog = { models: [
         { provider: connection.id, id: "model-a", label: "Model A", inputModalities: ["text"], isDefault: true,
-          supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" },
+          supportedReasoningEfforts: ["low", "high", "xhigh"], defaultReasoningEffort: "low" },
+        { provider: connection.id, id: "model-b", label: "Model B", inputModalities: ["text"],
+          supportedReasoningEfforts: ["medium"], defaultReasoningEffort: "medium" },
       ], commands: [], skills: [], notices: [] };
       const settings = new AntigravityThreadRepository(database);
       const persistence = new AntigravityThreadPersistence({ scope, backendInstanceId: connection.backendInstanceId,
-        settings, modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"), defaultsForConnection: () => ({ modeId: "plan" }),
+        settings, modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"),
+        defaultsForConnection: () => ({ modelId: "model-a", thinkingLevel: "xhigh", modeId: "plan" }),
         nativeNamespaceKey: "antigravity:test", now: () => 240 });
       const modes = new AntigravityModeCatalog();
       const adapter = new AntigravitySavedAgentAdapter(persistence, modes);
@@ -205,7 +214,16 @@ describe("Antigravity persistence", () => {
         label: { text: "Mode" }, currentDefaultValue: "plan", resolvedValue: "plan",
         options: [{ value: "default", label: { text: "Default" }, available: true }, { value: "plan", label: { text: "Plan" }, available: true }],
       });
-      expect(adapter.resolve(resolutionInput()).value).toEqual({ modelId: "model-a", thinkingLevel: "low", modeId: "plan" });
+      expect(adapter.resolve(resolutionInput()).value).toEqual({ modelId: "model-a", thinkingLevel: "xhigh", modeId: "plan" });
+      const unavailableEffort = resolutionInput([{ id: "model", value: "model-b" }, { id: "reasoning_effort", value: "max" }]);
+      expect(adapter.describeEditor(unavailableEffort).fields.find(item => item.id === "reasoning_effort")).toMatchObject({
+        currentDefaultValue: "xhigh", resolvedValue: "max", options: [
+          { value: "medium", label: { text: "Medium" }, available: true },
+          { value: "xhigh", label: { text: "Extra High" }, available: false },
+          { value: "max", label: { text: "Maximum" }, available: false },
+        ],
+      });
+      expect(() => adapter.resolve(unavailableEffort)).toThrow(/unavailable/);
 
       const overrides = [{ id: "model", value: "model-a" }, { id: "reasoning_effort", value: "high" }, { id: "mode", value: "default" }];
       const input = resolutionInput(overrides);

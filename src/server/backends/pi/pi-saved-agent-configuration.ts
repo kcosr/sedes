@@ -1,3 +1,4 @@
+import { reasoningEffortLabel } from "../../../shared/reasoning-effort-label.js";
 import type { ConnectionSettingPreferenceRepository } from "../../db/repositories/connection-setting-preference-repository.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -275,7 +276,7 @@ export class PiSavedAgentConfiguration {
           piThinkingLevels.map((value) =>
             option(
               value,
-              thinkingLabel(value),
+              reasoningEffortLabel(value),
               selectedModel
                 ? supportsThinkingLevel(selectedModel, value)
                 : true,
@@ -415,16 +416,6 @@ function option(
     available,
     ...(!available && reason ? { reason } : {}),
   });
-}
-
-function thinkingLabel(value: string): string {
-  return value === "off"
-    ? "Off"
-    : value === "xhigh"
-      ? "Extra High"
-      : value === "max"
-        ? "Maximum"
-        : `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
 }
 
 function toolAccessLabel(value: PiToolAccessMode): string {

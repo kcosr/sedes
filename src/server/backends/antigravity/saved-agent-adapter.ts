@@ -4,6 +4,7 @@ import {
   normalizedAgentConfigurationDescriptorSchema, normalizedAgentConfigurationOverridesSchema,
   type AgentConfigurationFieldDescriptor, type AgentConfigurationOption,
 } from "../../../shared/protocol/saved-agents.js";
+import { reasoningEffortLabel } from "../../../shared/reasoning-effort-label.js";
 import { boundDisplayText } from "../../conversations/payload-policy.js";
 import { DomainError } from "../../domain/errors.js";
 import { BACKEND_BRANDS } from "../contracts.js";
@@ -51,6 +52,14 @@ export class AntigravitySavedAgentAdapter implements SavedAgentBackendAdapter {
   describeEditor(input: ResolveInput) {
     const { canonical, defaults, models, modes, settings } = this.#selection(input);
     const model = models.find(item => item.id === settings.modelId);
+    // Reserve room for both values when the selected model no longer offers them.
+    const effortOptions = (model?.supportedReasoningEfforts ?? []).slice(0, 510)
+      .map(effort => option(effort, reasoningEffortLabel(effort)));
+    for (const effort of [defaults.thinkingLevel, settings.thinkingLevel]) {
+      if (effort !== null && !effortOptions.some(item => item.value === effort)) {
+        effortOptions.push({ value: effort, label: boundDisplayText(reasoningEffortLabel(effort)), available: false });
+      }
+    }
     const modeOptions = modes.map(mode => {
       const action = antigravityModeFeatureModule.operations.find(operation => operation.actionId === ANTIGRAVITY_MODE_ACTIONS[mode]);
       return option(mode, action?.label.text ?? mode);
@@ -63,8 +72,7 @@ export class AntigravitySavedAgentAdapter implements SavedAgentBackendAdapter {
     const fields: AgentConfigurationFieldDescriptor[] = [
       field("model", "Model", defaults.modelId, settings.modelId,
         models.slice(0, 511).map(item => option(item.id, item.label))),
-      field("reasoning_effort", "Reasoning effort", defaults.thinkingLevel, settings.thinkingLevel,
-        (model?.supportedReasoningEfforts ?? []).slice(0, 511).map(effort => option(effort, effort))),
+      field("reasoning_effort", "Reasoning effort", defaults.thinkingLevel, settings.thinkingLevel, effortOptions),
       field("mode", "Mode", defaults.modeId, settings.modeId, modeOptions),
     ];
     return normalizedAgentConfigurationDescriptorSchema.parse({

@@ -7,6 +7,7 @@ import type { BackendDefinition, EnvironmentDefinition, TargetDefinition } from 
 import type { ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
 import { FieldErrors } from "./validation.js";
 import { piNativeThinkingLevelSchema } from "../../../shared/protocol/pi-configuration.js";
+import { reasoningEffortLabel } from "../../../shared/reasoning-effort-label.js";
 import { SwitchField } from "../settings/SettingsField.js";
 
 type BackendKind = BackendDefinition["kind"];
@@ -120,7 +121,8 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
     summarizeTarget: value => {
       if (value.kind !== "antigravity_acp") return "";
       const { modelId, thinkingLevel, modeId } = value.moduleConfiguration.defaults;
-      return [modelId ?? "Native default model", thinkingLevel && `Reasoning ${thinkingLevel}`, modeId && `Mode ${modeId}`].filter(Boolean).join(" · ");
+      return [modelId ?? "Native default model", thinkingLevel && `Reasoning ${reasoningEffortLabel(thinkingLevel)}`,
+        modeId && `Mode ${modeId}`].filter(Boolean).join(" · ");
     },
     describeConnection: value => value.kind === "antigravity" ? [
       { label: "Runs", value: "Antigravity CLI on the execution host" },

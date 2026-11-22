@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { SettingDescriptor, ThreadSettingsSnapshot } from "../../../shared/protocol/conversation.js";
+import { reasoningEffortLabel } from "../../../shared/reasoning-effort-label.js";
 import type { ThreadBackendPresentationProvider } from "../../conversations/database-thread-application-readers.js";
 import { boundDisplayText } from "../../conversations/payload-policy.js";
 import type { ThreadApplicationPresentation } from "../../conversations/thread-application-service.js";
@@ -43,10 +44,12 @@ export class AntigravityThreadPresentation implements ThreadBackendPresentationP
       });
     }
     for (const effort of (desiredModel?.supportedReasoningEfforts ?? []).slice(0, 511)) {
-      effortOptions.push({ value: effort, label: boundDisplayText(effort), available: true });
+      effortOptions.push({ value: effort, label: boundDisplayText(reasoningEffortLabel(effort)), available: true });
     }
     appendStoredOption(modelOptions, desiredModelValue, desiredModel?.label ?? desired.modelId);
-    appendStoredOption(effortOptions, desired.thinkingLevel, desired.thinkingLevel);
+    if (desired.thinkingLevel !== null) {
+      appendStoredOption(effortOptions, desired.thinkingLevel, reasoningEffortLabel(desired.thinkingLevel));
+    }
     const selections: ThreadSettingsSnapshot["values"] = [
       settingValue("model", desiredModelValue, effectiveModelValue, unbound, effective !== undefined),
     ];

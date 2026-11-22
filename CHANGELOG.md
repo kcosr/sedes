@@ -107,7 +107,8 @@ User-facing changes are collected here before release. See the
   answerable across resnapshots and reconnects. Child cancellation and background
   completion require native terminal evidence. Unchanged history avoids repeated
   transcript processing, and native reads run outside the server event loop.
-  Antigravity now displays its official brand mark.
+  Antigravity displays its official brand mark and reasoning effort labels such
+  as **Extra High**. Codex Saved Agents use the same reasoning labels as threads.
   Upgrade Antigravity execution sidecars with the server for runtime capability **3**.
   See [Antigravity setup](docs/operator/backends/antigravity.md).
   ([#144](https://github.com/kcosr/sedes/pull/144))

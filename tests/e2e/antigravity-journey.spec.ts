@@ -20,7 +20,9 @@ test("Antigravity production connection streams, stops, requests permission and 
   await expect(composer).toBeVisible();
   const controls = page.getByTestId("composer").getByTestId("thread-configuration");
   await selectRadixOption(page, controls.getByRole("combobox", { name: "Model", exact: true }), "Fixture Alternate");
-  await selectRadixOption(page, controls.locator('[data-setting-id="thinking_level"] [role="combobox"]'), "high");
+  const effort = controls.locator('[data-setting-id="thinking_level"] [role="combobox"]');
+  await selectRadixOption(page, effort, "Extra High");
+  await expect(effort).toContainText("Extra High");
   await expect(controls.getByRole("combobox", { name: "Model", exact: true })).toContainText("Fixture Alternate");
   await page.getByRole("button", { name: "Thread actions", exact: true }).click();
   await page.getByRole("menuitem", { name: "Antigravity mode", exact: true }).click();
@@ -36,7 +38,7 @@ test("Antigravity production connection streams, stops, requests permission and 
   await page.keyboard.press("Escape");
   await fillAndPersistDraft(page, "wait", "Message Antigravity");
   await sendCurrentDraft(page);
-  await expect(page.getByText("Streaming fixture-alt at high effort in plan mode.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Streaming fixture-alt at xhigh effort in plan mode.", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
   await capture(page, testInfo, "antigravity-native-streaming.png");
   await page.getByRole("button", { name: "Stop", exact: true }).click();
@@ -65,7 +67,7 @@ test("Antigravity production connection streams, stops, requests permission and 
   expect(settled.orderedTurnIds).toHaveLength(2);
   expect(settled.orderedTurnIds.map(id => settled.turnsById[id]!.status)).toEqual(["interrupted", "completed"]);
   await page.reload();
-  await expect(page.getByText("Streaming fixture-alt at high effort in plan mode.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Streaming fixture-alt at xhigh effort in plan mode.", { exact: true })).toBeVisible();
   await expect(page.getByText("Permission allowed.", { exact: true })).toBeVisible();
   await expect(composer).toBeEnabled();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden();
