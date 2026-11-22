@@ -11,10 +11,10 @@ import { MAXIMUM_PROVIDER_FRAME_BYTES } from "../../../../provider-protocol/tran
 import { snapshotBoundedJson } from "../../../../provider-protocol/json/bounded-json-snapshot.js";
 import { acquirePiSessionWriterLock, PiSessionWriterCleanupRequiredError } from "../../pi-session-writer-lock.js";
 import { parsePiRpcCommand, parsePiRpcUIResponse } from "../rpc/pi-rpc-wire.js";
-import { parsePiManagedCommand } from "../rpc/pi-managed-protocol.js";
+import { parsePiManagedCommand, piManagedConfigurationDigest } from "../rpc/pi-managed-protocol.js";
 import { createPiNativeSessionProcess } from "../rpc/pi-native-launch.js";
 import {
-  PiNativeError, type PiNativeRuntimeConfiguration, type PiNativeSessionIdentity,
+  DEFAULT_SESSION_EVENT_BYTES, MAXIMUM_SESSION_EVENTS, PiNativeError, type PiNativeRuntimeConfiguration, type PiNativeSessionIdentity,
   type PiNativePort, type PiNativeAttachInput, type PiNativeAttachment, type PiNativeCatalog,
   type PiNativeCommand, type PiNativeCreateInput, type PiNativeForkInput, type PiNativeHistory,
   type PiNativeOutcome, type PiNativeEvent, type PiNativeInspection, type PiNativeObservation,
@@ -33,7 +33,7 @@ type Process = Awaited<ReturnType<typeof createPiNativeSessionProcess>>;
 export type PiNativeSessionLauncher = typeof createPiNativeSessionProcess;
 type Store = Pick<PiNativeDiskStore, "resolveSessionDirectory" | "create" | "fork" | "reconcileFork" | "listSessions" | "readHistory">;
 type OperationBudget = "observation" | "work" | "control";
-type Operation = { fingerprint: string; outcome: PiNativeOutcome; bytes: number; budget: OperationBudget; retainOutcome: boolean; observationOnly: boolean; abandoned: boolean };
+type Operation = { fingerprint: string; outcome: PiNativeOutcome; bytes: number; budget: OperationBudget; retainOutcome: boolean; observationOnly: boolean; abandoned: boolean; wakeInlineWaiter?: () => void };
 type CatalogProcess = { id: string; process?: Process; directory?: string; cleanupUnproven: boolean; closing?: Promise<void> };
 type StreamContent = { text: string; encodedBytes: number; lastCodeUnit: number };
 type Session = {
@@ -49,15 +49,18 @@ type Session = {
   observationBytes: number;
   streamId: string; streamContent: Map<string, StreamContent>; coalesced: Map<string, PiNativeEvent>;
 };
+// A carrier admits 128 concurrent calls shared by every backend instance.
+const MAXIMUM_INLINE_WAITERS = 16;
+const INLINE_WAIT_MILLISECONDS = 20;
+let inlineWaiters = 0;
 const FRAME_BYTES = MAXIMUM_PROVIDER_FRAME_BYTES;
-const DEFAULT_SESSION_EVENT_BYTES = 32 * 1024 * 1024;
 const SMALL_REPLY_RESERVATION = 4 * 1024;
 const BULK_REPLY_RESERVATION = 64 * 1024;
 const MAXIMUM_CANCELLED_OBSERVATIONS = 4096;
 const SMALL_RPC_REPLIES = new Set(["abort", "abort_retry", "abort_bash", "get_state", "get_available_thinking_levels",
   "prompt", "steer", "follow_up", "set_model", "cycle_model", "set_thinking_level", "cycle_thinking_level",
   "set_steering_mode", "set_follow_up_mode", "set_auto_compaction", "set_auto_retry", "set_session_name", "extension_ui_response"]);
-const SMALL_COMPANION_REPLIES = new Set(["set_policy", "set_active_tools", "resolve_tool_approval", "configure_agent_tools", "resolve_agent_tool", "begin_stop", "end_stop"]);
+const SMALL_COMPANION_REPLIES = new Set(["session_status", "confirm_configuration", "set_policy", "set_active_tools", "resolve_tool_approval", "configure_agent_tools", "resolve_agent_tool", "begin_stop", "end_stop"]);
 const SNAPSHOT_LIMITS = { maximumEncodedBytes: FRAME_BYTES, maximumStringBytes: FRAME_BYTES,
   maximumArrayItems: 1_000_000, maximumTotalNodes: 2_000_000, maximumDepth: 64 };
 const DISALLOWED_SESSION_COMMANDS = new Set(["new_session", "switch_session", "clone", "fork", "export_html"]);
@@ -356,7 +359,7 @@ export class PiNativeHost implements PiNativePort {
     const previous = session.operations.get(input.operationId);
     if (previous) {
       if (previous.fingerprint !== fingerprint) throw new PiNativeError("pi_native_operation_identity_conflict");
-      return copy(previous.outcome);
+      return this.#consumeOutcome(session, input.operationId, previous);
     }
     const acknowledged = session.tombstones.get(input.operationId);
     if (acknowledged !== undefined) {
@@ -390,7 +393,12 @@ export class PiNativeHost implements PiNativePort {
     void Promise.resolve().then(async () => {
       if (command.channel === "companion") {
         const parsed = parsePiManagedCommand(command.command);
-        const result = await process.bridge.request(parsed);
+        const checkCatalog = parsed.type === "confirm_configuration" || (parsed.type === "prepare_submission" && parsed.input.mode === "submit");
+        // A fresh read of this exact owned Pi process stays on the execution host.
+        // The companion decides drift only after checking for an existing intent.
+        const observedCatalogDigest = checkCatalog
+          ? piManagedConfigurationDigest(await process.rpc.request({ type: "get_available_models" })) : undefined;
+        const result = await process.bridge.request(parsed, { observedCatalogDigest });
         if (parsed.type === "begin_stop") {
           // Only an explicitly requested Stop cancels native dialogs. Companion
           // begin_stop already denies approvals and cancels Sedes tool calls.
@@ -411,15 +419,32 @@ export class PiNativeHost implements PiNativePort {
       return process.rpc.request(parsed, ["prompt", "steer", "follow_up", "compact", "bash"].includes(parsed.type) ? { deadlineAt: null } : {});
     }).then(result => this.#settle(session, operationId, operation, { status: "completed", result: result ?? null }),
       error => this.#settle(session, operationId, operation, { status: "failed", failure: failure(error, "sent_outcome_unknown") }));
-    return { status: "pending" };
+    // Stop and other commands are still admitted when the fast-reply budget
+    // is full. Waiting for a reply never transfers ownership to the carrier.
+    if (inlineWaiters >= MAXIMUM_INLINE_WAITERS) return { status: "pending" };
+    inlineWaiters++;
+    try {
+      await waitForInlineOutcome(operation, signal);
+      this.#current(authority, signal);
+    } catch (cause) {
+      throw new PiNativeError(cause instanceof PiNativeError ? cause.code : "pi_native_request_interrupted", "sent_outcome_unknown", { cause });
+    } finally {
+      inlineWaiters--;
+    }
+    if (session.operations.get(operationId) !== operation)
+      throw new PiNativeError("pi_native_operation_unknown", "sent_outcome_unknown");
+    return this.#consumeOutcome(session, operationId, operation);
   }
 
   async outcome(input: Parameters<PiNativePort["outcome"]>[0], signal?: AbortSignal, authority = LOCAL_AUTHORITY): Promise<PiNativeOutcome> {
     this.#current(authority, signal);
     const session = this.#session(input.handleId), operation = session.operations.get(input.operationId);
     if (!operation) throw new PiNativeError("pi_native_operation_unknown", "sent_outcome_unknown");
+    return this.#consumeOutcome(session, input.operationId, operation);
+  }
+  #consumeOutcome(session: Session, operationId: string, operation: Operation): PiNativeOutcome {
     const outcome = copy(operation.outcome);
-    if (!operation.retainOutcome && outcome.status !== "pending") this.#forgetOperation(session, input.operationId, operation);
+    if (!operation.retainOutcome && outcome.status !== "pending") this.#forgetOperation(session, operationId, operation);
     return outcome;
   }
   async acknowledgeOperation(input: Parameters<PiNativePort["acknowledgeOperation"]>[0], signal?: AbortSignal, authority = LOCAL_AUTHORITY): Promise<void> {
@@ -645,6 +670,7 @@ export class PiNativeHost implements PiNativePort {
       size = bytes(operation.outcome);
     }
     this.#accountOperation(session, operation.budget, size - operation.bytes); operation.bytes = size;
+    operation.wakeInlineWaiter?.();
     if (!operation.retainOutcome && operation.abandoned) this.#forgetOperation(session, operationId, operation);
     this.#wake(session); this.#retireReleased(session);
   }
@@ -683,7 +709,7 @@ export class PiNativeHost implements PiNativePort {
         const previous = key ? session.coalesced.get(key) : undefined;
         const reclaimed = previous ? this.#eventSize(previous) : 0;
         if (size > FRAME_BYTES || session.eventBytes + session.streamBytes + size - reclaimed > (this.input.maximumEventBytes ?? DEFAULT_SESSION_EVENT_BYTES) ||
-          session.events.length - (previous ? 1 : 0) >= 16384) throw new Error("capacity");
+          session.events.length - (previous ? 1 : 0) >= MAXIMUM_SESSION_EVENTS) throw new Error("capacity");
         if (previous) {
           session.events.splice(session.events.indexOf(previous), 1);
           session.eventBytes -= reclaimed;
@@ -880,6 +906,20 @@ function waitForCatalog<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) abort();
     void pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+function waitForInlineOutcome(operation: Operation, signal?: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      operation.wakeInlineWaiter = undefined;
+      resolve();
+    };
+    const timer = setTimeout(finish, INLINE_WAIT_MILLISECONDS);
+    operation.wakeInlineWaiter = finish;
+    signal?.addEventListener("abort", finish, { once: true });
+    if (signal?.aborted) finish();
   });
 }
 function waitForEvent(session: Session, signal: AbortSignal | undefined, milliseconds: number): Promise<void> {

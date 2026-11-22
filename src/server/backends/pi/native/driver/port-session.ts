@@ -32,10 +32,11 @@ class NativeObservationReader {
     signal?.throwIfAborted();
     const id = randomUUID(); this.#pending = id;
     try {
-      const result = await requestNative(this.port, this.attachment, command, id, signal, false, deadlineAt);
-      // Successful reads can be released even if their caller's wait just ended.
-      await this.#release().catch(() => undefined);
-      return result;
+      const outcome = await requestTerminalOutcome(this.port, this.attachment, command, id, signal, false, deadlineAt);
+      // The host consumed this transient operation before returning its
+      // terminal envelope, including when the native read itself failed.
+      this.#pending = undefined;
+      return nativeResult(outcome);
     } catch (cause) {
       // An authoritative refusal proves no late frame can be admitted. Do not
       // spend a permanent unknown-read cancellation marker on that operation.
@@ -80,9 +81,14 @@ export function nativeUnknownFailure(cause: unknown): BackendError {
     backendCode: cause instanceof PiNativeError ? cause.code : cause instanceof BackendError ? cause.backendCode ?? "pi_native_operation_unknown" : "pi_native_operation_unknown" }, { cause });
 }
 
-/** An operation ID is retained by the host until its caller has consumed the result. */
+/** Durable operation IDs remain owned until the application commits and acknowledges them. */
 export async function requestNative(port: PiNativePort, attachment: PiNativeAttachment, command: PiNativeCommand,
   operationId: string = randomUUID(), signal?: AbortSignal, retainOutcome = true, deadlineAt: number | null = Date.now() + 60_000): Promise<unknown> {
+  return nativeResult(await requestTerminalOutcome(port, attachment, command, operationId, signal, retainOutcome, deadlineAt));
+}
+
+async function requestTerminalOutcome(port: PiNativePort, attachment: PiNativeAttachment, command: PiNativeCommand,
+  operationId: string, signal: AbortSignal | undefined, retainOutcome: boolean, deadlineAt: number | null = Date.now() + 60_000) {
   signal?.throwIfAborted();
   const deadline = deadlineAt === null ? undefined : AbortSignal.timeout(Math.max(0, deadlineAt - Date.now()));
   const cancellation = signal && deadline ? AbortSignal.any([signal, deadline]) : signal ?? deadline;
@@ -104,6 +110,10 @@ export async function requestNative(port: PiNativePort, attachment: PiNativeAtta
     }
     throw nativeUnknownFailure(cause);
   }
+  return outcome;
+}
+
+function nativeResult(outcome: Exclude<PiNativeOutcome, { status: "pending" }>): unknown {
   if (outcome.status === "failed") throw nativeFailure(outcome.failure);
   return outcome.result;
 }
@@ -117,16 +127,5 @@ export function companion(port: PiNativePort, attachment: PiNativeAttachment, co
 async function invoke(port: PiNativePort, attachment: PiNativeAttachment, command: PiNativeCommand, operationId?: string, signal?: AbortSignal, deadlineAt?: number | null) {
   if (!operationId && piNativeCommandIsReadOnly(command)) return observationReader(port, attachment).read(command, signal, deadlineAt)
     .catch(cause => { if (cause instanceof PiNativeError) throw nativeFailure(cause); throw cause; });
-  const id = operationId ?? randomUUID();
-  let result: unknown;
-  try { result = await requestNative(port, attachment, command, id, signal, operationId !== undefined, deadlineAt); }
-  catch (cause) {
-    if (!operationId && cause instanceof BackendError && !cause.crossedSubmissionBoundary)
-      await port.acknowledgeOperation({ handleId: attachment.handleId, operationId: id }).catch(() => undefined);
-    throw cause;
-  }
-  // Ephemeral reads/configuration are consumed here. Durable operation callers acknowledge after their receipt is committed.
-  if (!operationId) await port.acknowledgeOperation({ handleId: attachment.handleId, operationId: id }, signal)
-    .catch(cause => { throw nativeUnknownFailure(cause); });
-  return result;
+  return requestNative(port, attachment, command, operationId, signal, operationId !== undefined, deadlineAt);
 }

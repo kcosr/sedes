@@ -9,7 +9,7 @@ import { chmod, lstat, mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PiManagedBridge } from "../../src/server/backends/pi/native/rpc/pi-managed-bridge.js";
-import { piManagedExtension } from "../../src/server/backends/pi/native/rpc/pi-managed-extension.js";
+import { piManagedCanonicalJson, piManagedExtension } from "../../src/server/backends/pi/native/rpc/pi-managed-extension.js";
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const action of cleanup.splice(0).reverse()) await action(); vi.unstubAllEnvs(); });
@@ -41,9 +41,9 @@ describe.skipIf(process.platform === "win32")("native Pi private bootstrap", () 
     expect(Object.keys(f.bootstrap).sort()).toEqual(["socketPath", "token", "version"]);
     expect(JSON.stringify(f.bootstrap)).not.toContain(f.key.toString("base64url"));
     await unlink(f.bridge.bootstrapPath);
-    f.socket.write(JSON.stringify({ type: "hello", version: 2, token: f.bootstrap.token }) + "\n");
+    f.socket.write(JSON.stringify({ type: "hello", version: 3, token: f.bootstrap.token }) + "\n");
     await vi.waitFor(() => expect(f.frames).toHaveLength(1));
-    expect(f.frames[0]).toEqual({ type: "initialize", version: 2, authenticationKey: f.key.toString("base64url") });
+    expect(f.frames[0]).toEqual({ type: "initialize", version: 3, authenticationKey: f.key.toString("base64url") });
     await expect(f.bridge.request({ type: "snapshot" })).rejects.toMatchObject({ delivery: "not_sent" });
     f.socket.write(JSON.stringify({ type: "ready", state }) + "\n");
     await expect(f.bridge.ready).resolves.toEqual(state);
@@ -54,7 +54,7 @@ describe.skipIf(process.platform === "win32")("native Pi private bootstrap", () 
     const f = await fixture();
     if (failure !== "unconsumed_bootstrap") await unlink(f.bridge.bootstrapPath);
     f.socket.write(JSON.stringify(failure === "missing_hello" ? { type: "ready", state }
-      : { type: "hello", version: 2, token: failure === "wrong_token" ? randomBytes(32).toString("base64url") : f.bootstrap.token }) + "\n");
+      : { type: "hello", version: 3, token: failure === "wrong_token" ? randomBytes(32).toString("base64url") : f.bootstrap.token }) + "\n");
     await f.bridge.closed;
     expect(f.frames).toEqual([]);
     await expect(f.bridge.ready).rejects.toThrow();
@@ -68,7 +68,7 @@ describe.skipIf(process.platform === "win32")("native Pi private bootstrap", () 
     await chmod(bridge.bootstrapPath, 0o640);
     vi.stubEnv("SEDES_PI_BOOTSTRAP_FILE", bridge.bootstrapPath);
     const factory = vi.fn();
-    await expect(piManagedExtension({} as Parameters<typeof piManagedExtension>[0], factory, factory, factory, { net, crypto, fs }))
+    await expect(piManagedExtension(piManagedCanonicalJson, {} as Parameters<typeof piManagedExtension>[1], factory, factory, factory, { net, crypto, fs }))
       .rejects.toThrow("pi_managed_bootstrap_invalid");
     expect(factory).not.toHaveBeenCalled();
   });

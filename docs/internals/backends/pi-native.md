@@ -25,12 +25,12 @@ macOS remain unqualified by this evidence.
 `native/pi-native-backend-module.ts` prepares one execution-environment-owned
 runtime. Local execution uses `PiNativeHost`; SSH and outbound execution use
 the same host behind `PiNativeRemotePort`. The persistent sidecar advertises
-`pi_native_runtime` major version 2. The response envelope carries the last
+`pi_native_runtime` major version 3. The response envelope carries the last
 observed admitted executable version, or explicit null when none is known.
 Pending or cancelled probes preserve the prior observation; positive rejection,
 executable replacement, and confirmed retirement clear it. Main assesses the
 version against its compiled tested-through release. Capability negotiation
-rejects version 1 before any new envelope is parsed.
+requires version 3 before admitting provider operations.
 There is no remote-to-local fallback.
 Windows is excluded because the managed companion uses a Unix-domain socket.
 
@@ -92,6 +92,42 @@ The driver rebuilds closed history from disk, transfers recognized exact
 operation outcomes into its durable journal before acknowledging them, and
 retains unknown outcomes as unknown. Unrecognized receipts still block
 retirement. A drained, proven-closed session can then release its resident slot.
+
+## Sending on an attached thread
+
+A settled, attached thread keeps its Pi RPC process and authenticated companion.
+A short plain-text Send with unchanged settings makes two main-to-host
+exchanges before `prompt` when both results return inline.
+
+1. Before claiming the input from SQLite, main asks for the native session ID,
+   file, current leaf and idle state. This read is independent of transcript
+   size. The leaf identifies the history position for the queue.
+2. After claiming the input, main sends `prepare_submission` with the token
+   from the last verified configuration on this handle generation. The host
+   checks model availability through local Pi RPC. The companion checks the
+   token, live model and thinking level, policy, available and active tools,
+   and idle state before recording the intent.
+
+Main recomputes its desired configuration from current model policy, settings,
+Sedes tool grants and instructions. A new handle, changed configuration, or
+proven live drift takes the configuration path. It writes changed settings,
+verifies thinking level after switching models, and obtains a new token.
+Only a proven mismatch before intent creation permits another preparation
+attempt in the same Send. Steer verifies its target against the active turn.
+
+Main registers its receipt waiter before dispatch. A terminal
+`complete_submission` reply can confirm consumption directly. For an enqueued
+Send, main waits briefly for matching companion evidence, then reads that
+exact submission if necessary. It verifies the operation and mutation IDs,
+reconciliation token, mode and fingerprint before committing the receipt and
+deferring host acknowledgement.
+
+Until the accepted user entry is projected, the driver holds the latest
+absolute text and thinking snapshots by stream and content index. A first
+history read after dispatch can still be necessary, especially on long
+threads. Adjacent refresh events in an observation batch can share a snapshot.
+Message boundaries, streamed output and interactions keep their order, and
+each replay sequence still needs evidence before its acknowledgement advances.
 
 ## Exact operation evidence
 
@@ -252,6 +288,13 @@ retained-operation budget with a separate 128 MiB control pool. Read-only
 operations, including snapshots and status reads, cannot consume that control
 pool. They are limited to 384 MiB across the host and 128 MiB per session,
 protecting 128 MiB of ordinary mutation capacity from read traffic.
+After admission, a request can wait up to 20 ms for its terminal result. At most
+16 such waits share a process. Further requests return `pending` immediately
+after admission, leaving capacity for Stop. The host consumes a terminal
+transient result when it returns it inline, on a poll, or to a duplicate
+request. If that reply is lost, main reconciles its outstanding read through
+abandonment. A retained mutation remains available until main commits its
+receipt and acknowledges it.
 Pending commands reserve their encoded command bytes plus 4 KiB for small
 replies or 64 KiB for bulk replies. Settlement replaces that reservation with
 the actual encoded outcome size and rechecks all applicable limits. An outcome
@@ -400,6 +443,12 @@ typechecks, the normal suite with host-specific sandbox exclusions, builds,
 and applicable browser coverage through the repository's standard scripts.
 The isolated `test:real-pi-native` suite uses a stock stable Pi >=1.4.0 executable selected
 by absolute `SEDES_REAL_PI_NATIVE_EXECUTABLE` and loopback model/MCP fixtures.
+Run `npm run test:real-pi-native -- --silent=false` to print the warm Send
+samples. The bundled-sidecar fixture reports dispatch, persisted receipt and
+first streaming driver item at 0, 20 and 50 ms injected round-trip latency,
+with histories on either side of the 64 KiB inline body threshold. Timings
+start at retry-anchor capture. Use client streaming diagnostics to measure
+browser delivery separately.
 The SDK live suites do not verify this backend. The separately authorized
 `test:live-pi-native` gate requires `SEDES_RUN_LIVE_PI_NATIVE=1`, an absolute
 `SEDES_LIVE_PI_NATIVE_EXECUTABLE`, and the exact AW Qwen provider/model pair,

@@ -9,7 +9,7 @@ import * as crypto from "node:crypto";
 import * as net from "node:net";
 import * as fs from "node:fs";
 import { PiManagedBridge } from "../../src/server/backends/pi/native/rpc/pi-managed-bridge.js";
-import { parsePiManagedResult, verifyPiManagedOperations, type PiManagedContextUsage, type PiManagedEvent, type PiManagedInput, type PiManagedState } from "../../src/server/backends/pi/native/rpc/pi-managed-protocol.js";
+import { piManagedConfigurationDigest, parsePiManagedResult, verifyPiManagedOperations, type PiManagedContextUsage, type PiManagedEvent, type PiManagedInput, type PiManagedState } from "../../src/server/backends/pi/native/rpc/pi-managed-protocol.js";
 import { parsePiNativeEntry } from "../../src/server/backends/pi/native/rpc/pi-rpc-wire.js";
 import { PiNativeHost, type PiNativeSessionLauncher } from "../../src/server/backends/pi/native/host/native-host.js";
 import { PiNativeConversationDriver, serializePiNativeBindingDetail, type PiNativeOperations } from "../../src/server/backends/pi/native/driver/driver.js";
@@ -61,7 +61,18 @@ async function fixture() {
   await install(api, codeFactory, () => (target: typeof api) => target.registerTool({ name: "mcp__test__read", parameters: {}, annotations: { readOnlyHint: true } }), () => (target: typeof api) => target.registerTool({ name: "tool_search", parameters: {} }), { net, crypto, fs });
   async function emit(name: string, event: RecordValue = {}) { let result: unknown; for (const handler of handlers.get(name) ?? []) result = await handler(event, context); return result; }
   await emit("session_start"); await bridge.ready;
-  return { bridge, key, entries, append, context, emit, tools, codeFactory };
+  const catalogDigest = piManagedConfigurationDigest({ models: [context.model] });
+  async function confirm() {
+    const state = await bridge.request({ type: "snapshot" }) as PiManagedState;
+    const expected = { model: { provider: context.model.provider, id: context.model.id }, thinkingLevel: context.thinkingLevel,
+      manifestDigest: state.manifestDigest!, policyDigest: state.policyDigest!, toolsDigest: piManagedConfigurationDigest(state.tools), activeTools: [...state.activeTools] };
+    return await bridge.request({ type: "confirm_configuration", expected, catalogDigest }, { observedCatalogDigest: catalogDigest }) as { configurationToken: string };
+  }
+  async function prepare(input: PiManagedInput) {
+    const confirmation = await confirm();
+    return await bridge.request({ type: "prepare_submission", input, ...confirmation, catalogDigest }, { observedCatalogDigest: catalogDigest }) as { wireText: string };
+  }
+  return { bridge, key, entries, append, context, emit, tools, codeFactory, prepare, confirm, catalogDigest, setActiveTools: api.setActiveTools };
 }
 function input(id: string, mode: "submit" | "steer" = "submit"): PiManagedInput {
   return { operationId: id, mutationId: `mutation-${id}`, reconciliationToken: `token-${id}`, fingerprint: "a".repeat(64), text: "identical user input", mode };
@@ -75,6 +86,45 @@ async function waitEvent(bridge: PiManagedBridge, type: PiManagedEvent["type"]):
 }
 
 describe("Pi native companion public API boundary", () => {
+  it("verifies existing v1 operation signatures with the canonical configuration encoder", () => {
+    const operation = { input: { ...input("legacy"), presentation: { z: 0, a: [3, { q: false, c: "kept" }] } }, phase: "intent" };
+    const entry = parsePiNativeEntry({ id: "recorded", parentId: null, timestamp: new Date(0).toISOString(), type: "custom",
+      customType: "sedes.native.input.v1", data: { version: 1, operation, authentication: "9Wbjy6NgiRjg6KutmreEoV3iLnayvxMzCL28CvIyoGo" } });
+    expect(verifyPiManagedOperations([entry], "session", Buffer.alloc(32))).toEqual([operation]);
+  });
+  it("reads the bounded idle/leaf record without loading the transcript or context usage", async () => {
+    const f = await fixture();
+    f.append({ type: "message", message: { role: "user", content: "private transcript", timestamp: 1 } });
+    vi.spyOn(f.context.sessionManager, "getEntries").mockImplementation(() => { throw new Error("Transcript read"); });
+    f.context.getContextUsage.mockImplementation(() => { throw new Error("Context read"); });
+    expect(await f.bridge.request({ type: "session_status" })).toEqual({ sessionId: "session", sessionFile: "/sessions/session.jsonl", leafId: "entry-0", isIdle: true });
+  });
+  it.each(["model", "effort", "policy", "manifest", "tools", "active", "catalog", "token", "idle"] as const)(
+    "guards the native intent against live %s drift", async axis => {
+      const f = await fixture();
+      await f.bridge.request({ type: "set_policy", policy: { mode: "full" } });
+      const { configurationToken } = await f.confirm();
+      if (axis === "model") f.context.model.id = "different";
+      if (axis === "effort") f.context.thinkingLevel = "high";
+      if (axis === "policy") await f.bridge.request({ type: "set_policy", policy: { mode: "read_only" } });
+      if (axis === "manifest") await f.bridge.request({ type: "configure_agent_tools", tools: [], instructions: "change" });
+      if (axis === "tools") f.tools.push({ name: "new-server-tool", parameters: {} });
+      if (axis === "active") f.setActiveTools(["read"]);
+      if (axis === "idle") f.context.isIdle = () => false;
+      await expect(f.bridge.request({ type: "prepare_submission", input: input("guard"), catalogDigest: f.catalogDigest,
+        configurationToken: axis === "token" ? "old-token" : configurationToken },
+      { observedCatalogDigest: axis === "catalog" ? "0".repeat(64) : f.catalogDigest }))
+        .rejects.toMatchObject({ code: axis === "idle" ? "pi_native_busy" : "pi_native_configuration_drift", delivery: "rejected" });
+      expect(await f.bridge.request({ type: "get_submission", operationId: "guard" })).toBeNull();
+    });
+  it("reports an existing operation before considering a new preparation's configuration mismatch", async () => {
+    const f = await fixture();
+    await f.bridge.request({ type: "set_policy", policy: { mode: "read_only" } });
+    await f.prepare(input("existing"));
+    await expect(f.bridge.request({ type: "prepare_submission", input: input("existing"), configurationToken: "expired", catalogDigest: f.catalogDigest },
+      { observedCatalogDigest: "0".repeat(64) })).rejects.toMatchObject({ code: "pi_managed_operation_exists" });
+  });
+
   it("reads fresh native context occupancy and preserves unknown post-compaction usage", async () => {
     const f = await fixture();
     expect((await f.bridge.request({ type: "snapshot" }) as PiManagedState).contextUsage).toBeUndefined();
@@ -89,19 +139,24 @@ describe("Pi native companion public API boundary", () => {
   it("authenticates the generated extension and preserves duplicate-input identity using persisted entry references", async () => {
     const f = await fixture();
     await f.bridge.request({ type: "set_policy", policy: { mode: "read_only" } });
-    const first = await f.bridge.request({ type: "prepare_submission", input: input("first") }) as { wireText: string };
-    await expect(f.bridge.request({ type: "prepare_submission", input: input("overlap") })).rejects.toMatchObject({ code: "pi_managed_admission_closed" });
+    const first = await f.prepare(input("first"));
+    await expect(f.prepare(input("overlap"))).rejects.toMatchObject({ code: "pi_managed_admission_closed" });
     expect(await f.emit("input", { source: "extension", text: first.wireText })).toEqual({ action: "handled" });
     expect(await f.emit("input", { source: "rpc", text: first.wireText })).toMatchObject({ action: "transform", text: "identical user input" });
     await f.bridge.request({ type: "complete_submission", operationId: "first", disposition: "started" });
-    const second = await f.bridge.request({ type: "prepare_submission", input: input("second", "steer") }) as { wireText: string };
+    const firstMessage = { role: "user", content: "identical user input", timestamp: 1 };
+    await f.emit("message_start", { message: firstMessage });
+    const root = f.append({ type: "message", message: firstMessage });
+    f.context.isIdle = () => false;
+    const second = await f.bridge.request({ type: "prepare_submission", input: { ...input("second", "steer"), targetTurnId: root.id } }) as { wireText: string };
     expect(first.wireText).not.toBe(second.wireText);
     expect(await f.emit("input", { source: "rpc", text: second.wireText })).toMatchObject({ action: "transform", text: "identical user input" });
     await f.bridge.request({ type: "complete_submission", operationId: "second", disposition: "queued" });
-    const messages = [1, 2].map(() => ({ role: "user", content: "identical user input", timestamp: 1 }));
-    for (const message of messages) { await f.emit("message_start", { message }); f.append({ type: "message", message }); }
+    const secondMessage = { role: "user", content: "identical user input", timestamp: 1 };
+    await f.emit("message_start", { message: secondMessage });
+    const steered = f.append({ type: "message", message: secondMessage });
     const state = await f.bridge.request({ type: "snapshot" }) as PiManagedState;
-    expect(state.operations.map((op) => [op.input.operationId, op.phase, op.userEntryId])).toEqual([["first", "accepted", "entry-4"], ["second", "accepted", "entry-5"]]);
+    expect(state.operations.map((op) => [op.input.operationId, op.phase, op.userEntryId])).toEqual([["first", "accepted", root.id], ["second", "accepted", steered.id]]);
     expect(verifyPiManagedOperations(state.entries, "session", f.key)).toEqual(state.operations);
     expect(verifyPiManagedOperations(state.entries, "other-session", f.key)).toEqual([]);
     expect(verifyPiManagedOperations(state.entries, "session", randomBytes(32))).toEqual([]);
@@ -111,7 +166,11 @@ describe("Pi native companion public API boundary", () => {
   it("resolves pending approvals during stop and marks only unmaterialized queued inputs lost", async () => {
     const f = await fixture();
     await f.bridge.request({ type: "set_policy", policy: { mode: "ask" } });
-    const prepared = await f.bridge.request({ type: "prepare_submission", input: input("queued", "steer") }) as { wireText: string };
+    const root = f.append({ type: "message", message: { role: "user", content: "initial", timestamp: 1 } });
+    f.context.isIdle = () => false;
+    await expect(f.bridge.request({ type: "prepare_submission", input: { ...input("stale", "steer"), targetTurnId: "other" } }))
+      .rejects.toMatchObject({ code: "pi_native_steer_target_stale" });
+    const prepared = await f.bridge.request({ type: "prepare_submission", input: { ...input("queued", "steer"), targetTurnId: root.id } }) as { wireText: string };
     await f.emit("input", { source: "rpc", text: prepared.wireText });
     await f.bridge.request({ type: "complete_submission", operationId: "queued", disposition: "queued" });
     const requested = waitEvent(f.bridge, "tool_approval_requested");
@@ -120,6 +179,7 @@ describe("Pi native companion public API boundary", () => {
     expect(await requested).toMatchObject({ type: "tool_approval_requested", toolCallId: "nested" });
     expect(await f.bridge.request({ type: "begin_stop" })).toEqual({ ok: true });
     expect(await tool).toMatchObject({ block: true });
+    f.context.isIdle = () => true;
     expect(await f.bridge.request({ type: "end_stop" })).toEqual({ ok: true });
     expect(await f.bridge.request({ type: "get_submission", operationId: "queued" })).toMatchObject({ phase: "lost" });
   });
@@ -129,7 +189,7 @@ describe("Pi native companion public API boundary", () => {
     await f.bridge.request({ type: "set_policy", policy: { mode: "read_only" } });
     for (let index = 0; index < 8; index++) {
       const operation = { ...input(`history-${index}`), text: `${index}:` + "private prompt ".repeat(2_048) };
-      await f.bridge.request({ type: "prepare_submission", input: operation });
+      await f.prepare(operation);
       await f.bridge.request({ type: "complete_submission", operationId: operation.operationId, disposition: "handled" });
     }
     for (const type of ["begin_stop", "end_stop"] as const) {
@@ -224,21 +284,21 @@ describe("Pi native companion public API boundary", () => {
     await handle.close(); await expect(driver.releaseConversationResidency(input)).resolves.toBe("released");
     expect(closed).toEqual([identity.sessionId]);
     expect(host.snapshot().retainedSessions.map(session => session.sessionId)).toEqual([peer.sessionId]);
-    await host.request({ handleId: peerHandle.handleId, operationId: "peer-read", command: { channel: "rpc", command: { type: "get_state" } }, retainOutcome: false });
-    await vi.waitFor(async () => expect(await host.outcome({ handleId: peerHandle.handleId, operationId: "peer-read" })).toMatchObject({ status: "completed" }));
+    const peerRead = await host.request({ handleId: peerHandle.handleId, operationId: "peer-read", command: { channel: "rpc", command: { type: "get_state" } }, retainOutcome: false });
+    await vi.waitFor(async () => expect(peerRead.status === "pending" ? await host.outcome({ handleId: peerHandle.handleId, operationId: "peer-read" }) : peerRead).toMatchObject({ status: "completed" }));
   });
 
   it("reopens admission after persisted acceptance without requiring the lost dispatch reply", async () => {
     const f = await fixture();
     await f.bridge.request({ type: "set_policy", policy: { mode: "read_only" } });
-    const first = await f.bridge.request({ type: "prepare_submission", input: input("first") }) as { wireText: string };
+    const first = await f.prepare(input("first"));
     await f.emit("input", { source: "rpc", text: first.wireText });
     const message = { role: "user", content: "identical user input", timestamp: 1 };
     await f.emit("message_start", { message }); f.append({ type: "message", message });
     expect((await f.bridge.request({ type: "snapshot" }) as PiManagedState).operations[0]?.phase).toBe("accepted");
-    await f.bridge.request({ type: "prepare_submission", input: input("second") });
+    await f.prepare(input("second"));
     await f.bridge.request({ type: "complete_submission", operationId: "first", disposition: "started" });
-    await expect(f.bridge.request({ type: "prepare_submission", input: input("third") })).rejects.toMatchObject({ code: "pi_managed_admission_closed" });
+    await expect(f.prepare(input("third"))).rejects.toMatchObject({ code: "pi_managed_admission_closed" });
   });
 
   it("permits code execution but gates every nested effect by trusted tool identity", async () => {

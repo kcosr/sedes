@@ -167,11 +167,11 @@ export class PiNativeAgentToolBridge {
     if (this.#artifacts.size !== entries.length) throw new Error("pi_native_agent_tool_catalog_ambiguous");
   }
 
-  async configure(): Promise<readonly string[]> {
+  manifest(mode: Mode = this.input.getToolMode()): { tools: ManifestTool[]; instructions: string } {
     if (this.#closed) throw new Error("pi_native_agent_tool_bridge_closed");
     const policy = this.facade.readPolicy(this.#source);
     const allowed = new Set(policy.enabledToolIds);
-    const artifacts = [...this.#artifacts.values()].filter(artifact => allowed.has(artifact.id) && (this.input.getToolMode() !== "read_only" || readOnly(artifact)));
+    const artifacts = [...this.#artifacts.values()].filter(artifact => allowed.has(artifact.id) && (mode !== "read_only" || readOnly(artifact)));
     const tools: ManifestTool[] = [];
     let instructions = "";
     if (policy.enabled && policy.presentation.surface === "native") {
@@ -187,8 +187,13 @@ export class PiNativeAgentToolBridge {
     } else if (policy.enabled && policy.presentation.surface === "cli") {
       instructions = "Sedes operations are available through the sedes CLI on this execution host. Use `sedes tool list --json`, then `sedes tool describe TOOL_ID --json`, then `sedes tool invoke TOOL_ID --input-file PATH --json` with the described input schema. The environment supplies the current thread authority; do not copy credentials into prompts or files.";
     }
-    await companion(this.input.port, this.input.attachment, { type: "configure_agent_tools", tools, instructions });
-    return tools.map(tool => tool.name);
+    return { tools, instructions };
+  }
+
+  async configure(): Promise<readonly string[]> {
+    const manifest = this.manifest();
+    await companion(this.input.port, this.input.attachment, { type: "configure_agent_tools", ...manifest });
+    return manifest.tools.map(tool => tool.name);
   }
 
   hasPendingCalls(): boolean { return this.#calls.size > 0; }

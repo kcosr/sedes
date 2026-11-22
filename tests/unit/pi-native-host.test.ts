@@ -1,3 +1,4 @@
+import { piManagedConfigurationDigest } from "../../src/server/backends/pi/native/rpc/pi-managed-protocol.js";
 import { assessPiRuntimeVersion } from "../../src/server/backends/pi/native/runtime-release.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -52,6 +53,19 @@ async function settled(host: PiNativeHost, handleId: string, operationId: string
 }
 
 describe("native Pi host ownership", () => {
+  it("checks catalog availability inside the owned host before forwarding a guarded prepare", async () => {
+    const f = fixture();
+    const { handleId } = await f.host.attach(identity);
+    const catalog = { models: [{ id: "changed" }] };
+    f.requests.mockResolvedValue(catalog);
+    const command = { type: "prepare_submission", configurationToken: "token", catalogDigest: "0".repeat(64),
+      input: { operationId: "op", mutationId: "mu", reconciliationToken: "rc", fingerprint: "1".repeat(64), mode: "submit", text: "input" } };
+    await f.host.request({ handleId, operationId: "prepare", retainOutcome: true, command: { channel: "companion", command } });
+    expect(await settled(f.host, handleId, "prepare")).toMatchObject({ status: "completed" });
+    expect(f.requests).toHaveBeenCalledWith({ type: "get_available_models" });
+    expect(f.bridgeRequests).toHaveBeenCalledWith(command, { observedCatalogDigest: piManagedConfigurationDigest(catalog) });
+  });
+
   it("reports the execution-host probe and clears the observation after local Stop", async () => {
     const observed = vi.fn(), f = fixture({ onRuntimeVersion: observed });
     expect(f.host.runtimeVersion).toBeNull();
@@ -77,7 +91,7 @@ describe("native Pi host ownership", () => {
     }
     const { handleId } = sessions[31]!;
     const commands = [
-      { channel: "companion" as const, command: { type: "prepare_submission", input: { operationId: "send", mutationId: "mutation", reconciliationToken: "token",
+      { channel: "companion" as const, command: { type: "prepare_submission", configurationToken: "verified", catalogDigest: "b".repeat(64), input: { operationId: "send", mutationId: "mutation", reconciliationToken: "token",
         fingerprint: "a".repeat(64), mode: "submit", text: "work" } } },
       { channel: "rpc" as const, command: { type: "prompt", message: "work" } },
       { channel: "companion" as const, command: { type: "set_policy", policy: { mode: "read_only" } } },
@@ -100,6 +114,54 @@ describe("native Pi host ownership", () => {
       snapshots[index]!.resolve({ entries: [] });
       await vi.waitFor(async () => expect(await f.host.abandonObservation(read)).toBe("released"));
     }
+  });
+
+  it("bounds simultaneous inline replies and leaves Stop available during slow reads", async () => {
+    const f = fixture(), { handleId } = await f.host.attach(identity);
+    const pending = deferred<unknown>();
+    f.bridgeRequests.mockImplementation(() => pending.promise);
+    vi.useFakeTimers();
+    try {
+      const responses: string[] = [];
+      const reads = Array.from({ length: 32 }, (_, index) => {
+        const operationId = `snapshot-${index}`;
+        return f.host.request({ handleId, operationId, retainOutcome: false,
+          command: { channel: "companion", command: { type: "snapshot" } } })
+          .then(result => { responses.push(result.status); });
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(responses).toHaveLength(16);
+      const stop = { handleId, operationId: "abort", retainOutcome: true,
+        command: { channel: "rpc" as const, command: { type: "abort" } } };
+      expect(await f.host.request(stop)).toEqual({ status: "pending" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await f.host.outcome(stop)).toMatchObject({ status: "completed" });
+      await vi.advanceTimersByTimeAsync(20);
+      await Promise.all(reads);
+      expect(responses).toEqual(Array(32).fill("pending"));
+    } finally { pending.resolve(idleState); vi.useRealTimers(); }
+  });
+
+  it.each(["cancelled", "controller replaced"] as const)("keeps a mutation owned when its inline wait is %s", async interruption => {
+    const f = fixture(), { handleId } = await f.host.attach(identity);
+    const pending = deferred<unknown>();
+    f.requests.mockImplementation(() => pending.promise);
+    const controller = new AbortController();
+    let current = true;
+    const authority = { assertCurrent() { if (!current) throw new PiNativeError("pi_native_controller_stale"); }, assertAdmission() {} };
+    const input = { handleId, operationId: "send", retainOutcome: true,
+      command: { channel: "rpc" as const, command: { type: "prompt", message: "work" } } };
+    const result = f.host.request(input, controller.signal, authority);
+    await Promise.resolve();
+    expect(f.requests).toHaveBeenCalledOnce();
+    if (interruption === "cancelled") controller.abort();
+    else current = false;
+    pending.resolve({ disposition: "started" });
+    await expect(result).rejects.toMatchObject({ delivery: "sent_outcome_unknown",
+      code: interruption === "cancelled" ? "pi_native_request_interrupted" : "pi_native_controller_stale" });
+    await vi.waitFor(async () => expect(await f.host.request(input)).toEqual({ status: "completed", result: { disposition: "started" } }));
+    expect(f.requests).toHaveBeenCalledOnce();
+    await f.host.acknowledgeOperation(input);
   });
 
   it("bounds actual retained read results while reserving ordinary Send and Stop capacity", async () => {
@@ -208,8 +270,7 @@ describe("native Pi host ownership", () => {
     const f = fixture(), { handleId } = await f.host.attach(identity);
     const read = { handleId, operationId: "read", retainOutcome: false,
       command: { channel: "rpc" as const, command: { type: "get_state" } } };
-    await f.host.request(read);
-    await vi.waitFor(async () => expect((await f.host.request(read)).status).toBe("completed"));
+    expect(await f.host.request(read)).toMatchObject({ status: "completed" });
     expect(await f.host.abandonObservation(read)).toBe("released");
     expect(await f.host.abandonObservation(read)).toBe("released");
     const missing = { handleId, operationId: "missing" };
@@ -239,8 +300,7 @@ describe("native Pi host ownership", () => {
       command: { channel: "rpc", command: { type: "get_state" } } })).rejects.toThrow("pi_native_operation_abandoned");
     const read = { handleId, operationId: "actual-read", retainOutcome: false,
       command: { channel: "rpc" as const, command: { type: "get_state" } } };
-    await f.host.request(read);
-    await vi.waitFor(async () => expect((await f.host.request(read)).status).toBe("completed"));
+    expect(await f.host.request(read)).toMatchObject({ status: "completed" });
     expect(await f.host.abandonObservation(read)).toBe("released");
     await f.host.release({ handleId });
     expect(["retired", "absent"]).toContain(await f.host.retireSession(identity));
@@ -258,9 +318,8 @@ describe("native Pi host ownership", () => {
       await expect(f.host.abandonObservation({ handleId, operationId })).rejects.toThrow("pi_native_operation_identity_invalid");
     const read = { handleId, operationId: "read", retainOutcome: false,
       command: { channel: "rpc" as const, command: { type: "get_state" } } };
-    await f.host.request(read);
-    await vi.waitFor(async () => expect((await f.host.request(read)).status).toBe("completed"));
-    expect(await f.host.outcome(read)).toMatchObject({ status: "completed" });
+    expect(await f.host.request(read)).toMatchObject({ status: "completed" });
+    await expect(f.host.outcome(read)).rejects.toThrow("pi_native_operation_unknown");
     expect(f.requests).toHaveBeenCalledTimes(1);
   });
 
@@ -275,7 +334,8 @@ describe("native Pi host ownership", () => {
     pending.resolve({ accepted: true });
     await vi.waitFor(async () => expect((await f.host.request(input)).status).toBe("completed"));
     await expect(f.host.abandonObservation(input)).rejects.toThrow("pi_native_observation_abandon_denied");
-    expect(await f.host.outcome(input)).toEqual({ status: "completed", result: { accepted: true } });
+    if (input.retainOutcome) expect(await f.host.outcome(input)).toEqual({ status: "completed", result: { accepted: true } });
+    else await expect(f.host.outcome(input)).rejects.toThrow("pi_native_operation_unknown");
     await f.host.acknowledgeOperation(input);
     await expect(f.host.abandonObservation(input)).rejects.toThrow("pi_native_observation_abandon_denied");
   });
@@ -530,7 +590,7 @@ describe("native Pi host ownership", () => {
     pending.resolve(idleState);
     await vi.waitFor(async () => expect((await f.host.request(input)).status).toBe("completed"));
     expect(f.host.snapshot()).toMatchObject({ revision: before.revision, state: "idle", blockers: [] });
-    expect(await f.host.outcome(input)).toMatchObject({ status: "completed" });
+    await expect(f.host.outcome(input)).rejects.toThrow("pi_native_operation_unknown");
     expect(f.host.snapshot().revision).toBe(before.revision);
     await f.host.stop({ expectedRevision: before.revision, force: false });
     expect(f.close).toHaveBeenCalledTimes(1);
@@ -1047,13 +1107,9 @@ describe("native Pi host ownership", () => {
     const f = fixture();
     f.requests.mockRejectedValue(new PiNativeError("pi_rpc_command_rejected", "rejected"));
     const { handleId } = await f.host.attach(identity);
-    await f.host.request({ handleId, operationId: "read", retainOutcome: false, command: { channel: "rpc", command: { type: "get_state" } } });
-    let outcome;
-    await vi.waitFor(async () => {
-      outcome = await f.host.outcome({ handleId, operationId: "read" });
-      expect(outcome.status).toBe("failed");
-    });
+    const outcome = await f.host.request({ handleId, operationId: "read", retainOutcome: false, command: { channel: "rpc", command: { type: "get_state" } } });
     expect(outcome).toEqual({ status: "failed", failure: { code: "pi_rpc_command_rejected", delivery: "rejected" } });
+    await expect(f.host.outcome({ handleId, operationId: "read" })).rejects.toThrow("pi_native_operation_unknown");
     await f.host.acknowledgeOperation({ handleId, operationId: "read" });
     expect(f.host.snapshot().blockers).not.toContain("unsettled_outcome");
     await expect(f.host.request({ handleId, operationId: "read", retainOutcome: false, command: { channel: "rpc", command: { type: "get_state" } } })).rejects.toThrow("pi_native_operation_acknowledged");
@@ -1094,7 +1150,7 @@ describe("native Pi host ownership", () => {
     await expect(f.host.observe({ handleId, afterSequence: 0 })).rejects.toThrow("pi_native_observation_continuity_lost");
     expect(f.close).not.toHaveBeenCalled();
     await expect(f.host.request({ handleId, operationId: "next", retainOutcome: true, command: { channel: "rpc", command: { type: "prompt", message: "next" } } })).rejects.toThrow("pi_native_observation_continuity_lost");
-    expect((await f.host.request({ handleId, operationId: "stop", retainOutcome: true, command: { channel: "rpc", command: { type: "abort" } } })).status).toBe("pending");
+    expect((await f.host.request({ handleId, operationId: "stop", retainOutcome: true, command: { channel: "rpc", command: { type: "abort" } } })).status).toBe("completed");
   });
 
   it("does not coalesce durable events or forgive real event-count overflow", async () => {

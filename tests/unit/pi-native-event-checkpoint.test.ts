@@ -6,7 +6,7 @@ import type { PiManagedState } from "../../src/server/backends/pi/native/rpc/pi-
 function fixture() {
   const checkpoint = new PiNativeEventCheckpoint(0);
   let sequence = 0;
-  const state: { entries: Record<string, unknown>[]; toolCalls: PiManagedState["toolCalls"]; toolResults: PiManagedState["toolResults"] } = { entries: [], toolCalls: [], toolResults: [] };
+  const state: { entries: Record<string, unknown>[]; toolCalls: PiManagedState["toolCalls"]; toolResults: PiManagedState["toolResults"]; operations: PiManagedState["operations"] } = { entries: [], toolCalls: [], toolResults: [], operations: [] };
   const observe = (kind: PiNativeEvent["kind"], payload: Record<string, unknown>) => {
     checkpoint.observe({ sequence: ++sequence, kind, payload }); return sequence;
   };
@@ -97,6 +97,38 @@ describe("native Pi durable event checkpoints", () => {
     f.state.entries.push({ id: "completed", type: "message", message });
     f.checkpoint.applied(2, f.state);
     expect(f.checkpoint.through(() => false, false)).toBe(2);
+  });
+
+  it("retires ephemeral bash and failure events at a fresh idle cut and still fences unsaved output", () => {
+    const f = fixture();
+    f.observe("stream", { type: "bash_snapshot", streamId: "bash", text: "running" });
+    f.observe("failure", { code: "pi_transport_unavailable" });
+    const busy = f.snapshot();
+    expect(f.checkpoint.through(() => false, false, busy)).toBe(0);
+    const entry = { id: "extra", type: "custom", customType: "marker", data: {} };
+    const appended = f.observe("rpc", { type: "entry_appended", entry });
+    f.checkpoint.applied(appended, { ...f.state, isIdle: true });
+    expect(f.checkpoint.through(() => false, false, appended)).toBe(busy);
+    f.state.entries.push(entry);
+    const idle = f.snapshot();
+    expect(f.checkpoint.through(() => false, false, idle)).toBe(idle);
+  });
+  it("acknowledges a coalesced idle batch only through the last operation covered by its exact proof", () => {
+    const f = fixture();
+    const input = { mode: "submit" as const, mutationId: "mutation", operationId: "operation", reconciliationToken: "token", fingerprint: "a".repeat(64), text: "Hello" };
+    const intent = { input, phase: "intent" as const };
+    const accepted = { input, phase: "accepted" as const, userEntryId: "user" };
+    f.observe("companion", { type: "operation_changed", operation: intent });
+    f.observe("companion", { type: "operation_changed", operation: accepted });
+    f.state.operations = [intent];
+    const batch = f.snapshot();
+    expect(f.checkpoint.through(() => false, false, batch)).toBe(1);
+    f.state.operations = [{ ...accepted, userEntryId: "wrong" }];
+    const mismatch = f.snapshot();
+    expect(f.checkpoint.through(() => false, false, mismatch)).toBe(1);
+    f.state.operations = [accepted];
+    const settled = f.snapshot();
+    expect(f.checkpoint.through(() => false, false, settled)).toBe(settled);
   });
 
   it("keeps an unfinished or attested nested call until its own completion is known", () => {

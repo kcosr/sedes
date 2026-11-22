@@ -271,6 +271,8 @@ export class PiNativeRemotePort implements PiNativePort {
 
 async function call(lease: SidecarRuntimeLease, input: PiNativeHostCommandInput, signal?: AbortSignal, onRuntimeVersion?: (assessment: VerifiedPiRuntimeVersion | undefined) => void): Promise<unknown> {
   let crossed = false;
+  let replyReceived = false;
+  let response: z.infer<typeof piNativeHostResponseSchema>;
   try {
     const command = piNativeHostCommandSchema.parse({ ...input, controllerEpoch: lease.controllerEpoch, serviceIncarnation: lease.serviceIncarnation });
     const body = await lease.channel.encodeBody(command);
@@ -278,19 +280,23 @@ async function call(lease: SidecarRuntimeLease, input: PiNativeHostCommandInput,
     crossed = true;
     const invoke = async (wireSignal?: AbortSignal) => {
       const encoded = await lease.channel.call(piNativeHostCommandLane(command) === "control" ? piNativeControlOperation : piNativeExecuteOperation, body, wireSignal ? { signal: wireSignal } : undefined);
+      replyReceived = true;
       return piNativeHostResponseSchema.parse(await lease.channel.decodeBody(encoded));
     };
     const observation = ["observe", "acknowledge", "outcome", "acknowledge_operation", "abandon_observation"].includes(command.action) ||
       (command.action === "request" && !command.input.retainOutcome && piNativeCommandIsReadOnly(command.input.command));
-    const response = observation && signal ? await drainObservation(signal, invoke) : await invoke(signal);
+    response = observation && signal ? await drainObservation(signal, invoke) : await invoke(signal);
     onRuntimeVersion?.(response.runtimeVersion === null ? undefined : assessPiRuntimeVersion(response.runtimeVersion));
-    if (response.status === "failed") throw new PiNativeError(response.failure.code, response.failure.delivery);
-    return response.value;
   } catch (error) {
+    // Body transfer and version observation have their own failures. Once the
+    // call replied, neither can prove that the original command was unsent.
+    if (replyReceived) throw new PiNativeError("pi_native_sidecar_unavailable", "sent_outcome_unknown", { cause: error });
     if (error instanceof PiNativeError) throw error;
     const delivery = (error as { delivery?: unknown } | null)?.delivery;
     throw new PiNativeError("pi_native_sidecar_unavailable", delivery === "not_sent" || !crossed ? "not_sent" : "sent_outcome_unknown", { cause: error });
   }
+  if (response.status === "failed") throw new PiNativeError(response.failure.code, response.failure.delivery);
+  return response.value;
 }
 
 /** Cancelling an active frame write destroys the shared carrier. Let admitted

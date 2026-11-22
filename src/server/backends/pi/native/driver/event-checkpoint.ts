@@ -1,4 +1,5 @@
 import type { PiNativeEvent } from "../port.js";
+import type { PiManagedOperation } from "../rpc/pi-managed-protocol.js";
 
 type Message = { readonly sequence: number; value?: unknown };
 type Tool = { readonly sequence: number; value?: Record<string, unknown>; isError?: unknown; parentToolCallId?: string };
@@ -26,10 +27,11 @@ export class PiNativeEventCheckpoint {
   #currentMessage?: Message;
   #tools = new Map<string, Tool>();
   #entries: { sequence: number; value: unknown }[] = [];
+  #operations: { sequence: number; value: Record<string, unknown> }[] = [];
   #interactions = new Map<string, number>();
   #agentCalls = new Map<string, number>();
   #notices = new Set<number>();
-  #unrecoverable: number[] = [];
+  #ephemeral: number[] = [];
 
   constructor(sequence: number) { this.#candidate = sequence; this.#acknowledged = sequence; this.#observed = sequence; }
   get acknowledged(): number { return this.#acknowledged; }
@@ -38,11 +40,11 @@ export class PiNativeEventCheckpoint {
     if (sequence <= this.#observed) return;
     this.#observed = sequence;
     const type = payload.type;
-    if (kind === "failure" || type === "failure") this.#unrecoverable.push(sequence);
+    if (kind === "failure" || type === "failure") this.#ephemeral.push(sequence);
     if (kind === "rpc" && type === "extension_error") this.#notices.add(sequence);
     if (kind === "stream") {
       if (type === "message_snapshot" || type === "toolcall_snapshot") this.#message(sequence);
-      else this.#unrecoverable.push(sequence);
+      else this.#ephemeral.push(sequence);
     }
     if (kind === "rpc") {
       if (type === "message_start") {
@@ -59,6 +61,7 @@ export class PiNativeEventCheckpoint {
       }
       if (type === "extension_ui_request" && typeof payload.id === "string") this.#interactions.set(payload.id, sequence);
     } else if (kind === "companion") {
+      if (type === "operation_changed") this.#operations.push({ sequence, value: object(payload.operation) });
       if (type === "tool_approval_requested" && typeof payload.id === "string") this.#interactions.set(payload.id, sequence);
       if (type === "tool_approval_closed" && typeof payload.id === "string") this.#interactions.delete(payload.id);
       if (type === "agent_tool_call" && typeof payload.id === "string") this.#agentCalls.set(payload.id, sequence);
@@ -67,12 +70,24 @@ export class PiNativeEventCheckpoint {
   }
 
   applied(sequence: number, state: { readonly entries: readonly Readonly<Record<string, unknown>>[];
-    readonly toolCalls: readonly Readonly<Record<string, unknown>>[]; readonly toolResults: readonly Readonly<Record<string, unknown>>[] }): void {
+    readonly toolCalls: readonly Readonly<Record<string, unknown>>[]; readonly toolResults: readonly Readonly<Record<string, unknown>>[]; readonly operations?: readonly PiManagedOperation[]; readonly isIdle?: boolean }): void {
     this.#candidate = Math.max(this.#candidate, sequence);
+    // Bash output and transport failures have no immutable message of their
+    // own. A fresh idle cut retires only those transient observations.
+    if (state.isIdle) this.#ephemeral = this.#ephemeral.filter(start => start > sequence);
     const messages = state.entries.filter(entry => entry.type === "message").map(entry => entry.message);
     this.#messages = this.#messages.filter(message => message.value === undefined ||
       !messages.some(value => sameJson(value, message.value)));
     this.#entries = this.#entries.filter(entry => !state.entries.some(value => sameJson(value, entry.value)));
+    if (this.#operations.length) {
+      const operations = new Map(state.operations?.map(operation => [operation.input.operationId, operation]));
+      this.#operations = this.#operations.filter(({ value }) => {
+        const latest = operations.get(String(object(value.input).operationId));
+        if (!latest || !sameJson(latest.input, value.input)) return true;
+        if (value.phase === "intent" || (value.phase === "enqueued" && latest.phase !== "intent")) return false;
+        return !sameJson(latest, value);
+      });
+    }
     const results = [...state.toolResults, ...messages.filter(message => object(message).role === "toolResult")];
     for (const [id, tool] of this.#tools) {
       if (!tool.value) continue;
@@ -94,14 +109,14 @@ export class PiNativeEventCheckpoint {
     if (this.#notices.delete(sequence)) this.#candidate = Math.max(this.#candidate, sequence);
   }
 
-  through(hasInteraction: (id: string) => boolean, hasPendingAgentCalls: boolean | undefined): number {
+  through(hasInteraction: (id: string) => boolean, hasPendingAgentCalls: boolean | undefined, observedIdleThrough?: number): number {
     for (const id of this.#interactions.keys()) if (!hasInteraction(id)) this.#interactions.delete(id);
     if (hasPendingAgentCalls === false) this.#agentCalls.clear();
     const barriers = [
       ...this.#messages.map(message => message.sequence), ...[...this.#tools.values()].map(tool => tool.sequence),
-      ...this.#entries.map(entry => entry.sequence), ...this.#interactions.values(), ...this.#agentCalls.values(), ...this.#notices, ...this.#unrecoverable,
+      ...this.#entries.map(entry => entry.sequence), ...this.#operations.map(entry => entry.sequence), ...this.#interactions.values(), ...this.#agentCalls.values(), ...this.#notices, ...this.#ephemeral,
     ];
-    return Math.max(this.#acknowledged, Math.min(this.#candidate, ...barriers.map(sequence => sequence - 1)));
+    return Math.max(this.#acknowledged, Math.min(observedIdleThrough ?? this.#candidate, ...barriers.map(sequence => sequence - 1)));
   }
 
   acknowledge(sequence: number): void {
@@ -111,11 +126,12 @@ export class PiNativeEventCheckpoint {
     this.#messages = this.#messages.filter(message => message.sequence > sequence);
     if (this.#currentMessage && this.#currentMessage.sequence <= sequence) this.#currentMessage = undefined;
     this.#entries = this.#entries.filter(entry => entry.sequence > sequence);
+    this.#operations = this.#operations.filter(entry => entry.sequence > sequence);
     for (const [id, tool] of this.#tools) if (tool.sequence <= sequence) this.#tools.delete(id);
     for (const [id, start] of this.#interactions) if (start <= sequence) this.#interactions.delete(id);
     for (const [id, start] of this.#agentCalls) if (start <= sequence) this.#agentCalls.delete(id);
     for (const start of this.#notices) if (start <= sequence) this.#notices.delete(start);
-    this.#unrecoverable = this.#unrecoverable.filter(start => start > sequence);
+    this.#ephemeral = this.#ephemeral.filter(start => start > sequence);
   }
 
   #message(sequence: number): Message {

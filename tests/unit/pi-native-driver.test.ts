@@ -7,7 +7,7 @@ import { companion, requestNative, rpc } from "../../src/server/backends/pi/nati
 import { PiNativeHost, type PiNativeSessionLauncher } from "../../src/server/backends/pi/native/host/native-host.js";
 import { PiRpcCallError } from "../../src/server/backends/pi/native/rpc/pi-rpc-client.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
-import type { PiManagedOperation, PiManagedState } from "../../src/server/backends/pi/native/rpc/pi-managed-protocol.js";
+import { piManagedConfigurationDigest, type PiManagedExpectedConfiguration, type PiManagedOperation, type PiManagedState } from "../../src/server/backends/pi/native/rpc/pi-managed-protocol.js";
 import { BackendError, type AttachConversationInput, type ConversationHandle, type SubmitTurnInput } from "../../src/server/backends/contracts.js";
 import type { BackendConversationEvent } from "../../src/shared/protocol/backend.js";
 import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
@@ -46,7 +46,17 @@ function operationStore(): PiNativeOperations {
 }
 class NativeFixture {
   state: PiManagedState = { sessionId: native.sessionId, sessionFile: native.sessionFile, entries: [], leafId: null, operations: [], toolCalls: [], toolResults: [], tools: ["read", "write", "bash"].map(name => ({ name, sourceInfo: { source: "builtin", path: `builtin:${name}` } })),
-    activeTools: [], isIdle: true, model: { provider: "provider", id: "model", input: ["text", "image"] }, thinkingLevel: "low" };
+    activeTools: [], manifestDigest: piManagedConfigurationDigest({ tools: [], instructions: "" }), isIdle: true, model: { provider: "provider", id: "model", input: ["text", "image"] }, thinkingLevel: "low" };
+  models = { models: [{ provider: "provider", id: "model", reasoning: true }] };
+  token?: string;
+  confirmed?: PiManagedExpectedConfiguration;
+  configurationMatches(expected: PiManagedExpectedConfiguration, catalogDigest: unknown) {
+    return expected.model.provider === this.state.model?.provider && expected.model.id === this.state.model.id &&
+      expected.thinkingLevel === this.state.thinkingLevel && expected.policyDigest === this.state.policyDigest &&
+      expected.manifestDigest === this.state.manifestDigest && expected.toolsDigest === piManagedConfigurationDigest(this.state.tools) &&
+      JSON.stringify([...expected.activeTools].sort()) === JSON.stringify([...this.state.activeTools].sort()) &&
+      catalogDigest === piManagedConfigurationDigest(this.models);
+  }
   commands: { id: string; type: string; command: Readonly<Record<string, unknown>> }[] = [];
   outcomes = new Map<string, PiNativeOutcome>();
   wires = new Map<string, string>();
@@ -73,13 +83,28 @@ class NativeFixture {
       let result: unknown = {};
       if (type === "snapshot") result = structuredClone(this.state);
       if (type === "get_state") result = this.rpcState();
-      if (type === "get_available_models") result = { models: [{ provider: "provider", id: "model", reasoning: true }] };
+      if (type === "get_available_models") result = this.models;
+      if (type === "session_status") {
+        const { sessionId, sessionFile, leafId, isIdle } = this.state; result = { sessionId, sessionFile, leafId, isIdle };
+      }
+      if (type === "configure_agent_tools") this.state = { ...this.state, manifestDigest: piManagedConfigurationDigest({ tools: command.tools, instructions: command.instructions }) };
+      if (type === "set_policy") this.state = { ...this.state, policyDigest: piManagedConfigurationDigest(command.policy) };
+      if (type === "confirm_configuration") {
+        const expected = command.expected as PiManagedExpectedConfiguration;
+        if (!this.configurationMatches(expected, command.catalogDigest)) throw new PiNativeError("pi_native_configuration_drift", "rejected");
+        this.confirmed = expected; this.token = randomUUID(); result = { configurationToken: this.token };
+      }
       if (type === "get_commands") result = { commands: [{ name: "skill:review", source: "skill" }] };
       if (type === "set_model") this.state = { ...this.state, model: { provider: String(command.provider), id: String(command.modelId) } };
       if (type === "set_thinking_level") this.state = { ...this.state, thinkingLevel: String(command.level) };
       if (type === "set_active_tools") this.state = { ...this.state, activeTools: command.names as string[] };
       if (type === "prepare_submission") {
         const operation = { input: command.input, phase: "intent" } as PiManagedOperation;
+        if (operation.input.mode === "submit") {
+          if (!this.state.isIdle) throw new PiNativeError("pi_native_busy", "rejected");
+          if (!this.confirmed || this.token !== command.configurationToken || !this.configurationMatches(this.confirmed, command.catalogDigest))
+            throw new PiNativeError("pi_native_configuration_drift", "rejected");
+        }
         this.state = { ...this.state, operations: [...this.state.operations, operation] }; const wireText = `wire:${operation.input.operationId}`; this.wires.set(wireText, operation.input.operationId);
         result = { wireText, operation };
       }
@@ -100,7 +125,9 @@ class NativeFixture {
       if (type === "abort") this.state = { ...this.state, isIdle: true };
       if (type === "begin_stop") result = { ok: true };
       if (type === "end_stop") { this.state = { ...this.state, operations: this.state.operations.map(item => item.phase === "enqueued" || item.phase === "intent" ? { ...item, phase: "lost" } : item) }; result = { ok: true }; }
-      const outcome = { status: "completed" as const, result }; this.outcomes.set(input.operationId, outcome); return outcome;
+      const outcome = { status: "completed" as const, result };
+      if (input.retainOutcome) this.outcomes.set(input.operationId, outcome);
+      return outcome;
     },
     outcome: async input => this.outcomes.get(input.operationId) ?? { status: "failed", failure: { code: "unknown_operation", delivery: "sent_outcome_unknown" } },
     acknowledgeOperation: async input => { this.outcomes.delete(input.operationId); },
@@ -121,10 +148,11 @@ async function subscribeProjection(handle: ConversationHandle, listener: (event:
 }
 function setup(extra: Partial<PiNativeDriverOptions> = {}) {
   const fixture = new NativeFixture();
+  const settings = { modelProvider: "provider", modelId: "model", thinkingLevel: "low", toolMode: "full" as "full" | "ask" | "read_only", revision: 0 };
   const driver = new PiNativeConversationDriver({ instance, connection, port: fixture.port, operations: operationStore(), usage: NO_USAGE_SINK,
-    settings: { getSettings: () => ({ modelProvider: "provider", modelId: "model", thinkingLevel: "low", toolMode: "full", revision: 0 }) },
+    settings: { getSettings: () => settings },
     modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "provider_model_effort"), ...extra });
-  drivers.push(driver); return { fixture, driver };
+  drivers.push(driver); return { fixture, driver, settings };
 }
 afterEach(async () => {
   try { for (const driver of drivers.splice(0)) await driver.close(); }
@@ -236,6 +264,97 @@ describe("native Pi driver", () => {
     const history = await driver.openHistory(conversation);
     expect((await history.backendCapabilities()).usageSections).toEqual(["counters"]);
     expect((await history.usage()).context).toBeUndefined(); await history.close();
+  });
+  it("uses a bounded status read and a guarded prepare before a warm plain prompt", async () => {
+    const { driver, fixture, settings } = setup();
+    const handle = await driver.attach(conversation);
+    settings.revision++;
+    fixture.commands.length = 0;
+    expect(JSON.parse(await handle.captureSubmissionRetryAnchor())).toEqual({ version: 2, sessionId: native.sessionId, leafId: null });
+    await handle.submit(submission());
+    const commands = fixture.commands.map(command => command.type);
+    expect(commands.slice(0, commands.indexOf("prompt"))).toEqual(["session_status", "prepare_submission"]);
+    expect(fixture.attachCount).toBe(1);
+  });
+  it("keeps history available and denies Send until an unavailable native model is selectable", async () => {
+    const { driver, fixture } = setup({ settings: { getSettings: () => ({
+      modelProvider: null, modelId: null, thinkingLevel: null, toolMode: "full", revision: 0,
+    }) } });
+    const { model: _initial, ...withoutModel } = fixture.state;
+    fixture.state = { ...withoutModel, entries: [user("u", null), answer("a", "u")], leafId: "a" };
+    const handle = await driver.attach(conversation);
+    expect((await handle.history({ limit: 1 })).orderedBackendTurnIds).toEqual(["u"]);
+    await expect(handle.submit(submission())).rejects.toMatchObject({ backendCode: "pi_native_model_policy_denied", crossedSubmissionBoundary: false });
+    fixture.state = { ...fixture.state, model: { provider: "provider", id: "model" } };
+    await expect(handle.submit(submission())).resolves.toMatchObject({ accepted: true });
+    expect(fixture.commands.filter(command => command.type === "prompt")).toHaveLength(1);
+  });
+  it("rechecks model availability on drift and writes only the changed policy", async () => {
+    const { driver, fixture } = setup();
+    const handle = await driver.attach(conversation);
+    fixture.commands.length = 0;
+    fixture.models.models.push({ provider: "provider", id: "other", reasoning: true });
+    await handle.submit(submission());
+    const commands = fixture.commands.map(command => command.type);
+    expect(commands.filter(type => type.startsWith("set_") || type === "configure_agent_tools")).toEqual(["set_policy"]);
+    expect(commands.filter(type => type === "confirm_configuration")).toHaveLength(1);
+    expect(commands.filter(type => type === "prepare_submission")).toHaveLength(2);
+    expect(commands.filter(type => type === "prompt")).toHaveLength(1);
+  });
+  it("stops before intent when the selected model disappears from the live catalog", async () => {
+    const operations = operationStore();
+    const { driver, fixture } = setup({ operations });
+    const handle = await driver.attach(conversation);
+    fixture.models.models = [];
+    await expect(handle.submit(submission())).rejects.toMatchObject({ backendCode: "pi_native_model_policy_denied", crossedSubmissionBoundary: false });
+    expect(operations.getOperation(conversation.scope, "thread", "submit")).toMatchObject({ state: "prepared", prepareAttempt: 1 });
+    expect(fixture.state.operations).toHaveLength(0);
+    expect(fixture.commands.filter(command => command.type === "prompt")).toHaveLength(0);
+  });
+  it.each(["live", "restart", "closed", "older_attempt"] as const)("recovers exact pre-intent drift after reply loss through %s", async recovery => {
+    const operations = operationStore();
+    const result = setup({ operations }); let driver = result.driver;
+    const fixture = result.fixture, request = fixture.port.request;
+    const input = submission("drift");
+    const id = "drift:prepare:0";
+    const original = await driver.attach(conversation);
+    let fail = true;
+    const ack = fixture.port.acknowledgeOperation;
+    fixture.port.acknowledgeOperation = async (value, signal) => {
+      if (fail && value.operationId === id && recovery === "older_attempt") throw new PiNativeError("ack_lost");
+      return ack(value, signal);
+    };
+    fixture.port.request = async (value, signal) => {
+      if (fail && value.command.command.type === "prepare_submission") {
+        if (value.operationId !== id) throw new PiNativeError("reconfiguration_failed", "not_sent");
+        const outcome = { status: "failed" as const, failure: { code: "pi_native_configuration_drift", delivery: "rejected" as const } };
+        fixture.outcomes.set(id, outcome);
+        if (recovery === "older_attempt") return outcome;
+        throw new PiNativeError("prepare_reply_lost", "sent_outcome_unknown");
+      }
+      return request(value, signal);
+    };
+    await expect(original.submit(input)).rejects.toMatchObject({ crossedSubmissionBoundary: recovery !== "older_attempt" });
+    expect(fixture.state.operations).toHaveLength(0);
+    fail = false;
+    if (recovery !== "live") {
+      await original.close();
+      fixture.port.attachForDrain = async () => ({ ...attachment, closed: recovery !== "restart", observationGap: false, retainedOperationIds: [id] });
+      if (recovery === "restart") {
+        await driver.close(); driver = setup({ operations, port: fixture.port }).driver;
+      } else {
+        fixture.port.retireSession = async () => fixture.outcomes.has(id) ? "undelivered" : "retired";
+        await expect(driver.releaseConversationResidency(conversation)).resolves.toBe("released");
+      }
+    }
+    expect(await driver.reconcileSubmission({ ...conversation, applicationOperationId: "drift" })).toEqual({ status: "not_accepted", retryable: true });
+    expect(operations.getOperation(conversation.scope, "thread", "drift")).toMatchObject({
+      state: "prepared", dispatchStarted: false, prepareAttempt: recovery === "older_attempt" ? 2 : 1 });
+    expect(fixture.outcomes.has(id)).toBe(false);
+    expect(fixture.commands.filter(command => command.type === "prompt")).toHaveLength(0);
+    const handle = recovery === "live" ? original : await driver.attach(conversation);
+    await handle.submit(input);
+    expect(fixture.commands.filter(command => command.type === "prompt")).toHaveLength(1);
   });
   it.each(["throw", "retained"] as const)("retries the same submission after proven not-sent preparation (%s)", async failure => {
     const operations = operationStore(); const { driver, fixture } = setup({ operations });
@@ -772,22 +891,24 @@ describe("native Pi driver", () => {
   it.each(["complete_submission", "get_submission", "snapshot"] as const)("keeps a dispatched submission crossed when later %s is refused", async phase => {
     const operations = operationStore(); const { driver, fixture } = setup({ operations });
     const handle = await driver.attach(conversation);
-    const request = fixture.port.request; let dispatched = false; let rejectPhase = true; let rejectRetrySnapshot = false;
+    const request = fixture.port.request; let dispatched = false; let rejectPhase = true;
     fixture.port.request = async (input, signal) => {
       const type = input.command.command.type;
-      if (dispatched && ((rejectPhase && type === phase) || (rejectRetrySnapshot && type === "snapshot")))
+      if (dispatched && rejectPhase && type === phase)
         throw new PiNativeError("later_request_refused", "not_sent");
       const result = await request(input, signal);
       if (type === "prompt") dispatched = true;
+      if (phase === "get_submission" && type === "complete_submission" && result.status === "completed") {
+        const operation = result.result as PiManagedOperation;
+        return { status: "completed", result: { input: operation.input, phase: "enqueued" } };
+      }
       return result;
     };
     const input = submission("compound-submit");
     await expect(handle.submit(input)).rejects.toMatchObject({ category: "submission_unknown", crossedSubmissionBoundary: true, retryable: false, backendCode: "later_request_refused" });
     expect(operations.getOperation(conversation.scope, "thread", input.applicationOperationId)?.state).toBe(phase === "snapshot" ? "completed" : "sent");
     expect(fixture.commands.some(command => command.type === "complete_submission" && command.command.disposition === "rejected")).toBe(false);
-    rejectPhase = false; rejectRetrySnapshot = true;
-    await expect(handle.submit(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true, backendCode: "later_request_refused" });
-    rejectRetrySnapshot = false;
+    rejectPhase = false;
     await expect(handle.submit(input)).resolves.toMatchObject({ accepted: true, completionCorrelation: input.applicationOperationId });
     expect(fixture.commands.filter(command => command.type === "prompt")).toHaveLength(1);
   });
@@ -831,8 +952,9 @@ describe("native Pi driver", () => {
     expect(fixture.commands.some(command => command.id === "compound-policy:tools")).toBe(false);
   });
   it.each(["submit", "action"] as const)("preserves a genuine %s preflight refusal", async kind => {
-    const operations = operationStore(); const { driver, fixture } = setup({ operations });
+    const operations = operationStore(); const { driver, fixture, settings } = setup({ operations });
     const handle = await driver.attach(conversation);
+    settings.toolMode = "ask";
     const request = fixture.port.request;
     fixture.port.request = async (input, signal) => {
       if (input.command.command.type === "snapshot") throw new PiNativeError("preflight_refused", "not_sent");
@@ -840,73 +962,47 @@ describe("native Pi driver", () => {
     };
     const result = kind === "submit" ? handle.submit(submission("preflight")) : handle.perform({ action: "compact", applicationOperationId: "preflight" });
     await expect(result).rejects.toMatchObject({ crossedSubmissionBoundary: false, category: "unavailable", backendCode: "preflight_refused" });
-    expect(operations.getOperation(conversation.scope, "thread", "preflight")?.state).toBe(kind === "submit" ? undefined : "prepared");
+    expect(operations.getOperation(conversation.scope, "thread", "preflight")?.state).toBe("prepared");
     expect(fixture.commands.some(command => command.type === "prompt" || command.type === "compact")).toBe(false);
   });
-  it.each(["model", "thinking"] as const)("verifies applied settings after an older %s snapshot finishes", async stale => {
-    const settings = { modelProvider: "provider", modelId: "model", thinkingLevel: "medium", toolMode: "full" as const, revision: 1 };
-    const { driver, fixture } = setup({ settings: { getSettings: () => settings } });
+  it.each(["model", "thinking"] as const)("verifies the live %s at preparation even after an older observer read", async stale => {
+    const { driver, fixture } = setup();
     const handle = await driver.attach(conversation);
     fixture.commands.length = 0;
-    const deferred = () => {
-      let resolve!: () => void;
-      const promise = new Promise<void>(accept => { resolve = accept; });
-      return { promise, resolve };
-    };
-    const snapshotStarted = deferred();
-    const releaseSnapshot = deferred();
-    const settingsApplied = deferred();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let captured!: () => void;
+    const capturedSnapshot = new Promise<void>(resolve => { captured = resolve; });
     const request = fixture.port.request;
-    let captureSnapshot = false;
-    let oldSnapshot: PiManagedState | undefined;
-    const admitted: { model: PiManagedState["model"]; thinkingLevel: string | undefined }[] = [];
+    let holdFirstSnapshot = true;
     fixture.port.request = async (input, signal) => {
-      const type = input.command.command.type;
-      if (type === "set_model") {
-        // Stock Pi reapplies its native thinking default even for the same model.
-        // Also cover a read captured before a different model finishes applying.
-        fixture.state = { ...fixture.state, ...(stale === "thinking" ? { thinkingLevel: "xhigh" }
-          : { model: { provider: "old-provider", id: "old-model" } }) };
-        captureSnapshot = true;
-        fixture.push({ kind: "companion", payload: { type: "state_changed" } });
-        await snapshotStarted.promise;
-      }
-      if (type === "snapshot" && captureSnapshot && !oldSnapshot) {
-        oldSnapshot = structuredClone(fixture.state);
-        const result = await request(input, signal);
-        snapshotStarted.resolve();
-        await releaseSnapshot.promise;
-        return result;
-      }
-      if (type === "prepare_submission") admitted.push({ model: fixture.state.model, thinkingLevel: fixture.state.thinkingLevel });
       const result = await request(input, signal);
-      if (type === "set_thinking_level") settingsApplied.resolve();
+      if (input.command.command.type === "snapshot" && holdFirstSnapshot) {
+        holdFirstSnapshot = false; captured(); await held;
+      }
       return result;
     };
-    const submitting = handle.submit(submission("fresh-settings"));
-    void submitting.catch(() => undefined);
+    fixture.push({ kind: "companion", payload: { type: "state_changed" } });
     try {
-      await settingsApplied.promise;
-      // Drain the completed settings RPC's continuations while the older read
-      // remains held, so verification must encounter that in-flight snapshot.
-      await new Promise<void>(resolve => setImmediate(resolve));
-      expect(fixture.state).toMatchObject({ model: { provider: "provider", id: "model" }, thinkingLevel: "medium" });
-      expect(oldSnapshot).toMatchObject(stale === "thinking" ? { thinkingLevel: "xhigh" }
-        : { model: { provider: "old-provider", id: "old-model" } });
-      expect(admitted).toEqual([]);
-      releaseSnapshot.resolve();
+      await capturedSnapshot;
+      fixture.state = { ...fixture.state, ...(stale === "thinking" ? { thinkingLevel: "high" }
+        : { model: { provider: "provider", id: "old-model" } }) };
+      const submitting = handle.submit(submission("fresh-settings"));
+      await vi.waitFor(() => expect(fixture.commands.some(command => command.type === "prepare_submission")).toBe(true));
+      release();
       await expect(submitting).resolves.toMatchObject({ backendTurnId: "user:fresh-settings" });
-      expect(admitted).toEqual([{ model: { provider: "provider", id: "model" }, thinkingLevel: "medium" }]);
+      expect(fixture.commands.filter(command => command.type === "prepare_submission").map(command => command.id))
+        .toEqual(["fresh-settings:prepare:0", "fresh-settings:prepare:1"]);
       expect(fixture.commands.filter(command => command.type === "prompt")).toHaveLength(1);
-    } finally {
-      snapshotStarted.resolve(); releaseSnapshot.resolve();
-      await submitting.catch(() => undefined);
-    }
+      expect(fixture.state).toMatchObject({ model: { provider: "provider", id: "model" }, thinkingLevel: "low" });
+    } finally { release(); }
   });
   it.each(["model", "thinking"] as const)("rejects a genuine applied %s mismatch before admitting a prompt", async mismatch => {
     const operations = operationStore();
-    const { driver, fixture } = setup({ operations });
+    const { driver, fixture, settings } = setup({ operations });
     const handle = await driver.attach(conversation);
+    settings.toolMode = "ask";
+    fixture.state = { ...fixture.state, model: { provider: "old-provider", id: "old-model" }, thinkingLevel: "off" };
     fixture.commands.length = 0;
     const request = fixture.port.request;
     fixture.port.request = async (input, signal) => {
@@ -934,8 +1030,10 @@ describe("native Pi driver", () => {
     { kind: "action", type: "snapshot" },
     { kind: "tool_access", type: "get_available_models" },
   ] as const)("keeps $kind retryable when auxiliary $type completion is unknown", async ({ kind, type }) => {
-    const operations = operationStore(); const { driver, fixture } = setup({ operations });
+    const operations = operationStore(); const { driver, fixture, settings } = setup({ operations });
     const handle = await driver.attach(conversation);
+    settings.toolMode = "ask";
+    fixture.state = { ...fixture.state, model: { provider: "old-provider", id: "old-model" }, thinkingLevel: "off" };
     const request = fixture.port.request; let fail = true; let auxiliaryId: string | undefined;
     fixture.port.request = async (input, signal) => {
       const result = await request(input, signal);
@@ -956,10 +1054,10 @@ describe("native Pi driver", () => {
       category: "unavailable", crossedSubmissionBoundary: false, retryable: true, backendCode: "auxiliary_reply_lost",
     });
     expect(operations.getOperation(conversation.scope, "thread", input.applicationOperationId)?.state)
-      .toBe(kind === "submit" && type === "snapshot" ? undefined : "prepared");
+      .toBe("prepared");
     expect(fixture.commands.some(command => command.type === "prepare_submission" || command.type === "prompt" || command.type === "compact" || command.id === `${input.applicationOperationId}:policy`)).toBe(false);
     if (type.startsWith("set_")) {
-      expect(fixture.outcomes.has(auxiliaryId!)).toBe(true);
+      expect(fixture.outcomes.has(auxiliaryId!)).toBe(false);
       expect(acknowledge.mock.calls.some(([value]) => value.operationId === auxiliaryId)).toBe(false);
     } else expect(fixture.port.abandonObservation).toHaveBeenCalledWith({ handleId: attachment.handleId, operationId: auxiliaryId }, expect.any(AbortSignal));
     const requestsBeforeReconcile = fixture.commands.length;
@@ -971,8 +1069,9 @@ describe("native Pi driver", () => {
     expect(fixture.commands.filter(command => command.type === "prepare_submission" || command.type === "compact" || command.id === `${input.applicationOperationId}:policy`)).toHaveLength(1);
   });
   it("keeps a timed-out auxiliary read owned while its unsent submission remains retryable", async () => {
-    const operations = operationStore(); const { driver, fixture } = setup({ operations });
+    const operations = operationStore(); const { driver, fixture, settings } = setup({ operations });
     const handle = await driver.attach(conversation);
+    settings.toolMode = "ask";
     const request = fixture.port.request; let readId: string | undefined;
     fixture.port.request = vi.fn(async (input, signal) => {
       if (input.command.command.type === "snapshot") {
@@ -988,23 +1087,20 @@ describe("native Pi driver", () => {
     expect(fixture.port.request).toHaveBeenCalledTimes(1);
     expect(fixture.port.abandonObservation).toHaveBeenCalledTimes(2);
     expect(fixture.port.abandonObservation).toHaveBeenLastCalledWith({ handleId: attachment.handleId, operationId: readId }, expect.any(AbortSignal));
-    expect(operations.getOperation(conversation.scope, "thread", input.applicationOperationId)).toBeUndefined();
+    expect(operations.getOperation(conversation.scope, "thread", input.applicationOperationId)?.state).toBe("prepared");
     expect(await driver.reconcileSubmission({ ...conversation, applicationOperationId: input.applicationOperationId })).toEqual({ status: "not_accepted", retryable: true });
   });
-  it.each(["native", "transport"] as const)("keeps the submission unsent after a %s setup acknowledgement failure", async kind => {
-    const operations = operationStore(); const { driver, fixture } = setup({ operations });
-    const handle = await driver.attach(conversation);
-    const acknowledge = fixture.port.acknowledgeOperation;
-    fixture.port.acknowledgeOperation = async (input, signal) => {
-      if (fixture.commands.find(command => command.id === input.operationId)?.type === "set_model")
-        throw kind === "native" ? new PiNativeError("setup_acknowledgement_lost", "sent_outcome_unknown") : new Error("setup transport closed");
-      return acknowledge(input, signal);
-    };
-    await expect(handle.submit(submission("setup-ack"))).rejects.toMatchObject({
-      crossedSubmissionBoundary: false, retryable: true, category: "unavailable", backendCode: kind === "native" ? "setup_acknowledgement_lost" : "pi_native_operation_unknown",
-    });
-    expect(operations.getOperation(conversation.scope, "thread", "setup-ack")?.state).toBe("prepared");
-    expect(fixture.commands.some(command => command.type === "prepare_submission")).toBe(false);
+  it("consumes successful transient reads and settings with a single exchange", async () => {
+    const { fixture } = setup();
+    const acknowledge = vi.spyOn(fixture.port, "acknowledgeOperation");
+    const poll = vi.spyOn(fixture.port, "outcome");
+    await rpc(fixture.port, attachment, { type: "get_state" });
+    await rpc(fixture.port, attachment, { type: "set_model", provider: "provider", modelId: "model" });
+    expect(fixture.commands.map(value => value.type)).toEqual(["get_state", "set_model"]);
+    expect(poll).not.toHaveBeenCalled();
+    expect(acknowledge).not.toHaveBeenCalled();
+    expect(fixture.port.abandonObservation).not.toHaveBeenCalled();
+    expect(fixture.outcomes.size).toBe(0);
   });
   it.each(["policy", "tools"] as const)("keeps the action dispatched after its own %s reply is lost", async phase => {
     const operations = operationStore(); const { driver, fixture } = setup({ operations });
@@ -1062,7 +1158,7 @@ describe("native Pi driver", () => {
       return result;
     };
     const input = submission("refused-prompt");
-    await expect(handle.submit(input)).rejects.toMatchObject({ crossedSubmissionBoundary: identity === "different", backendCode: "prompt_refused" });
+    await expect(handle.submit(input)).rejects.toMatchObject({ crossedSubmissionBoundary: identity === "different", backendCode: identity === "different" ? "pi_native_submission_evidence_mismatch" : "prompt_refused" });
     await expect(handle.submit(input)).rejects.toMatchObject({ crossedSubmissionBoundary: false, backendCode: "pi_native_submission_not_materialized" });
     expect(fixture.state.operations.find(operation => operation.input.operationId === input.applicationOperationId)?.phase).toBe("rejected");
     expect(prompts).toBe(1);
@@ -1080,7 +1176,7 @@ describe("native Pi driver", () => {
     expect(await handle.reconcileAction(input)).toEqual({ outcome: "not_applied" });
     expect(operations.getOperation(conversation.scope, "thread", input.applicationOperationId)).toMatchObject({ state: "completed", receiptJson: JSON.stringify({ outcome: "not_applied" }) });
   });
-  it("preserves a verified rejected submission when its final snapshot is refused", async () => {
+  it("returns a verified native rejection without a final snapshot", async () => {
     const operations = operationStore(); const { driver, fixture } = setup({ operations });
     const handle = await driver.attach(conversation);
     const request = fixture.port.request; let settled = false;
@@ -1091,7 +1187,7 @@ describe("native Pi driver", () => {
       if (input.command.command.type === "complete_submission") settled = true;
       return result;
     };
-    await expect(handle.submit(submission("handled"))).rejects.toMatchObject({ crossedSubmissionBoundary: false, backendCode: "snapshot_refused" });
+    await expect(handle.submit(submission("handled"))).rejects.toMatchObject({ crossedSubmissionBoundary: false, backendCode: "pi_native_submission_not_materialized" });
     expect(JSON.parse(operations.getOperation(conversation.scope, "thread", "handled")!.receiptJson!)).toMatchObject({ phase: "rejected" });
   });
   it("keeps Stop crossed when a command after accepted begin_stop is refused", async () => {
@@ -1749,7 +1845,7 @@ describe("native Pi driver", () => {
     let pending = true; let lost = false;
     const close = vi.fn(() => { pending = false; });
     const service = { prepareLaunch: async () => undefined, createBridge: () => ({
-      configure: async () => [], onEvent() {}, reconcileHistory() {}, hasPendingCalls: () => pending, close,
+      manifest: () => ({ tools: [], instructions: "" }), configure: async () => [], onEvent() {}, reconcileHistory() {}, hasPendingCalls: () => pending, close,
     }) } as unknown as PiNativeAgentToolService;
     const { driver, fixture } = setup({ agentTools: service });
     fixture.state = { ...fixture.state, entries: [user("u", null)], leafId: "u", isIdle: false };
@@ -1917,7 +2013,7 @@ describe("native Pi driver", () => {
       settings = { ...settings, modelProvider: actual.model!.provider, modelId: actual.model!.id, thinkingLevel: actual.thinkingLevel! };
     } } });
     await driver.attach(conversation);
-    expect(fixture.commands.filter(item => item.type === "set_model").map(item => item.command)).toEqual([{ type: "set_model", provider: "provider", modelId: "model" }]);
+    expect(fixture.commands.some(item => item.type === "set_model")).toBe(false);
     expect(settings.modelId).toBe("model");
   });
   it("normalizes only a unique policy-allowed native catalog default", async () => {
@@ -1986,16 +2082,16 @@ describe("native Pi driver", () => {
     expect(fixture.commands.filter(command => command.type === type)).toHaveLength(1);
     expect(fixture.outcomes.get(pendingId!)).toEqual({ status: "pending" });
   });
-  it("abandons only uncertain reads without releasing uncertain mutations", async () => {
+  it("consumes returned terminal failures without abandoning reads or acknowledging transient mutations", async () => {
     const { fixture } = setup(); fixture.port.acknowledgeOperation = vi.fn(async () => {});
     fixture.port.request = async () => ({ status: "failed", failure: { code: "denied", delivery: "rejected" } });
     await expect(rpc(fixture.port, attachment, { type: "get_state" })).rejects.toMatchObject({ crossedSubmissionBoundary: false });
     expect(fixture.port.abandonObservation).not.toHaveBeenCalled();
     fixture.port.request = async () => ({ status: "failed", failure: { code: "lost", delivery: "sent_outcome_unknown" } });
     await expect(rpc(fixture.port, attachment, { type: "get_state" })).rejects.toMatchObject({ crossedSubmissionBoundary: true });
-    expect(fixture.port.abandonObservation).toHaveBeenCalledOnce();
+    expect(fixture.port.abandonObservation).not.toHaveBeenCalled();
     await expect(rpc(fixture.port, attachment, { type: "set_session_name", name: "Unknown" })).rejects.toMatchObject({ crossedSubmissionBoundary: true });
-    expect(fixture.port.abandonObservation).toHaveBeenCalledOnce();
+    expect(fixture.port.abandonObservation).not.toHaveBeenCalled();
     expect(fixture.port.acknowledgeOperation).not.toHaveBeenCalled();
   });
   it.each(["not_sent", "sent_outcome_unknown"] as const)("retains an uncertain read gate only after %s evidence", async delivery => {
@@ -2037,7 +2133,7 @@ describe("native Pi driver", () => {
   it("fences client controls to the originating normalized active turn, including Steers", async () => {
     let bridgeInput!: Parameters<PiNativeAgentToolService["createBridge"]>[0];
     const service = { prepareLaunch: async () => ({ environment: {} }),
-      createBridge: (input: typeof bridgeInput) => { bridgeInput = input; return { configure: async () => [], onEvent() {}, reconcileHistory() {}, hasPendingCalls: () => false, close() {} }; } } as unknown as PiNativeAgentToolService;
+      createBridge: (input: typeof bridgeInput) => { bridgeInput = input; return { manifest: () => ({ tools: [], instructions: "" }), configure: async () => [], onEvent() {}, reconcileHistory() {}, hasPendingCalls: () => false, close() {} }; } } as unknown as PiNativeAgentToolService;
     const { driver, fixture } = setup({ agentTools: service }); const handle = await driver.attach(conversation); await handle.submit(submission());
     const first = await bridgeInput.clientControlAuthority("user:submit").acquire(new AbortController().signal);
     expect(first.isCurrent()).toBe(true);
@@ -2051,6 +2147,111 @@ describe("native Pi driver", () => {
     await handle.submit(submission("next"));
     await expect(bridgeInput.clientControlAuthority("user:submit").acquire(new AbortController().signal)).rejects.toThrow("no longer active");
     const next = await bridgeInput.clientControlAuthority("user:next").acquire(new AbortController().signal); expect(next.isCurrent()).toBe(true); next.release();
+  });
+  it.each(["before reply", "after reply", "on timeout"] as const)("recovers exact consumption evidence %s", async timing => {
+    const { driver, fixture } = setup();
+    const handle = await driver.attach(conversation);
+    const observed = vi.fn();
+    handle.subscribe(event => { if (event.type === "turn_started") observed(); });
+    const request = fixture.port.request;
+    fixture.port.request = async (input, signal) => {
+      const result = await request(input, signal);
+      if (input.command.command.type !== "complete_submission" || result.status !== "completed") return result;
+      const accepted = result.result as PiManagedOperation;
+      const announce = () => fixture.push({ kind: "companion", payload: { type: "operation_changed", operation: accepted } });
+      if (timing === "before reply") {
+        announce(); await vi.waitFor(() => expect(observed).toHaveBeenCalledOnce());
+      } else if (timing === "after reply") setTimeout(announce, 10);
+      return { status: "completed", result: { input: accepted.input, phase: "enqueued" } };
+    };
+    await expect(handle.submit(submission())).resolves.toMatchObject({ backendTurnId: "user:submit" });
+    expect(fixture.commands.filter(command => command.type === "get_submission").map(command => command.command.operationId))
+      .toEqual(timing === "on timeout" ? ["submit"] : []);
+    expect(fixture.commands.filter(command => command.type === "prompt")).toHaveLength(1);
+  });
+
+  it.each(["operationId", "mutationId", "reconciliationToken", "fingerprint"] as const)("refuses a terminal receipt with the wrong %s", async field => {
+    const operations = operationStore(); const { driver, fixture } = setup({ operations });
+    const handle = await driver.attach(conversation); const request = fixture.port.request;
+    fixture.port.request = async (input, signal) => {
+      const result = await request(input, signal);
+      if (input.command.command.type !== "complete_submission" || result.status !== "completed") return result;
+      const operation = result.result as PiManagedOperation;
+      return { status: "completed", result: { ...operation, input: { ...operation.input, [field]: "a".repeat(64) } } };
+    };
+    await expect(handle.submit(submission())).rejects.toMatchObject({ crossedSubmissionBoundary: true, backendCode: "pi_native_submission_evidence_mismatch" });
+    expect(operations.getOperation(conversation.scope, "thread", "submit")?.state).toBe("sent");
+  });
+
+  it("returns a durable terminal receipt while its host acknowledgements are still pending", async () => {
+    const operations = operationStore(); const { driver, fixture } = setup({ operations });
+    const handle = await driver.attach(conversation);
+    let finish!: () => void;
+    const blocked = new Promise<void>(resolve => { finish = resolve; });
+    const acknowledged: string[] = [];
+    fixture.port.acknowledgeOperation = async ({ operationId }) => {
+      expect(operations.getOperation(conversation.scope, "thread", "submit")?.state).toBe("completed");
+      await blocked; acknowledged.push(operationId);
+    };
+    try {
+      await expect(handle.submit(submission())).resolves.toMatchObject({ backendTurnId: "user:submit" });
+      expect(acknowledged).toEqual([]);
+      expect(fixture.commands.some(command => command.type === "get_submission")).toBe(false);
+    } finally { finish(); }
+    await handle.close();
+    expect(acknowledged.sort()).toEqual(["submit:complete", "submit:dispatch", "submit:prepare:0"]);
+  });
+
+  it("holds early text and thinking for the accepted turn while the previous turn is still projected active", async () => {
+    const { driver, fixture } = setup(); const handle = await driver.attach(conversation);
+    await handle.submit(submission("old")); fixture.state = { ...fixture.state, isIdle: true };
+    const events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    const request = fixture.port.request;
+    fixture.port.request = async (input, signal) => {
+      if (input.command.command.type === "prompt") {
+        for (const [contentIndex, semanticKind, text] of [[0, "reasoning", "first"], [0, "reasoning", "latest"], [1, "assistant_message", "answer"]] as const)
+          fixture.push({ kind: "stream", payload: { type: "message_snapshot", streamId: "next-message", contentIndex, semanticKind, text } });
+        fixture.push({ kind: "rpc", payload: { type: "extension_error", error: "boundary" } });
+        await vi.waitFor(() => expect(events.some(event => event.type === "notice")).toBe(true));
+        expect(events.some(event => event.type === "item_started")).toBe(false);
+      }
+      return request(input, signal);
+    };
+    await handle.submit(submission("new"));
+    const items = events.filter(event => event.type === "item_started").map(event => event.item);
+    expect(items).toMatchObject([
+      { backendTurnId: "user:new", semanticKind: "reasoning", markdown: { text: "latest" } },
+      { backendTurnId: "user:new", semanticKind: "assistant_message", markdown: { text: "answer" } },
+    ]);
+  });
+
+  it("coalesces adjacent state and entry refreshes without crossing stream, notice or assistant boundaries", async () => {
+    const { driver, fixture } = setup(); const handle = await driver.attach(conversation);
+    await handle.submit(submission());
+    const types: string[] = []; handle.subscribe(event => types.push(event.type));
+    fixture.commands.length = 0;
+    const refresh = () => fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+    refresh(); fixture.push({ kind: "rpc", payload: { type: "entry_appended", entry: fixture.state.entries[0] } }); refresh();
+    fixture.push({ kind: "stream", payload: { type: "message_snapshot", streamId: "stream", contentIndex: 0, semanticKind: "reasoning", text: "thinking" } });
+    refresh(); refresh(); fixture.push({ kind: "rpc", payload: { type: "extension_error", error: "ordered" } });
+    refresh(); refresh(); fixture.push({ kind: "rpc", payload: { type: "message_start", message: { role: "assistant" } } });
+    refresh(); refresh(); fixture.push({ kind: "rpc", payload: { type: "extension_error", error: "done" } });
+    await vi.waitFor(() => expect(types.filter(type => type === "notice")).toHaveLength(2));
+    expect(fixture.commands.filter(command => command.type === "snapshot")).toHaveLength(4);
+    expect(types.filter(type => ["run_state_changed", "item_started", "notice"].includes(type))).toEqual([
+      "run_state_changed", "item_started", "run_state_changed", "notice", "run_state_changed", "run_state_changed", "notice",
+    ]);
+  });
+
+  it("publishes throughput only on the completed turn when its first observed snapshot already contains the final message", async () => {
+    const { driver, fixture } = setup(); const handle = await driver.attach(conversation); const events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    const completed = answer("done", "fast");
+    fixture.state = { ...fixture.state, entries: [user("fast", null), { ...completed, message: { ...completed.message, durationMs: 10, usage: { output: 2 } } }], leafId: "done" };
+    fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+    await vi.waitFor(() => expect(events.find(event => event.type === "turn_completed")).toMatchObject({ turn: { throughput: { outputTokens: 2, requestDurationMs: 10 } } }));
+    expect(events.find(event => event.type === "turn_started")?.turn.throughput).toBeUndefined();
   });
   it("does not acknowledge a live submission receipt before its caller consumes it", async () => {
     const { driver, fixture } = setup(); const handle = await driver.attach(conversation);
