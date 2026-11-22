@@ -84,6 +84,6 @@ export async function bundledSidecar(configuration: PiNativeRuntimeConfiguration
   try {
     await vi.waitFor(async () => { if (child.exitCode !== null) throw new Error(`Bundled sidecar exited: ${stderr}`); await status(); }, { timeout: 15_000, interval: 25 });
     await attach();
-    return { port, status, close, async reconnect() { await session?.close("fixture_carrier_replaced"); lease = undefined; await attach(); } };
+    return { port, status, close, get channel() { return lease!.channel; }, async reconnect() { await session?.close("fixture_carrier_replaced"); lease = undefined; await attach(); } };
   } catch (error) { await close().catch(() => undefined); throw error; }
 }

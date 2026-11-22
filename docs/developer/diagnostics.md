@@ -252,6 +252,14 @@ no client update is required for this diagnostic surface. Remote process records
 need the persistent-sidecar opt-in above **before daemon startup**. Main's flag
 alone does not enable remote capture.
 
+For a slow warm Send, compare two consecutive messages on the same attached
+thread. Correlate the delivery-dispatch timings for retry-anchor capture and
+submission with the launch records below. A new `attachmentId` on a session
+launch identifies a new Pi process. On the same session, compare client Streaming
+diagnostics for the first item arrival with the browser batch and commit times.
+The submit duration includes receipt verification and can include a fresh
+history projection. Browser arrival and paint have separate clocks.
+
 Correlate main's `applicationThreadId`, `handleId`, and `handleGeneration` with
 the execution host's matching handle, `runtimeId`, and per-launch `attachmentId`:
 

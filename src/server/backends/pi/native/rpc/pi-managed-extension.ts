@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";
 import path from "node:path";
-import type { PiManagedCommand, PiManagedContextUsage, PiManagedOperation, PiManagedPolicy } from "./pi-managed-protocol.js";
+import type { PiManagedCommand, PiManagedExpectedConfiguration, PiManagedContextUsage, PiManagedOperation, PiManagedPolicy, PiManagedSessionStatus } from "./pi-managed-protocol.js";
 
 // Deliberately structural public-hook types: the installed CLI owns its types
 // and runtime. No embedded SDK module is loaded by this companion.
@@ -26,9 +26,21 @@ interface PublicPiAPI {
   registerTool(tool: NativeRecord): void;
 }
 
+/** Serialized into the standalone companion and shared with its controller.
+ * Preserve this ordering for the authenticated entries already in Pi history. */
+export function piManagedCanonicalJson(value: unknown): string {
+  function stable(part: unknown): unknown {
+    if (Array.isArray(part)) return part.map(stable);
+    if (part && typeof part === "object")
+      return Object.fromEntries(Object.entries(part).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, child]) => [key, stable(child)]));
+    return part;
+  }
+  return JSON.stringify(stable(value));
+}
+
 /** This function is serialized after compilation. Keep all runtime dependencies
  * and helpers inside it so the companion is independent of Sedes' installation. */
-export async function piManagedExtension(pi: PublicPiAPI,
+export async function piManagedExtension(canonicalJson: (value: unknown) => string, pi: PublicPiAPI,
   createCodemodeExtension: (options: { models: boolean }) => (api: PublicPiAPI) => unknown,
   createMcpExtension: () => (api: PublicPiAPI) => unknown,
   createToolSearchExtension: () => (api: PublicPiAPI) => unknown,
@@ -60,7 +72,7 @@ export async function piManagedExtension(pi: PublicPiAPI,
     fs.unlinkSync(bootstrapPath);
   } finally { fs.closeSync(descriptor); }
   const bootstrap = JSON.parse(bootstrapText) as { version?: unknown; socketPath?: unknown; token?: unknown };
-  if (!bootstrap || Object.keys(bootstrap).length !== 3 || bootstrap.version !== 2 || typeof bootstrap.socketPath !== "string" ||
+  if (!bootstrap || Object.keys(bootstrap).length !== 3 || bootstrap.version !== 3 || typeof bootstrap.socketPath !== "string" ||
       !bootstrap.socketPath.startsWith("/") || Buffer.byteLength(bootstrap.socketPath) > 103 || typeof bootstrap.token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(bootstrap.token)) throw new Error("pi_managed_bootstrap_invalid");
   const { socketPath, token } = bootstrap;
   let key = Buffer.alloc(0);
@@ -86,16 +98,16 @@ export async function piManagedExtension(pi: PublicPiAPI,
   const toolResults = new Map<string, NativeRecord>();
   const activeCalls = new Map<string, NativeRecord>();
   let instructions = "";
+  let manifestDigest: string | undefined = digest({ tools: [], instructions });
+  let confirmation: { token: string; catalogDigest: string; expected: PiManagedExpectedConfiguration } | undefined;
   const socket = createConnection(socketPath);
-  socket.once("connect", () => write({ type: "hello", version: 2, token }));
+  socket.once("connect", () => write({ type: "hello", version: 3, token }));
 
-  function stable(value: any): any {
-    if (Array.isArray(value)) return value.map(stable);
-    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, v]) => [k, stable(v)]));
-    return value;
+  function digest(value: unknown): string {
+    return runtime.crypto.createHash("sha256").update(canonicalJson(value)).digest("hex");
   }
   function sign(operation: PiManagedOperation): string {
-    return createHmac("sha256", key).update(JSON.stringify(stable([marker, context!.sessionManager.getSessionId(), operation]))).digest("base64url");
+    return createHmac("sha256", key).update(canonicalJson([marker, context!.sessionManager.getSessionId(), operation])).digest("base64url");
   }
   function write(value: unknown): void {
     if (socket.destroyed) return;
@@ -136,19 +148,44 @@ export async function piManagedExtension(pi: PublicPiAPI,
       if (admitting === operationId) admitting = undefined;
     }
   }
+  function currentTools() {
+    return pi.getAllTools().map(({ name, description, parameters, sourceInfo, exposure }) => ({ name, description, parameters, sourceInfo, exposure,
+        ...(name === "codemode" ? { managed: "codemode" } : name === "tool_search" ? { managed: "tool_search" } : mcpTools.has(name) ? { managed: "mcp" } : agentTools.get(name)?.active ? { managed: "agent" } : {}) }));
+  }
+  function configurationMatches(expected: PiManagedExpectedConfiguration): boolean {
+    return policy !== undefined && digest(policy) === expected.policyDigest && expected.manifestDigest === manifestDigest &&
+      context?.model?.provider === expected.model.provider && context.model.id === expected.model.id &&
+      (context.thinkingLevel ?? "off") === expected.thinkingLevel && digest(currentTools()) === expected.toolsDigest &&
+      digest([...pi.getActiveTools()].sort()) === digest([...expected.activeTools].sort());
+  }
+  function activeTurnId(): string | undefined {
+    const steers = new Map<string, string>();
+    for (const op of operations.values()) {
+      if (op.phase === "accepted" && op.input.mode === "steer" && op.userEntryId && op.input.targetTurnId)
+        steers.set(op.userEntryId, op.input.targetTurnId);
+    }
+    let root: string | undefined;
+    for (const entry of context!.sessionManager.getBranch()) {
+      if (entry.type === "message" && entry.message.role === "user" && (!root || steers.get(entry.id) !== root)) root = entry.id;
+    }
+    return root;
+  }
+  function sessionStatus(): PiManagedSessionStatus {
+    if (!context) throw new Error("pi_managed_not_ready");
+    return { sessionId: context.sessionManager.getSessionId(), sessionFile: context.sessionManager.getSessionFile(),
+      leafId: context.sessionManager.getLeafId(), isIdle: context.isIdle() };
+  }
   function snapshot(): unknown {
     if (!context) throw new Error("pi_managed_not_ready");
     flush();
     const model = context.model;
     const contextUsage = context.getContextUsage();
     return {
-      sessionId: context.sessionManager.getSessionId(), sessionFile: context.sessionManager.getSessionFile(),
-      entries: context.sessionManager.getEntries(), leafId: context.sessionManager.getLeafId(),
+      ...sessionStatus(), entries: context.sessionManager.getEntries(),
       operations: [...operations.values()],
       toolCalls: [...toolCalls.values()], toolResults: [...toolResults.values()],
-      tools: pi.getAllTools().map(({ name, description, parameters, sourceInfo, exposure }) => ({ name, description, parameters, sourceInfo, exposure,
-        ...(name === "codemode" ? { managed: "codemode" } : name === "tool_search" ? { managed: "tool_search" } : mcpTools.has(name) ? { managed: "mcp" } : agentTools.get(name)?.active ? { managed: "agent" } : {}) })),
-      activeTools: pi.getActiveTools(), isIdle: context.isIdle(),
+      tools: currentTools(), manifestDigest, ...(policy ? { policyDigest: digest(policy) } : {}),
+      activeTools: pi.getActiveTools(),
       ...(model ? { model: { provider: model.provider, id: model.id, input: model.input } } : {}),
       thinkingLevel: context.thinkingLevel,
       ...(contextUsage ? { contextUsage } : {}),
@@ -189,7 +226,7 @@ export async function piManagedExtension(pi: PublicPiAPI,
       sourceInfo: { source, path, ...(scope ? { scope } : {}), ...(origin ? { origin } : {}) }, arguments: call.input,
       ...(call.toolName === "codemode" ? { managed: "codemode" } : call.toolName === "tool_search" ? { managed: "tool_search" } : mcpTools.has(call.toolName) ? { managed: "mcp" } : agentTools.get(call.toolName)?.active ? { managed: "agent" } : {}) };
     const marker = "sedes.native.tool.v1";
-    const authentication = createHmac("sha256", key).update(JSON.stringify(stable([marker, context!.sessionManager.getSessionId(), nativeCall]))).digest("base64url");
+    const authentication = createHmac("sha256", key).update(canonicalJson([marker, context!.sessionManager.getSessionId(), nativeCall])).digest("base64url");
     pi.appendEntry(marker, { version: 1, call: nativeCall, authentication });
     toolCalls.set(`${identity.assistantEntryId}\0${call.toolCallId}`, nativeCall);
     activeCalls.set(call.toolCallId, nativeCall);
@@ -198,22 +235,39 @@ export async function piManagedExtension(pi: PublicPiAPI,
     if (!policy) throw new Error("pi_managed_policy_missing");
     if (policy.allowedModels && !policy.allowedModels.some(({ provider, modelId, thinkingLevels }) => provider === context?.model?.provider && modelId === context?.model?.id && (!thinkingLevels || thinkingLevels.includes(context?.thinkingLevel ?? "off")))) throw new Error("pi_managed_model_denied");
   }
-  async function command(command: PiManagedCommand): Promise<unknown> {
+  async function command(command: PiManagedCommand, observedCatalogDigest?: string): Promise<unknown> {
     if (!context || failed) throw new Error("pi_managed_not_ready");
     flush();
     switch (command.type) {
       case "snapshot": return snapshot();
+      case "session_status": return sessionStatus();
+      case "confirm_configuration": {
+        confirmation = undefined;
+        if (!context.isIdle() || observedCatalogDigest !== command.catalogDigest || !configurationMatches(command.expected))
+          throw new Error("pi_native_configuration_drift");
+        confirmation = { token: randomUUID(), catalogDigest: command.catalogDigest, expected: command.expected };
+        return { configurationToken: confirmation.token };
+      }
       case "get_submission": return operations.get(command.operationId) ?? null;
-      case "set_policy": policy = command.policy; return {};
+      case "set_policy": confirmation = undefined; policy = command.policy; return {};
       case "set_active_tools": {
         if (!policy || command.names.some((name) => !admittedTool(name) || (policy!.mode === "read_only" && !readOnlyTool(name)))) throw new Error("pi_managed_tool_denied");
+        confirmation = undefined;
         pi.setActiveTools(command.names); return {};
       }
       case "prepare_submission": {
-        enforceModel();
+        if (operations.has(command.input.operationId)) throw new Error("pi_managed_operation_exists");
         if (stopping || admitting || prepared.size + acceptedInputs.length + materializing.size >= 128) throw new Error("pi_managed_admission_closed");
-        const old = operations.get(command.input.operationId);
-        if (old) throw new Error("pi_managed_operation_exists");
+        if (command.input.mode === "steer") {
+          if (context.isIdle() || !command.input.targetTurnId || command.input.targetTurnId !== activeTurnId())
+            throw new Error("pi_native_steer_target_stale");
+        } else {
+          if (!context.isIdle()) throw new Error("pi_native_busy");
+          if (!confirmation || command.configurationToken !== confirmation.token || command.catalogDigest !== confirmation.catalogDigest ||
+              observedCatalogDigest !== confirmation.catalogDigest || !configurationMatches(confirmation.expected))
+            throw new Error("pi_native_configuration_drift");
+        }
+        enforceModel();
         const wireText = `sedes-input:${randomUUID()}`;
         const operation: PiManagedOperation = { input: command.input, phase: "intent" };
         persist(operation); prepared.set(wireText, command.input.operationId); admitting = command.input.operationId;
@@ -259,6 +313,8 @@ export async function piManagedExtension(pi: PublicPiAPI,
         if (!context.isIdle() || agentCalls.size) throw new Error("pi_managed_tools_busy");
         const names = new Set(command.tools.map((tool) => tool.name));
         if (names.size !== command.tools.length || command.tools.some((tool) => ["codemode", "tool_search", "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"].includes(tool.name) || tool.name.startsWith("mcp__") || builtin(tool.name))) throw new Error("pi_managed_tool_name_conflict");
+        confirmation = undefined;
+        manifestDigest = undefined;
         for (const state of agentTools.values()) state.active = false;
         instructions = command.instructions ?? "";
         for (const tool of command.tools) {
@@ -279,6 +335,7 @@ export async function piManagedExtension(pi: PublicPiAPI,
             },
           });
         }
+        manifestDigest = digest({ tools: command.tools, instructions });
         return {};
       }
       case "resolve_agent_tool": {
@@ -299,12 +356,12 @@ export async function piManagedExtension(pi: PublicPiAPI,
     let index: number;
     while ((index = buffered.indexOf(10)) >= 0) {
       const raw = buffered.subarray(0, index); buffered = buffered.subarray(index + 1);
-      let request: { type: string; id: string; command: PiManagedCommand; version?: unknown; authenticationKey?: unknown };
+      let request: { type: string; id: string; command: PiManagedCommand; observedCatalogDigest?: string; version?: unknown; authenticationKey?: unknown };
       try { request = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)); }
       catch { fail("pi_managed_frame_invalid"); return; }
       if (!request || typeof request !== "object" || Array.isArray(request)) { fail("pi_managed_frame_invalid"); return; }
       if (!key.byteLength) {
-        if (request.type !== "initialize" || request.version !== 2 || Object.keys(request).length !== 3 ||
+        if (request.type !== "initialize" || request.version !== 3 || Object.keys(request).length !== 3 ||
             typeof request.authenticationKey !== "string" || request.authenticationKey.length > 5462 || !/^[A-Za-z0-9_-]+$/.test(request.authenticationKey)) { fail("pi_managed_initialization_invalid"); return; }
         key = Buffer.from(request.authenticationKey, "base64url");
         if (key.byteLength < 32 || key.toString("base64url") !== request.authenticationKey) { fail("pi_managed_key_invalid"); return; }
@@ -313,7 +370,7 @@ export async function piManagedExtension(pi: PublicPiAPI,
       }
       if (request.type !== "request" || typeof request.id !== "string" || !request.command) { fail("pi_managed_request_invalid"); return; }
       chain = chain.then(async () => {
-        try { write({ type: "response", id: request.id, success: true, data: await command(request.command) }); }
+        try { write({ type: "response", id: request.id, success: true, data: await command(request.command, request.observedCatalogDigest) }); }
         catch (error) { write({ type: "response", id: request.id, success: false, code: error instanceof Error ? error.message : "pi_managed_command_failed" }); }
       });
     }
@@ -342,7 +399,7 @@ export async function piManagedExtension(pi: PublicPiAPI,
       if (entry.type === "custom" && ["sedes.native.tool.v1", "sedes.native.tool-result.v1"].includes(entry.customType) && entry.data?.version === 1) {
         const payload = entry.customType === "sedes.native.tool.v1" ? entry.data.call : entry.data.result;
         if (!payload || typeof entry.data.authentication !== "string") continue;
-        const expected = Buffer.from(createHmac("sha256", key).update(JSON.stringify(stable([entry.customType, ctx.sessionManager.getSessionId(), payload]))).digest("base64url"));
+        const expected = Buffer.from(createHmac("sha256", key).update(canonicalJson([entry.customType, ctx.sessionManager.getSessionId(), payload])).digest("base64url"));
         const actual = Buffer.from(entry.data.authentication);
         if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) continue;
         if (known.get(payload.assistantEntryId)?.message?.role !== "assistant" || known.get(payload.userEntryId)?.message?.role !== "user") continue;
@@ -421,7 +478,7 @@ export async function piManagedExtension(pi: PublicPiAPI,
     const result = { toolCallId: event.toolCallId, assistantEntryId: call.assistantEntryId, userEntryId: call.userEntryId,
       content: event.result.content, ...(event.result.details === undefined ? {} : { details: event.result.details }), isError: event.isError };
     const marker = "sedes.native.tool-result.v1";
-    const authentication = createHmac("sha256", key).update(JSON.stringify(stable([marker, ctx.sessionManager.getSessionId(), result]))).digest("base64url");
+    const authentication = createHmac("sha256", key).update(canonicalJson([marker, ctx.sessionManager.getSessionId(), result])).digest("base64url");
     pi.appendEntry(marker, { version: 1, result, authentication });
     toolResults.set(`${call.assistantEntryId}\0${event.toolCallId}`, result); activeCalls.delete(event.toolCallId);
   });
@@ -439,7 +496,7 @@ export async function piManagedExtension(pi: PublicPiAPI,
 }
 
 export function piManagedExtensionSource(): string {
-  return `// Sedes managed Pi companion. Generated from reviewed public-hook code.\nimport { createCodemodeExtension, createMcpExtension, createToolSearchExtension } from "@earendil-works/pi-coding-agent";\nimport * as net from "node:net";\nimport * as crypto from "node:crypto";\nimport * as fs from "node:fs";\nconst install = ${piManagedExtension.toString()};\nexport default (pi) => install(pi, createCodemodeExtension, createMcpExtension, createToolSearchExtension, { net, crypto, fs });\n`;
+  return `// Sedes managed Pi companion. Generated from reviewed public-hook code.\nimport { createCodemodeExtension, createMcpExtension, createToolSearchExtension } from "@earendil-works/pi-coding-agent";\nimport * as net from "node:net";\nimport * as crypto from "node:crypto";\nimport * as fs from "node:fs";\nconst install = (${piManagedExtension.toString()}).bind(null, ${piManagedCanonicalJson.toString()});\nexport default (pi) => install(pi, createCodemodeExtension, createMcpExtension, createToolSearchExtension, { net, crypto, fs });\n`;
 }
 
 export async function installPiManagedExtension(directory: string): Promise<string> {

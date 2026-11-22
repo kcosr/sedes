@@ -18,7 +18,7 @@ import type { ThreadEnvironmentResolver } from "../../../../environment-variable
 import { backendConversationEventSchema, type BackendConversationEvent, type BackendEffectiveSettings, type BackendCapabilityDocument,
   type BackendItem, type DriverInteraction } from "../../../../../shared/protocol/backend.js";
 import type { RuntimeNotice, UsageSnapshot } from "../../../../../shared/protocol/conversation.js";
-import type { PiNativeAttachment, PiNativeForkInput, PiNativeHistory, PiNativePort, PiNativeSessionIdentity } from "../port.js";
+import type { PiNativeAttachment, PiNativeEvent, PiNativeForkInput, PiNativeHistory, PiNativeOutcome, PiNativePort, PiNativeSessionIdentity } from "../port.js";
 import { piNativeThinkingLevelSchema } from "../../../../../shared/protocol/pi-configuration.js";
 import { PiProjectionEstablisher } from "../../pi-projection-establisher.js";
 import { PiCatalogService } from "../../pi-catalog-service.js";
@@ -28,13 +28,14 @@ import { companion, forgetNativeObservations, nativeFailure, nativeUnknownFailur
 import { historyPage, locateHistory, object, projectNativeHistory, projectionWindow, string,
   nativeBranch, publishNativeHistoryArtifacts, type NativeHistoryProjection, type NativeInputEvidence } from "./history.js";
 import { normalizedAbsolutePath } from "../../../../../shared/absolute-path.js";
-import { piManagedOperationSchema, piManagedStateSchema, type PiManagedOperation, type PiManagedState } from "../rpc/pi-managed-protocol.js";
+import { piManagedConfigurationDigest, piManagedSessionStatusSchema, piManagedOperationSchema, piManagedStateSchema, type PiManagedOperation, type PiManagedState } from "../rpc/pi-managed-protocol.js";
 import { formatPiContextExcerptPrompt } from "../../pi-context-excerpt-message.js";
 import { formatPiTaskContextPrompt } from "../../pi-task-context-message.js";
 import type { UsageSink } from "../../../../usage/contracts.js";
 import type { OutputArtifactPublisher } from "../../../../output-artifacts/contracts.js";
 import { PiNativeUsageAccounting } from "./usage.js";
 import { piNativeContextUsage } from "./context-usage.js";
+import { PiNativePendingSubmission } from "./submit-progress.js";
 import { PiNativeEventCheckpoint } from "./event-checkpoint.js";
 import { TurnThroughputRecorder } from "../../../turn-throughput.js";
 import type { PiNativeAgentToolBridge, PiNativeAgentToolService } from "../agent-tools.js";
@@ -71,6 +72,14 @@ export interface PiNativeDriverOptions {
   readonly now?: () => string;
 }
 interface PiNativeOperationRecord { readonly requestHash: string; readonly state: "prepared" | "sent" | "completed" | "unknown"; readonly prepareAttempt: number; readonly dispatchStarted: boolean; readonly receiptJson: string | null }
+interface ConfirmedPiSettings {
+  readonly generation: string;
+  readonly desiredDigest: string;
+  readonly catalogDigest: string;
+  readonly configurationToken: string;
+  readonly model: NonNullable<PiManagedState["model"]>;
+  readonly thinkingLevel: string;
+}
 type NativeMutationPhase = "preflight" | "dispatched" | "not_applied";
 interface NativeMutationBoundary { phase: NativeMutationPhase }
 export interface PiNativeOperations {
@@ -102,7 +111,20 @@ function preparationAttempt(operationId: string, submissionId: string): number |
 // operation_exists and unexpected errors cannot disprove earlier consumption.
 const preparationRejectionCodes = new Set([
   "pi_managed_not_ready", "pi_managed_policy_missing", "pi_managed_model_denied", "pi_managed_admission_closed",
+  "pi_native_busy", "pi_native_steer_target_stale",
 ]);
+function retryablePreparation(outcome: PiNativeOutcome | undefined): boolean {
+  return outcome?.status === "failed" && (outcome.failure.delivery === "not_sent" ||
+    (outcome.failure.delivery === "rejected" && outcome.failure.code === "pi_native_configuration_drift"));
+}
+function configurationChanged(cause: unknown, allowBusy = false): cause is BackendError {
+  return cause instanceof BackendError && cause.category === "rejected" && !cause.crossedSubmissionBoundary &&
+    (cause.backendCode === "pi_native_configuration_drift" || (allowBusy && cause.backendCode === "pi_native_busy"));
+}
+function staleSteerTarget(): BackendError {
+  return new BackendError({ category: "rejected", retryable: true, crossedSubmissionBoundary: false,
+    safeMessage: "The selected Pi turn is no longer active.", backendCode: "pi_native_steer_target_stale", steerRejectionReason: "target_no_longer_active" });
+}
 async function nativeCall<T>(call: () => Promise<T>): Promise<T> {
   try { return await call(); }
   catch (cause) { if (cause instanceof PiNativeError) throw nativeFailure(cause); throw cause; }
@@ -403,7 +425,7 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
       throw cause;
     }
   }
-  async #drain(input: ReleaseConversationResidencyInput): Promise<void> {
+  async #drain(input: ReleaseConversationResidencyInput, preparation?: { applicationOperationId: string; prepareAttempt: number }): Promise<void> {
     const native = this.assertBinding(input);
     if (this.#handles.has(native.sessionId) || this.#attaching.has(native.sessionId) || this.#releasePending.has(native.sessionId)) throw reject("pi_native_already_attached");
     this.#attaching.add(native.sessionId);
@@ -420,8 +442,12 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
       }
       this.#handles.set(native.sessionId, handle);
       try {
-        await handle.initialize(true, attachment.closed);
-        if (attachment.observationGap) {
+        if (preparation) {
+          const { applicationOperationId, prepareAttempt } = preparation;
+          if (attachment.retainedOperationIds.includes(`${applicationOperationId}:prepare:${prepareAttempt}`))
+            await handle.recoverRetainedPreparation(applicationOperationId);
+        } else await handle.initialize(true, attachment.closed);
+        if (!preparation && attachment.observationGap) {
           // Keep the warning until a public subscriber receives it, including
           // when the gap acknowledgement succeeds but its reply is lost.
           this.#recoveryNotices.set(native.sessionId, { id: `pi-native-gap:${fingerprint(attachment.generation)}`, tone: "warning",
@@ -456,7 +482,7 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
     if (existing) return existing.reconcileSubmission(input.applicationOperationId, input.reconciliationToken);
     const evidence = (await nativeCall(() => this.options.port.readHistory(native))).operations.find(operation => operation.input.operationId === input.applicationOperationId);
     const matched = matchingSubmission(evidence, input.applicationOperationId, input.reconciliationToken);
-    if (!record.dispatchStarted && matched?.phase === "intent") {
+    if (!record.dispatchStarted && (matched?.phase === "intent" || (!evidence && record.state === "sent"))) {
       // A client may have attached while history was loading. Reuse that
       // handle without taking ownership of its lifetime.
       if (this.#submissionRecovery.has(native.sessionId)) throw submissionRecoveryBusy();
@@ -465,6 +491,15 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
       if (this.#attaching.has(native.sessionId)) throw submissionRecoveryBusy();
       this.#submissionRecovery.add(native.sessionId);
       try {
+        if (!matched) {
+          // Only a resident process can own the lost reply. Inspect its retained
+          // receipt without launching Pi when history contains no signed intent.
+          await this.#drain({ ...input, binding: input.binding, opaqueBindingDetail: input.opaqueBindingDetail },
+            { applicationOperationId: input.applicationOperationId, prepareAttempt: record.prepareAttempt });
+          const current = this.options.operations.getOperation(input.scope, input.binding.applicationThreadId, input.applicationOperationId);
+          if (current?.state === "prepared") return { status: "not_accepted", retryable: true };
+          return submissionReconciliation({}, input.applicationOperationId);
+        }
         const recovery = await this.#attachSession({ ...input, binding: input.binding, opaqueBindingDetail: input.opaqueBindingDetail });
         try { return await recovery.reconcileSubmission(input.applicationOperationId, input.reconciliationToken); }
         finally { await recovery.close(); }
@@ -491,6 +526,28 @@ export class PiNativeConversationDriver implements ConversationBackendDriver {
     this.#closing = operation;
     try { await operation; } finally { if (this.#closing === operation) this.#closing = undefined; }
   }
+}
+
+function activeToolNames(tools: unknown, mode: PiNativeSettings["toolMode"], agentNames: readonly string[]): string[] {
+  const reviewed = new Set(["read", "grep", "find", "ls", "bash", "write", "edit", "powershell"]);
+  const readonly = new Set(["read", "grep", "find", "ls"]);
+  const names: string[] = [...agentNames];
+  let providesRead = false;
+  for (const entry of Array.isArray(tools) ? tools : []) {
+    const tool = object(entry); const source = object(tool.sourceInfo);
+    if (tool.exposure === "hidden" || tool.exposure === "codemode" || tool.exposure === "deferred") continue;
+    if (tool.managed === "codemode" || tool.managed === "tool_search" || (tool.managed === "mcp" && mode !== "read_only")) {
+      names.push(String(tool.name));
+      if (tool.managed === "codemode") providesRead = true;
+      continue;
+    }
+    if (source.source !== "builtin") continue;
+    if (typeof tool.name !== "string" || !reviewed.has(tool.name) || source.path !== `builtin:${tool.name}`) throw reject("pi_native_tool_catalog_unreviewed");
+    if (tool.name === "read") providesRead = true;
+    if (mode !== "read_only" || readonly.has(tool.name)) names.push(tool.name);
+  }
+  if (!providesRead) throw reject("pi_native_read_tool_unavailable");
+  return names;
 }
 
 function nativeCatalog(value: unknown, policy: CompiledBackendModelPolicy): BackendCatalog {
@@ -580,7 +637,7 @@ class PiNativeConversationHandle implements ConversationHandle {
   readonly #observedSubmissions = new Set<string>();
   readonly #clientAuthorities = new Map<AbortController, { userEntryId: string; turnId: string }>();
   #state: Record<string, unknown> = {};
-  #checkpointState: Pick<PiManagedState, "entries" | "toolCalls" | "toolResults"> = { entries: [], toolCalls: [], toolResults: [] };
+  #checkpointState: Pick<PiManagedState, "entries" | "toolCalls" | "toolResults" | "operations" | "isIdle"> = { entries: [], toolCalls: [], toolResults: [], operations: [], isIdle: false };
   #projection!: NativeHistoryProjection;
   #projector!: PiProjectionEstablisher;
   #settings: PiNativeSettings;
@@ -594,12 +651,17 @@ class PiNativeConversationHandle implements ConversationHandle {
   #refreshing?: Promise<void>;
   #sending: Promise<void> = Promise.resolve();
   #activeSubmissionId?: string;
+  #receiptWaiter?: PiNativePendingSubmission;
+  #pendingTurn?: PiNativePendingSubmission;
+  readonly #pendingAcknowledgements = new Map<string, Promise<void>>();
   #historyMetadata?: PiNativeHistory;
   #usageAccounting?: PiNativeUsageAccounting;
   #agentTools?: PiNativeAgentToolBridge;
   #agentToolNames: readonly string[] = [];
   #configuringMode?: PiNativeSettings["toolMode"];
   #toolCatalogSignature?: string;
+  #confirmedSettings?: ConfirmedPiSettings;
+  #settingsInFlight?: Promise<ConfirmedPiSettings | undefined>;
   #draining = false;
   #providerClosed = false;
   #recoveryNotice?: { readonly notice: RuntimeNotice; readonly observed: () => void };
@@ -669,7 +731,7 @@ class PiNativeConversationHandle implements ConversationHandle {
       await this.#refresh(false);
       if (!drainRetained && !this.#controlOnly) {
         this.driver.options.settings.syncObserved?.(this.input.scope, this.binding.applicationThreadId, capabilities(this.#settings, this.#state, Boolean(this.driver.options.outputArtifacts)).effectiveSettings);
-        if (this.#state.isIdle === true) await this.#applySettings();
+        if (this.#state.isIdle === true) await this.#applyIdleSettings();
       }
       const initial = projectionWindow(this.#projection, this.attachment.sessionId);
       this.#projector = new PiProjectionEstablisher({ initialSnapshot: initial.snapshot, initialHistory: initial.history,
@@ -695,6 +757,7 @@ class PiNativeConversationHandle implements ConversationHandle {
   }
   async #applyToolPolicy(mode: PiNativeSettings["toolMode"], operationId?: string, boundary?: NativeMutationBoundary): Promise<void> {
     this.#assertMutation();
+    this.#confirmedSettings = undefined;
     this.#configuringMode = mode;
     try { if (this.#agentTools) this.#agentToolNames = await this.#agentTools.configure(); }
     finally { this.#configuringMode = undefined; }
@@ -710,36 +773,108 @@ class PiNativeConversationHandle implements ConversationHandle {
       throw cause;
     }
     const snapshot = object(await companion(this.port, this.attachment, { type: "snapshot" }));
-    const reviewed = new Set(["read", "grep", "find", "ls", "bash", "write", "edit", "powershell"]);
-    const readonly = new Set(["read", "grep", "find", "ls"]);
-    const names: string[] = [...this.#agentToolNames];
-    let reviewedRead = false;
-    for (const entry of Array.isArray(snapshot.tools) ? snapshot.tools : []) {
-      const tool = object(entry); const source = object(tool.sourceInfo);
-      if (tool.exposure === "hidden" || tool.exposure === "codemode" || tool.exposure === "deferred") continue;
-      if (tool.managed === "codemode" || tool.managed === "tool_search" || (tool.managed === "mcp" && mode !== "read_only")) { names.push(String(tool.name)); continue; }
-      if (source.source !== "builtin") continue;
-      if (typeof tool.name !== "string" || !reviewed.has(tool.name) || source.path !== `builtin:${tool.name}`) throw reject("pi_native_tool_catalog_unreviewed");
-      if (tool.name === "read") reviewedRead = true;
-      if (mode !== "read_only" || readonly.has(tool.name)) names.push(tool.name);
-    }
-    if (!reviewedRead && !names.some(name => snapshot.tools && Array.isArray(snapshot.tools) && snapshot.tools.some(entry => object(entry).name === name && object(entry).managed === "codemode"))) throw reject("pi_native_read_tool_unavailable");
+    const names = activeToolNames(snapshot.tools, mode, this.#agentToolNames);
     this.#toolCatalogSignature = fingerprint(snapshot.tools);
     await companion(this.port, this.attachment, { type: "set_active_tools", names }, operationId ? `${operationId}:tools` : undefined);
   }
-  async #applySettings(settings = this.driver.options.settings.getSettings(this.input.scope, this.binding.applicationThreadId)): Promise<void> {
-    await this.#applyToolPolicy(settings.toolMode);
-    if (settings.modelProvider && settings.modelId) {
-      if (!this.driver.options.modelPolicy.isSelectionAllowed({ providerId: settings.modelProvider, modelId: settings.modelId, reasoningEffort: settings.thinkingLevel ?? "off" })) throw reject("pi_native_model_policy_denied");
-      await rpc(this.port, this.attachment, { type: "set_model", provider: settings.modelProvider, modelId: settings.modelId });
+  async #ensureCurrentCatalog(): Promise<void> {
+    if (this.#draining || this.#state.isIdle !== true || this.#settingsInFlight ||
+        this.#toolCatalogSignature === fingerprint(this.#state.tools)) return;
+    this.#confirmedSettings = undefined;
+    await this.#applyIdleSettings();
+  }
+  async #applyIdleSettings(): Promise<void> {
+    try { await this.#applySettings(); }
+    catch (cause) {
+      // Native tools can register, or a turn can begin, while an idle observer
+      // is configuring the session. The next Send still needs its own proof.
+      if (!configurationChanged(cause, true)) throw cause;
     }
-    if (settings.thinkingLevel) await rpc(this.port, this.attachment, { type: "set_thinking_level", level: settings.thinkingLevel });
-    await this.#refresh(false);
-    const model = object(this.#state.model);
-    if ((settings.modelProvider && model.provider !== settings.modelProvider) || (settings.modelId && model.id !== settings.modelId) ||
-        (settings.thinkingLevel && this.#state.thinkingLevel !== settings.thinkingLevel))
+  }
+  async #applySettings(): Promise<ConfirmedPiSettings | undefined> {
+    if (this.#settingsInFlight) {
+      try { await this.#settingsInFlight; }
+      catch (cause) { if (!configurationChanged(cause, true)) throw cause; }
+      return this.#applySettings();
+    }
+    const settings = this.driver.options.settings.getSettings(this.input.scope, this.binding.applicationThreadId);
+    const manifest = this.#agentTools?.manifest(settings.toolMode) ?? { tools: [], instructions: "" };
+    const desiredDigest = piManagedConfigurationDigest({ modelPolicy: this.driver.options.modelPolicy.policy,
+      provider: settings.modelProvider, model: settings.modelId, effort: settings.thinkingLevel, mode: settings.toolMode, manifest });
+    if (this.#confirmedSettings?.generation === this.attachment.generation && this.#confirmedSettings.desiredDigest === desiredDigest)
+      return this.#confirmedSettings;
+
+    this.#confirmedSettings = undefined;
+    const verify = () => this.#verifySettings(settings, manifest, desiredDigest);
+    const applying = verify().catch(cause => {
+      if (!configurationChanged(cause)) throw cause;
+      return verify(); // New live snapshot, including any newly registered MCP tools.
+    });
+    this.#settingsInFlight = applying;
+    try { return this.#confirmedSettings = await applying; }
+    catch (cause) {
+      if (!configurationChanged(cause)) throw cause;
+      throw new BackendError({ category: "rejected", retryable: true, crossedSubmissionBoundary: false,
+        backendCode: cause.backendCode, safeMessage: "Pi's configuration is still changing. Retry when it settles." }, { cause });
+    }
+    finally { this.#settingsInFlight = undefined; }
+  }
+  async #verifySettings(settings: PiNativeSettings, manifest: ReturnType<PiNativeAgentToolBridge["manifest"]>, desiredDigest: string): Promise<ConfirmedPiSettings | undefined> {
+    const snapshot = async () => {
+      const state = piManagedStateSchema.parse(await companion(this.port, this.attachment, { type: "snapshot" }));
+      if (state.sessionId !== this.attachment.sessionId || state.sessionFile !== this.attachment.sessionFile)
+        throw reject("pi_native_snapshot_identity_mismatch");
+      return state;
+    };
+    let state = await snapshot();
+    if (!state.isIdle) throw reject("pi_native_busy");
+    const models = await rpc(this.port, this.attachment, { type: "get_available_models" });
+    const catalogDigest = piManagedConfigurationDigest(models);
+    const catalog = nativeCatalog(models, this.driver.options.modelPolicy);
+    const policy = { mode: settings.toolMode, allowedModels: catalog.models.map(model => ({
+      provider: model.provider, modelId: model.id, thinkingLevels: model.supportedReasoningEfforts })) };
+    const manifestDigest = piManagedConfigurationDigest(manifest);
+    const policyDigest = piManagedConfigurationDigest(policy);
+    if (state.manifestDigest !== manifestDigest) {
+      await companion(this.port, this.attachment, { type: "configure_agent_tools", ...manifest });
+      state = await snapshot();
+    }
+    if (state.policyDigest !== policyDigest) await companion(this.port, this.attachment, { type: "set_policy", policy });
+    const names = activeToolNames(state.tools, settings.toolMode, manifest.tools.map(tool => tool.name));
+    if (piManagedConfigurationDigest([...names].sort()) !== piManagedConfigurationDigest([...state.activeTools].sort()))
+      await companion(this.port, this.attachment, { type: "set_active_tools", names });
+    if (settings.modelProvider && settings.modelId) {
+      if (!this.driver.options.modelPolicy.isSelectionAllowed({ providerId: settings.modelProvider, modelId: settings.modelId,
+        reasoningEffort: settings.thinkingLevel ?? "off" })) throw reject("pi_native_model_policy_denied");
+      if (settings.modelProvider !== state.model?.provider || settings.modelId !== state.model?.id) {
+        await rpc(this.port, this.attachment, { type: "set_model", provider: settings.modelProvider, modelId: settings.modelId });
+        // Pi may reset effort when moving to a different model.
+        state = await snapshot();
+      }
+    }
+    if (settings.thinkingLevel && settings.thinkingLevel !== state.thinkingLevel) {
+      await rpc(this.port, this.attachment, { type: "set_thinking_level", level: settings.thinkingLevel });
+      state = await snapshot();
+    }
+    const model = state.model, thinkingLevel = state.thinkingLevel ?? "off";
+    if ((settings.modelProvider && settings.modelProvider !== model?.provider) ||
+        (settings.modelId && settings.modelId !== model?.id) || (settings.thinkingLevel && settings.thinkingLevel !== thinkingLevel))
       throw reject("pi_native_settings_not_applied", "Pi did not apply the requested model and thinking settings.");
+    // History and model selection remain available without an admissible model.
+    // Preparing a Send always requires a confirmed selection.
+    let confirmed: ConfirmedPiSettings | undefined;
+    if (model && policy.allowedModels.some(entry => entry.provider === model.provider && entry.modelId === model.id &&
+        (!entry.thinkingLevels || entry.thinkingLevels.includes(thinkingLevel)))) {
+      const verified = object(await companion(this.port, this.attachment, { type: "confirm_configuration", catalogDigest,
+        expected: { model: { provider: model.provider, id: model.id }, thinkingLevel, policyDigest, manifestDigest,
+          toolsDigest: piManagedConfigurationDigest(state.tools), activeTools: names } }));
+      if (typeof verified.configurationToken !== "string" || !verified.configurationToken) throw reject("pi_native_configuration_unconfirmed");
+      confirmed = { generation: this.attachment.generation, desiredDigest, catalogDigest, configurationToken: verified.configurationToken, model, thinkingLevel };
+    }
+    this.#toolCatalogSignature = fingerprint(state.tools);
+    this.#state = { ...this.#state, model, thinkingLevel, tools: state.tools, activeTools: names };
     this.#settings = settings;
+    return confirmed;
   }
   async #refresh(publish: boolean, signal = this.#lifetime.signal): Promise<void> {
     signal.throwIfAborted();
@@ -766,6 +901,7 @@ class PiNativeConversationHandle implements ConversationHandle {
         const parsed = piManagedOperationSchema.safeParse(candidate);
         if (!parsed.success) throw reject("pi_native_operation_evidence_invalid");
         const operation = parsed.data;
+        this.#observeReceipt(operation);
         if (["accepted", "lost", "rejected"].includes(operation.phase)) {
           const record = this.driver.options.operations.getOperation(this.input.scope, this.binding.applicationThreadId, operation.input.operationId);
           const settledNow = record?.state === "sent" || record?.state === "unknown";
@@ -784,7 +920,10 @@ class PiNativeConversationHandle implements ConversationHandle {
           ...(typeof operation.userEntryId === "string" ? { userEntryId: operation.userEntryId } : {}),
           ...(typeof operation.targetTurnId === "string" ? { targetTurnId: operation.targetTurnId } : {}), presentation: operation.input.presentation }];
       });
-      if (recovered.length) await this.#acknowledge(recovered);
+      if (recovered.length) {
+        if (this.#draining) await this.#acknowledge(recovered);
+        else this.#deferAcknowledgement(recovered);
+      }
       const images = await publishNativeHistoryArtifacts(history, this.binding, this.driver.options.outputArtifacts);
       const projected = projectNativeHistory(history, { running: state.isIdle === false, operations: evidence, images });
       const context = piNativeContextUsage(state.contextUsage);
@@ -809,7 +948,7 @@ class PiNativeConversationHandle implements ConversationHandle {
       for (const id of next.snapshot.orderedBackendTurnIds) {
         const turn = next.snapshot.turnsById[id]!;
         const previous = prior?.snapshot.turnsById[id];
-        if (!previous) this.#emit({ type: "turn_started", turn: { ...turn, status: "in_progress", orderedBackendItemIds: [], endedBy: undefined, completedAt: undefined, failure: undefined } });
+        if (!previous) this.#emit({ type: "turn_started", turn: { ...turn, status: "in_progress", throughput: undefined, orderedBackendItemIds: [], endedBy: undefined, completedAt: undefined, failure: undefined } });
         for (const itemId of turn.orderedBackendItemIds) {
           const item = next.snapshot.itemsById[itemId]!;
           if (JSON.stringify(prior?.snapshot.itemsById[itemId]) !== JSON.stringify(item)) this.#emit({ type: item.status === "streaming" ? (prior?.snapshot.itemsById[itemId] ? "item_updated" : "item_started") : "item_completed", item });
@@ -821,6 +960,7 @@ class PiNativeConversationHandle implements ConversationHandle {
       this.#emit({ type: "usage_changed", usage: next.usage });
       if (prior && Object.keys(prior.snapshot.itemsById).some(id => !next.snapshot.itemsById[id]))
         this.#emit({ type: "resnapshot_required", reason: "history_changed" });
+      this.#publishPendingStreams();
     })();
     this.#refreshing = operation;
     try { await operation; } finally { if (this.#refreshing === operation) this.#refreshing = undefined; }
@@ -886,24 +1026,58 @@ class PiNativeConversationHandle implements ConversationHandle {
     this.#projector?.publish(parsed);
     for (const listener of this.#listeners) listener(parsed);
   }
+  #observeReceipt(operation: PiManagedOperation): void {
+    const waiter = [this.#receiptWaiter, this.#pendingTurn].find(value => value?.expected.operationId === operation.input.operationId);
+    waiter?.verify(operation);
+  }
+  #refreshTrigger(event: PiNativeEvent): boolean {
+    if (this.#providerClosed) return false;
+    if (event.kind === "companion") return event.payload.type === "state_changed" || event.payload.type === "operation_changed";
+    return event.kind === "rpc" && ["agent_start", "tool_execution_end", "compaction_end", "agent_settled", "entry_appended"].includes(String(event.payload.type));
+  }
   async #observePage() {
     const page = await this.port.observe({ handleId: this.attachment.handleId, afterSequence: this.#afterSequence }, this.#lifetime.signal);
     this.#lifetime.signal.throwIfAborted();
     if (page.retainedAfterSequence > this.#afterSequence) {
+      this.#pendingTurn?.clearStreams();
       await this.#refresh(true); this.#emit({ type: "resnapshot_required", reason: "sequence_gap" });
       this.#eventCheckpoint.acknowledge(page.retainedAfterSequence);
     }
-    for (const event of page.events) {
+    const events = page.events.filter(event => event.sequence > this.#afterSequence);
+    for (let i = 0; i < events.length; i++) {
       this.#lifetime.signal.throwIfAborted();
-      if (event.sequence <= this.#afterSequence) continue;
-      this.#eventCheckpoint.observe(event);
-      if (await this.#consume(event.kind, event.payload)) this.#eventCheckpoint.applied(event.sequence, this.#checkpointState);
-      if (!this.#providerClosed && event.kind === "rpc" && event.payload.type === "extension_error") this.#eventCheckpoint.noticeApplied(event.sequence);
+      let event = events[i]!;
+      if (this.#refreshTrigger(event)) {
+        let companionChanged = false;
+        // A single snapshot covers this consecutive prefix. Never cross a
+        // message boundary, UI request, notice, or streamed item.
+        for (;;) {
+          this.#eventCheckpoint.observe(event);
+          if (event.kind === "companion") {
+            const change = piManagedEventSchema.parse(event.payload);
+            this.#agentTools?.onEvent(change);
+            if (change.type === "operation_changed") this.#observeReceipt(change.operation);
+            companionChanged = true;
+          }
+          if (!events[i + 1] || !this.#refreshTrigger(events[i + 1]!)) break;
+          event = events[++i]!;
+        }
+        await this.#refresh(true);
+        if (companionChanged) await this.#ensureCurrentCatalog();
+        this.#eventCheckpoint.applied(event.sequence, this.#checkpointState);
+      } else {
+        this.#eventCheckpoint.observe(event);
+        if (await this.#consume(event.kind, event.payload)) this.#eventCheckpoint.applied(event.sequence, this.#checkpointState);
+        if (!this.#providerClosed && event.kind === "rpc" && event.payload.type === "extension_error") this.#eventCheckpoint.noticeApplied(event.sequence);
+      }
       this.#afterSequence = event.sequence;
     }
     this.#afterSequence = Math.max(this.#afterSequence, page.throughSequence);
-    const throughSequence = this.#state.isIdle === true && this.#interactions.size === 0 && !this.#agentTools?.hasPendingCalls()
-      ? this.#afterSequence : this.#eventCheckpoint.through(id => this.#interactions.has(id), this.#agentTools?.hasPendingCalls());
+    // After a closed provider's retained output is drained, the disk
+    // projection plus its interrupted trailing overlay is authoritative.
+    const idle = this.#state.isIdle === true && !this.#pendingTurn && !this.#interactions.size && !this.#agentTools?.hasPendingCalls();
+    const throughSequence = this.#providerClosed && idle ? this.#afterSequence : this.#eventCheckpoint.through(
+      id => this.#interactions.has(id), this.#agentTools?.hasPendingCalls(), idle ? this.#afterSequence : undefined);
     if (throughSequence > this.#eventCheckpoint.acknowledged) {
       await this.port.acknowledge({ handleId: this.attachment.handleId, throughSequence }, this.#lifetime.signal);
       this.#eventCheckpoint.acknowledge(throughSequence);
@@ -922,6 +1096,7 @@ class PiNativeConversationHandle implements ConversationHandle {
         if (this.#closed || this.#lifetime.signal.aborted) return;
         this.#readDiagnostics.failed("observe", cause);
         if (cause instanceof PiNativeError && cause.code === "pi_native_observation_continuity_lost") {
+          this.#pendingTurn?.clearStreams();
           this.#throughput.invalidate();
           this.#controlOnly = true;
           await this.#readControl();
@@ -992,7 +1167,15 @@ class PiNativeConversationHandle implements ConversationHandle {
         ...(typeof event.code === "string" ? { diagnosticCode: event.code } : {}) });
       this.#throughput.invalidate(); this.#emit({ type: "run_state_changed", state: "disconnected" }); return false;
     }
-    if (kind === "stream") { this.#stream(event); return false; }
+    if (kind === "stream") {
+      if (!this.#stream(event)) {
+        // Hold the replay cursor at this item until a fresh snapshot can
+        // identify its turn or replace its stream with durable history.
+        await this.#refresh(true);
+        if (!this.#stream(event)) throw new PiNativeError("pi_native_pending_stream_limit", "not_sent");
+      }
+      return false;
+    }
     if (this.#providerClosed) {
       // The disk snapshot is authoritative for completed output. Retain only a
       // trailing partial streamed message as interrupted, and discard dead UI.
@@ -1015,26 +1198,39 @@ class PiNativeConversationHandle implements ConversationHandle {
       }
       else {
         await this.#refresh(true);
-        if (!this.#draining && this.#state.isIdle === true && this.#toolCatalogSignature !== fingerprint(this.#state.tools)) await this.#applyToolPolicy(this.#settings.toolMode);
+        await this.#ensureCurrentCatalog();
         return true;
       }
       return false;
     }
     if (event.type === "extension_ui_request") { this.#uiRequest(event); return false; }
-    if (event.type === "message_start" && object(event.message).role === "assistant") this.#live.clear();
-    if (event.type === "message_end" && object(event.message).role === "assistant") this.#live.clear();
-    if (["agent_start", "message_end", "tool_execution_end", "compaction_end", "agent_settled", "entry_appended"].includes(String(event.type))) { await this.#refresh(true); return true; }
+    if ((event.type === "message_start" || event.type === "message_end") && object(event.message).role === "assistant") {
+      this.#live.clear(); this.#pendingTurn?.clearStreams();
+    }
+    if (event.type === "message_end") { await this.#refresh(true); return true; }
     if (event.type === "extension_error") this.#emit({ type: "notice", notice: { id: randomUUID(), tone: "error", message: boundText(event.error, 500), createdAt: new Date().toISOString() } });
     return false;
   }
-  #stream(event: Record<string, unknown>): void {
-    const turnId = this.#projection.snapshot.activeBackendTurnId ?? (this.#providerClosed ? this.#projection.snapshot.orderedBackendTurnIds.at(-1) : undefined);
-    if (!turnId) return;
+  #publishPendingStreams(): void {
+    const pending = this.#pendingTurn;
+    const evidence = pending?.terminal;
+    if (!pending || !evidence) return;
+    if (evidence.phase !== "accepted") { this.#pendingTurn = undefined; return; }
+    const turn = evidence.userEntryId && this.#projection.snapshot.turnsById[evidence.userEntryId];
+    if (!turn) return;
+    if (turn.status === "in_progress" && this.#projection.snapshot.activeBackendTurnId !== evidence.userEntryId) return;
+    this.#pendingTurn = undefined;
+    if (turn.status === "in_progress") for (const { payload } of pending.streams.values()) this.#stream(payload);
+  }
+  #stream(event: Record<string, unknown>): boolean {
     if (event.type !== "message_snapshot" || typeof event.streamId !== "string" || !event.streamId ||
       (event.semanticKind !== "assistant_message" && event.semanticKind !== "reasoning") ||
-      !Number.isSafeInteger(event.contentIndex) || Number(event.contentIndex) < 0 || typeof event.text !== "string") return;
+      !Number.isSafeInteger(event.contentIndex) || Number(event.contentIndex) < 0 || typeof event.text !== "string") return true;
     const index = event.contentIndex as number;
     const key = `${event.streamId}:${index}`;
+    if (this.#pendingTurn) return this.#pendingTurn.retain(key, event);
+    const turnId = this.#projection.snapshot.activeBackendTurnId ?? (this.#providerClosed ? this.#projection.snapshot.orderedBackendTurnIds.at(-1) : undefined);
+    if (!turnId) return true;
     const prior = this.#live.get(key);
     const item: BackendItem = { backendItemId: `live:${key}`, backendTurnId: turnId, status: this.#providerClosed ? "interrupted" : "streaming",
       sourceOrder: 1_000_000_000_000 + index, semanticKind: event.semanticKind,
@@ -1044,6 +1240,7 @@ class PiNativeConversationHandle implements ConversationHandle {
     const turn = this.#projection.snapshot.turnsById[turnId]!;
     if (!turn.orderedBackendItemIds.includes(item.backendItemId)) turn.orderedBackendItemIds.push(item.backendItemId);
     this.#emit({ type: this.#providerClosed ? "item_completed" : prior ? "item_updated" : "item_started", item });
+    return true;
   }
   #approval(event: Record<string, unknown>): void {
     if (typeof event.id !== "string") return;
@@ -1087,9 +1284,12 @@ class PiNativeConversationHandle implements ConversationHandle {
   async backendCapabilities() { this.#assert(); return this.#capabilities(); }
   async usage(): Promise<UsageSnapshot> { this.#assert(); return this.#projection.usage; }
   async captureSubmissionRetryAnchor(): Promise<string> {
-    this.#assertMutation(); await this.#refresh(false);
-    if (this.#state.isIdle !== true) throw reject("pi_native_retry_anchor_busy");
-    return JSON.stringify({ version: 1, sessionId: this.attachment.sessionId, leafId: this.#state.leafId, revision: this.#projection.revision });
+    this.#assertMutation();
+    const status = piManagedSessionStatusSchema.parse(await companion(this.port, this.attachment, { type: "session_status" }));
+    if (status.sessionId !== this.attachment.sessionId || status.sessionFile !== this.attachment.sessionFile)
+      throw reject("pi_native_snapshot_identity_mismatch");
+    if (!status.isIdle) throw reject("pi_native_retry_anchor_busy");
+    return JSON.stringify({ version: 2, sessionId: status.sessionId, leafId: status.leafId });
   }
   async #send(input: SubmitTurnInput | SteerTurnInput, mode: "submit" | "steer"): Promise<Record<string, unknown>> {
     return this.#guardMutation(input.applicationOperationId, async boundary => {
@@ -1099,9 +1299,9 @@ class PiNativeConversationHandle implements ConversationHandle {
         this.#activeSubmissionId = input.applicationOperationId;
         try { return await this.#sendOnce(input, mode, boundary); }
         finally {
-          this.#activeSubmissionId = undefined;
+          this.#activeSubmissionId = undefined; this.#receiptWaiter = undefined;
           if (this.driver.options.operations.getOperation(this.input.scope, this.binding.applicationThreadId, input.applicationOperationId)?.state === "completed")
-            await this.#acknowledge(this.#submissionOperationIds(input.applicationOperationId)
+            this.#deferAcknowledgement(this.#submissionOperationIds(input.applicationOperationId)
               .filter(id => this.#retainedOperationIds.has(id)));
         }
       });
@@ -1109,19 +1309,19 @@ class PiNativeConversationHandle implements ConversationHandle {
       return operation;
     });
   }
-  async #sendOnce(input: SubmitTurnInput | SteerTurnInput, mode: "submit" | "steer", boundary: NativeMutationBoundary): Promise<Record<string, unknown>> {
+  async #sendOnce(input: SubmitTurnInput | SteerTurnInput, mode: "submit" | "steer", boundary: NativeMutationBoundary, retryDrift = true): Promise<Record<string, unknown>> {
     this.#assertMutation();
     const prior = this.driver.options.operations.getOperation(this.input.scope, this.binding.applicationThreadId, input.applicationOperationId);
     const saved = prior?.receiptJson ? object(JSON.parse(prior.receiptJson)) : {};
     const rejected = prior?.state === "completed" && (saved.outcome === "not_applied" || saved.phase === "rejected" || saved.phase === "lost");
-    if (!rejected) await this.#refresh(false);
+    if (!rejected && mode === "steer") await this.#refresh(false);
     const target = "target" in input ? input.target : undefined;
     const durable = this.driver.options.operations.prepareOperation(this.input.scope, this.binding.applicationThreadId, {
       operationId: input.applicationOperationId, kind: "submission", requestHash: fingerprint({ mode, mutationId: input.mutationId,
         reconciliationToken: input.reconciliationToken, text: input.text, target, selectedSkillId: input.selectedSkillId,
         contextExcerpts: input.contextExcerpts, taskContexts: input.taskContexts, attachments: input.attachments }) });
     if (durable.state === "completed" && durable.receiptJson) {
-      await this.#acknowledge(this.#submissionOperationIds(input.applicationOperationId));
+      this.#deferAcknowledgement(this.#submissionOperationIds(input.applicationOperationId));
       this.#throwNegativeReceipt(durable);
       return object(JSON.parse(durable.receiptJson));
     }
@@ -1140,18 +1340,18 @@ class PiNativeConversationHandle implements ConversationHandle {
           throw reject("pi_native_submission_unresolved", "Pi has not resolved this previously dispatched operation.", true);
         if (["accepted", "lost", "rejected"].includes(parsed.data.phase)) {
           this.#record(input.applicationOperationId, "completed", prior);
-          await this.#acknowledge(this.#submissionOperationIds(input.applicationOperationId));
+          this.#deferAcknowledgement(this.#submissionOperationIds(input.applicationOperationId));
         }
         return prior;
       }
       throw reject("pi_native_submission_unresolved", "Pi has not resolved this previously dispatched operation.", true);
     }
-    if (mode === "submit" && this.#state.isIdle !== true) throw reject("pi_native_busy");
     if (mode === "steer" && (target?.kind !== "turn" || target.turnId !== this.#projection.snapshot.activeBackendTurnId || this.#state.isIdle !== false))
-      throw new BackendError({ category: "rejected", retryable: true, crossedSubmissionBoundary: false, safeMessage: "The selected Pi turn is no longer active.", backendCode: "pi_native_steer_target_stale", steerRejectionReason: "target_no_longer_active" });
-    if (mode === "submit") await this.#applySettings();
-    const model = object(this.#state.model);
-    if (typeof model.provider !== "string" || typeof model.id !== "string" || !this.driver.options.modelPolicy.isSelectionAllowed({ providerId: model.provider, modelId: model.id, reasoningEffort: string(this.#state.thinkingLevel) ?? "off" })) throw reject("pi_native_model_policy_denied");
+      throw staleSteerTarget();
+    const confirmation = mode === "submit" ? await this.#applySettings() : undefined;
+    if (mode === "submit" && !confirmation) throw reject("pi_native_model_policy_denied");
+    const model = confirmation?.model ?? object(this.#state.model);
+    if (typeof model.provider !== "string" || typeof model.id !== "string" || !this.driver.options.modelPolicy.isSelectionAllowed({ providerId: model.provider, modelId: model.id, reasoningEffort: confirmation?.thinkingLevel ?? string(this.#state.thinkingLevel) ?? "off" })) throw reject("pi_native_model_policy_denied");
     let text = formatPiTaskContextPrompt(input.taskContexts, formatPiContextExcerptPrompt(input.contextExcerpts, input.text));
     const images: { type: "image"; data: string; mimeType: string }[] = [];
     for (const attachment of input.attachments) {
@@ -1180,11 +1380,22 @@ class PiNativeConversationHandle implements ConversationHandle {
     boundary.phase = "dispatched";
     let prepared: Record<string, unknown>;
     try {
-      prepared = object(await companion(this.port, this.attachment, { type: "prepare_submission", input: {
+      prepared = object(await companion(this.port, this.attachment, { type: "prepare_submission",
+        ...(confirmation ? { configurationToken: confirmation.configurationToken, catalogDigest: confirmation.catalogDigest } : {}), input: {
         operationId: input.applicationOperationId, mutationId: input.mutationId, reconciliationToken: input.reconciliationToken,
         fingerprint: requestFingerprint, mode, ...(target?.kind === "turn" ? { targetTurnId: target.turnId } : {}), text,
         presentation: { text: input.text, contextExcerpts: input.contextExcerpts, taskContexts: input.taskContexts, attachments: input.attachments.map(({ agentPath: _path, sha256: _sha, ...attachment }) => attachment) } } }, prepareId));
     } catch (cause) {
+      if (mode === "submit" && configurationChanged(cause)) {
+        // Only an explicit pre-intent mismatch permits a new attempt ID. A lost reply may already own an intent.
+        this.#confirmedSettings = undefined;
+        boundary.phase = "preflight";
+        this.driver.options.operations.resetUnsentOperation(this.input.scope, this.binding.applicationThreadId,
+          input.applicationOperationId, durable.requestHash, durable.prepareAttempt);
+        await this.#acknowledge([prepareId]);
+        if (retryDrift) return this.#sendOnce(input, mode, boundary, false);
+        throw cause;
+      }
       // The native adapter reserves this classification for positive not-sent evidence.
       // A missing reply or receipt must keep the durable submission non-replayable.
       if (cause instanceof BackendError && cause.category === "unavailable" && cause.retryable && !cause.crossedSubmissionBoundary) {
@@ -1195,7 +1406,7 @@ class PiNativeConversationHandle implements ConversationHandle {
       }
       if (cause instanceof BackendError && cause.category === "rejected" && !cause.crossedSubmissionBoundary && preparationRejectionCodes.has(cause.backendCode ?? "")) {
         boundary.phase = "not_applied";
-        return this.#finishRejection(input.applicationOperationId, [prepareId], cause);
+        return this.#finishRejection(input.applicationOperationId, [prepareId], cause.backendCode === "pi_native_steer_target_stale" ? staleSteerTarget() : cause);
       }
       if (cause instanceof BackendError && cause.category === "rejected" && !cause.crossedSubmissionBoundary)
         this.#record(input.applicationOperationId, "unknown", { nativeOutcomes: { [prepareId]: {
@@ -1207,33 +1418,45 @@ class PiNativeConversationHandle implements ConversationHandle {
     this.#assertMutation();
     this.driver.options.operations.markSubmissionDispatched(this.input.scope, this.binding.applicationThreadId,
       input.applicationOperationId, durable.requestHash, durable.prepareAttempt);
+    const pending = new PiNativePendingSubmission({ operationId: input.applicationOperationId, mutationId: input.mutationId,
+      reconciliationToken: input.reconciliationToken, mode, fingerprint: requestFingerprint });
+    this.#receiptWaiter = pending;
+    if (mode === "submit") this.#pendingTurn = pending;
     let result: Record<string, unknown>;
     try {
       result = object(await rpc(this.port, this.attachment, { type: mode === "submit" ? "prompt" : "steer", message: prepared.wireText,
         ...(images.length ? { images } : {}) }, `${input.applicationOperationId}:dispatch`));
     } catch (cause) {
       if (cause instanceof BackendError && !cause.crossedSubmissionBoundary) {
-        const settled = object(await companion(this.port, this.attachment, { type: "complete_submission", operationId: input.applicationOperationId, disposition: "rejected" }));
-        const settledInput = object(settled.input);
-        if ((settled.phase === "rejected" || settled.phase === "lost") && settledInput.operationId === input.applicationOperationId &&
-          settledInput.mutationId === input.mutationId && settledInput.reconciliationToken === input.reconciliationToken && settledInput.fingerprint === requestFingerprint)
+        const settled = pending.verify(await companion(this.port, this.attachment, { type: "complete_submission", operationId: input.applicationOperationId, disposition: "rejected" }));
+        if (settled.phase === "rejected" || settled.phase === "lost") {
           boundary.phase = "not_applied";
+          this.#record(input.applicationOperationId, "completed", settled);
+          this.#deferAcknowledgement(this.#submissionOperationIds(input.applicationOperationId));
+          if (this.#pendingTurn === pending) this.#pendingTurn = undefined;
+        }
       }
       throw cause;
     }
     const disposition = string(result.disposition);
     if (disposition !== "started" && disposition !== "queued" && disposition !== "handled") throw reject("pi_native_submission_disposition_missing", undefined, true);
-    await companion(this.port, this.attachment, { type: "complete_submission", operationId: input.applicationOperationId, disposition }, `${input.applicationOperationId}:complete`);
-    const evidence = object(await companion(this.port, this.attachment, { type: "get_submission", operationId: input.applicationOperationId }));
-    const verified = piManagedOperationSchema.parse(evidence);
-    if (verified.input.operationId !== input.applicationOperationId || verified.input.mutationId !== input.mutationId || verified.input.reconciliationToken !== input.reconciliationToken || verified.input.fingerprint !== requestFingerprint)
-      throw reject("pi_native_submission_evidence_mismatch", undefined, true);
-    if (["accepted", "lost", "rejected"].includes(verified.phase)) {
-      if (verified.phase !== "accepted") boundary.phase = "not_applied";
-      this.driver.options.operations.completeOperation(this.input.scope, this.binding.applicationThreadId, input.applicationOperationId, { state: "completed", receiptJson: JSON.stringify(verified) });
-      await this.#acknowledge(this.#submissionOperationIds(input.applicationOperationId));
+    let evidence = pending.verify(await companion(this.port, this.attachment, { type: "complete_submission", operationId: input.applicationOperationId, disposition }, `${input.applicationOperationId}:complete`));
+    if (mode === "submit" && evidence.phase === "enqueued") {
+      evidence = await pending.wait(this.#lifetime.signal) ??
+        pending.verify(await companion(this.port, this.attachment, { type: "get_submission", operationId: input.applicationOperationId }));
     }
-    await this.#refresh(true);
+    if (pending.terminal) {
+      if (evidence.phase !== "accepted") boundary.phase = "not_applied";
+      this.#record(input.applicationOperationId, "completed", evidence);
+      for (const id of this.#submissionOperationIds(input.applicationOperationId)) this.#retainedOperationIds.add(id);
+    }
+    this.#publishPendingStreams();
+    if (mode === "submit" && evidence.phase === "accepted" && this.#pendingTurn === pending) {
+      // An observer may already be projecting this exact receipt. Only read a
+      // fresh snapshot if its native turn is still missing.
+      if (this.#refreshing) await this.#refreshing;
+      if (this.#pendingTurn === pending) await this.#refresh(true);
+    }
     return evidence;
   }
   async submit(input: SubmitTurnInput): Promise<SubmitTurnResult> {
@@ -1285,7 +1508,10 @@ class PiNativeConversationHandle implements ConversationHandle {
         const saved = matchingSubmission(receipt, operationId, reconciliationToken);
         if (saved) return submissionReconciliation(saved, operationId);
       }
-      const evidence = matchingSubmission(await companion(this.port, this.attachment, { type: "get_submission", operationId }), operationId, reconciliationToken);
+      const native = await companion(this.port, this.attachment, { type: "get_submission", operationId });
+      if (native === null && await this.recoverRetainedPreparation(operationId))
+        return { status: "not_accepted", retryable: true } as const;
+      const evidence = matchingSubmission(native, operationId, reconciliationToken);
       if (!record.dispatchStarted && evidence?.phase === "intent")
         return submissionReconciliation(await this.#retireUndispatchedIntent(record, evidence), operationId);
       if (evidence && ["accepted", "lost", "rejected"].includes(evidence.phase)) {
@@ -1337,6 +1563,16 @@ class PiNativeConversationHandle implements ConversationHandle {
     if (retained) return piNativeOutcomeSchema.parse(retained);
     return this.port.outcome({ handleId: this.attachment.handleId, operationId }).catch(() => undefined);
   }
+  async recoverRetainedPreparation(operationId: string): Promise<boolean> {
+    const record = this.driver.options.operations.getOperation(this.input.scope, this.binding.applicationThreadId, operationId);
+    if (!record || record.dispatchStarted || record.state !== "sent" || record.receiptJson !== null) return false;
+    const id = `${operationId}:prepare:${record.prepareAttempt}`;
+    if (!retryablePreparation(await this.#outcome(id))) return false;
+    this.driver.options.operations.resetUnsentOperation(this.input.scope, this.binding.applicationThreadId, operationId, record.requestHash, record.prepareAttempt);
+    this.#confirmedSettings = undefined;
+    await this.#acknowledge([id]);
+    return true;
+  }
   async #preserveClosedOutcomes(): Promise<void> {
     for (const id of [...this.#retainedOperationIds]) {
       const exact = this.driver.options.operations.getOperation(this.input.scope, this.binding.applicationThreadId, id);
@@ -1354,8 +1590,8 @@ class PiNativeConversationHandle implements ConversationHandle {
           this.#record(operationId, "completed", { outcome: "not_applied" });
           await this.#acknowledge([id]); continue;
         }
-        if (attempt !== undefined && outcome.status === "failed" && outcome.failure.delivery === "not_sent" &&
-          (attempt < record.prepareAttempt || (attempt === record.prepareAttempt && record.state === "sent"))) {
+        if (attempt !== undefined && retryablePreparation(outcome) &&
+          (attempt < record.prepareAttempt || (attempt === record.prepareAttempt && !record.dispatchStarted && record.state === "sent" && record.receiptJson === null))) {
           if (attempt === record.prepareAttempt) this.driver.options.operations.resetUnsentOperation(this.input.scope, this.binding.applicationThreadId, operationId, record.requestHash, attempt);
           await this.#acknowledge([id]); continue;
         }
@@ -1375,10 +1611,20 @@ class PiNativeConversationHandle implements ConversationHandle {
       ...[...this.#retainedOperationIds].filter(id => preparationAttempt(id, operationId) !== undefined),
     ])];
   }
-  async #acknowledge(ids: readonly string[]): Promise<void> {
+  #deferAcknowledgement(ids: readonly string[]): void {
+    for (const id of ids) {
+      if (this.#pendingAcknowledgements.has(id)) continue;
+      this.#retainedOperationIds.add(id);
+      // Close drains committed receipts before releasing this handle. Give
+      // their host cleanup its own deadline so stopping observation cannot cancel it.
+      const cleanup = this.#acknowledge([id], AbortSignal.timeout(5_000)).finally(() => this.#pendingAcknowledgements.delete(id));
+      this.#pendingAcknowledgements.set(id, cleanup);
+    }
+  }
+  async #acknowledge(ids: readonly string[], signal?: AbortSignal): Promise<void> {
     // Durable receipts already prove the result. A lost cleanup reply cannot undo it.
     for (const operationId of ids) {
-      try { await this.port.acknowledgeOperation({ handleId: this.attachment.handleId, operationId }); this.#retainedOperationIds.delete(operationId); }
+      try { await this.port.acknowledgeOperation({ handleId: this.attachment.handleId, operationId }, signal); this.#retainedOperationIds.delete(operationId); }
       catch (cause) {
         if (cause instanceof PiNativeError && ["pi_native_operation_unknown", "pi_native_operation_acknowledged"].includes(cause.code)) this.#retainedOperationIds.delete(operationId);
         else this.#retainedOperationIds.add(operationId);
@@ -1515,6 +1761,7 @@ class PiNativeConversationHandle implements ConversationHandle {
       }
       this.#settings = { ...this.#settings, toolMode: input.mode as PiNativeSettings["toolMode"], revision: this.#settings.revision + 1 };
     } else {
+      if (input.action === "set_model" || input.action === "set_thinking_level") this.#confirmedSettings = undefined;
       let command: Record<string, unknown>;
       if (input.action === "rename") command = { type: "set_session_name", name: input.title };
       else if (input.action === "compact") command = { type: "compact", ...(input.instructions ? { customInstructions: input.instructions } : {}) };
@@ -1647,7 +1894,9 @@ class PiNativeConversationHandle implements ConversationHandle {
         this.#agentTools?.close();
         for (const controller of this.#clientAuthorities.keys()) controller.abort(); this.#clientAuthorities.clear();
         this.#throughput.clear(); this.#measuredRequests.clear();
-        await Promise.all([this.#watch, this.#controlWatch]); this.#projector?.close(); this.#listeners.clear(); this.#usageAccounting?.close();
+        await Promise.all([this.#watch, this.#controlWatch]);
+        await Promise.all(this.#pendingAcknowledgements.values());
+        this.#pendingTurn = undefined; this.#projector?.close(); this.#listeners.clear(); this.#usageAccounting?.close();
         cleanupSucceeded = true;
       } finally {
         try { await this.port.release({ handleId: this.attachment.handleId }); forgetNativeObservations(this.port, this.attachment.handleId); released = true; }

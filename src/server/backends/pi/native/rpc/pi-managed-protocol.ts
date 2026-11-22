@@ -1,12 +1,27 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import type { BoundedJsonValue } from "../../../../provider-protocol/json/bounded-json-snapshot.js";
 import { piBoundedJson, piNativeEntrySchema, type PiNativeEntry } from "./pi-rpc-wire.js";
+import { piManagedCanonicalJson } from "./pi-managed-extension.js";
 import { piNativeToolCallSchema, piNativeToolResultSchema, type PiNativeToolCall, type PiNativeToolResult } from "../tool-provenance.js";
 
-export const PI_MANAGED_PROTOCOL_VERSION = 2;
+export const PI_MANAGED_PROTOCOL_VERSION = 3;
 export const PI_MANAGED_INPUT_MARKER = "sedes.native.input.v1";
 const id = z.string().min(1).max(512);
+const digest = z.string().regex(/^[a-f0-9]{64}$/);
+export const piManagedSessionStatusSchema = z.object({
+  sessionId: id, sessionFile: z.string().min(1).max(4096).optional(), leafId: id.nullable(), isIdle: z.boolean(),
+}).strict();
+export type PiManagedSessionStatus = z.infer<typeof piManagedSessionStatusSchema>;
+const expectedConfiguration = z.object({
+  model: z.object({ provider: id, id }).strict(), thinkingLevel: id, policyDigest: digest,
+  manifestDigest: digest, toolsDigest: digest, activeTools: z.array(id).max(4096),
+}).strict();
+export type PiManagedExpectedConfiguration = z.infer<typeof expectedConfiguration>;
+
+export function piManagedConfigurationDigest(value: unknown): string {
+  return createHash("sha256").update(piManagedCanonicalJson(value)).digest("hex");
+}
 const json = z.custom<BoundedJsonValue>();
 const agentToolSchema = z.object({ name: id, label: id.optional(), description: z.string().max(65_536),
   parameters: z.record(z.string(), json), readOnly: z.boolean() }).strict();
@@ -34,7 +49,12 @@ export const piManagedPolicySchema = z.object({
 }).strict();
 export type PiManagedPolicy = z.infer<typeof piManagedPolicySchema>;
 export const piManagedCommandSchema = z.union([
-  z.object({ type: z.literal("prepare_submission"), input: piManagedInputSchema }).strict(),
+  z.object({ type: z.literal("prepare_submission"), input: piManagedInputSchema,
+    configurationToken: id.optional(), catalogDigest: digest.optional() }).strict().refine(command => command.input.mode === "submit"
+      ? command.configurationToken !== undefined && command.catalogDigest !== undefined && command.input.targetTurnId === undefined
+      : command.configurationToken === undefined && command.catalogDigest === undefined && command.input.targetTurnId !== undefined),
+  z.object({ type: z.literal("confirm_configuration"), expected: expectedConfiguration, catalogDigest: digest }).strict(),
+  z.object({ type: z.literal("session_status") }).strict(),
   z.object({ type: z.literal("complete_submission"), operationId: id, disposition: z.enum(["started", "queued", "handled", "rejected"]) }).strict(),
   z.object({ type: z.literal("get_submission"), operationId: id }).strict(),
   z.object({ type: z.literal("snapshot"), since: id.optional() }).strict(),
@@ -74,6 +94,8 @@ export interface PiManagedState {
   readonly toolCalls: readonly PiNativeToolCall[];
   readonly toolResults: readonly PiNativeToolResult[];
   readonly tools: readonly PiManagedTool[];
+  readonly manifestDigest?: string;
+  readonly policyDigest?: string;
   readonly activeTools: readonly string[];
   readonly isIdle: boolean;
   readonly model?: { readonly provider: string; readonly id: string; readonly input?: readonly string[] };
@@ -94,7 +116,7 @@ export const piManagedStateSchema = z.object({
   sessionId: id, sessionFile: z.string().optional(), entries: z.array(piNativeEntrySchema), leafId: id.nullable(),
   operations: z.array(piManagedOperationSchema), toolCalls: z.array(piNativeToolCallSchema), toolResults: z.array(piNativeToolResultSchema), tools: z.array(z.object({ name: id, description: z.string().optional(),
     parameters: json.optional(), sourceInfo: json.optional(), exposure: z.string().optional(), managed: z.enum(["codemode", "agent", "mcp", "tool_search"]).optional() }).strict()),
-  activeTools: z.array(id), isIdle: z.boolean(), model: z.object({ provider: id, id, input: z.array(z.string()).optional() }).strict().optional(), thinkingLevel: id.optional(),
+  manifestDigest: digest.optional(), policyDigest: digest.optional(), activeTools: z.array(id), isIdle: z.boolean(), model: z.object({ provider: id, id, input: z.array(z.string()).optional() }).strict().optional(), thinkingLevel: id.optional(),
   contextUsage: piManagedContextUsageSchema.optional(),
 }).strict();
 export const piManagedEventSchema = z.discriminatedUnion("type", [
@@ -110,6 +132,8 @@ export const piManagedEventSchema = z.discriminatedUnion("type", [
 export function parsePiManagedResult(command: PiManagedCommand, value: unknown): unknown {
   const bounded = value === undefined ? undefined : piBoundedJson(value);
   switch (command.type) {
+    case "confirm_configuration": return z.object({ configurationToken: id }).strict().parse(bounded);
+    case "session_status": return piManagedSessionStatusSchema.parse(bounded);
     case "snapshot": return piManagedStateSchema.parse(bounded);
     case "prepare_submission": return z.object({ wireText: id, operation: piManagedOperationSchema }).strict().parse(bounded);
     case "complete_submission": return piManagedOperationSchema.parse(bounded);
@@ -125,12 +149,7 @@ export function parsePiManagedCommand(value: unknown): PiManagedCommand {
 
 /** Canonical key order is shared with the generated companion implementation. */
 export function piManagedAuthenticationBytes(sessionId: string, operation: PiManagedOperation): string {
-  function stable(value: unknown): unknown {
-    if (Array.isArray(value)) return value.map(stable);
-    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, child]) => [key, stable(child)]));
-    return value;
-  }
-  return JSON.stringify(stable([PI_MANAGED_INPUT_MARKER, sessionId, operation]));
+  return piManagedCanonicalJson([PI_MANAGED_INPUT_MARKER, sessionId, operation]);
 }
 
 export function signPiManagedOperation(sessionId: string, operation: PiManagedOperation, key: Uint8Array): string {

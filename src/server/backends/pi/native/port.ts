@@ -2,6 +2,9 @@ import type { EnvironmentVariableOverrides } from "../../../../shared/protocol/e
 import type { EnvironmentChannelScope } from "../../../execution/environment-channel.js";
 import type { PiManagedOperation } from "./rpc/pi-managed-protocol.js";
 
+export const DEFAULT_SESSION_EVENT_BYTES = 32 * 1024 * 1024;
+export const MAXIMUM_SESSION_EVENTS = 16_384;
+
 /** Provider-private execution-host configuration. Paths always name this host. */
 export interface PiNativeRuntimeConfiguration extends EnvironmentChannelScope {
   readonly executablePath?: string;

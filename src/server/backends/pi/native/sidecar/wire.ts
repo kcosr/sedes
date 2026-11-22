@@ -56,7 +56,7 @@ export const piNativeHostCommandSchema = z.discriminatedUnion("action", [
 export type PiNativeHostCommand = z.infer<typeof piNativeHostCommandSchema>;
 export type PiNativeHostCommandInput = PiNativeHostCommand extends infer Command
   ? Command extends PiNativeHostCommand ? Omit<Command, "serviceIncarnation" | "controllerEpoch"> : never : never;
-const capability = { capabilityId: "pi_native_runtime", majorVersion: 2 } as const;
+const capability = { capabilityId: "pi_native_runtime", majorVersion: 3 } as const;
 export const piNativeExecuteOperation = { ...capability, operation: "runtime.execute", requestSchema: sidecarRuntimeBodySchema,
   responseSchema: sidecarRuntimeBodySchema, lane: "operation", maximumDeadlineMilliseconds: 120_000,
 } satisfies SidecarOperationDefinition<z.infer<typeof sidecarRuntimeBodySchema>, z.infer<typeof sidecarRuntimeBodySchema>>;

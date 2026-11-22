@@ -1,4 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { companion } from "../../src/server/backends/pi/native/driver/port-session.js";
 import { createServer, type ServerResponse } from "node:http";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -16,16 +18,19 @@ import { agentContextToolDefinition } from "../../src/server/agent-tools/tools/a
 import type { BackendAgentToolFacade, BackendAgentToolInvocationInput } from "../../src/server/agent-tools/adapters/backend-facade.js";
 import type { SedesToolInvocationResult } from "../../src/server/agent-tools/contracts/agent-tool-contracts.js";
 import { bundledSidecar } from "./bundled-sidecar.js";
+import { measureWarmSend, type StreamingReply } from "./warm-send-performance.js";
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => { const errors: unknown[] = []; for (const action of cleanup.splice(0).reverse()) { try { await action(); } catch (error) { errors.push(error); } } if (errors.length) throw errors[0]; });
 const scope = { tenantId: "offline-test", principalId: "offline-test" };
-function operationStore(): PiNativeOperations {
+function operationStore(onVerified?: (operationId: string) => void): PiNativeOperations {
   const records = new Map<string, ReturnType<PiNativeOperations["prepareOperation"]>>();
   return {
     prepareOperation(_scope, thread, input) { const key = `${thread}:${input.operationId}`; const prior = records.get(key); if (prior && prior.requestHash !== input.requestHash) throw new Error("operation_replay_mismatch"); const next = prior ?? { requestHash: input.requestHash, state: "prepared", prepareAttempt: 0, dispatchStarted: false, receiptJson: null }; records.set(key, next); return next; },
     getOperation(_scope, thread, id) { return records.get(`${thread}:${id}`); },
-    completeOperation(_scope, thread, id, input) { const key = `${thread}:${id}`; const prior = records.get(key); if (!prior) throw new Error("operation_missing"); const next = { ...prior, ...input }; records.set(key, next); return next; },
+    completeOperation(_scope, thread, id, input) { const key = `${thread}:${id}`; const prior = records.get(key); if (!prior) throw new Error("operation_missing"); const next = { ...prior, ...input }; records.set(key, next);
+      if (onVerified && next.state === "completed" && next.receiptJson && JSON.parse(next.receiptJson).phase === "accepted") onVerified(id);
+      return next; },
     markSubmissionDispatched(_scope, thread, id, requestHash, prepareAttempt) { const key = `${thread}:${id}`; const prior = records.get(key);
       if (!prior || prior.state !== "sent" || prior.requestHash !== requestHash || prior.prepareAttempt !== prepareAttempt || prior.receiptJson !== null) throw new Error("operation_not_dispatchable");
       const next = { ...prior, dispatchStarted: true }; records.set(key, next); return next; },
@@ -36,7 +41,7 @@ function operationStore(): PiNativeOperations {
 }
 const submission = (text: string, id = randomUUID()): SubmitTurnInput => ({ applicationOperationId: id, mutationId: `${id}:mutation`, reconciliationToken: `${id}:token`, source: { kind: "user" }, text, contextExcerpts: [], taskContexts: [], attachments: [] });
 
-async function fixture(options: { mcp?: boolean; agentTools?: PiNativeAgentToolService; bundled?: boolean } = {}) {
+async function fixture(options: { mcp?: boolean; agentTools?: PiNativeAgentToolService; bundled?: boolean; streamingReply?: () => StreamingReply | undefined; onVerified?: (operationId: string) => void } = {}) {
   const executablePath = process.env.SEDES_REAL_PI_NATIVE_EXECUTABLE;
   if (!executablePath || !path.isAbsolute(executablePath)) throw new Error("Set SEDES_REAL_PI_NATIVE_EXECUTABLE to an isolated stock Pi >=1.4.0 executable. This suite never uses PATH discovery.");
   const directory = await mkdtemp(path.join(tmpdir(), "sedes-pi-test-"));
@@ -94,7 +99,12 @@ lines.on("line", line => {
     if (tool && body.messages.at(-1)?.role === "user") {
       send({ role: "assistant", tool_calls: [{ index: 0, id: `outer-${requests.length}`, type: "function", function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] }, null);
       send({}, "tool_calls");
-    } else { send({ role: "assistant", content: "offline completed" }, null); send({}, "stop"); }
+    } else {
+      const reply = options.streamingReply?.();
+      send({ role: "assistant", content: reply?.text ?? "offline completed" }, null);
+      if (reply) await reply.finish;
+      send({}, "stop");
+    }
     response.write(`data: ${JSON.stringify({ ...base, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })}\n\n`);
     response.end("data: [DONE]\n\n");
   });
@@ -116,7 +126,7 @@ lines.on("line", line => {
   const instance = { id: "pi-native-test", tenantId: scope.tenantId, kind: "pi_native" as const, label: "Pi", enabled: true, configurationRevision: 1, protocolRelease: "1.4.0" };
   const connection = { id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "pi_rpc" as const, backendInstanceId: instance.id, executionEnvironmentId: "local-test", label: "Pi", enabled: true, configurationRevision: 1 };
   const settings = { modelProvider: "fixture", modelId: "fixture", thinkingLevel: "off", toolMode: "read_only" as "read_only" | "ask" | "full", revision: 0 };
-  const driver = new PiNativeConversationDriver({ instance, connection, port: host, operations: operationStore(), usage: NO_USAGE_SINK, settings: { getSettings: () => settings }, modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "provider_model_effort"), ...(options.agentTools ? { agentTools: options.agentTools } : {}) });
+  const driver = new PiNativeConversationDriver({ instance, connection, port: host, operations: operationStore(options.onVerified), usage: NO_USAGE_SINK, settings: { getSettings: () => settings }, modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "provider_model_effort"), ...(options.agentTools ? { agentTools: options.agentTools } : {}) });
   cleanup.push(() => driver.close());
   const workspace = { canonicalPath: workspacePath, authorityRevision: 0, summary: { id: "workspace", environmentId: "local-test", displayName: "Offline", displayPath: workspacePath, availability: "available" as const, trustState: "untrusted" as const, revision: 0 } };
   const created = await driver.create({ scope, applicationThreadId: "thread", applicationOperationId: randomUUID(), source: { kind: "user" }, workspace, requestedBackendConversationId: randomUUID() });
@@ -125,7 +135,7 @@ lines.on("line", line => {
 }
 
 async function completed(handle: ConversationHandle, text: string) {
-  const receipt = await handle.submit(submission(text)).catch((error) => { throw new Error(`${text} submission failed: ${error.backendCode ?? error.message}`, { cause: error }); });
+  const receipt = await handle.submit(submission(text)).catch((error) => { throw new Error(`${text.slice(0, 80)} submission failed: ${error.backendCode ?? error.message}`, { cause: error }); });
   await vi.waitFor(async () => expect((await handle.history({ limit: 50 })).turnsById[receipt.backendTurnId!]?.status).toBe("completed"), { timeout: 15_000, interval: 25 });
   return receipt;
 }
@@ -249,7 +259,7 @@ it("enforces code-mode nested tool policy and native MCP approval before any MCP
   expect((await readFile(f.mcpLog, "utf8")).trim().split("\n")).toHaveLength(2);
 });
 
-it("runs native Sedes tools directly and through code mode with thread scope and durable invocation identity", async () => {
+function fixtureAgentTools(remote = false) {
   const registry = new AgentToolRegistry(); registry.register(agentContextToolDefinition);
   const artifact = registry.artifact(agentContextToolDefinition.id, agentContextToolDefinition.schemaVersion);
   const invoke = vi.fn(async (_input: BackendAgentToolInvocationInput): Promise<SedesToolInvocationResult<unknown>> => ({ invocationId: `invocation-${invoke.mock.calls.length}`, state: "completed", output: { nativeAgentResult: "scoped-result" } }));
@@ -264,7 +274,12 @@ it("runs native Sedes tools directly and through code mode with thread scope and
         maximumOutputBytes: artifact.execution.maximumOutputBytes, uncertainExternalOutcome: artifact.execution.uncertainExternalOutcome } }],
     invoke: invoke as BackendAgentToolFacade["invoke"],
   };
-  const agentTools = new PiNativeAgentToolService({ facade, cli: { availability: "unavailable", reason: "cli_unavailable" }, remote: false, sourceCapabilities: { issue: () => { throw new Error("CLI not requested"); } } });
+  const agentTools = new PiNativeAgentToolService({ facade, cli: { availability: "unavailable", reason: "cli_unavailable" }, remote, sourceCapabilities: { issue: () => { throw new Error("CLI not requested"); } } });
+  return { agentTools, invoke };
+}
+
+it("runs native Sedes tools directly and through code mode with thread scope and durable invocation identity", async () => {
+  const { agentTools, invoke } = fixtureAgentTools();
   const f = await fixture({ agentTools });
   const handle = await f.driver.attach(f.input);
   await completed(handle, "agent-code");
@@ -300,4 +315,74 @@ it.skipIf(process.platform === "win32")("runs the release sidecar bundle and pre
   await handle.interrupt({ applicationOperationId: randomUUID(), deadlineAt: Date.now() + 10_000 });
   await completed(handle, "completed after carrier replacement");
   expect(JSON.stringify(await handle.history({ limit: 50 }))).toContain("native-offline-code-result");
+}, 60_000);
+
+it.skipIf(process.platform === "win32").each([0, 20, 50])("measures warm native Send at %i ms sidecar round-trip latency", async roundTripMs => {
+  let reply: StreamingReply | undefined;
+  const { agentTools } = fixtureAgentTools(true);
+  const verifiedAt = new Map<string, number>();
+  const f = await fixture({ bundled: true, agentTools, streamingReply: () => reply,
+    onVerified: id => { if (!verifiedAt.has(id)) verifiedAt.set(id, performance.now()); } });
+  const handle = await f.driver.attach(f.input);
+  try {
+    const native = parsePiNativeBindingDetail(f.input.opaqueBindingDetail);
+    await completed(handle, "establish warm settings");
+    for (const historySize of ["short", "long"] as const) {
+      if (historySize === "long") await completed(handle, "large history " + "x".repeat(70 * 1024));
+      const history = await f.host.readHistory(native);
+      const historyBytes = Buffer.byteLength(JSON.stringify(history.entries));
+      expect(historyBytes > 64 * 1024).toBe(historySize === "long");
+      await measureWarmSend({ channel: f.remote!.channel, handle, historyBytes, roundTripMs,
+        submission, verifiedAt, modelRequestCount: () => f.requests.length, setReply: value => { reply = value; } });
+    }
+  } finally { await handle.close(); }
+}, 120_000);
+
+it.skipIf(process.platform === "win32")("dispatches a warm Send while a large observer snapshot awaits decoding", async () => {
+  const f = await fixture({ bundled: true, agentTools: fixtureAgentTools(true).agentTools });
+  const attaching = vi.spyOn(f.host, "attach");
+  const handle = await f.driver.attach(f.input);
+  const attachment = await attaching.mock.results[0]!.value;
+  attaching.mockRestore();
+  try {
+    await completed(handle, "large history " + "x".repeat(70 * 1024));
+    // Use the event observer's normal companion reader on the same attachment.
+    // The response stream has already been offered by the remote Pi host. Only
+    // this observer's decode is held. Other requests still use the real carrier.
+    const observer = new AsyncLocalStorage<boolean>();
+    let held = false;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const channel = f.remote!.channel;
+    const decode = channel.decodeBody.bind(channel);
+    const intercept = vi.spyOn(channel, "decodeBody").mockImplementation(async body => {
+      if (observer.getStore() && body.type === "stream") {
+        held = true;
+        await gate;
+      }
+      return decode(body);
+    });
+    const snapshot = observer.run(true, () => companion(f.host, attachment, { type: "snapshot" }));
+    let send: ReturnType<ConversationHandle["submit"]> | undefined;
+    try {
+      await Promise.race([
+        vi.waitFor(() => expect(held).toBe(true), { timeout: 5_000 }),
+        snapshot.then(() => { throw new Error("Expected a streamed snapshot"); }),
+      ]);
+      const priorRequests = f.requests.length;
+      send = (async () => {
+        await handle.captureSubmissionRetryAnchor();
+        return handle.submit(submission("submit with observer blocked"));
+      })();
+      const reachedModel = vi.waitFor(() => expect(f.requests.length).toBe(priorRequests + 1), { timeout: 5_000 });
+      await Promise.race([reachedModel, send.then(() => reachedModel)]);
+    } finally {
+      release();
+      await Promise.allSettled([snapshot, send]);
+      intercept.mockRestore();
+      observer.disable();
+    }
+    expect(Buffer.byteLength(JSON.stringify(await snapshot))).toBeGreaterThan(64 * 1024);
+    expect(await send).toMatchObject({ accepted: true });
+  } finally { await handle.close(); }
 }, 60_000);

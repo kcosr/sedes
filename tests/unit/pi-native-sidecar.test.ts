@@ -91,9 +91,9 @@ async function attachment(f: Awaited<ReturnType<typeof fixture>>, mode: "normal"
   cleanup.push(disconnect);
   return { lease, channel, disconnect, release, epoch, transport: left };
 }
-function proxy(lease: SidecarRuntimeLease, existingOnly = false) {
+function proxy(lease: SidecarRuntimeLease, existingOnly = false, onRuntimeVersion?: ConstructorParameters<typeof PiNativeRemotePort>[0]["onRuntimeVersion"]) {
   const runtime = { acquire: vi.fn(async () => lease), acquireExisting: vi.fn(async () => lease) } satisfies SidecarRuntimeProvider;
-  const port = new PiNativeRemotePort({ configuration, sidecarRuntime: runtime, existingOnly });
+  const port = new PiNativeRemotePort({ configuration, sidecarRuntime: runtime, existingOnly, onRuntimeVersion });
   cleanup.push(() => port.close());
   return { port, runtime };
 }
@@ -172,12 +172,12 @@ setInterval(() => {}, 1000);
     expect(observed).toHaveBeenLastCalledWith(undefined);
   });
 
-  it("requires version-aware native capability 2 before sending provider operations", async () => {
+  it("requires native capability 3 before sending provider operations", async () => {
     const f = await fixture(), connected = await attachment(f);
-    const supported = vi.spyOn(connected.channel, "supportsOperation").mockImplementation(operation => operation.majorVersion === 1);
+    const supported = vi.spyOn(connected.channel, "supportsOperation").mockImplementation(operation => operation.majorVersion <= 2);
     const { port } = proxy(connected.lease);
     await expect(port.attach(identity)).rejects.toThrow("pi_native_remote_runtime_unsupported");
-    expect(supported).toHaveBeenCalledWith(expect.objectContaining({ capabilityId: "pi_native_runtime", majorVersion: 2 }));
+    expect(supported).toHaveBeenCalledWith(expect.objectContaining({ capabilityId: "pi_native_runtime", majorVersion: 3 }));
     expect(f.createHost).not.toHaveBeenCalled();
   });
 
@@ -418,7 +418,7 @@ setInterval(() => {}, 1000);
       port.request({ handleId: other.handleId, operationId: "send", retainOutcome: true, command: { channel: "rpc", command: { type: "prompt", message: "other work" } } }),
     ]);
     expect(page.events).toHaveLength(1);
-    expect(outcome.status).toBe("pending");
+    expect(outcome.status).toBe("completed");
     expect(runtime.acquire).toHaveBeenCalledTimes(1);
     expect(runtime.acquireExisting).toHaveBeenCalledTimes(1);
     await port.acknowledge({ handleId: drained.handleId, throughSequence: page.throughSequence });
@@ -640,7 +640,7 @@ setInterval(() => {}, 1000);
     expect(runtime.acquire).not.toHaveBeenCalled();
     expect(runtime.acquireExisting).toHaveBeenCalledTimes(1);
     await expect(port.request({ handleId: session.handleId, operationId: "new", retainOutcome: true, command: { channel: "rpc", command: { type: "prompt", message: "new" } } })).rejects.toThrow("pi_native_recovery_read_only");
-    expect(await port.request({ handleId: session.handleId, operationId: "stop", retainOutcome: true, command: { channel: "rpc", command: { type: "abort" } } })).toEqual({ status: "pending" });
+    expect(await port.request({ handleId: session.handleId, operationId: "stop", retainOutcome: true, command: { channel: "rpc", command: { type: "abort" } } })).toEqual({ status: "completed", result: { ok: true } });
     await expect(port.attach({ ...identity, sessionFile: "/workspace/other.jsonl" })).rejects.toThrow("pi_native_recovery_read_only");
     expect(f.createHost).toHaveBeenCalledTimes(1);
   });
@@ -664,6 +664,31 @@ setInterval(() => {}, 1000);
     expect(f.requests).toHaveBeenCalledTimes(1);
     await vi.waitFor(async () => expect((await port.outcome({ handleId: session.handleId, operationId: "send" })).status).toBe("completed"));
     expect(f.requests).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["inline", "stream", "version observation"] as const)("preserves uncertainty on %s reply processing failure", async stage => {
+    const f = await fixture(), connection = await attachment(f);
+    const observeVersion = vi.fn();
+    const { port } = proxy(connection.lease, false, observeVersion);
+    const { handleId } = await port.attach(identity);
+    const result = stage === "stream" ? { data: "x".repeat(65_536) } : { ok: true };
+    f.requests.mockResolvedValue(result);
+    const decoded: string[] = [];
+    if (stage === "version observation") {
+      observeVersion.mockImplementationOnce(() => { throw new PiNativeError("pi_native_controller_stale", "not_sent"); });
+    } else {
+      const decode = connection.channel.decodeBody.bind(connection.channel);
+      vi.spyOn(connection.channel, "decodeBody").mockImplementationOnce(async body => {
+        decoded.push(body.type);
+        await decode(body);
+        throw Object.assign(new Error("response processing failed"), { delivery: "not_sent" });
+      });
+    }
+    const input = { handleId, operationId: "send", retainOutcome: true, command: { channel: "rpc" as const, command: { type: "prompt", message: "work" } } };
+    await expect(port.request(input)).rejects.toMatchObject({ delivery: "sent_outcome_unknown" });
+    expect(decoded).toEqual(stage === "version observation" ? [] : [stage]);
+    expect(await port.outcome({ handleId, operationId: input.operationId })).toEqual({ status: "completed", result });
+    expect(f.requests).toHaveBeenCalledOnce();
   });
 
   it("releases exact handles after a separate administration port stops the host", async () => {

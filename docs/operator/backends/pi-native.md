@@ -33,11 +33,11 @@ Sedes's per-thread and startup variable editors do not override it. A leading
 so discovery and the running process always use the same native store.
 
 For a remote runtime, enable persistent sidecar operations and deploy a sidecar
-that advertises native Pi runtime capability **2**. Upgrade the server and
-sidecar together, following the
-[persistent service upgrade procedure](../operations.md#persistent-remote-services).
-Drain native Pi work before an incompatible sidecar upgrade; retained work
-blocks automatic replacement.
+that advertises native Pi runtime capability **3**. Before upgrading from
+capability 2, use the matching main and sidecar to settle active work, resolve
+pending interactions and drain retained operation and event evidence. Confirm
+the native runtime can stop normally, then upgrade main and sidecar together.
+See the [persistent service upgrade procedure](../operations.md#persistent-remote-services).
 Install and authenticate Pi on that host. Files, attachment staging, terminals, and Sedes CLI tools still
 require their own environment grants; starting Pi grants none of them. Native
 Pi workspace tools run on the execution host and do not use the SDK's remote
@@ -119,8 +119,10 @@ turn. Queue is the shared Sedes queue and sends only after authoritative turn
 settlement. Stop reconciles accepted and cleared native inputs; an unknown
 outcome stays in recovery rather than being retried automatically.
 
-Settings verification reads a fresh snapshot after applying the requested model
-and thinking level, so an older observation cannot falsely reject a Send.
+On a warm thread, Send verifies the live configuration on the execution host.
+A changed model, tool catalog or grant triggers fresh configuration checks before
+Pi receives the prompt. Sedes associates streamed progress with the native user
+entry that consumed the input.
 If handle cleanup failed, **Stop** or **Restart** in the backend controls can
 retry release of that same native owner. New work stays blocked until cleanup is proven; this never discards
 uncertain input outcomes or starts a competing process. Closing a handle lets
@@ -269,10 +271,10 @@ The separate `test:live-pi-native` gate requires explicit authorization,
 `SEDES_RUN_LIVE_PI_NATIVE=1`, and an absolute `SEDES_LIVE_PI_NATIVE_EXECUTABLE`
 selecting stock stable Pi >=1.4.0. It uses disposable native sessions and
 verifies the exact `aw-qwen-3-8-27b/aw-qwen-3-8-27b` model, low reasoning, and read-only tools
-before prompting. On 2026-11-08, its one Linux x64 live test passed with stock
-Pi 1.5.0, including nested code-mode reads, signed provenance, and detach/resume; all ten offline
-native qualification tests also passed with Pi 1.5.0, including context
-occupancy through compaction and secret-free process bootstrap. This evidence is limited to that model
+before prompting. On 2026-11-22, the Linux x64 live test passed with stock
+Pi 1.5.0, including nested code-mode reads, signed provenance, and detach/resume.
+All 14 offline tests also passed, including warm sends over the bundled sidecar,
+context occupancy through compaction and secret-free process bootstrap. This evidence is limited to that model
 and host platform; it does not qualify other providers or macOS execution.
 
 Provider-private evidence, bounds, and lifecycle invariants are documented in

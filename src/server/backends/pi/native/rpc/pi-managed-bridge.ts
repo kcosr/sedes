@@ -78,7 +78,7 @@ export class PiManagedBridge {
     this.#listeners.add(listener); return () => this.#listeners.delete(listener);
   }
 
-  request(command: PiManagedCommand, options: PiRpcRequestOptions = {}): Promise<unknown> {
+  request(command: PiManagedCommand, options: PiRpcRequestOptions & { readonly observedCatalogDigest?: string } = {}): Promise<unknown> {
     let parsed: PiManagedCommand;
     try { parsed = parsePiManagedCommand(command); }
     catch (cause) { return Promise.reject(new PiRpcCallError("pi_managed_command_invalid", "not_sent", { cause })); }
@@ -87,7 +87,7 @@ export class PiManagedBridge {
     const remaining = options.deadlineAt === null ? null : (options.deadlineAt ?? Date.now() + 30_000) - Date.now();
     if (remaining !== null && (!Number.isFinite(remaining) || remaining <= 0)) return Promise.reject(new PiRpcCallError("pi_managed_expired", "not_sent"));
     if (this.#pending.size >= 128) return Promise.reject(new PiRpcCallError("pi_managed_pending_limit", "not_sent"));
-    const id = randomUUID(); const frame = JSON.stringify({ type: "request", id, command: parsed }) + "\n";
+    const id = randomUUID(); const frame = JSON.stringify({ type: "request", id, command: parsed, observedCatalogDigest: options.observedCatalogDigest }) + "\n";
     if (Buffer.byteLength(frame) > PI_RPC_MAXIMUM_BYTES || this.#socket.writableLength + Buffer.byteLength(frame) > PI_RPC_MAXIMUM_BYTES) return Promise.reject(new PiRpcCallError("pi_managed_outbound_limit", "not_sent"));
     return new Promise((resolve, reject) => {
       const retire = () => { this.#retired.add(id); if (this.#retired.size > 1024) this.#retired.delete(this.#retired.values().next().value!); };
