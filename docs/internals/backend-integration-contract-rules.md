@@ -3661,6 +3661,18 @@ Do not advertise a checkpoint after an invisible or uncopyable leaf.
 
 ## Execution environments and files
 
+Account for every sidecar-owned OS process before launching it. Use the
+shared owned-process channel for provider probes and stdio sessions. A new
+launch path needs durable evidence, or an explicit pre-launch marker that
+blocks automatic same-boot replacement. Audit new actions inside an existing
+runtime operation even when its outer capability name and version stay the
+same. Provider stores shared across hosts
+need their own ownership proof. Keep the evidence scoped to the installation,
+tenant, principal, execution environment and exact service incarnation.
+Retiring an OS owner grants no authority to acknowledge, abandon or resend a
+provider operation. Reconcile uncertain work using its original receipt and
+the backend's native evidence.
+
 Backend connectivity and workspace file access are separate capabilities of an
 execution environment. A working SSH carrier does not imply file access, and a
 Files sidecar does not imply a provider transport.

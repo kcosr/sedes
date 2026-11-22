@@ -34,6 +34,16 @@ export class SidecarServiceManagementError extends Error {
   }
 }
 
+/** A proved crash still has a running descriptor. Only launch can enter the
+ * startup lock to retire it. All observational and receipt callers keep the fence. */
+export async function inspectForSidecarLaunch(status: Promise<SidecarServiceStatus | undefined>): Promise<SidecarServiceStatus | undefined> {
+  try { return await status; }
+  catch (error) {
+    if (error instanceof SidecarServiceManagementError && error.code === "sidecar_service_replacement_ready") return undefined;
+    throw error;
+  }
+}
+
 /** This attempt failed before sending any shutdown/restart command. */
 export class SidecarServiceStagingError extends Error {
   constructor(cause: unknown) {

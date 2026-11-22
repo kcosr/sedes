@@ -2437,7 +2437,9 @@ export async function startProductionApplication(
           try { observedServices.set(id, await owner.inspectService(managementSignal()) ?? null); observationFailures.delete(key); }
           catch (error) { observationFailures.set(key, observationFailure(error)); }
         }
-        service = observedServices.get(id) ?? undefined;
+        const recoveryRequired = ownershipRecovery(key, environmentPreparationFailures.get(id));
+        const replacementReady = recoveryRequired === "sidecar_service_replacement_ready";
+        service = replacementReady ? undefined : observedServices.get(id) ?? undefined;
         const terminalImpact = terminalService.impact(scope, id);
         const blockers = service?.resources.filter(item => item.state !== "idle" || item.blockers.length > 0) ?? [];
         interruptions.push(...blockers.map(item => `${item.kind} ${item.resourceId} (${item.state}): ${item.blockers.join(", ") || "no additional blockers"}`));
@@ -2450,7 +2452,6 @@ export async function startProductionApplication(
         if (terminalImpact.unknownCount) interruptions.push(`${terminalImpact.unknownCount} terminal(s) have unconfirmed process state.`);
         const remote = definition !== undefined && definition.kind !== "local";
         const outboundOffline = definition?.kind === "outbound" && !outboundConnections.isConnected(scope, id);
-        const recoveryRequired = ownershipRecovery(key, environmentPreparationFailures.get(id));
         const observed = observedServices.has(id);
         const disconnected = record.preference === "disconnected" && observed && !service?.attached && !observationFailures.has(key);
         const stopped = record.preference === "stopped" && observed && (!service || service.state === "stopped") && !observationFailures.has(key);
@@ -2466,12 +2467,12 @@ export async function startProductionApplication(
         runtime = {...record,
           effectiveRevision: applied ? record.desiredRevision : record.effectiveRevision,
           applyState: outboundOffline || observationFailures.has(key) || environmentPreparationFailures.has(id) ? "unavailable" : applied ? "applied" : "pending",
-          connectionState: outboundOffline ? "unreachable" : recoveryRequired ? "recovery_required" : stopped ? "stopped" : disconnected ? "disconnected" : observationFailures.has(key) ? "unreachable" : remote ? service?.attached ? "connected" : observed ? "disconnected" : "unknown" : environmentRuntimes.has(id) ? "connected" : "stopped",
+          connectionState: outboundOffline ? "unreachable" : replacementReady ? "disconnected" : recoveryRequired ? "recovery_required" : stopped ? "stopped" : disconnected ? "disconnected" : observationFailures.has(key) ? "unreachable" : remote ? service?.attached ? "connected" : observed ? "disconnected" : "unknown" : environmentRuntimes.has(id) ? "connected" : "stopped",
           incarnation: service?.serviceIncarnation ?? (remote ? null : environmentRuntimes.has(id) ? `local:${sidecarInstallationId}:${id}` : null),
           softwareVersion: service?.buildId ?? null,
           upgradeState: !remote ? "current" : !service || !owner ? "unknown" : service.artifactSha256 === owner.artifact.artifactSha256 ? "current" : service.runtimeWireVersion === SIDECAR_WIRE_VERSION ? "pending" : "required",
           activeResources: Math.max(blockers.length, terminalImpact.liveCount + terminalImpact.unknownCount),
-          supportedActions: owner && definition && !outboundOffline ? ["connect", "disconnect", "start", "stop", "restart", "upgrade"] : [],
+          supportedActions: owner && definition && !outboundOffline ? replacementReady ? ["connect", "disconnect", "start"] : ["connect", "disconnect", "start", "stop", "restart", "upgrade"] : [],
           lastError: outboundOffline ? "The host connector is offline. Start it on the host or wait for it to reconnect; retained work has not been discarded." : recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : observationFailures.has(key) ? "The execution host is unreachable; retained work has not been discarded." : environmentPreparationFailures.has(id) ? "The environment could not apply its configuration. Check its settings and installed sidecar artifacts." : service?.state === "handoff_pending" ? "Final terminal history or operation outcomes must be recovered before this service can stop." : service?.state === "cleanup_unproven" ? "Resource cleanup is unconfirmed; replacement is blocked. Stop the service to retry its cleanup." : attachmentBlocks.has(id) && !service?.attached ? attachmentBlockMessage(attachmentBlocks.get(id)!) : null,
         };
       } else {

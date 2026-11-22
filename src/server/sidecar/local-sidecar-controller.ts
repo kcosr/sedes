@@ -45,7 +45,13 @@ export class LocalSidecarController {
     catch (error) {
       if (!hasCode(error, 'ENOENT') && !hasCode(error, 'ECONNREFUSED')) throw error;
       // No socket does not prove retirement: retain the shared process-lifetime fence.
-      await assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath);
+      try { await assertPreviousServiceRetired(paths.descriptorPath); }
+      catch (error) {
+        if (error instanceof Error && /^sidecar_service_[a-z_]{1,100}$/u.test(error.message)) {
+          return { managementVersion: 1, requestId: request.requestId, outcome: 'error', code: error.message };
+        }
+        throw error;
+      }
       return { managementVersion: 1, requestId: request.requestId, outcome: 'absent' };
     }
     try {

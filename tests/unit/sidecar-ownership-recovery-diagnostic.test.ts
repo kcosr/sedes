@@ -6,6 +6,13 @@ describe("sidecar ownership recovery diagnostics", () => {
   it.each([
     ["sidecar_service_owner_unreachable", "process is still running"],
     ["sidecar_service_orphan_cleanup_unproven", "process has exited"],
+    ["sidecar_service_launch_evidence_invalid", "incomplete or inconsistent"],
+    ["sidecar_service_launch_identity_unrecorded", "child identity is missing"],
+    ["sidecar_service_live_child", "is still running"],
+    ["sidecar_service_unsupported_launch_kind", "descendants cannot be verified"],
+    ["sidecar_service_containment_unproven", "outside its original session"],
+    ["sidecar_service_inspection_failed", "could not inspect"],
+    ["sidecar_service_replacement_ready", "permit replacement"],
     ["sidecar_service_target_identity_unavailable", "cannot read the host's process identity"],
     ["sidecar_service_recovery_required", "cannot validate this environment's saved sidecar ownership"],
   ] as const)("retains %s through attachment wrappers", (code, explanation) => {

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   chmod,
@@ -14,14 +14,18 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { build } from "esbuild";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type {
   BackendModule,
   BackendNativeStoreLifecycle,
   PreparedBackendModule,
 } from "../../src/server/backends/module.js";
+import * as retirement from "../../src/server/sidecar/sidecar-launch-ledger.js";
+import { sidecarProcessOwnership } from "../../src/server/sidecar/sidecar-process-ownership.js";
+import { sidecarServiceKey } from "../../src/server/sidecar/persistent-sidecar-paths.js";
 import { createCodexNativeStoreLifecycle } from "../../src/server/backends/codex/codex-native-store-lock.js";
 import {
   CodexNativeStoreOwnershipGate,
@@ -65,6 +69,21 @@ const fixture = fileURLToPath(
 );
 const lockName = ".harness-codex-runtime.lock";
 const temporaryPaths: string[] = [];
+let holderDirectory: string;
+let holderExecutable: string;
+
+beforeAll(async () => {
+  holderDirectory = await mkdtemp(path.join(tmpdir(), "sedes-store-holder-"));
+  holderExecutable = path.join(holderDirectory, "holder.mjs");
+  // A runtime TS loader may start an esbuild subprocess. Keep the fixture's
+  // process group limited to the owner even when compilation caches are cold.
+  await build({ entryPoints: [fixture], outfile: holderExecutable, bundle: true, platform: "node", format: "esm" });
+  if (process.platform === "darwin") vi.stubEnv("HOME", holderDirectory);
+});
+afterAll(async () => {
+  if (process.platform === "darwin") vi.unstubAllEnvs();
+  if (holderDirectory) await rm(holderDirectory, { recursive: true, force: true });
+});
 
 afterEach(async () => {
   filesystemHooks.beforeRename = undefined;
@@ -442,11 +461,128 @@ describe("Codex native store lock", () => {
   });
 });
 
-function spawnHolder(codexHome: string): ChildProcessWithoutNullStreams {
-  return spawn(process.execPath, ["--import", "tsx", fixture, codexHome], {
-    cwd: path.dirname(fixture),
+const sidecarScope = { installationId: "install", tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote" };
+
+async function afterSidecarCrash() {
+  const codexHome = await temporaryHome();
+  const serviceDirectory = path.join(await temporaryHome(), sidecarServiceKey(sidecarScope));
+  await mkdir(serviceDirectory, { mode: 0o700 });
+  const ownerFile = path.join(codexHome, lockName, "owner.json");
+  const child = spawnHolder(codexHome, serviceDirectory, JSON.stringify(sidecarScope));
+  try { await expect(readOutcome(child)).resolves.toBe("acquired"); }
+  finally { child.kill("SIGKILL"); await childExit(child); }
+  const bytes = await readFile(ownerFile, "utf8");
+  const claim = JSON.parse(bytes) as { version: number; nonce: string; sidecar: retirement.SidecarLaunchOwner };
+  expect(claim.version).toBe(2);
+  expect(claim.sidecar.process.pid).toBe(child.pid);
+  const owner = { scope: sidecarScope, serviceIncarnation: randomUUID(),
+    process: (await sidecarProcessOwnership.readProcess(process.pid))!, lifetime: await sidecarProcessOwnership.readTargetLifetime() };
+  const acquire = (scope = sidecarScope, backendInstanceId = "codex-fixture") => createCodexNativeStoreLifecycle({
+    canonicalCodexHome: codexHome, ownership: new CodexNativeStoreOwnershipGate(), label: "fixture",
+    sidecar: { serviceDirectory, owner: { ...owner, scope }, backendInstanceId },
+  }).acquire();
+  const recordRetirement = () => retirement.recordSidecarLaunchRetirement(serviceDirectory, claim.sidecar, async () => {});
+  return { acquire, codexHome, ownerFile, claim, bytes, recordRetirement };
+}
+
+describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("sidecar Codex native store claims", () => {
+  it("recognizes a live sidecar and releases its acquisition witness after a clean close", async () => {
+    const home = await temporaryHome();
+    const serviceDirectory = await temporaryHome();
+    const child = spawnHolder(home, serviceDirectory, JSON.stringify(sidecarScope));
+    try {
+      expect(await readOutcome(child)).toBe("acquired");
+      const claim = JSON.parse(await readFile(path.join(home, lockName, "owner.json"), "utf8"));
+      const directory = retirement.sidecarLaunchLedgerDirectory(serviceDirectory, claim.sidecar.serviceIncarnation);
+      const witness = `codex-claim-${claim.nonce}.json`;
+      expect(await readdir(directory)).toContain(witness);
+      await expect(lifecycle(home).acquire()).rejects.toThrow("codex_native_store_already_locked");
+      child.stdin.end();
+      await childExit(child);
+      expect(child.exitCode).toBe(0);
+      expect(await readdir(directory)).not.toContain(witness);
+      expect(await readdir(home)).not.toContain(lockName);
+    } finally { child.stdin.end(); await childExit(child); }
+  });
+
+  it("retires only a witnessed claim and keeps stdio excluded even with an external store user", async () => {
+    const fixture = await afterSidecarCrash();
+    await expect(fixture.acquire()).rejects.toThrow("codex_native_store_stale_lock_requires_operator");
+    await fixture.recordRetirement();
+    const external = spawn(process.execPath, ["-e",
+      "require('node:fs').openSync(process.argv[1], 'a');console.log('open');process.stdin.resume()",
+      path.join(fixture.codexHome, "external-daemon-store")], { stdio: ["pipe", "pipe", "pipe"] });
+    try {
+      expect(await readOutcome(external)).toBe("open");
+      await expect(fixture.acquire()).rejects.toThrow("codex_native_store_exclusivity_requires_operator");
+      expect(await readFile(fixture.ownerFile, "utf8")).toBe(fixture.bytes.slice(0, -2) + "1}");
+      // Both a retry and an older/local contender remain excluded.
+      await expect(fixture.acquire()).rejects.toThrow("codex_native_store_exclusivity_requires_operator");
+      await expect(lifecycle(fixture.codexHome).acquire()).rejects.toThrow("codex_native_store_stale_lock_requires_operator");
+      expect(external.exitCode).toBeNull();
+      expect(external.signalCode).toBeNull();
+    } finally { external.stdin.end(); await childExit(external); }
+  });
+
+  it("preserves foreign, copied, edited and incomplete claims", async () => {
+    const fixture = await afterSidecarCrash();
+    await fixture.recordRetirement();
+    await expect(fixture.acquire({ ...sidecarScope, installationId: "other" })).rejects.toThrow("codex_native_store_stale_lock_requires_operator");
+    await expect(fixture.acquire(sidecarScope, "another-backend")).rejects.toThrow("codex_native_store_stale_lock_requires_operator");
+    expect(await readFile(fixture.ownerFile, "utf8")).toBe(fixture.bytes);
+
+    const original = fixture.ownerFile + ".original";
+    await rename(fixture.ownerFile, original);
+    await writeFile(fixture.ownerFile, fixture.bytes, { mode: 0o600 });
+    await expect(fixture.acquire()).rejects.toThrow("codex_native_store_stale_lock_requires_operator");
+    expect(await readFile(fixture.ownerFile, "utf8")).toBe(fixture.bytes);
+    await rename(original, fixture.ownerFile);
+    for (const edited of [fixture.bytes.replace(fixture.claim.nonce, randomUUID()), '{"version":2}', '{"version":1,"pid":999999,"nonce":"old"}']) {
+      await writeFile(fixture.ownerFile, edited);
+      await expect(fixture.acquire()).rejects.toThrow("codex_native_store_stale_lock_requires_operator");
+      expect(await readFile(fixture.ownerFile, "utf8")).toBe(edited);
+    }
+  });
+
+  it.skipIf(process.platform !== "linux")("refuses a recorded retirement from a different PID namespace on the same boot", async () => {
+    const fixture = await afterSidecarCrash();
+    await fixture.recordRetirement();
+    const target = await sidecarProcessOwnership.readTargetLifetime();
+    const changed = vi.spyOn(sidecarProcessOwnership, "readTargetLifetime").mockResolvedValue({
+      ...target, pidNamespace: target.pidNamespace === "pid:[1]" ? "pid:[2]" : "pid:[1]",
+    });
+    try {
+      await expect(fixture.acquire()).rejects.toThrow("codex_native_store_stale_lock_requires_operator");
+      expect(await readFile(fixture.ownerFile, "utf8")).toBe(fixture.bytes);
+    } finally { changed.mockRestore(); }
+  });
+
+  it("keeps a concurrently acquired replacement lock intact", async () => {
+    const fixture = await afterSidecarCrash();
+    await fixture.recordRetirement();
+    const checkRecorded = retirement.assertSidecarLaunchRetirementRecorded;
+    const original = path.dirname(fixture.ownerFile);
+    let replacement: Awaited<ReturnType<BackendNativeStoreLifecycle["acquire"]>> | undefined;
+    const swapped = vi.spyOn(retirement, "assertSidecarLaunchRetirementRecorded").mockImplementationOnce(async (...args) => {
+      await checkRecorded(...args);
+      await rename(original, original + ".operator-quarantine");
+      replacement = await lifecycle(fixture.codexHome).acquire();
+    });
+    try {
+      await expect(fixture.acquire()).rejects.toThrow("codex_native_store_stale_lock_requires_operator");
+      expect(JSON.parse(await readFile(fixture.ownerFile, "utf8"))).toMatchObject({ version: 1, pid: process.pid });
+      expect(await readFile(path.join(original + ".operator-quarantine", "owner.json"), "utf8")).toBe(fixture.bytes);
+    } finally { swapped.mockRestore(); await replacement?.release(); }
+  });
+});
+
+function spawnHolder(codexHome: string, ...sidecarArguments: string[]): ChildProcessWithoutNullStreams {
+  return spawn(process.execPath, [holderExecutable, codexHome, ...sidecarArguments], {
+    cwd: holderDirectory,
+    detached: sidecarArguments.length > 0,
     env: {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
+      HOME: holderDirectory,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });

@@ -74,6 +74,7 @@ import { registerClaudePersistentRuntimeHost } from "../backends/claude/runtime/
 import { installEmbeddedClaudeWorker } from "../backends/claude/worker/claude-sidecar-worker-artifact.js";
 import { supportsClaudeRuntimeHost } from "../backends/claude/worker/claude-runtime-host-support.js";
 import { PersistentTerminalHost } from "./persistent-terminal-host.js";
+import { recordUncoveredRuntimeOperation } from "./sidecar-runtime-launch-coverage.js";
 import { pruneSupersededSidecarArtifacts } from "./sidecar-artifact-retention.js";
 
 declare const __SEDES_SIDECAR_BUILD_ID__: string;
@@ -158,10 +159,11 @@ async function main(): Promise<void> {
   });
   const serviceRegistry = new PersistentSidecarServiceRegistry({ scope: input.scope, configuration: input.configuration,
     buildId: input.expectedBuild, artifactSha256, runtimeWireVersion: SIDECAR_WIRE_VERSION, recordAbandonment });
-  await recordPersistentSidecar(input.scope, serviceRegistry.serviceIncarnation, "running");
+  const launchLedger = await recordPersistentSidecar(input.scope, serviceRegistry.serviceIncarnation, "running");
   // Retention is hygiene: an unreadable process table keeps every build.
   void pruneSupersededSidecarArtifacts({ stateRoot: paths.stateRoot, executablePath, artifactSha256 }).catch(() => undefined);
   const server = new PersistentSidecarServiceServer({ registry: serviceRegistry, endpointPath: paths.endpointPath,
+    ...(launchLedger ? { beforeRuntimeOperation: key => recordUncoveredRuntimeOperation(launchLedger, key) } : {}),
     receipts: new PersistentSidecarManagementReceipts(path.join(paths.serviceDirectory, "management-receipts")),
     onStopped: async () => {
       workspaceContext.close(); workspaceSkills.close(); directoryBrowser.close();
@@ -269,15 +271,19 @@ async function main(): Promise<void> {
   };
 
   const environmentChannel = new LocalEnvironmentChannelProvider({
+    ...(launchLedger ? { launchRecorder: launchLedger } : {}),
     scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env,
   });
   const codexHosts = new CodexRuntimeHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
-    executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry });
+    executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry,
+    ...(launchLedger && { sidecarStore: { owner: launchLedger.owner, serviceDirectory: paths.serviceDirectory } }) });
   const piHosts = new PiNativeHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, channels: environmentChannel,
     serviceDirectory: paths.serviceDirectory, services: serviceRegistry });
-  const openCodeHosts = new OpenCodeRuntimeHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
+  const openCodeHosts = new OpenCodeRuntimeHostRegistry({
+    ...(launchLedger ? { beforeOwnedLaunch: () => launchLedger.markUnsupported("opencode_owned_process") } : {}),
+    scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry,
     agentTools: {
       cli: () => agentToolIngress && attachment.currentPeer?.supportsOperation(openCodeToolInvokeOperation)
@@ -314,6 +320,7 @@ async function main(): Promise<void> {
     },
   });
   const terminals = new PersistentTerminalHost({
+    ...(launchLedger ? { beforeLaunch: () => launchLedger.markUnsupported("interactive_terminal") } : {}),
     scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     environmentId: input.scope.executionEnvironmentId,
     environment: process.env,
@@ -380,6 +387,7 @@ async function main(): Promise<void> {
   const workspaceContext = new WorkspaceContextSidecarHost();
   const workspaceSkills = new WorkspaceSkillsSidecarHost();
   const workspaceToolsShell = new WorkspaceToolsShellHost({
+    ...(launchLedger ? { beforeLaunch: () => launchLedger.markUnsupported("workspace_shell") } : {}),
     captureAdmission,
     acknowledgeOperation: (operationId) => { workspaceTools.handlers.mutationAcknowledge({ operationId }, { requestId: operationId, signal: new AbortController().signal }); },
     resolveWorkspace: (workspaceHandle) =>

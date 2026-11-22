@@ -564,7 +564,7 @@ verifiers. Losing or replacing it breaks continuity of that evidence and
 invalidates outstanding source references and Tool client credentials.
 Treat the entire directory as one backup unit. `.state.lock` is a separate
 transient process-ownership directory and is removed after a clean shutdown.
-State and native-store locks contain one uniquely named owner record with the
+The state lock contains one uniquely named owner record with the
 owner's PID, and on Linux and macOS its process start time and boot identity.
 The next start recovers a lock whose owner exited, including one whose PID now
 belongs to an unrelated process; Windows records require that PID to be gone.
@@ -574,8 +574,9 @@ Stop older servers cleanly before upgrading to directory locks. Existing
 regular-file locks and malformed lock directories are preserved for explicit
 recovery. If startup reports that a lock cannot be recovered safely, establish
 that its prior owner and any native child processes have exited before removing
-that lock. Native Pi's separate writer marker still blocks recovery when child
-cleanup is unproven; see [Pi runtime ownership](backends/pi-native.md#ownership-reconnect-and-recovery).
+that lock. Provider-native stores have separate ownership rules. See
+[Pi runtime ownership](backends/pi-native.md#ownership-reconnect-and-recovery)
+and [Codex stdio store recovery](backends/codex.md#stdio-store-recovery).
 
 The overlay stores Sedes-owned state: projects, inventory, drafts, stashes,
 principal execution configuration, runtime preferences and receipts, the
@@ -900,8 +901,9 @@ the service as stopped. Until then replacement stays blocked. The daemon
 handles `SIGTERM` by attempting the same forced stop; if cleanup is unproven it
 exits with its ownership record still marked running, so a later start requires
 recovery, and a second signal always forces an exit. A daemon that has recorded
-`stopped` exits on its own; a replacement bootstrap prompts a lingering one
-with `SIGTERM` after three seconds and `SIGKILL` after ten. If every resource
+`stopped` exits on its own. The replacement bootstrap waits up to fifteen
+seconds for that owner to exit and reports retirement in progress if it
+remains alive. If every resource
 proved it ended but the daemon then failed to close its remaining hosts or to
 record `stopped`, the **Stop** or **Upgrade and restart** request reports that
 failure, its receipt records the same code, and the daemon still exits; its
@@ -910,6 +912,9 @@ recovery.
 
 When the management endpoint is missing, the runtime status distinguishes:
 
+- `sidecar_service_replacement_ready` means the previous owner has exited
+  and its launch evidence permits replacement. Connect to start it. Startup
+  rechecks the evidence while holding the service's startup lock.
 - `sidecar_service_owner_unreachable`: the exact recorded daemon process is
   still alive. Inspect that environment's daemon on the host and request its
   graceful shutdown (`SIGTERM` on Linux/macOS), then retry. Check the recorded
@@ -926,16 +931,32 @@ When the management endpoint is missing, the runtime status distinguishes:
 - `sidecar_service_recovery_required`: the saved ownership record or process
   identity cannot be validated. Inspect the exact service's files and host
   identity before repairing anything.
+- `sidecar_service_live_child` identifies a surviving process.
+  `sidecar_service_containment_unproven` and
+  `sidecar_service_unsupported_launch_kind` require checking the launch's
+  descendants on the host. Preserve incomplete or unreadable evidence when
+  startup reports `sidecar_service_launch_identity_unrecorded`,
+  `sidecar_service_launch_evidence_invalid` or `sidecar_service_inspection_failed`.
 
-An explicit Stop can abandon retained results while still proving physical
-cleanup through the live daemon. A daemon that was already killed cannot
-perform that cleanup. The current implementation has no durable per-child
-ownership ledger, so even a daemon that appears idle cannot be automatically
-replaced on the same host lifetime solely because its PID disappeared. Verify
-cleanup of that exact service and all its children before repairing its
-ownership descriptor; an absent socket or missing supervisor PID alone is not
-cleanup evidence. Proven spawn failures and early child exits before daemon
-ownership are recorded as stopped automatically.
+On Linux and macOS, a new sidecar records its incarnation and process-launch
+evidence before publishing itself as running. If it crashes on the same boot
+before admitting any owned process launch, the next startup can verify the
+exact owner's death and start one replacement. Checking status leaves the
+saved evidence and socket in place. Earlier services lack this evidence and
+require operator recovery after a crash.
+
+An interrupted launch can leave an intent without a child identity. A stdio
+child can also create descendants that leave its recorded Unix session.
+Terminals, workspace commands and other launches without sufficient
+containment evidence require host inspection. Keep the service records while
+identifying surviving work, including processes that changed session. A
+successful clean shutdown follows the normal **Stop** path. Windows still
+requires manual recovery after a same-boot sidecar crash.
+
+Replacement preserves thread bindings. Use each backend's operation recovery
+to check interrupted sends, tool results and other uncertain work. When the
+backend uses Codex stdio, also check the native store before restarting it.
+See [Codex stdio store recovery](backends/codex.md#stdio-store-recovery).
 
 ### OpenCode runtime recovery
 

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   constants as filesystemConstants,
+  type BigIntStats,
   realpathSync,
   statSync,
 } from "node:fs";
@@ -15,7 +16,17 @@ import {
   stat as statAsync,
   unlink as unlinkAsync,
   writeFile as writeFileAsync,
+  type FileHandle,
 } from "node:fs/promises";
+import { z } from "zod";
+import {
+  assertSidecarLaunchRetirementRecorded,
+  sidecarLaunchLedgerDirectory,
+  sidecarLaunchOwnerSchema,
+  type SidecarLaunchOwner,
+} from "../../sidecar/sidecar-launch-ledger.js";
+import { sidecarServiceKey } from "../../sidecar/persistent-sidecar-paths.js";
+import { sidecarProcessOwnership } from "../../sidecar/sidecar-process-ownership.js";
 import type {
   BackendNativeStoreLease,
   BackendNativeStoreLifecycle,
@@ -31,8 +42,30 @@ import {
 const LOCK_DIRECTORY_NAME = ".harness-codex-runtime.lock";
 const OWNER_FILE_NAME = "owner.json";
 const NAMESPACE_DOMAIN = "harness.codex-native-store.v1\n";
-const MAXIMUM_OWNER_METADATA_BYTES = 256;
+const MAXIMUM_OWNER_METADATA_BYTES = 8_192;
 const OWNER_READ_BUFFER_BYTES = MAXIMUM_OWNER_METADATA_BYTES + 1;
+const MAXIMUM_V1_OWNER_BYTES = 256;
+
+export interface CodexSidecarStoreContext {
+  readonly serviceDirectory: string;
+  readonly owner: SidecarLaunchOwner;
+}
+
+type SidecarStoreAuthority = CodexSidecarStoreContext & {
+  readonly backendInstanceId: string;
+};
+
+const sidecarStoreClaimSchema = z.strictObject({
+  version: z.literal(2),
+  nonce: z.uuid(),
+  namespaceKey: z.hash("sha256"),
+  backendInstanceId: z.string().min(1).max(512),
+  sidecar: sidecarLaunchOwnerSchema,
+  // Fixed-width final field. Retirement writes this one byte through the pinned
+  // original owner file. The canonical directory continues excluding old clients.
+  retired: z.union([z.literal(0), z.literal(1)]),
+});
+type SidecarStoreClaim = z.infer<typeof sidecarStoreClaimSchema>;
 
 type LockIdentity = {
   readonly device: bigint;
@@ -47,15 +80,16 @@ type ReleasePhase =
   | "released";
 
 /**
- * Atomic directory creation excludes every application version. Locks are never
- * stolen: a SIGKILL leaves a fail-closed stale marker that an operator must
- * inspect and remove only after proving the daemon/process group is gone.
+ * Exclusive mkdir coordinates every Sedes version. A proved sidecar retirement
+ * can clear its own claim while retaining the directory until the operator has
+ * established that external Codex processes are no longer using the native store.
  */
 export function createCodexNativeStoreLifecycle(input: {
   readonly canonicalCodexHome: string;
   readonly createIfMissing?: boolean;
   readonly label: string;
   readonly ownership: CodexNativeStoreOwnershipGate;
+  readonly sidecar?: SidecarStoreAuthority;
 }): BackendNativeStoreLifecycle {
   if (!path.isAbsolute(input.canonicalCodexHome) || !input.label) {
     throw new Error("codex_native_store_lock_configuration_invalid");
@@ -93,6 +127,7 @@ export function createCodexNativeStoreLifecycle(input: {
         await acquireCodexNativeStoreLock(
           canonicalCodexHome,
           input.createIfMissing === true,
+          input.sidecar,
         ),
         input.ownership,
       ),
@@ -114,6 +149,7 @@ export function codexNativeStoreNamespaceKey(
 async function acquireCodexNativeStoreLock(
   canonicalCodexHome: string,
   createIfMissing: boolean,
+  sidecar: SidecarStoreAuthority | undefined,
 ): Promise<BackendNativeStoreLease> {
   if (createIfMissing) {
     try {
@@ -149,7 +185,7 @@ async function acquireCodexNativeStoreLock(
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
       throw new Error("codex_native_store_lock_create_failed");
     }
-    throw await existingLockError(ownerFile);
+    throw await existingLockError(canonicalCodexHome, lockDirectory, ownerFile, sidecar);
   }
 
   let metadata: Awaited<ReturnType<typeof lstatAsync>>;
@@ -165,26 +201,43 @@ async function acquireCodexNativeStoreLock(
     device: metadata.dev,
     inode: metadata.ino,
   };
-  const ownerToken = Object.freeze({
-    version: 1,
-    pid: process.pid,
-    nonce: randomUUID(),
-  });
+  const nonce = randomUUID();
+  const ownerToken = sidecar
+    ? sidecarStoreClaimSchema.parse({
+        version: 2,
+        nonce,
+        namespaceKey: codexNativeStoreNamespaceKey(canonicalCodexHome),
+        backendInstanceId: sidecar.backendInstanceId,
+        sidecar: sidecar.owner,
+        retired: 0,
+      })
+    : { version: 1 as const, pid: process.pid, nonce };
   const serializedOwner = JSON.stringify(ownerToken);
-  if (
-    Buffer.byteLength(serializedOwner, "utf8") > MAXIMUM_OWNER_METADATA_BYTES
-  ) {
+  if (Buffer.byteLength(serializedOwner, "utf8") > MAXIMUM_OWNER_METADATA_BYTES) {
     throw new Error("codex_native_store_owner_metadata_too_large");
   }
+  let witnessPath: string | undefined;
   try {
-    await writeFileAsync(ownerFile, serializedOwner, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
+    if (sidecar && ownerToken.version === 2) {
+      witnessPath = claimWitnessPath(sidecar, nonce);
+      const handle = await openAsync(ownerFile, "wx", 0o600);
+      try {
+        // Bind the service-private witness to the specific home, lock directory,
+        // and owner file. A copied claim cannot authorize a different lock.
+        const witness = await claimWitness(canonicalCodexHome, lockDirectory, handle, ownerToken);
+        await writeFileAsync(witnessPath, witness, { flag: "wx", mode: 0o600, flush: true });
+        await syncDirectory(path.dirname(witnessPath));
+        await handle.writeFile(serializedOwner);
+        await handle.sync();
+      } finally { await handle.close(); }
+      await syncDirectory(lockDirectory);
+      await syncDirectory(canonicalCodexHome);
+      await verifyOwnedLock(lockDirectory, ownerFile, lockIdentity, serializedOwner);
+    } else {
+      await writeFileAsync(ownerFile, serializedOwner, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    }
   } catch {
-    // Do not attempt pathname cleanup after ownership initialization fails.
-    // The empty/partial directory is an intentional fail-closed stale marker.
+    // Failed initialization leaves the canonical marker in place.
     throw new Error("codex_native_store_owner_write_failed");
   }
 
@@ -197,7 +250,7 @@ async function acquireCodexNativeStoreLock(
   let releasePromise: Promise<void> | undefined;
   return Object.freeze({
     release: () => {
-      if (phase === "released") return Promise.resolve();
+      if (phase === "released" && !witnessPath) return Promise.resolve();
       releasePromise ??= releaseCodexNativeStoreLock({
         lockDirectory,
         ownerFile,
@@ -209,6 +262,13 @@ async function acquireCodexNativeStoreLock(
         setPhase: (next) => {
           phase = next;
         },
+      }).then(async () => {
+        if (witnessPath) {
+          await unlinkAsync(witnessPath).catch(error => {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("codex_native_store_release_cleanup_failed");
+          });
+          witnessPath = undefined;
+        }
       }).finally(() => {
         releasePromise = undefined;
       });
@@ -287,28 +347,127 @@ async function releaseCodexNativeStoreLock(input: {
   }
 }
 
-async function existingLockError(ownerFile: string): Promise<Error> {
-  const owner = await readBoundedOwner(ownerFile).catch(() => "");
-  const pid = parseOwnerPid(owner);
-  return new Error(
-    pid !== undefined && processExists(pid)
-      ? "codex_native_store_already_locked"
-      : "codex_native_store_stale_lock_requires_operator",
-  );
+function claimWitnessPath(sidecar: CodexSidecarStoreContext, nonce: string): string {
+  const directory = sidecarLaunchLedgerDirectory(sidecar.serviceDirectory, sidecar.owner.serviceIncarnation);
+  return path.join(directory, `codex-claim-${nonce}.json`);
+}
+
+async function claimWitness(home: string, lockDirectory: string, owner: FileHandle, claim: SidecarStoreClaim): Promise<string> {
+  const [homeStat, directory, file] = await Promise.all([
+    lstatAsync(home, { bigint: true }),
+    lstatAsync(lockDirectory, { bigint: true }),
+    owner.stat({ bigint: true }),
+  ]);
+  assertUsableHomeDirectory(homeStat);
+  assertOwnedLockDirectory(directory);
+  assertSafeOwnerFile(file);
+  // The claim embeds the scope, service process, incarnation and target lifetime.
+  // The immutable witness is the same for both states of this specific claim.
+  const digest = createHash("sha256").update(JSON.stringify({ ...claim, retired: 0 })).digest("hex");
+  const identity = (stat: BigIntStats) => [String(stat.dev), String(stat.ino)];
+  return JSON.stringify({
+    version: 1, digest,
+    home: identity(homeStat),
+    directory: identity(directory),
+    owner: identity(file),
+  });
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  const handle = await openAsync(directory, filesystemConstants.O_RDONLY | filesystemConstants.O_DIRECTORY | filesystemConstants.O_NOFOLLOW);
+  try { await handle.sync(); }
+  finally { await handle.close(); }
+}
+
+async function existingLockError(
+  home: string,
+  lockDirectory: string,
+  ownerFile: string,
+  current: SidecarStoreAuthority | undefined,
+): Promise<Error> {
+  const serialized = await readBoundedOwner(ownerFile).catch(() => "");
+  const pid = parseOwnerPid(serialized);
+  if (pid !== undefined && processExists(pid)) return new Error("codex_native_store_already_locked");
+  const manual = new Error("codex_native_store_stale_lock_requires_operator");
+  try {
+    const claim = sidecarStoreClaimSchema.parse(JSON.parse(serialized));
+    if (!await sidecarProcessOwnership.lifetimeEnded(claim.sidecar.lifetime) &&
+        await sidecarProcessOwnership.processMatches(claim.sidecar.process)) {
+      return new Error("codex_native_store_already_locked");
+    }
+    if (!current || claim.namespaceKey !== codexNativeStoreNamespaceKey(home) ||
+        claim.backendInstanceId !== current.backendInstanceId ||
+        sidecarServiceKey(claim.sidecar.scope) !== sidecarServiceKey(current.owner.scope)) return manual;
+    await retireSidecarClaim(home, lockDirectory, ownerFile, current, claim);
+    return new Error("codex_native_store_exclusivity_requires_operator");
+  } catch {
+    // Missing or changed evidence leaves the lock on the manual path.
+    return manual;
+  }
+}
+
+async function retireSidecarClaim(
+  home: string,
+  directory: string,
+  ownerFile: string,
+  current: CodexSidecarStoreContext,
+  claim: SidecarStoreClaim,
+): Promise<void> {
+  const active = JSON.stringify({ ...claim, retired: 0 });
+  const retired = JSON.stringify({ ...claim, retired: 1 });
+  if (!active.endsWith(',"retired":0}')) throw new Error("claim_invalid");
+  await withBoundedOwner(ownerFile, true, async (handle, serialized) => {
+    if (serialized !== active && serialized !== retired) throw new Error("claim_changed");
+    const witness = await claimWitness(home, directory, handle, claim);
+    const witnessPath = claimWitnessPath(
+      { serviceDirectory: current.serviceDirectory, owner: claim.sidecar }, claim.nonce,
+    );
+    if (await readBoundedOwner(witnessPath) !== witness) throw new Error("claim_changed");
+    // Recheck same-boot identity, launch evidence and the retirement recorded by
+    // startup under its lock. Namespace or boot replacement alone cannot retire
+    // a lock on a filesystem that another host/container might still share.
+    await assertSidecarLaunchRetirementRecorded(current.serviceDirectory, claim.sidecar);
+    if (await claimWitness(home, directory, handle, claim) !== witness ||
+        await readBoundedOwner(witnessPath) !== witness) throw new Error("claim_changed");
+    const latest = await readBoundedOwner(ownerFile);
+    if (latest !== active && latest !== retired) throw new Error("claim_changed");
+    if (latest === active) {
+      const byte = Buffer.from("1");
+      const written = await handle.write(byte, 0, 1, Buffer.byteLength(serialized) - 2);
+      if (written.bytesWritten !== 1) throw new Error("claim_write_failed");
+      await handle.sync();
+    }
+    const named = await lstatAsync(ownerFile, { bigint: true });
+    const pinned = await handle.stat({ bigint: true });
+    if (named.dev !== pinned.dev || named.ino !== pinned.ino ||
+        await readBoundedOwner(ownerFile) !== retired) throw new Error("claim_changed");
+  });
 }
 
 async function readBoundedOwner(filename: string): Promise<string> {
-  let handle: Awaited<ReturnType<typeof openAsync>> | undefined;
+  return await withBoundedOwner(filename, false, async (_handle, serialized) => serialized);
+}
+
+async function withBoundedOwner<T>(
+  filename: string,
+  writable: boolean,
+  use: (handle: FileHandle, serialized: string) => Promise<T>,
+): Promise<T> {
+  let handle: FileHandle | undefined;
   try {
     const pathMetadata = await lstatAsync(filename, { bigint: true });
     assertSafeOwnerFile(pathMetadata);
+    const access = writable ? filesystemConstants.O_RDWR : filesystemConstants.O_RDONLY;
     handle = await openAsync(
-      filename,
-      filesystemConstants.O_RDONLY | filesystemConstants.O_NOFOLLOW,
+      filename, access | filesystemConstants.O_NOFOLLOW | filesystemConstants.O_NONBLOCK,
     );
     const before = await handle.stat({ bigint: true });
     assertSafeOwnerFile(before);
-    if (before.size > BigInt(MAXIMUM_OWNER_METADATA_BYTES)) {
+    if (
+      before.dev !== pathMetadata.dev ||
+      before.ino !== pathMetadata.ino ||
+      before.size > BigInt(MAXIMUM_OWNER_METADATA_BYTES)
+    ) {
       throw new Error("codex_native_store_owner_metadata_invalid");
     }
     const value = Buffer.alloc(OWNER_READ_BUFFER_BYTES);
@@ -335,9 +494,7 @@ async function readBoundedOwner(filename: string): Promise<string> {
     ) {
       throw new Error("codex_native_store_owner_metadata_invalid");
     }
-    return new TextDecoder("utf-8", { fatal: true }).decode(
-      value.subarray(0, bytesRead),
-    );
+    return await use(handle, new TextDecoder("utf-8", { fatal: true }).decode(value.subarray(0, bytesRead)));
   } catch {
     throw new Error("codex_native_store_owner_metadata_invalid");
   } finally {
@@ -395,6 +552,7 @@ async function ensureFailClosedMarker(lockDirectory: string): Promise<void> {
 }
 
 function parseOwnerPid(value: string): number | undefined {
+  if (Buffer.byteLength(value) > MAXIMUM_V1_OWNER_BYTES) return undefined;
   try {
     const parsed = JSON.parse(value) as {
       readonly version?: unknown;

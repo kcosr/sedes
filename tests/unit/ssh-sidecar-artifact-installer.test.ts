@@ -225,14 +225,15 @@ describe("SshSidecarArtifactInstaller", () => {
     expect(receiptCommands[0]).toContain("exec node -e");
   });
 
-  it("surfaces the remote bootstrap's diagnostic instead of a bare carrier failure", async () => {
+  it.each(["absent", "recoverable"])("surfaces the locked bootstrap diagnostic after a %s observation", async observation => {
     const artifact = await artifactFixture(Buffer.from("diagnostic bundle"));
     const installChild = fakeChild();
     installChild.stdin.on("finish", () => { installChild.stdout.end(installationProofLine(artifact.artifactSha256)); complete(installChild, 0); });
     const statusChild = fakeChild();
     statusChild.stdin.on("data", (bytes: Buffer) => {
       const request = sidecarManagementRequestSchema.parse(JSON.parse(bytes.toString("utf8")));
-      statusChild.stdout.write(`${JSON.stringify({ managementVersion: 1, requestId: request.requestId, outcome: "absent" })}\n`);
+      const result = observation === "absent" ? { outcome: "absent" } : { outcome: "error", code: "sidecar_service_replacement_ready" };
+      statusChild.stdout.write(`${JSON.stringify({ managementVersion: 1, requestId: request.requestId, ...result })}\n`);
     });
     statusChild.stdin.on("finish", () => complete(statusChild, 0));
     const launchChild = fakeChild();

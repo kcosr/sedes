@@ -84,6 +84,7 @@ export class WorkspaceToolsShellHost {
   }) => SidecarOutboundStream;
   readonly #acknowledgeOperation: (operationId: string) => void;
   readonly #retainLease: () => () => void;
+  readonly #beforeLaunch?: () => Promise<void>;
   readonly #admitOperation: <T>(
     workspaceHandle: string,
     operationId: string,
@@ -124,6 +125,7 @@ export class WorkspaceToolsShellHost {
     readonly acknowledgeOperation?: (operationId: string) => void;
     readonly captureAdmission?: () => () => void;
     readonly retainLease?: () => () => void;
+    readonly beforeLaunch?: () => Promise<void>;
     readonly admitOperation: <T>(
       workspaceHandle: string,
       operationId: string,
@@ -139,6 +141,7 @@ export class WorkspaceToolsShellHost {
     ) => Promise<boolean>;
   }) {
     this.#resolveWorkspace = input.resolveWorkspace;
+    if (input.beforeLaunch) this.#beforeLaunch = input.beforeLaunch;
     this.#captureAdmission = input.captureAdmission ?? (() => () => undefined);
     this.#openStream = input.openStream;
     this.#acknowledgeOperation =
@@ -299,6 +302,11 @@ export class WorkspaceToolsShellHost {
       throw new SidecarOperationError("shell_workspace_process_capacity", true);
     }
     const cwd = await this.#resolveWorkspace(request.workspaceHandle);
+    if (this.#beforeLaunch) {
+      signal.throwIfAborted();
+      assertAdmission();
+      await this.#beforeLaunch();
+    }
     signal.throwIfAborted();
     assertAdmission();
     const stream = this.#openStream({

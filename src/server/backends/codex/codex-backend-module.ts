@@ -32,7 +32,7 @@ import {
   codexNativeStoreNamespaceKey,
   createCodexNativeStoreLifecycle,
 } from "./codex-native-store-lock.js";
-import { CodexNativeStoreOwnershipGate } from "./codex-native-store-ownership.js";
+import { codexNativeStoreRefusal, CodexNativeStoreOwnershipGate } from "./codex-native-store-ownership.js";
 import { CodexThreadActionPersistence } from "./codex-thread-action-persistence.js";
 import {
   CODEX_APP_SERVER_RELEASE,
@@ -1401,5 +1401,11 @@ export class CodexBackendModule implements BackendModule {
       prepared,
       this.#dependencies,
     );
+  }
+
+  runtimeDiagnostic(error: unknown) {
+    const refusal = codexNativeStoreRefusal(error);
+    if (refusal) return { connectionState: "recovery_required" as const, message: refusal.message };
+    return undefined;
   }
 }

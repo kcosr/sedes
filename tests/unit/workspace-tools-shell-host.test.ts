@@ -4,6 +4,12 @@ import type { SidecarOutboundStream } from "../../src/internal/sidecar-protocol/
 import { WorkspaceToolsShellHost } from "../../src/server/sidecar/workspace-tools-shell-host.js";
 
 describe("workspace tools shell host", () => {
+  it("cannot start a shell when the service cannot record its uncovered launch", async () => {
+    const fixture = shellFixture({ beforeLaunch: async () => { throw new Error("coverage_write_failed"); } });
+    await expect(fixture.host.handlers.start(request("exit 0"), context())).rejects.toThrow("coverage_write_failed");
+    expect(fixture.openedStreams).toBe(0);
+    expect(fixture.host.activeProcessCount()).toBe(0);
+  });
   it("applies per-shell variables and explicit unsets without leaking to another shell", async () => {
     const fixture = shellFixture();
     try {
@@ -264,6 +270,7 @@ describe("workspace tools shell host", () => {
 
 function shellFixture(options?: {
   readonly blockOutput?: boolean;
+  readonly beforeLaunch?: () => Promise<void>;
   readonly operationCapacity?: number;
   readonly abortOnLease?: AbortController;
   readonly processGroupExited?: (
@@ -300,6 +307,7 @@ function shellFixture(options?: {
     },
   };
   const host = new WorkspaceToolsShellHost({
+    ...(options?.beforeLaunch ? { beforeLaunch: options.beforeLaunch } : {}),
     resolveWorkspace: () => "/tmp",
     openStream: () => {
       openedStreams += 1;

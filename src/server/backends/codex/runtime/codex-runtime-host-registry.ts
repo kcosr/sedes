@@ -13,7 +13,7 @@ import { SidecarResourceHandoffPendingError } from "../../../sidecar/persistent-
 import type { AgentBackendInstance, AgentConnectionProfile } from "../../contracts.js";
 import type { CodexBackendModuleConfiguration } from "../codex-backend-configuration.js";
 import { CodexNativeStoreOwnershipGate } from "../codex-native-store-ownership.js";
-import { createCodexNativeStoreLifecycle } from "../codex-native-store-lock.js";
+import { createCodexNativeStoreLifecycle, type CodexSidecarStoreContext } from "../codex-native-store-lock.js";
 import { resolveCodexRuntimeConfiguration } from "../codex-runtime-config.js";
 import { CodexDaemonSupervisor } from "../codex-daemon-supervisor.js";
 import { createCodexRuntimeTransport } from "./codex-runtime-transport.js";
@@ -40,6 +40,7 @@ export class CodexRuntimeHostRegistry {
     environmentChannel: ExecutionEnvironmentChannelProvider;
     environment: Readonly<Record<string, string | undefined>>;
     services: PersistentSidecarServiceRegistry;
+    sidecarStore?: CodexSidecarStoreContext;
   }) {
     this.managedTui = new CodexRuntimeManagedTuiHosts({ getRuntime: runtimeId => this.getRuntime(runtimeId), services: input.services });
   }
@@ -149,7 +150,8 @@ export class CodexRuntimeHostRegistry {
         : path.join(canonicalLocalEnvironmentDirectorySync(this.input.environment.HOME ?? homedir()), ".codex")
       : undefined;
     const lease = ownership && nativeHome
-      ? await createCodexNativeStoreLifecycle({ canonicalCodexHome: nativeHome, createIfMissing: configuredHome === undefined, ownership, label: configuration.instance.id }).acquire()
+      ? await createCodexNativeStoreLifecycle({ canonicalCodexHome: nativeHome, createIfMissing: configuredHome === undefined, ownership, label: configuration.instance.id,
+          ...(this.input.sidecarStore && { sidecar: { ...this.input.sidecarStore, backendInstanceId: configuration.instance.id } }) }).acquire()
       : undefined;
     let resolved: ResolvedCodexRuntimeConfiguration;
     try {

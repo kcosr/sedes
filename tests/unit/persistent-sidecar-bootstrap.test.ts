@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, open, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, open, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { acquireStartupLock, assertPreviousServiceRetired, ensurePersistentSidecar, preparePersistentSidecarNamespace, recordPersistentSidecar } from "../../src/server/sidecar/persistent-sidecar-bootstrap.js";
 import { sidecarProcessOwnership } from "../../src/server/sidecar/sidecar-process-ownership.js";
 import { REMOTE_SERVICE_MANAGEMENT_PROXY_SOURCE } from "../../src/server/sidecar/ssh-sidecar-management-proxy.js";
+import { sidecarLaunchLedgerDirectory } from "../../src/server/sidecar/sidecar-launch-ledger.js";
+import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
+import { PersistentSidecarServiceServer } from "../../src/server/sidecar/persistent-sidecar-service-server.js";
+import { PersistentSidecarManagementReceipts } from "../../src/server/sidecar/persistent-sidecar-management-receipts.js";
 import { persistentSidecarPaths } from "../../src/server/sidecar/persistent-sidecar-paths.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -30,6 +34,32 @@ async function fixture() {
   await writeFile(executablePath, bytes, { mode: 0o500 });
   return { paths, scope, input: { scope, configuration: { environmentRevision: 1, operationsRevision: 1 },
     executablePath, expectedBuild: "test-build", expectedDigest: createHash("sha256").update(bytes).digest("hex"), agentToolEndpointKey: "a".repeat(32) } };
+}
+
+// A real writer exits while its socket is bound. Both the descriptor and stale
+// socket are artifacts of the same OS process; the fixture sends no signals.
+async function crashedUnusedSidecar({ paths, scope, input }: Awaited<ReturnType<typeof fixture>>) {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const incarnation = randomUUID();
+  const home = path.dirname(input.executablePath);
+  const program = `
+    import {createServer} from "node:net";
+    import {chmod} from "node:fs/promises";
+    import {recordPersistentSidecar} from "./src/server/sidecar/persistent-sidecar-bootstrap.ts";
+    const [scope, incarnation, socket] = process.argv.slice(1);
+    await recordPersistentSidecar(JSON.parse(scope), incarnation, "running");
+    createServer().listen(socket, async () => { await chmod(socket, 0o600); process.exit(0); });
+  `;
+  const child = actual.spawn(process.execPath,
+    ["--import", "tsx", "--input-type=module", "-e", program, JSON.stringify(scope), incarnation, paths.endpointPath],
+    { env: { ...process.env, HOME: home }, detached: true, stdio: ["ignore", "ignore", "pipe"], timeout: 10_000 });
+  let diagnostic = "";
+  child.stderr.setEncoding("utf8").on("data", chunk => { diagnostic += chunk; });
+  await new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", code => code === 0 ? resolve() : reject(new Error(diagnostic || "crash_fixture_failed")));
+  });
+  return { home, directory: sidecarLaunchLedgerDirectory(paths.serviceDirectory, incarnation) };
 }
 
 describe("persistent service bootstrap ownership", () => {
@@ -76,7 +106,7 @@ describe("persistent service bootstrap ownership", () => {
     });
     await expect(ensurePersistentSidecar({ ...input, signal: controller.signal })).rejects.toThrow("pairing_revoked");
     expect(JSON.parse(await readFile(paths.descriptorPath, "utf8"))).toMatchObject({ state: "starting" });
-    await expect(assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath)).rejects.toThrow("sidecar_service_owner_unreachable");
+    await expect(assertPreviousServiceRetired(paths.descriptorPath)).rejects.toThrow("sidecar_service_owner_unreachable");
   });
 
   it.each(["throw", "error", "exit"])("settles its own starting intent after a proven spawn %s", async (failure) => {
@@ -117,24 +147,112 @@ describe("persistent service bootstrap ownership", () => {
     await (await second)();
     expect(await readdir(root)).toEqual([]);
   });
+  it("observes a proved crash without mutating ownership, then retries interrupted recovery and starts one replacement", async () => {
+    const data = await fixture();
+    const { input, paths, scope } = data;
+    const { home, directory } = await crashedUnusedSidecar(data);
+    const bytes = await readFile(paths.descriptorPath, "utf8");
+    const socket = await lstat(paths.endpointPath);
+    const actualChild = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const proxy = REMOTE_SERVICE_MANAGEMENT_PROXY_SOURCE.replace("o.userInfo().homedir", JSON.stringify(home));
+    const argument = Buffer.from(JSON.stringify({ scope, requestId: randomUUID() })).toString("base64url");
+    const observed = await new Promise<string>((resolve, reject) => actualChild.execFile(process.execPath,
+      ["-e", proxy, argument], { timeout: 5_000 }, (error, stdout) => error ? reject(error) : resolve(stdout)));
+    expect(JSON.parse(observed)).toMatchObject({ outcome: "error", code: "sidecar_service_replacement_ready" });
+    await expect(assertPreviousServiceRetired(paths.descriptorPath)).rejects.toThrow("sidecar_service_replacement_ready");
+    expect(await readFile(paths.descriptorPath, "utf8")).toBe(bytes);
+    expect((await lstat(paths.endpointPath)).ino).toBe(socket.ino);
+    const receipt = path.join(directory, "retired.json");
+    await expect(lstat(receipt)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let interrupted = false;
+    vi.mocked(open).mockImplementation(async (...args: Parameters<typeof open>) => {
+      if (!interrupted && String(args[0]).startsWith(paths.descriptorPath + ".")) {
+        interrupted = true;
+        throw new Error("cutover_interrupted");
+      }
+      return actual.open(...args);
+    });
+    vi.mocked(spawn).mockClear();
+    await expect(ensurePersistentSidecar(input)).rejects.toThrow("cutover_interrupted");
+    expect(await readFile(paths.descriptorPath, "utf8")).toBe(bytes);
+    const receiptBytes = await readFile(receipt, "utf8");
+    expect(spawn).not.toHaveBeenCalled();
+    const registry = new PersistentSidecarServiceRegistry({ scope, configuration: input.configuration,
+      buildId: "replacement", artifactSha256: input.expectedDigest, runtimeWireVersion: 1 });
+    const server = new PersistentSidecarServiceServer({ registry, endpointPath: paths.endpointPath,
+      receipts: new PersistentSidecarManagementReceipts(path.join(paths.serviceDirectory, "receipts")),
+      onStopped: async () => {}, onRuntimeAttachment: () => {} });
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = Object.assign(new EventEmitter(), { unref: vi.fn(), exitCode: null, signalCode: null });
+      void recordPersistentSidecar(scope, registry.serviceIncarnation, "running").then(() => server.listen()).catch(error => child.emit("error", error));
+      return child as unknown as ReturnType<typeof spawn>;
+    });
+    try {
+      const endpoints = await Promise.all([ensurePersistentSidecar(input), ensurePersistentSidecar(input)]);
+      expect(endpoints).toEqual([paths.endpointPath, paths.endpointPath]);
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(await readFile(receipt, "utf8")).toBe(receiptBytes);
+    } finally { await server.stop(true, "test_cleanup"); }
+  });
+
+  it("rechecks the specific launch records after writing the retirement receipt at cutover", async () => {
+    const data = await fixture();
+    const { input, paths } = data;
+    const { directory } = await crashedUnusedSidecar(data);
+    const before = await readFile(paths.descriptorPath, "utf8");
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.mocked(open).mockImplementation(async (...args: Parameters<typeof open>) => {
+      if (String(args[0]).startsWith(paths.descriptorPath + ".")) {
+        expect(await actual.readFile(path.join(directory, "retired.json"), "utf8")).toContain("retiredOwner");
+        await writeFile(path.join(directory, "unused.json"), "{}");
+      }
+      return actual.open(...args);
+    });
+    vi.mocked(spawn).mockClear();
+    await expect(ensurePersistentSidecar(input)).rejects.toThrow("sidecar_service_launch_evidence_invalid");
+    expect(await readFile(paths.descriptorPath, "utf8")).toBe(before);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("preserves a descriptor replaced after inspection and before retirement publication", async () => {
+    const data = await fixture();
+    const { input, paths, scope } = data;
+    const { directory } = await crashedUnusedSidecar(data);
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.mocked(readFile).mockImplementation(async (...args: Parameters<typeof readFile>) => {
+      const bytes = await actual.readFile(...args);
+      if (args[0] === input.executablePath) await recordPersistentSidecar(scope, "other-owner", "running");
+      return bytes;
+    });
+    vi.mocked(spawn).mockClear();
+    await expect(ensurePersistentSidecar(input)).rejects.toThrow("sidecar_service_recovery_required");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(JSON.parse(await actual.readFile(paths.descriptorPath, "utf8"))).toMatchObject({ serviceIncarnation: "other-owner" });
+    await expect(lstat(path.join(directory, "retired.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("blocks a missing supervisor without namespace lifetime evidence", async () => {
     const { paths, scope } = await fixture();
     await recordPersistentSidecar(scope, "old-daemon", "running");
+    await rm(sidecarLaunchLedgerDirectory(paths.serviceDirectory, "old-daemon"), { recursive: true });
     const descriptor = JSON.parse(await readFile(paths.descriptorPath, "utf8"));
     descriptor.process.pid = 2147483647;
     await writeFile(paths.descriptorPath, JSON.stringify(descriptor));
-    await expect(assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath)).rejects.toThrow("sidecar_service_orphan_cleanup_unproven");
+    await expect(assertPreviousServiceRetired(paths.descriptorPath)).rejects.toThrow("sidecar_service_orphan_cleanup_unproven");
   });
 
   it.each(["live", "dead"])("diagnoses a %s owner consistently without changing stale ownership", async owner => {
     const { input, paths, scope } = await fixture();
     await recordPersistentSidecar(scope, "unavailable-daemon", "running");
+    await rm(sidecarLaunchLedgerDirectory(paths.serviceDirectory, "unavailable-daemon"), { recursive: true });
     const descriptor = JSON.parse(await readFile(paths.descriptorPath, "utf8"));
     if (owner === "dead") descriptor.process.pid = 2147483647;
     const bytes = JSON.stringify(descriptor);
     await writeFile(paths.descriptorPath, bytes);
     const code = owner === "live" ? "sidecar_service_owner_unreachable" : "sidecar_service_orphan_cleanup_unproven";
-    await expect(assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath)).rejects.toThrow(code);
+    await expect(assertPreviousServiceRetired(paths.descriptorPath)).rejects.toThrow(code);
     const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
     const source = REMOTE_SERVICE_MANAGEMENT_PROXY_SOURCE.replace("o.userInfo().homedir", JSON.stringify(path.dirname(input.executablePath)));
     const argument = Buffer.from(JSON.stringify({ scope, requestId: randomUUID() })).toString("base64url");
@@ -149,7 +267,7 @@ describe("persistent service bootstrap ownership", () => {
     const { paths, scope } = await fixture();
     await recordPersistentSidecar(scope, "old-container", "running");
     const proof = vi.spyOn(sidecarProcessOwnership, "lifetimeEnded").mockResolvedValue(true);
-    await expect(assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath)).resolves.toBeUndefined();
+    await expect(assertPreviousServiceRetired(paths.descriptorPath)).resolves.toBeUndefined();
     expect(proof).toHaveBeenCalledWith(expect.objectContaining({ bootId: expect.any(String), pidNamespace: expect.any(String), namespaceInitStartTime: expect.any(String) }));
   });
 
@@ -159,7 +277,7 @@ describe("persistent service bootstrap ownership", () => {
     const descriptor = JSON.parse(await readFile(paths.descriptorPath, "utf8"));
     delete descriptor.version; delete descriptor.lifetime; delete descriptor.process.pidNamespace;
     await writeFile(paths.descriptorPath, JSON.stringify(descriptor));
-    await expect(assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath)).rejects.toThrow("sidecar_service_recovery_required");
+    await expect(assertPreviousServiceRetired(paths.descriptorPath)).rejects.toThrow("sidecar_service_recovery_required");
     await mkdir(paths.lockDirectory, { mode: 0o700 });
     await writeFile(path.join(paths.lockDirectory, "owner.json"), JSON.stringify(descriptor.process), { mode: 0o600 });
     await expect(acquireStartupLock(paths.lockDirectory)).rejects.toThrow("sidecar_service_recovery_required");
@@ -237,7 +355,7 @@ describe("persistent service bootstrap ownership", () => {
       if (file === "/proc/1/ns/pid") throw Object.assign(new Error("denied"), { code: "EACCES" });
       return actual.readlink(file, ...options);
     });
-    if (recordKind === "stopped descriptor") await expect(assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath)).resolves.toBeUndefined();
+    if (recordKind === "stopped descriptor") await expect(assertPreviousServiceRetired(paths.descriptorPath)).resolves.toBeUndefined();
     else await (await acquireStartupLock(paths.lockDirectory))();
     expect(vi.mocked(readlink).mock.calls.some(([file]) => file === "/proc/1/ns/pid")).toBe(false);
   });
@@ -258,7 +376,7 @@ describe("persistent service bootstrap ownership", () => {
       if (file === "/proc/1/ns/pid") throw Object.assign(new Error("denied"), { code: "EPERM" });
       return actual.readlink(file, ...options);
     });
-    await expect(recordKind === "stopped descriptor" ? assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath) : acquireStartupLock(paths.lockDirectory))
+    await expect(recordKind === "stopped descriptor" ? assertPreviousServiceRetired(paths.descriptorPath) : acquireStartupLock(paths.lockDirectory))
       .rejects.toThrow("sidecar_service_recovery_required");
     expect(await readFile(recordPath, "utf8")).toBe(retained);
   });
@@ -283,7 +401,7 @@ describe("persistent service bootstrap ownership", () => {
       if (file === `/proc/${record.process.pid}/stat`) return zombieStat;
       return actual.readFile(file, ...options);
     });
-    const result = recordKind === "stopped descriptor" ? assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath) : acquireStartupLock(paths.lockDirectory);
+    const result = recordKind === "stopped descriptor" ? assertPreviousServiceRetired(paths.descriptorPath) : acquireStartupLock(paths.lockDirectory);
     if (threads === 1) {
       const release = await result;
       if (release) await release();
@@ -309,7 +427,7 @@ describe("persistent service bootstrap ownership", () => {
     record.process.pid = 2147483647;
     await writeFile(recordPath, JSON.stringify(record));
     const matching = vi.spyOn(sidecarProcessOwnership, "processMatches");
-    await expect(state === "startup lock" ? acquireStartupLock(paths.lockDirectory) : assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath))
+    await expect(state === "startup lock" ? acquireStartupLock(paths.lockDirectory) : assertPreviousServiceRetired(paths.descriptorPath))
       .rejects.toThrow("sidecar_service_recovery_required");
     expect(matching).not.toHaveBeenCalled();
   });
@@ -322,7 +440,7 @@ describe("persistent service bootstrap ownership", () => {
     record.lifetime.pidNamespace = record.process.pidNamespace;
     await writeFile(paths.descriptorPath, JSON.stringify(record));
     const matching = vi.spyOn(sidecarProcessOwnership, "processMatches");
-    await expect(assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath)).resolves.toBeUndefined();
+    await expect(assertPreviousServiceRetired(paths.descriptorPath)).resolves.toBeUndefined();
     expect(matching).not.toHaveBeenCalled();
   });
 
@@ -336,7 +454,7 @@ describe("persistent service bootstrap ownership", () => {
     else if (corruption === "missing clock offset") delete record.lifetime.boottimeOffset;
     else record.version = 2;
     await writeFile(paths.descriptorPath, JSON.stringify(record));
-    await expect(assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath)).rejects.toThrow("sidecar_service_recovery_required");
+    await expect(assertPreviousServiceRetired(paths.descriptorPath)).rejects.toThrow("sidecar_service_recovery_required");
     const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
     const source = REMOTE_SERVICE_MANAGEMENT_PROXY_SOURCE.replace("o.userInfo().homedir", JSON.stringify(path.dirname(input.executablePath)));
     const argument = Buffer.from(JSON.stringify({ scope, requestId: randomUUID() })).toString("base64url");
@@ -353,8 +471,8 @@ describe("persistent service bootstrap ownership", () => {
       process: daemon === "live" ? { pid: identity!.pid, startTime: identity!.startTime, bootId: identity!.bootId } : { pid: 2147483647, startTime: "1", bootId: identity!.bootId } };
     await writeFile(paths.descriptorPath, JSON.stringify(legacy), { mode: 0o600 });
     const lifetime = vi.spyOn(sidecarProcessOwnership, "lifetimeEnded");
-    if (daemon === "live") await expect(assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath)).rejects.toThrow("sidecar_service_retirement_in_progress");
-    else await expect(assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath)).resolves.toBeUndefined();
+    if (daemon === "live") await expect(assertPreviousServiceRetired(paths.descriptorPath)).rejects.toThrow("sidecar_service_retirement_in_progress");
+    else await expect(assertPreviousServiceRetired(paths.descriptorPath)).resolves.toBeUndefined();
     expect(lifetime).not.toHaveBeenCalled();
     // The artifact-independent management carrier reports the same clean stop
     // as absent, so Start and Upgrade and restart proceed through bootstrap.
@@ -370,12 +488,13 @@ describe("persistent service bootstrap ownership", () => {
     // A legacy record naming another scope is never proof for this directory.
     await writeFile(paths.descriptorPath, JSON.stringify({ ...legacy, scope: { ...scope, executionEnvironmentId: "other-environment" } }), { mode: 0o600 });
     expect(await proxy(scope)).toMatchObject({ outcome: "error", code: "sidecar_service_recovery_required" });
+    await expect(assertPreviousServiceRetired(paths.descriptorPath)).rejects.toThrow("sidecar_service_recovery_required");
   });
 
   it.each(["running", "starting"])("keeps a legacy %s record fail-closed in bootstrap and the management proxy", async state => {
     const { input, paths, scope } = await fixture();
     await writeFile(paths.descriptorPath, JSON.stringify({ scope, state, serviceIncarnation: "legacy-incarnation", process: { pid: 2147483647, startTime: "1", bootId: "boot" } }), { mode: 0o600 });
-    await expect(assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath)).rejects.toThrow("sidecar_service_recovery_required");
+    await expect(assertPreviousServiceRetired(paths.descriptorPath)).rejects.toThrow("sidecar_service_recovery_required");
     const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
     const source = REMOTE_SERVICE_MANAGEMENT_PROXY_SOURCE.replace("o.userInfo().homedir", JSON.stringify(path.dirname(input.executablePath)));
     const argument = Buffer.from(JSON.stringify({ scope, requestId: randomUUID() })).toString("base64url");
@@ -395,7 +514,7 @@ describe("persistent service bootstrap ownership", () => {
     await writeFile(recordPath, JSON.stringify(record));
     const matching = vi.spyOn(sidecarProcessOwnership, "processMatches");
     if (state === "startup lock") await (await acquireStartupLock(paths.lockDirectory))();
-    else await expect(assertPreviousServiceRetired(paths.descriptorPath, paths.endpointPath)).resolves.toBeUndefined();
+    else await expect(assertPreviousServiceRetired(paths.descriptorPath)).resolves.toBeUndefined();
     expect(matching).not.toHaveBeenCalled();
   });
 
