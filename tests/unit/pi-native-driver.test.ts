@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { PiNativeConversationDriver, serializePiNativeBindingDetail, type PiNativeDriverOptions, type PiNativeOperations } from "../../src/server/backends/pi/native/driver/driver.js";
 import { PiNativeAgentToolService } from "../../src/server/backends/pi/native/agent-tools.js";
 import { PiNativeError, type PiNativeAttachment, type PiNativeCatalog, type PiNativeHistory, type PiNativeOutcome, type PiNativePort } from "../../src/server/backends/pi/native/port.js";
-import { companion, requestNative, rpc } from "../../src/server/backends/pi/native/driver/port-session.js";
+import { companion, forgetNativeObservations, requestNative, rpc } from "../../src/server/backends/pi/native/driver/port-session.js";
 import { PiNativeHost, type PiNativeSessionLauncher } from "../../src/server/backends/pi/native/host/native-host.js";
 import { PiRpcCallError } from "../../src/server/backends/pi/native/rpc/pi-rpc-client.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
@@ -28,6 +28,11 @@ const user = (id: string, parentId: string | null, text = "Hello") => ({ id, par
   message: { role: "user" as const, timestamp: Date.parse(time), content: [{ type: "text" as const, text }] } });
 const answer = (id: string, parentId: string) => ({ id, parentId, type: "message" as const, timestamp: time,
   message: { role: "assistant" as const, timestamp: Date.parse(time), content: [{ type: "text" as const, text: "Done" }], provider: "provider", model: "model", api: "openai-completions", stopReason: "stop" as const, usage: {} } });
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(r => { resolve = r; });
+  return { promise, resolve };
+}
 function operationStore(): PiNativeOperations {
   const records = new Map<string, ReturnType<PiNativeOperations["prepareOperation"]>>();
   return {
@@ -50,6 +55,9 @@ class NativeFixture {
   models = { models: [{ provider: "provider", id: "model", reasoning: true }] };
   token?: string;
   confirmed?: PiManagedExpectedConfiguration;
+  registerMcpTool(name: string) {
+    this.state = { ...this.state, tools: [...this.state.tools, { name, managed: "mcp" }] };
+  }
   configurationMatches(expected: PiManagedExpectedConfiguration, catalogDigest: unknown) {
     return expected.model.provider === this.state.model?.provider && expected.model.id === this.state.model.id &&
       expected.thinkingLevel === this.state.thinkingLevel && expected.policyDigest === this.state.policyDigest &&
@@ -91,7 +99,8 @@ class NativeFixture {
       if (type === "set_policy") this.state = { ...this.state, policyDigest: piManagedConfigurationDigest(command.policy) };
       if (type === "confirm_configuration") {
         const expected = command.expected as PiManagedExpectedConfiguration;
-        if (!this.configurationMatches(expected, command.catalogDigest)) throw new PiNativeError("pi_native_configuration_drift", "rejected");
+        this.token = undefined;
+        if (!this.state.isIdle || !this.configurationMatches(expected, command.catalogDigest)) throw new PiNativeError("pi_native_configuration_drift", "rejected");
         this.confirmed = expected; this.token = randomUUID(); result = { configurationToken: this.token };
       }
       if (type === "get_commands") result = { commands: [{ name: "skill:review", source: "skill" }] };
@@ -276,6 +285,40 @@ describe("native Pi driver", () => {
     expect(commands.slice(0, commands.indexOf("prompt"))).toEqual(["session_status", "prepare_submission"]);
     expect(fixture.attachCount).toBe(1);
   });
+  it("dispatches a warm Send while its observer is transferring a long history", async () => {
+    const { driver, fixture } = setup();
+    fixture.state = { ...fixture.state, entries: [user("prior", null, "x".repeat(96 * 1024)), answer("reply", "prior")], leafId: "reply" };
+    const handle = await driver.attach(conversation);
+    const request = fixture.port.request;
+    const transfer = deferred<void>();
+    const captured = deferred<void>();
+    let holdSnapshot = true;
+    fixture.commands.length = 0;
+    fixture.port.request = async (input, signal) => {
+      const outcome = await request(input, signal);
+      if (holdSnapshot && input.command.command.type === "snapshot") {
+        holdSnapshot = false;
+        captured.resolve();
+        await transfer.promise;
+      }
+      return outcome;
+    };
+    fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+    await captured.promise;
+    const models = rpc(fixture.port, attachment, { type: "get_available_models" });
+    const sending = (async () => {
+      const anchor = JSON.parse(await handle.captureSubmissionRetryAnchor());
+      expect(anchor.leafId).toBe("reply");
+      return handle.submit(submission("next"));
+    })();
+    try {
+      await vi.waitFor(() => expect(fixture.commands.map(command => command.type)).toContain("prompt"));
+      expect(fixture.commands.slice(0, 4).map(command => command.type)).toEqual(["snapshot", "session_status", "prepare_submission", "prompt"]);
+      expect(fixture.commands.some(command => command.type === "get_available_models")).toBe(false);
+    } finally { transfer.resolve(); }
+    await expect(models).resolves.toEqual(fixture.models);
+    await expect(sending).resolves.toMatchObject({ backendTurnId: "user:next" });
+  });
   it("keeps history available and denies Send until an unavailable native model is selectable", async () => {
     const { driver, fixture } = setup({ settings: { getSettings: () => ({
       modelProvider: null, modelId: null, thinkingLevel: null, toolMode: "full", revision: 0,
@@ -300,6 +343,120 @@ describe("native Pi driver", () => {
     expect(commands.filter(type => type === "confirm_configuration")).toHaveLength(1);
     expect(commands.filter(type => type === "prepare_submission")).toHaveLength(2);
     expect(commands.filter(type => type === "prompt")).toHaveLength(1);
+  });
+  it.each(["attach", "send", "observer"] as const)("reconfirms an MCP tool registered during %s verification", async caller => {
+    const { driver, fixture, settings } = setup();
+    let handle = caller === "attach" ? undefined : await driver.attach(conversation);
+    const events: BackendConversationEvent[] = [];
+    handle?.subscribe(event => events.push(event));
+    const request = fixture.port.request;
+    let confirmations = 0;
+    fixture.port.request = async (input, signal) => {
+      if (input.command.command.type === "confirm_configuration" && ++confirmations === 1) fixture.registerMcpTool("late_tool");
+      return request(input, signal);
+    };
+    if (caller === "attach") handle = await driver.attach(conversation);
+    if (caller === "send") settings.toolMode = "ask";
+    if (caller === "observer") {
+      fixture.registerMcpTool("first_tool");
+      fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+      await vi.waitFor(() => expect(fixture.confirmed?.activeTools).toContain("late_tool"));
+    }
+    await expect(handle!.submit(submission())).resolves.toMatchObject({ accepted: true });
+    expect(confirmations).toBe(2);
+    expect(fixture.confirmed?.activeTools).toContain("late_tool");
+    expect(fixture.commands.filter(command => command.type === "prepare_submission")).toHaveLength(1);
+    expect(fixture.commands.filter(command => command.type === "prompt")).toHaveLength(1);
+    expect(events).not.toContainEqual({ type: "run_state_changed", state: "disconnected" });
+  });
+  it("finishes attaching while MCP tools keep registering and verifies on the next Send", async () => {
+    const { driver, fixture } = setup();
+    const request = fixture.port.request;
+    let confirmations = 0;
+    fixture.port.request = async (input, signal) => {
+      if (input.command.command.type === "confirm_configuration" && ++confirmations <= 2)
+        fixture.registerMcpTool(`late_${confirmations}`);
+      return request(input, signal);
+    };
+    const handle = await driver.attach(conversation);
+    expect(confirmations).toBe(2);
+    expect(fixture.token).toBeUndefined();
+    await expect(handle.submit(submission())).resolves.toMatchObject({ accepted: true });
+    expect(confirmations).toBe(3);
+    expect(fixture.confirmed?.activeTools).toContain("late_2");
+  });
+  it.each(["attach", "observer"] as const)("keeps %s usable when a turn begins during confirmation", async caller => {
+    const { driver, fixture } = setup();
+    const original = caller === "observer" ? await driver.attach(conversation) : undefined;
+    const events: BackendConversationEvent[] = [];
+    original?.subscribe(event => events.push(event));
+    const request = fixture.port.request; let confirmations = 0;
+    fixture.port.request = async (input, signal) => {
+      if (input.command.command.type === "confirm_configuration" && ++confirmations === 1) fixture.state = { ...fixture.state, isIdle: false };
+      return request(input, signal);
+    };
+    if (original) {
+      fixture.registerMcpTool("first_tool");
+      fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+      fixture.push({ kind: "rpc", payload: { type: "extension_error", error: "observer reached the next event" } });
+      await vi.waitFor(() => expect(events.some(event => event.type === "notice")).toBe(true));
+    }
+    const handle = original ?? await driver.attach(conversation);
+    expect(confirmations).toBe(1);
+    expect(events).not.toContainEqual({ type: "run_state_changed", state: "disconnected" });
+    fixture.state = { ...fixture.state, isIdle: true };
+    await expect(handle.submit(submission())).resolves.toMatchObject({ accepted: true });
+    expect(confirmations).toBe(2);
+  });
+  it("runs a waiting Send's own verification after the observer's bounded attempts encounter drift", async () => {
+    const operations = operationStore(); const { driver, fixture } = setup({ operations });
+    const handle = await driver.attach(conversation);
+    const events: BackendConversationEvent[] = []; handle.subscribe(event => events.push(event));
+    const request = fixture.port.request;
+    let confirmations = 0;
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    fixture.port.request = async (input, signal) => {
+      if (input.command.command.type === "confirm_configuration" && ++confirmations <= 2) {
+        if (confirmations === 2) await held;
+        fixture.registerMcpTool(`late_${confirmations}`);
+      }
+      return request(input, signal);
+    };
+    fixture.registerMcpTool("first_tool");
+    fixture.push({ kind: "companion", payload: { type: "state_changed" } });
+    try {
+      await vi.waitFor(() => expect(confirmations).toBe(2));
+      const submitting = handle.submit(submission());
+      await vi.waitFor(() => expect(operations.getOperation(conversation.scope, "thread", "submit")?.state).toBe("prepared"));
+      release();
+      await expect(submitting).resolves.toMatchObject({ accepted: true });
+    } finally { release(); }
+    expect(confirmations).toBe(3);
+    expect(fixture.confirmed?.activeTools).toContain("late_2");
+    expect(events).not.toContainEqual({ type: "run_state_changed", state: "disconnected" });
+    expect(fixture.commands.filter(command => command.type === "prompt")).toHaveLength(1);
+  });
+  it.each(["churn", "lost"] as const)("stops preflight without creating an intent on confirmation %s", async failure => {
+    const { driver, fixture, settings } = setup();
+    const handle = await driver.attach(conversation);
+    const request = fixture.port.request;
+    settings.toolMode = "ask";
+    let confirmations = 0;
+    fixture.port.request = async (input, signal) => {
+      if (input.command.command.type !== "confirm_configuration") return request(input, signal);
+      confirmations++;
+      if (failure === "churn") fixture.registerMcpTool(`late_${confirmations}`);
+      const result = await request(input, signal);
+      if (failure === "lost") throw new PiNativeError("pi_native_configuration_drift", "sent_outcome_unknown");
+      return result;
+    };
+    await expect(handle.submit(submission())).rejects.toMatchObject({ backendCode: "pi_native_configuration_drift", retryable: true, crossedSubmissionBoundary: false });
+    expect(confirmations).toBe(failure === "lost" ? 1 : 2);
+    expect(fixture.commands.filter(command => command.type === "prepare_submission" || command.type === "prompt")).toHaveLength(0);
+    fixture.port.request = request;
+    await expect(handle.submit(submission())).resolves.toMatchObject({ accepted: true });
+    expect(fixture.commands.filter(command => command.type === "prompt")).toHaveLength(1);
   });
   it("stops before intent when the selected model disappears from the live catalog", async () => {
     const operations = operationStore();
@@ -2104,6 +2261,39 @@ describe("native Pi driver", () => {
     expect(request).toHaveBeenCalledTimes(delivery === "not_sent" ? 2 : 1);
     expect(fixture.port.abandonObservation).toHaveBeenCalledTimes(delivery === "not_sent" ? 0 : 2);
   });
+  it.each(["snapshot", "session_status"] as const)("holds both reader lanes through a canceled %s and its late delivery", async first => {
+    const { fixture } = setup();
+    const delivered = deferred<void>();
+    const started = deferred<string>();
+    const cancel = new AbortController();
+    let fenced = false;
+    const request = fixture.port.request;
+    fixture.port.request = vi.fn(async (input, signal) => {
+      if (input.command.command.type !== first) return request(input, signal);
+      started.resolve(input.operationId);
+      await delivered.promise;
+      throw new PiNativeError("read_reply_lost", "sent_outcome_unknown");
+    });
+    fixture.port.abandonObservation = vi.fn(async () => fenced ? "released" : "pending");
+    const original = companion(fixture.port, attachment, { type: first }, undefined, cancel.signal);
+    const operationId = await started.promise;
+    cancel.abort();
+    forgetNativeObservations(fixture.port, attachment.handleId);
+    const other = () => companion(fixture.port, { ...attachment }, { type: first === "snapshot" ? "session_status" : "snapshot" });
+    const pending = { backendCode: "pi_native_observation_pending", crossedSubmissionBoundary: false };
+    try {
+      await expect(other()).rejects.toMatchObject(pending);
+      expect(fixture.port.abandonObservation).not.toHaveBeenCalled();
+    } finally { delivered.resolve(); }
+    await expect(original).rejects.toMatchObject({ backendCode: "read_reply_lost", crossedSubmissionBoundary: true });
+    expect(fixture.port.abandonObservation).toHaveBeenCalledWith({ handleId: attachment.handleId, operationId }, expect.any(AbortSignal));
+    forgetNativeObservations(fixture.port, attachment.handleId);
+    await expect(other()).rejects.toMatchObject(pending);
+    expect(fixture.port.request).toHaveBeenCalledTimes(1);
+    fenced = true;
+    await expect(other()).resolves.toMatchObject({ sessionId: native.sessionId });
+    expect(fixture.port.request).toHaveBeenCalledTimes(2);
+  });
   it("reconciles never-dispatched actions as not applied and persists a proven rejection", async () => {
     const { driver, fixture } = setup(); const handle = await driver.attach(conversation);
     const request = fixture.port.request;
@@ -2183,23 +2373,78 @@ describe("native Pi driver", () => {
     expect(operations.getOperation(conversation.scope, "thread", "submit")?.state).toBe("sent");
   });
 
-  it("returns a durable terminal receipt while its host acknowledgements are still pending", async () => {
+  it.each(["delivered", "failed"] as const)("drains %s deferred acknowledgements when a handle closes immediately after Send", async delivery => {
     const operations = operationStore(); const { driver, fixture } = setup({ operations });
     const handle = await driver.attach(conversation);
+    const ack = fixture.port.acknowledgeOperation;
     let finish!: () => void;
     const blocked = new Promise<void>(resolve => { finish = resolve; });
-    const acknowledged: string[] = [];
-    fixture.port.acknowledgeOperation = async ({ operationId }) => {
+    const submittedIds = ["submit:complete", "submit:dispatch", "submit:prepare:0"];
+    fixture.port.acknowledgeOperation = async (input, signal) => {
       expect(operations.getOperation(conversation.scope, "thread", "submit")?.state).toBe("completed");
-      await blocked; acknowledged.push(operationId);
+      await blocked; signal?.throwIfAborted();
+      if (delivery === "failed" && input.operationId === "submit:complete") throw new Error("transport_lost");
+      return ack(input, signal);
     };
+    const retained = () => [...fixture.outcomes.keys()].filter(id => submittedIds.includes(id)).sort();
     try {
       await expect(handle.submit(submission())).resolves.toMatchObject({ backendTurnId: "user:submit" });
-      expect(acknowledged).toEqual([]);
       expect(fixture.commands.some(command => command.type === "get_submission")).toBe(false);
+      const closing = handle.close();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(retained()).toEqual(submittedIds);
+      expect(fixture.releaseCount).toBe(0);
+      finish(); await closing;
     } finally { finish(); }
-    await handle.close();
-    expect(acknowledged.sort()).toEqual(["submit:complete", "submit:dispatch", "submit:prepare:0"]);
+    expect(fixture.releaseCount).toBe(1);
+    expect(retained()).toEqual(delivery === "failed" ? ["submit:complete"] : []);
+    if (delivery === "failed") {
+      fixture.port.acknowledgeOperation = ack;
+      fixture.port.attach = async () => ({ ...attachment, retainedOperationIds: retained() });
+      await driver.attach(conversation);
+      expect(retained()).toEqual([]);
+      expect(fixture.commands.filter(command => command.type === "prompt")).toHaveLength(1);
+    }
+  });
+
+  it.each(["retained prefix", "continuity lost"] as const)("discards a pending turn's early streams after a %s gap", async gap => {
+    const { driver, fixture } = setup();
+    const observe = fixture.port.observe;
+    let insertGap = false;
+    fixture.port.observe = async (input, signal) => {
+      if (!insertGap) return observe(input, signal);
+      insertGap = false;
+      if (gap === "continuity lost") throw new PiNativeError("pi_native_observation_continuity_lost", "sent_outcome_unknown");
+      const cut = ++fixture.sequence;
+      return { events: [], retainedAfterSequence: cut, throughSequence: cut, closed: false };
+    };
+    const handle = await driver.attach(conversation);
+    const events: BackendConversationEvent[] = [];
+    handle.subscribe(event => events.push(event));
+    const request = fixture.port.request;
+    const stream = (text: string, index: number) => fixture.push({ kind: "stream", payload: {
+      type: "message_snapshot", streamId: "assistant", contentIndex: index, semanticKind: "reasoning", text,
+    } });
+    fixture.port.request = async (input, signal) => {
+      if (input.command.command.type === "prompt") {
+        fixture.state = { ...fixture.state, isIdle: false };
+        stream("stale", 0);
+        fixture.push({ kind: "rpc", payload: { type: "extension_error", error: "after buffered stream" } });
+        await vi.waitFor(() => expect(events.some(event => event.type === "notice")).toBe(true));
+        insertGap = true;
+        await vi.waitFor(() => expect(events).toContainEqual({ type: "resnapshot_required", reason: "sequence_gap" }));
+        if (gap === "retained prefix") {
+          stream("fresh", 1);
+          fixture.push({ kind: "rpc", payload: { type: "extension_error", error: "after fresh stream" } });
+          await vi.waitFor(() => expect(events.filter(event => event.type === "notice")).toHaveLength(2));
+        }
+      }
+      return request(input, signal);
+    };
+    await expect(handle.submit(submission())).resolves.toMatchObject({ backendTurnId: "user:submit" });
+    expect(events.filter(event => event.type === "item_started").map(event => event.item)).toMatchObject(
+      gap === "retained prefix" ? [{ backendTurnId: "user:submit", semanticKind: "reasoning", markdown: { text: "fresh" } }] : []);
+    expect(JSON.stringify(events)).not.toContain("stale");
   });
 
   it("holds early text and thinking for the accepted turn while the previous turn is still projected active", async () => {

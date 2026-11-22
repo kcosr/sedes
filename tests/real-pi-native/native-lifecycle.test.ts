@@ -1,4 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { companion } from "../../src/server/backends/pi/native/driver/port-session.js";
 import { createServer, type ServerResponse } from "node:http";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -331,7 +333,56 @@ it.skipIf(process.platform === "win32").each([0, 20, 50])("measures warm native 
       const historyBytes = Buffer.byteLength(JSON.stringify(history.entries));
       expect(historyBytes > 64 * 1024).toBe(historySize === "long");
       await measureWarmSend({ channel: f.remote!.channel, handle, historyBytes, roundTripMs,
-        submission, verifiedAt, setReply: value => { reply = value; } });
+        submission, verifiedAt, modelRequestCount: () => f.requests.length, setReply: value => { reply = value; } });
     }
   } finally { await handle.close(); }
 }, 120_000);
+
+it.skipIf(process.platform === "win32")("dispatches a warm Send while a large observer snapshot awaits decoding", async () => {
+  const f = await fixture({ bundled: true, agentTools: fixtureAgentTools(true).agentTools });
+  const attaching = vi.spyOn(f.host, "attach");
+  const handle = await f.driver.attach(f.input);
+  const attachment = await attaching.mock.results[0]!.value;
+  attaching.mockRestore();
+  try {
+    await completed(handle, "large history " + "x".repeat(70 * 1024));
+    // Use the event observer's normal companion reader on the same attachment.
+    // The response stream has already been offered by the remote Pi host. Only
+    // this observer's decode is held. Other requests still use the real carrier.
+    const observer = new AsyncLocalStorage<boolean>();
+    let held = false;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const channel = f.remote!.channel;
+    const decode = channel.decodeBody.bind(channel);
+    const intercept = vi.spyOn(channel, "decodeBody").mockImplementation(async body => {
+      if (observer.getStore() && body.type === "stream") {
+        held = true;
+        await gate;
+      }
+      return decode(body);
+    });
+    const snapshot = observer.run(true, () => companion(f.host, attachment, { type: "snapshot" }));
+    let send: ReturnType<ConversationHandle["submit"]> | undefined;
+    try {
+      await Promise.race([
+        vi.waitFor(() => expect(held).toBe(true), { timeout: 5_000 }),
+        snapshot.then(() => { throw new Error("Expected a streamed snapshot"); }),
+      ]);
+      const priorRequests = f.requests.length;
+      send = (async () => {
+        await handle.captureSubmissionRetryAnchor();
+        return handle.submit(submission("submit with observer blocked"));
+      })();
+      const reachedModel = vi.waitFor(() => expect(f.requests.length).toBe(priorRequests + 1), { timeout: 5_000 });
+      await Promise.race([reachedModel, send.then(() => reachedModel)]);
+    } finally {
+      release();
+      await Promise.allSettled([snapshot, send]);
+      intercept.mockRestore();
+      observer.disable();
+    }
+    expect(Buffer.byteLength(JSON.stringify(await snapshot))).toBeGreaterThan(64 * 1024);
+    expect(await send).toMatchObject({ accepted: true });
+  } finally { await handle.close(); }
+}, 60_000);

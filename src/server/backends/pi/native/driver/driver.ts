@@ -117,6 +117,10 @@ function retryablePreparation(outcome: PiNativeOutcome | undefined): boolean {
   return outcome?.status === "failed" && (outcome.failure.delivery === "not_sent" ||
     (outcome.failure.delivery === "rejected" && outcome.failure.code === "pi_native_configuration_drift"));
 }
+function configurationChanged(cause: unknown, allowBusy = false): cause is BackendError {
+  return cause instanceof BackendError && cause.category === "rejected" && !cause.crossedSubmissionBoundary &&
+    (cause.backendCode === "pi_native_configuration_drift" || (allowBusy && cause.backendCode === "pi_native_busy"));
+}
 function staleSteerTarget(): BackendError {
   return new BackendError({ category: "rejected", retryable: true, crossedSubmissionBoundary: false,
     safeMessage: "The selected Pi turn is no longer active.", backendCode: "pi_native_steer_target_stale", steerRejectionReason: "target_no_longer_active" });
@@ -727,7 +731,7 @@ class PiNativeConversationHandle implements ConversationHandle {
       await this.#refresh(false);
       if (!drainRetained && !this.#controlOnly) {
         this.driver.options.settings.syncObserved?.(this.input.scope, this.binding.applicationThreadId, capabilities(this.#settings, this.#state, Boolean(this.driver.options.outputArtifacts)).effectiveSettings);
-        if (this.#state.isIdle === true) await this.#applySettings();
+        if (this.#state.isIdle === true) await this.#applyIdleSettings();
       }
       const initial = projectionWindow(this.#projection, this.attachment.sessionId);
       this.#projector = new PiProjectionEstablisher({ initialSnapshot: initial.snapshot, initialHistory: initial.history,
@@ -777,11 +781,20 @@ class PiNativeConversationHandle implements ConversationHandle {
     if (this.#draining || this.#state.isIdle !== true || this.#settingsInFlight ||
         this.#toolCatalogSignature === fingerprint(this.#state.tools)) return;
     this.#confirmedSettings = undefined;
-    await this.#applySettings();
+    await this.#applyIdleSettings();
+  }
+  async #applyIdleSettings(): Promise<void> {
+    try { await this.#applySettings(); }
+    catch (cause) {
+      // Native tools can register, or a turn can begin, while an idle observer
+      // is configuring the session. The next Send still needs its own proof.
+      if (!configurationChanged(cause, true)) throw cause;
+    }
   }
   async #applySettings(): Promise<ConfirmedPiSettings | undefined> {
     if (this.#settingsInFlight) {
-      await this.#settingsInFlight;
+      try { await this.#settingsInFlight; }
+      catch (cause) { if (!configurationChanged(cause, true)) throw cause; }
       return this.#applySettings();
     }
     const settings = this.driver.options.settings.getSettings(this.input.scope, this.binding.applicationThreadId);
@@ -792,9 +805,18 @@ class PiNativeConversationHandle implements ConversationHandle {
       return this.#confirmedSettings;
 
     this.#confirmedSettings = undefined;
-    const applying = this.#verifySettings(settings, manifest, desiredDigest);
+    const verify = () => this.#verifySettings(settings, manifest, desiredDigest);
+    const applying = verify().catch(cause => {
+      if (!configurationChanged(cause)) throw cause;
+      return verify(); // New live snapshot, including any newly registered MCP tools.
+    });
     this.#settingsInFlight = applying;
     try { return this.#confirmedSettings = await applying; }
+    catch (cause) {
+      if (!configurationChanged(cause)) throw cause;
+      throw new BackendError({ category: "rejected", retryable: true, crossedSubmissionBoundary: false,
+        backendCode: cause.backendCode, safeMessage: "Pi's configuration is still changing. Retry when it settles." }, { cause });
+    }
     finally { this.#settingsInFlight = undefined; }
   }
   async #verifySettings(settings: PiNativeSettings, manifest: ReturnType<PiNativeAgentToolBridge["manifest"]>, desiredDigest: string): Promise<ConfirmedPiSettings | undefined> {
@@ -838,18 +860,21 @@ class PiNativeConversationHandle implements ConversationHandle {
     if ((settings.modelProvider && settings.modelProvider !== model?.provider) ||
         (settings.modelId && settings.modelId !== model?.id) || (settings.thinkingLevel && settings.thinkingLevel !== thinkingLevel))
       throw reject("pi_native_settings_not_applied", "Pi did not apply the requested model and thinking settings.");
+    // History and model selection remain available without an admissible model.
+    // Preparing a Send always requires a confirmed selection.
+    let confirmed: ConfirmedPiSettings | undefined;
+    if (model && policy.allowedModels.some(entry => entry.provider === model.provider && entry.modelId === model.id &&
+        (!entry.thinkingLevels || entry.thinkingLevels.includes(thinkingLevel)))) {
+      const verified = object(await companion(this.port, this.attachment, { type: "confirm_configuration", catalogDigest,
+        expected: { model: { provider: model.provider, id: model.id }, thinkingLevel, policyDigest, manifestDigest,
+          toolsDigest: piManagedConfigurationDigest(state.tools), activeTools: names } }));
+      if (typeof verified.configurationToken !== "string" || !verified.configurationToken) throw reject("pi_native_configuration_unconfirmed");
+      confirmed = { generation: this.attachment.generation, desiredDigest, catalogDigest, configurationToken: verified.configurationToken, model, thinkingLevel };
+    }
     this.#toolCatalogSignature = fingerprint(state.tools);
     this.#state = { ...this.#state, model, thinkingLevel, tools: state.tools, activeTools: names };
     this.#settings = settings;
-    // History and model selection remain available without an admissible model.
-    // Preparing a Send always requires a confirmed selection.
-    if (!model || !policy.allowedModels.some(entry => entry.provider === model.provider && entry.modelId === model.id &&
-        (!entry.thinkingLevels || entry.thinkingLevels.includes(thinkingLevel)))) return undefined;
-    const verified = object(await companion(this.port, this.attachment, { type: "confirm_configuration", catalogDigest,
-      expected: { model: { provider: model.provider, id: model.id }, thinkingLevel, policyDigest, manifestDigest,
-        toolsDigest: piManagedConfigurationDigest(state.tools), activeTools: names } }));
-    if (typeof verified.configurationToken !== "string" || !verified.configurationToken) throw reject("pi_native_configuration_unconfirmed");
-    return { generation: this.attachment.generation, desiredDigest, catalogDigest, configurationToken: verified.configurationToken, model, thinkingLevel };
+    return confirmed;
   }
   async #refresh(publish: boolean, signal = this.#lifetime.signal): Promise<void> {
     signal.throwIfAborted();
@@ -1071,6 +1096,7 @@ class PiNativeConversationHandle implements ConversationHandle {
         if (this.#closed || this.#lifetime.signal.aborted) return;
         this.#readDiagnostics.failed("observe", cause);
         if (cause instanceof PiNativeError && cause.code === "pi_native_observation_continuity_lost") {
+          this.#pendingTurn?.clearStreams();
           this.#throughput.invalidate();
           this.#controlOnly = true;
           await this.#readControl();
@@ -1360,8 +1386,7 @@ class PiNativeConversationHandle implements ConversationHandle {
         fingerprint: requestFingerprint, mode, ...(target?.kind === "turn" ? { targetTurnId: target.turnId } : {}), text,
         presentation: { text: input.text, contextExcerpts: input.contextExcerpts, taskContexts: input.taskContexts, attachments: input.attachments.map(({ agentPath: _path, sha256: _sha, ...attachment }) => attachment) } } }, prepareId));
     } catch (cause) {
-      if (mode === "submit" && cause instanceof BackendError && cause.category === "rejected" && !cause.crossedSubmissionBoundary &&
-          cause.backendCode === "pi_native_configuration_drift") {
+      if (mode === "submit" && configurationChanged(cause)) {
         // Only an explicit pre-intent mismatch permits a new attempt ID. A lost reply may already own an intent.
         this.#confirmedSettings = undefined;
         boundary.phase = "preflight";
@@ -1590,7 +1615,9 @@ class PiNativeConversationHandle implements ConversationHandle {
     for (const id of ids) {
       if (this.#pendingAcknowledgements.has(id)) continue;
       this.#retainedOperationIds.add(id);
-      const cleanup = this.#acknowledge([id], this.#lifetime.signal).finally(() => this.#pendingAcknowledgements.delete(id));
+      // Close drains committed receipts before releasing this handle. Give
+      // their host cleanup its own deadline so stopping observation cannot cancel it.
+      const cleanup = this.#acknowledge([id], AbortSignal.timeout(5_000)).finally(() => this.#pendingAcknowledgements.delete(id));
       this.#pendingAcknowledgements.set(id, cleanup);
     }
   }

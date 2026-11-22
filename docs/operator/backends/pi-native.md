@@ -273,7 +273,7 @@ selecting stock stable Pi >=1.4.0. It uses disposable native sessions and
 verifies the exact `aw-qwen-3-8-27b/aw-qwen-3-8-27b` model, low reasoning, and read-only tools
 before prompting. On 2026-11-22, the Linux x64 live test passed with stock
 Pi 1.5.0, including nested code-mode reads, signed provenance, and detach/resume.
-All 13 offline tests also passed, including warm sends over the bundled sidecar,
+All 14 offline tests also passed, including warm sends over the bundled sidecar,
 context occupancy through compaction and secret-free process bootstrap. This evidence is limited to that model
 and host platform; it does not qualify other providers or macOS execution.
 

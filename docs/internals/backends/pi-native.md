@@ -100,8 +100,9 @@ A short plain-text Send with unchanged settings makes two main-to-host
 exchanges before `prompt` when both results return inline.
 
 1. Before claiming the input from SQLite, main asks for the native session ID,
-   file, current leaf and idle state. This read is independent of transcript
-   size. The leaf identifies the history position for the queue.
+   file, current leaf and idle state. The fixed-size response can arrive while
+   main is receiving a full snapshot for the observer. The leaf identifies
+   the history position for the queue.
 2. After claiming the input, main sends `prepare_submission` with the token
    from the last verified configuration on this handle generation. The host
    checks model availability through local Pi RPC. The companion checks the
@@ -112,15 +113,20 @@ Main recomputes its desired configuration from current model policy, settings,
 Sedes tool grants and instructions. A new handle, changed configuration, or
 proven live drift takes the configuration path. It writes changed settings,
 verifies thinking level after switching models, and obtains a new token.
-Only a proven mismatch before intent creation permits another preparation
-attempt in the same Send. Steer verifies its target against the active turn.
+If the live catalog changes during confirmation, main verifies once more from
+a fresh snapshot. Continued drift leaves the attachment observable and Send
+retryable. Only a proven mismatch before intent creation permits another
+preparation attempt in the same Send. Steer verifies its target against the
+active turn.
 
 Main registers its receipt waiter before dispatch. A terminal
 `complete_submission` reply can confirm consumption directly. For an enqueued
 Send, main waits briefly for matching companion evidence, then reads that
 exact submission if necessary. It verifies the operation and mutation IDs,
 reconciliation token, mode and fingerprint before committing the receipt and
-deferring host acknowledgement.
+deferring host acknowledgement. Acknowledgements get their own five-second
+deadline so closing the observer can drain them. A lost acknowledgement
+remains recoverable on reattachment.
 
 Until the accepted user entry is projected, the driver holds the latest
 absolute text and thinking snapshots by stream and content index. A first
@@ -363,9 +369,10 @@ The driver requests replacement immediately when its first control snapshot is
 idle, after natural completion, or when the existing process disappears. While
 active, it polls the small RPC `get_state` result once per second with a
 five-second wait budget. It hydrates full history only when the control state
-changes or first becomes idle, using the normal read deadline. All transient
-reads on a handle are serialized; an abandoned read blocks further reads until
-the host confirms its release, while retained Stop commands remain independent.
+changes or first becomes idle, using the normal read deadline. Transient reads
+are serialized within the handle's ordinary read queue. The bounded
+`session_status` read can run alongside it. An abandoned read blocks new reads
+until the host confirms release. Retained Stop commands remain independent.
 A confirmed `end_stop` receipt permits recovery without another history read.
 Closing the handle cancels its read waits and abandons their results. A missing or ended
 control attachment retries the normal drain once; failed cleanup remains a

@@ -25,6 +25,7 @@ export async function measureWarmSend(input: {
   roundTripMs: number;
   historyBytes: number;
   verifiedAt: ReadonlyMap<string, number>;
+  modelRequestCount(): number;
 }): Promise<void> {
   // An observer on the same carrier can fetch history while Send is in flight.
   // Only the calls made by this queue capture and submit are on its critical path.
@@ -69,9 +70,11 @@ export async function measureWarmSend(input: {
   };
 
   const samples = [];
+  const acceptedTurns = new Set<string>();
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       const text = "test progress " + randomUUID();
+      const previousModelRequests = input.modelRequestCount();
       let finish!: () => void;
       const completion = new Promise<void>(resolve => { finish = resolve; });
       let firstItem: { turn: string; ms: number } | undefined;
@@ -94,8 +97,21 @@ export async function measureWarmSend(input: {
         const [{ receipt, exchangesAtReturn }] = await Promise.all([send,
           vi.waitFor(() => expect(firstItem).toBeDefined(), { timeout: 15_000, interval: 25 })]);
         expect(receipt).toMatchObject({ accepted: true, reconciliationToken: message.reconciliationToken, backendTurnId: firstItem!.turn });
-        await vi.waitFor(async () => expect((await input.handle.history({ limit: 1 })).turnsById[firstItem!.turn]?.status)
-          .toBe("completed"), { timeout: 15_000, interval: 25 });
+        const turnId = firstItem!.turn;
+        expect(acceptedTurns.has(turnId)).toBe(false);
+        acceptedTurns.add(turnId);
+        await vi.waitFor(async () => {
+          const page = await input.handle.history({ limit: 1 });
+          const turn = page.turnsById[turnId];
+          expect(turn?.status).toBe("completed");
+          const items = turn!.orderedBackendItemIds.map(id => page.itemsById[id]);
+          expect(items).toEqual(expect.arrayContaining([
+            expect.objectContaining({ backendTurnId: turnId, semanticKind: "user_message",
+              content: [{ kind: "text", text: { text: message.text } }] }),
+            expect.objectContaining({ backendTurnId: turnId, semanticKind: "assistant_message", markdown: { text } }),
+          ]));
+        }, { timeout: 15_000, interval: 25 });
+        expect(input.modelRequestCount()).toBe(previousModelRequests + 1);
         expect(trace.beforePrompt.filter(name => name !== "outcome")).toEqual(["session_status", "prepare_submission"]);
         expect(trace.prePromptOffers).toBe(0);
         expect(trace.dispatch).toBeDefined();
@@ -108,6 +124,11 @@ export async function measureWarmSend(input: {
         input.setReply(undefined);
         unsubscribe();
       }
+    }
+    // A loaded host can occasionally exceed its bounded inline wait. A host
+    // that *always* returns pending must still fail the no-latency regression.
+    if (input.roundTripMs === 0) {
+      expect(samples.some(sample => sample.prePromptExchanges === 2)).toBe(true);
     }
     process.stdout.write(JSON.stringify({ roundTripMs: input.roundTripMs, historyBytes: input.historyBytes, samples }) + "\n");
   } finally {

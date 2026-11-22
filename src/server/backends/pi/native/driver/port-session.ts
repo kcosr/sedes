@@ -7,41 +7,58 @@ import { parsePiManagedCommand } from "../rpc/pi-managed-protocol.js";
 import { piNativeRecoveryMessage } from "../diagnostics.js";
 import { piNativeCommandIsReadOnly } from "../command-policy.js";
 
-/** One abandoned observation gates later reads until its host ownership ends. */
+interface NativeObservation {
+  id: string;
+  cancellation?: AbortSignal;
+  uncertain: boolean;
+  releasing?: Promise<boolean>;
+}
+
+/** Only small session-status reads can run alongside ordinary history and state reads. */
 class NativeObservationReader {
-  #pending?: string;
-  #serial: Promise<unknown> = Promise.resolve();
+  #serial: Record<"ordinary" | "status", Promise<unknown>> = { ordinary: Promise.resolve(), status: Promise.resolve() };
+  #reads = new Set<NativeObservation>();
+  #callers = 0;
   constructor(readonly port: PiNativePort, readonly attachment: PiNativeAttachment) {}
-  get pending(): boolean { return this.#pending !== undefined; }
+  get pending(): boolean { return this.#callers > 0 || this.#reads.size > 0; }
   read(command: PiNativeCommand, signal?: AbortSignal, deadlineAt?: number | null): Promise<unknown> {
-    const operation = this.#serial.then(() => this.#read(command, signal, deadlineAt));
-    this.#serial = operation.catch(() => undefined);
+    const lane = command.channel === "companion" && command.command.type === "session_status" ? "status" : "ordinary";
+    this.#callers++;
+    const operation = this.#serial[lane].then(() => this.#read(command, signal, deadlineAt)).finally(() => { this.#callers--; });
+    this.#serial[lane] = operation.catch(() => undefined);
     return operation;
   }
-  async #release(): Promise<boolean> {
-    if (!this.#pending) return true;
-    const result = await this.port.abandonObservation({ handleId: this.attachment.handleId, operationId: this.#pending }, AbortSignal.timeout(5_000));
-    if (result === "pending") return false;
-    this.#pending = undefined;
-    return true;
+  #release(read: NativeObservation): Promise<boolean> {
+    return read.releasing ??= this.port.abandonObservation({ handleId: this.attachment.handleId, operationId: read.id }, AbortSignal.timeout(5_000))
+      .then(result => {
+        if (result === "released") this.#reads.delete(read);
+        return !this.#reads.has(read);
+      }).finally(() => { read.releasing = undefined; });
   }
   async #read(command: PiNativeCommand, signal?: AbortSignal, deadlineAt?: number | null): Promise<unknown> {
     signal?.throwIfAborted();
-    if (!await this.#release()) throw new BackendError({ category: "unavailable", retryable: true, crossedSubmissionBoundary: false,
-      backendCode: "pi_native_observation_pending", safeMessage: "A previous Pi state read is still completing." });
-    signal?.throwIfAborted();
-    const id = randomUUID(); this.#pending = id;
+    // An aborted transfer may still be draining locally. Gate both lanes until
+    // its operation terminates or the host confirms that late delivery is fenced.
+    for (;;) {
+      const prior = [...this.#reads].find(read => read.uncertain || read.cancellation?.aborted);
+      if (!prior) break;
+      if (!prior.uncertain || !await this.#release(prior)) throw new BackendError({ category: "unavailable", retryable: true, crossedSubmissionBoundary: false,
+        backendCode: "pi_native_observation_pending", safeMessage: "A previous Pi state read is still completing." });
+      signal?.throwIfAborted();
+    }
+    const read: NativeObservation = { id: randomUUID(), cancellation: nativeCancellation(signal, deadlineAt), uncertain: false };
+    this.#reads.add(read);
     try {
-      const outcome = await requestTerminalOutcome(this.port, this.attachment, command, id, signal, false, deadlineAt);
-      // The host consumed this transient operation before returning its
-      // terminal envelope, including when the native read itself failed.
-      this.#pending = undefined;
+      const outcome = await requestTerminalOutcome(this.port, this.attachment, command, read.id, read.cancellation, false);
+      // A terminal envelope proves the host consumed this transient operation.
+      this.#reads.delete(read);
       return nativeResult(outcome);
     } catch (cause) {
-      // An authoritative refusal proves no late frame can be admitted. Do not
-      // spend a permanent unknown-read cancellation marker on that operation.
-      if (cause instanceof BackendError && !cause.crossedSubmissionBoundary) this.#pending = undefined;
-      else await this.#release().catch(() => undefined);
+      if (cause instanceof BackendError && !cause.crossedSubmissionBoundary) this.#reads.delete(read);
+      else if (this.#reads.has(read)) {
+        read.uncertain = true;
+        await this.#release(read).catch(() => undefined);
+      }
       throw cause;
     }
   }
@@ -84,14 +101,17 @@ export function nativeUnknownFailure(cause: unknown): BackendError {
 /** Durable operation IDs remain owned until the application commits and acknowledges them. */
 export async function requestNative(port: PiNativePort, attachment: PiNativeAttachment, command: PiNativeCommand,
   operationId: string = randomUUID(), signal?: AbortSignal, retainOutcome = true, deadlineAt: number | null = Date.now() + 60_000): Promise<unknown> {
-  return nativeResult(await requestTerminalOutcome(port, attachment, command, operationId, signal, retainOutcome, deadlineAt));
+  return nativeResult(await requestTerminalOutcome(port, attachment, command, operationId, nativeCancellation(signal, deadlineAt), retainOutcome));
+}
+
+function nativeCancellation(signal?: AbortSignal, deadlineAt: number | null = Date.now() + 60_000) {
+  const deadline = deadlineAt === null ? undefined : AbortSignal.timeout(Math.max(0, deadlineAt - Date.now()));
+  return signal && deadline ? AbortSignal.any([signal, deadline]) : signal ?? deadline;
 }
 
 async function requestTerminalOutcome(port: PiNativePort, attachment: PiNativeAttachment, command: PiNativeCommand,
-  operationId: string, signal: AbortSignal | undefined, retainOutcome: boolean, deadlineAt: number | null = Date.now() + 60_000) {
-  signal?.throwIfAborted();
-  const deadline = deadlineAt === null ? undefined : AbortSignal.timeout(Math.max(0, deadlineAt - Date.now()));
-  const cancellation = signal && deadline ? AbortSignal.any([signal, deadline]) : signal ?? deadline;
+  operationId: string, cancellation: AbortSignal | undefined, retainOutcome: boolean) {
+  cancellation?.throwIfAborted();
   let outcome: PiNativeOutcome;
   let requestReturned = false;
   try {
