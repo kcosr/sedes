@@ -95,6 +95,10 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
+- Use **Command+Shift+P** or **Ctrl+Shift+P** to switch between the two most
+  recently opened threads in the current client session.
+  ([#144](https://github.com/kcosr/sedes/pull/144))
+
 - Run Google Antigravity through ACP on local or persistent SSH/outbound
   execution hosts, with native history, streaming, permission decisions, model
   and native mode selection, Saved Agents, scoped Sedes tools, and background

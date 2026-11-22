@@ -1,5 +1,6 @@
 import { useDefaultThread, DefaultThreadResolutionProvider, defaultThreadChoices } from "../app/default-thread.js";
 import { installDefaultThreadShortcut, openDefaultThread } from "../app/default-thread-shortcut.js";
+import { installThreadNavigationShortcut, PREVIOUS_THREAD_OPEN_COMMAND } from "../app/keyboard-shortcuts.js";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -58,7 +59,7 @@ import {
 } from "./ServerSettingsForm";
 import type { PanelRegionStore } from "../workspace-panels/region-store";
 import type { WorkspacePanelTenantRegistry } from "../workspace-panels/registry";
-import { installThreadPanelOpenRequestListener } from "../workspace-panels/thread-panel-navigation.js";
+import { installThreadPanelOpenRequestListener, openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { ComposerDraftProvider } from "../context-excerpts/coordinator.js";
 import { TaskDragProvider } from "../tasks/task-drag.js";
 import { ThreadDragProvider } from "../threads/thread-drag.js";
@@ -140,6 +141,23 @@ function ApplicationShellContent({
     () => installDefaultThreadShortcut(window, handleOpenDefaultThread),
     [handleOpenDefaultThread],
   );
+  const recentThreads = useRef<{ latest: string; previous?: string }>(undefined);
+  const openedThreadId = route.name === "thread" ? route.threadId : undefined;
+  useLayoutEffect(() => {
+    // Only a committed route to a different thread changes the pair.
+    if (openedThreadId && recentThreads.current?.latest !== openedThreadId) {
+      recentThreads.current = { latest: openedThreadId, previous: recentThreads.current?.latest };
+    }
+    return installThreadNavigationShortcut(window, PREVIOUS_THREAD_OPEN_COMMAND.defaultBinding, () => {
+      const destination = openedThreadId ? recentThreads.current?.previous : recentThreads.current?.latest;
+      if (!destination) return false;
+      const thread = applicationStore.getThreadSummaries().find(({ id }) => id === destination);
+      if (!thread || thread.inventoryState === "archived") return false;
+      openThreadRoute(thread.id);
+      setDrawerOpen(false);
+      return true;
+    });
+  }, [applicationStore, openedThreadId]);
   // Drawer contents unmount on close; retain this client-session UI state here.
   const drawerScrollPosition = useRef(0);
   // Keep the thread tree at the same React position and dimensions while Settings
