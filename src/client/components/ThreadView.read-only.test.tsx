@@ -1718,6 +1718,38 @@ describe("ThreadView backend interaction modes", () => {
       ).toBeDisabled();
     },
   );
+
+  it.each(["idle", "reconciling"] as const)("uses the permission capability during delivery recovery while %s", async runState => {
+    const base = makeSnapshot("interactive", runState);
+    const snapshot: NormalizedThreadSnapshot = { ...base,
+      recovery: { kind: "operation_uncertain", operationCategory: "delivery", diagnostic: { text: "Steer is unconfirmed." },
+        submissionMayHaveBeenAccepted: true, recoverable: true },
+      capabilities: { ...base.capabilities, interactions: [{ kind: "confirmation", available: true }] } };
+    const state = fixture(snapshot);
+    const respond = vi.fn(async () => undefined);
+    Object.assign(state.registry.get(snapshot.thread.id), { respond });
+    render(<ThreadView threadActive threadId={snapshot.thread.id} visible registry={state.registry} applicationStore={state.applicationStore} />);
+    const approve = screen.getByRole("button", { name: "Approve" });
+    expect(approve).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toBeDisabled();
+    fireEvent.click(approve);
+    await waitFor(() => expect(respond).toHaveBeenCalledWith("interaction-1", { kind: "confirmation", confirmed: true }));
+  });
+
+  it.each(["capability", "connection", "authority", "availability", "backend disconnected"] as const)("keeps the %s permission fence during delivery recovery", reason => {
+    // A native disconnect can precede the next capability document while the
+    // browser's application transport and cached authority are still current.
+    const base = makeSnapshot("interactive", reason === "backend disconnected" ? "disconnected" : "idle");
+    const snapshot: NormalizedThreadSnapshot = { ...base,
+      thread: { ...base.thread, available: reason !== "availability" },
+      recovery: { kind: "operation_uncertain", operationCategory: "delivery", diagnostic: { text: "Steer is unconfirmed." },
+        submissionMayHaveBeenAccepted: true, recoverable: true },
+      capabilities: { ...base.capabilities, interactions: [{ kind: "confirmation", available: reason !== "capability" }] } };
+    const state = fixture(snapshot, [], { ...(reason === "connection" ? { connection: "disconnected" } : {}),
+      ...(reason === "authority" ? { authoritative: false } : {}) });
+    render(<ThreadView threadActive threadId={snapshot.thread.id} visible registry={state.registry} applicationStore={state.applicationStore} />);
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+  });
 });
 
 function fixture(

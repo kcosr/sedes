@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { randomUUID } from "node:crypto";
 
 const { messages } = JSON.parse(readFileSync(new URL("../../../src/server/backends/antigravity/native-projection.json", import.meta.url), "utf8"));
 
@@ -36,6 +37,7 @@ export function openFixtureHistory(geminiDirectory, sessionId, cwd) {
     database.exec(`
       CREATE TABLE IF NOT EXISTS trajectory_meta(cascade_id TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS trajectory_metadata_blob(id TEXT PRIMARY KEY, data BLOB NOT NULL);
+      CREATE TABLE IF NOT EXISTS executor_metadata(idx INTEGER PRIMARY KEY, data BLOB NOT NULL);
       CREATE TABLE IF NOT EXISTS steps(idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER,
         has_subtrajectory INTEGER, step_format INTEGER, step_payload BLOB);
     `);
@@ -51,19 +53,45 @@ export function openFixtureHistory(geminiDirectory, sessionId, cwd) {
     INSERT INTO steps VALUES (?, ?, ?, 0, 0, ?)
     ON CONFLICT(idx) DO UPDATE SET status = excluded.status, step_payload = excluded.step_payload
   `);
-  function step(index, type, status, payload) {
+  const executions = new Map();
+  const createdAt = new Map();
+  const responseText = new Map();
+  function step(index, type, status, payload, executionId, toolCall) {
     const time = { seconds: Math.floor(Date.now() / 1000) };
-    const metadata = { created_at: time, ...(status === 3 ? { completed_at: time } : {}) };
+    if (!createdAt.has(index)) createdAt.set(index, time);
+    const metadata = { created_at: createdAt.get(index), ...([3, 6].includes(status) ? { completed_at: time } : {}),
+      ...(executionId ? { execution_id: executionId } : {}),
+      ...(toolCall ? { tool_call: toolCall, tool_source: 1 } : {}) };
     write.run(index, type, status, encode(".gemini_coder.Step", { type, status, metadata, ...payload }));
   }
   return {
     begin(text) {
       const index = database.prepare("SELECT coalesce(max(idx) + 1, 0) AS next FROM steps").get().next;
-      step(index, 14, 3, { user_input: { items: [{ text }] } });
+      const executionId = randomUUID();
+      executions.set(index + 1, executionId);
+      step(index, 14, 3, { user_input: { items: [{ text }] } }, executionId);
       return index + 1;
     },
     response(index, text, stopReason = 0) {
-      step(index, 15, stopReason ? 3 : 2, { planner_response: { response: text, stop_reason: stopReason } });
+      responseText.set(index, text);
+      step(index, 15, stopReason ? 3 : 2, { planner_response: { response: text, stop_reason: stopReason } }, executions.get(index));
+    },
+    cancelAtPermission(index) {
+      const executionId = executions.get(index);
+      if (!executionId) throw new Error("Missing fixture execution");
+      const toolCall = { id: "permission-command", name: "run_command",
+        arguments_json: JSON.stringify({ CommandLine: "printf permission-check", Cwd: cwd, IsDaemon: false }) };
+      database.transaction(() => {
+        step(index, 15, 3, { planner_response: { response: responseText.get(index) ?? "", stop_reason: 2,
+          tool_calls: [toolCall] } }, executionId);
+        // Native generic tools keep their input/identity in metadata. A
+        // cancelled command need not have produced a generic result payload.
+        step(index + 1, 132, 6, { generic: {} }, executionId, toolCall);
+        const receiptIndex = database.prepare("SELECT coalesce(max(idx) + 1, 0) AS next FROM executor_metadata").get().next;
+        database.prepare("INSERT INTO executor_metadata VALUES (?, ?)").run(receiptIndex,
+          encode(".exa.cortex_pb.ExecutorMetadata", { execution_id: executionId,
+            last_step_idx: index + 1, termination_reason: 2 }));
+      })();
     },
     close() { database.close(); },
   };

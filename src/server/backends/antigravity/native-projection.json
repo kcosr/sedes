@@ -958,6 +958,36 @@
         "type": 12,
         "typeName": null
       }
+    ],
+    ".exa.cortex_pb.ExecutorMetadata": [
+      {
+        "name": "termination_reason",
+        "number": 1,
+        "label": 1,
+        "type": 14,
+        "typeName": ".exa.cortex_pb.ExecutorTerminationReason"
+      },
+      {
+        "name": "last_step_idx",
+        "number": 3,
+        "label": 1,
+        "type": 5,
+        "typeName": null
+      },
+      {
+        "name": "proceeded_with_auto_continue",
+        "number": 4,
+        "label": 1,
+        "type": 8,
+        "typeName": null
+      },
+      {
+        "name": "execution_id",
+        "number": 9,
+        "label": 1,
+        "type": 9,
+        "typeName": null
+      }
     ]
   }
 }

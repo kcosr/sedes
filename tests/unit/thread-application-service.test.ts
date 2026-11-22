@@ -222,6 +222,7 @@ function createService(input?: {
   queue?: readonly QueuedInputSummary[];
   recovery?: NonNullable<NormalizedThreadSnapshot["recovery"]>;
   exclusivePendingSteer?: boolean;
+  uncertainSteer?: boolean;
   mutation?: (
     operation: ThreadApplicationOperation,
   ) => Promise<
@@ -437,6 +438,7 @@ function createService(input?: {
     recovery: {
       read: async () => input?.recovery,
       hasExclusivePendingSteer: async () => input?.exclusivePendingSteer ?? false,
+      canRespondDuringRecovery: async () => input?.uncertainSteer ?? false,
     },
     interactions: {
       listPending: () =>
@@ -2060,6 +2062,32 @@ describe("ThreadApplicationService", () => {
       canRunNow: false,
       canCloneOnRun: false,
     });
+  });
+
+  it.each(["running", "reconciling"] as const)("allows only present permission kinds through uncertain Steer while %s", async runState => {
+    const { service } = createService({ runState, uncertainSteer: true, queue: [], interactionKinds: ["confirmation", "choice"],
+      recovery: { kind: "operation_uncertain", operationCategory: "delivery", diagnostic: { text: "Steer is unconfirmed." },
+        submissionMayHaveBeenAccepted: true, recoverable: true } });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(snapshot.capabilities.interactions).toContainEqual({ kind: "confirmation", available: true });
+    expect(snapshot.capabilities.interactions.find(({ kind }) => kind === "choice")).toMatchObject({ available: false });
+    expect(snapshot.capabilities.deliveryModes.filter(({ id }) => id !== "queue").every(({ available }) => !available)).toBe(true);
+    expect(snapshot.capabilities.deliveryModes.find(({ id }) => id === "queue")?.available).toBe(runState === "running");
+    expect(snapshot.capabilities.operations.filter(({ id }) => ["compact", "archive"].includes(id))
+      .every(({ available }) => !available)).toBe(true);
+  });
+
+  it.each(["other recovery", "disconnected", "archived", "read only", "unavailable"] as const)("keeps pending permissions fenced during %s", async reason => {
+    const state = inventory();
+    const { service } = createService({ runState: reason === "disconnected" ? "disconnected" : "running",
+      uncertainSteer: reason !== "other recovery", queue: [],
+      ...(reason === "archived" ? { state: { ...state, thread: { ...state.thread, inventoryState: "archived" } } } : {}),
+      ...(reason === "unavailable" ? { state: { ...state, thread: { ...state.thread, available: false } } } : {}),
+      ...(reason === "read only" ? { interactionMode: "read_only" } : {}),
+      recovery: { kind: "operation_uncertain", operationCategory: "delivery", diagnostic: { text: "Delivery is unconfirmed." },
+        submissionMayHaveBeenAccepted: true, recoverable: true } });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(snapshot.capabilities.interactions.every(({ available }) => !available)).toBe(true);
   });
 
   it("captures archived history even when its execution target is unavailable", async () => {

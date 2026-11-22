@@ -14,7 +14,7 @@ const input: SubmitTurnInput = { applicationOperationId: "operation", mutationId
   text: "  original user text\n\n", contextExcerpts: [], taskContexts: [], attachments: [] };
 const base = { type: 15, status: 3, hasSubtrajectory: false };
 function native(text: string, stopReason = 2): AntigravityNativeHistory {
-  return { revision: "a".repeat(64), steps: [{ ...base, index: 0, type: 14, user: { text } },
+  return { revision: "a".repeat(64), executions: [], steps: [{ ...base, index: 0, type: 14, user: { text } },
     { ...base, index: 1, response: { text: "Answer", thinking: "Reasoning", stopReason, toolCalls: [] } }] };
 }
 describe("Antigravity native projection and exact delivery evidence", () => {
@@ -55,6 +55,57 @@ describe("Antigravity native projection and exact delivery evidence", () => {
     expect(projectAntigravityHistory(native("user", 16), scope).snapshot.turnsById["input:0"]?.status).toBe("interrupted");
     expect(projectAntigravityHistory(native("user", 13), scope).snapshot.turnsById["input:0"]?.status).toBe("failed");
   });
+  it("keeps existing item order identities when earlier optional native content appears", () => {
+    const history = native("user", 0);
+    history.steps[1]!.status = 2;
+    history.steps[1]!.response!.thinking = "";
+    history.steps.push({ ...base, index: 2, type: 132, status: 2,
+      command: { command: "git status", cwd: "/workspace", output: "", persistent: false } });
+    const before = projectAntigravityHistory(history, scope).snapshot;
+    history.steps[1]!.response!.thinking = "Reasoning arrived after the first text chunk.";
+    const after = projectAntigravityHistory(history, scope).snapshot;
+    for (const [id, item] of Object.entries(before.itemsById)) {
+      expect(after.itemsById[id]?.sourceOrder).toBe(item.sourceOrder);
+    }
+    expect(after.itemsById["step:1:thinking"]!.sourceOrder).toBeLessThan(after.itemsById["step:1:assistant"]!.sourceOrder);
+    expect(after.itemsById["step:1:assistant"]!.sourceOrder).toBeLessThan(after.itemsById["step:2:command"]!.sourceOrder);
+  });
+  it("rejects a native item order that cannot be represented as a safe integer", () => {
+    const history = native("user");
+    history.steps[1]!.index = Number.MAX_SAFE_INTEGER;
+    expect(() => projectAntigravityHistory(history, scope)).toThrow("antigravity_item_order_invalid");
+  });
+  function cancelledCommandHistory(): AntigravityNativeHistory {
+    const history = native("Read the repository");
+    history.steps[0]!.executionId = "cancelled-execution";
+    history.steps[1]!.executionId = "cancelled-execution";
+    history.steps[1]!.response = { text: "", thinking: "", stopReason: 2,
+      toolCalls: [{ id: "command", name: "run_command", argumentsJson: "{}" }] };
+    history.steps.push({ ...base, index: 2, type: 132, status: 6, executionId: "cancelled-execution",
+      completedAt: "2026-11-22T13:28:42.334Z", command: { command: "git status", cwd: "/workspace", output: "", persistent: false } });
+    history.executions = [{ executionId: "cancelled-execution", lastStepIndex: 2, terminationReason: 2, proceededWithAutoContinue: false }];
+    return history;
+  }
+  it("settles a cancelled command turn only from its exact durable executor cancellation receipt", () => {
+    const { snapshot } = projectAntigravityHistory(cancelledCommandHistory(), scope);
+    expect(snapshot.runState).toBe("idle");
+    expect(snapshot.turnsById["input:0"]).toMatchObject({ status: "interrupted", endedBy: "interrupted", completedAt: "2026-11-22T13:28:42.334Z" });
+    expect(snapshot.itemsById["step:2:command"]).toMatchObject({ semanticKind: "command", status: "interrupted", phase: "interrupted" });
+  });
+  it.each(["missing", "wrong_execution", "wrong_head", "auto_continue", "early_continue", "later_step", "active_step", "conflicting_receipt"] as const)(
+    "does not infer whole-turn cancellation from a cancelled tool with %s executor evidence", evidence => {
+      const history = cancelledCommandHistory(), receipt = history.executions[0]!;
+      if (evidence === "missing") history.executions = [];
+      if (evidence === "wrong_execution") receipt.executionId = "another-execution";
+      if (evidence === "wrong_head") receipt.lastStepIndex = 1;
+      if (evidence === "auto_continue") receipt.proceededWithAutoContinue = true;
+      if (evidence === "early_continue") receipt.terminationReason = 7;
+      if (evidence === "later_step") history.steps.push({ ...base, index: 3, executionId: receipt.executionId });
+      if (evidence === "active_step") history.steps[1]!.status = 2;
+      if (evidence === "conflicting_receipt") history.executions.push({ ...receipt, terminationReason: 12 });
+      expect(projectAntigravityHistory(history, scope).snapshot.turnsById["input:0"]?.status).toBe("in_progress");
+    },
+  );
   async function steerText(operation: string): Promise<string> {
     const prompt = await buildAntigravityPrompt(scope, { ...input, applicationOperationId: operation }, "", "steer");
     if (prompt[0]?.type !== "text") throw new Error();
@@ -78,6 +129,19 @@ describe("Antigravity native projection and exact delivery evidence", () => {
     expect(snapshot.orderedBackendTurnIds).toEqual(["input:0", "input:2"]);
     expect(snapshot.turnsById["input:2"]).toMatchObject({ status: "completed", completionCorrelations: ["steer-2", "steer-3"] });
     expect(snapshot.itemsById["step:3:user"]).toMatchObject({ backendTurnId: "input:2", deliveryOperationId: "steer-3" });
+    expect(snapshot.runState).toBe("idle");
+  });
+  it("applies executor cancellation only at its terminal head after grouping consumed steers", async () => {
+    const history = native("original");
+    for (const index of [2, 3]) history.steps.push({ ...base, type: 14, index, executionId: "shared",
+      user: { text: await steerText(`steer-${index}`) } });
+    history.steps.push({ ...base, index: 4, executionId: "shared", response: { text: "", thinking: "", stopReason: 2,
+      toolCalls: [{ id: "command", name: "run_command", argumentsJson: "{}" }] } },
+      { ...base, index: 5, type: 132, status: 6, executionId: "shared", command: { command: "git status", cwd: "/workspace", output: "", persistent: false } });
+    history.executions.push({ executionId: "shared", lastStepIndex: 5, terminationReason: 2, proceededWithAutoContinue: false });
+    const { snapshot } = projectAntigravityHistory(history, scope);
+    expect(snapshot.orderedBackendTurnIds).toEqual(["input:0", "input:2"]);
+    expect(snapshot.turnsById["input:2"]).toMatchObject({ status: "interrupted", completionCorrelations: ["steer-2", "steer-3"] });
     expect(snapshot.runState).toBe("idle");
   });
   it("recognizes exact native execution evidence when a steer starts after cancellation", async () => {

@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { capture, fillAndPersistDraft, sendCurrentDraft, selectRadixOption } from "./helpers";
+import { capture, fillAndPersistDraft, sendCurrentDraft, selectDeliveryMode, selectRadixOption } from "./helpers";
 import { normalizedThreadSnapshotSchema } from "../../src/shared/protocol/conversation.js";
 
 test("Antigravity production connection streams, stops, requests permission and reloads native history", async ({ page, request }, testInfo) => {
@@ -69,4 +69,50 @@ test("Antigravity production connection streams, stops, requests permission and 
   await expect(page.getByText("Permission allowed.", { exact: true })).toBeVisible();
   await expect(composer).toBeEnabled();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden();
+
+  // A steer can be dispatched while the provider is about to ask permission,
+  // without reaching native history until that permission is answered.
+  await fillAndPersistDraft(page, "permission after steer", "Message Antigravity");
+  await sendCurrentDraft(page);
+  await expect(page.getByText("Waiting for a steer before requesting permission.", { exact: true })).toBeVisible();
+  await fillAndPersistDraft(page, "steer into permission", "Message Antigravity");
+  await selectDeliveryMode(page, "Steer");
+  await page.getByRole("button", { name: "Steer", exact: true }).click();
+  await expect(permission).toBeVisible();
+  const snapshot = async () => normalizedThreadSnapshotSchema.parse(
+    await (await page.request.get(`${fixture.origin}/api/threads/${creation.threadId}?activityDetail=full`)).json());
+  await expect.poll(async () => (await snapshot()).recovery?.kind).toBe("operation_uncertain");
+  await expect(composer).toBeDisabled();
+  await expect(permission.getByRole("button", { name: "Reject", exact: true })).toBeEnabled();
+  await capture(page, testInfo, "antigravity-uncertain-steer-permission.png");
+  await permission.getByRole("button", { name: "Reject", exact: true }).click();
+  await expect(permission).toBeHidden();
+  await expect.poll(async () => {
+    const value = await snapshot();
+    return { runState: value.runState, lastTurn: value.turnsById[value.orderedTurnIds.at(-1)!]?.status,
+      recovery: value.recovery?.kind, pendingPermissions: value.interactions.length };
+  }).toEqual({ runState: "idle", lastTurn: "interrupted", recovery: "operation_uncertain", pendingPermissions: 0 });
+  await expect(composer).toBeDisabled();
+  await page.getByRole("button", { name: "Thread actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Force reset…", exact: true }).click();
+  const reset = page.getByRole("dialog", { name: "Force reset Sedes state?", exact: true });
+  await expect(reset.getByRole("button", { name: "Force reset", exact: true })).toBeEnabled();
+  await reset.getByRole("button", { name: "Force reset", exact: true }).click();
+  await expect(reset).toBeHidden();
+  await expect.poll(async () => {
+    const value = await snapshot();
+    return { runState: value.runState, recovery: value.recovery ?? null };
+  }).toEqual({ runState: "idle", recovery: null });
+  await expect(composer).toBeEnabled();
+  await fillAndPersistDraft(page, "continue after reset", "Message Antigravity");
+  await sendCurrentDraft(page);
+  await expect(page.getByText("Fixture response.", { exact: true })).toBeVisible();
+  await expect.poll(async () => {
+    const value = await snapshot();
+    return value.orderedTurnIds.map(id => value.turnsById[id]!.status);
+  }).toEqual(["interrupted", "completed", "interrupted", "completed"]);
+  await page.reload();
+  await expect(composer).toBeEnabled();
+  await expect(page.getByText("Fixture response.", { exact: true })).toBeVisible();
+  await capture(page, testInfo, "antigravity-reset-recovered.png");
 });

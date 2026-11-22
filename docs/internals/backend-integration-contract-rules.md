@@ -80,6 +80,20 @@ prose differ, establish the production path and tests, then update the prose.
 
 Antigravity is a compiled ACP backend with a passive native SQLite history reader; see [its integration contract](backends/antigravity.md). Native store identity fields must be verified from the provider schema: root ancestry and trajectory IDs must not be treated as aliases for a session ID. Pending reverse requests require an authoritative attach inventory independent of acknowledged event replay. Foreground readiness, background inventory, and terminal continuation receipts are separate evidence. Apply these invariants when auditing every backend.
 
+If only steering submissions are uncertain, they must not prevent answering a
+current provider interaction needed for progress. The scoped application receipt continues to
+fence ordinary mutations; only an exact pending interaction may pass that fence,
+with its usual response receipt, ownership, and runtime-generation validation.
+Interaction controls use their own capability, independent of composer readiness.
+Replaying a pending interaction must preserve its original identity metadata,
+including its opening timestamp. Item ordering metadata must remain stable when
+an earlier item gains another projected content part.
+This rule applies to Pi SDK, native Pi, Codex, Claude, Grok, OpenCode, and
+Antigravity when their advertised steering and interaction capabilities permit
+the combination; it grants neither capability to an unsupported backend.
+Antigravity additionally settles canceled foreground turns from its own durable
+executor receipt. Other backends retain their existing native terminal evidence.
+
 The Codex 0.169.0 compatibility update is provider-private. Its single generated
 profile validates native moderation, completion-token, executor-environment and
 audio-reference metadata without granting browser or additional-executor authority.

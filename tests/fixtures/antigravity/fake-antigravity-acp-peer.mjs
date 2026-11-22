@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 let sessionId;
 let pendingPrompt;
 let permissionPrompt;
+let permissionRequestId;
+let queuedSteer;
 let history;
 let currentModel = "fixture-model";
 let thinking = "low";
@@ -31,16 +33,37 @@ function finish(prompt, content, stopReason = "end_turn") {
   if (prompt.index !== undefined) history.response(prompt.index, content, stopReason === "cancelled" ? 16 : 2);
   reply(prompt.id, { stopReason });
 }
+function requestPermission() {
+  permissionRequestId = randomUUID();
+  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: permissionRequestId, method: "session/request_permission", params: {
+    sessionId, toolCall: { toolCallId: `tool-${permissionRequestId}`, title: "Read file", status: "pending" },
+    options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "reject", name: "Reject", kind: "reject_once" }],
+  } })}\n`);
+}
 
 try {
   for await (const line of readline.createInterface({ input: process.stdin })) {
     const message = JSON.parse(line);
     if (!message.method) {
-      if (message.id === "permission" && permissionPrompt) {
+      if (message.id === permissionRequestId && permissionPrompt) {
+        if (queuedSteer && message.result?.outcome?.optionId !== "allow") {
+          // Native cancellation can end at the denied tool with no final
+          // assistant response. The queued steer was never consumed.
+          if (permissionPrompt.index !== undefined) history.cancelAtPermission(permissionPrompt.index);
+          reply(permissionPrompt.id, { stopReason: "cancelled" });
+          reply(queuedSteer.id, { stopReason: "cancelled" });
+          permissionPrompt = undefined;
+          queuedSteer = undefined;
+          continue;
+        }
         const text = `Permission ${message.result?.outcome?.optionId === "allow" ? "allowed" : "declined"}.`;
         stream(text);
         finish(permissionPrompt, text);
         permissionPrompt = undefined;
+        if (queuedSteer) {
+          finish({ id: queuedSteer.id, index: history?.begin(queuedSteer.stored) }, "Queued steer consumed.");
+          queuedSteer = undefined;
+        }
       }
       continue;
     }
@@ -72,17 +95,21 @@ try {
         const stored = message.params.prompt.find(block => block.type === "text")?.text ?? "";
         // Persist the exact ACP text so main must authenticate its correlation.
         const userText = stored.startsWith("<sedes-antigravity-") ? stored.slice(stored.indexOf(">\n") + 2) : stored;
+        if (userText === "steer into permission" && pendingPrompt?.permissionAfterSteer) {
+          queuedSteer = { id: message.id, stored };
+          permissionPrompt = pendingPrompt;
+          pendingPrompt = undefined;
+          requestPermission();
+          break;
+        }
         const prompt = { id: message.id, index: history?.begin(stored) };
         if (userText === "permission") {
           permissionPrompt = prompt;
-          process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: "permission", method: "session/request_permission", params: {
-            sessionId, toolCall: { toolCallId: "tool-permission", title: "Read file", status: "pending" },
-            options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "reject", name: "Reject", kind: "reject_once" }],
-          } })}\n`); break;
+          requestPermission(); break;
         }
-        if (userText === "wait") {
-          pendingPrompt = prompt;
-          const text = `Streaming ${currentModel} at ${thinking} effort in ${mode} mode.`;
+        if (userText === "wait" || userText === "permission after steer") {
+          pendingPrompt = { ...prompt, permissionAfterSteer: userText === "permission after steer" };
+          const text = userText === "wait" ? `Streaming ${currentModel} at ${thinking} effort in ${mode} mode.` : "Waiting for a steer before requesting permission.";
           if (prompt.index !== undefined) history.response(prompt.index, text);
           stream(text);
           break;

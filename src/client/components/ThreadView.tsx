@@ -394,7 +394,8 @@ export const ThreadView = memo(function ThreadView({
     interactionReturnFocus.current = null;
   }
   const interactionUnavailable =
-    showInteractionTakeover && (!interactionCapability?.available || disabled);
+    showInteractionTakeover && (!interactionCapability?.available ||
+      !snapshot.thread.available || snapshot.runState === "disconnected" || state.connection !== "connected" || !state.authoritative);
   const interactionUnavailableReason =
     interactionCapability?.unavailableReason?.text ??
     (state.connection !== "connected"

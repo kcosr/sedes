@@ -780,6 +780,11 @@ export class DatabaseThreadApplicationRecoveryReader implements ThreadApplicatio
     };
   }
 
+  async canRespondDuringRecovery(scope: RequestScope, applicationThreadId: string): Promise<boolean> {
+    return this.operations.findUncertainThreadOperation(scope, applicationThreadId)?.operationKind === "conversation_steer" &&
+      !this.operations.hasUncertainNonSteerOperation(scope, applicationThreadId);
+  }
+
   async hasExclusivePendingSteer(
     scope: RequestScope,
     applicationThreadId: string,

@@ -35,6 +35,12 @@ export const antigravityNativeStepSchema = z.strictObject({
 });
 export const antigravityNativeHistorySchema = z.strictObject({
   steps: z.array(antigravityNativeStepSchema).max(100_000),
+  executions: z.array(z.strictObject({
+    executionId: id,
+    lastStepIndex: z.number().int().min(-1).max(Number.MAX_SAFE_INTEGER),
+    terminationReason: count,
+    proceededWithAutoContinue: z.boolean(),
+  })).max(100_000),
   parentSessionId: z.string().uuid().optional(),
   revision: z.string().regex(/^[a-f0-9]{64}$/u),
 });

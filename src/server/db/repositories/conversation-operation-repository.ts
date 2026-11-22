@@ -910,6 +910,14 @@ export class ConversationOperationRepository {
     ).map(parseInteractionResponse);
   }
 
+  hasUncertainNonSteerOperation(scope: RequestScope, threadId: string, exceptInteractionResponseId?: string): boolean {
+    return prepareCached(this.database, `SELECT 1 FROM mutation_receipts
+      WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
+        AND operation_kind <> 'conversation_steer' AND result_code = 'uncertain'
+        AND (? IS NULL OR operation_kind <> 'conversation_interaction_response' OR mutation_id <> ?) LIMIT 1`)
+      .get(scope.tenantId, scope.principalId, threadId, exceptInteractionResponseId ?? null, exceptInteractionResponseId ?? null) !== undefined;
+  }
+
   prepareInterrupt(
     scope: RequestScope,
     threadId: string,

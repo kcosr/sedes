@@ -929,10 +929,27 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       unresolvedOperation.mutationId !== operation.mutationId &&
       this.input.operations.findSteer(scope, unresolvedOperation.mutationId)
         ?.source === "queued_input";
+    // The active provider may need a permission answer before it can consume
+    // an uncertain Steer. Keep ordinary writes fenced, but let the exact
+    // interaction (or its retained response receipt) use its own authority and
+    // idempotency checks. Never resend the Steer to unblock a reverse request.
+    const respondsBehindUncertainSteer =
+      unresolvedOperation?.operationKind === "conversation_steer" &&
+      operation.kind === "respond" &&
+      (() => {
+        const response = this.input.operations.findInteractionResponse(scope, operation.operationId);
+        const exactResponse = response?.operationId === operation.operationId && response.threadId === applicationThreadId &&
+          response.interactionId === operation.interactionId;
+        if (this.input.operations.hasUncertainNonSteerOperation(scope, applicationThreadId, exactResponse ? response.operationId : undefined)) return false;
+        return exactResponse || this.input.interactions.listPending(scope, applicationThreadId).some(
+          interaction => interaction.id === operation.interactionId,
+        );
+      })();
     if (
       unresolvedOperation &&
       !retriesUncertainOperation &&
-      !admitsBehindQueuedSteer
+      !admitsBehindQueuedSteer &&
+      !respondsBehindUncertainSteer
     ) {
       throw new DomainError(
         "operation_outcome_uncertain",

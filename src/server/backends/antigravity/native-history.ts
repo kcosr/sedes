@@ -7,14 +7,18 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { antigravityNativeHistorySchema, type AntigravityNativeStep } from "./native-schema.js";
 import { decodeAntigravityNativeMessage as decode, message, string, integer, repeated, bytes, type Message } from "./native-protobuf.js";
-import type { AntigravityHistory, AntigravityIdentity, AntigravityRuntimeConfiguration } from "./port.js";
+import { AntigravityError, type AntigravityHistory, type AntigravityIdentity, type AntigravityRuntimeConfiguration } from "./port.js";
 import { assertAntigravityNativeSemantics } from "./native-guards.js";
 import { antigravityNativeActivity } from "./host/native-activity.js";
 
 const MAXIMUM_HISTORY_BYTES = 96 * 1024 * 1024;
 const MAXIMUM_ROWS = 100_000;
+const MAXIMUM_EXECUTOR_BYTES = 32 * 1024 * 1024;
+const MAXIMUM_EXECUTOR_ROW_BYTES = 8 * 1024 * 1024;
+const MAXIMUM_EXECUTOR_ROWS = 100_000;
 type ChildReference = { sessionId: string; workspaceUris: readonly string[] };
-type ReadBudget = { remainingBytes: number; remainingRows: number; remainingSessions: number; ancestors: ReadonlySet<string> };
+type ReadBudget = { remainingBytes: number; remainingRows: number; remainingExecutorBytes: number; remainingExecutorRows: number;
+  remainingSessions: number; ancestors: ReadonlySet<string> };
 
 export function antigravityConversationsDirectory(configuration: AntigravityRuntimeConfiguration): string {
   return path.join(configuration.geminiDirectory ?? path.join(homedir(), ".gemini"), "antigravity-cli", "conversations");
@@ -36,6 +40,7 @@ async function nativePath(configuration: AntigravityRuntimeConfiguration, identi
 export async function readAntigravityNativeHistory(configuration: AntigravityRuntimeConfiguration,
   identity: AntigravityIdentity, signal?: AbortSignal): Promise<AntigravityHistory> {
   return readNative(configuration, identity, signal, { remainingBytes: MAXIMUM_HISTORY_BYTES, remainingRows: MAXIMUM_ROWS,
+    remainingExecutorBytes: MAXIMUM_EXECUTOR_BYTES, remainingExecutorRows: MAXIMUM_EXECUTOR_ROWS,
     remainingSessions: 32, ancestors: new Set() });
 }
 async function readNative(configuration: AntigravityRuntimeConfiguration, identity: AntigravityIdentity, signal: AbortSignal | undefined,
@@ -65,9 +70,40 @@ async function readNative(configuration: AntigravityRuntimeConfiguration, identi
       if (workspaces.length !== 1 || nativeWorkspace(workspaces[0]!) !== identity.cwd)
         throw new Error("antigravity_history_workspace_mismatch");
       const size = database.prepare("SELECT count(*) AS count, coalesce(sum(length(step_payload)), 0) AS bytes FROM steps").get() as { count: number; bytes: number };
-      if (size.count > budget.remainingRows || size.bytes > budget.remainingBytes) throw new Error("antigravity_history_capacity_exceeded");
+      if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'executor_metadata'").get())
+        throw new AntigravityError("antigravity_history_executor_format_unsupported");
+      const executionSize = database.prepare("SELECT count(*) AS count, coalesce(sum(length(data)), 0) AS bytes, coalesce(max(length(data)), 0) AS maximum FROM executor_metadata")
+        .get() as { count: number; bytes: number; maximum: number };
+      if (size.count > budget.remainingRows || size.bytes > budget.remainingBytes)
+        throw new Error("antigravity_history_capacity_exceeded");
       budget.remainingRows -= size.count; budget.remainingBytes -= size.bytes;
       const hash = createHash("sha256").update(row.data);
+      const executions = [];
+      if (executionSize.count <= budget.remainingExecutorRows && executionSize.bytes <= budget.remainingExecutorBytes &&
+          executionSize.maximum <= MAXIMUM_EXECUTOR_ROW_BYTES) {
+        budget.remainingExecutorRows -= executionSize.count; budget.remainingExecutorBytes -= executionSize.bytes;
+        for (const value of database.prepare("SELECT idx, data FROM executor_metadata ORDER BY idx").iterate()) {
+          signal?.throwIfAborted();
+          const execution = value as { idx: number; data: Uint8Array };
+          if (!Number.isSafeInteger(execution.idx) || execution.idx < 0 || !(execution.data instanceof Uint8Array))
+            throw new AntigravityError("antigravity_history_executor_format_unsupported");
+          const payload = decode(execution.data, ".exa.cortex_pb.ExecutorMetadata");
+          hash.update(JSON.stringify(["executor_metadata", execution.idx, execution.data.byteLength])).update(execution.data);
+          const executionId = string(payload.execution_id);
+          // An unset protobuf ID cannot match an execution. It contributes to
+          // revision identity, but never supplies terminal evidence.
+          if (!executionId) continue;
+          const receipt = antigravityNativeHistorySchema.shape.executions.element.safeParse({ executionId,
+            lastStepIndex: integer(payload.last_step_idx), terminationReason: integer(payload.termination_reason),
+            proceededWithAutoContinue: payload.proceeded_with_auto_continue === true });
+          if (!receipt.success) throw new AntigravityError("antigravity_history_executor_format_unsupported");
+          executions.push(receipt.data);
+        }
+      } else {
+        // Optional proof must not consume the step/child budget. Never acquire
+        // a partial receipt set: omitted rows could contradict cancellation.
+        hash.update(JSON.stringify(["executor_metadata_omitted_capacity", executionSize]));
+      }
       const steps: AntigravityNativeStep[] = [];
       for (const value of database.prepare("SELECT idx, step_type, status, has_subtrajectory, step_format, step_payload FROM steps ORDER BY idx").iterate()) {
         signal?.throwIfAborted();
@@ -89,7 +125,7 @@ async function readNative(configuration: AntigravityRuntimeConfiguration, identi
         steps.push(projected);
       }
       const parent = string(metadata.parent_conversation_id);
-      return antigravityNativeHistorySchema.parse({ steps, revision: hash.digest("hex"), ...(parent ? { parentSessionId: parent } : {}) });
+      return antigravityNativeHistorySchema.parse({ steps, executions, revision: hash.digest("hex"), ...(parent ? { parentSessionId: parent } : {}) });
     })();
     database.exec("ROLLBACK"); transactionOpen = false;
     // Child databases are read passively under the same aggregate bounds.
@@ -247,7 +283,7 @@ function childResults(value: Message): readonly ChildReference[] {
 }
 function childState(steps: readonly AntigravityNativeStep[]): "active" | "terminal" | "cancelled" | "unknown" {
   const active = new Set([1, 2, 8, 9, 11]), terminal = new Set([3, 4, 5, 6, 7, 12]);
-  const state = antigravityNativeActivity({ steps: [...steps], revision: "0".repeat(64) });
+  const state = antigravityNativeActivity({ steps: [...steps], executions: [], revision: "0".repeat(64) });
   if (state.active) return "active";
   if (state.unknown) return "unknown";
   if (steps.some(step => active.has(step.status) || step.subtrajectoryState === "active" || step.subagents?.some(child => child.state === "active"))) return "active";

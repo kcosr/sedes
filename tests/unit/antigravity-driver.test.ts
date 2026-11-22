@@ -22,7 +22,7 @@ function fixture(policy: BackendModelPolicy = { type: "catalog" }) {
     templateId: "template", executionEnvironmentId: "environment", kind: "antigravity_acp", label: "Antigravity", enabled: true, configurationRevision: 0 };
   const workspace: ValidatedWorkspace = { canonicalPath: identity.cwd, authorityRevision: 0, summary: { id: "workspace", environmentId: "environment",
     displayName: "Workspace", displayPath: identity.cwd, availability: "available", trustState: "trusted", revision: 0 } };
-  const native: AntigravityNativeHistory = { revision: "a".repeat(64), steps: [] };
+  const native: AntigravityNativeHistory = { revision: "a".repeat(64), steps: [], executions: [] };
   const attachment: AntigravityAttachment = { ...identity, handleId: "handle", generation: "generation", retainedAfterSequence: 0, throughSequence: 0,
     retainedOperationIds: [], pendingPermissions: [], createdByOperationId: "creation", setup: { initialize: { protocolVersion: 1, agentCapabilities: { loadSession: true } },
       session: { configOptions: [
@@ -257,6 +257,92 @@ describe("Antigravity driver authority and projection", () => {
     expect(f.port.request).toHaveBeenCalledOnce(); expect(handle.retirementBlocked).toBe(true);
     expect(f.port.acknowledgeOperation).not.toHaveBeenCalled();
   });
+  it("does not hold a native permission behind an unmaterialized Steer or replay that Steer", async () => {
+    const f = fixture();
+    f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text: "Ongoing input" } },
+      { index: 1, type: 15, status: 2, hasSubtrajectory: false, response: { text: "Streaming", thinking: "", stopReason: 0, toolCalls: [] } });
+    const handle = await f.driver.attach(f.attached);
+    const events: BackendConversationEvent[] = [];
+    const projection = await handle.establishProjection({ signal: new AbortController().signal });
+    const unsubscribe = projection.subscribeFromNext(event => events.push(event.event));
+    vi.mocked(f.port.request).mockImplementation(async ({ operationId, command }) => {
+      if (command.type === "steer") {
+        f.receipts.set(operationId, { status: "pending" });
+        setTimeout(() => f.emit({ kind: "permission", requestId: "permission", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId,
+          toolCall: { toolCallId: "native-tool", title: "Run command" }, options: [{ optionId: "deny", name: "Deny", kind: "reject_once" }] } }), 100);
+        return { status: "pending" };
+      }
+      expect(command).toEqual({ type: "permission", requestId: "permission", response: { outcome: { outcome: "cancelled" } } });
+      const outcome: AntigravityOutcome = { status: "completed", result: {} };
+      f.receipts.set(operationId, outcome); return outcome;
+    });
+    // The acceptance wait ends when permission arrives, before its full window.
+    const startedAt = Date.now();
+    await expect(handle.steer({ ...submit, target: { kind: "conversation" } })).rejects.toMatchObject({
+      category: "submission_unknown", crossedSubmissionBoundary: true, retryable: false,
+    });
+    expect(events).toContainEqual(expect.objectContaining({ type: "interaction_opened" }));
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    await expect(handle.respond({ applicationOperationId: "deny", interactionId: "permission", kind: "cancel" })).resolves.toBeUndefined();
+    expect(handle.retirementBlocked).toBe(true);
+    await expect(f.driver.reconcileSubmission({ ...f.attached, applicationOperationId: submit.applicationOperationId,
+      reconciliationToken: submit.reconciliationToken, steerTarget: { kind: "conversation" } })).resolves.toMatchObject({ status: "unresolved" });
+    expect(vi.mocked(f.port.request).mock.calls.filter(([request]) => request.command.type === "steer")).toHaveLength(1);
+    expect(f.port.acknowledgeOperation).not.toHaveBeenCalledWith({ handleId: "handle", operationId: submit.applicationOperationId }, expect.anything());
+    unsubscribe();
+  }, 2000);
+  it.each([false, true])("waits briefly for asynchronous exact Steer evidence (consumed: %s)", async consumed => {
+    const f = fixture();
+    f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text: "Ongoing input" } },
+      { index: 1, type: 15, status: 2, hasSubtrajectory: false, response: { text: "Streaming", thinking: "", stopReason: 0, toolCalls: [] } });
+    const handle = await f.driver.attach(f.attached);
+    vi.mocked(f.port.request).mockImplementationOnce(async ({ command }) => {
+      if (command.type !== "steer" || command.prompt[0]?.type !== "text") throw new Error("Expected steer");
+      const text = command.prompt[0].text;
+      setTimeout(() => {
+        f.native.steps.push({ index: 2, type: 14, status: 3, hasSubtrajectory: false, user: { text }, executionId: "steered" });
+        if (consumed) f.native.steps.push({ index: 3, type: 15, status: 2, hasSubtrajectory: false, executionId: "steered",
+          response: { text: "Following the steer", thinking: "", stopReason: 0, toolCalls: [] } });
+      }, 100);
+      return { status: "pending" };
+    });
+    await expect(handle.steer({ ...submit, target: { kind: "conversation" } })).resolves.toMatchObject({
+      status: consumed ? "accepted" : "pending_materialization", completionCorrelation: submit.applicationOperationId,
+    });
+    expect(f.port.request).toHaveBeenCalledOnce();
+    expect(f.port.acknowledgeOperation).not.toHaveBeenCalled();
+  });
+  it.each([false, true])("prefers fresh exact Steer evidence over a pending permission mirror (consumed: %s)", async consumed => {
+    const f = fixture();
+    vi.mocked(f.port.attach).mockResolvedValue({ ...f.attachment, pendingPermissions: [{ requestId: "permission",
+      openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId,
+        toolCall: { toolCallId: "tool", title: "Pending permission" }, options: [{ optionId: "deny", name: "Deny", kind: "reject_once" }] } }] });
+    const handle = await f.driver.attach(f.attached);
+    vi.mocked(f.port.request).mockImplementationOnce(async ({ command }) => {
+      if (command.type !== "steer" || command.prompt[0]?.type !== "text") throw new Error("Expected steer");
+      f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, executionId: "steered", user: { text: command.prompt[0].text } });
+      if (consumed) f.native.steps.push({ index: 1, type: 15, status: 2, hasSubtrajectory: false, executionId: "steered",
+        response: { text: "Following the steer", thinking: "", stopReason: 0, toolCalls: [] } });
+      return { status: "pending" };
+    });
+    await expect(handle.steer({ ...submit, target: { kind: "conversation" } })).resolves.toMatchObject({
+      status: consumed ? "accepted" : "pending_materialization", completionCorrelation: submit.applicationOperationId,
+    });
+    expect(f.port.request).toHaveBeenCalledOnce();
+    expect(f.port.acknowledgeOperation).not.toHaveBeenCalled();
+  });
+  it("ends the bounded Steer acceptance wait as unknown without replay when evidence never arrives", async () => {
+    const f = fixture(), handle = await f.driver.attach(f.attached);
+    vi.mocked(f.port.request).mockResolvedValueOnce({ status: "pending" });
+    const startedAt = Date.now();
+    await expect(handle.steer({ ...submit, target: { kind: "conversation" } })).rejects.toMatchObject({
+      category: "submission_unknown", crossedSubmissionBoundary: true, retryable: false,
+    });
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(900);
+    expect(f.port.request).toHaveBeenCalledOnce();
+    expect(f.port.acknowledgeOperation).not.toHaveBeenCalled();
+    expect(handle.retirementBlocked).toBe(true);
+  }, 2500);
   it("keeps a dispatched control unknown when its outcome lookup fails", async () => {
     const f = fixture(), handle = await f.driver.attach(f.attached);
     vi.mocked(f.port.request).mockResolvedValueOnce({ status: "pending" });
@@ -482,7 +568,7 @@ describe("Antigravity driver authority and projection", () => {
   });
   it("restores pending permissions independently of replay and resolves them when Stop cancels the reverse request", async () => {
     const f = fixture();
-    const pending = { requestId: "permission", request: { sessionId: identity.sessionId, toolCall: { toolCallId: "native-tool", title: "Run command" },
+    const pending = { requestId: "permission", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId, toolCall: { toolCallId: "native-tool", title: "Run command" },
       options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" as const }, { optionId: "deny", name: "Deny", kind: "reject_once" as const }] } };
     vi.mocked(f.port.attach).mockResolvedValue({ ...f.attachment, pendingPermissions: [pending], retainedAfterSequence: 9, throughSequence: 9 });
     const handle = await f.driver.attach(f.attached);
@@ -495,5 +581,50 @@ describe("Antigravity driver authority and projection", () => {
     await vi.waitFor(() => expect(events).toContainEqual({ type: "interaction_resolved", backendInteractionId: "permission" }));
     expect(events.filter(event => event.type === "interaction_resolved")).toHaveLength(1);
     stop();
+  });
+  it("preserves the exact permission identity through projection replacement and retained reconnect", async () => {
+    const f = fixture();
+    const pending = { requestId: "permission", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId,
+      toolCall: { toolCallId: "native-tool", title: "Run command" }, options: [{ optionId: "deny", name: "Deny", kind: "reject_once" as const }] } };
+    const attachment = { ...f.attachment, pendingPermissions: [pending] };
+    vi.mocked(f.port.attach).mockResolvedValue(attachment); vi.mocked(f.port.attachExisting).mockResolvedValue(attachment);
+    const handle = await f.driver.attach(f.attached), events: BackendConversationEvent[] = [];
+    const first = await handle.establishProjection({ signal: new AbortController().signal });
+    const unsubscribeFirst = first.subscribeFromNext(event => events.push(event.event));
+    const original = events.find(event => event.type === "interaction_opened");
+    expect(original).toMatchObject({ interaction: { backendInteractionId: pending.requestId, openedAt: pending.openedAt } });
+    const replacement = await handle.establishProjection({ signal: new AbortController().signal });
+    const unsubscribeReplacement = replacement.subscribeFromNext(event => events.push(event.event));
+    vi.mocked(f.port.observe).mockRejectedValueOnce(new AntigravityError("carrier_lost", "not_sent"));
+    await vi.waitFor(() => expect(f.port.attachExisting).toHaveBeenCalled());
+    expect(events.filter(event => event.type === "interaction_opened").length).toBeGreaterThan(2);
+    for (const event of events.filter(event => event.type === "interaction_opened")) expect(event).toEqual(original);
+    expect(events.some(event => event.type === "interaction_resolved")).toBe(false); expect(f.port.request).not.toHaveBeenCalled();
+    unsubscribeFirst(); unsubscribeReplacement();
+  });
+  it.each([
+    // Application composition refines running + permission into waiting_for_approval.
+    { pending: true, terminal: false, closed: false, expected: "running" },
+    { pending: false, terminal: false, closed: false, expected: "reconciling" },
+    { pending: true, terminal: true, closed: false, expected: "idle" },
+    { pending: true, terminal: false, closed: true, expected: "disconnected" },
+  ] as const)("cold attach uses exact permission authority without inventing foreground progress: $expected", async ({ pending, terminal, closed, expected }) => {
+    const f = fixture();
+    f.native.steps.push({ index: 0, type: 14, status: 3, hasSubtrajectory: false, user: { text: "Existing native input" } },
+      { index: 1, type: 15, status: terminal ? 3 : 2, hasSubtrajectory: false,
+        response: { text: "Existing native response", thinking: "", stopReason: terminal ? 2 : 0, toolCalls: [] } });
+    vi.mocked(f.port.attach).mockResolvedValue({ ...f.attachment, pendingPermissions: pending ? [{
+      requestId: "permission", openedAt: "2026-11-22T00:00:00.000Z", request: { sessionId: identity.sessionId,
+        toolCall: { toolCallId: "native-tool", title: "Run command" },
+        options: [{ optionId: "deny", name: "Deny", kind: "reject_once" }] },
+    }] : [] });
+    if (closed) vi.mocked(f.port.observe).mockResolvedValue({ events: [], throughSequence: 0, retainedAfterSequence: 0, closed: true });
+    const handle = await f.driver.attach(f.attached);
+    await vi.waitFor(async () => {
+      const projection = await handle.establishProjection({ signal: new AbortController().signal });
+      expect(projection.snapshot.runState).toBe(expected);
+      expect(projection.snapshot.turnsById["input:0"]?.status).toBe(terminal ? "completed" : "in_progress");
+    });
+    expect(f.port.request).not.toHaveBeenCalled();
   });
 });

@@ -70,7 +70,7 @@ export const antigravityHostCommandSchema = z.discriminatedUnion("action", [
 export type AntigravityHostCommand = z.infer<typeof antigravityHostCommandSchema>;
 export type AntigravityHostCommandInput = AntigravityHostCommand extends infer Command
   ? Command extends AntigravityHostCommand ? Omit<Command, "controllerEpoch" | "serviceIncarnation"> : never : never;
-const capability = { capabilityId: "antigravity_runtime", majorVersion: 1 } as const;
+const capability = { capabilityId: "antigravity_runtime", majorVersion: 2 } as const;
 export const antigravityExecuteOperation = { ...capability, operation: "runtime.execute", requestSchema: sidecarRuntimeBodySchema,
   responseSchema: sidecarRuntimeBodySchema, lane: "operation", maximumDeadlineMilliseconds: 120_000,
 } satisfies SidecarOperationDefinition<z.infer<typeof sidecarRuntimeBodySchema>, z.infer<typeof sidecarRuntimeBodySchema>>;
@@ -95,11 +95,11 @@ export const antigravityHostResponseSchema = z.discriminatedUnion("status", [
 export const antigravityAttachmentSchema = antigravityIdentitySchema.extend({ handleId: id, generation: id, setup: antigravitySetupSchema,
   createdByOperationId: id.optional(),
   throughSequence: position, retainedAfterSequence: position, retainedOperationIds: z.array(id).max(640),
-  pendingPermissions: z.array(z.strictObject({ requestId: id, request: acp<RequestPermissionRequest>(decodeRequestPermissionRequest) })).max(64) });
+  pendingPermissions: z.array(z.strictObject({ requestId: id, openedAt: z.iso.datetime(), request: acp<RequestPermissionRequest>(decodeRequestPermissionRequest) })).max(64) });
 const eventPosition = { sequence: position };
 export const antigravityEventSchema = z.discriminatedUnion("kind", [
   z.strictObject({ ...eventPosition, kind: z.literal("update"), notification: acp<SessionNotification>(decodeSessionNotification) }),
-  z.strictObject({ ...eventPosition, kind: z.literal("permission"), requestId: id, request: acp<RequestPermissionRequest>(decodeRequestPermissionRequest) }),
+  z.strictObject({ ...eventPosition, kind: z.literal("permission"), requestId: id, openedAt: z.iso.datetime(), request: acp<RequestPermissionRequest>(decodeRequestPermissionRequest) }),
   z.strictObject({ ...eventPosition, kind: z.literal("permission_resolved"), requestId: id }),
   z.strictObject({ ...eventPosition, kind: z.literal("operation"), operationId: id, outcome: antigravityOutcomeSchema }),
   z.strictObject({ ...eventPosition, kind: z.literal("failure"), failure: antigravityFailureSchema }),

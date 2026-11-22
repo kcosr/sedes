@@ -13,6 +13,7 @@ import { AntigravityHostRegistry } from "../../src/server/backends/antigravity/h
 import { AntigravityRemotePort } from "../../src/server/backends/antigravity/sidecar/remote-port.js";
 import { registerAntigravityHost } from "../../src/server/backends/antigravity/sidecar/register-host.js";
 import { AntigravityAcpConnection } from "../../src/server/backends/antigravity/acp-connection.js";
+import { antigravityHistorySchema, antigravityRuntimeCapability } from "../../src/server/backends/antigravity/sidecar/wire.js";
 import type { AntigravityRuntimeConfiguration } from "../../src/server/backends/antigravity/port.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" };
@@ -32,7 +33,7 @@ async function fixture() {
   const launched = vi.fn();
   const createHost = vi.fn((configuration: AntigravityRuntimeConfiguration) => {
     const host = new AntigravityHost({ configuration, channels, environment: process.env, observationWaitMs: 5,
-      readHistory: async identity => ({ ...identity, native: { steps: [], revision: "a".repeat(64) } }),
+      readHistory: async identity => ({ ...identity, native: { steps: [], executions: [], revision: "a".repeat(64) } }),
       launch: async input => {
         launched(); const peer = await AntigravityAcpConnection.open(input); const close = peer.close.bind(peer);
         vi.spyOn(peer, "close").mockImplementation(async () => { if (failCleanup) throw new Error("cleanup_uncertain"); await close(); }); return peer;
@@ -66,6 +67,12 @@ function proxy(f: Awaited<ReturnType<typeof fixture>>, getLease: () => SidecarRu
   const port = new AntigravityRemotePort({ configuration: f.configuration, sidecarRuntime: runtime }); cleanup.push(() => port.close()); return { port, runtime };
 }
 describe("Antigravity persistent sidecar", () => {
+  it("requires executor evidence inventory in its versioned private history contract", () => {
+    expect(antigravityRuntimeCapability.majorVersion).toBe(2);
+    const history = { sessionId: "session", cwd: "/workspace", native: { steps: [], revision: "a".repeat(64) } };
+    expect(antigravityHistorySchema.safeParse(history).success).toBe(false);
+    expect(antigravityHistorySchema.safeParse({ ...history, native: { ...history.native, executions: [] } }).success).toBe(true);
+  });
   it("publishes normalized provider ownership through service status", async () => {
     const f = await fixture(), connected = await attachment(f);
     const host = await f.hosts.ensure(f.configuration, connected.epoch);

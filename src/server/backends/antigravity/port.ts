@@ -43,7 +43,7 @@ export type AntigravityOutcome =
   | { readonly status: "failed"; readonly failure: AntigravityFailure };
 export type AntigravityEvent = { readonly sequence: number } & (
   | { readonly kind: "update"; readonly notification: SessionNotification }
-  | { readonly kind: "permission"; readonly requestId: string; readonly request: RequestPermissionRequest }
+  | { readonly kind: "permission"; readonly requestId: string; readonly openedAt: string; readonly request: RequestPermissionRequest }
   | { readonly kind: "permission_resolved"; readonly requestId: string }
   | { readonly kind: "operation"; readonly operationId: string; readonly outcome: AntigravityOutcome }
   | { readonly kind: "failure"; readonly failure: AntigravityFailure });
@@ -55,7 +55,7 @@ export interface AntigravityAttachment extends AntigravityIdentity {
   readonly throughSequence: number;
   readonly retainedAfterSequence: number;
   readonly retainedOperationIds: readonly string[];
-  readonly pendingPermissions: readonly { readonly requestId: string; readonly request: RequestPermissionRequest }[];
+  readonly pendingPermissions: readonly { readonly requestId: string; readonly openedAt: string; readonly request: RequestPermissionRequest }[];
 }
 export interface AntigravityObservation {
   readonly events: readonly AntigravityEvent[];

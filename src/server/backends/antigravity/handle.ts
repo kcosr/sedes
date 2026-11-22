@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import type { RequestPermissionRequest, SessionConfigOption } from "@agentclientprotocol/sdk";
+import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { backendConversationEventSchema, backendConversationSnapshotSchema, type BackendConversationEvent, type BackendConversationSnapshot,
   type DriverInteraction, type SequencedBackendEvent } from "../../../shared/protocol/backend.js";
 import { boundDisplayText, boundText } from "../../conversations/payload-policy.js";
@@ -27,7 +27,7 @@ export class AntigravityHandle implements ConversationHandle {
   readonly #rawListeners = new Set<(event: BackendConversationEvent) => void>();
   readonly #listeners = new Set<BackendEventListener>();
   readonly #journal: SequencedBackendEvent[] = [];
-  readonly #permissions = new Map<string, RequestPermissionRequest>();
+  readonly #permissions = new Map<string, AntigravityAttachment["pendingPermissions"][number]>();
   readonly #receipts = new Map<string, AntigravityOutcome>();
   readonly #acknowledgedOperations = new Set<string>();
   readonly #receiptWaiters = new Set<() => void>();
@@ -73,8 +73,8 @@ export class AntigravityHandle implements ConversationHandle {
     // Control is independent of transcript acquisition and revoked on owner loss.
     this.attached.onControlReady?.({ generation: this.attachment.generation, lifetime: this.#control.signal,
       interrupt: input => this.interrupt(input), reconcileInterrupt: input => this.reconcileInterrupt(input) });
+    for (const pending of this.attachment.pendingPermissions) this.#permissions.set(pending.requestId, pending);
     await this.#refresh(false);
-    for (const pending of this.attachment.pendingPermissions) this.#permissions.set(pending.requestId, pending.request);
     for (const operationId of this.attachment.retainedOperationIds) this.#receipts.set(operationId,
       await this.driver.input.port.outcome({ handleId: this.attachment.handleId, operationId }, this.#lifetime.signal)
         .catch(error => { throw antigravityReadError(error, this.#lifetime.signal); }));
@@ -95,6 +95,7 @@ export class AntigravityHandle implements ConversationHandle {
     }
     for (const listener of this.#rawListeners) { try { listener(validated); } catch { /* Observers cannot change provider authority. */ } }
     for (const listener of this.#listeners) { try { listener(sequenced); } catch { /* Independent observer boundary. */ } }
+    if (event.type === "interaction_opened") for (const wake of this.#receiptWaiters) wake();
   }
   async #refresh(emit: boolean): Promise<void> {
     const previousUsage = this.#projection?.usage;
@@ -109,6 +110,8 @@ export class AntigravityHandle implements ConversationHandle {
     const projection = projectAntigravityHistory(history.native, this.scope);
     if (this.#contextUsage) projection.usage.context = this.#contextUsage;
     if (projection.snapshot.runState === "reconciling" && this.#streaming) projection.snapshot.runState = "running";
+    if (this.#permissions.size && (projection.snapshot.runState === "running" || projection.snapshot.runState === "reconciling"))
+      projection.snapshot.runState = "running";
     if (this.#disconnected) projection.snapshot.runState = "disconnected";
     if (this.#pendingSubmit && projection.snapshot.runState === "idle" && !Object.values(projection.snapshot.turnsById).some(
       turn => turn.completionCorrelations?.includes(this.#pendingSubmit!))) projection.snapshot.runState = "starting";
@@ -178,8 +181,8 @@ export class AntigravityHandle implements ConversationHandle {
             this.#emit({ type: "interaction_resolved", backendInteractionId: id });
           this.#permissions.clear();
           for (const pending of retained.pendingPermissions) {
-            this.#permissions.set(pending.requestId, pending.request);
-            this.#emit({ type: "interaction_opened", interaction: permissionInteraction(pending.requestId, pending.request) });
+            this.#permissions.set(pending.requestId, pending);
+            this.#emit({ type: "interaction_opened", interaction: permissionInteraction(pending) });
           }
           this.#disconnected = false;
         } catch { /* Keep ownership unknown until exact retained lookup succeeds. */ }
@@ -189,8 +192,8 @@ export class AntigravityHandle implements ConversationHandle {
   }
   #accept(event: AntigravityEvent): void {
     if (event.kind === "permission") {
-      this.#permissions.set(event.requestId, event.request);
-      this.#emit({ type: "interaction_opened", interaction: permissionInteraction(event.requestId, event.request) });
+      this.#permissions.set(event.requestId, event);
+      this.#emit({ type: "interaction_opened", interaction: permissionInteraction(event) });
     } else if (event.kind === "permission_resolved") {
       if (this.#permissions.delete(event.requestId)) this.#emit({ type: "interaction_resolved", backendInteractionId: event.requestId });
     } else if (event.kind === "operation") {
@@ -224,7 +227,7 @@ export class AntigravityHandle implements ConversationHandle {
             event: { type: "resnapshot_required", reason: "buffer_overflow" } });
           else for (const event of this.#journal) if (event.handleSequence > sequence) listener(event);
           this.#listeners.add(listener);
-          for (const [id, request] of this.#permissions) this.#emit({ type: "interaction_opened", interaction: permissionInteraction(id, request) });
+          for (const pending of this.#permissions.values()) this.#emit({ type: "interaction_opened", interaction: permissionInteraction(pending) });
           return () => { this.#listeners.delete(listener); };
         } };
     });
@@ -434,7 +437,10 @@ export class AntigravityHandle implements ConversationHandle {
     const outcome = await this.#request(input.applicationOperationId, { type: "steer", prompt });
     if (outcome.status === "failed") { await this.#ackReceipt(input.applicationOperationId).catch(() => undefined); throw outcomeError(outcome); }
     return this.#afterSubmissionDispatch(async (): Promise<SteerTurnResult> => {
-      const deadline = Date.now() + 30_000;
+      // Give asynchronous native enqueue a short evidence window, but release
+      // the actor mailbox immediately when its provider needs a permission.
+      // Host dispatch alone never proves native acceptance or authorizes replay.
+      const deadline = Date.now() + 1000;
       while (Date.now() < deadline) {
         await this.#serialize(() => this.#refresh(true));
         const turn = Object.values(this.#projection.snapshot.turnsById).find(value => value.completionCorrelations?.includes(input.applicationOperationId));
@@ -443,7 +449,8 @@ export class AntigravityHandle implements ConversationHandle {
         if (staged) return { status: "pending_materialization", reconciliationToken: input.reconciliationToken, completionCorrelation: input.applicationOperationId };
         const receipt = this.#receipts.get(input.applicationOperationId);
         if (receipt?.status === "failed") { await this.#ackReceipt(input.applicationOperationId); throw outcomeError(receipt); }
-        await delay(50, undefined, { signal: this.#lifetime.signal });
+        if (this.#permissions.size) throw unknown();
+        await this.#waitForReceipt(Math.min(50, deadline - Date.now()));
       }
       throw unknown();
     });
@@ -476,7 +483,7 @@ export class AntigravityHandle implements ConversationHandle {
   }
   async reconcileAction(input: RegisteredBackendActionInput) { return this.#reconcileReceipt(input.applicationOperationId, "set_config"); }
   async respond(input: InteractionResponseInput): Promise<void> {
-    const request = this.#permissions.get(input.interactionId);
+    const request = this.#permissions.get(input.interactionId)?.request;
     if (!request) throw unsupported("The Antigravity interaction is no longer pending.");
     const selected = input.kind === "decision" ? input.selectedActionId : input.kind === "choice" && input.selectedOptionIds.length === 1 ? input.selectedOptionIds[0] : undefined;
     if (input.kind !== "cancel" && !request.options.some(option => option.optionId === selected)) throw unsupported("The selected interaction response is invalid.");
@@ -510,9 +517,9 @@ export class AntigravityHandle implements ConversationHandle {
   }
 }
 
-function permissionInteraction(id: string, request: RequestPermissionRequest): DriverInteraction {
+function permissionInteraction({ requestId: id, request, openedAt }: AntigravityAttachment["pendingPermissions"][number]): DriverInteraction {
   const base = { backendInteractionId: id, sourceLabel: boundDisplayText("Antigravity"), title: boundDisplayText(request.toolCall.title || "Permission required"),
-    openedAt: new Date().toISOString(), secret: false, destructive: true, cancellable: true };
+    openedAt, secret: false, destructive: true, cancellable: true };
   if (request.toolCall.toolCallId.startsWith("interaction_")) return { ...base, kind: "choice", destructive: false, multiple: false,
     options: request.options.map(option => ({ backendOptionId: option.optionId, label: boundDisplayText(option.name) })) };
   return { ...base, kind: "decision", message: boundText(request.toolCall.title || "Antigravity requests permission to continue."),

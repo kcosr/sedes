@@ -16,7 +16,7 @@ import { AntigravityError, type AntigravityPort, type AntigravityRuntimeConfigur
 
 export interface AntigravityHostAuthority { assertCurrent(): void; assertAdmission(): void; }
 const localAuthority: AntigravityHostAuthority = { assertCurrent() {}, assertAdmission() {} };
-type Permission = { request: RequestPermissionRequest; resolve(value: RequestPermissionResponse): void };
+type Permission = { request: RequestPermissionRequest; openedAt: string; resolve(value: RequestPermissionResponse): void };
 type SetterPostcondition = { kind: "config"; id: string; valueFingerprint: string; after: number } | { kind: "mode"; valueFingerprint: string; after: number };
 type Operation = { fingerprint: string; outcome: AntigravityOutcome; postcondition?: SetterPostcondition };
 type CancellationResult = { settledOperationIds: readonly string[]; nativeRevision: string };
@@ -321,7 +321,7 @@ export class AntigravityHost implements AntigravityPort {
     return { ...session.identity, handleId: session.handleId, generation: session.generation, setup: session.setup,
       ...(createdByOperationId ? { createdByOperationId } : {}),
       throughSequence: session.sequence, retainedAfterSequence: session.retainedAfter, retainedOperationIds: [...session.operations.keys()],
-      pendingPermissions: [...session.permissions].map(([requestId, permission]) => ({ requestId, request: permission.request })) };
+      pendingPermissions: [...session.permissions].map(([requestId, permission]) => ({ requestId, openedAt: permission.openedAt, request: permission.request })) };
   }
   async request(input: Parameters<AntigravityPort["request"]>[0], signal?: AbortSignal, authority = localAuthority): Promise<AntigravityOutcome> {
     this.#current(authority, signal);
@@ -452,7 +452,7 @@ export class AntigravityHost implements AntigravityPort {
   }
   #permission(session: Session, request: RequestPermissionRequest, signal?: AbortSignal): Promise<RequestPermissionResponse> {
     if (session.permissions.size >= 64) return Promise.resolve({ outcome: { outcome: "cancelled" } });
-    const requestId = randomUUID();
+    const requestId = randomUUID(), openedAt = new Date().toISOString();
     return new Promise(resolve => {
       const finish = (value: RequestPermissionResponse) => {
         if (session.permissions.get(requestId)?.resolve !== finish) return;
@@ -460,7 +460,7 @@ export class AntigravityHost implements AntigravityPort {
         this.#event(session, { kind: "permission_resolved", requestId }); resolve(value);
       };
       const abort = () => finish({ outcome: { outcome: "cancelled" } });
-      session.permissions.set(requestId, { request, resolve: finish }); this.#event(session, { kind: "permission", requestId, request });
+      session.permissions.set(requestId, { request, openedAt, resolve: finish }); this.#event(session, { kind: "permission", requestId, openedAt, request });
       signal?.addEventListener("abort", abort, { once: true }); if (signal?.aborted) abort();
     });
   }

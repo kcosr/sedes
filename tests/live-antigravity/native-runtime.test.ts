@@ -2,6 +2,44 @@ import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { command, localFixture, observer, untilNative, waitOutcome, quiescent } from "./qualification.js";
 import { antigravityNativeActivity } from "../../src/server/backends/antigravity/host/native-activity.js";
+import { projectAntigravityHistory } from "../../src/server/backends/antigravity/history.js";
+
+it("recovers a cancelled permission from durable executor evidence without a final assistant response", async () => {
+  const f = await localFixture();
+  try {
+    await command(f.host, f.attachment.handleId, { type: "set_mode", modeId: "default" });
+    const operationId = randomUUID();
+    await f.host.request({ handleId: f.attachment.handleId, operationId, command: { type: "prompt", prompt: [{ type: "text",
+      text: "This is a bounded permission cancellation test. Use run_command exactly once to run printf SEDES_PERMISSION_PROBE in the current temporary directory. Do not use any other tools. Stop if permission is denied." }] } });
+    let afterSequence = f.attachment.retainedAfterSequence;
+    let cancelledPermission = false;
+    const deadline = Date.now() + 90_000;
+    while (!cancelledPermission && Date.now() < deadline) {
+      const observed = await f.host.observe({ handleId: f.attachment.handleId, afterSequence });
+      afterSequence = observed.throughSequence;
+      for (const event of observed.events) if (event.kind === "permission") {
+        await command(f.host, f.attachment.handleId, { type: "permission", requestId: event.requestId,
+          response: { outcome: { outcome: "cancelled" } } });
+        cancelledPermission = true;
+      }
+      await f.host.acknowledge({ handleId: f.attachment.handleId, throughSequence: afterSequence });
+    }
+    expect(cancelledPermission).toBe(true);
+    await waitOutcome(f.host, f.attachment.handleId, operationId);
+    const history = await f.host.readHistory(f.identity);
+    expect(history.native.executions.some(execution => execution.terminationReason === 2)).toBe(true);
+    const projection = projectAntigravityHistory(history.native, { key: Buffer.alloc(32, 1), binding: {
+      version: 1, sessionId: f.identity.sessionId, canonicalWorkspacePath: f.cwd,
+      tenantId: f.configuration.tenantId, principalId: f.configuration.principalId,
+      backendInstanceId: f.configuration.backendInstanceId, executionEnvironmentId: f.configuration.executionEnvironmentId,
+      connectionProfileId: "live-qualification", nativeNamespaceKey: "live-qualification",
+    } });
+    expect(projection.snapshot.runState).toBe("idle");
+    expect(Object.values(projection.snapshot.turnsById).at(-1)?.status).toBe("interrupted");
+    expect(quiescent(history)).toBe(true);
+    expect(history.native.steps.filter(step => step.command).every(step => step.command?.output === "")).toBe(true);
+  } finally { await f.close(); }
+});
 
 it("qualifies stock streaming, exact retained steering cancellation, and passive native rereads", async () => {
   const f = await localFixture();

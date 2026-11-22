@@ -51,6 +51,11 @@ idempotency key. Uncertainty remains unresolved until exact evidence exists.
 
 An acknowledged event is not an acknowledged permission response. Attachments
 carry the live pending-permission inventory independently of event replay.
+Each request keeps its host-assigned opening timestamp across projection
+replacement and retained reconnect. An exact pending permission also supplies
+active foreground authority on a cold attachment, allowing application
+composition to show the approval state without requiring a fresh text chunk.
+It does not make an already completed foreground turn active.
 Acknowledged mutation outcomes remain readable while the host is retained,
 without keeping it busy solely for an already-applied receipt.
 
@@ -89,11 +94,33 @@ connection and an explicit read transaction. Its source-ownership audit admits
 other database importers, and native SQLite addons remain forbidden in the
 sidecar bundle.
 
-Native step indices provide stable timeline identities. Antigravity writes
+Native step indices and fixed semantic slots provide stable timeline identities
+and item ordering even when an earlier step acquires optional reasoning or text.
+Ordering arithmetic rejects values outside the safe integer range. Antigravity writes
 incremental output to SQLite during streaming, so live and historical views
 share one projection. Prompt completion requires terminal native response or
 error evidence. A token-usage update, quiet interval, completed tool, or empty
 activity inventory does not prove turn completion.
+
+The reader also acquires bounded `executor_metadata` rows in the same SQLite
+snapshot and includes acquired bytes in the native revision. Executor evidence
+has a separate aggregate allowance of 100,000 rows and 32 MiB across root and
+child sessions, with at most 8 MiB per row; it never reduces the 100,000-step,
+96 MiB history allowance. If a complete session's receipt set exceeds the
+remaining allowance, all of that session's receipts are omitted and a bounded
+capacity marker enters the revision. Partial receipt sets cannot prove
+cancellation because an omitted row could contradict them. ID-less protobuf
+defaults are hashed but supply no evidence. Malformed acquired records and a
+missing executor table are unsupported native formats, not legacy fallbacks.
+Only execution ID,
+last step index, termination reason, and auto-continue disposition are decoded;
+embedded native configuration and telemetry stay unprojected. A durable
+`USER_CANCELED` executor receipt can finish a turn as interrupted without a final
+assistant response when it matches that turn's exact execution and last native
+step, all steps in that execution are terminal, and no auto-continue or conflicting
+receipt exists. A cancelled permission/tool step alone is insufficient. Remote
+history carries this required evidence through `antigravity_runtime` capability
+2; older peers fail capability negotiation rather than silently dropping it.
 
 Typed system-message receipts can begin autonomous continuation turns without
 an application submission. They never consume a pending user operation merely
@@ -103,7 +130,11 @@ govern background quiescence; finishing a child-launch tool is insufficient.
 Conversation-scoped steering uses concurrent ACP prompt requests. A native user
 row can be staged without consumption. Sedes requires native execution/start
 evidence before publishing it, and carries each signed operation correlation
-when several consumed inputs share one response. Stop fences new admission and
+when several consumed inputs share one response. A short, one-second acceptance
+window accommodates asynchronous native enqueue, but a pending permission wakes
+and ends that wait immediately so the actor can publish and answer it. Missing
+proof remains unconfirmed without replay; host dispatch is not acceptance.
+Stop fences new admission and
 drains its captured prompt set with repeated native cancellation until native
 quiescence is proved. Only then can a retained cancelled outcome plus a fresh
 native read return an unconsumed input as not sent. ACP callback ordering and

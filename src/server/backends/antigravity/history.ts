@@ -26,13 +26,34 @@ export function antigravityStepStatus(status: number): BackendItem["status"] {
   return "streaming";
 }
 export interface AntigravityProjection { snapshot: BackendConversationSnapshot; usage: UsageSnapshot; stepTurns: ReadonlyMap<number, string> }
+// A native step can acquire optional reasoning/text after later items have
+// appeared. Reserve immutable slots so that growth never renumbers an item.
+const itemSlots = { continuation: 0, user: 1, thinking: 2, assistant: 3, command: 4, tool: 4, error: 5 } as const;
+function cancelledExecutionHeads(native: AntigravityNativeHistory): ReadonlyMap<string, number> {
+  const heads = new Map<string, AntigravityNativeStep>(), unsettled = new Set<string>();
+  for (const step of native.steps) if (step.executionId) {
+    heads.set(step.executionId, step);
+    if (![3, 4, 5, 6, 7, 12].includes(step.status)) unsettled.add(step.executionId);
+  }
+  const receipts = new Map<string, AntigravityNativeHistory["executions"][number] | null>();
+  for (const receipt of native.executions) receipts.set(receipt.executionId, receipts.has(receipt.executionId) ? null : receipt);
+  const cancelled = new Map<string, number>();
+  for (const [id, receipt] of receipts) {
+    // USER_CANCELED is an executor outcome. A cancelled tool or a quiet native
+    // activity inventory alone cannot terminate the enclosing turn.
+    if (receipt?.terminationReason === 2 && !receipt.proceededWithAutoContinue &&
+        heads.get(id)?.index === receipt.lastStepIndex && !unsettled.has(id)) cancelled.set(id, receipt.lastStepIndex);
+  }
+  return cancelled;
+}
 export function projectAntigravityHistory(native: AntigravityNativeHistory, scope: AntigravitySubmissionScope): AntigravityProjection {
   const snapshot: BackendConversationSnapshot = { orderedBackendTurnIds: [], turnsById: {}, itemsById: {}, runState: "idle" };
   const stepTurns = new Map<number, string>();
   let turn: BackendTurn | undefined;
-  let sourceOrder = 0;
   let lastResponse: AntigravityNativeStep | undefined;
+  let lastStep: AntigravityNativeStep | undefined;
   let executionId: string | undefined;
+  const cancelled = cancelledExecutionHeads(native);
   const settle = () => {
     if (!turn) return;
     const last = lastResponse;
@@ -45,11 +66,18 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
       turn.status = "completed"; turn.endedBy = "agent_settled";
     }
     if (turn.status !== "in_progress" && last?.completedAt) turn.completedAt = last.completedAt;
+    else if (turn.status === "in_progress" && executionId && lastStep?.executionId === executionId &&
+        cancelled.get(executionId) === lastStep.index) {
+      turn.status = "interrupted"; turn.endedBy = "interrupted";
+      if (lastStep.completedAt) turn.completedAt = lastStep.completedAt;
+    }
   };
-  const add = (step: AntigravityNativeStep, suffix: string, part: Omit<BackendItem, "backendItemId" | "backendTurnId" | "status" | "sourceOrder">, status = antigravityStepStatus(step.status)) => {
+  const add = (step: AntigravityNativeStep, suffix: keyof typeof itemSlots, part: Omit<BackendItem, "backendItemId" | "backendTurnId" | "status" | "sourceOrder">, status = antigravityStepStatus(step.status)) => {
     if (!turn) return;
+    const sourceOrder = step.index * 8 + itemSlots[suffix];
+    if (!Number.isSafeInteger(sourceOrder) || sourceOrder < 0) throw new Error("antigravity_item_order_invalid");
     const item = { ...part, backendItemId: `step:${step.index}:${suffix}`, backendTurnId: turn.backendTurnId, status,
-      sourceOrder: sourceOrder++, ...(step.createdAt ? { startedAt: step.createdAt } : {}), ...(step.completedAt ? { completedAt: step.completedAt } : {}) } as BackendItem;
+      sourceOrder, ...(step.createdAt ? { startedAt: step.createdAt } : {}), ...(step.completedAt ? { completedAt: step.completedAt } : {}) } as BackendItem;
     snapshot.itemsById[item.backendItemId] = item; turn.orderedBackendItemIds.push(item.backendItemId);
   };
   for (const step of native.steps) {
@@ -105,6 +133,7 @@ export function projectAntigravityHistory(native: AntigravityNativeHistory, scop
         arguments: boundValue(args), ...(step.tool.result !== undefined ? { result: { content: [{ kind: "text", value: boundText(step.tool.result) }], isError: status === "failed" } } : {}) } as BackendItem);
     }
     if (step.error) { lastResponse = step; add(step, "error", { semanticKind: "notice", tone: "error", text: boundText(step.error) } as BackendItem, "failed"); }
+    lastStep = step;
   }
   settle();
   const active = Object.values(snapshot.turnsById).filter(value => value.status === "in_progress");

@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { readAntigravityNativeHistory } from "../../src/server/backends/antigravity/native-history.js";
 import { antigravityNativeActivity } from "../../src/server/backends/antigravity/host/native-activity.js";
 import type { AntigravityNativeStep } from "../../src/server/backends/antigravity/native-schema.js";
+import { antigravityReadError } from "../../src/server/backends/antigravity/errors.js";
 
 const parentId = "8a54e222-1000-4000-8000-000000000001", childId = "8a54e222-1000-4000-8000-000000000002";
 const roots: string[] = [];
@@ -30,7 +31,7 @@ async function fixture() {
   const databases: Database.Database[] = [];
   function create(sessionId: string, parent?: string) {
     const database = new Database(path.join(directory, `${sessionId}.db`)); databases.push(database);
-    database.exec("CREATE TABLE trajectory_meta (cascade_id TEXT); CREATE TABLE trajectory_metadata_blob (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, has_subtrajectory INTEGER, step_format INTEGER, step_payload BLOB)");
+    database.exec("CREATE TABLE trajectory_meta (cascade_id TEXT); CREATE TABLE trajectory_metadata_blob (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE executor_metadata (idx INTEGER PRIMARY KEY, data BLOB); CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, has_subtrajectory INTEGER, step_format INTEGER, step_payload BLOB)");
     database.prepare("INSERT INTO trajectory_meta VALUES (?)").run(sessionId);
     const metadata = proto(field(1, field(1, pathToFileURL(root).href)), ...(parent ? [field(5, parent)] : []));
     database.prepare("INSERT INTO trajectory_metadata_blob VALUES ('main', ?)").run(metadata);
@@ -43,6 +44,94 @@ async function fixture() {
   return { root, directory, configuration, create, step, read, close: () => databases.forEach(database => database.close()) };
 }
 describe("Antigravity native background authority", () => {
+  it("reads only reviewed executor proof and changes revision when a late terminal receipt is stored", async () => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId);
+      f.step(parent, 0, 15, 3, response());
+      const before = await f.read();
+      expect(before.native.executions).toEqual([]);
+      // Other fields contain native configuration; neither the private wire nor
+      // normalized history may acquire them just to establish cancellation.
+      const data = proto(field(1, 2), field(3, 0), field(9, "cancelled-execution"), field(10, "private-native-config"));
+      parent.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(data);
+      const after = await f.read();
+      expect(after.native.executions).toEqual([{ executionId: "cancelled-execution", lastStepIndex: 0,
+        terminationReason: 2, proceededWithAutoContinue: false }]);
+      expect(after.native.steps).toEqual(before.native.steps);
+      expect(after.native.revision).not.toBe(before.native.revision);
+      expect(JSON.stringify(after)).not.toContain("private-native-config");
+    } finally { f.close(); }
+  });
+  it("fails closed on a changed executor field wire type", async () => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId);
+      parent.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, "cancelled"), field(9, "execution")));
+      await expect(f.read()).rejects.toThrow("antigravity_native_field_type_changed");
+    } finally { f.close(); }
+  });
+  it("hashes ID-less executor rows without treating their protobuf defaults as cancellation evidence", async () => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId); f.step(parent, 0, 15, 3, response());
+      const before = await f.read();
+      parent.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, 2), field(3, 0)));
+      const after = await f.read();
+      expect(after.native.steps).toEqual(before.native.steps); expect(after.native.executions).toEqual([]);
+      expect(after.native.revision).not.toBe(before.native.revision);
+    } finally { f.close(); }
+  });
+  it("classifies a missing executor table as unsupported native format", async () => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId); parent.exec("DROP TABLE executor_metadata");
+      await expect(f.read().catch(error => { throw antigravityReadError(error); }))
+        .rejects.toMatchObject({ backendCode: "antigravity_history_executor_format_unsupported", crossedSubmissionBoundary: false });
+    } finally { f.close(); }
+  });
+  it("still rejects malformed executor indices rather than treating them as absent proof", async () => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId);
+      parent.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(9, "execution"), field(3, 4294967294)));
+      await expect(f.read()).rejects.toThrow("antigravity_history_executor_format_unsupported");
+    } finally { f.close(); }
+  });
+  it("omits the complete executor proof set when row capacity is exceeded, preserving step history", async () => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId);
+      f.step(parent, 0, 15, 3, response());
+      parent.exec("WITH RECURSIVE records(idx) AS (SELECT 0 UNION ALL SELECT idx + 1 FROM records WHERE idx < 100000) INSERT INTO executor_metadata SELECT idx, X'00' FROM records");
+      const history = await f.read(); expect(history.native.steps).toHaveLength(1); expect(history.native.executions).toEqual([]);
+    } finally { f.close(); }
+  });
+  it.each(["one oversized row", "aggregate bytes"])("omits all executor receipts before decoding %s, including otherwise valid cancellation proof", async kind => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId);
+      f.step(parent, 0, 15, 3, response());
+      parent.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, 2), field(9, "execution")));
+      const insert = parent.prepare("INSERT INTO executor_metadata VALUES (?, zeroblob(?))");
+      if (kind === "one oversized row") insert.run(1, 8 * 1024 * 1024 + 1);
+      else for (let index = 1; index <= 5; index++) insert.run(index, 7 * 1024 * 1024);
+      const history = await f.read(); expect(history.native.steps).toHaveLength(1); expect(history.native.executions).toEqual([]);
+    } finally { f.close(); }
+  });
+  it("does not let executor rows consume the root and child step budget", async () => {
+    const f = await fixture();
+    try {
+      const parent = f.create(parentId), child = f.create(childId, parentId);
+      f.step(parent, 0, 132, 3, generic("invoke_subagent", field(2, proto(field(1, childId), field(3, pathToFileURL(f.root).href))), "InvokeSubagent"));
+      parent.prepare("WITH RECURSIVE records(idx) AS (SELECT 1 UNION ALL SELECT idx + 1 FROM records WHERE idx < 99998) INSERT INTO steps SELECT idx, 15, 3, 0, 0, ? FROM records").run(response());
+      parent.prepare("INSERT INTO executor_metadata VALUES (0, ?)").run(proto(field(1, 2), field(9, "execution")));
+      f.step(child, 0, 15, 3, response());
+      const history = await f.read();
+      expect(history.native.steps).toHaveLength(99999);
+      expect(history.native.steps[0]?.subagents).toMatchObject([{ sessionId: childId, state: "terminal" }]);
+    } finally { f.close(); }
+  });
   it("follows only exact typed native child identities and observes child changes without changing the parent DB", async () => {
     const f = await fixture();
     try {
@@ -91,7 +180,7 @@ describe("Antigravity native background authority", () => {
     const task: AntigravityNativeStep = { index: 0, type: 132, status: 3, hasSubtrajectory: false, task: { id: "task", title: "Timer", description: "timer", daemon: false }, schedule: { mode: "timer", outcome: "fired", iterations: 0 } };
     const wake: AntigravityNativeStep = { index: 2, type: 101, status: 3, hasSubtrajectory: false, continuation: { id: "wake", recipient: parentId, sender: "task", kind: "task_notification", content: "wake" } };
     const final: AntigravityNativeStep = { index: 3, type: 15, status: 3, hasSubtrajectory: false, response: { text: "done", thinking: "", stopReason: 2, toolCalls: [] } };
-    const history = { revision: "a".repeat(64), steps: [task] };
+    const history = { revision: "a".repeat(64), executions: [], steps: [task] };
     expect(antigravityNativeActivity(history)).toMatchObject({ active: true, foregroundActive: false, pendingContinuations: true, other: 1 });
     history.steps.push(wake); expect(antigravityNativeActivity(history)).toMatchObject({ active: true, foregroundActive: true });
     history.steps.push(final); expect(antigravityNativeActivity(history)).toMatchObject({ active: false, unknown: false, pendingContinuations: false, other: 0 });
@@ -100,6 +189,6 @@ describe("Antigravity native background authority", () => {
   });
   it("settles explicit cancelled children without fabricating a completion callback", () => {
     const step: AntigravityNativeStep = { index: 0, type: 132, status: 3, hasSubtrajectory: false, subagents: [{ sessionId: childId, state: "cancelled" }] };
-    expect(antigravityNativeActivity({ revision: "a".repeat(64), steps: [step] })).toMatchObject({ active: false, unknown: false, agents: 0 });
+    expect(antigravityNativeActivity({ revision: "a".repeat(64), executions: [], steps: [step] })).toMatchObject({ active: false, unknown: false, agents: 0 });
   });
 });

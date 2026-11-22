@@ -3427,7 +3427,12 @@ function interactionResponseFixture(input?: {
           }
         : undefined,
     ),
-    findInteractionResponse: vi.fn(() => record()),
+    hasUncertainNonSteerOperation: vi.fn((requestScope: RequestScope, threadId: string, exceptOperationId?: string) =>
+      requestScope.tenantId === scope.tenantId && requestScope.principalId === scope.principalId &&
+      threadId === "thread-1" && state === "uncertain" && exceptOperationId !== operationId),
+    findInteractionResponse: vi.fn((requestScope: RequestScope, requestedOperationId: string) =>
+      requestScope.tenantId === scope.tenantId && requestScope.principalId === scope.principalId &&
+      requestedOperationId === operationId ? record() : undefined),
     prepareRecoverableInteractionResponse: vi.fn(() => {
       state ??= "prepared";
       return record();
@@ -3451,6 +3456,9 @@ function interactionResponseFixture(input?: {
     }),
   };
   const interactions = {
+    listPending: vi.fn((requestScope: RequestScope, threadId: string) =>
+      requestScope.tenantId === scope.tenantId && requestScope.principalId === scope.principalId &&
+      threadId === "thread-1" && state !== "accepted" ? [{ id: interactionId }] : []),
     prepareResponse: vi.fn((): PreparedInteractionResponse => ({
       owner: "provider",
       persistence: "durable",
@@ -3520,6 +3528,105 @@ function interactionResponseFixture(input?: {
 }
 
 describe("ThreadMutationGateway interaction-response recovery", () => {
+  it("answers an exact pending permission behind an uncertain Steer without changing or replaying that Steer", async () => {
+    const subject = interactionResponseFixture();
+    const steer = { threadId: "thread-1", mutationId: "unconfirmed-steer", operationKind: "conversation_steer" };
+    subject.operations.findUncertainThreadOperation.mockReturnValue(steer);
+    await expect(subject.gateway.mutate(scope, "thread-1", subject.operation)).resolves.toEqual({ status: "completed" });
+    expect(subject.respond).toHaveBeenCalledOnce();
+    expect(subject.state()).toBe("accepted");
+    expect(subject.operations.findUncertainThreadOperation()).toEqual(steer);
+    await expect(subject.gateway.mutate(scope, "thread-1", { kind: "perform", mutationId: "rename",
+      expectedThreadRevision: 1, operation: { action: "rename", title: "New title" } })).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    expect(subject.respond).toHaveBeenCalledOnce();
+  });
+
+  it.each(["foreign tenant", "foreign principal", "wrong thread", "stale interaction"] as const)("denies %s while a Steer is uncertain", async reason => {
+    const subject = interactionResponseFixture();
+    subject.operations.findUncertainThreadOperation.mockReturnValue({ threadId: "thread-1", mutationId: "unconfirmed-steer", operationKind: "conversation_steer" });
+    const requestScope = { ...scope, ...(reason === "foreign tenant" ? { tenantId: "foreign" } : {}),
+      ...(reason === "foreign principal" ? { principalId: "foreign" } : {}) };
+    await expect(subject.gateway.mutate(requestScope, reason === "wrong thread" ? "thread-2" : "thread-1",
+      { ...subject.operation, ...(reason === "stale interaction" ? { interactionId: "retired-interaction" } : {}) }))
+      .rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    expect(subject.interactions.prepareResponse).not.toHaveBeenCalled(); expect(subject.respond).not.toHaveBeenCalled();
+  });
+
+  it.each(["conversation_interrupt", "conversation_settings", "conversation_interaction_response"])("preserves the permission barrier behind unrelated %s uncertainty", async operationKind => {
+    const subject = interactionResponseFixture();
+    subject.operations.findUncertainThreadOperation.mockReturnValue({ threadId: "thread-1", mutationId: "another-operation", operationKind });
+    await expect(subject.gateway.mutate(scope, "thread-1", subject.operation)).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    expect(subject.respond).not.toHaveBeenCalled();
+  });
+
+  it("reconciles its own uncertain permission response receipt behind an older uncertain Steer", async () => {
+    const subject = interactionResponseFixture({ initialState: "uncertain", reconciliation: "accepted" });
+    subject.operations.findUncertainThreadOperation.mockReturnValue({ threadId: "thread-1", mutationId: "unconfirmed-steer", operationKind: "conversation_steer" });
+    subject.interactions.listPending.mockReturnValue([]);
+    await expect(subject.gateway.mutate(scope, "thread-1", subject.operation)).resolves.toEqual({ status: "completed" });
+    expect(subject.reconcileInteractionResponse).toHaveBeenCalledOnce(); expect(subject.respond).not.toHaveBeenCalled();
+  });
+
+  it.each(["tenantId", "principalId"] as const)("does not reuse a retained response across %s while a Steer is uncertain", async field => {
+    const subject = interactionResponseFixture({ initialState: "uncertain", reconciliation: "accepted" });
+    subject.operations.findUncertainThreadOperation.mockReturnValue({ threadId: "thread-1", mutationId: "unconfirmed-steer", operationKind: "conversation_steer" });
+    subject.interactions.listPending.mockReturnValue([]);
+    await expect(subject.gateway.mutate({ ...scope, [field]: "foreign" }, "thread-1", subject.operation))
+      .rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    expect(subject.reconcileInteractionResponse).not.toHaveBeenCalled(); expect(subject.respond).not.toHaveBeenCalled();
+  });
+
+  it("does not let an older Steer hide a permission response's own uncertainty barrier", async () => {
+    const subject = interactionResponseFixture({ initialState: "uncertain", reconciliation: "accepted" });
+    subject.operations.findUncertainThreadOperation.mockReturnValue({ threadId: "thread-1", mutationId: "unconfirmed-steer", operationKind: "conversation_steer" });
+    await expect(subject.gateway.mutate(scope, "thread-1", { ...subject.operation, operationId: "second-response" }))
+      .rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    expect(subject.respond).not.toHaveBeenCalled(); expect(subject.reconcileInteractionResponse).not.toHaveBeenCalled();
+    await expect(subject.gateway.mutate(scope, "thread-1", subject.operation)).resolves.toEqual({ status: "completed" });
+    expect(subject.reconcileInteractionResponse).toHaveBeenCalledOnce(); expect(subject.respond).not.toHaveBeenCalled();
+  });
+
+  it("keeps a newer uncertain Stop fenced even behind an older Steer", async () => {
+    const subject = interactionResponseFixture();
+    subject.operations.findUncertainThreadOperation.mockReturnValue({ threadId: "thread-1", mutationId: "older-steer", operationKind: "conversation_steer" });
+    subject.operations.hasUncertainNonSteerOperation.mockReturnValue(true);
+    await expect(subject.gateway.mutate(scope, "thread-1", subject.operation)).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    expect(subject.operations.hasUncertainNonSteerOperation).toHaveBeenCalledWith(scope, "thread-1", undefined);
+    expect(subject.interactions.prepareResponse).not.toHaveBeenCalled(); expect(subject.respond).not.toHaveBeenCalled();
+  });
+
+  it("does not let exact response replay exempt another uncertain non-Steer operation", async () => {
+    const subject = interactionResponseFixture({ initialState: "uncertain", reconciliation: "accepted" });
+    subject.operations.findUncertainThreadOperation.mockReturnValue({ threadId: "thread-1", mutationId: "older-steer", operationKind: "conversation_steer" });
+    subject.operations.hasUncertainNonSteerOperation.mockReturnValue(true);
+    await expect(subject.gateway.mutate(scope, "thread-1", subject.operation)).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    expect(subject.operations.hasUncertainNonSteerOperation).toHaveBeenCalledWith(scope, "thread-1", subject.operation.operationId);
+    expect(subject.reconcileInteractionResponse).not.toHaveBeenCalled(); expect(subject.respond).not.toHaveBeenCalled();
+  });
+
+  it("cannot exempt a newer Stop by supplying its operation ID as a permission response", async () => {
+    const subject = interactionResponseFixture();
+    subject.operations.findUncertainThreadOperation.mockReturnValue({ threadId: "thread-1", mutationId: "older-steer", operationKind: "conversation_steer" });
+    subject.operations.findInteractionResponse.mockImplementation((_scope, operationId) => {
+      if (operationId === "newer-stop") throw new DomainError("conflict", "The operation ID belongs to Stop.");
+      return undefined;
+    });
+    subject.operations.hasUncertainNonSteerOperation.mockReturnValue(true);
+    await expect(subject.gateway.mutate(scope, "thread-1", { ...subject.operation, operationId: "newer-stop" })).rejects.toMatchObject({ code: "conflict" });
+    expect(subject.respond).not.toHaveBeenCalled(); expect(subject.operations.hasUncertainNonSteerOperation).not.toHaveBeenCalled();
+  });
+
+  it.each(["thread", "interaction"] as const)("does not exempt an existing response receipt when its %s differs", async field => {
+    const subject = interactionResponseFixture({ initialState: "uncertain", reconciliation: "accepted" });
+    subject.operations.findUncertainThreadOperation.mockReturnValue({ threadId: "thread-1", mutationId: "older-steer", operationKind: "conversation_steer" });
+    const threadId = field === "thread" ? "other-thread" : "thread-1";
+    await expect(subject.gateway.mutate(scope, threadId,
+      { ...subject.operation, ...(field === "interaction" ? { interactionId: "other-interaction" } : {}) }))
+      .rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    expect(subject.operations.hasUncertainNonSteerOperation).toHaveBeenCalledWith(scope, threadId, undefined);
+    expect(subject.reconcileInteractionResponse).not.toHaveBeenCalled(); expect(subject.respond).not.toHaveBeenCalled();
+  });
+
   it("retains and retries the exact response while the interaction remains pending", async () => {
     const respond = vi
       .fn<() => Promise<void>>()

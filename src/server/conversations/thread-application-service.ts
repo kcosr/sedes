@@ -227,6 +227,8 @@ export interface ThreadApplicationRecoveryReader {
     scope: RequestScope,
     applicationThreadId: string,
   ): Promise<NormalizedThreadRecovery | undefined>;
+  /** An exact unresolved Steer must not prevent its provider's pending permission answer. */
+  canRespondDuringRecovery(scope: RequestScope, applicationThreadId: string): Promise<boolean>;
   /**
    * A legacy draft-source Steer awaiting materialization. It keeps its
    * exclusive barrier on every delivery mode. Queue-owned Steers awaiting
@@ -600,7 +602,7 @@ export class ThreadApplicationService {
     capture: ThreadConversationCapture,
     presentationSource: "fresh" | "cached" = "fresh",
   ) {
-    const [queue, presentation, recovery, exclusivePendingSteer] = await Promise.all([
+    const [queue, presentation, recovery, exclusivePendingSteer, interactionResponseRecovery] = await Promise.all([
       this.#queue.list(scope, applicationThreadId),
       this.#presentation[
         presentationSource === "fresh" && inventory.thread.inventoryState !== "archived"
@@ -614,6 +616,7 @@ export class ThreadApplicationService {
       ),
       this.#recovery.read(scope, applicationThreadId),
       this.#recovery.hasExclusivePendingSteer(scope, applicationThreadId),
+      this.#recovery.canRespondDuringRecovery(scope, applicationThreadId),
     ]);
     const interactions = this.#interactions.listPending(
       scope,
@@ -652,6 +655,7 @@ export class ThreadApplicationService {
       presentation,
       recovery,
       exclusivePendingSteer,
+      interactionResponseRecovery,
       interactions,
       providerFeatureConcurrency: (feature, actionId) =>
         actionPersistence.providerFeatureConcurrency(feature, actionId),
@@ -969,6 +973,7 @@ function composeCapabilities(input: {
   readonly presentation: ThreadApplicationPresentation;
   readonly recovery?: NormalizedThreadRecovery;
   readonly exclusivePendingSteer: boolean;
+  readonly interactionResponseRecovery: boolean;
   readonly interactions: readonly BackendInteraction[];
   readonly providerFeatureConcurrency: ThreadActionPersistenceProvider["providerFeatureConcurrency"];
   readonly historyOperational: boolean;
@@ -1382,6 +1387,7 @@ function composeCapabilities(input: {
         interactions: input.interactions.map(({ id, kind }) => [id, kind]),
         recovery: input.recovery,
         exclusivePendingSteer: input.exclusivePendingSteer,
+        interactionResponseRecovery: input.interactionResponseRecovery,
         historyOperational: input.historyOperational,
         attachmentStagingAvailable: input.attachmentStagingAvailable,
       }),
@@ -1448,14 +1454,13 @@ function composeCapabilities(input: {
             ...input.backendCapabilities.interactionKinds,
             ...input.interactions.map(({ kind }) => kind),
           ]),
-        ].map((kind) => ({
-          kind,
-          available: available && bound && !backendTransitioning,
-          ...reason(
-            available && bound && !backendTransitioning,
-            "The backend interaction is unavailable in the current thread state.",
-          ),
-        }))
+        ].map((kind) => {
+          const pendingSteerControl = input.interactionResponseRecovery && input.interactions.some(interaction => interaction.kind === kind);
+          const canRespond = available && bound && !archived && input.actualRunState !== "disconnected" &&
+            (!backendTransitioning || pendingSteerControl) && (input.recovery === undefined || pendingSteerControl);
+          return { kind, available: canRespond,
+            ...reason(canRespond, "The backend interaction is unavailable in the current thread state.") };
+        })
       : [],
     history: {
       available: input.historyOperational,
