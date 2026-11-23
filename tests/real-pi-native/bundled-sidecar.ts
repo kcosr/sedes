@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { connect } from "node:net";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
+import { agentToolsCatalogOperation, agentToolsDescribeOperation, agentToolsInvokeOperation, executionPolicyDigest } from "../../src/internal/sidecar-protocol/index.js";
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import { vi } from "vitest";
 import { buildProductionSidecarArtifact, terminateChild } from "../support/production-carrier-fixture.js";
 import { SidecarOperationRegistry } from "../../src/internal/sidecar-protocol/operation-registry.js";
@@ -21,11 +23,23 @@ type UnscopedRequest = SidecarManagementRequest extends infer Request ? Request 
 
 /** Release bundle, actual persistent-service entry point, and production framed
  * carrier. The private local socket stands in for SSH's authenticated bytes. */
-export async function bundledSidecar(configuration: PiNativeRuntimeConfiguration, environment: Readonly<Record<string, string | undefined>>) {
+export async function bundledSidecar(configuration: PiNativeRuntimeConfiguration, environment: Readonly<Record<string, string | undefined>>, cliEnabled: boolean) {
   const home = environment.HOME!;
   const artifact = await buildProductionSidecarArtifact(path.join(home, "sidecar-artifact"));
   const serviceScope = { installationId: randomUUID(), tenantId: configuration.tenantId, principalId: configuration.principalId, executionEnvironmentId: configuration.executionEnvironmentId };
   const revision = { environmentRevision: 1, operationsRevision: 1 };
+  const snapshot = {
+    roots: [],
+    capabilities: cliEnabled ? [{ id: "agent_tools_cli", generation: 1 }] : [],
+    backends: [{
+      id: configuration.backendInstanceId, kind: "pi_native", generation: 1,
+      launchDigest: runtimeLaunchDigest.pi_native(configuration, configuration.startupEnvironmentVariables),
+      targets: [{ id: "connection", generation: 1 }],
+    }],
+  };
+  const policy = { snapshot, digest: executionPolicyDigest(snapshot), revision: 1, configuration: revision };
+  const cliCalls: number[] = [];
+  const sourceCapability = randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", "");
   const paths = persistentSidecarPaths(home, process.getuid!(), serviceScope);
   await mkdir(paths.stateRoot, { recursive: true, mode: 0o700 });
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -63,10 +77,26 @@ export async function bundledSidecar(configuration: PiNativeRuntimeConfiguration
       sessionNonce, carrierGeneration: ++generation, configuration: revision, mode: "normal" });
     const response = await readSidecarManagementRecord(connection, sidecarManagementResponseSchema, signal);
     if (response.value.outcome !== "ok") { await connection.close("fixture_attach_failed"); throw new Error(JSON.stringify(response.value)); }
+    const { controllerEpoch, serviceIncarnation } = response.value.status;
+    const sedesOperations = new SidecarOperationRegistry();
+    if (cliEnabled) {
+      sedesOperations.register(agentToolsCatalogOperation, request => {
+        const binding = request.routeBinding;
+        if (request.sourceCapability !== sourceCapability || binding?.backendInstanceId !== configuration.backendInstanceId ||
+            binding.backendGeneration !== 1 || binding.capabilityGeneration !== 1)
+          throw new Error("fixture_cli_source_mismatch");
+        cliCalls.push(controllerEpoch);
+        return { outcome: "ok" as const, tools: [] };
+      });
+      sedesOperations.register(agentToolsDescribeOperation, () => ({ outcome: "ok" as const, tools: [] }));
+      sedesOperations.register(agentToolsInvokeOperation, () => { throw new Error("fixture_unexpected_cli_invoke"); });
+    }
     session = await SidecarClientSession.start({ connectionCompression: true, transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: generation, artifact,
       installation: { accountHome: home, stateRoot: paths.stateRoot, nodeExecutable: process.execPath, environment: { HOME: home }, executableDirectory: artifact.executableDirectory, executablePath: artifact.executablePath },
-      authorizedCapabilities: [], authorizedRuntimeCapabilities: [piNativeRuntimeCapability], sedesOperations: new SidecarOperationRegistry(), signal });
-    lease = { channel: session.runtimeChannel, closed: session.closed, controllerEpoch: response.value.status.controllerEpoch, serviceIncarnation: response.value.status.serviceIncarnation, release() {} };
+      authorizedCapabilities: cliEnabled ? [{ capabilityId: "agent_tools_cli", majorVersion: 6 }] : [], authorizedRuntimeCapabilities: [piNativeRuntimeCapability],
+      policyAttachment: "normal", readDesiredPolicy: () => policy, sedesOperations, signal });
+    await session.applyPolicy(policy, signal);
+    lease = { channel: session.runtimeChannel, closed: session.closed, controllerEpoch, serviceIncarnation, release() {} };
   }
   const port = new PiNativeRemotePort({ configuration, sidecarRuntime: { acquire: async () => { if (!lease) throw new Error("fixture_carrier_missing"); return lease; }, acquireExisting: async () => { if (!lease) throw new Error("fixture_carrier_missing"); return lease; } } });
   async function close() {
@@ -84,6 +114,8 @@ export async function bundledSidecar(configuration: PiNativeRuntimeConfiguration
   try {
     await vi.waitFor(async () => { if (child.exitCode !== null) throw new Error(`Bundled sidecar exited: ${stderr}`); await status(); }, { timeout: 15_000, interval: 25 });
     await attach();
-    return { port, status, close, get channel() { return lease!.channel; }, async reconnect() { await session?.close("fixture_carrier_replaced"); lease = undefined; await attach(); } };
+    return { port, status, close, cliCalls, sourceCapability, async cliRoute() {
+      return vi.waitFor(() => session!.acquirePolicyRoute({ capabilityId: "agent_tools_cli", backendInstanceId: configuration.backendInstanceId, generation: 1 }));
+    }, get channel() { return lease!.channel; }, async reconnect() { await session?.close("fixture_carrier_replaced"); lease = undefined; await attach(); } };
   } catch (error) { await close().catch(() => undefined); throw error; }
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { BackendModelDescriptor } from "./contracts.js";
 import { deepFreeze } from "../../shared/json-guards.js";
 
 export type BackendModelPolicyMatcher = Readonly<{
@@ -140,6 +141,27 @@ export interface CompiledBackendModelPolicy {
   ): readonly string[];
 }
 
+/** Apply saved policy at delivery so a warm provider catalog reflects live edits. */
+export function filterCatalogModels(
+  models: readonly BackendModelDescriptor[],
+  policy: CompiledBackendModelPolicy,
+  dimension: BackendModelPolicyIdentityDisposition,
+): readonly BackendModelDescriptor[] {
+  return models.flatMap((model) => {
+    const identity = dimension === "provider_model_effort"
+      ? { providerId: model.provider, modelId: model.id } : { modelId: model.id };
+    if (model.supportedReasoningEfforts === undefined)
+      return policy.isModelWithoutReasoningEffortAllowed(identity) ? [model] : [];
+    const supportedReasoningEfforts = policy.filterReasoningEfforts(identity, model.supportedReasoningEfforts);
+    if (!supportedReasoningEfforts.length) return [];
+    if (model.defaultReasoningEffort !== undefined && !supportedReasoningEfforts.includes(model.defaultReasoningEffort)) {
+      const { defaultReasoningEffort, isDefault, ...descriptor } = model;
+      return [{ ...descriptor, supportedReasoningEfforts }];
+    }
+    return [{ ...model, supportedReasoningEfforts }];
+  });
+}
+
 export class BackendModelPolicyConfigurationError extends Error {
   readonly code = "backend_model_policy_provider_dimension_unsupported";
 
@@ -252,5 +274,34 @@ function matcherSignature(matcher: BackendModelPolicyMatcher): string {
     reasoningEfforts: matcher.reasoningEfforts
       ? [...matcher.reasoningEfforts].sort()
       : null,
+  });
+}
+
+/** The runtime owns its process configuration. Model admission reads the
+ * principal's current saved policy on every check, including existing handles.
+ * Compiled matchers are cached until the document snapshot changes. */
+export function configuredModelPolicy(input: {
+  readonly backend: Pick<import("./module.js").BackendModuleBackendConfiguration, "id" | "kind" | "enabled" | "modelPolicy">;
+  readonly readCurrentBackend?: import("./module.js").BackendModuleConfigurationInput["readCurrentBackend"];
+},
+  dimension: BackendModelPolicyIdentityDisposition): CompiledBackendModelPolicy {
+  let source = input.backend.modelPolicy;
+  let compiled = compileBackendModelPolicy(source, dimension);
+  if (!input.backend.enabled || !input.readCurrentBackend) return compiled;
+  const current = (): CompiledBackendModelPolicy => {
+    const definition = input.readCurrentBackend!();
+    if (!definition?.enabled || definition.id !== input.backend.id || definition.kind !== input.backend.kind)
+      throw new Error("backend_policy_unavailable");
+    if (source !== definition.modelPolicy) {
+      compiled = compileBackendModelPolicy(definition.modelPolicy, dimension);
+      source = definition.modelPolicy;
+    }
+    return compiled;
+  };
+  return Object.freeze({
+    get policy() { return current().policy; },
+    isSelectionAllowed: (value: BackendModelSelection) => current().isSelectionAllowed(value),
+    isModelWithoutReasoningEffortAllowed: (value: BackendModelIdentity) => current().isModelWithoutReasoningEffortAllowed(value),
+    filterReasoningEfforts: (value: BackendModelIdentity, efforts: readonly string[]) => current().filterReasoningEfforts(value, efforts),
   });
 }

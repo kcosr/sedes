@@ -10,17 +10,18 @@ import { PrincipalAgentToolClientRepository } from "../../src/server/db/reposito
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
 import { ThreadCompletionCallbackRepository } from "../../src/server/db/repositories/thread-completion-callback-repository.js";
 import { UserInputRevisionRepository } from "../../src/server/db/repositories/user-input-revision-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { savedAgentDatabase, insertPreRootGrantWorkspace } from "../support/saved-agent-fixture.js";
 
 function fixture(version?: number) {
   const { database, scope } = savedAgentDatabase(version);
   const inventory = new InventoryRepository(database);
   const environment = inventory.getLocalEnvironment(scope);
-  const workspace = inventory.upsertWorkspace(scope, {
+  const seed = {
     id: randomUUID(), environmentId: environment.id, canonicalPath: "/tmp/user-input-revision",
     displayName: "Voice freshness", project: { kind: "new", name: "Voice freshness" },
     available: true, trustState: "trusted", environmentConfigurationRevision: environment.configurationRevision, now: 200,
-  });
+  } as const;
+  const workspace = version === undefined ? inventory.upsertWorkspace(scope, seed) : insertPreRootGrantWorkspace(database, scope, seed);
   const profile = database.prepare("SELECT id FROM agent_connection_profiles LIMIT 1").get() as { id: string };
   const bindings = new ConversationBindingRepository(database);
   const createThread = (bound = true) => {

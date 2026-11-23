@@ -85,6 +85,7 @@ export class OwnedNdjsonStdioTransportFactory implements FramedTransportFactory 
   readonly #sensitiveValues: readonly string[];
   readonly #retainStderr: boolean;
   readonly #commandArguments: readonly string[];
+  readonly #assertLaunchAdmission?: () => void;
   readonly #assuranceDiagnosticPrefix: string;
   readonly #transportDiagnosticPrefix: string;
   readonly #onProcessClosed?: (closure: EnvironmentProcessClosure) => void;
@@ -93,6 +94,7 @@ export class OwnedNdjsonStdioTransportFactory implements FramedTransportFactory 
     readonly scope: ProviderTransportScope;
     readonly channels: ExecutionEnvironmentChannelProvider;
     readonly process: PreparedEnvironmentOwnedProcess;
+    readonly assertLaunchAdmission?: () => void;
     readonly environment: Readonly<Record<string, string>>;
     readonly commandArguments: readonly string[];
     readonly limits?: Partial<OwnedNdjsonStdioLimits>;
@@ -115,6 +117,7 @@ export class OwnedNdjsonStdioTransportFactory implements FramedTransportFactory 
     this.#scope = Object.freeze({ ...input.scope });
     this.#channels = input.channels;
     this.#process = input.process;
+    this.#assertLaunchAdmission = input.assertLaunchAdmission;
     this.#environment = Object.freeze({ ...input.environment });
     this.#transportDiagnosticPrefix = transportDiagnosticPrefix;
     this.#assuranceDiagnosticPrefix = assuranceDiagnosticPrefix;
@@ -139,6 +142,7 @@ export class OwnedNdjsonStdioTransportFactory implements FramedTransportFactory 
     }
     if (signal.aborted) throw signal.reason;
     const observer = lifecycle ?? NOOP_TRANSPORT_LIFECYCLE;
+    this.#assertLaunchAdmission?.();
     observer.launchStarted();
     let channel: EnvironmentOwnedProcessChannel;
     try {
@@ -146,6 +150,7 @@ export class OwnedNdjsonStdioTransportFactory implements FramedTransportFactory 
         expectedScope,
         {
           prepared: this.#process,
+          ...(this.#assertLaunchAdmission && { assertLaunchAdmission: this.#assertLaunchAdmission }),
           arguments: this.#commandArguments,
           environment: this.#environment,
           cleanup: {

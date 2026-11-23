@@ -84,6 +84,8 @@ export interface InteractiveTerminalEnvironmentProvider {
     readonly terminalId: string;
     readonly incarnationId: string;
     readonly environmentVariables?: EnvironmentVariableOverrides;
+    readonly workspaceAuthority?: { readonly authorityRootId: string; readonly authorityRevision: number };
+    readonly assertWorkspaceCurrent?: () => void;
     readonly initialCwd: string;
     readonly shellProfile?: string;
     readonly rows: number;

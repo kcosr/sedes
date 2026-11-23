@@ -35,6 +35,7 @@ export class SidecarWorkspaceToolExecutor implements WorkspaceToolExecutor {
   readonly #environmentId: string;
   readonly #declaredPath: string;
   readonly #policyRootPath: string;
+  readonly #assertCurrent?: () => void;
   readonly #admissionId = randomUUID();
   readonly #handles = new Map<number, string>();
   readonly #shell: SidecarWorkspaceShellExecutor;
@@ -45,6 +46,7 @@ export class SidecarWorkspaceToolExecutor implements WorkspaceToolExecutor {
     readonly environmentId: string;
     readonly declaredPath: string;
     readonly policyRootPath: string;
+    readonly assertCurrent?: () => void;
   }) {
     if (!isWithin(input.policyRootPath, input.declaredPath))
       throw new Error("sidecar_workspace_tool_configuration_invalid");
@@ -52,6 +54,7 @@ export class SidecarWorkspaceToolExecutor implements WorkspaceToolExecutor {
     this.#scope = input.scope;
     this.#environmentId = input.environmentId;
     this.#declaredPath = input.declaredPath;
+    this.#assertCurrent = input.assertCurrent;
     this.#policyRootPath = input.policyRootPath;
     this.#shell = new SidecarWorkspaceShellExecutor({
       acquireWorkspaceLease: async (signal) =>
@@ -134,6 +137,7 @@ export class SidecarWorkspaceToolExecutor implements WorkspaceToolExecutor {
   async acquireWorkspaceLease(
     signal: AbortSignal,
   ): Promise<SidecarWorkspaceToolLease> {
+    this.#assertCurrent?.();
     let lease:
       | Awaited<
           ReturnType<
@@ -147,6 +151,7 @@ export class SidecarWorkspaceToolExecutor implements WorkspaceToolExecutor {
         this.#environmentId,
         signal,
       );
+      this.#assertCurrent?.();
       let workspaceHandle = this.#handles.get(lease.carrierGeneration);
       if (!workspaceHandle) {
         this.#handles.clear();
@@ -161,6 +166,7 @@ export class SidecarWorkspaceToolExecutor implements WorkspaceToolExecutor {
         ));
         this.#handles.set(lease.carrierGeneration, workspaceHandle);
       }
+      this.#assertCurrent?.();
       return {
         session: lease.session,
         workspaceHandle,

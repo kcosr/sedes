@@ -1,3 +1,4 @@
+import {inRecoveryRequest,withRecoveryRequest} from "./recovery-context.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { SidecarFrameCompression } from "./frame-compression.js";
@@ -12,7 +13,7 @@ import {
   controlHelloOperation,
   controlPingOperation,
   type SidecarCapabilityInventory,
-} from "./control-v2.js";
+} from "./control-v3.js";
 import {
   decodeSidecarFrame,
   encodeSidecarEnvelope,
@@ -177,6 +178,7 @@ export class SidecarProtocolPeer {
   #helloInProgress = false;
   #started = false;
   #closed = false;
+  readonly #beforeCall:((key:SidecarOperationDefinition<unknown,unknown>, request:unknown)=>void | "recovery")|undefined;
   readonly #onReady: (() => void) | undefined;
   readonly #onClosing: (() => void) | undefined;
   readonly #onDiagnostic: ((record: SidecarHeartbeatDiagnostic, error?: unknown) => void) | undefined;
@@ -189,6 +191,7 @@ export class SidecarProtocolPeer {
     readonly registry: SidecarOperationRegistry;
     readonly limits?: Partial<SidecarProtocolLimits>;
     readonly requestIdFactory?: () => string;
+    readonly beforeCall?:(key:SidecarOperationDefinition<unknown,unknown>, request:unknown)=>void | "recovery";
     readonly onReady?: () => void;
     /** Runs before connection-scoped request signals are aborted. */
     readonly onClosing?: () => void;
@@ -206,6 +209,7 @@ export class SidecarProtocolPeer {
     this.#registry = input.registry;
     this.#limits = resolveSidecarProtocolLimits(input.limits);
     this.#requestId = input.requestIdFactory ?? randomUUID;
+    this.#beforeCall=input.beforeCall;
     this.#onReady = input.onReady;
     this.#onClosing = input.onClosing;
     this.#onDiagnostic = input.onDiagnostic;
@@ -266,6 +270,7 @@ export class SidecarProtocolPeer {
     } else if (!this.#remoteOperations.has(operationKey(definition))) {
       throw new Error("sidecar_operation_not_negotiated");
     }
+    const disposition = this.#beforeCall?.(definition as SidecarOperationDefinition<unknown,unknown>, request);
     if (this.#outbound.size >= this.#limits.maximumOutboundRequests) {
       throw new Error("sidecar_protocol_outbound_request_limit");
     }
@@ -286,6 +291,7 @@ export class SidecarProtocolPeer {
       wireVersion: SIDECAR_WIRE_VERSION,
       sessionNonce: this.#sessionNonce,
       type: "request",
+      ...(this.#role==="sedes" && (inRecoveryRequest() || disposition === "recovery")?{recovery:true as const}:{}),
       requestNamespace: this.#role,
       requestId,
       capabilityId: definition.capabilityId,
@@ -631,7 +637,7 @@ export class SidecarProtocolPeer {
               channel,
               bytes: copy,
             }),
-            { lane: "operation" },
+            { lane:input.capabilityId==="interactive_terminal"?"interactive":"operation" },
           );
           state.sequence += copy.byteLength;
           this.#markOutboundActivity();
@@ -667,7 +673,7 @@ export class SidecarProtocolPeer {
           for (let delay = CONGESTION_RETRY_MILLISECONDS; ; ) {
             try {
               await this.#transport.send(frame, {
-                lane: "operation",
+                lane: "control",
                 settlement: true,
               });
               break;
@@ -740,6 +746,9 @@ export class SidecarProtocolPeer {
         if (envelope.sessionNonce !== this.#sessionNonce) {
           throw new Error("sidecar_protocol_session_nonce_mismatch");
         }
+        if ((envelope.type==="request" && envelope.capabilityId==="control" && envelope.operation==="policy.stage" ||
+            envelope.type==="response" && this.#outbound.get(envelope.requestId)?.definition.lane==="staging") &&
+            frame.bytes.byteLength+16>12_288) throw new Error("sidecar_policy_frame_too_large");
         if (envelope.type === "request") this.#receiveRequest(envelope);
         else if (envelope.type === "response") this.#receiveResponse(envelope);
         else if (envelope.type === "cancel") {
@@ -878,10 +887,11 @@ export class SidecarProtocolPeer {
       const result = await raceAgainstAbort(
         () => {
           if (diagnosticStarted !== undefined) this.#diagnoseHeartbeat(envelope.requestId, "handler_start", { durationMs: performance.now() - diagnosticStarted });
-          return operation.handler(request, {
+          const dispatch=()=>operation.handler(request, {
             requestId: envelope.requestId,
             signal: controller.signal,
           });
+          return envelope.recovery && this.#role==="sidecar" ? withRecoveryRequest(dispatch) : dispatch();
         },
         controller.signal,
       );
@@ -1193,14 +1203,6 @@ export class SidecarProtocolPeer {
     const hello = controlHelloOperation.responseSchema.parse(payload);
     if (hello.compression !== requestedCompression) {
       throw new Error("sidecar_protocol_compression_mismatch");
-    }
-    const agentToolCliAccepted = hello.sedesCapabilities.some(
-      (capability) =>
-        capability.capabilityId === "agent_tools_cli" &&
-        capability.majorVersion === 6,
-    );
-    if (agentToolCliAccepted !== Boolean(hello.agentToolCli)) {
-      throw new Error("sidecar_protocol_agent_tool_cli_metadata_mismatch");
     }
     const sidecar = negotiatedInventory(hello.sidecarCapabilities);
     const sedes = negotiatedInventory(hello.sedesCapabilities);

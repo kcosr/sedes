@@ -67,9 +67,10 @@ export class PiNativeRemotePort implements PiNativePort {
       lease.channel.assertReady();
       if (!piNativeRuntimeOperations.every(operation => lease.channel.supportsOperation(operation))) throw new PiNativeError("pi_native_remote_runtime_unsupported");
       if (this.#identity && lease.serviceIncarnation !== this.#identity.serviceIncarnation) throw new PiNativeError("pi_native_runtime_incarnation_changed", "sent_outcome_unknown");
-      const value = await this.#call(lease, recovery
+      let value = await this.#call(lease, recovery
         ? { action: "lookup_retained", backendInstanceId: this.input.configuration.backendInstanceId }
-        : { action: this.#identity ? "lookup" : "ensure", configuration: this.input.configuration }, this.#lifetime.signal);
+        : { action: "lookup", configuration: this.input.configuration }, this.#lifetime.signal);
+      if (value === null && !this.#identity && !recovery) value = await this.#call(lease, { action: "ensure", configuration: this.input.configuration }, this.#lifetime.signal);
       if (value === null) throw new PiNativeError("pi_native_retained_runtime_missing", "not_sent");
       const { runtimeId } = runtimeSchema.parse(value);
       if (this.#identity && runtimeId !== this.#identity.runtimeId) throw new PiNativeError("pi_native_runtime_incarnation_changed", "sent_outcome_unknown");

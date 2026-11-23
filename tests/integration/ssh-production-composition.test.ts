@@ -491,7 +491,7 @@ describe.skipIf(!openSshAvailable)(
       }
     }, 60_000);
 
-    it("validates a Pi-only SSH environment on its first sidecar operation", async () => {
+    it("lists a cold Pi-only SSH target across a main restart and attaches only for its first workspace request", async () => {
       const fixture = await ProductionSshFixture.create({
         directoryBrowser: true,
         piOnly: true,
@@ -505,7 +505,7 @@ describe.skipIf(!openSshAvailable)(
         : fixture.binDirectory;
       let application: RunningApplication | undefined;
       try {
-        application = await startProductionApplication(
+        const start = () => startProductionApplication(
           {
             ...process.env,
             APP_STATE_DIR: fixture.stateDirectory,
@@ -517,22 +517,19 @@ describe.skipIf(!openSshAvailable)(
             sidecarAccountHomeForTests: fixture.remoteAccountHome,
           },
         );
+        application = await start();
         await fixture.authenticate(application);
-        const [session, snapshot] = await Promise.all([
-          readApplicationSession(fixture),
-          readApplicationSnapshot(fixture),
-        ]);
-        expect(
-          snapshot.environments.find(({ id }) => id === SSH_ENVIRONMENT_ID),
-        ).toMatchObject({
-          available: false,
-        });
-        expect(
-          snapshot.environments.find(
-            ({ id }) => id === SSH_ENVIRONMENT_ID,
-          ),
-        ).toHaveProperty("diagnostic.text", "configuration_apply_pending");
+        const first = await readApplicationSnapshot(fixture);
+        expect(first.executionTargets).toContainEqual(expect.objectContaining({environmentId: SSH_ENVIRONMENT_ID, available: true}));
+        const normalConnections = async () => (await fixture.sshInvocations()).filter(command => command.includes("service connect")).length;
+        expect(await normalConnections()).toBe(0);
+        await application.close();
+        application = await start();
+        await fixture.authenticate(application);
+        const [session, snapshot] = await Promise.all([readApplicationSession(fixture), readApplicationSnapshot(fixture)]);
+        expect(snapshot.executionTargets).toContainEqual(expect.objectContaining({environmentId: SSH_ENVIRONMENT_ID, available: true}));
 
+        expect(await normalConnections()).toBe(0);
         const response = await fixture.fetch(
           `http://127.0.0.1:${fixture.httpPort}/api/execution-environments/${SSH_ENVIRONMENT_ID}/directories/browse`,
           {
@@ -548,6 +545,7 @@ describe.skipIf(!openSshAvailable)(
           },
         );
         expect(response.status).toBe(200);
+        expect(await normalConnections()).toBe(1);
         await waitFor(async () => {
           const current = await readApplicationSnapshot(fixture);
           return (

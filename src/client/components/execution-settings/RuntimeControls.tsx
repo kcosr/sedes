@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import type { ConfigurationLifecycleImpact, ConfigurationLifecycleResult, ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
+import type { ConfigurationDocument, ConfigurationLifecycleImpact, ConfigurationLifecycleResult, ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
 import { ApiError } from "../../api/ApiClient.js";
 import { Button } from "../ui/button.js";
 import { Callout } from "../ui/callout.js";
@@ -10,7 +10,7 @@ import { StatusPill } from "../ui/status-pill.js";
 import type { Tone } from "../ui/tone.js";
 import { useFocusReturn } from "../settings/use-focus-return.js";
 import { errorMessage } from "./fields.js";
-import { actionLabels, applyLabels, atLeast, preferenceLabels, presentRuntime, upgradeLabels, type RuntimeAction, type RuntimeActionPresentation, type RuntimePresentation, type StatusPresentation } from "./runtime-presentation.js";
+import { actionLabels, applyLabels, atLeast, componentLabels, effectLabels, effectSubject, needsBackendRestart, preferenceLabels, presentRuntime, upgradeLabels, type RuntimeAction, type RuntimeActionPresentation, type RuntimePresentation, type StatusPresentation } from "./runtime-presentation.js";
 import type { ConfigurationControls } from "./useConfiguration.js";
 
 const confirmationNotes: Partial<Record<RuntimeAction, string>> = {
@@ -110,7 +110,7 @@ export function useRuntimeController({ controls, revision, resourceKind, resourc
   }, [durableOperation?.mutationId, durableOperation?.state, durableOperation?.action]);
   const expireImpact = () => {
     setImpact(undefined);
-    setNotice("The interruption preview expired. Select the action again to review its current impact.");
+    setNotice("The preview expired. Select the action again to review it.");
   };
   useEffect(() => {
     if (!impact) return;
@@ -127,7 +127,9 @@ export function useRuntimeController({ controls, revision, resourceKind, resourc
     setAwaitingOutcome(result.state === "pending" || result.state === "unknown");
     setOutcomeUnknown(result.state === "unknown");
     if (result.state === "unknown") {
-      setError("The operation outcome is unknown. Check its original status, or Stop to end this runtime once the earlier command can be safely withdrawn.", "warning");
+      setError(result.runtime.supportedActions.includes("stop")
+        ? "The operation outcome is unknown. Check its original status, or Stop to end this runtime once the earlier command can be safely withdrawn."
+        : "The operation outcome is unknown. Check its original status before taking another action.", "warning");
     } else if (result.state === "rejected" || result.state === "unavailable") {
       setError(result.runtime.lastError ?? "The requested operation is unavailable.", result.state === "rejected" ? "danger" : "warning");
     } else {
@@ -199,7 +201,7 @@ export function useRuntimeController({ controls, revision, resourceKind, resourc
     return () => window.clearTimeout(timer);
   });
   const requestAction = async (action: RuntimeAction) => {
-    if (action !== "stop" && action !== "restart" && action !== "upgrade") {
+    if (action === "connect" || action === "start" || action === "disconnect") {
       await execute(action);
       return;
     }
@@ -208,7 +210,7 @@ export function useRuntimeController({ controls, revision, resourceKind, resourc
     setNotice("");
     try {
       const next = await controls.configurationLifecycleImpact({ resourceKind, resourceId, action, expectedRevision: revision });
-      if (next.activeResources > 0 || next.interruptions.length > 0) setImpact(next);
+      if (action === "confirm_retirement" || next.activeResources > 0 || next.interruptions.length > 0) setImpact(next);
       else await execute(action, next);
     } catch (cause) { setError(errorMessage(cause, "Could not determine the effect of this operation.")); }
     finally { setBusy(false); }
@@ -307,13 +309,14 @@ export function RuntimeFeedback({ controller }: { readonly controller: RuntimeCo
  * differs from the header's (a paired host can be online while its runtime
  * is unknown).
  */
-export function RuntimeHealth({ controller, status, children }: {
+export function RuntimeHealth({ controller, status, configuration, children }: {
   readonly controller: RuntimeController;
+  readonly configuration?: ConfigurationDocument;
   /** The state the detail header's pill shows. */
   readonly status: StatusPresentation;
   readonly children?: React.ReactNode;
 }): React.JSX.Element {
-  const { presentation, unsettled, awaitingOutcome, canStopUnknown, label } = controller;
+  const { presentation, unsettled, awaitingOutcome, canStopUnknown, label, runtime } = controller;
   const pills = [
     { label: presentation.headline, tone: presentation.headlineTone },
     ...(presentation.qualifier ? [{ label: presentation.qualifier, tone: presentation.qualifierTone ?? "neutral" }] : []),
@@ -324,6 +327,26 @@ export function RuntimeHealth({ controller, status, children }: {
       {pills.map(pill => <StatusPill key={pill.label} tone={pill.tone}>{pill.label}</StatusPill>)}
     </div> : null}
     <p className="execution-health-detail">{presentation.detail}</p>
+    {runtime?.effects?.length ? <ul aria-label="Saved settings" className="execution-settings-effects">
+      {runtime.effects.map(effect => <li key={JSON.stringify([effect.component, effect.subjectId])}>
+        <details>
+          <summary>
+            <strong>{componentLabels[effect.component]}</strong> · {effectSubject(effect, { resourceId: runtime.resourceId, label }, configuration)} · {effect.state === "next_launch" && effect.subjectId.startsWith("managed_tui:") ? "On next terminal launch" : effectLabels[effect.state]}
+            {effect.detail ? <span> · {effect.detail}</span> : null}
+          </summary>
+          <KeyValueList className="execution-facts" items={[
+            { label: "Saved revision", value: effect.desiredRevision, mono: true },
+            { label: "Applied revision", value: effect.effectiveRevision ?? "Unconfirmed", mono: effect.effectiveRevision !== null },
+            ...(effect.lastHostConfirmation ? [
+              { label: "Confirmed host policy revision", value: effect.lastHostConfirmation.revision, mono: true },
+              { label: "Host policy digest", value: effect.lastHostConfirmation.digest, mono: true },
+              { label: "Service incarnation", value: effect.lastHostConfirmation.incarnation, mono: true },
+              { label: "Controller epoch", value: effect.lastHostConfirmation.epoch, mono: true },
+            ] : []),
+          ]} />
+        </details>
+      </li>)}
+    </ul> : null}
     {unsettled ? <p className="execution-muted">{awaitingOutcome ? "Checking the outcome automatically. " : ""}
       {canStopUnknown ? "Other actions wait until it settles; Stop is in the actions menu." : "Other actions wait until this operation settles."}</p> : null}
     {children}
@@ -337,7 +360,7 @@ export function runtimeDiagnostics(controller: RuntimeController): KeyValueItem[
   const unconfirmed = runtime.connectionState === "unknown" || runtime.connectionState === "unreachable" || runtime.connectionState === "recovery_required";
   return [
     { label: "Connection preference", value: preferenceLabels[runtime.preference] },
-    { label: "Configuration", value: runtime.applyState === "pending" && runtime.startupEnvironmentPending ? "Pending restart" : applyLabels[runtime.applyState] },
+    { label: "Configuration", value: runtime.applyState === "pending" && needsBackendRestart(runtime) ? effectLabels.restart_backend : applyLabels[runtime.applyState] },
     { label: "Saved revision", value: runtime.desiredRevision, mono: true },
     { label: "Applied revision", value: runtime.effectiveRevision ?? "Not confirmed", mono: runtime.effectiveRevision !== null },
     { label: "Active or unconfirmed resources", value: unconfirmed ? "Not confirmed" : runtime.activeResources },
@@ -348,7 +371,7 @@ export function runtimeDiagnostics(controller: RuntimeController): KeyValueItem[
   ];
 }
 
-/** Confirms a command that interrupts running work, listing exactly what it affects. */
+/** Shows the current impact or operator attestation before submitting its fenced lifecycle command. */
 export function RuntimeImpactDialog({ controller }: { readonly controller: RuntimeController }): React.JSX.Element {
   const { impact, label, runtime, stopEffect } = controller;
   const focusReturn = useFocusReturn();
@@ -357,6 +380,7 @@ export function RuntimeImpactDialog({ controller }: { readonly controller: Runti
   useEffect(() => { if (impact) setShown(impact); }, [impact]);
   const current = impact ?? shown;
   const action = current ? actionLabels[current.action] : "";
+  const confirmsRetirement = current?.action === "confirm_retirement";
   const retiresAttachment = current?.action === "stop" && stopEffect === "attachment";
   const unknownStopEffect = current?.action === "stop" && stopEffect === "unknown";
   const unreachableStop = current?.action === "stop" && runtime?.connectionState === "unreachable";
@@ -369,11 +393,14 @@ export function RuntimeImpactDialog({ controller }: { readonly controller: Runti
     : unknownStopEffect ? "Stop ends Sedes-owned execution or retires Sedes's attachment to an external server. External servers are left running."
     : "Running work will be interrupted; interrupted work is not restarted automatically.";
   return <ConfirmDialog open={Boolean(impact)} onOpenChange={(open) => { if (!open) controller.cancelImpact(); }}
-    title={`${action} ${label}?`} tone="danger" confirmLabel={`Confirm ${action.toLowerCase()}`}
-    description={current ? `${current.activeResources} affected resource${current.activeResources === 1 ? "" : "s"}. ${consequence}` : undefined}
+    title={confirmsRetirement ? `Confirm retirement of ${label}?` : `${action} ${label}?`} tone="danger"
+    confirmLabel={confirmsRetirement ? "I verified the processes have stopped" : `Confirm ${action.toLowerCase()}`}
+    description={confirmsRetirement ? "Independently check the named host. Stop any remaining processes owned by this backend before confirming." : current ? `${current.activeResources} affected resource${current.activeResources === 1 ? "" : "s"}. ${consequence}` : undefined}
     onConfirm={controller.confirmImpact} {...focusReturn}>
     {current ? <div className="execution-impact">
-      <p>{unreachableStop
+      <p>{confirmsRetirement
+        ? "Sedes records your verification for this backend only."
+        : unreachableStop
         ? "Work on the host may still be running. Reconnect and inspect its status before deciding whether to stop it again."
         : retiresAttachment
         ? "Pending Sedes results may remain unknown, and retained output may be lost. Connect again to establish a new Sedes attachment."

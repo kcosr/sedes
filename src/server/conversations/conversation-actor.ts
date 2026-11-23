@@ -1052,10 +1052,22 @@ export class ConversationActor {
     });
   }
 
+  #assertWorkspaceCurrent(): void {
+    try { this.#environmentLease?.assertCurrent?.(); }
+    catch {
+      throw new BackendError({ category: "unavailable", retryable: false, crossedSubmissionBoundary: false,
+        safeMessage: "The workspace root changed. Revalidate the workspace before sending new input." });
+    }
+  }
+
   submit(input: ApplicationSubmitTurnInput): Promise<SubmitTurnResult> {
     return this.#runStartingMutation(() =>
       this.#deliverPreparedInput(input, (prepared) =>
-        this.#nativeEffects.run(() => this.#handle.submit(prepared)),
+        this.#nativeEffects.run(() => {
+          this.#assertWorkspaceCurrent();
+          input.attachmentEvidence?.assertDeliverable?.();
+          return this.#handle.submit(prepared);
+        }),
       ),
     );
   }
@@ -1134,7 +1146,11 @@ export class ConversationActor {
       }
       const result = await this.#deliverPreparedInput(
         { ...input, target },
-        (prepared) => this.#nativeEffects.run(() => this.#handle.steer(prepared)),
+        (prepared) => this.#nativeEffects.run(() => {
+          this.#assertWorkspaceCurrent();
+          input.attachmentEvidence?.assertDeliverable?.();
+          return this.#handle.steer(prepared);
+        }),
       );
       if (target.kind === "turn" && result.backendTurnId !== target.turnId) {
         throw new BackendError({
@@ -1174,7 +1190,7 @@ export class ConversationActor {
 
   perform(input: RegisteredBackendActionInput): Promise<BackendActionResult> {
     return input.action === "compact"
-      ? this.#runStartingMutation(() => this.#handle.perform(input))
+      ? this.#runStartingMutation(() => { this.#assertWorkspaceCurrent(); return this.#handle.perform(input); })
       : this.#enqueue(() => this.#handle.perform(input));
   }
 
@@ -1193,7 +1209,7 @@ export class ConversationActor {
           this.#projector.backendTurnId(head) !== input.backendTurnId || !this.#handle.recoverModelFailure) {
         return "rejected";
       }
-      return this.#nativeEffects.run(() => this.#handle.recoverModelFailure!(input));
+      return this.#nativeEffects.run(() => { this.#assertWorkspaceCurrent(); return this.#handle.recoverModelFailure!(input); });
     });
   }
 

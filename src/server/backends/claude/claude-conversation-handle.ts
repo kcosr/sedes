@@ -527,6 +527,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       });
     };
     this.#session = input.runtimeClient.createSession({
+      applicationThreadId: input.binding.applicationThreadId,
       executionEnvironment: input.executionEnvironment,
       executablePath: input.executablePath,
       initializationTimeoutMs: input.initializationTimeoutMs,

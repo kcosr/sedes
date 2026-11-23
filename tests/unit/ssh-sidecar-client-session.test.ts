@@ -1,3 +1,5 @@
+import {inRecoveryRequest} from "../../src/internal/sidecar-protocol/recovery-context.js";
+import {policyAcquireRouteOperation} from "../../src/internal/sidecar-protocol/execution-policy.js";
 import { createAgentToolCliNamedPipeEndpoint } from "../../src/internal/agent-tool-cli-protocol/local-endpoint.js";
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -13,7 +15,7 @@ import {
   controlPingOperation,
   terminalPrepareOperation,
   interactiveTerminalV2Operations,
-  registerControlV2Operations,
+  registerControlV3Operations,
   workspaceFilesListOperation,
   workspaceFilesInvalidatedEventSchema,
   workspaceFilesWatchFailedEventSchema,
@@ -98,6 +100,30 @@ const workspaceContextEvidence = Object.freeze({
 });
 
 describe("SidecarClientSession", () => {
+  it("narrows opaque provider requests to retained operations before main confirms policy", async () => {
+    const streams = byteStreamPair();
+    const operations = new SidecarOperationRegistry();
+    const runtime = {capabilityId: "opencode_runtime", majorVersion: 5, operations: openCodeRuntimeOperations.map(operation => operation.operation)};
+    const body = {capabilityId: sidecarRuntimeBodyOffer.capabilityId, majorVersion: 1, operations: [sidecarRuntimeBodyOffer.operation]};
+    const received = vi.fn(() => inRecoveryRequest());
+    for (const operation of openCodeRuntimeOperations) operations.register(operation, request => { received(); return request; });
+    operations.register(sidecarRuntimeBodyOffer, () => ({accepted: true}));
+    registerControlV3Operations(operations, {buildId: artifact.buildId, artifactSha256: artifact.artifactSha256,
+      enabledSidecarCapabilities: [runtime, body].map(({capabilityId, majorVersion}) => ({capabilityId, majorVersion})), enabledSedesCapabilities: [body]});
+    const host = new SidecarProtocolPeer({role: "sidecar", sessionNonce, registry: operations,
+      transport: new LengthPrefixedSidecarFrameTransport({assurance: {kind: "test", carrierGeneration: 1}, stream: streams.right})});
+    host.start();
+    const session = await SidecarClientSession.start({connectionCompression: false, policyAttachment: "normal",
+      readDesiredPolicy: () => {throw Error("sidecar_policy_revision_conflict");}, stream: streams.left, transportKind: "ssh_stdio",
+      carrierGeneration: 1, sessionNonce, artifact, installation, signal: new AbortController().signal, authorizedCapabilities: [],
+      authorizedRuntimeCapabilities: [runtime], sedesOperations: new SidecarOperationRegistry()});
+    try {
+      const inspect = await session.runtimeChannel.encodeBody({action: "inspect"});
+      await expect(session.runtimeChannel.call(openCodeRuntimeOperations[0], inspect)).resolves.toEqual(inspect);
+      expect(received).toHaveReturnedWith(true);
+    } finally { await session.close("done"); await host.close("done"); }
+  });
+
   it.each(["ssh_stdio", "outbound_websocket"].flatMap(transportKind => [true, false].map(privateSupported => ({ transportKind, privateSupported }))))("negotiates exact OpenCode tools over $transportKind (private support $privateSupported)", async ({ transportKind, privateSupported }) => {
     const streams = byteStreamPair(), registry = new SidecarOperationRegistry();
     const runtime = { capabilityId: "opencode_runtime", majorVersion: 5, operations: openCodeRuntimeOperations.map(operation => operation.operation) };
@@ -105,10 +131,9 @@ describe("SidecarClientSession", () => {
     const privateTools = { capabilityId: openCodeToolInvokeOperation.capabilityId, majorVersion: openCodeToolInvokeOperation.majorVersion, operations: [openCodeToolInvokeOperation.operation] };
     for (const operation of openCodeRuntimeOperations) registry.register(operation, () => { throw new Error("unexpected native invocation"); });
     registry.register(sidecarRuntimeBodyOffer, () => ({ accepted: true }));
-    const prepare = vi.fn(() => ({ endpoint: "unix:///run/user/1000/sedes/agent-tools.sock", executableDirectory: installation.executableDirectory, inheritedPath: "/usr/bin" }));
-    registerControlV2Operations(registry, { buildId: artifact.buildId, artifactSha256: artifact.artifactSha256,
+    registerControlV3Operations(registry, { buildId: artifact.buildId, artifactSha256: artifact.artifactSha256,
       enabledSidecarCapabilities: [runtime, body].map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion })),
-      enabledSedesCapabilities: [agentToolsInventory, ...(privateSupported ? [privateTools] : []), body], prepareSedesCapabilities: prepare });
+      enabledSedesCapabilities: [agentToolsInventory, ...(privateSupported ? [privateTools] : []), body] });
     const host = new SidecarProtocolPeer({ role: "sidecar", sessionNonce, registry,
       transport: new LengthPrefixedSidecarFrameTransport({ assurance: { kind: "test_server", carrierGeneration: 1 }, stream: streams.right }) });
     host.start();
@@ -122,7 +147,6 @@ describe("SidecarClientSession", () => {
       expect(host.supportsOperation(openCodeToolInvokeOperation)).toBe(privateSupported);
       expect(session.runtimeChannel.supportsIncomingOperation(openCodeToolInvokeOperation)).toBe(privateSupported);
       expect(session.runtimeChannel.supportsOperation(openCodeRuntimeOperations[0]!)).toBe(true);
-      expect(prepare).toHaveBeenCalledOnce();
       const stamp = { authority: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "environment", backendInstanceId: "backend",
         runtimeId: "runtime", nativeGeneration: "generation", directory: "/workspace", session: { applicationThreadId: randomUUID(), nativeSessionID: "ses_source", bindingFingerprint: "binding" } },
         journalId: "journal", throughSequence: 1, nativeContinuity: "continuity", inputId: "msg_current", authorityEpoch: 1, nativeConnected: true };
@@ -161,7 +185,7 @@ describe("SidecarClientSession", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const streams = byteStreamPair();
     const registry = new SidecarOperationRegistry();
-    registerControlV2Operations(registry, { buildId: artifact.buildId, artifactSha256: artifact.artifactSha256,
+    registerControlV3Operations(registry, { buildId: artifact.buildId, artifactSha256: artifact.artifactSha256,
       enabledSidecarCapabilities: [], enabledSedesCapabilities: [] });
     const transport = new LengthPrefixedSidecarFrameTransport({ assurance: { kind: "test_server", carrierGeneration: 1 }, stream: streams.right });
     const host = new SidecarProtocolPeer({ role: "sidecar", transport, sessionNonce, registry });
@@ -203,7 +227,7 @@ describe("SidecarClientSession", () => {
     });
     const streams = byteStreamPair();
     const registry = new SidecarOperationRegistry();
-    registerControlV2Operations(registry, { buildId: artifact.buildId, artifactSha256: artifact.artifactSha256,
+    registerControlV3Operations(registry, { buildId: artifact.buildId, artifactSha256: artifact.artifactSha256,
       enabledSidecarCapabilities: [], enabledSedesCapabilities: [] });
     const transport = new LengthPrefixedSidecarFrameTransport({ assurance: { kind: "test_server", carrierGeneration: 1 }, stream: streams.right });
     const host = new SidecarProtocolPeer({ role: "sidecar", transport, sessionNonce, registry });
@@ -250,7 +274,7 @@ describe("SidecarClientSession", () => {
         }) as never,
       );
     }
-    registerControlV2Operations(registry, {
+    registerControlV3Operations(registry, {
       buildId: artifact.buildId,
       artifactSha256: artifact.artifactSha256,
       enabledSidecarCapabilities: [interactiveTerminalCapability],
@@ -566,12 +590,13 @@ describe("SidecarClientSession", () => {
           }) as never,
         );
       }
-      registerControlV2Operations(sidecarOperations, {
+      sidecarOperations.register(policyAcquireRouteOperation,()=>metadata);
+      registerControlV3Operations(sidecarOperations, {
         buildId: artifact.buildId,
         artifactSha256: artifact.artifactSha256,
         enabledSidecarCapabilities: [workspaceCapability],
         enabledSedesCapabilities: [agentToolsInventory],
-        prepareSedesCapabilities: () => metadata,
+
       });
       const sidecar = new SidecarProtocolPeer({
         role: "sidecar",
@@ -608,15 +633,16 @@ describe("SidecarClientSession", () => {
         sedesOperations,
       });
 
+      const session=await started;
+      const acquired=session.acquirePolicyRoute({capabilityId:"agent_tools_cli",generation:1,backendInstanceId:"backend"});
       if (variant === "windows_wrong_artifact") {
-        await expect(started).rejects.toThrow(
+        await expect(acquired).rejects.toThrow(
           "sidecar_agent_tool_cli_metadata_invalid",
         );
         await sidecar.close("test_complete");
         return;
       }
-      const session = await started;
-      expect(session.agentToolCli).toEqual(metadata);
+      expect(await acquired).toEqual(metadata);
       expect(session.negotiatedCapabilities.some(capability => capability.capabilityId === "agent_tools_cli")).toBe(false);
       await expect(
         sidecar.call(agentToolsCatalogOperation, {
@@ -687,7 +713,7 @@ describe("SidecarClientSession", () => {
           }) as never,
         );
       }
-      registerControlV2Operations(registry, {
+      registerControlV3Operations(registry, {
         buildId: artifact.buildId,
         artifactSha256: artifact.artifactSha256,
         enabledSidecarCapabilities: [workspaceCapability],
@@ -782,7 +808,7 @@ describe("SidecarClientSession", () => {
           }) as never,
         );
       }
-      registerControlV2Operations(registry, {
+      registerControlV3Operations(registry, {
         buildId: artifact.buildId,
         artifactSha256: artifact.artifactSha256,
         enabledSidecarCapabilities: [workspaceCapability],
@@ -846,7 +872,7 @@ describe("SidecarClientSession", () => {
         }) as never,
       );
     }
-    registerControlV2Operations(registry, {
+    registerControlV3Operations(registry, {
       buildId: artifact.buildId,
       artifactSha256: artifact.artifactSha256,
       enabledSidecarCapabilities: [workspaceCapability],
@@ -908,7 +934,7 @@ describe("SidecarClientSession", () => {
         }) as never,
       );
     }
-    registerControlV2Operations(registry, {
+    registerControlV3Operations(registry, {
       buildId: artifact.buildId,
       artifactSha256: artifact.artifactSha256,
       enabledSidecarCapabilities: [workspaceCapability],
@@ -1032,7 +1058,7 @@ async function startWorkspaceFilesSession() {
       }) as never,
     );
   }
-  registerControlV2Operations(registry, {
+  registerControlV3Operations(registry, {
     buildId: artifact.buildId,
     artifactSha256: artifact.artifactSha256,
     enabledSidecarCapabilities: [workspaceCapability],

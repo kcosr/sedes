@@ -1,3 +1,4 @@
+import type { ConfigurationTarget } from "../../shared/protocol/configuration-admin.js";
 import type {
   BackendModuleRuntime,
   BackendModuleRuntimeContext,
@@ -61,6 +62,8 @@ type Entry = {
   readonly prepared: PreparedBackendModule;
   readonly executionEnvironmentId: string;
   readonly leases: BackendNativeStoreLease[];
+  connections?: BackendModuleRuntimeContext["connections"];
+  targets?: ReadonlyMap<string, ConfigurationTarget>;
   runtime?: BackendModuleRuntime;
   factory?: BackendDriverFactory;
   phase?: "starting" | "ready" | "discarding";
@@ -171,16 +174,31 @@ export class PrincipalBackendRuntimeCollection
     "installationAdvisories",
   );
   readonly savedAgentAdapters = new SavedAgentBackendAdapterRegistry([]);
-  #tail: Promise<unknown> = Promise.resolve();
+  readonly #tails = new Map<string, Promise<unknown>>();
   #closed = false;
 
   constructor(
     readonly input: {
       readonly scope: RequestScope;
       readonly registry: AgentBackendRegistry;
+      readonly withConnectionAuthorization?: BackendDriverFactory["withConnectionAuthorization"];
+      readonly connectionGeneration?: (connection: BackendModuleRuntimeContext["connections"][number]) => number | undefined;
       readonly desiredInstanceRevision: (backendInstanceId: string) => number | undefined;
     },
   ) {}
+
+  /** Update selectors used for new work while retaining existing drivers and handles. */
+  updateConnections(id: string, connections: BackendModuleRuntimeContext["connections"], targets: readonly ConfigurationTarget[]): void {
+    const entry = this.#entries.get(id);
+    if (!entry) return;
+    if (connections.some(profile => profile.tenantId !== this.input.scope.tenantId ||
+        profile.ownerPrincipalId !== this.input.scope.principalId || profile.backendInstanceId !== id ||
+        profile.executionEnvironmentId !== entry.executionEnvironmentId) ||
+        targets.some(target => target.backendInstanceId !== id || target.executionEnvironmentId !== entry.executionEnvironmentId))
+      throw new Error("backend_runtime_connection_scope_invalid");
+    entry.connections = [...connections];
+    entry.targets = new Map(targets.map(target => [target.id, target]));
+  }
 
   /** Captured host authority survives withdrawal and failed cleanup. */
   executionEnvironmentId(backendInstanceId: string): string | undefined {
@@ -192,7 +210,7 @@ export class PrincipalBackendRuntimeCollection
     retirement: BackendRuntimeRetirementAuthority,
     signal?: AbortSignal,
   ): Promise<BackendRuntimeApplyResult> {
-    return this.#serialize(async () => {
+    return this.#serialize(plan.context.instance.id, async () => {
       this.#assertOpen();
       signal?.throwIfAborted();
       this.#validatePlan(plan);
@@ -234,7 +252,7 @@ export class PrincipalBackendRuntimeCollection
     retirement: BackendRuntimeRetirementAuthority,
     { signal, startupTimeoutMs }: BackendRuntimeStartupOptions = {},
   ): Promise<BackendRuntimeStartup> {
-    return this.#serialize(async () => {
+    return this.#serialize(plan.context.instance.id, async () => {
       this.#assertOpen();
       signal?.throwIfAborted();
       this.#validatePlan(plan);
@@ -263,7 +281,7 @@ export class PrincipalBackendRuntimeCollection
         timer?.unref();
         const entry: Entry = { prepared: plan.prepared, executionEnvironmentId: plan.context.environmentChannel.executionEnvironmentId,
           leases: [], phase: "starting", startupAbort: controller };
-        this.#entries.set(id, entry);
+        this.#reserve(id, entry);
         entry.startup = Promise.resolve().then(async (): Promise<BackendRuntimeStartupResult> => {
           try {
             await this.#initialize(plan, entry, startupSignal);
@@ -277,7 +295,7 @@ export class PrincipalBackendRuntimeCollection
         return {
           backendInstanceId: id, completion: entry.startup,
           cancel: () => { controller.abort(); if (entry.phase) entry.phase = "discarding"; },
-          publish: () => this.#serialize(async () => {
+          publish: () => this.#serialize(id, async () => {
             this.#assertOpen(); cancellationSignal.throwIfAborted();
             if (this.#entries.get(id) !== entry || entry.phase !== "ready" ||
                 this.input.desiredInstanceRevision(id) !== plan.context.instance.configurationRevision) {
@@ -309,7 +327,7 @@ export class PrincipalBackendRuntimeCollection
       if (this.#entries.get(id) === entry) this.#failure(id, error, true);
       throw error;
     }
-    await this.#serialize(async () => {
+    await this.#serialize(id, async () => {
       if (this.#entries.get(id) !== entry) return;
       this.#entries.delete(id); this.#failures.delete(id);
     });
@@ -322,7 +340,7 @@ export class PrincipalBackendRuntimeCollection
     // Cancel immediately when already visible, then inspect again under the
     // lock: a queued reservation may not have installed its entry yet.
     this.#entries.get(backendInstanceId)?.startupAbort?.abort();
-    const discard = await this.#serialize(async (): Promise<(() => Promise<void>) | undefined> => {
+    const discard = await this.#serialize(backendInstanceId, async (): Promise<(() => Promise<void>) | undefined> => {
       this.#assertOpen();
       const entry = this.#entries.get(backendInstanceId);
       if (!entry) { this.#failures.delete(backendInstanceId); return; }
@@ -349,7 +367,8 @@ export class PrincipalBackendRuntimeCollection
     const pending = [...this.#entries].filter(([, entry]) => entry.phase);
     for (const [, entry] of pending) { entry.phase = "discarding"; entry.startupAbort?.abort(); }
     await Promise.all(pending.map(([, entry]) => entry.startup));
-    return this.#serialize(async () => {
+    await Promise.allSettled([...this.#tails.values()]);
+    return this.#serialize("shutdown", async () => {
       const errors: unknown[] = [];
       for (const [id, entry] of [...this.#entries].reverse()) {
         this.#withdraw(id, entry);
@@ -373,9 +392,14 @@ export class PrincipalBackendRuntimeCollection
   async #start(plan: BackendRuntimePlan, signal?: AbortSignal): Promise<BackendRuntimeApplyResult> {
     const id = plan.context.instance.id;
     const entry: Entry = { prepared: plan.prepared, executionEnvironmentId: plan.context.environmentChannel.executionEnvironmentId, leases: [] };
-    this.#entries.set(id, entry);
+    this.#reserve(id, entry);
     try { await this.#initialize(plan, entry, signal); return this.#publish(plan, entry); }
     catch (error) { return this.#failedStartup(id, entry, error); }
+  }
+
+  #reserve(id: string, entry: Entry): void {
+    planBackendNativeStores([...this.#entries.values()].map(other => other.prepared).concat(entry.prepared));
+    this.#entries.set(id, entry);
   }
 
   async #initialize(plan: BackendRuntimePlan, entry: Entry, signal?: AbortSignal): Promise<void> {
@@ -387,7 +411,9 @@ export class PrincipalBackendRuntimeCollection
       entry.leases.push(await store.acquire());
     }
     signal?.throwIfAborted();
-    const runtime = prepared.createRuntime(context);
+    entry.connections ??= context.connections;
+    const runtime = prepared.createRuntime({ ...context, get connections() { return entry.connections!; },
+      targetDefinition: templateId => entry.targets?.get(templateId) });
     entry.runtime = runtime; // Own even a malformed or partially started runtime.
     if (
       !sameScope(runtime.scope, this.input.scope) ||
@@ -423,7 +449,14 @@ export class PrincipalBackendRuntimeCollection
     ];
     // Validate adapter contracts before registering any contribution.
     new SavedAgentBackendAdapterRegistry(registrations);
+    const connectionGeneration = (profile: BackendModuleRuntimeContext["connections"][number]) => {
+      const current = entry.connections?.find(candidate => candidate.id === profile.id);
+      if (!current?.enabled || !sameConnection(current, profile) || current.configurationRevision !== profile.configurationRevision) return undefined;
+      return this.input.connectionGeneration ? this.input.connectionGeneration(current) : current.configurationRevision;
+    };
     const factory: BackendDriverFactory = {
+      connectionGeneration,
+      ...(this.input.withConnectionAuthorization && {withConnectionAuthorization: this.input.withConnectionAuthorization}),
       scope: runtime.driverFactory.scope,
       instance: runtime.driverFactory.instance,
       connectionKinds: runtime.driverFactory.connectionKinds,
@@ -433,11 +466,7 @@ export class PrincipalBackendRuntimeCollection
         ? { creationIdentity: runtime.driverFactory.creationIdentity }
         : {}),
       create: (connection) => {
-        const expected = context.connections.find(
-          ({ id: profileId }) => profileId === connection.id,
-        );
-        if (!expected || !sameConnection(expected, connection) ||
-          this.input.desiredInstanceRevision(id) !== context.instance.configurationRevision)
+        if (connectionGeneration(connection) === undefined)
           throw new DomainError("runtime_unavailable", "Configuration change pending for this backend.", true);
         return runtime.driverFactory.create(connection);
       },
@@ -569,9 +598,12 @@ export class PrincipalBackendRuntimeCollection
   #assertOpen(): void {
     if (this.#closed) throw new Error("backend_runtime_collection_closed");
   }
-  #serialize<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#tail.then(operation);
-    this.#tail = result.catch(() => undefined);
+  #serialize<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const result = (this.#tails.get(key) ?? Promise.resolve()).then(operation);
+    const tail = result.then(() => {}, () => {}).finally(() => {
+      if (this.#tails.get(key) === tail) this.#tails.delete(key);
+    });
+    this.#tails.set(key, tail);
     return result;
   }
 }
@@ -593,9 +625,7 @@ function sameConnection(
     left.templateId === right.templateId &&
     left.backendInstanceId === right.backendInstanceId &&
     left.executionEnvironmentId === right.executionEnvironmentId &&
-    left.configurationRevision === right.configurationRevision &&
     left.enabled === right.enabled &&
-    left.kind === right.kind &&
-    left.label === right.label
+    left.kind === right.kind
   );
 }

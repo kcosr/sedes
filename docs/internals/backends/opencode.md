@@ -80,14 +80,17 @@ critical evidence prevents new ordinary work while preserving the independent
 control path.
 
 The persistent sidecar advertises major 5 of the private `opencode_runtime`
-capability under sidecar wire protocol 17 on Linux. Its registry owns the same
+capability under sidecar wire protocol 18 on Linux. Its registry owns the same
 runtime/host used locally; SSH and outbound
 carriers share typed operations and the bounded runtime body channel. Carrier
 detach releases ports and subscribers, preserving the native owner and evidence.
 Existing-only recovery can reopen exact retained thread authority after a
-configuration change, but cannot create scopes or submit new work. Backend
+configuration change. Recovery can reject a pending permission, cancel a form, and replay an exact original write receipt. A fresh approval or form answer requires the current backend grant. Backend
 administration can inspect and explicitly retire the original owner even after
-desired native paths change. Scope acquisition, evidence recovery and controls
+desired native paths change. Ordinary lookups use the immutable native store and
+scope. A fresh launch must match the currently installed backend generation and
+desired launch digest. Unrelated target changes preserve normal ports, native
+identities and observation subscriptions. Scope acquisition, evidence recovery and controls
 have a separate lane from ordinary history/body requests. Observations multiplex
 into at most two polling requests per carrier, with bounded aggregate responses
 and separate evidence/presentation purposes. Closing one subscription cannot
@@ -549,7 +552,10 @@ later on main.
 
 The private `opencode_tools` reverse operation carries that stamp beside the
 canonical tool request. It requires both the OpenCode runtime capability and the
-existing `agent_tools_cli` grant. Source resolution, policy, approvals, invocation
+current tool grant. Remote tool admission acquires the scoped reverse-operation
+descriptor for that backend and grant generation. Both the CLI route and native
+MCP registration retain their original endpoint identity. Withdrawing and
+regranting tools requires a fresh tool admission. Source resolution, policy, approvals, invocation
 and result projection continue through the shared canonical relay; catalog and
 description use its existing operations. Unstamped OpenCode invocation through
 the generic reverse operation is rejected. Cancellation and carrier loss do not

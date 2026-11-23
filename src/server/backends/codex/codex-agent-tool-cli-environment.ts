@@ -1,6 +1,7 @@
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { ConversationCreationProvenanceRepository } from "../../db/repositories/conversation-creation-provenance-repository.js";
 import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
+import { boundedAgentToolPath, MAX_AGENT_TOOL_EXECUTABLE_DIRECTORY_BYTES, MAX_AGENT_TOOL_INHERITED_PATH_BYTES } from "../../../internal/agent-tool-cli-protocol/path-limits.js";
 import { isAgentToolCliEndpoint } from "../../../internal/agent-tool-cli-protocol/local-endpoint.js";
 import { pathForRemoteRoot } from "../../execution/remote-path.js";
 import type Database from "better-sqlite3";
@@ -581,7 +582,7 @@ function absoluteDirectory(value: string): string {
     value,
     "codex_agent_tool_cli_directory_invalid",
   );
-  if (!normalizedAbsolutePath(bounded)) {
+  if (!normalizedAbsolutePath(bounded) || !boundedAgentToolPath(bounded, MAX_AGENT_TOOL_EXECUTABLE_DIRECTORY_BYTES)) {
     throw new Error("codex_agent_tool_cli_directory_invalid");
   }
   return bounded;
@@ -590,8 +591,7 @@ function absoluteDirectory(value: string): string {
 function boundedEnvironmentValue(value: string, code: string): string {
   if (
     value.length === 0 ||
-    Buffer.byteLength(value, "utf8") > 16_384 ||
-    /[\u0000\r\n]/u.test(value)
+    !boundedAgentToolPath(value, MAX_AGENT_TOOL_INHERITED_PATH_BYTES)
   ) {
     throw new Error(code);
   }

@@ -1,3 +1,6 @@
+import type { ClaudePersistentConfiguration } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-wire.js";
+import { attachFixturePolicy, installFixturePolicy } from "../helpers/execution-policy-fixture.js";
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { ClaudeConversationBackendDriver } from "../../src/server/backends/claude/claude-conversation-driver.js";
 import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
@@ -32,6 +35,8 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
 async function fixture(options: {
+  readonly emptyWorker?: () => boolean;
+  readonly readLaunchConfiguration?: () => ClaudePersistentConfiguration | undefined;
   readonly validateAgentToolMcp?: (agentToolMcp: NonNullable<ClaudeRuntimeSessionOptions["agentToolMcp"]>) => void;
   readonly detachedSessionTtlMs?: number;
   readonly maximumCompactReceiptBytes?: number;
@@ -43,7 +48,9 @@ async function fixture(options: {
     scope: { tenantId: scope.tenantId, principalId: scope.principalId, executionEnvironmentId: scope.executionEnvironmentId, installationId: "installation" }, buildId: "test", artifactSha256: "a".repeat(64),
     runtimeWireVersion: 1, configuration: serviceConfiguration, recordAbandonment: archive,
   });
-  const createRuntime = vi.fn(() => native.runtime);
+  const disposeEmpty = vi.fn();
+  const createRuntime = vi.fn((_config: ClaudePersistentConfiguration) => options.emptyWorker
+    ? { ...native.runtime, emptyAfterCleanup: options.emptyWorker, disposeEmpty } : native.runtime);
   const hosts = new ClaudePersistentRuntimeRegistry({
     scope, executionEnvironmentId: scope.executionEnvironmentId,
     environmentChannel: {} as ExecutionEnvironmentChannelProvider, environment: {}, services,
@@ -65,11 +72,17 @@ async function fixture(options: {
   };
   const clients: ClaudePersistentRuntimeClient[] = [];
   const carriers: { close(): Promise<void> }[] = [];
-  async function attach() {
+  async function attach(startup: EnvironmentVariableOverrides = {}) {
     const carrier = await createSidecarFramedCarrier();
-    const controllerEpoch = services.attach(serviceConfiguration);
+    const controllerEpoch = attachFixturePolicy(services, serviceConfiguration, "normal", {
+      roots: [{id:"workspace-root", path:"/workspace", generation:1}],
+      capabilities: options.validateAgentToolMcp ? [{id:"agent_tools_cli",generation:2}] : [],
+      backends: [{id:scope.backendInstanceId,kind:"claude_agent_sdk",generation:3,
+        launchDigest:runtimeLaunchDigest.claude_agent_sdk(configuration, startup), targets:[{id:"profile", generation:4}]}],
+    });
     const detach = registerClaudePersistentRuntimeHost({
       registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, controllerEpoch,
+      getExecutionPolicy: () => services.executionPolicy(controllerEpoch),
       onDetach: () => services.detach(controllerEpoch),
     });
     await carrier.start();
@@ -81,7 +94,7 @@ async function fixture(options: {
     current = lease;
     const attached = {
       ...carrier, lease,
-      connection: new ClaudeSidecarRuntimeConnection(carrier.mainChannel),
+      connection: new ClaudeSidecarRuntimeConnection(carrier.mainChannel, scope.backendInstanceId),
       async close() {
         if (current === lease) current = undefined;
         detach();
@@ -93,7 +106,7 @@ async function fixture(options: {
     return attached;
   }
   function client(startupEnvironmentVariables?: EnvironmentVariableOverrides) {
-    const value = new ClaudePersistentRuntimeClient({ ...configuration, scope, sidecarRuntime, startupEnvironmentVariables });
+    const value = new ClaudePersistentRuntimeClient({ ...configuration, scope, sidecarRuntime, startupEnvironmentVariables, readLaunchConfiguration: options.readLaunchConfiguration });
     clients.push(value);
     return value;
   }
@@ -110,7 +123,7 @@ async function fixture(options: {
     for (const carrier of carriers) await carrier.close();
     await native.runtime.close();
   });
-  return { ...native, services, hosts, attach, client, stop, archive, createRuntime };
+  return { ...native, services, hosts, attach, client, stop, archive, createRuntime, disposeEmpty };
 }
 
 function sessionOptions(sessionId: string, overrides: Partial<ClaudeRuntimeSessionOptions> = {}): ClaudeRuntimeSessionOptions {
@@ -235,7 +248,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const input = { operationId: randomUUID(), instructions: "Keep the pending investigation." };
     const lost = expect(session.compact(input)).rejects.toThrow();
     await vi.waitFor(() => expect(native.compact).toHaveBeenCalledExactlyOnceWith(input));
-    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const host = f.hosts.get(await carrier.connection.ensure(configuration));
     expect(host.snapshot().blockers).toContain("active_work");
     await carrier.close();
     await lost;
@@ -274,7 +287,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
         cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
     native.compact.mockResolvedValueOnce({ outcome: "noop", message: "Not enough history to compact.", nativeResult });
     const result = await session.compact(input);
-    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const host = f.hosts.get(await carrier.connection.ensure(configuration));
     const authority = { runtimeId: host.runtimeId, controllerEpoch: carrier.lease.controllerEpoch };
     await expect(carrier.connection.execute({ ...authority, action: "compact", request: {
       queryId: id, startupProbeUuid: randomUUID(), operationId: randomUUID(),
@@ -326,7 +339,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(await session.reconcileCompact(input)).toEqual({ outcome: "unknown", pending: true });
     await expect(session.compact(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
     expect(native.compact).toHaveBeenCalledOnce();
-    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const host = f.hosts.get(await carrier.connection.ensure(configuration));
     expect(host.snapshot().blockers).toEqual(expect.arrayContaining(["active_work", "unsettled_outcome"]));
     await expect(session.compact({ operationId: randomUUID() })).rejects.toMatchObject({ backendCode: "claude_compact_busy", crossedSubmissionBoundary: false });
     await expect(session.send({ operationId: randomUUID(), content: "Do not resend while uncertain." })).rejects.toMatchObject({ crossedSubmissionBoundary: false, backendCode: "claude_persistent_query_busy" });
@@ -373,7 +386,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(dispatched).toEqual([input.operationId]);
     expect(native.compact).toHaveBeenCalledTimes(2); // native admission, then exact retained-result read
     expect(native.send).not.toHaveBeenCalled();
-    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const host = f.hosts.get(await carrier.connection.ensure(configuration));
     expect(host.snapshot().blockers).toEqual([]);
   });
 
@@ -389,7 +402,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     native.reconcileCompact.mockResolvedValue({ outcome: "unknown", pending: false, nativeResult });
     await expect(session.compact(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true, nativeResult });
     expect(await session.reconcileCompact(input)).toEqual({ outcome: "unknown", pending: false, nativeResult });
-    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const host = f.hosts.get(await carrier.connection.ensure(configuration));
     expect(host.snapshot().blockers).toEqual([]);
     expect(await session.compact({ operationId: randomUUID() })).toEqual({ outcome: "compacted" });
     await session.close({ reason: "evicted" }); expect(native.closed).toBe(true);
@@ -402,7 +415,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
   it("remembers a scoped frozen-admission refusal and never redispatches its operation after admission resumes", async () => {
     const f = await fixture(); const carrier = await f.attach();
     const id = randomUUID(); const session = f.client().createSession(sessionOptions(id)); await session.start();
-    const native = f.sessions[0]!; const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const native = f.sessions[0]!; const host = f.hosts.get(await carrier.connection.ensure(configuration));
     const input = { operationId: randomUUID() };
     host.freezeAdmission();
     await expect(session.compact(input)).rejects.toMatchObject({ backendCode: "claude_persistent_admission_frozen", crossedSubmissionBoundary: false });
@@ -428,7 +441,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
       ? { cwd: "/another-workspace" }
       : { canUseTool: async () => ({ behavior: "deny" as const, message: "Scoped test policy" }) }) }));
     await restored.start(); const current = f.sessions[1]!;
-    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch); host.freezeAdmission();
+    const host = f.hosts.get(await carrier.connection.ensure(configuration)); host.freezeAdmission();
     const authority = { runtimeId: host.runtimeId, controllerEpoch: carrier.lease.controllerEpoch };
     const request = { queryId: id, startupProbeUuid: current.startupProbeUuid, ...input };
     await expect(carrier.connection.execute({ ...authority, action: "compact", request })).resolves.toMatchObject({
@@ -443,7 +456,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
   });
 
   it("classifies missing-query and scoped stopped-runtime refusals as pre-native failures", async () => {
-    const f = await fixture(); const carrier = await f.attach(); const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const f = await fixture(); const carrier = await f.attach(); const host = f.hosts.get(await carrier.connection.ensure(configuration));
     const authority = { runtimeId: host.runtimeId, controllerEpoch: carrier.lease.controllerEpoch };
     const request = { queryId: randomUUID(), startupProbeUuid: randomUUID(), operationId: randomUUID() };
     await expect(carrier.connection.execute({ ...authority, action: "compact", request })).resolves.toMatchObject({
@@ -461,7 +474,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await native.emit({ type: "system", subtype: "background_tasks_changed", uuid: randomUUID(), session_id: id,
       tasks: [{ task_id: "background-child", task_type: "local_agent", description: "Independent investigation" }] } as SDKMessage);
     await session.flushMessages!();
-    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const host = f.hosts.get(await carrier.connection.ensure(configuration));
     expect(host.snapshot().blockers).toContain("active_work");
     const input = { operationId: randomUUID() };
     expect(await session.compact(input)).toEqual({ outcome: "compacted" });
@@ -479,7 +492,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const permission = native.options.canUseTool!("Read", {}, { requestId: "child-permission", toolUseID: "child-tool",
       agentID: "background-child", signal: abort.signal });
     await vi.waitFor(() => expect(decide).toBeTypeOf("function"));
-    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const host = f.hosts.get(await carrier.connection.ensure(configuration));
     expect(host.snapshot().blockers).toContain("pending_interaction");
     const input = { operationId: randomUUID() };
     expect(await session.compact(input)).toEqual({ outcome: "compacted" });
@@ -589,6 +602,37 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     }
   });
 
+  it("reattaches the original application query when the controller's tool endpoint changes or is unavailable", async () => {
+    const validate = vi.fn();
+    const f = await fixture({ validateAgentToolMcp: validate });
+    const original = await f.attach();
+    const applicationThreadId = randomUUID(), sessionId = randomUUID();
+    const options = sessionOptions(sessionId, { applicationThreadId, agentToolMcp });
+    await f.client().createSession(options).start();
+    const worker = f.sessions[0]!;
+    await original.close();
+    const current = await f.attach();
+    const runtimeId = f.services.status().resources[0]!.resourceId;
+    const request = { queryId: sessionId, sessionId, cwd: "/workspace", launch: "resume" as const,
+      enableCanUseTool: false, environment: {} };
+    const open = (threadId: string, mcp?: typeof agentToolMcp, cwd = request.cwd) =>
+      current.connection.execute({ action: "open", runtimeId, controllerEpoch: current.lease.controllerEpoch,
+        applicationThreadId: threadId, replay: "full", request: { ...request, cwd, agentToolMcp: mcp } });
+    await expect(open(applicationThreadId)).rejects.toThrow("claude_persistent_runtime_not_attached");
+    expect(await current.connection.lookup(configuration, current.lease.controllerEpoch)).toBe(runtimeId);
+    const sibling = new ClaudeSidecarRuntimeConnection(current.mainChannel, "sibling-backend");
+    await expect(sibling.execute({ runtimeId, controllerEpoch: current.lease.controllerEpoch, action: "attach", replay: "full", request: { sessionId } }))
+      .rejects.toMatchObject({ code: "claude_persistent_runtime_not_attached" });
+    await expect(open(applicationThreadId)).resolves.toMatchObject({ reattached: true });
+    await expect(open(applicationThreadId, { ...agentToolMcp, endpoint: "unix:///run/user/1000/sedes/new.sock" }))
+      .resolves.toMatchObject({ reattached: true });
+    await expect(open(randomUUID(), agentToolMcp)).rejects.toThrow("claude_persistent_session_configuration_conflict");
+    await expect(open(applicationThreadId, agentToolMcp, "/different-workspace")).rejects.toThrow("claude_persistent_session_configuration_conflict");
+    expect(f.sessions).toEqual([worker]);
+    expect(f.sessions[0]!.options.agentToolMcp).toEqual(agentToolMcp);
+    expect(validate).toHaveBeenCalledOnce();
+  });
+
   it("admits a Native MCP server only through the sidecar's own validator", async () => {
     const open = (
       attached: Awaited<ReturnType<Awaited<ReturnType<typeof fixture>>["attach"]>>,
@@ -603,7 +647,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const attached = await f.attach();
     const sessionId = randomUUID();
     await f.client().createSession(sessionOptions(sessionId, { agentToolMcp })).start();
-    expect(validate).toHaveBeenCalledWith(agentToolMcp);
+    expect(validate).toHaveBeenCalledWith(agentToolMcp, scope.backendInstanceId);
     expect(f.runtime.createSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentToolMcp, environment: {} }),
     );
@@ -634,11 +678,66 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(unvalidated.runtime.createSession).toHaveBeenCalledTimes(1);
   });
 
+  it("a freshly constructed Claude client adopts its saved contract on an empty owner found by existing-only lookup", async () => {
+    const changed = { MODE:{kind:"literal" as const,value:"new"} };
+    const f = await fixture({ emptyWorker: () => true, readLaunchConfiguration: () => ({...configuration,startupEnvironmentVariables:changed}) });
+    const carrier = await f.attach();
+    const id = await carrier.connection.ensure(configuration);
+    const originalPolicy = f.services.executionPolicy(carrier.lease.controllerEpoch);
+    installFixturePolicy(f.services, carrier.lease.controllerEpoch, serviceConfiguration,
+      {...originalPolicy, backends:originalPolicy.backends.map(backend => ({...backend,launchDigest:runtimeLaunchDigest.claude_agent_sdk(configuration,changed)}))});
+    const next = f.client(changed);
+    await expect(next.listSessions({dir:"/workspace"}, {})).resolves.toEqual([]);
+    expect(f.hosts.get(id).input.configuration.startupEnvironmentVariables).toEqual(changed);
+    expect(f.runtime.listSessions).toHaveBeenCalledOnce();
+    expect(f.disposeEmpty).toHaveBeenCalledOnce();
+  });
+
+  it("wakes an evicted Claude worker with saved launch settings and preserves its settled compact journal", async () => {
+    let desired: ClaudePersistentConfiguration | undefined = configuration;
+    let provedEmpty = false;
+    const f = await fixture({ emptyWorker: () => provedEmpty, readLaunchConfiguration: () => desired });
+    const carrier = await f.attach();
+    const client = f.client();
+    const id = randomUUID();
+    const query = client.createSession(sessionOptions(id));
+    await query.start();
+    const runtimeId = f.services.status().resources[0]!.resourceId;
+    const native = f.sessions[0]!;
+    const operation = { operationId: randomUUID(), instructions:"summarize" };
+    native.compact.mockResolvedValueOnce({ outcome:"compacted" });
+    const compact = await query.compact!(operation);
+    const originalPolicy = f.services.executionPolicy(carrier.lease.controllerEpoch);
+    const update = (config: ClaudePersistentConfiguration) => installFixturePolicy(f.services, carrier.lease.controllerEpoch, serviceConfiguration,
+      {...originalPolicy,backends:originalPolicy.backends.map(backend => ({ ...backend,launchDigest:runtimeLaunchDigest.claude_agent_sdk(config,config.startupEnvironmentVariables) }))});
+    const next = { ...configuration, executablePath:"/new/claude", initializationTimeoutMs:8000, startupEnvironmentVariables:{ MODE:{kind:"literal" as const,value:"updated"} } };
+    desired = next;
+    update(next);
+    await expect(carrier.connection.ensure(next)).rejects.toThrow("claude_persistent_configuration_restart_required");
+    await query.close({ reason:"evicted" });
+    expect(native.closed).toBe(true);
+    await expect(carrier.connection.ensure(next)).rejects.toThrow("claude_persistent_configuration_restart_required");
+    provedEmpty = true;
+    const wrongStore = {...next,configDirectory:"/another/store"};
+    update(wrongStore);
+    await expect(carrier.connection.ensure(wrongStore)).rejects.toThrow("claude_persistent_configuration_restart_required");
+    update(next);
+    await expect(client.listSessions({dir:"/workspace"}, {})).resolves.toEqual([]);
+    expect(f.createRuntime.mock.calls.map(([config]) => config.executablePath)).toEqual([configuration.executablePath,next.executablePath]);
+    expect(f.createRuntime.mock.calls[1]![0]).toEqual(next);
+    expect(f.disposeEmpty).toHaveBeenCalledOnce();
+    await expect(carrier.connection.execute({runtimeId,controllerEpoch:carrier.lease.controllerEpoch,action:"compact",request:{
+      queryId:id,startupProbeUuid:native.startupProbeUuid,...operation,
+    }})).resolves.toMatchObject({response:compact});
+    desired = undefined;
+    await expect(client.listSessions({dir:"/workspace"}, {})).rejects.toThrow();
+  });
+
   it("reattaches after main restart with pending startup edits and applies them only after explicit restart", async () => {
     const f = await fixture();
     const applied: EnvironmentVariableOverrides = { PATH: { kind: "literal", value: "/applied/bin" } };
     const desired: EnvironmentVariableOverrides = { PATH: { kind: "literal", value: "/pending/bin" } };
-    const firstCarrier = await f.attach();
+    const firstCarrier = await f.attach(applied);
     const first = f.client(applied);
     const sessionId = randomUUID();
     await first.createSession(sessionOptions(sessionId)).start();
@@ -649,7 +748,8 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await first.close(); await firstCarrier.close();
     expect(f.runtime.close).not.toHaveBeenCalled();
 
-    const secondCarrier = await f.attach();
+    const secondCarrier = await f.attach(desired);
+    await expect(secondCarrier.connection.ensure({ ...configuration, startupEnvironmentVariables: desired })).rejects.toMatchObject({ code: "claude_persistent_configuration_restart_required" });
     const replacement = f.client(desired);
     await replacement.createSession(sessionOptions(sessionId, { launch: "resume" })).start();
     await expect(replacement.listSessions({ dir: "/workspace" }, {})).resolves.toEqual([]);
@@ -808,7 +908,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
   it("withdraws on Stop, before interrupting, only inputs Claude has not started, and records only those Claude withdrew", async () => {
     const f = await fixture();
     const attached = await f.attach();
-    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const host = f.hosts.get(await attached.connection.ensure(configuration));
     const client = f.client();
     const sessionId = randomUUID();
     const roots = new Map<string, string>();
@@ -882,7 +982,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(native.close).not.toHaveBeenCalled();
 
     const second = await f.attach();
-    const host = f.hosts.ensure(configuration, second.lease.controllerEpoch);
+    const host = f.hosts.get(await second.connection.ensure(configuration));
     const client = f.client();
     const replacement = client.createSession(sessionOptions(sessionId, { launch: "resume" }));
     await replacement.start();
@@ -1243,10 +1343,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     async (subtype) => {
       const f = await fixture();
       const attached = await f.attach();
-      const host = f.hosts.ensure(
-        configuration,
-        attached.lease.controllerEpoch,
-      );
+      const host = f.hosts.get(await attached.connection.ensure(configuration));
       const authority = {
         runtimeId: host.runtimeId,
         controllerEpoch: attached.lease.controllerEpoch,
@@ -1450,7 +1547,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
   it.each([false, true])("retains inventory and outcome holds across replacement and eviction with initially backgrounded=%s", async (is_backgrounded) => {
     const f = await fixture();
     const carrier = await f.attach();
-    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const host = f.hosts.get(await carrier.connection.ensure(configuration));
     let authority = { runtimeId: host.runtimeId, controllerEpoch: carrier.lease.controllerEpoch };
     const sessionId = randomUUID();
     const delivered: ClaudePersistentEvent[] = [];
@@ -1511,7 +1608,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
   it("compacts an acknowledged stream beyond the wire event limit and reattaches its complete text", async () => {
     const f = await fixture();
     const attached = await f.attach();
-    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const host = f.hosts.get(await attached.connection.ensure(configuration));
     const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
     const sessionId = randomUUID();
     const delivered: ClaudePersistentEvent[] = [];
@@ -1593,6 +1690,8 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const replacement = await f.attach();
     replacement.connection.onEvent(runtimeId, () => {});
     const current = { runtimeId, controllerEpoch: replacement.lease.controllerEpoch };
+    expect(await replacement.connection.lookup(configuration, current.controllerEpoch)).toBe(runtimeId);
+    installFixturePolicy(f.services, current.controllerEpoch, serviceConfiguration, { roots: [], backends: [], capabilities: [] });
     const answered = claudePersistentAttachmentSchema.parse(await replacement.connection.execute({ ...current, action: "attach", replay: "full", request: { sessionId } }));
     expect(answered.events).toEqual([]);
     await native.options.onPermissionResponseDelivered!({ requestId: "ask", toolUseID: "tool" });
@@ -1626,7 +1725,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(f.services.status()).toMatchObject({ state: "stopped", resources: [] });
   });
 
-  it("allows denial but never a new permission grant after admission has frozen", async () => {
+  it.each(["frozen", "withdrawn"])("allows denial but never a new permission grant after admission is %s", async reason => {
     const f = await fixture();
     const attached = await f.attach();
     const runtimeId = await attached.connection.ensure(configuration);
@@ -1638,10 +1737,11 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     } });
     const native = f.sessions[0]!;
     const pending = native.options.canUseTool!("Read", {}, { requestId: "ask", toolUseID: "tool", signal: new AbortController().signal });
-    f.hosts.get(runtimeId).freezeAdmission();
+    if (reason === "frozen") f.hosts.get(runtimeId).freezeAdmission();
+    else installFixturePolicy(f.services, attached.lease.controllerEpoch, serviceConfiguration, { roots: [], backends: [], capabilities: [] });
     await expect(attached.connection.execute({ ...authority, action: "respond_permission", request: {
       sessionId, requestId: "ask", toolUseID: "tool", response: { behavior: "allow", updatedInput: {} },
-    } })).rejects.toThrow("sidecar_operation_failed");
+    } })).rejects.toThrow(reason === "frozen" ? "sidecar_operation_failed" : "backend_policy_denied");
     const response = { behavior: "deny" as const, message: "Stopping this runtime." };
     await attached.connection.execute({ ...authority, action: "respond_permission", request: { sessionId, requestId: "ask", toolUseID: "tool", response } });
     await expect(pending).resolves.toEqual(response);
@@ -2311,7 +2411,7 @@ describe("persistent retained-event accounting", () => {
   async function openDirect() {
     const f = await fixture();
     const attached = await f.attach();
-    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const host = f.hosts.get(await attached.connection.ensure(configuration));
     const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
     const sessionId = randomUUID();
     const delivered: ClaudePersistentEvent[] = [];
@@ -2379,7 +2479,7 @@ describe("persistent host shutdown evidence", () => {
   it("does not hold an input Claude refused as outstanding work", async () => {
     const f = await fixture();
     const attached = await f.attach();
-    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const host = f.hosts.get(await attached.connection.ensure(configuration));
     const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
     const listener = (_event: ClaudePersistentEvent) => undefined;
     const sessionId = randomUUID(), operationId = randomUUID();
@@ -2394,7 +2494,7 @@ describe("persistent host shutdown evidence", () => {
   it("tells a retire request apart when only undelivered output holds the query", async () => {
     const f = await fixture();
     const attached = await f.attach();
-    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const host = f.hosts.get(await attached.connection.ensure(configuration));
     const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
     const delivered: ClaudePersistentEvent[] = [];
     const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
@@ -2414,7 +2514,7 @@ describe("persistent host shutdown evidence", () => {
   it("acknowledges an evicted query's last event without waiting for its retirement", async () => {
     const f = await fixture();
     const attached = await f.attach();
-    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const host = f.hosts.get(await attached.connection.ensure(configuration));
     const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
     const delivered: ClaudePersistentEvent[] = [];
     const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
@@ -2439,7 +2539,7 @@ describe("persistent host shutdown evidence", () => {
   it("replays Claude's running state after pruning a result Claude chained into a turn of its own", async () => {
     const f = await fixture();
     const attached = await f.attach();
-    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const host = f.hosts.get(await attached.connection.ensure(configuration));
     const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
     const delivered: ClaudePersistentEvent[] = [];
     const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
@@ -2470,7 +2570,7 @@ describe("persistent host shutdown evidence", () => {
   it("keeps an unforced stop within its baseline budget by leaving out idle sessions' full histories", async () => {
     const f = await fixture();
     const attached = await f.attach();
-    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const host = f.hosts.get(await attached.connection.ensure(configuration));
     const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
     const delivered: ClaudePersistentEvent[] = [];
     const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
@@ -2507,7 +2607,7 @@ describe("persistent host shutdown evidence", () => {
   it("ends every session on a forced stop but marks a settled session's unacknowledged result as its outcome", async () => {
     const f = await fixture();
     const attached = await f.attach();
-    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const host = f.hosts.get(await attached.connection.ensure(configuration));
     const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
     const delivered: ClaudePersistentEvent[] = [];
     const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
@@ -2540,7 +2640,7 @@ describe("persistent host shutdown evidence", () => {
   it("records a hard handover when Claude starts work after an unforced stop was confirmed", async () => {
     const f = await fixture();
     const attached = await f.attach();
-    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const host = f.hosts.get(await attached.connection.ensure(configuration));
     const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
     const sessionId = randomUUID();
     await host.execute({ ...authority, action: "open", replay: "full", request: {
@@ -2564,7 +2664,7 @@ describe("persistent host shutdown evidence", () => {
   it("writes no abandonment record for an unforced stop that ended nothing", async () => {
     const f = await fixture();
     const attached = await f.attach();
-    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const host = f.hosts.get(await attached.connection.ensure(configuration));
     const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
     const sessionId = randomUUID();
     await host.execute({ ...authority, action: "open", replay: "full", request: {
@@ -2586,7 +2686,7 @@ describe("persistent host shutdown evidence", () => {
     const stopped = async (work: boolean) => {
       const f = await fixture();
       const attached = await f.attach();
-      const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+      const host = f.hosts.get(await attached.connection.ensure(configuration));
       const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
       const sessionId = randomUUID();
       await host.execute({ ...authority, action: "open", replay: "full", request: {
@@ -2610,7 +2710,7 @@ describe("persistent host shutdown evidence", () => {
 it("a full Claude Stop journal cannot disable other sessions and is retired only with its native owner", async () => {
   const f = await fixture();
   const attached = await f.attach();
-  const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+  const host = f.hosts.get(await attached.connection.ensure(configuration));
   const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
   const listener = vi.fn();
   const first = randomUUID(), second = randomUUID();

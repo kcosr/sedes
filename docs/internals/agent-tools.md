@@ -208,14 +208,17 @@ environments under [Resource scope](#resource-scope).
   that call.
 - `workspace.open@3` returns the workspace's `projectId` and accepts an
   optional `projectId`. Without it, a directory Sedes does not know becomes a
-  new single-location project named after the directory. With it, the new
+  new single-location project named after the directory. An implicit open of
+  an active location returns its existing project only when the caller may
+  access every active member environment. With an explicit ID, the new
   directory joins that active project, which is authorized as a project ref,
   so attaching a directory requires the same project scope or allowlisted
   member environment as reaching it; a removed project is not found. A known directory keeps its project, and naming a different project
   for it is a conflict, never a move: an active location is revalidated, and a
   removed location of an active project is restored only when the call names
   that project, authorized against its current membership; without
-  `projectId` the call is a conflict that names the project. A location whose
+  `projectId` the call reports a conflict and identifies the project only if
+  the caller can access it. A location whose
   project was removed is a conflict, so neither thread agents nor Tool clients
   can restore a removed project.
 - `task.list@5`, `task.get@3`, `task.create@3`, `task.update@3`, and

@@ -152,7 +152,7 @@ export class OpenCodeNativeHost {
   }
 
   async mutate<K extends OpenCodeMutationMethod>(authority: OpenCodeNativeAuthority, method: K,
-    input: OpenCodeMutationInput<K>, control: OpenCodeMutationControl, signal?: AbortSignal): Promise<OpenCodeMutationOutput<K>> {
+    input: OpenCodeMutationInput<K>, control: OpenCodeMutationControl, signal?: AbortSignal, admit?: () => (() => void) | undefined): Promise<OpenCodeMutationOutput<K>> {
     // A retired owner cannot prove an earlier attempt was never dispatched.
     if (this.#lifetime.signal.aborted) throw new OpenCodeNativeMutationDeliveryError("sent_outcome_unknown", "opencode_mutation_owner_closed");
     try {
@@ -166,7 +166,7 @@ export class OpenCodeNativeHost {
       throw new OpenCodeNativeMutationDeliveryError("not_sent", error instanceof OpenCodeRuntimeError ? error.code : "opencode_native_mutation_input_invalid");
     }
     const scope = this.#assertAuthority(authority); scope.operations++;
-    try { return await this.#journal.mutate(authority, method, input, control, async (captured, deadline) => {
+    try { return await this.#journal.mutate(authority, method, input, control, async (captured, deadline, assertDispatch) => {
       const budget = AbortSignal.any([deadline, this.#lifetime.signal]);
       try { await this.hooks.assertCurrent(budget); this.#assertAuthority(authority); }
       catch { throw new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_runtime_unavailable"); }
@@ -174,6 +174,7 @@ export class OpenCodeNativeHost {
         try { await this.#hub.ensureListening(AbortSignal.any([budget, AbortSignal.timeout(5_000)])); }
         catch { throw new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_event_ready_timeout"); }
       }
+      assertDispatch?.();
       if (method === "installSessionEnvironment") {
         await this.hooks.installSessionEnvironment(authority, captured as OpenCodeMutationInput<"installSessionEnvironment">, budget);
         return { ok: true } as OpenCodeMutationOutput<K>;
@@ -200,7 +201,7 @@ export class OpenCodeNativeHost {
         }
         throw error;
       }
-    }, signal); }
+    }, signal, admit); }
     finally { scope.operations--; this.#collectScope(authority); }
   }
 

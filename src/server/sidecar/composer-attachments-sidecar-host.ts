@@ -1,8 +1,10 @@
+import type { WorkspacePolicyGuard } from "./workspace-policy-guard.js";
 import {
   SidecarOperationError,
   type ComposerAttachmentsV1Handlers,
 } from "../../internal/sidecar-protocol/index.js";
 import {
+  materializationScope,
   ExecutionAttachmentStagingEngine,
   ExecutionAttachmentStagingError,
 } from "../composer-attachments/execution-attachment-staging-engine.js";
@@ -16,22 +18,30 @@ export class ComposerAttachmentsSidecarHost {
   #revision = 0;
 
   constructor(input: {
+    readonly policyGuard?: WorkspacePolicyGuard;
     readonly baseDirectory: string;
     readonly sessionNonce: string;
     readonly captureAdmission?: () => () => void;
+    readonly captureCleanup?: () => () => void;
   }) {
     this.#engine = new ExecutionAttachmentStagingEngine(input);
     this.handlers = {
       open: (request) =>
         this.#guard(async () => {
+          const authority = request.workspaceAuthority;
+          if (input.policyGuard && !authority) throw new SidecarOperationError("workspace_policy_denied");
+          const check = authority && input.policyGuard?.capture("composer_attachments", authority.path, {
+            authorityRootId: authority.rootId, authorityRevision: authority.rootGeneration,
+          }, authority.featureGeneration);
           const result = await this.#engine.open(request.admissionId, {
-            scopeKey: request.scopeKey,
+            scopeKey: materializationScope(request.scopeKey, request.workspaceAuthority),
             threadId: request.threadId,
             attachmentId: request.attachmentId,
             sha256: request.sha256,
             sizeBytes: request.sizeBytes,
             extension: request.extension,
-          });
+          }, check);
+          check?.();
           if (result.state === "upload")
             this.#uploads.set(request.admissionId, result.uploadHandle);
           else this.#uploads.delete(request.admissionId);
@@ -67,7 +77,7 @@ export class ComposerAttachmentsSidecarHost {
       release: (request) =>
         this.#guard(() =>
           this.#engine.release({
-            scopeKey: request.scopeKey,
+            scopeKey: materializationScope(request.scopeKey, request.workspaceAuthority),
             threadId: request.threadId,
             attachmentId: request.attachmentId,
             sha256: request.expectedSha256,

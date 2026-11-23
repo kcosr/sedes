@@ -1,3 +1,4 @@
+import { type WorkspaceRootGrant, workspaceRootGrant } from "../execution/workspace-root-grant.js";
 import { realpath, stat } from "node:fs/promises";
 import { DomainError } from "../domain/errors.js";
 import type { ThreadWorkspaceIsolationResolver } from "../execution/thread-workspace-isolation.js";
@@ -10,25 +11,34 @@ import type {
 import { piSandboxEffectiveWorkspacePath } from "./pi-sandbox-allocation-repository.js";
 import type { PiSandboxMaterializer } from "./pi-sandbox-materializer.js";
 
-function assertAllocationAuthority(
-  scope: RequestScope,
-  sourceWorkspace: Parameters<
-    ThreadWorkspaceIsolationResolver["resolve"]
-  >[0]["sourceWorkspace"],
-  allocation: PiSandboxAllocationRecord,
-): void {
+type IsolationSource = Parameters<ThreadWorkspaceIsolationResolver["isSelected"]>[0];
+
+function assertAllocationIdentity(input: IsolationSource, allocation: PiSandboxAllocationRecord): void {
   if (
-    allocation.tenantId !== scope.tenantId ||
-    allocation.ownerPrincipalId !== scope.principalId ||
-    allocation.sourceWorkspaceId !== sourceWorkspace.summary.id ||
-    allocation.executionEnvironmentId !==
-      sourceWorkspace.summary.environmentId ||
-    allocation.sourceCanonicalPath !== sourceWorkspace.canonicalPath
+    allocation.tenantId !== input.scope.tenantId ||
+    allocation.ownerPrincipalId !== input.scope.principalId ||
+    allocation.applicationThreadId !== input.applicationThreadId ||
+    allocation.sourceWorkspaceId !== input.sourceWorkspace.summary.id ||
+    allocation.executionEnvironmentId !== input.sourceWorkspace.summary.environmentId ||
+    allocation.sourceCanonicalPath !== input.sourceWorkspace.canonicalPath
   ) {
-    throw new DomainError(
-      "conflict",
-      "The isolated workspace does not match the thread source workspace.",
-    );
+    throw new DomainError("conflict", "The isolated workspace does not match the thread source workspace.");
+  }
+}
+
+function assertAllocationAuthority(
+  input: IsolationSource,
+  allocation: PiSandboxAllocationRecord,
+  readWorkspaceRoots?: () => readonly WorkspaceRootGrant[],
+): void {
+  assertAllocationIdentity(input, allocation);
+  const workspace = input.sourceWorkspace;
+  if ((allocation.sourceAuthorityRootId || workspace.authorityRootId) &&
+      (allocation.sourceAuthorityRootId !== workspace.authorityRootId || allocation.sourceAuthorityGeneration !== workspace.authorityRevision)) {
+    throw new DomainError("conflict", "The isolated workspace does not match the source workspace root grant.");
+  }
+  if (readWorkspaceRoots && !workspaceRootGrant(readWorkspaceRoots(), workspace.canonicalPath, workspace)) {
+    throw new DomainError("conflict", "The isolated workspace root is no longer authorized.");
   }
 }
 
@@ -76,6 +86,7 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
       readonly materializer: Pick<PiSandboxMaterializer, "materialize">;
       readonly runtime: Pick<LocalPiSandboxRuntime, "acquire">;
       readonly backendInstanceId: string;
+      readonly readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
       readonly admittedNetworkProfiles: ReadonlySet<
         "isolated" | "execution_host"
       >;
@@ -90,10 +101,7 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
       input.applicationThreadId,
     );
     if (!allocation) return undefined;
-    assertAllocationAuthority(input.scope, input.sourceWorkspace, allocation);
-    if (allocation.applicationThreadId !== input.applicationThreadId) {
-      throw new DomainError("conflict", "The isolated workspace does not match the history thread.");
-    }
+    assertAllocationIdentity(input, allocation);
     return {
       ...input.sourceWorkspace,
       canonicalPath: piSandboxEffectiveWorkspacePath(allocation),
@@ -108,7 +116,7 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
       input.applicationThreadId,
     );
     if (!allocation) return false;
-    this.#assertAuthority(input.scope, input.sourceWorkspace, allocation);
+    this.#assertAuthority(input, allocation);
     return true;
   }
 
@@ -120,9 +128,10 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
       input.applicationThreadId,
     );
     if (!allocation) return undefined;
-    this.#assertAuthority(input.scope, input.sourceWorkspace, allocation);
+    this.#assertAuthority(input, allocation);
     if (input.access === "passive") {
       const canonicalPath = await validatedPassivePath(allocation);
+      this.#assertAuthority(input, allocation);
       return {
         access: "passive",
         workspaceAccess:
@@ -137,8 +146,11 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
       };
     }
     const ready = await this.#ready(input.scope, allocation);
+    const assertCurrent = () => this.#assertAuthority(input, ready);
+    assertCurrent();
     if (input.access === "prepare") {
       const canonicalPath = await validatedPassivePath(ready);
+      assertCurrent();
       return {
         access: "prepare",
         workspaceAccess:
@@ -165,6 +177,16 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
       networkMode: ready.networkProfile,
       workspaceAccess: ready.workspaceAccess,
     });
+    try { assertCurrent(); } catch (error) {
+      await lease.release();
+      throw error;
+    }
+    const read = async <T>(action: () => Promise<T>): Promise<T> => {
+      assertCurrent();
+      const result = await action();
+      assertCurrent();
+      return result;
+    };
     return {
       access: "active",
       workspaceAccess:
@@ -175,8 +197,16 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
       },
       semanticCwd: lease.semanticCwd,
       serviceCwd: lease.serviceCwd,
-      executor: lease.executor,
-      contextReader: lease.contextReader,
+      executor: {
+        read: request => read(() => lease.executor.read(request)),
+        list: request => read(() => lease.executor.list(request)),
+        find: request => read(() => lease.executor.find(request)),
+        grep: request => read(() => lease.executor.grep(request)),
+        write: request => { assertCurrent(); return lease.executor.write(request); },
+        edit: request => { assertCurrent(); return lease.executor.edit(request); },
+        startShell: request => { assertCurrent(); return lease.executor.startShell(request); },
+      },
+      contextReader: { read: signal => read(() => lease.contextReader.read(signal)) },
       environmentLabel: lease.environmentLabel,
       release: () => lease.release(),
     };
@@ -236,14 +266,8 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
     return result;
   }
 
-  #assertAuthority(
-    scope: RequestScope,
-    sourceWorkspace: Parameters<
-      ThreadWorkspaceIsolationResolver["resolve"]
-    >[0]["sourceWorkspace"],
-    allocation: PiSandboxAllocationRecord,
-  ): void {
-    assertAllocationAuthority(scope, sourceWorkspace, allocation);
+  #assertAuthority(input: IsolationSource, allocation: PiSandboxAllocationRecord): void {
+    assertAllocationAuthority(input, allocation, this.input.readWorkspaceRoots);
     if (!this.input.admittedNetworkProfiles.has(allocation.networkProfile)) {
       throw new DomainError(
         "runtime_unavailable",
@@ -258,6 +282,7 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
 export class UnavailableThreadWorkspaceIsolationResolver implements ThreadWorkspaceIsolationResolver {
   constructor(
     readonly allocations: Pick<PiSandboxAllocationRepository, "getForThread">,
+    readonly readWorkspaceRoots?: () => readonly WorkspaceRootGrant[],
   ) {}
 
   historyWorkspace(
@@ -268,10 +293,7 @@ export class UnavailableThreadWorkspaceIsolationResolver implements ThreadWorksp
       input.applicationThreadId,
     );
     if (!allocation) return undefined;
-    assertAllocationAuthority(input.scope, input.sourceWorkspace, allocation);
-    if (allocation.applicationThreadId !== input.applicationThreadId) {
-      throw new DomainError("conflict", "The isolated workspace does not match the history thread.");
-    }
+    assertAllocationIdentity(input, allocation);
     return {
       ...input.sourceWorkspace,
       canonicalPath: piSandboxEffectiveWorkspacePath(allocation),
@@ -286,7 +308,7 @@ export class UnavailableThreadWorkspaceIsolationResolver implements ThreadWorksp
       input.applicationThreadId,
     );
     if (!allocation) return false;
-    assertAllocationAuthority(input.scope, input.sourceWorkspace, allocation);
+    assertAllocationAuthority(input, allocation, this.readWorkspaceRoots);
     return true;
   }
 
@@ -298,9 +320,10 @@ export class UnavailableThreadWorkspaceIsolationResolver implements ThreadWorksp
       input.applicationThreadId,
     );
     if (!allocation) return undefined;
-    assertAllocationAuthority(input.scope, input.sourceWorkspace, allocation);
+    assertAllocationAuthority(input, allocation, this.readWorkspaceRoots);
     if (input.access === "passive") {
       const canonicalPath = await validatedPassivePath(allocation);
+      assertAllocationAuthority(input, allocation, this.readWorkspaceRoots);
       return {
         access: "passive",
         workspaceAccess:

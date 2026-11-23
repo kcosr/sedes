@@ -63,6 +63,15 @@ const productionDependencies: ClaudeBackendModuleDependencies = Object.freeze({
         scope: { ...context.scope, backendInstanceId: context.instance.id,
           executionEnvironmentId: context.environmentChannel.executionEnvironmentId },
         sidecarRuntime: context.sidecarRuntime,
+        ...(context.readCurrentLaunchConfiguration && { readLaunchConfiguration: () => {
+          const current = context.readCurrentLaunchConfiguration!();
+          if (!current || current.backend.kind !== "claude_agent_sdk") return undefined;
+          const runtime = current.backend.moduleConfiguration;
+          return { ...context.scope, executionEnvironmentId: context.environmentChannel.executionEnvironmentId,
+            backendInstanceId: context.instance.id, executablePath: runtime.executablePath ?? "claude",
+            configDirectory: runtime.configDirectory, initializationTimeoutMs: runtime.initializationTimeoutMs,
+            startupEnvironmentVariables: current.startupEnvironmentVariables };
+        }}),
         executablePath: prepared.runtime.executablePath ?? "claude",
         configDirectory: prepared.runtime.configDirectory,
         initializationTimeoutMs: prepared.runtime.initializationTimeoutMs,
@@ -168,6 +177,8 @@ class ClaudeBackendModuleRuntime implements BackendModuleRuntime {
       prepared.connections.map((connection) => [connection.id, connection]),
     );
     const resolveConnectionDefaults = (connection: AgentConnectionProfile) => {
+      const current = context.targetDefinition?.(connection.templateId);
+      if (current?.kind === "claude_agent_sdk") return current.enabled === connection.enabled ? current.moduleConfiguration.defaults : undefined;
       const configured = preparedConnections.get(connection.templateId);
       if (!configured || configured.enabled !== connection.enabled) {
         return undefined;
@@ -232,7 +243,7 @@ class ClaudeBackendModuleRuntime implements BackendModuleRuntime {
       modelPolicy: prepared.modelPolicy,
       attachmentProvenanceKey: context.toolProvenanceKey,
       outputArtifacts: context.outputArtifacts,
-      connections: context.connections,
+      get connections() { return context.connections; },
       agentToolCli: context.agentToolCli,
       agentToolSourceCapabilities: context.agentToolSourceCapabilities,
       agentTools: context.agentTools,
@@ -464,7 +475,7 @@ export class ClaudeBackendModule implements BackendModule {
   readonly creationProvenanceRepair = undefined;
   readonly startupPolicy = "composition_only" as const;
   readonly remoteRuntimeCapabilities = Object.freeze([Object.freeze({
-    capabilityId: "claude_persistent_runtime", majorVersion: 5,
+    capabilityId: "claude_persistent_runtime", majorVersion: 6,
     operations: Object.freeze(claudePersistentRuntimeOperations.map(operation => operation.operation)),
   })]);
   readonly backendKind = "claude_agent_sdk" as const;

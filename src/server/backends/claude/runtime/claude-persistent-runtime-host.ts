@@ -76,6 +76,8 @@ const STOPPED_HISTORY_BYTES = 64 * 1024 * 1024;
 /** Service-owned sessions never depend on an upstream SSH attachment lifetime. */
 export class ClaudePersistentRuntimeHost {
   readonly runtimeId = randomUUID();
+  #workerIdentity: object = {};
+  get workerIdentity(): object { return this.#workerIdentity; }
   readonly #sessions = new Map<string, Session>();
   /** Running one-shot fork launches by child session; they share the session cap. */
   readonly #forkLaunches = new Map<string, Promise<ClaudeRuntimeForkResult>>();
@@ -97,6 +99,7 @@ export class ClaudePersistentRuntimeHost {
   /** An unforced stop ended work that started after its confirmation. */
   #handedOver = false;
   #inflight = 0;
+  #commands = 0;
   /** Shutdown baseline; `messages` is absent for an idle session that did not fit its budget. */
   readonly #stoppedHistory = new Map<string, { info: Awaited<ReturnType<ClaudeRuntimeClient["getSessionInfo"]>>; present: boolean; messages?: Awaited<ReturnType<ClaudeRuntimeClient["getSessionMessages"]>> }>();
   freezeAdmission(): void { this.#frozen = true; }
@@ -115,13 +118,30 @@ export class ClaudePersistentRuntimeHost {
     /** Aggregate command receipt budget; reserves terminal evidence before dispatch. */
     maximumCompactReceiptBytes?: number;
     replayRetention?: { highWaterEntries?: number; highWaterBytes?: number; minimumHistoryIntervalMs?: number };
-    validateQueryEnvironment?: (environment: Readonly<Record<string, string | undefined>>) => void;
-    validateAgentToolMcp?: (agentToolMcp: ClaudeRuntimeAgentToolMcp) => void;
+    validateQueryEnvironment?: (environment: Readonly<Record<string, string | undefined>>, backendInstanceId: string) => void;
+    validateAgentToolMcp?: (agentToolMcp: ClaudeRuntimeAgentToolMcp, backendInstanceId: string) => void;
     /** How long a detached, quiescent query stays resident before retirement. */
     detachedSessionTtlMs?: number;
     /** Per-query journal bound for sends, permission responses, and compactions. */
     maximumJournaledOperations?: number;
   }) {}
+
+  canReplaceWorker(): boolean {
+    return !this.#closed && !this.#runtimeStopped && !this.#closing && !this.#cleanupUnproven && !this.#frozen &&
+      !this.#commands && !this.#inflight && !this.#sessions.size && !this.#forkLaunches.size &&
+      this.input.client.emptyAfterCleanup?.() === true && !!this.input.client.disposeEmpty;
+  }
+
+  /** The journal belongs to this backend incarnation. Only its proved-empty native worker changes. */
+  replaceWorker(configuration: ClaudePersistentConfiguration, client: ClaudeOwnedRuntimeClient & { close(): Promise<void> }): void {
+    if (!this.canReplaceWorker()) throw new SidecarOperationError("claude_persistent_configuration_restart_required");
+    this.input.client.disposeEmpty!();
+    this.#workerIdentity = {};
+    this.input.configuration = configuration;
+    this.input.client = client;
+    this.input.close = () => client.close();
+    this.#revision++;
+  }
 
   get #journalLimit(): number {
     return this.input.maximumJournaledOperations ?? MAXIMUM_JOURNALED_OPERATIONS;
@@ -277,18 +297,23 @@ export class ClaudePersistentRuntimeHost {
     this.#sessions.clear(); this.#revision++;
   }
 
-  async execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void): Promise<unknown> {
-    if (command.action === "fork") return await this.#forkLaunch(command);
+  async execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void, assertPolicy?: () => void): Promise<unknown> {
+    if (command.action === "fork") return await this.#forkLaunch(command, assertPolicy);
     if (command.runtimeId !== this.runtimeId) throw new Error("claude_persistent_runtime_unknown");
     this.input.services.assertController(command.controllerEpoch);
     const existingOpen = command.action === "open" && this.#sessions.has(command.request.sessionId);
     const retainedProbe = this.#runtimeStopped && command.action === "probe";
+    const history = command.action === "info" || command.action === "messages" || command.action === "transcript";
+    const resident = history ? this.#sessions.get(command.request.sessionId) : undefined;
+    const retainedHistory = history && !!resident && (command.request.dir === undefined || command.request.dir === resident.cwd);
     const compactReplay = command.action === "compact" && !!this.#matchingCompactRecord(command.request);
     const permissionSettlement = command.action === "respond_permission" &&
       (this.#sessions.get(command.request.sessionId)?.permissionResponses.has(permissionKey(command.request)) ||
-        ((!this.#runtimeStopped && !this.#frozen || command.request.response.behavior === "deny") &&
+        (command.request.response.behavior === "deny" &&
           this.#sessions.get(command.request.sessionId)?.permissions.has(permissionKey(command.request))));
     try {
+      if (!existingOpen && !retainedProbe && !retainedHistory && !permissionSettlement && !compactReplay &&
+          !["attach", "detach", "evict", "retire", "acknowledge", "submission_disposition", "compact_disposition", "interrupt_disposition", "interrupt"].includes(command.action)) assertPolicy?.();
       if (this.#closed || this.#cleanupUnproven) throw new Error("claude_persistent_runtime_unavailable");
       if (this.#runtimeStopped && !existingOpen && !permissionSettlement && !compactReplay && !["attach", "detach", "evict", "retire", "acknowledge", "submission_disposition", "compact_disposition", "interrupt_disposition", "info", "messages", "transcript", "list", "probe"].includes(command.action)) throw new Error("claude_persistent_runtime_stopped");
       if (!existingOpen && !retainedProbe && !permissionSettlement && !compactReplay && !["attach", "detach", "evict", "retire", "acknowledge", "list", "info", "messages", "transcript", "submission_disposition", "compact_disposition", "interrupt_disposition"].includes(command.action)) {
@@ -308,7 +333,8 @@ export class ClaudePersistentRuntimeHost {
     const mutation = ["rename", "compact", "interrupt", "set_model", "set_effort", "set_permission_mode"].includes(command.action) && !compactReplay;
     if (mutation) { this.#inflight++; this.#revision++; }
     const started = performance.now();
-    try { return await this.#execute(command, listener); }
+    this.#commands++;
+    try { return await this.#execute(command, listener, assertPolicy); }
     catch (error) {
       attachmentDiagnostic("claude_sidecar_command_failed", {
         role: "sidecar",
@@ -319,10 +345,10 @@ export class ClaudePersistentRuntimeHost {
       }, error);
       throw error;
     }
-    finally { if (mutation) { this.#inflight--; this.#revision++; } }
+    finally { this.#commands--; if (mutation) { this.#inflight--; this.#revision++; } }
   }
 
-  async #execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void): Promise<unknown> {
+  async #execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void, assertPolicy?: () => void): Promise<unknown> {
     const config = this.input.configuration;
     if (this.#runtimeStopped) {
       if (command.action === "info" || command.action === "messages" || command.action === "transcript") {
@@ -387,7 +413,7 @@ export class ClaudePersistentRuntimeHost {
         await this.#settledForkLaunch(command.request.sessionId);
         return { present: await this.input.client.hasSessionTranscript(command.request.sessionId, { dir: command.request.dir }, {}) };
       case "rename": await this.input.client.renameSession(command.request.sessionId, command.request.title, { dir: command.request.dir }, {}); return { renamed: true };
-      case "open": return await this.#open(command, listener);
+      case "open": return await this.#open(command, listener, assertPolicy);
       case "attach": return await this.#attach(this.#session(command.request.sessionId), command.controllerEpoch, listener, true, command.replay);
       case "evict":
       case "detach": {
@@ -733,7 +759,7 @@ export class ClaudePersistentRuntimeHost {
    * refusal before the launch starts is reported as such, so main can treat
    * it as proof that no child was created.
    */
-  async #forkLaunch(command: Extract<ClaudePersistentCommand, { action: "fork" }>): Promise<ClaudeRuntimeForkResult> {
+  async #forkLaunch(command: Extract<ClaudePersistentCommand, { action: "fork" }>, assertPolicy?: () => void): Promise<ClaudeRuntimeForkResult> {
     const request = command.request;
     const started = performance.now();
     try {
@@ -742,6 +768,7 @@ export class ClaudePersistentRuntimeHost {
         this.input.services.assertController(command.controllerEpoch);
         if (this.#closed || this.#cleanupUnproven || this.#runtimeStopped || this.#frozen) throw new Error("claude_persistent_admission_frozen");
         this.input.services.assertAdmission(command.controllerEpoch);
+        assertPolicy?.();
         if (this.#sessions.has(request.sessionId) || this.#forkLaunches.has(request.sessionId)) throw new Error("claude_persistent_session_configuration_conflict");
       } catch (error) {
         throw claudeForkLaunchFailure("claude_fork_launch_refused", error);
@@ -751,6 +778,7 @@ export class ClaudePersistentRuntimeHost {
       }
       const config = this.input.configuration;
       const launch = this.input.client.forkSession({
+        assertLaunchAdmission: assertPolicy,
         executablePath: config.executablePath, initializationTimeoutMs: config.initializationTimeoutMs,
         sessionId: request.sessionId, sourceSessionId: request.sourceSessionId, resumeSessionAt: request.resumeSessionAt,
         cwd: request.cwd, ...(request.title ? { title: request.title } : {}), model: request.model,
@@ -778,29 +806,31 @@ export class ClaudePersistentRuntimeHost {
     await this.#forkLaunches.get(sessionId)?.catch(() => undefined);
   }
 
-  async #open(command: Extract<ClaudePersistentCommand, { action: "open" }>, listener: (event: ClaudePersistentEvent) => void) {
+  async #open(command: Extract<ClaudePersistentCommand, { action: "open" }>, listener: (event: ClaudePersistentEvent) => void, assertPolicy?: () => void) {
     const request = command.request;
     let session = this.#sessions.get(request.sessionId);
     if (session?.retiring) { await session.retiring; this.input.services.assertController(command.controllerEpoch); session = this.#sessions.get(request.sessionId); }
     if (session) {
-      if (session.cwd !== request.cwd || session.authorityFingerprint !== queryAuthorityFingerprint(request)) throw new Error("claude_persistent_session_configuration_conflict");
+      if (session.cwd !== request.cwd || session.authorityFingerprint !== queryAuthorityFingerprint(command)) throw new SidecarOperationError("claude_persistent_session_configuration_conflict");
       return await this.#attach(session, command.controllerEpoch, listener, true, command.replay);
     }
     if (this.#frozen || this.#runtimeStopped) throw new Error("claude_persistent_admission_frozen");
     this.input.services.assertAdmission(command.controllerEpoch);
+    assertPolicy?.();
     // A running fork launch owns this identity until its process has exited.
     if (this.#forkLaunches.has(request.sessionId)) throw new Error("claude_persistent_session_configuration_conflict");
     if (this.#sessions.size + this.#forkLaunches.size >= CLAUDE_PERSISTENT_MAXIMUM_SESSIONS) {
       throw new SidecarOperationError("claude_persistent_session_capacity_exceeded", true);
     }
-    this.input.validateQueryEnvironment?.(request.environment);
+    this.input.validateQueryEnvironment?.(request.environment, this.input.configuration.backendInstanceId);
     if (request.agentToolMcp) {
       if (!this.input.validateAgentToolMcp) throw new Error("claude_persistent_agent_tool_mcp_denied");
-      this.input.validateAgentToolMcp(request.agentToolMcp);
+      this.input.validateAgentToolMcp(request.agentToolMcp, this.input.configuration.backendInstanceId);
     }
     const config = this.input.configuration;
     let created!: Session;
     const runtime = this.input.client.createSession({
+      assertLaunchAdmission: assertPolicy,
       ...request, executablePath: config.executablePath, initializationTimeoutMs: config.initializationTimeoutMs,
       environment: request.environment,
       ...(request.enableCanUseTool ? { canUseTool: this.#canUseTool(() => created) } : {}),
@@ -812,7 +842,7 @@ export class ClaudePersistentRuntimeHost {
         this.#fail(created, "claude_persistent_query_failed");
       },
     });
-    created = { interruptOperations: new ClaudeInterruptOperations(), compactions: new Map(), backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(request), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
+    created = { interruptOperations: new ClaudeInterruptOperations(), compactions: new Map(), backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(command), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
       journalMessageBytes: 0, journalMessageCount: 0, offeredThrough: 0,
       nextHistoryRead: 0, historyBackoff: 0, historyPressure: false, historyCandidatesDirty: true, hasHistoryCandidates: false, rewriteGeneration: 0, streamStopSequence: 0, replayStateSequences: new Map(),
       admissionJournalComplete: request.launch === "new",
@@ -821,7 +851,9 @@ export class ClaudePersistentRuntimeHost {
     session = created;
     session.backgroundActivity.reset();
     this.#sessions.set(session.id, session); this.#inflight++; this.#revision++;
-    session.starting = runtime.start();
+    // A concurrent open or attach awaits the same admission decision. Only
+    // queries admitted after startup become available as retained sessions.
+    session.starting = runtime.start().then(() => assertPolicy?.());
     try { await session.starting; }
     catch (error) {
       try { await runtime.close(); this.#sessions.delete(session.id); }
@@ -1388,12 +1420,19 @@ function coalesceDelta(previous: ClaudePersistentEvent, current: ClaudePersisten
 }
 function object(value: unknown): Record<string, unknown> | undefined { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 
-function queryAuthorityFingerprint(request: Extract<ClaudePersistentCommand, { action: "open" }>["request"]): string {
+function queryAuthorityFingerprint(command: Extract<ClaudePersistentCommand, { action: "open" }>): string {
+  const { applicationThreadId, request } = command;
+  const owner = applicationThreadId
+    ? { applicationThreadId }
+    : { environment: request.environment, agentToolMcp: request.agentToolMcp ?? null };
+  // A retained application query keeps its original process, CLI environment
+  // and MCP configuration. A reconnect may arrive with a new listener or
+  // while tool routes are unavailable. Only a fresh query uses that material.
   return createHash("sha256").update(JSON.stringify({
-    cwd: request.cwd, enableCanUseTool: request.enableCanUseTool,
+    cwd: request.cwd,
+    enableCanUseTool: request.enableCanUseTool,
     allowDangerouslySkipPermissions: request.allowDangerouslySkipPermissions ?? false,
-    environment: request.environment,
-    agentToolMcp: request.agentToolMcp ?? null,
+    owner,
   })).digest("hex");
 }
 

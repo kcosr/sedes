@@ -18,11 +18,11 @@ import { Tag } from "../ui/tag.js";
 import { SettingsBackLink } from "../settings/SettingsPage.js";
 import { SettingsDetailHeader } from "../settings/SettingsSplit.js";
 import { CopyableValue, PathText } from "./detail-parts.js";
-import { capabilityLabels, environmentKindNames } from "./EnvironmentEditor.js";
+import { environmentKindNames } from "./EnvironmentEditor.js";
 import { environmentBackends, EnvironmentIcon, environmentKindLabels, hostPlatform, hostPresence, runtimeFor } from "./ExecutionInventory.js";
 import { RecoveredOperations } from "./RecoveredOperations.js";
 import { hasAvailableRuntimeMenuItems, hasDestructiveRuntimeMenuItems, hasRuntimeMenuItems, runtimeDiagnostics, RuntimeFeedback, RuntimeHealth, RuntimeImpactDialog, RuntimeMenuItems, RuntimePrimaryAction, useRuntimeController, type RuntimeController } from "./RuntimeControls.js";
-import { worstStatus } from "./runtime-presentation.js";
+import { capabilityLabels, worstStatus } from "./runtime-presentation.js";
 import type { ConfigurationSnapshot, EnvironmentDefinition } from "./types.js";
 import type { ConfigurationControls } from "./useConfiguration.js";
 
@@ -158,7 +158,7 @@ export function EnvironmentDetail({ environment, toolPolicyApi, selected, tab, o
         <TabsTrigger value="activity">Activity</TabsTrigger>
       </TabsList>
       <TabsContent value="overview" forceMount hidden={tab !== "overview"} className="execution-tab">
-        <RuntimeHealth controller={controller} status={status}>
+        <RuntimeHealth controller={controller} status={status} configuration={snapshot.configuration}>
           {remote && controller.presentation.recoveryEmphasis ? <Callout tone="warning"
             action={<Button type="button" size="sm" variant="outline" onClick={() => setRecoveryOpen(true)}>Review</Button>}>
             Retained results may need recovery before lifecycle actions can succeed.</Callout> : null}

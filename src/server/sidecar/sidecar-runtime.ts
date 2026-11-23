@@ -1,6 +1,10 @@
+import { workspaceRootGrant } from "../execution/workspace-root-grant.js";
+import { withAbort } from "../runtime/with-abort.js";
+import { SidecarPolicyController, type PolicyConnection, type SidecarPolicyRecovery } from "./sidecar-policy-controller.js";
+import type { InstalledExecutionPolicy } from "../../internal/sidecar-protocol/execution-policy.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { AGENT_TOOL_CLI_CAPABILITY } from "../../internal/agent-tool-cli-protocol/capability.js";
-import type { SidecarAgentToolCliMetadata, SidecarCapabilityInventory } from "../../internal/sidecar-protocol/control-v2.js";
+import type { SidecarAgentToolCliMetadata, SidecarCapabilityInventory } from "../../internal/sidecar-protocol/control-v3.js";
 import { SIDECAR_WIRE_VERSION } from "../../internal/sidecar-protocol/envelopes.js";
 import {
   SidecarFrameWriteError,
@@ -34,10 +38,11 @@ export class SidecarSessionCleanupError extends Error {
   }
 }
 
-export interface SidecarRuntimeSession {
+export interface SidecarRuntimeSession extends PolicyConnection {
+  acquirePolicyRoute?(subject: { capabilityId: "agent_tools_cli"; generation: number; backendInstanceId: string }, signal?: AbortSignal): Promise<SidecarAgentToolCliMetadata>;
   readonly negotiatedCapabilities: readonly SidecarCapabilityInventory[];
-  readonly agentToolCli?: SidecarAgentToolCliMetadata;
   readonly closed: Promise<unknown>;
+  recoveryView(): SidecarRuntimeSession;
   close(reason: string): Promise<void>;
 }
 
@@ -91,7 +96,6 @@ export interface SidecarRuntimeLease<
 }
 
 interface AutomaticRecoveryAttachment<Session extends SidecarRuntimeSession> {
-  readonly existingOnly: boolean;
   readonly controller: AbortController;
   readonly promise: Promise<SidecarRuntimeLease<Session>>;
   references: number;
@@ -103,21 +107,22 @@ export interface SidecarRuntimeOwnerOptions<
 > {
   readonly scope: RequestScope;
   readonly executionEnvironmentId: string;
-  readonly environmentConfigurationRevision: number;
-  readonly operationsConfigurationRevision: number;
+  readonly readDesiredPolicy: () => InstalledExecutionPolicy;
+  readonly onPolicyChanged?: () => void;
+  readonly policyRecovery?: SidecarPolicyRecovery;
   readonly authorizedCapabilities: readonly SidecarAuthorizedCapability[];
   readonly authorizedRuntimeCapabilities: readonly SidecarRuntimeCapability[];
   /** Read when each new normal or recovery connection starts. */
   readonly connectionCompression: () => boolean;
   readonly isAutomaticConnectionEnabled: () => boolean | Promise<boolean>;
-  readonly activeEnvironmentConfigurationRevision: () =>
-    number | Promise<number>;
-  readonly activeOperationsConfigurationRevision: () =>
-    number | Promise<number>;
+  /** Synchronous preference for selection, including before the first attachment. */
+  readonly isAutomaticConnectionEligible?: () => boolean;
   readonly artifact: SidecarArtifactRegistration;
   readonly provisioner: SidecarProvisioner;
   readonly sedesOperations: SidecarOperationRegistry;
   readonly startSession: (input: {
+    readonly policyAttachment: "normal" | "recovery";
+    readonly readDesiredPolicy?: () => InstalledExecutionPolicy;
     readonly connectionCompression: boolean;
     readonly executionEnvironmentId?: string;
     readonly stream: SidecarByteStream;
@@ -146,18 +151,15 @@ export interface SidecarRuntimeOwnerOptions<
  * it never falls back to a local filesystem.
  */
 export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
+  readonly #policy: SidecarPolicyController;
+  readonly #readDesiredPolicy: () => InstalledExecutionPolicy;
   readonly #scope: RequestScope;
   readonly #executionEnvironmentId: string;
-  readonly #environmentConfigurationRevision: number;
-  readonly #operationsConfigurationRevision: number;
   readonly #authorizedCapabilities: readonly SidecarAuthorizedCapability[];
   readonly #authorizedRuntimeCapabilities: readonly SidecarRuntimeCapability[];
   readonly #isAutomaticConnectionEnabled: () => boolean | Promise<boolean>;
+  readonly #isAutomaticConnectionEligible: () => boolean;
   readonly #connectionCompression: () => boolean;
-  readonly #activeEnvironmentConfigurationRevision: () =>
-    number | Promise<number>;
-  readonly #activeOperationsConfigurationRevision: () =>
-    number | Promise<number>;
   readonly #artifact: SidecarArtifactRegistration;
   readonly #provisioner: SidecarRuntimeOwnerOptions<Session>["provisioner"];
   readonly #sedesOperations: SidecarOperationRegistry;
@@ -181,7 +183,6 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   readonly #retiringSessions = new Set<Promise<void>>();
   readonly #sessionRetirements = new WeakMap<Session, Promise<void>>();
   #lastNegotiatedCapabilities: readonly SidecarCapabilityInventory[] | undefined;
-  #lastAgentToolCliAvailable: boolean | undefined;
   readonly #recoverySessions = new Set<Session>();
   readonly #recoveryReferences = new Map<Session, () => SidecarRuntimeLease<Session>>();
   #automaticRecovery: AutomaticRecoveryAttachment<Session> | undefined;
@@ -195,10 +196,6 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
       !input.scope.tenantId ||
       !input.scope.principalId ||
       !input.executionEnvironmentId ||
-      !Number.isSafeInteger(input.environmentConfigurationRevision) ||
-      input.environmentConfigurationRevision < 0 ||
-      !Number.isSafeInteger(input.operationsConfigurationRevision) ||
-      input.operationsConfigurationRevision < 0 ||
       input.authorizedCapabilities.length > 8 ||
       !Array.isArray(input.authorizedRuntimeCapabilities) || input.authorizedRuntimeCapabilities.length > 32 ||
       input.authorizedRuntimeCapabilities.length + input.authorizedCapabilities.filter((capability) => capability.capabilityId !== "agent_tools_cli").length + (input.authorizedRuntimeCapabilities.length ? 1 : 0) + 1 > 32 ||
@@ -248,12 +245,10 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     if (!Number.isSafeInteger(idleMilliseconds) || idleMilliseconds <= 0) {
       throw new Error("sidecar_runtime_idle_invalid");
     }
+    this.#readDesiredPolicy = input.readDesiredPolicy;
+    this.#policy = new SidecarPolicyController(input.readDesiredPolicy, input.onPolicyChanged ?? (() => undefined), input.policyRecovery);
     this.#scope = Object.freeze({ ...input.scope });
     this.#executionEnvironmentId = input.executionEnvironmentId;
-    this.#environmentConfigurationRevision =
-      input.environmentConfigurationRevision;
-    this.#operationsConfigurationRevision =
-      input.operationsConfigurationRevision;
     this.#authorizedCapabilities = Object.freeze(
       input.authorizedCapabilities.map((capability) =>
         Object.freeze({ ...capability }),
@@ -261,11 +256,8 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     );
     this.#authorizedRuntimeCapabilities = Object.freeze(input.authorizedRuntimeCapabilities.map((capability) => Object.freeze({ ...capability })));
     this.#isAutomaticConnectionEnabled = input.isAutomaticConnectionEnabled;
+    this.#isAutomaticConnectionEligible = input.isAutomaticConnectionEligible ?? (() => true);
     this.#connectionCompression = input.connectionCompression;
-    this.#activeEnvironmentConfigurationRevision =
-      input.activeEnvironmentConfigurationRevision;
-    this.#activeOperationsConfigurationRevision =
-      input.activeOperationsConfigurationRevision;
     this.#artifact = input.artifact;
     this.#provisioner = input.provisioner;
     this.#sedesOperations = input.sedesOperations;
@@ -280,16 +272,108 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     return this.#closed || this.#intentionallyDisconnected || !this.#isTransportAvailable() ? [] : this.#lastNegotiatedCapabilities ?? [];
   }
 
-  /** Lazy admission is possible before the first handshake. Once observed,
-   * missing native capabilities stay unavailable through idle retirement;
-   * every operation still validates its newly acquired session inventory. */
   canAcquireCapability(capabilityId: string, majorVersion: number): boolean {
-    if (this.#closed || this.#intentionallyDisconnected || this.#retirementFailure !== undefined || !this.#isTransportAvailable()) return false;
-    if (!this.#authorizedCapabilities.some(capability => capability.capabilityId === capabilityId && capability.majorVersion === majorVersion)) return false;
-    // Agent tools use the reverse Sedes route, not the sidecar's forward
-    // operation inventory. Its endpoint metadata is verified during hello.
-    if (capabilityId === AGENT_TOOL_CLI_CAPABILITY.capabilityId) return this.#lastAgentToolCliAvailable !== false;
-    return this.#lastNegotiatedCapabilities === undefined || this.#lastNegotiatedCapabilities.some(capability => capability.capabilityId === capabilityId && capability.majorVersion === majorVersion);
+    if (!this.#canAttach()) return false;
+    if (this.#policy.capabilityGeneration(capabilityId, true) === undefined) return false;
+    if (capabilityId === AGENT_TOOL_CLI_CAPABILITY.capabilityId) return majorVersion === AGENT_TOOL_CLI_CAPABILITY.majorVersion;
+    const capabilities = this.#lastNegotiatedCapabilities ?? this.#authorizedCapabilities;
+    return capabilities.some(capability => capability.capabilityId === capabilityId && capability.majorVersion === majorVersion);
+  }
+
+  policyStatus() { return this.#policy.status; }
+  conflictsWithDesiredPolicy(incarnation: string): boolean { return this.#policy.requiresRecovery(incarnation); }
+  policyBackendGeneration(id: string): number | undefined { return this.#policy.backendGeneration(id); }
+  acquirableTargetGeneration(backendId: string, targetId: string): number | undefined {
+    return this.#canAttach() ? this.#policy.targetGeneration(backendId, targetId, true) : undefined;
+  }
+
+  async confirmTargetSelection(backendId: string, targetId: string, signal = AbortSignal.timeout(10_000)): Promise<boolean> {
+    signal.throwIfAborted();
+    if (!this.#canAttach()) return false;
+    const generation = this.#policy.targetGeneration(backendId, targetId, true);
+    if (generation === undefined) return false;
+    if (this.#policy.targetGeneration(backendId, targetId) === generation) return true;
+    try {
+      return await this.withTargetAuthorization(backendId, targetId, generation, () => true, signal);
+    } catch (error) {
+      signal.throwIfAborted();
+      if (error instanceof SidecarUnavailableError) return false;
+      throw error;
+    }
+  }
+
+  async withTargetAuthorization<T>(backendId: string, targetId: string, generation: number, operation: () => T, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
+    if (this.acquirableTargetGeneration(backendId, targetId) !== generation) throw new SidecarUnavailableError();
+    const lease = await this.acquireOperation(this.#scope, this.#executionEnvironmentId, signal ?? this.#attachmentController.signal).catch(error => {
+      signal?.throwIfAborted();
+      throw error;
+    });
+    try {
+      if (this.#current?.session !== lease.session || this.#policy.targetGeneration(backendId, targetId) !== generation)
+        throw new SidecarUnavailableError();
+      return await operation();
+    } finally {
+      lease.release();
+    }
+  }
+
+  #canAttach(): boolean {
+    return !this.#closed && !this.#intentionallyDisconnected && this.#retirementFailure === undefined && this.#isTransportAvailable() && this.#isAutomaticConnectionEligible();
+  }
+  policyCapabilityGeneration(id: string): number | undefined { return this.#policy.capabilityGeneration(id); }
+  acquirableCapabilityGeneration(id: string): number | undefined { return this.#canAttach() ? this.#policy.capabilityGeneration(id, true) : undefined; }
+  policyRouteGeneration(id: string): number | undefined { return this.#policy.routeGeneration(id); }
+  retainToolRoute(backendId: string, backendGeneration: number, capabilityGeneration: number) {
+    if (this.#closed || this.#intentionallyDisconnected || !this.#isTransportAvailable() ||
+      this.policyBackendGeneration(backendId) !== backendGeneration) throw new SidecarUnavailableError();
+    return this.#policy.leaseRoute(capabilityGeneration, backendId);
+  }
+  async confirmWorkspacePolicy(
+    path?: string,
+    binding?: {readonly authorityRootId?: string; readonly authorityRevision: number},
+    signal = this.#attachmentController.signal,
+  ): Promise<void> {
+    signal.throwIfAborted();
+    if (!this.#canAttach() || this.#policy.conflict) throw new SidecarUnavailableError();
+    const desired = this.#readDesiredPolicy();
+    const grant = path === undefined ? undefined : workspaceRootGrant(desired.snapshot.roots, path, binding);
+    if (path !== undefined && !grant) return;
+    const current = this.#policy.status?.installed;
+    if (this.#current && current) {
+      if (current.revision === desired.revision && current.digest === desired.digest) return;
+      const confirmed = this.#policy.workspaceRoots();
+      if (path !== undefined) {
+        // Any surviving confirmed grant can admit a new path. A saved
+        // workspace must still match its original root and generation.
+        if (workspaceRootGrant(confirmed, path, binding)) return;
+      } else if (desired.snapshot.roots.every(root => confirmed.some(entry => entry.id === root.id && entry.generation === root.generation))) return;
+    }
+    // Explicitly opening a new root may retry its pending policy during
+    // backoff. An already-confirmed root has returned above.
+    if (this.#current) await this.synchronizePolicy(signal, true);
+    const lease = await this.acquireOperation(this.#scope, this.#executionEnvironmentId, signal);
+    lease.release();
+  }
+  acquirableWorkspaceRoots() { return this.#canAttach() ? this.#policy.workspaceRoots(true) : []; }
+
+  async retryPolicy(signal: AbortSignal): Promise<void> {
+    // Starting a normal session after idle expiry checks the host preference
+    // and synchronizes its first policy without a service-management command.
+    this.#clearIdleTimer();
+    try {
+      if (this.#current) await this.synchronizePolicy(signal, true);
+      else await this.#session(signal);
+    } finally {
+      this.#scheduleIdleIfEligible();
+    }
+  }
+
+  async synchronizePolicy(signal?: AbortSignal, force = false): Promise<void> {
+    if (!this.#current) return;
+    const delivered = this.#policy.synchronize(force);
+    if (signal) await withAbort(delivered, signal);
+    else await delivered;
   }
 
   get artifact(): SidecarArtifactRegistration {
@@ -306,13 +390,13 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   }
 
   acquireAutomaticRecovery(scope: RequestScope, executionEnvironmentId: string, signal: AbortSignal): Promise<SidecarRuntimeLease<Session>> {
-    return this.#acquireAutomaticRecovery(scope, executionEnvironmentId, signal, false);
+    return this.#acquireAutomaticRecovery(scope, executionEnvironmentId, signal);
   }
 
   /** Existing backend work may finish under its original grants while replacement is pending.
    * The daemon attachment is recovery-only: it cannot admit a new process or operation. */
   acquireRetainedRecovery(scope: RequestScope, executionEnvironmentId: string, signal: AbortSignal): Promise<SidecarRuntimeLease<Session>> {
-    return this.#acquireAutomaticRecovery(scope, executionEnvironmentId, signal, true);
+    return this.#acquireAutomaticRecovery(scope, executionEnvironmentId, signal);
   }
 
   /** An invocation can arrive on the current carrier before its backend has a
@@ -323,16 +407,16 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   async acquireExisting(scope: RequestScope, executionEnvironmentId: string, signal: AbortSignal): Promise<SidecarRuntimeLease<Session>> {
     const attachmentSignal = this.#attachmentController.signal;
     this.#assertScope(scope, executionEnvironmentId);
-    await this.#assertActive(true);
+    await this.#assertActive();
     signal.throwIfAborted();
-    const current = this.#borrowCurrentRecovery([]);
+    const current = this.#borrowCurrentRecovery();
     if (current) return current;
-    const automatic = await this.#borrowAutomaticRecovery([], signal, false);
+    const automatic = await this.#borrowAutomaticRecovery([], signal);
     if (automatic) return automatic;
     attachmentSignal.throwIfAborted();
     signal.throwIfAborted();
     if (this.#closed) throw new SidecarUnavailableError();
-    const newlyAvailable = this.#borrowCurrentRecovery([]);
+    const newlyAvailable = this.#borrowCurrentRecovery();
     if (newlyAvailable) return newlyAvailable;
     // Manual management can also receive a reverse invocation while inspecting
     // retained work. Share its lease so the original caller's release cannot
@@ -343,29 +427,20 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     return this.acquireRetainedRecovery(scope, executionEnvironmentId, signal);
   }
 
-  async #acquireAutomaticRecovery(scope: RequestScope, executionEnvironmentId: string, signal: AbortSignal, allowPendingRevision: boolean): Promise<SidecarRuntimeLease<Session>> {
+  async #acquireAutomaticRecovery(scope: RequestScope, executionEnvironmentId: string, signal: AbortSignal): Promise<SidecarRuntimeLease<Session>> {
     const attachmentSignal = this.#attachmentController.signal;
     this.#assertScope(scope, executionEnvironmentId);
-    await this.#assertActive(allowPendingRevision);
+    await this.#assertActive();
     attachmentSignal.throwIfAborted();
     signal.throwIfAborted();
     let attachment = this.#automaticRecovery;
-    if (allowPendingRevision && attachment && !attachment.existingOnly) {
-      // A previous observer may have borrowed a normal controller. A retained
-      // backend must instead use a daemon-enforced recovery-only attachment.
-      this.#automaticRecovery = undefined;
-      attachment.controller.abort();
-      attachment.lease?.release();
-      attachment = undefined;
-    }
     if (!attachment) {
       const controller = new AbortController();
       attachment = {
-        existingOnly: allowPendingRevision,
         controller,
         references: 0,
         lease: undefined,
-        promise: this.#acquireRecovery(scope, executionEnvironmentId, controller.signal, true, [], allowPendingRevision),
+        promise: this.#acquireRecovery(scope, executionEnvironmentId, controller.signal, true, []),
       };
       this.#automaticRecovery = attachment;
       const owned = attachment;
@@ -383,7 +458,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     try {
       const lease = await withAbort(owned.promise, signal);
       this.#assertScope(scope, executionEnvironmentId);
-      await this.#assertActive(allowPendingRevision);
+      await this.#assertActive();
       attachmentSignal.throwIfAborted();
       owned.controller.signal.throwIfAborted();
       signal.throwIfAborted();
@@ -409,9 +484,9 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     return release;
   }
 
-  async #borrowAutomaticRecovery(required: readonly SidecarAuthorizedCapability[], signal: AbortSignal, retainedOnly = true): Promise<SidecarRuntimeLease<Session> | undefined> {
+  async #borrowAutomaticRecovery(required: readonly SidecarAuthorizedCapability[], signal: AbortSignal): Promise<SidecarRuntimeLease<Session> | undefined> {
     const owned = this.#automaticRecovery;
-    if (this.#current || this.#intentionallyDisconnected || !owned || (retainedOnly && !owned.existingOnly) || owned.controller.signal.aborted ||
+    if (this.#current || this.#intentionallyDisconnected || !owned || owned.controller.signal.aborted ||
       required.some(capability => !this.#authorizedCapabilities.some(admitted =>
         admitted.capabilityId === capability.capabilityId && admitted.majorVersion === capability.majorVersion))) return undefined;
     const release = this.#referenceAutomaticRecovery(owned);
@@ -434,12 +509,12 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     await this.#assertActive();
   }
 
-  async #acquireRecovery(scope: RequestScope, executionEnvironmentId: string, signal: AbortSignal, automatic: boolean, requiredCapabilities: readonly SidecarAuthorizedCapability[], allowPendingRevision = false): Promise<SidecarRuntimeLease<Session>> {
+  async #acquireRecovery(scope: RequestScope, executionEnvironmentId: string, signal: AbortSignal, automatic: boolean, requiredCapabilities: readonly SidecarAuthorizedCapability[]): Promise<SidecarRuntimeLease<Session>> {
     this.#assertScope(scope, executionEnvironmentId);
     const recoveryCapabilities = this.#recoveryCapabilities(requiredCapabilities);
-    if (automatic) await this.#assertActive(allowPendingRevision);
+    if (automatic) await this.#assertActive();
     if (this.#closed || signal.aborted) throw new SidecarUnavailableError({ cause: signal.reason });
-    const borrowed = allowPendingRevision ? undefined : this.#borrowCurrentRecovery(requiredCapabilities);
+    const borrowed = this.#borrowCurrentRecovery();
     if (borrowed) return borrowed;
     const retained = automatic ? undefined : await this.#borrowAutomaticRecovery(requiredCapabilities, signal);
     if (retained) return retained;
@@ -449,37 +524,33 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     // This stages a verified client artifact only. attachExisting cannot start
     // a service and its read-only epoch cannot launch or mutate remote work.
     await this.#provisioner.install(controller);
-    if (automatic) await this.#assertActive(allowPendingRevision);
+    if (automatic) await this.#assertActive();
     controller.throwIfAborted();
     // A normal session may have finished starting while artifact verification
     // awaited I/O. Inspection must preserve its existing controller too.
     if (this.#startPromise) {
       await withAbort(this.#startPromise.then(() => undefined, () => undefined), controller);
-      if (automatic) await this.#assertActive(allowPendingRevision);
+      if (automatic) await this.#assertActive();
       controller.throwIfAborted();
     }
-    const available = allowPendingRevision ? undefined : this.#borrowCurrentRecovery(requiredCapabilities);
+    const available = this.#borrowCurrentRecovery();
     if (available) return available;
     const retainedAfterInstall = automatic ? undefined : await this.#borrowAutomaticRecovery(requiredCapabilities, controller);
     if (retainedAfterInstall) return retainedAfterInstall;
-    // The service admits one controller. A live normal session that cannot
-    // grant the required capabilities is retired here deliberately, rather
-    // than being evicted remotely as an unexplained failure.
-    if (this.#current && !this.#intentionallyDisconnected) await this.#retireCurrent("sidecar_recovery_replaced");
     const carrierGeneration = ++this.#carrierGeneration;
     const sessionNonce = randomBytes(32).toString("base64url");
     const stream = await this.#provisioner.attachExisting(carrierGeneration, sessionNonce, controller);
     let session: Session;
     try {
-      if (automatic) await this.#assertActive(allowPendingRevision);
+      if (automatic) await this.#assertActive();
       controller.throwIfAborted();
-      session = await this.#startSession({ stream, transportKind: this.#provisioner.transportKind, carrierGeneration, sessionNonce, artifact: stream.serviceStatus, installation: stream.installation,
+      session = await this.#startSession({ policyAttachment: "recovery", stream, transportKind: this.#provisioner.transportKind, carrierGeneration, sessionNonce, artifact: stream.serviceStatus, installation: stream.installation,
         connectionCompression: this.#connectionCompression(),
         executionEnvironmentId: this.#executionEnvironmentId,
         authorizedCapabilities: recoveryCapabilities, authorizedRuntimeCapabilities: this.#authorizedRuntimeCapabilities,
         sedesOperations: this.#sedesOperations, signal: controller });
     } catch (error) { await stream.close("sidecar_recovery_handshake_failed").catch(() => undefined); throw error; }
-    try { if (automatic) await this.#assertActive(allowPendingRevision); controller.throwIfAborted(); }
+    try { if (automatic) await this.#assertActive(); controller.throwIfAborted(); }
     catch (error) { await this.#beginSessionRetirement(session, "sidecar_recovery_admission_changed"); throw error; }
     this.#recoverySessions.add(session);
     // Automatic observation must stop when the operator disconnects. Manual
@@ -528,16 +599,15 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     return Object.freeze(merged.sort((left, right) => order.indexOf(left.capabilityId) - order.indexOf(right.capabilityId)).map((capability) => Object.freeze({ ...capability })));
   }
 
-  #borrowCurrentRecovery(required: readonly SidecarAuthorizedCapability[]): SidecarRuntimeLease<Session> | undefined {
+  #borrowCurrentRecovery(): SidecarRuntimeLease<Session> | undefined {
     const owned = this.#current;
-    if (!owned || this.#intentionallyDisconnected || required.some((capability) => !this.#authorizedCapabilities.some((normal) =>
-      normal.capabilityId === capability.capabilityId && normal.majorVersion === capability.majorVersion))) return undefined;
+    if (!owned || this.#intentionallyDisconnected) return undefined;
     // Inspection has the same bounded attachment lifetime as an operation
     // lease, without starting a carrier or replacing its authenticated epoch.
     this.#clearIdleTimer();
     this.#operationLeases += 1;
     let released = false;
-    return Object.freeze({ session: owned.session, carrierGeneration: owned.carrierGeneration, serviceStatus: owned.serviceStatus,
+    return Object.freeze({ session: owned.session.recoveryView() as Session, carrierGeneration: owned.carrierGeneration, serviceStatus: owned.serviceStatus,
       release: () => {
         if (released) return;
         released = true;
@@ -547,12 +617,14 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     });
   }
 
-  async connect(signal: AbortSignal): Promise<SidecarServiceStatus> {
+  async connect(signal: AbortSignal, options: {retryPolicy?: boolean} = {}): Promise<SidecarServiceStatus> {
     this.#intentionallyDisconnected = false;
+    const wasAttached = !!this.#current;
     await this.#session(signal);
+    if (wasAttached) await this.synchronizePolicy(signal, options.retryPolicy !== false);
     let status = await this.inspectService(signal);
     if (!status) throw new SidecarUnavailableError();
-    if (this.#outdated(status) && status.resources.every((resource) => resource.state === "idle" && resource.blockers.length === 0)) {
+    if (this.#policy.status?.installed && !this.#policy.conflict && this.#outdated(status) && status.resources.every((resource) => resource.state === "idle" && resource.blockers.length === 0)) {
       // The service answered, is compatible, and owns no unsettled work: this
       // is the proven-safe idle replacement that needs no confirmation. The
       // service still refuses if work was admitted since this observation.
@@ -573,13 +645,12 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   }
 
   #outdated(status: SidecarServiceStatus): boolean {
-    return status.runtimeWireVersion === SIDECAR_WIRE_VERSION && (status.artifactSha256 !== this.#artifact.artifactSha256 ||
-      status.effectiveConfiguration.environmentRevision !== this.#environmentConfigurationRevision ||
-      status.effectiveConfiguration.operationsRevision !== this.#operationsConfigurationRevision);
+    return status.runtimeWireVersion === SIDECAR_WIRE_VERSION && (status.artifactSha256 !== this.#artifact.artifactSha256 || status.buildId !== this.#artifact.buildId);
   }
 
   async disconnect(reason = "sidecar_intentionally_disconnected"): Promise<void> {
     this.#intentionallyDisconnected = true;
+    this.#policy.detach();
     await this.#retireAttachment(reason);
   }
 
@@ -647,20 +718,29 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     scope: RequestScope,
     executionEnvironmentId: string,
     signal: AbortSignal,
-  ): Promise<SidecarRuntimeLease<Session>> {
-    if (
-      !this.#authorizedCapabilities.some(
-        ({ capabilityId }) => capabilityId === "agent_tools_cli",
-      )
-    ) {
-      throw new SidecarUnavailableError();
+    backendInstanceId?: string,
+  ) {
+    if (!this.#readDesiredPolicy().snapshot.capabilities.some(capability => capability.id === "agent_tools_cli")) throw new SidecarUnavailableError();
+    const lease = await this.#acquire("agent_tools", scope, executionEnvironmentId, signal);
+    try {
+      if (!backendInstanceId) throw new SidecarUnavailableError();
+      const generation = this.#policy.routeGeneration(backendInstanceId);
+      const backendGeneration = this.#policy.backendGeneration(backendInstanceId);
+      if (generation === undefined || !lease.session.acquirePolicyRoute) throw new SidecarUnavailableError();
+      let agentToolCli: SidecarAgentToolCliMetadata;
+      try {
+        agentToolCli = await lease.session.acquirePolicyRoute({ capabilityId: "agent_tools_cli", generation, backendInstanceId }, signal);
+      } catch (error) {
+        if (!signal.aborted) void this.synchronizePolicy(undefined, true).catch(this.#onBackgroundError);
+        throw error;
+      }
+      if (this.#current?.session !== lease.session || this.#policy.backendGeneration(backendInstanceId) !== backendGeneration) throw new SidecarUnavailableError();
+      const route = this.#policy.leaseRoute(generation, backendInstanceId);
+      return { ...lease, agentToolCli, routeGeneration: generation, closed: route.closed, release: () => { route.release(); lease.release(); } };
+    } catch (error) {
+      lease.release();
+      throw error;
     }
-    return await this.#acquire(
-      "agent_tools",
-      scope,
-      executionEnvironmentId,
-      signal,
-    );
   }
 
   close(reason = "sidecar_runtime_closed"): Promise<void> {
@@ -693,6 +773,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     };
     try {
       const owned = await this.#session(signal);
+      if (this.#current !== owned || !this.#policy.status?.installed || this.#policy.conflict) throw new SidecarUnavailableError();
       if (signal.aborted) {
         throw new SidecarUnavailableError({
           cause: signal.reason,
@@ -712,9 +793,11 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   }
 
   async #session(signal: AbortSignal): Promise<OwnedSession<Session>> {
+    const attachment = this.#attachmentController.signal;
     await this.#assertActive();
+    if (attachment.aborted) throw new SidecarUnavailableError({cause: attachment.reason});
     const current = this.#current;
-    if (current) return current;
+    if (current && (this.#policy.status || !this.#startPromise)) return current;
     let starting = this.#startPromise;
     if (!starting) {
       starting = this.#start();
@@ -754,6 +837,11 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
       await this.#assertActive();
       handshakeStarted = true;
       session = await this.#startSession({
+        policyAttachment: "normal",
+        readDesiredPolicy: () => {
+          if (this.#policy.conflict) throw new Error("sidecar_policy_revision_conflict");
+          return this.#readDesiredPolicy();
+        },
         connectionCompression: this.#connectionCompression(),
         executionEnvironmentId: this.#executionEnvironmentId,
         stream,
@@ -773,7 +861,6 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
       const owned = Object.freeze({ session, carrierGeneration, serviceStatus: launched.serviceStatus });
       this.#current = owned;
       this.#lastNegotiatedCapabilities = session.negotiatedCapabilities;
-      this.#lastAgentToolCliAvailable = session.agentToolCli !== undefined;
       const readyPublication = this.#publishLifecycleEvidence({
         availability: "available",
       });
@@ -781,6 +868,10 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
         () => this.#sessionClosed(owned),
         (error) => this.#sessionClosed(owned, error),
       );
+      this.#policy.attach(session, owned.serviceStatus);
+      // A failed first delivery keeps the authenticated transport available for
+      // retries and exact settlement. New operations require confirmation.
+      await this.synchronizePolicy(signal).catch(this.#onBackgroundError);
       await readyPublication;
       return owned;
     } catch (error) {
@@ -824,6 +915,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   #sessionClosed(owned: OwnedSession<Session>, error?: unknown): void {
     if (this.#current !== owned) return;
     this.#current = undefined;
+    this.#policy.detach(true);
     if (error instanceof SidecarSessionCleanupError) {
       this.#retirementFailure ??= error;
     } else {
@@ -862,6 +954,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
         return;
       }
       this.#current = undefined;
+      this.#policy.detach(true);
       void this.#beginSessionClose(owned, "sidecar_idle_expired").catch(
         this.#onBackgroundError,
       );
@@ -884,6 +977,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     const starting = this.#startPromise;
     const current = this.#current;
     this.#current = undefined;
+    this.#policy.detach();
     const retirementsToJoin = new Set(this.#retiringSessions);
     for (const recovery of this.#recoverySessions) retirementsToJoin.add(this.#beginSessionRetirement(recovery, reason));
     this.#recoverySessions.clear();
@@ -932,82 +1026,19 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     }
   }
 
-  async #assertActive(allowPendingRevision = false): Promise<void> {
-    if (this.#retirementFailure !== undefined) {
-      throw new SidecarUnavailableError({
-        cause: this.#retirementFailure,
-      });
-    }
+  async #assertActive(): Promise<void> {
+    if (this.#retirementFailure !== undefined) throw new SidecarUnavailableError({cause: this.#retirementFailure});
+    if (!(await this.#isAutomaticConnectionEnabled())) throw unavailable("sidecar_automatic_connection_disabled");
     if (this.#closed || this.#closeController.signal.aborted) throw unavailable("sidecar_runtime_closed");
     if (this.#intentionallyDisconnected) throw unavailable("sidecar_intentionally_disconnected");
-    if (!(await this.#isAutomaticConnectionEnabled())) throw unavailable("sidecar_automatic_connection_disabled");
-    if (!this.#isTransportAvailable()) throw unavailable("sidecar_transport_unavailable");
-    let environmentRevision: number;
-    let operationsRevision: number;
-    try {
-      [environmentRevision, operationsRevision] = await Promise.all([
-        this.#activeEnvironmentConfigurationRevision(),
-        this.#activeOperationsConfigurationRevision(),
-      ]);
-    } catch (error) {
-      throw new SidecarUnavailableError({ cause: error });
-    }
-    if (this.#retirementFailure !== undefined) {
-      throw new SidecarUnavailableError({
-        cause: this.#retirementFailure,
-      });
-    }
-    if (
-      this.#closed ||
-      (!allowPendingRevision && (environmentRevision !== this.#environmentConfigurationRevision ||
-      operationsRevision !== this.#operationsConfigurationRevision))
-    ) {
-      if (!this.#closed) {
-        try {
-          await this.#retireCurrent("sidecar_revision_changed");
-        } catch (error) {
-          throw new SidecarUnavailableError({ cause: error });
-        }
-        throw unavailable("sidecar_revision_changed");
-      }
-      throw unavailable("sidecar_runtime_closed");
-    }
-    if (this.#closed || this.#closeController.signal.aborted) throw unavailable("sidecar_runtime_closed");
-    if (this.#intentionallyDisconnected) throw unavailable("sidecar_intentionally_disconnected");
-    if (!(await this.#isAutomaticConnectionEnabled())) throw unavailable("sidecar_automatic_connection_disabled");
     if (!this.#isTransportAvailable()) throw unavailable("sidecar_transport_unavailable");
   }
 
-  #publishLifecycleEvidence(
-    evidence: SidecarLifecycleEvidence,
-  ): Promise<void> {
+  #publishLifecycleEvidence(evidence: SidecarLifecycleEvidence): Promise<void> {
     const publication = this.#lifecycleTail.then(async () => {
-      if (this.#closed) return;
-      let environmentRevision: number;
-      let operationsRevision: number;
-      try {
-        [environmentRevision, operationsRevision] = await Promise.all([
-          this.#activeEnvironmentConfigurationRevision(),
-          this.#activeOperationsConfigurationRevision(),
-        ]);
-      } catch (error) {
-        this.#onBackgroundError(error);
-        return;
-      }
-      if (
-        this.#closed ||
-        environmentRevision !== this.#environmentConfigurationRevision ||
-        operationsRevision !== this.#operationsConfigurationRevision
-      ) {
-        return;
-      }
-      try {
-        await this.#onLifecycleEvidence(evidence);
-      } catch (error) {
-        this.#onBackgroundError(error);
-      }
-    });
-    this.#lifecycleTail = publication.catch(() => undefined);
+      if (!this.#closed) await this.#onLifecycleEvidence(evidence);
+    }).catch(this.#onBackgroundError);
+    this.#lifecycleTail = publication;
     return publication;
   }
 
@@ -1016,6 +1047,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     const current = this.#current;
     if (current) {
       this.#current = undefined;
+      this.#policy.detach(!this.#intentionallyDisconnected);
       void this.#beginSessionClose(current, reason);
     }
     await Promise.all([...this.#retiringSessions]);
@@ -1047,7 +1079,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
 }
 
 /** Administration reads the cause to tell a refused attachment from an unreachable host. */
-function unavailable(code: "sidecar_runtime_closed" | "sidecar_intentionally_disconnected" | "sidecar_automatic_connection_disabled" | "sidecar_transport_unavailable" | "sidecar_revision_changed"): SidecarUnavailableError {
+function unavailable(code: "sidecar_runtime_closed" | "sidecar_intentionally_disconnected" | "sidecar_automatic_connection_disabled" | "sidecar_transport_unavailable"): SidecarUnavailableError {
   return new SidecarUnavailableError({ cause: new Error(code) });
 }
 
@@ -1069,21 +1101,4 @@ interface OwnedSession<Session extends SidecarRuntimeSession> {
   readonly serviceStatus: SidecarServiceStatus;
   readonly session: Session;
   readonly carrierGeneration: number;
-}
-
-async function withAbort<T>(promise: Promise<T>, signal: AbortSignal) {
-  if (signal.aborted) throw signal.reason;
-  return await new Promise<T>((resolve, reject) => {
-    const abort = () => finish(false, signal.reason);
-    const finish = (success: boolean, value: unknown) => {
-      signal.removeEventListener("abort", abort);
-      if (success) resolve(value as T);
-      else reject(value);
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    void promise.then(
-      (value) => finish(true, value),
-      (error) => finish(false, error),
-    );
-  });
 }

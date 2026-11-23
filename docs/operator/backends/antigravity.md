@@ -38,6 +38,12 @@ reservation also applies when separate profile paths are configured: default,
 explicit, and symlinked paths may refer to the same native store, and preparing
 configuration never probes a remote filesystem to guess their identity.
 
+On a connected SSH or paired host, saving the first backend or an additional
+target applies it as soon as the sidecar confirms the settings. Running turns
+and terminals continue. Changes to provider startup settings apply to the next
+native runtime. If you need them immediately, stop the existing backend after
+its work settles.
+
 The backend kind is `antigravity`, connection kind `antigravity_acp`, and
 configured protocol release `1.5.14`. Connection configuration accepts:
 

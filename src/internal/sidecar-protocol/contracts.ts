@@ -1,7 +1,7 @@
 import type { EnvironmentProcessWriteDelivery } from "../../server/execution/environment-channel.js";
 import type { SidecarFrameCompression } from "./frame-compression.js";
 
-export type SidecarFrameLane = "control" | "operation";
+export type SidecarFrameLane = "control" | "operation" | "staging" | "interactive";
 
 export interface SidecarFrameWriteDiagnostic {
   readonly stage: "queued" | "write_start" | "write_complete" | "write_failed";

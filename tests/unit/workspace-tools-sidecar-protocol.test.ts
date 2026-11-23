@@ -7,7 +7,7 @@ import {
   WORKSPACE_TOOLS_SHELL_V2_LIMITS,
   WORKSPACE_TOOLS_V2_LIMITS,
   controlHelloOperation,
-  registerControlV2Operations,
+  registerControlV3Operations,
   registerWorkspaceContextV1Operations,
   registerWorkspaceToolsV2Operations,
   validateSidecarHelloCapabilityEvidence,
@@ -205,7 +205,7 @@ describe("sidecar hello capability evidence", () => {
 
   it("accepts the static tools/context capability evidence pair", () => {
     expect(() =>
-      registerControlV2Operations(registeredCapabilityRegistry(), {
+      registerControlV3Operations(registeredCapabilityRegistry(), {
         buildId: "build",
         artifactSha256: "a".repeat(64),
         enabledSidecarCapabilities: [
@@ -221,7 +221,7 @@ describe("sidecar hello capability evidence", () => {
 
   it("advertises tools/context without probing search executables", async () => {
     const registry = registeredCapabilityRegistry();
-    registerControlV2Operations(registry, {
+    registerControlV3Operations(registry, {
       buildId: "build",
       artifactSha256: "a".repeat(64),
       enabledSidecarCapabilities: [
@@ -245,7 +245,7 @@ describe("sidecar hello capability evidence", () => {
 
   it("fails the atomic tools/context demand when static evidence is absent", async () => {
     const registry = registeredCapabilityRegistry();
-    registerControlV2Operations(registry, {
+    registerControlV3Operations(registry, {
       buildId: "build",
       artifactSha256: "a".repeat(64),
       enabledSidecarCapabilities: [
@@ -359,7 +359,7 @@ function registeredCapabilityRegistry(): SidecarOperationRegistry {
 
 async function invokeHello(
   registry: SidecarOperationRegistry,
-  authorizedSidecarCapabilities: readonly {
+  supportedSidecarCapabilities: readonly {
     readonly capabilityId: string;
     readonly majorVersion: number;
   }[],
@@ -370,7 +370,7 @@ async function invokeHello(
       compression: "none",
       expectedBuildId: "build",
       expectedArtifactSha256: "a".repeat(64),
-      authorizedSidecarCapabilities,
+      supportedSidecarCapabilities,
       offeredSedesCapabilities: [],
     },
     { requestId: randomUUID(), signal: new AbortController().signal },

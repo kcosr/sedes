@@ -1,3 +1,4 @@
+import { ownerPolicy, ownerPolicyPeer } from "../helpers/sidecar-owner-policy.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SidecarOperationRegistry } from "../../src/internal/sidecar-protocol/operation-registry.js";
 import { SidecarRuntimeOwner, type SidecarAuthorizedCapability } from "../../src/server/sidecar/sidecar-runtime.js";
@@ -26,14 +27,14 @@ function fixture(authorizedCapabilities: readonly SidecarAuthorizedCapability[] 
   const launch = vi.fn(async () => stream("normal"));
   const attachExisting = vi.fn(async () => stream("recovery"));
   const negotiated: Array<readonly SidecarAuthorizedCapability[]> = [];
-  const owner = new SidecarRuntimeOwner({ connectionCompression: () => true, scope, executionEnvironmentId: "remote", environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
+  const owner = new SidecarRuntimeOwner({ connectionCompression: () => true, scope, executionEnvironmentId: "remote", readDesiredPolicy: () => ownerPolicy(authorizedCapabilities.map(c => c.capabilityId), {environmentRevision,operationsRevision}),
     authorizedCapabilities, authorizedRuntimeCapabilities: [],
-    activeEnvironmentConfigurationRevision: environmentProbe, activeOperationsConfigurationRevision: () => operationsRevision, isAutomaticConnectionEnabled: () => enabled,
+    isAutomaticConnectionEnabled: async () => { await environmentProbe(); return enabled; },
     artifact: { artifactId: SIDECAR_ARTIFACT_ID, modes: SIDECAR_ARTIFACT_MODES, executableDirectory: "/fixture", executablePath: "/fixture/sedes",
       artifactSha256: "a".repeat(64), artifactBytes: 1, buildId: "fixture", minimumNodeVersion: SIDECAR_MINIMUM_NODE_VERSION, nativeAssets: [] },
     provisioner: { transportKind: "ssh_stdio", install, launch, attachExisting, inspect: async () => registry.status(), inspectReceipt: async () => undefined, withdrawReceipt: async () => undefined, control: async () => undefined },
     sedesOperations: new SidecarOperationRegistry(), idleMilliseconds: 20,
-    startSession: async (input) => { negotiated.push(input.authorizedCapabilities); const epoch = registry.controllerEpoch; const session = makeSession(() => registry.detach(epoch)); sessions.push(session); return session; } });
+    startSession: async (input) => { negotiated.push(input.authorizedCapabilities); const epoch = registry.controllerEpoch; const session = makeSession(() => registry.detach(epoch), ownerPolicyPeer(registry.status())); sessions.push(session); return session; } });
   cleanups.push(() => owner.close());
   return { owner, registry, install, launch, attachExisting, sessions, negotiated, environmentProbe,
     disable: () => { enabled = false; },
@@ -41,12 +42,12 @@ function fixture(authorizedCapabilities: readonly SidecarAuthorizedCapability[] 
     changeOperations: () => { operationsRevision += 1; },
   };
 }
-function makeSession(detach: () => void) {
+function makeSession(detach: () => void, policy: ReturnType<typeof ownerPolicyPeer>) {
   const listeners = new Set<(event: string) => void>();
   let resolve!: () => void;
   const closed = new Promise<void>(done => { resolve = done; });
   const close = vi.fn(async (_reason: string) => { listeners.clear(); detach(); resolve(); });
-  return { negotiatedCapabilities: [], closed, close, subscribe: (listener: (event: string) => void) => { listeners.add(listener); }, emit: (event: string) => { for (const listener of listeners) listener(event); } };
+  return { ...policy, recoveryView() { return this; }, negotiatedCapabilities: [], closed, close, subscribe: (listener: (event: string) => void) => { listeners.add(listener); }, emit: (event: string) => { for (const listener of listeners) listener(event); } };
 }
 describe("recovery attachment ownership", () => {
   it.each([1, 2, 6])("fences recovery paused at authority probe %s across disconnect and reconnect", async (probe) => {
@@ -184,7 +185,7 @@ describe("recovery attachment ownership", () => {
     expect(value.launch).not.toHaveBeenCalled();
   });
 
-  it.each(["borrowed", "temporary"] as const)("revalidates disabled connection and changed revisions for %s recovery", async (kind) => {
+  it.each(["borrowed", "temporary"] as const)("honors intentional disconnection and preserves exact settlement across live edits for %s recovery", async (kind) => {
     for (const revoke of ["disable", "changeEnvironment", "changeOperations"] as const) {
       const value = fixture();
       const signal = new AbortController().signal;
@@ -192,7 +193,8 @@ describe("recovery attachment ownership", () => {
       const recovery = await value.owner.acquireAutomaticRecovery(scope, "remote", signal);
       await value.owner.assertAutomaticRecoveryActive(scope, "remote");
       value[revoke]();
-      await expect(value.owner.assertAutomaticRecoveryActive(scope, "remote")).rejects.toThrow("sidecar_unavailable");
+      if (revoke === "disable") await expect(value.owner.assertAutomaticRecoveryActive(scope, "remote")).rejects.toThrow("sidecar_unavailable");
+      else await value.owner.assertAutomaticRecoveryActive(scope, "remote");
       recovery.release(); operation?.release();
     }
   });
@@ -274,16 +276,14 @@ describe("recovery attachment ownership", () => {
     recovery.release();
     await expect(value.owner.acquireOperation(scope, "remote", signal)).rejects.toThrow("sidecar_unavailable");
   });
-  it("borrows only when the live session already contains every required recovery capability", async () => {
+  it("borrows the same controller for scoped retained capability requests", async () => {
     const value = fixture([]);
     const signal = new AbortController().signal;
     const normal = await value.owner.acquireOperation(scope, "remote", signal);
     expect(value.negotiated[0]).toEqual([]);
     const recovery = await value.owner.acquireRecovery(scope, "remote", signal, [{ capabilityId: "workspace_files", majorVersion: 8 }]);
-    expect(recovery.session).not.toBe(normal.session);
-    expect(value.attachExisting).toHaveBeenCalledTimes(1);
-    expect(value.negotiated[1]).toEqual([{ capabilityId: "workspace_files", majorVersion: 8 }]);
-    expect(recovery.serviceStatus.attachmentMode).toBe("recovery");
+    expect(recovery.session).toBe(normal.session);
+    expect(value.attachExisting).not.toHaveBeenCalled();
     normal.release(); recovery.release();
   });
   it("rejects extra authority, obsolete majors, duplicates, unpaired tools and wrong scope before transport", async () => {
@@ -306,7 +306,6 @@ it("recovers retained work under pending revisions without granting ordinary ope
   value.changeEnvironment(); value.changeOperations();
   await value.owner.disconnectTransport("test_carrier_lost");
   normal.release();
-  await expect(value.owner.acquireOperation(scope, "remote", signal)).rejects.toMatchObject({ cause: { message: "sidecar_revision_changed" } });
   const [first, second] = await Promise.all([
     value.owner.acquireRetainedRecovery(scope, "remote", signal),
     value.owner.acquireRetainedRecovery(scope, "remote", signal),
@@ -316,22 +315,21 @@ it("recovers retained work under pending revisions without granting ordinary ope
   expect(value.launch).toHaveBeenCalledOnce();
   expect(() => value.registry.assertController(first.serviceStatus.controllerEpoch)).not.toThrow();
   expect(() => value.registry.assertAdmission(first.serviceStatus.controllerEpoch)).toThrow("sidecar_recovery_attachment_read_only");
-  await expect(value.owner.acquireOperation(scope, "remote", signal)).rejects.toMatchObject({ cause: { message: "sidecar_revision_changed" } });
   await expect(value.owner.acquireRetainedRecovery({ ...scope, principalId: "other" }, "remote", signal)).rejects.toThrow();
   await value.owner.disconnect();
   await expect(value.owner.acquireRetainedRecovery(scope, "remote", signal)).rejects.toMatchObject({ cause: { message: "sidecar_intentionally_disconnected" } });
   first.release(); second.release();
 });
 
-it("replaces a cached normal-controller observation before issuing retained-only recovery", async () => {
+it("borrows a cached normal controller for retained-only recovery without disrupting it", async () => {
   const value = fixture();
   const signal = new AbortController().signal;
   const normal = await value.owner.acquireOperation(scope, "remote", signal);
   const observer = await value.owner.acquireAutomaticRecovery(scope, "remote", signal);
   expect(observer.session).toBe(normal.session);
   const retained = await value.owner.acquireRetainedRecovery(scope, "remote", signal);
-  expect(retained.session).not.toBe(normal.session);
-  expect(() => value.registry.assertAdmission(retained.serviceStatus.controllerEpoch)).toThrow("sidecar_recovery_attachment_read_only");
+  expect(retained.session).toBe(normal.session);
+  expect(value.attachExisting).not.toHaveBeenCalled();
   normal.release(); observer.release(); retained.release();
 });
 

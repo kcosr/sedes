@@ -1,16 +1,21 @@
+import type { InstalledExecutionPolicy } from "../../internal/sidecar-protocol/execution-policy.js";
+import { validateConfigurationDocument } from "./configuration-validation.js";
+import { changedConfigurationEffects, configurationEffectsPending, observeProviderLaunch } from "./configuration-effects.js";
+import { hostExecutionPolicy } from "./configuration-execution-policy.js";
+import { antigravityOwners, assertSingleAntigravityOwner, restoreMigratedTargets } from "./configuration-ownership.js";
 import { assertOutboundPairingReferences } from "./configuration-outbound-pairing.js";
 import type Database from "better-sqlite3";
 import {
   configurationDocumentSchema, configurationLifecycleRequestSchema, configurationLifecycleResultSchema,
   configurationRuntimeStateSchema, configurationSnapshotSchema,
-  type ConfigurationDocument, type ConfigurationLifecycleRequest,
+  type ConfigurationDocument, type ConfigurationEffect, type ConfigurationLifecycleRequest,
   type ConfigurationLifecycleResult, type ConfigurationRuntimeState,
   type ConfigurationSnapshot, type SaveConfigurationRequest,
 } from "../../shared/protocol/configuration-admin.js";
 import { configurationFingerprint } from "../config/configuration-fingerprint.js";
 import { DomainError } from "../domain/errors.js";
 import type { RequestScope } from "../identity/identity-provider.js";
-import { configurationIdentities, runtimeConfigurationFingerprint } from "./configuration-identities.js";
+import { configurationIdentities } from "./configuration-identities.js";
 
 export const EMPTY_EXECUTION_CONFIGURATION: ConfigurationDocument = {
   executionEnvironments: [], backends: [], targets: [], defaultTargetId: null, webSearch: null,
@@ -82,6 +87,12 @@ export class ConfigurationRepository {
       this.#assertRevision(previous, request.expectedRevision);
       this.#assertCapacity(scope);
       const document = configurationDocumentSchema.parse(request.configuration);
+      assertSingleAntigravityOwner(document);
+      const incumbents = antigravityOwners(previous.configuration);
+      for (const [environment, ids] of antigravityOwners(document)) {
+        if (incumbents.get(environment)?.[0] !== ids[0]) this.assertNativeOwner(scope, environment, "antigravity", ids[0]!);
+      }
+      if (restoreMigratedTargets(this.database, scope, document)) validateConfigurationDocument(document);
       assertOutboundPairingReferences(this.database, scope, document, previous.configuration);
       this.#reserveIdentities(scope, document);
       const revision = previous.revision + 1;
@@ -108,6 +119,7 @@ export class ConfigurationRepository {
       }
       if (this.isInitialized(scope)) throw new DomainError("conflict", "Database configuration already exists; import cannot overwrite it.");
       const validated = configurationDocumentSchema.parse(document);
+      assertSingleAntigravityOwner(validated);
       this.#assertCompleteImport(scope, validated);
       assertOutboundPairingReferences(this.database, scope, validated);
       this.#reserveIdentities(scope, validated);
@@ -144,8 +156,146 @@ export class ConfigurationRepository {
       if (observation.applyState === "applied" && observation.effectiveRevision !== observation.desiredRevision) {
         throw new DomainError("conflict", "Applied status requires the exact desired revision.");
       }
-      this.#putRuntime(scope, observation);
-      return observation;
+      const effects = current.effects?.map(effect => {
+        if (effect.component !== "provider_launch" || effect.providerLaunch?.owner === "host") return effect;
+        if (observation.connectionState === "stopped" && effect.providerLaunch) {
+          return { ...effect, state: "next_launch" as const, effectiveRevision: null,
+            providerLaunch: {...effect.providerLaunch, confirmedDigest: null} };
+        }
+        if (observation.startupEnvironmentPending) return { ...effect, state: "restart_backend" as const };
+        if (observation.applyState === "applied" && observation.connectionState === "connected") {
+          return { ...effect, state: "applied" as const, effectiveRevision: effect.desiredRevision,
+            ...(effect.providerLaunch && { providerLaunch: {...effect.providerLaunch, confirmedDigest: effect.providerLaunch.desiredDigest} }) };
+        }
+        return effect;
+      });
+      const pending = configurationEffectsPending(effects ?? []);
+      const observed = { ...observation, ...(effects ? { effects } : {}),
+        ...(pending && observation.applyState === "applied" ? { applyState: "pending" as const, effectiveRevision: current.effectiveRevision === current.desiredRevision ? null : current.effectiveRevision } : {}) };
+      this.#putRuntime(scope, observed);
+      return observed;
+    })();
+  }
+
+  /** Publish only evidence for the still-current complete snapshot. Background observations may arrive out of order. */
+  observeHostPolicy(scope: RequestScope, environmentId: string, installed: InstalledExecutionPolicy,
+    readiness: ReadonlyMap<string, "ready" | "unsupported" | "failed" | "preparing">,
+    confirmation?: {incarnation: string; epoch: number; launchDigests?: ReadonlyMap<string,string | null>}): void {
+    this.database.transaction(() => {
+      const desired = hostExecutionPolicy(this.database, scope, environmentId);
+      if (!desired || desired.revision !== installed.revision || desired.digest !== installed.digest) return;
+      const stamp = confirmation && {revision: installed.revision, digest: installed.digest, incarnation: confirmation.incarnation, epoch: confirmation.epoch};
+      // The immutable profile binding survives removal so an installed withdrawal also settles
+      // its retained runtime row before someone re-adds the same backend in a later generation.
+      const hostRuntimes = this.database.prepare(`SELECT state_json AS state FROM execution_configuration_runtime_state
+        WHERE tenant_id = ? AND owner_principal_id = ?
+          AND ((resource_kind = 'environment' AND resource_id = ?) OR (resource_kind = 'backend' AND resource_id IN (
+            SELECT backend_instance_id FROM agent_connection_profiles
+              WHERE tenant_id = ? AND owner_principal_id = ? AND execution_environment_id = ?
+          )))`).all(scope.tenantId, scope.principalId, environmentId, scope.tenantId, scope.principalId, environmentId) as {state: string}[];
+      for (const row of hostRuntimes) {
+        const runtime = configurationRuntimeStateSchema.parse(JSON.parse(row.state));
+        const effects = (runtime.effects ?? []).map(effect => {
+          if (effect.component !== "host_policy") return effect;
+          const [kind, id] = effect.subjectId.split(":", 2);
+          const target = kind === "target" ? installed.snapshot.backends.find(b => b.targets.some(t => t.id === id)) : undefined;
+          const subject = target ? `backend:${target.id}` : effect.subjectId;
+          // A complete installation proves withdrawals, including an intermediate removal skipped while offline.
+          const granted = kind === "target" ? Boolean(target)
+            : kind === "backend" || kind === "managed_tui" ? installed.snapshot.backends.some(b => b.id === id && (kind !== "managed_tui" || b.managedTuiDigest))
+            : kind === "route" ? installed.snapshot.backends.some(b => b.id === id) && installed.snapshot.capabilities.some(c => c.id === "agent_tools_cli")
+            : kind === "root" ? installed.snapshot.roots.some(r => r.id === id)
+            : kind === "capability" && installed.snapshot.capabilities.some(c => c.id === id);
+          const state = granted ? readiness.get(subject) : "ready";
+          const outcome: ConfigurationEffect["state"] = state === "ready"
+            ? granted && kind === "managed_tui" ? "next_launch" : "applied"
+            : state === "unsupported" || state === "failed" ? state : "awaiting_host";
+          return { ...effect, state: outcome, effectiveRevision: state === "ready" ? effect.desiredRevision : effect.effectiveRevision === effect.desiredRevision ? null : effect.effectiveRevision,
+            ...(stamp ? { lastHostConfirmation: stamp } : {}) };
+        });
+        const grant = runtime.resourceKind === "backend" && installed.snapshot.backends.find(b => b.id === runtime.resourceId);
+        if (grant && grant.kind !== "pi" && stamp) {
+          observeProviderLaunch(runtime, effects, grant.launchDigest, confirmation?.launchDigests?.get(grant.id), stamp);
+        }
+        if (JSON.stringify(runtime.effects) === JSON.stringify(effects)) continue;
+        this.#putRuntime(scope, { ...runtime, effects, ...(configurationEffectsPending(effects) && runtime.applyState === "applied" ? {
+          applyState: "pending", effectiveRevision: runtime.effectiveRevision === runtime.desiredRevision ? null : runtime.effectiveRevision,
+        } : {}) });
+      }
+    })();
+  }
+
+  /** Migration candidates remain addressable after their disabled definitions and targets are removed. */
+  unresolvedAntigravityCandidates(scope: RequestScope, environmentId: string): string[] {
+    return (this.database.prepare(`SELECT c.backend_id AS id FROM execution_configuration_ownership_conflicts c
+      WHERE c.tenant_id = ? AND c.owner_principal_id = ? AND c.environment_id = ? AND c.retirement_confirmed = 0
+        AND NOT EXISTS (SELECT 1 FROM execution_configuration_native_owners o WHERE o.tenant_id = c.tenant_id
+          AND o.owner_principal_id = c.owner_principal_id AND o.environment_id = c.environment_id AND o.namespace = 'antigravity')
+      ORDER BY c.backend_id`).all(scope.tenantId, scope.principalId, environmentId) as { id: string }[]).map(row => row.id);
+  }
+
+  retainedAntigravityOwner(scope: RequestScope, environmentId: string): string | undefined {
+    const row = this.database.prepare(`SELECT backend_id AS id FROM execution_configuration_native_owners WHERE tenant_id = ?
+      AND owner_principal_id = ? AND environment_id = ? AND namespace = 'antigravity'`)
+      .get(scope.tenantId, scope.principalId, environmentId) as { id: string | null } | undefined;
+    return row?.id ?? undefined;
+  }
+
+  confirmLocalAntigravityRetirement(scope: RequestScope, environmentId: string, backendId: string): void {
+    // This attestation is available only for an unclaimed, disabled local migration candidate.
+    // A positive retained owner must be stopped using its actual runtime identity.
+    this.database.transaction(() => {
+      const { configuration } = this.get(scope);
+      if (!configuration.executionEnvironments.some(e => e.id === environmentId && e.kind === "local") ||
+          !configuration.backends.some(b => b.id === backendId && b.kind === "antigravity" && !b.enabled) ||
+          !configuration.targets.some(t => t.backendInstanceId === backendId && t.executionEnvironmentId === environmentId) ||
+          !this.unresolvedAntigravityCandidates(scope, environmentId).includes(backendId)) {
+        throw new DomainError("conflict", "This local legacy retirement is no longer awaiting confirmation.");
+      }
+      this.confirmNativeOwner(scope, environmentId, "antigravity", null, backendId);
+      const current = this.runtime(scope, "backend", backendId);
+      const effects = current.effects?.map(effect => effect.component === "ownership" ? {
+        ...effect, state: "applied" as const, effectiveRevision: effect.desiredRevision,
+        detail: "The operator confirmed retirement of this previous local runtime.",
+      } : effect);
+      this.#putRuntime(scope, { ...current, effects });
+    })();
+  }
+
+  assertNativeOwner(scope: RequestScope, environmentId: string, namespace: string, backendId: string): void {
+    const row = this.database.prepare(`SELECT backend_id AS backendId FROM execution_configuration_native_owners
+      WHERE tenant_id = ? AND owner_principal_id = ? AND environment_id = ? AND namespace = ?`)
+      .get(scope.tenantId, scope.principalId, environmentId, namespace) as {backendId: string | null} | undefined;
+    if (!row && namespace === "antigravity" && this.database.prepare(`SELECT 1 FROM execution_configuration_ownership_conflicts
+      WHERE tenant_id = ? AND owner_principal_id = ? AND environment_id = ? LIMIT 1`).get(scope.tenantId, scope.principalId, environmentId)) {
+      throw new DomainError("conflict", "Inspect the retained Antigravity runtime or confirm its retirement before enabling any owner.");
+    }
+    if (row?.backendId && row.backendId !== backendId) {
+      throw new DomainError("conflict", "Confirm retirement of the retained Antigravity backend before enabling another owner.");
+    }
+  }
+
+  /** Trusted exact live inventory or confirmed retirement is the only source of namespace ownership evidence. */
+  confirmNativeOwner(scope: RequestScope, environmentId: string, namespace: string, owner: string | null, expectedOwner?: string): void {
+    this.assertPrincipal(scope);
+    this.database.transaction(() => {
+      const host = [scope.tenantId, scope.principalId, environmentId];
+      if (namespace === "antigravity" && owner === null && expectedOwner && !this.database.prepare(`SELECT 1
+        FROM execution_configuration_native_owners WHERE tenant_id = ? AND owner_principal_id = ? AND environment_id = ? AND namespace = ?`)
+        .get(...host, namespace)) {
+        // Inspecting one missing backend says nothing about a different candidate on this host.
+        this.database.prepare(`UPDATE execution_configuration_ownership_conflicts SET retirement_confirmed = 1
+          WHERE tenant_id = ? AND owner_principal_id = ? AND environment_id = ? AND backend_id = ?`).run(...host, expectedOwner);
+        if (this.database.prepare(`SELECT 1 FROM execution_configuration_ownership_conflicts
+          WHERE tenant_id = ? AND owner_principal_id = ? AND environment_id = ? AND retirement_confirmed = 0 LIMIT 1`).get(...host)) return;
+      }
+      const result = this.database.prepare(`INSERT INTO execution_configuration_native_owners
+        (tenant_id, owner_principal_id, environment_id, namespace, backend_id) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, owner_principal_id, environment_id, namespace) DO UPDATE SET backend_id = excluded.backend_id
+        WHERE (excluded.backend_id IS NOT NULL AND (backend_id IS NULL OR backend_id = excluded.backend_id))
+           OR (excluded.backend_id IS NULL AND (? IS NULL OR backend_id IS NULL OR backend_id = ?))`)
+        .run(scope.tenantId, scope.principalId, environmentId, namespace, owner, expectedOwner ?? null, expectedOwner ?? null);
+      if (!result.changes) throw new DomainError("conflict", "The reported native runtime ownership conflicts with the confirmed incumbent.");
     })();
   }
 
@@ -186,7 +336,8 @@ export class ConfigurationRepository {
       this.#assertCapacity(scope);
       const runtime = this.runtime(scope, request.resourceKind, request.resourceId);
       if (runtime.incarnation !== request.expectedIncarnation) throw new DomainError("conflict", "The runtime incarnation changed.");
-      const preference = request.action === "disconnect" ? "disconnected" : request.action === "stop" ? "stopped" : "automatic";
+      const preference = request.action === "confirm_retirement" ? runtime.preference
+        : request.action === "disconnect" ? "disconnected" : request.action === "stop" ? "stopped" : "automatic";
       const next: ConfigurationRuntimeState = {
         ...runtime, preference, desiredRevision: snapshot.revision + 1, applyState: "pending", lastError: null,
       };
@@ -211,7 +362,9 @@ export class ConfigurationRepository {
       const current = this.runtime(scope, request.resourceKind, request.resourceId);
       // A settled old receipt remains queryable, but cannot replace a newer
       // configuration/runtime projection.
-      if (current.desiredRevision === result.runtime.desiredRevision && current.preference === result.runtime.preference) this.observe(scope, result.runtime);
+      if (current.desiredRevision === result.runtime.desiredRevision && current.preference === result.runtime.preference) {
+        result.runtime = this.observe(scope, result.runtime);
+      }
       this.database.prepare(`UPDATE execution_configuration_receipts SET result_json = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND mutation_id = ? AND operation = 'lifecycle'`)
         .run(JSON.stringify(result), scope.tenantId, scope.principalId, request.mutationId);
@@ -289,9 +442,12 @@ export class ConfigurationRepository {
         WHERE tenant_id = ? AND owner_principal_id = ? AND resource_kind = ? AND resource_id = ?`)
         .get(scope.tenantId, scope.principalId, resource.kind, resource.id) as { state: string } | undefined;
       const current = existing ? configurationRuntimeStateSchema.parse(JSON.parse(existing.state)) : undefined;
-      if (current && runtimeConfigurationFingerprint(previous, resource.kind, resource.id) === runtimeConfigurationFingerprint(next, resource.kind, resource.id)) continue;
-      this.#putRuntime(scope, current ? { ...current, desiredRevision: revision, applyState: "pending", lastError: null } : {
-        resourceKind: resource.kind, resourceId: resource.id, desiredRevision: revision, effectiveRevision: null,
+      const effects = changedConfigurationEffects(scope, previous, next, resource.kind, resource.id, revision, current);
+      if (!effects) continue;
+      const applied = current?.applyState === "applied" && !configurationEffectsPending(effects);
+      this.#putRuntime(scope, current ? { ...current, desiredRevision: revision, effects,
+        effectiveRevision: applied ? revision : current.effectiveRevision, applyState: applied ? "applied" : "pending", lastError: null } : {
+        resourceKind: resource.kind, resourceId: resource.id, desiredRevision: revision, effectiveRevision: null, effects,
         applyState: "pending", preference: "automatic", connectionState: "unknown", incarnation: null,
         softwareVersion: null, upgradeState: "unknown", activeResources: 0, supportedActions: [], lastError: null,
       });
@@ -300,7 +456,7 @@ export class ConfigurationRepository {
 
   #putRuntime(scope: RequestScope, runtime: ConfigurationRuntimeState): void {
     // Receipt state is projected at read time; observations cannot persist it.
-    const { lifecycleOperation: _operation, ...observation } = runtime;
+    const { lifecycleOperation: _operation, ...observation } = configurationRuntimeStateSchema.parse(runtime);
     this.database.prepare(`INSERT INTO execution_configuration_runtime_state
       (tenant_id, owner_principal_id, resource_kind, resource_id, state_json) VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(tenant_id, owner_principal_id, resource_kind, resource_id) DO UPDATE SET state_json = excluded.state_json`)

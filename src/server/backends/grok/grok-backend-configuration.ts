@@ -1,7 +1,7 @@
 import path from "node:path";
 import { z } from "zod";
 import {
-  compileBackendModelPolicy,
+  configuredModelPolicy,
   type BackendModelPolicy,
   type CompiledBackendModelPolicy,
 } from "../model-policy.js";
@@ -97,6 +97,7 @@ export type GrokConnectionModuleConfiguration = z.infer<
 >;
 
 export interface GrokBackendConfigurationInput {
+  readonly readCurrentBackend?: import("../module.js").BackendModuleConfigurationInput["readCurrentBackend"];
   readonly backend: {
     readonly id: string;
     readonly kind: "grok_build";
@@ -141,8 +142,8 @@ export function parseGrokBackendConfiguration(
   const runtime = grokBackendModuleConfigurationSchema.parse(
     input.backend.moduleConfiguration,
   );
-  const modelPolicy = compileBackendModelPolicy(
-    input.backend.modelPolicy,
+  const modelPolicy = configuredModelPolicy(
+    input,
     "model_effort",
   );
   const connections = input.connections.map((connection) => {
@@ -165,7 +166,7 @@ export function parseGrokBackendConfiguration(
     const environment = input.executionEnvironments.find(
       ({ id }) => id === connection.executionEnvironmentId,
     );
-    if (!environment || environment.kind !== "local") {
+    if (!environment || (environment.kind !== "local" && (input.backend.enabled || connection.enabled))) {
       throw new Error("grok_execution_environment_invalid");
     }
     const { model, reasoningEffort } = connection.configuration.defaults;

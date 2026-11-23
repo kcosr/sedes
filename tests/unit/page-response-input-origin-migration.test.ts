@@ -4,7 +4,7 @@ import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { savedAgentDatabase, insertPreRootGrantWorkspace } from "../support/saved-agent-fixture.js";
 
 describe("page response input origin migration", () => {
   it("renames retained question provenance transactionally without losing queue data or integrity", () => {
@@ -12,7 +12,7 @@ describe("page response input origin migration", () => {
     try {
       const inventory = new InventoryRepository(database);
       const environment = inventory.getLocalEnvironment(scope);
-      const workspace = inventory.upsertWorkspace(scope, {
+      const workspace = insertPreRootGrantWorkspace(database, scope, {
         id: randomUUID(), environmentId: environment.id, canonicalPath: "/tmp/page-response-migration",
         displayName: "Page responses", project: { kind: "new", name: "Page responses" },
         available: true, trustState: "trusted", environmentConfigurationRevision: environment.configurationRevision, now: 200,

@@ -105,6 +105,10 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
 
   cancelIdle(): void { this.#idleRequest = undefined; }
 
+  canReleaseParkedProcess(): boolean {
+    return this.#accepting && this.#reads === 0 && this.unsettledCount() === 0 && this.#sessions?.canIdle() === true;
+  }
+
   async idle(authority: CodexRuntimeAuthority, generation: number, retire: () => Promise<void | boolean>): Promise<boolean> {
     this.#assertAuthority(authority);
     this.#idleRequest = { authority, generation, retire };
@@ -251,7 +255,7 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
     this.#retryIdle();
   }
 
-  async respond(authority: CodexRuntimeAuthority, input: Parameters<CodexRuntimeConnection["respond"]>[1]): Promise<void> {
+  async respond(authority: CodexRuntimeAuthority, input: Parameters<CodexRuntimeConnection["respond"]>[1], assertAdmission?: () => void): Promise<void> {
     this.#assertAuthority(authority);
     const key = codexRuntimeRequestKey(input.generation, input.requestId);
     const responseFingerprint = digest(input.result);
@@ -264,6 +268,7 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
     const pending = this.#pending.get(key);
     if (!pending) throw new Error("codex_runtime_server_request_unknown");
     const result = encodeCodexServerRequestResult(pending.request.method, input.result);
+    if (!isRecoveryResponse(pending.request.method, result)) assertAdmission?.();
     if (this.#responses.size >= this.#maximumOperations) {
       const oldestSettled = [...this.#responses.keys()].find(candidate => !this.#pending.has(candidate));
       if (!oldestSettled) throw new Error("codex_runtime_response_capacity_exceeded");
@@ -450,3 +455,27 @@ class RuntimeRequestRouter extends CodexServerRequestRouter {
   }
 }
 function digest(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
+
+
+/** The exact pending request and its response codec have already been checked. */
+function isRecoveryResponse(method: CodexRuntimePendingRequest["method"], result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  switch (method) {
+    case "item/commandExecution/requestApproval":
+    case "item/fileChange/requestApproval":
+      return "decision" in result && (result.decision === "decline" || result.decision === "cancel");
+    case "applyPatchApproval":
+    case "execCommandApproval":
+      return "decision" in result && (result.decision === "abort" ||
+        (!!result.decision && typeof result.decision === "object" && "denied" in result.decision));
+    case "item/permissions/requestApproval":
+      return "permissions" in result && !!result.permissions && typeof result.permissions === "object" &&
+        Object.keys(result.permissions).length === 0 && "scope" in result && result.scope === "turn";
+    case "item/tool/requestUserInput":
+      return "answers" in result && !!result.answers && typeof result.answers === "object" && Object.keys(result.answers).length === 0;
+    case "mcpServer/elicitation/request":
+      return "action" in result && (result.action === "cancel" || result.action === "decline") &&
+        (!("content" in result) || result.content === null);
+    default: return false;
+  }
+}

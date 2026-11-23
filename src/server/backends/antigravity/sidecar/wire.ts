@@ -1,3 +1,4 @@
+import { validToolPath, validToolDirectory } from "../../agent-tool-route.js";
 import { z } from "zod";
 import type { InitializeResponse, LoadSessionResponse, PromptRequest, RequestPermissionRequest, RequestPermissionResponse, SessionNotification } from "@agentclientprotocol/sdk";
 import { decodeInitializeResponse, decodeLoadSessionResponse, decodePromptRequest, decodeRequestPermissionRequest,
@@ -13,7 +14,7 @@ const id = z.string().min(1).max(512);
 const hostPath = z.string().min(1).max(4096);
 const position = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const antigravityAgentToolsSchema = z.strictObject({ surface: z.enum(["native", "cli"]), mode: z.enum(["progressive", "individual"]),
-  endpoint: z.url().max(4096), sourceCapability: z.string().min(1).max(32 * 1024), executableDirectory: hostPath, inheritedPath: z.string().max(32 * 1024) });
+  endpoint: z.url().max(4096), sourceCapability: z.string().min(1).max(32 * 1024), executableDirectory: hostPath.refine(validToolDirectory), inheritedPath: z.string().refine(validToolPath) });
 const limits = { maximumEncodedBytes: MAXIMUM_PROVIDER_FRAME_BYTES, maximumStringBytes: MAXIMUM_PROVIDER_FRAME_BYTES,
   maximumArrayItems: MAXIMUM_PROVIDER_FRAME_BYTES, maximumTotalNodes: MAXIMUM_PROVIDER_FRAME_BYTES, maximumDepth: 32 };
 function acp<T>(decode: (value: unknown) => unknown | undefined) {
@@ -93,7 +94,7 @@ export const antigravityHostResponseSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("ok"), runtimeVersion: z.string().max(128).nullable(), value: z.unknown() }),
   z.strictObject({ status: z.literal("failed"), runtimeVersion: z.string().max(128).nullable(), failure: antigravityFailureSchema }),
 ]);
-export const antigravityAttachmentSchema = antigravityIdentitySchema.extend({ handleId: id, generation: id, setup: antigravitySetupSchema,
+export const antigravityAttachmentSchema = antigravityIdentitySchema.extend({ toolPeerStamp: z.string().regex(/^[0-9a-f]{64}$/u).optional(), handleId: id, generation: id, setup: antigravitySetupSchema,
   createdByOperationId: id.optional(),
   throughSequence: position, retainedAfterSequence: position, retainedOperationIds: z.array(id).max(640),
   pendingPermissions: z.array(z.strictObject({ requestId: id, openedAt: z.iso.datetime(), request: acp<RequestPermissionRequest>(decodeRequestPermissionRequest) })).max(64) });

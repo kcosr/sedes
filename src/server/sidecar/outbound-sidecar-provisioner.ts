@@ -3,7 +3,7 @@ import { setTimeout as pause } from 'node:timers/promises';
 import { outboundInstallationSchema } from '../../internal/outbound-protocol.js';
 import { SIDECAR_WIRE_VERSION } from '../../internal/sidecar-protocol/envelopes.js';
 import { readSidecarManagementRecord, writeSidecarManagementRecord } from '../../internal/sidecar-protocol/service-management-channel.js';
-import { sameSidecarServiceConfiguration, sameSidecarServiceScope, sidecarManagementResponseSchema,
+import { sameSidecarServiceScope, sidecarManagementResponseSchema,
   type SidecarManagementRequest, type SidecarManagementReceipt, type SidecarManagementResponse,
   type SidecarServiceConfiguration, type SidecarServiceScope, type SidecarServiceStatus } from '../../internal/sidecar-protocol/service-management-v1.js';
 import { OutboundCarrierError, type OutboundConnectionRegistry } from '../outbound/outbound-connection-registry.js';
@@ -20,11 +20,13 @@ export class OutboundSidecarProvisioner implements SidecarProvisioner {
   readonly #artifact: SidecarArtifactRegistration;
   readonly #scope: SidecarServiceScope;
   readonly #configuration: SidecarServiceConfiguration;
+  readonly #requiresPolicyRecovery: (incarnation: string) => boolean;
   readonly #agentToolEndpointKey: string;
-  constructor(input: { registry: OutboundConnectionRegistry; artifact: SidecarArtifactRegistration; serviceScope: SidecarServiceScope; configuration: SidecarServiceConfiguration; agentToolEndpointKey: string }) {
+  constructor(input: { registry: OutboundConnectionRegistry; artifact: SidecarArtifactRegistration; serviceScope: SidecarServiceScope; configuration: SidecarServiceConfiguration; requiresPolicyRecovery?: (incarnation: string) => boolean; agentToolEndpointKey: string }) {
     assertSidecarArtifactRegistration(input.artifact);
     if (!/^[a-f0-9]{24}$/u.test(input.agentToolEndpointKey)) throw new Error('sidecar_agent_tool_endpoint_key_invalid');
     this.#registry = input.registry; this.#artifact = input.artifact; this.#scope = input.serviceScope;
+    this.#requiresPolicyRecovery = input.requiresPolicyRecovery ?? (() => false);
     this.#configuration = input.configuration; this.#agentToolEndpointKey = input.agentToolEndpointKey;
   }
 
@@ -55,10 +57,10 @@ export class OutboundSidecarProvisioner implements SidecarProvisioner {
 
   async launch(carrierGeneration: number, sessionNonce: string, signal: AbortSignal): Promise<PersistentSidecarByteStream> {
     let existing = await inspectForSidecarLaunch(this.inspect(signal));
-    for (let attempt = 0; existing && this.#outdated(existing); attempt += 1) {
-      if (existing.resources.some(resource => resource.state === 'active' || resource.state === 'unknown' || resource.blockers.length > 0)) {
-        if (existing.runtimeWireVersion !== SIDECAR_WIRE_VERSION) throw new SidecarServiceManagementError('sidecar_runtime_upgrade_required', existing);
-        break;
+    for (let attempt = 0; existing && existing.runtimeWireVersion !== SIDECAR_WIRE_VERSION; attempt += 1) {
+      if (this.#requiresPolicyRecovery(existing.serviceIncarnation) ||
+        existing.resources.some(resource => resource.state !== 'idle' || resource.blockers.length)) {
+        throw new SidecarServiceManagementError('sidecar_runtime_upgrade_required', existing);
       }
       const outdated = existing;
       try {
@@ -164,7 +166,7 @@ export class OutboundSidecarProvisioner implements SidecarProvisioner {
 
   #outdated(status: SidecarServiceStatus): boolean {
     return status.buildId !== this.#artifact.buildId || status.artifactSha256 !== this.#artifact.artifactSha256 ||
-      status.runtimeWireVersion !== SIDECAR_WIRE_VERSION || !sameSidecarServiceConfiguration(status.effectiveConfiguration, this.#configuration);
+      status.runtimeWireVersion !== SIDECAR_WIRE_VERSION;
   }
 
   async #carrier<T>(operation: () => Promise<T>): Promise<T> {

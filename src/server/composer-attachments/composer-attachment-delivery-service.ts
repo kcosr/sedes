@@ -85,6 +85,7 @@ export class ComposerAttachmentDeliveryService {
         canonicalEvidence: frozenEvidence([]),
       };
     }
+    lease.assertCurrent?.();
     if (!this.supports(scope, lease.environment.id)) {
       throw new BackendError({
         category: "unavailable",
@@ -109,6 +110,7 @@ export class ComposerAttachmentDeliveryService {
         safeMessage: "A referenced attachment is no longer available.",
       });
     }
+    const featureChecks: (() => void)[] = [];
     const staged = await Promise.all(
       resolved.map(async (attachment, index) => {
         const expected = descriptors[index];
@@ -160,6 +162,7 @@ export class ComposerAttachmentDeliveryService {
           ) {
             throw new Error("composer_attachment_staging_evidence_mismatch");
           }
+          if (materialized.assertDeliverable) featureChecks.push(materialized.assertDeliverable);
           const verifiedAt = this.now();
           if (
             previous?.state === "ready" &&
@@ -198,18 +201,25 @@ export class ComposerAttachmentDeliveryService {
         }
       }),
     );
+    const assertDeliverable = () => {
+      try {
+        lease.assertCurrent?.();
+        for (const check of featureChecks) check();
+      } catch {
+        throw new BackendError({ category: "unavailable", retryable: true, crossedSubmissionBoundary: false,
+          safeMessage: "File attachments are unavailable in this execution environment." });
+      }
+    };
+    assertDeliverable();
     return {
       attachments: staged,
-      canonicalBytes: this.#canonicalByteReader(
-        scope,
-        applicationThreadId,
-        descriptors,
-      ),
+      canonicalBytes: this.#canonicalByteReader(scope, applicationThreadId, descriptors, assertDeliverable),
       canonicalEvidence: frozenEvidence(
         resolved.map((attachment) => ({
           ...attachment.descriptor,
           sha256: attachment.sha256,
         })),
+        assertDeliverable,
       ),
     };
   }
@@ -218,12 +228,14 @@ export class ComposerAttachmentDeliveryService {
     scope: RequestScope,
     applicationThreadId: string,
     descriptors: readonly ComposerAttachmentDescriptor[],
+    assertDeliverable?: () => void,
   ): CanonicalComposerAttachmentByteReader {
     const expectedById = new Map(
       descriptors.map((descriptor) => [descriptor.id, descriptor] as const),
     );
     return {
       read: async (staged, signal) => {
+        assertDeliverable?.();
         const expected = expectedById.get(staged.id);
         if (!expected || !sameStagedDescriptor(staged, expected)) {
           throw attachmentChangedError();
@@ -246,9 +258,10 @@ export class ComposerAttachmentDeliveryService {
           throw attachmentChangedError();
         }
         let handle;
+        let bytes: Buffer;
         try {
           handle = await resolved.open();
-          const bytes = signal
+          bytes = signal
             ? await handle.readFile({ signal })
             : await handle.readFile();
           if (
@@ -257,7 +270,6 @@ export class ComposerAttachmentDeliveryService {
           ) {
             throw new Error("composer_attachment_canonical_integrity_mismatch");
           }
-          return bytes;
         } catch (error) {
           if (error instanceof BackendError) throw error;
           throw new BackendError({
@@ -269,6 +281,8 @@ export class ComposerAttachmentDeliveryService {
         } finally {
           await handle?.close().catch(() => undefined);
         }
+        assertDeliverable?.();
+        return bytes;
       },
     };
   }
@@ -276,11 +290,12 @@ export class ComposerAttachmentDeliveryService {
 
 function frozenEvidence(
   evidence: readonly CanonicalComposerAttachmentEvidence[],
+  assertDeliverable?: () => void,
 ): CanonicalComposerAttachmentEvidenceResolver {
   const value = Object.freeze(
     evidence.map((entry) => Object.freeze({ ...entry })),
   );
-  return { resolve: () => value };
+  return { resolve: () => value, assertDeliverable };
 }
 
 function attachmentUnavailableError(): BackendError {

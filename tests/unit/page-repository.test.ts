@@ -30,7 +30,8 @@ function input(html = "<html><body>first</body></html>", invocationId = "first")
 }
 function serviceFor(repository: PageRepository, readAbsoluteFile: ConstructorParameters<typeof PageService>[0]["files"]["readAbsoluteFile"], onPublished?: ConstructorParameters<typeof PageService>[0]["onPublished"]) {
   return new PageService({ repository, files: { readAbsoluteFile }, onPublished, inventory: {
-    getThread: () => ({ thread: { workspaceId: "workspace" } }),
+    workspaceAuthorityIsCurrent: () => true,
+      getThread: () => ({ thread: { workspaceId: "workspace" } }),
     getWorkspace: () => ({ id: "workspace", environmentId: "environment", canonicalPath: "/work", availability: "available" }),
     getEnvironment: () => ({ availability: "available", configurationRevision: 1, operationsConfigurationRevision: 1 }),
   } as never });
@@ -152,16 +153,37 @@ describe("immutable thread HTML pages", () => {
     completeRefresh();
   });
 
-  it("fences environment changes during asynchronous file capture before publication", async () => {
+  it("rechecks retained asset grants after preview preparation, and primary authority for inline publication", async () => {
+    const {repository} = fixture();
+    let primaryCurrent = true;
+    let checks = 0;
+    const service = new PageService({repository, files: {readAbsoluteFile: async (_scope, _thread, _path, _max, _signal, retain) => {
+      retain?.(() => { if (++checks > 1) throw new Error("asset grant revoked"); });
+      return Buffer.from("<html>preview</html>");
+    }}, inventory: {
+      getThread: () => ({thread:{workspaceId:"workspace"}}),
+      getWorkspace: () => ({id:"workspace", environmentId:"environment", canonicalPath:"/work", authorityRootId:"root", environmentConfigurationRevision:1, availability:"available"}),
+      workspaceAuthorityIsCurrent: () => primaryCurrent,
+      getEnvironment: () => ({availability:"available"}),
+    } as never});
+    await expect(service.prepare(scope, "thread", {path:"/work/page.html"})).rejects.toThrow("asset grant revoked");
+    const publication = service.publish(scope, "thread", {html:"<p>inline</p>",title:"Page"}, {invocationId:"new"});
+    primaryCurrent = false;
+    await expect(publication).rejects.toThrow("environment changed");
+    expect(repository.list(scope, "thread").items).toEqual([]);
+  });
+
+  it("fences root withdrawal during asynchronous file capture before publication", async () => {
     const { repository } = fixture();
-    let environmentRevision = 1;
+    let rootGeneration = 1;
     const service = new PageService({ repository, files: { readAbsoluteFile: async () => {
-      environmentRevision = 2;
+      rootGeneration = 2;
       return Buffer.from("<html>captured</html>");
     } }, inventory: {
+      workspaceAuthorityIsCurrent: () => true,
       getThread: () => ({ thread: { workspaceId: "workspace" } }),
-      getWorkspace: () => ({ id: "workspace", environmentId: "environment", canonicalPath: "/work", availability: "available" }),
-      getEnvironment: () => ({ availability: "available", configurationRevision: environmentRevision, operationsConfigurationRevision: 1 }),
+      getWorkspace: () => ({ id: "workspace", environmentId: "environment", canonicalPath: "/work", authorityRootId: "root", environmentConfigurationRevision: rootGeneration, availability: "available" }),
+      getEnvironment: () => ({ availability: "available", configurationRevision: 1, operationsConfigurationRevision: 1 }),
     } as never });
     await expect(service.publish(scope, "thread", { path: "/work/page.html", title: "Page" }, { invocationId: "new" })).rejects.toThrow("environment changed");
     expect(repository.list(scope, "thread").items).toEqual([]);
@@ -171,7 +193,8 @@ describe("immutable thread HTML pages", () => {
     const { repository } = fixture();
     const service = new PageService({ repository, files: { readAbsoluteFile: async () => Buffer.from("<html>captured</html>") },
       inventory: {
-        getThread: () => ({ thread: { workspaceId: "workspace" } }),
+        workspaceAuthorityIsCurrent: () => true,
+      getThread: () => ({ thread: { workspaceId: "workspace" } }),
         getWorkspace: () => ({ id: "workspace", environmentId: "environment", canonicalPath: "/work", availability: "available" }),
         getEnvironment: () => ({ availability: "available", configurationRevision: 1, operationsConfigurationRevision: 1 }),
       } as never,
@@ -186,7 +209,8 @@ describe("immutable thread HTML pages", () => {
     const { repository } = fixture();
     const service = new PageService({ repository, files: { readAbsoluteFile: async () => { throw new Error("must not read"); } },
       inventory: {
-        getThread: () => ({ thread: { workspaceId: "workspace" } }),
+        workspaceAuthorityIsCurrent: () => true,
+      getThread: () => ({ thread: { workspaceId: "workspace" } }),
         getWorkspace: () => ({ id: "workspace", environmentId: "environment", canonicalPath: "/work", availability: "available" }),
         getEnvironment: () => ({ availability: "available", configurationRevision: 1, operationsConfigurationRevision: 1 }),
       } as never,

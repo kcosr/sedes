@@ -6,7 +6,7 @@ import type {
   BackendModuleConnectionConfiguration,
 } from "../module.js";
 import {
-  compileBackendModelPolicy,
+  configuredModelPolicy,
   type CompiledBackendModelPolicy,
 } from "../model-policy.js";
 import {
@@ -320,7 +320,7 @@ export function parseCodexBackendConfiguration(
     throw new Error("codex_backend_release_configuration_invalid");
   }
 
-  const configuration = codexBackendModuleConfigurationSchema.parse(
+  let configuration = codexBackendModuleConfigurationSchema.parse(
     input.backend.moduleConfiguration,
   );
   if (input.backend.modelPolicy.type !== "catalog") {
@@ -333,8 +333,24 @@ export function parseCodexBackendConfiguration(
         modelIdSchema.parse(modelId);
     }
   }
-  const modelPolicy = compileBackendModelPolicy(
-    input.backend.modelPolicy,
+  if (input.backend.enabled && input.readCurrentBackend) {
+    const current = () => {
+      const definition = input.readCurrentBackend!();
+      return definition?.enabled && definition.id === input.backend.id && definition.kind === "codex_app_server" ?
+        definition.moduleConfiguration : undefined;
+    };
+    configuration = { ...configuration,
+      get tuiExecutablePath() { return current()?.tuiExecutablePath; },
+      policy: Object.freeze({
+        get allowedSandboxModes() { return current()?.policy.allowedSandboxModes ?? []; },
+        get allowedNetworkAccess() { return current()?.policy.allowedNetworkAccess ?? []; },
+        get allowedApprovalPolicies() { return current()?.policy.allowedApprovalPolicies ?? []; },
+        get allowedApprovalReviewers() { return current()?.policy.allowedApprovalReviewers ?? []; },
+      }),
+    };
+  }
+  const modelPolicy = configuredModelPolicy(
+    input,
     "model_effort",
   );
   const connections = input.connections.map((connection) =>

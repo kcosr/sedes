@@ -24,7 +24,7 @@ export const claudePersistentCommandSchema = z.discriminatedUnion("action", [
   command("messages", worker.claudeRuntimeSessionMessagesRequestSchema),
   command("transcript", worker.claudeRuntimeSessionTranscriptRequestSchema),
   command("rename", worker.claudeRuntimeSessionRenameRequestSchema),
-  command("open", claudePersistentOpenRequestSchema).extend({ replay: z.enum(["full", "unacknowledged"]) }),
+  command("open", claudePersistentOpenRequestSchema).extend({ applicationThreadId: id.optional(), replay: z.enum(["full", "unacknowledged"]) }),
   command("fork", worker.claudeRuntimeForkRequestSchema),
   command("send", worker.claudeRuntimeQuerySendRequestSchema),
   command("compact", worker.claudeRuntimeQueryCompactRequestSchema.extend({ startupProbeUuid: z.string().uuid() })),

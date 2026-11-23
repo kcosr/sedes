@@ -127,6 +127,7 @@ function fixture(input: {
         environmentConfigurationRevision: 0,
       }),
       getEnvironment: () => ({ kind: input.environmentKind ?? "local" }),
+      workspaceAuthorityIsCurrent: (candidate: typeof scope, workspace: {id:string; environmentId:string}) => candidate.tenantId === scope.tenantId && candidate.principalId === scope.principalId && workspace.id === workspaceId && workspace.environmentId === environmentId,
       assertWorkspaceActive: () => undefined,
       getThread: () => ({thread:{workspaceId,environmentId}}),
     } as never,

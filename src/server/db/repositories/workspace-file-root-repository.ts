@@ -1,3 +1,4 @@
+import { workspaceFileRootAuthority, type FileRootAdmission } from "./workspace-file-root-authority.js";
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { DomainError } from "../../domain/errors.js";
@@ -160,6 +161,7 @@ export class WorkspaceFileRootRepository {
     workspaceId: string,
     canonicalPath: string,
     now: number,
+    validated?: FileRootAdmission,
   ): WorkspaceFileLinkRootRecord {
     return this.database
       .transaction(() => {
@@ -179,8 +181,13 @@ export class WorkspaceFileRootRepository {
             workspaceId,
             canonicalPath,
         ) as WorkspaceFileLinkRootRecord | undefined;
+        const authority = workspaceFileRootAuthority(this.database, scope, workspaceId);
+        const grant = authority.admit(canonicalPath, validated);
+        if (existing && authority.stillAdmitted(existing.rootId, canonicalPath)) return existing;
         if (existing) {
-          return existing;
+          this.database.prepare(`DELETE FROM workspace_file_link_roots
+            WHERE tenant_id = ? AND owner_principal_id = ? AND workspace_id = ? AND root_id = ?`)
+            .run(scope.tenantId, scope.principalId, workspaceId, existing.rootId);
         }
         const count = this.database
           .prepare(
@@ -208,8 +215,8 @@ export class WorkspaceFileRootRepository {
             `
               INSERT INTO workspace_file_link_roots(
                 tenant_id, owner_principal_id, workspace_id, root_id,
-                canonical_path, created_at
-              ) VALUES (?, ?, ?, ?, ?, ?)
+                canonical_path, created_at, authority_root_id, authority_root_generation
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             `,
           )
           .run(
@@ -218,7 +225,7 @@ export class WorkspaceFileRootRepository {
             workspaceId,
             rootId,
             canonicalPath,
-            now,
+            now, grant.id, grant.generation,
           );
         return this.findLinkRoot(scope, workspaceId, rootId)!;
       })
@@ -272,6 +279,7 @@ export class WorkspaceFileRootRepository {
       /** Validated storage values resolved from the original request. */
       readonly canonicalPath: string;
       readonly resolvedDisplayLabel: string;
+      readonly authority?: FileRootAdmission;
       readonly sortOrder?: number;
       readonly mutationId: string;
       readonly now: number;
@@ -381,6 +389,7 @@ export class WorkspaceFileRootRepository {
             }
           ).nextSortOrder;
         const rootId = randomUUID();
+        const grant = workspaceFileRootAuthority(this.database, scope, workspaceId).admit(input.canonicalPath, input.authority);
         try {
           this.database
             .prepare(
@@ -388,8 +397,8 @@ export class WorkspaceFileRootRepository {
               INSERT INTO workspace_file_roots(
                 tenant_id, owner_principal_id, workspace_id, root_id,
                 canonical_path, display_label, sort_order, availability,
-                revision, created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, 'available', 1, ?, ?)
+                revision, created_at, updated_at, authority_root_id, authority_root_generation
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, 'available', 1, ?, ?, ?, ?)
             `,
             )
             .run(
@@ -401,7 +410,7 @@ export class WorkspaceFileRootRepository {
               input.resolvedDisplayLabel,
               sortOrder,
               input.now,
-              input.now,
+              input.now, grant.id, grant.generation,
             );
         } catch (error) {
           if (isConstraintError(error)) {

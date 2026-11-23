@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
-import { capture, fillAndPersistDraft, sendCurrentDraft, selectDeliveryMode, selectRadixOption } from "./helpers";
+import { capture, fillAndPersistDraft, sendCurrentDraft, selectDeliveryMode, selectRadixOption, expectNoPageOverflow } from "./helpers";
+import { configurationLifecycleResultSchema, configurationSnapshotSchema } from "../../src/shared/protocol/configuration-admin.js";
 import { normalizedThreadSnapshotSchema } from "../../src/shared/protocol/conversation.js";
 
 test("Antigravity production connection streams, stops, requests permission and reloads native history", async ({ page, request }, testInfo) => {
@@ -181,4 +182,47 @@ test("Antigravity production connection streams, stops, requests permission and 
   await expect(page.getByText("Fixture response.", { exact: true })).toBeVisible();
   await expect(page.getByText(steerText, { exact: true })).toHaveCount(1);
   await capture(page, testInfo, "antigravity-reconciled.png");
+});
+
+
+test("Settings records verified retirement for one disabled local Antigravity candidate", async ({ page }, testInfo) => {
+  const { AntigravityProductionFixture } = await import("../support/antigravity-production-fixture.js");
+  const fixture = await AntigravityProductionFixture.create({ emptyLocalEnvironment: true });
+  try {
+    const { environmentId, environmentLabel, candidates } = await fixture.seedLocalRetirementCandidates();
+    const first = candidates[0]!;
+    const second = candidates[1]!;
+    const origin = fixture.url;
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/settings/backends/${first.id}`);
+    const detail = page.getByRole("region", { name: `${first.label} details`, exact: true });
+    const action = detail.getByRole("button", { name: "Confirm retirement", exact: true });
+    const dialog = page.getByRole("dialog", { name: `Confirm retirement of ${first.label}?`, exact: true });
+    await action.click();
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await expect(dialog).toContainText(environmentLabel);
+    await expect(dialog).toContainText(environmentId);
+    await expect(dialog).toContainText(first.id);
+    await expect(dialog).not.toContainText(second.id);
+    await expect(dialog.getByRole("button", { name: "I verified the processes have stopped" })).toBeInViewport();
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "antigravity-confirm-local-retirement-mobile.png");
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    const read = async () => configurationSnapshotSchema.parse(await (await page.request.get(origin + "/api/configuration")).json());
+    expect((await read()).runtimes.find(r => r.resourceId === first.id)?.supportedActions).toEqual(["confirm_retirement"]);
+    await action.click();
+    const response = page.waitForResponse(value => value.url() === origin + "/api/configuration/lifecycle" && value.request().method() === "POST");
+    await dialog.getByRole("button", { name: "I verified the processes have stopped" }).click();
+    const executed = await response;
+    expect(executed.request().postDataJSON()).toMatchObject({ resourceId: first.id, action: "confirm_retirement", impactToken: expect.any(String) });
+    expect(configurationLifecycleResultSchema.parse(await executed.json()).state).toBe("applied");
+    await expect(action).toHaveCount(0);
+    const after = await read();
+    for (const candidate of candidates) expect(after.configuration.backends.find(b => b.id === candidate.id)?.enabled).toBe(false);
+    expect(after.runtimes.find(r => r.resourceId === first.id)?.supportedActions).not.toContain("confirm_retirement");
+    expect(after.runtimes.find(r => r.resourceId === second.id)?.supportedActions).toEqual(["confirm_retirement"]);
+  } finally {
+    try { await page.goto("about:blank"); }
+    finally { await fixture.close(); }
+  }
 });

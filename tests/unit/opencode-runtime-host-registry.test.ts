@@ -1,3 +1,4 @@
+import {attachFixturePolicy} from "../helpers/execution-policy-fixture.js";
 import { OPENCODE_RELEASE } from "../../src/server/backends/opencode/opencode-release.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
@@ -26,7 +27,7 @@ function deferred() { let release!: () => void; const promise = new Promise<void
 function fixture(createHost?: (runtimeId: string) => OpenCodeNativeHost, beforeOwnedLaunch?: () => Promise<void>) {
   const archive = vi.fn(async (_record: unknown) => {});
   const services = new PersistentSidecarServiceRegistry({ scope: { ...scope, installationId: "installation", executionEnvironmentId }, buildId: "build", artifactSha256: "a".repeat(64), runtimeWireVersion: 1, configuration: serviceConfiguration, recordAbandonment: archive });
-  const epoch = services.attach(serviceConfiguration), owners: FakeRuntime[] = [];
+  const epoch = attachFixturePolicy(services, serviceConfiguration), owners: FakeRuntime[] = [];
   const controls = { beforeLaunch: undefined as ReturnType<typeof deferred> | undefined, afterLaunch: undefined as ReturnType<typeof deferred> | undefined,
     cleanupFailure: false, startupFailure: false, created: vi.fn(), launched: vi.fn(), signals: vi.fn() };
   class FakeRuntime {
@@ -129,10 +130,22 @@ describe("resident OpenCode runtime registry", () => {
     let lookedUp = false;
     const lookup = f.hosts.lookup(configuration, f.epoch).then(value => { lookedUp = true; return value; });
     await Promise.resolve(); expect(lookedUp).toBe(false); f.controls.beforeLaunch.release();
-    expect(await second).toBe(await first); expect(await lookup).toBe(await first); expect(f.controls.launched).toHaveBeenCalledOnce();
+    const resident = await first;
+    expect(await second).toBe(resident); expect(await lookup).toBe(resident);
     const changed = { ...configuration, startupEnvironmentVariables: { HOST_VALUE: { kind: "literal" as const, value: "pending value" } } };
-    expect(await f.hosts.ensure(changed, f.epoch)).toBe(await first);
+    await expect(f.hosts.ensure(changed, f.epoch)).rejects.toMatchObject({ code: "opencode_runtime_configuration_restart_required" });
+    expect(await f.hosts.lookup(changed, f.epoch)).toBe(resident);
     expect(f.owners[0]!.input.environment.HOST_VALUE).toBe("host value");
+    expect(f.controls.launched).toHaveBeenCalledOnce();
+    expect(f.controls.signals).not.toHaveBeenCalled();
+
+    const inspection = await f.hosts.inspect(resident.runtimeId);
+    await f.hosts.stop(resident.runtimeId, inspection.revision, true);
+    expect(await f.hosts.lookup(changed, f.epoch)).toBeUndefined();
+    const replacement = await f.hosts.ensure(changed, f.epoch);
+    expect(replacement.runtimeId).not.toBe(resident.runtimeId);
+    expect(f.owners[1]!.input.environment.HOST_VALUE).toBe("pending value");
+    expect(f.controls.launched).toHaveBeenCalledTimes(2);
   });
 
   it("retains native identity and proof across controller detach and replacement", async () => {
@@ -140,7 +153,7 @@ describe("resident OpenCode runtime registry", () => {
     f.services.detach(f.epoch);
     expect(f.owners[0]!.state).toBe("ready"); expect(f.controls.signals).not.toHaveBeenCalled();
     await expect(f.hosts.lookup(configuration, f.epoch)).rejects.toThrow("controller_stale");
-    const next = f.services.attach(serviceConfiguration);
+    const next = attachFixturePolicy(f.services, serviceConfiguration);
     expect(await f.hosts.lookup(configuration, next)).toBe(runtime);
     expect((await f.hosts.inspect(runtime.runtimeId)).retainedThreadIds).toEqual(["retained-thread"]);
     expect(f.controls.launched).toHaveBeenCalledOnce();
@@ -176,7 +189,7 @@ describe("resident OpenCode runtime registry", () => {
     f.services.detach(f.epoch); f.controls.afterLaunch.release();
     expect(await starting).toMatchObject({ message: "sidecar_controller_stale" });
     expect(f.services.status().resources).toHaveLength(1); expect(f.controls.signals).not.toHaveBeenCalled();
-    const next = f.services.attach(serviceConfiguration); expect(await f.hosts.lookup(configuration, next)).toBe(f.owners[0]);
+    const next = attachFixturePolicy(f.services, serviceConfiguration); expect(await f.hosts.lookup(configuration, next)).toBe(f.owners[0]);
   });
 
   it.each(["owned", "external"] as const)("reports a ready idle %s resident without inventing active work or allowing automatic retirement", async ownership => {
@@ -347,7 +360,7 @@ describe("resident OpenCode runtime registry", () => {
     f.owners[0]!.generation = "replaced-native-generation";
     await expect(f.services.stop(request)).rejects.toThrow("confirmation_stale");
     f.owners[0]!.generation = "native-generation";
-    f.services.attach({ ...serviceConfiguration, environmentRevision: 2 });
+    attachFixturePolicy(f.services, { ...serviceConfiguration, environmentRevision: 2 });
     await expect(f.services.stop({ ...request, controllerEpoch: f.services.controllerEpoch })).rejects.toThrow("confirmation_stale");
     expect(f.controls.signals).not.toHaveBeenCalled(); expect(f.archive).not.toHaveBeenCalled();
   });

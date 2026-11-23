@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
+// Wire v18 discovers persistent runtime support separately from controller-scoped live policy.
 // Wire v17 preserves OpenCode observation-continuity failures so main can
 // reopen a saved cursor after its sidecar journal has been replaced.
 // Wire v16 cuts over OpenCode's private runtime to capability 4 and the 2.1.1
@@ -15,7 +16,7 @@ import { z } from "zod";
 // history pages). Older persistent services must go through upgrade handling
 // before attachment.
 // Managed peers require this exact version; there is no dual parser.
-export const SIDECAR_WIRE_VERSION = 17 as const;
+export const SIDECAR_WIRE_VERSION = 18 as const;
 export const SIDECAR_JSON_FRAME_TAG = 0x01 as const;
 export const SIDECAR_STREAM_DATA_FRAME_TAG = 0x02 as const;
 const STREAM_DATA_SESSION_BINDING_BYTES = 16;
@@ -49,6 +50,7 @@ export const sidecarRequestEnvelopeSchema = z.strictObject({
   majorVersion: z.number().int().min(1).max(65_535),
   operation: identifierSchema,
   deadline: sidecarRequestDeadlineSchema,
+  recovery:z.literal(true).optional(),
   payload: z.unknown(),
 });
 

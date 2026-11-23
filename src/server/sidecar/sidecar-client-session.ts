@@ -1,3 +1,31 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { assertApprovedVariableRequest } from "../environment-variables/runtime-environment.js";
+import { closedWorkerControl } from "../../internal/sidecar-protocol/control-v3.js";
+import {
+  inRecoveryRequest,
+  withRecoveryRequest,
+} from "../../internal/sidecar-protocol/recovery-context.js";
+import {
+  policyReadOperation,
+  policyStageOperation,
+  policyApplyOperation,
+  policyAcquireRouteOperation,
+  policyAcquireOpenCodeRouteOperation,
+  executionPolicyBytes,
+  POLICY_BLOCK_BYTES,
+  type InstalledExecutionPolicy,
+  type ExecutionPolicyRouteSubject,
+  type ExecutionPolicyStatus,
+  type ExecutionPolicyPage,
+} from "../../internal/sidecar-protocol/execution-policy.js";
+import {
+  requiresCapabilityGrant,
+  terminalReceiptOperation,
+  providerPolicyOperation,
+  requirePolicyCapability,
+  retainedPolicyOperation,
+} from "../../internal/sidecar-protocol/execution-policy-admission.js";
+
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
@@ -45,6 +73,8 @@ import { sidecarRuntimeBodyOffer } from "./runtime-body-channel.js";
 import { attachmentDiagnostic } from "../diagnostics/attachment-diagnostics.js";
 import { deliveryDiagnosticsEnabled } from "../diagnostics/delivery-diagnostic-output.js";
 
+// Main-only authority: ordinary runtime channels share a peer, never its policy writer.
+const policyWriter=new AsyncLocalStorage<SidecarProtocolPeer>();
 const HEARTBEAT_INTERVAL_MILLISECONDS = 10_000;
 const MAXIMUM_EARLY_WATCH_EVENTS = 256;
 // An event may precede its watch registration only while the open response is
@@ -56,7 +86,8 @@ export class SidecarClientSession implements SidecarRuntimeSession {
   /** Remote account identity established by the admitted artifact installation. */
   readonly accountHome: string;
   readonly closed: Promise<SidecarTransportClosure>;
-  readonly agentToolCli: SidecarAgentToolCliMetadata | undefined;
+  readonly #installation: SidecarArtifactInstallation;
+  readonly #policy: {confirmed?:InstalledExecutionPolicy};
   readonly runtimeChannel: SidecarRuntimeChannel;
   readonly negotiatedCapabilities: readonly SidecarCapabilityInventory[];
   readonly #peer: SidecarProtocolPeer;
@@ -84,7 +115,8 @@ export class SidecarClientSession implements SidecarRuntimeSession {
     readonly peer: SidecarProtocolPeer;
     readonly transport: LengthPrefixedSidecarFrameTransport;
     readonly heartbeatIntervalMilliseconds: number;
-    readonly agentToolCli?: SidecarAgentToolCliMetadata;
+    readonly installation:SidecarArtifactInstallation;
+    readonly policy:{confirmed?:InstalledExecutionPolicy};
     readonly runtimeChannel: SidecarRuntimeChannel;
     readonly negotiatedCapabilities: readonly SidecarCapabilityInventory[];
     readonly diagnosticContext: { attachmentId: string; executionEnvironmentId?: string; transportKind: string; carrierGeneration: number };
@@ -93,7 +125,8 @@ export class SidecarClientSession implements SidecarRuntimeSession {
     this.#diagnosticContext = input.diagnosticContext;
     this.accountHome = input.accountHome;
     this.#transport = input.transport;
-    this.agentToolCli = input.agentToolCli;
+    this.#installation=input.installation;
+    this.#policy=input.policy;
     this.runtimeChannel = input.runtimeChannel;
     this.negotiatedCapabilities = Object.freeze(input.negotiatedCapabilities.map(capability => Object.freeze({ ...capability, operations: Object.freeze([...capability.operations]) })));
     this.#heartbeatIntervalMilliseconds = input.heartbeatIntervalMilliseconds;
@@ -160,6 +193,8 @@ export class SidecarClientSession implements SidecarRuntimeSession {
     readonly authorizedCapabilities: readonly SidecarAuthorizedCapability[];
     readonly authorizedRuntimeCapabilities: readonly SidecarRuntimeCapability[];
       readonly sedesOperations: SidecarOperationRegistry;
+    readonly readDesiredPolicy?:()=>InstalledExecutionPolicy;
+    readonly policyAttachment?:"normal"|"recovery";
     readonly heartbeatIntervalMilliseconds?: number;
   }): Promise<SidecarClientSession> {
     // A local observation ID, never the authenticated wire session nonce.
@@ -177,9 +212,55 @@ export class SidecarClientSession implements SidecarRuntimeSession {
       },
       stream: input.stream,
     });
-    const registry = input.sedesOperations.fork();
+    const policy: { confirmed?: InstalledExecutionPolicy } = {};
+    const guard = (
+      key:
+        | SidecarOperationDefinition<unknown, unknown>
+        | { capabilityId: string; majorVersion: number; operation: string },
+      request: unknown,
+    ): void | "recovery" => {
+      if (key.capabilityId === "control" && key.operation.startsWith("policy.")) {
+        if (key.operation === "policy.authorize_variables") assertApprovedVariableRequest(request);
+        else if (policyWriter.getStore() !== peer)
+          throw new Error("sidecar_policy_controller_required");
+      }
+      if (inRecoveryRequest() || input.policyAttachment === "recovery") {
+        if (
+          retainedPolicyOperation(key) ||
+          providerPolicyOperation(key) ||
+          key.capabilityId === "runtime_bodies" ||
+          (key.capabilityId === "control" &&
+            ["hello", "ping", "go_away", "policy.read"].includes(key.operation))
+        )
+          return;
+        throw new Error("sidecar_recovery_attachment_read_only");
+      }
+      if (input.policyAttachment !== "normal") return;
+      if (!requiresCapabilityGrant(key)) {
+        if (!providerPolicyOperation(key)) return;
+        // An opaque runtime command can contain either settlement or new work.
+        // Without current main authority, force its typed host handler to use
+        // the same exact-resource checks as an explicit recovery caller.
+        try {
+          const desired = input.readDesiredPolicy?.();
+          if (desired && policy.confirmed && (desired.revision > policy.confirmed.revision ||
+            (desired.revision === policy.confirmed.revision && desired.digest === policy.confirmed.digest))) return;
+        } catch { /* A quarantined or missing desired snapshot permits recovery only. */ }
+        return "recovery";
+      }
+      try {
+        const desired = input.readDesiredPolicy?.();
+        if (!desired || !policy.confirmed) throw new Error("sidecar_policy_unsynchronized");
+        requirePolicyCapability(desired.snapshot, key, request, policy.confirmed.snapshot);
+      } catch (error) {
+        if (terminalReceiptOperation(key)) return "recovery";
+        throw error;
+      }
+    };
+
+    const registry = input.sedesOperations.fork(guard);
     const peer = new SidecarProtocolPeer({
-      role: "sedes",
+      role: "sedes", beforeCall:guard,
       transport,
       sessionNonce: input.sessionNonce,
       registry,
@@ -214,7 +295,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
           compression: input.connectionCompression ? "zstd" : "none",
           expectedBuildId: input.artifact.buildId,
           expectedArtifactSha256: input.artifact.artifactSha256,
-          authorizedSidecarCapabilities: [...authorizedCapabilities.filter(
+          supportedSidecarCapabilities: [...authorizedCapabilities.filter(
             ({ capabilityId }) => capabilityId !== "agent_tools_cli",
           ), ...runtimeCapabilities.map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion }))],
           offeredSedesCapabilities: [...offeredSedesCapabilities],
@@ -227,6 +308,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
       ) {
         throw new Error("sidecar_capability_mismatch");
       }
+      if(input.transportKind==="pi_sandbox_stdio" && !closedWorkerControl(hello.sidecarCapabilities))throw new Error("sidecar_worker_control_mismatch");
       validateSidecarHelloCapabilityEvidence(
         hello,
         authorizedCapabilities.filter(
@@ -283,6 +365,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
       }
       for (const expected of runtimeCapabilities) {
         const actual = hello.sidecarCapabilities.find((capability) => capability.capabilityId === expected.capabilityId && capability.majorVersion === expected.majorVersion);
+        if (!actual && input.policyAttachment) continue;
         if (!actual && (expected.capabilityId === "codex_managed_tui" || expected.capabilityId === "claude_persistent_runtime" || expected.capabilityId === "opencode_runtime")) continue;
         if (!actual || JSON.stringify([...actual.operations].sort()) !== JSON.stringify([...expected.operations].sort())) throw new Error("sidecar_runtime_capability_mismatch");
       }
@@ -297,11 +380,6 @@ export class SidecarClientSession implements SidecarRuntimeSession {
       ) {
         throw new Error("sidecar_capability_mismatch");
       }
-      const agentToolCli = validateAgentToolCliMetadata(
-        hello.agentToolCli,
-        agentToolCliAuthorized,
-        input.installation,
-      );
       const heartbeatIntervalMilliseconds =
         input.heartbeatIntervalMilliseconds ?? HEARTBEAT_INTERVAL_MILLISECONDS;
       if (
@@ -318,13 +396,157 @@ export class SidecarClientSession implements SidecarRuntimeSession {
         runtimeChannel,
         negotiatedCapabilities: hello.sidecarCapabilities,
         heartbeatIntervalMilliseconds,
-        ...(agentToolCli ? { agentToolCli } : {}),
+        installation:input.installation,policy,
       });
     } catch (error) {
       attachmentDiagnostic("sidecar_handshake_failed", diagnosticContext, error);
       await peer.close("sidecar_hello_failed").catch(() => undefined);
       throw error;
     }
+  }
+
+  recoveryView(): SidecarClientSession {
+    const channel = narrowRecoveryView(this.runtimeChannel);
+    return narrowRecoveryView(this, channel);
+  }
+
+  #callPolicy<Request, Response>(
+    definition: SidecarOperationDefinition<Request, Response>,
+    request: Request,
+    options?: { signal?: AbortSignal },
+  ): Promise<Response> {
+    return policyWriter.run(this.#peer, () => this.#peer.call(definition, request, options));
+  }
+
+  async readPolicy(signal?: AbortSignal): Promise<ExecutionPolicyStatus> {
+    return this.#collectPolicyPages(
+      await this.#callPolicy(policyReadOperation, {}, { signal }),
+      signal,
+    );
+  }
+
+  async #collectPolicyPages(
+    first: ExecutionPolicyPage,
+    signal?: AbortSignal,
+  ): Promise<ExecutionPolicyStatus> {
+    const { cursor: initial, ...status } = first;
+    const readiness = [...status.readiness];
+    let cursor = initial;
+    while (cursor) {
+      const next = await this.#callPolicy(policyReadOperation, { cursor }, { signal });
+      if (
+        next.incarnation !== status.incarnation ||
+        next.controllerEpoch !== status.controllerEpoch ||
+        next.installed?.revision !== status.installed?.revision ||
+        next.installed?.digest !== status.installed?.digest ||
+        !next.readiness.length ||
+        readiness.length + next.readiness.length > 240 ||
+        next.cursor === cursor
+      )
+        throw new Error("sidecar_policy_page_stale");
+      readiness.push(...next.readiness);
+      cursor = next.cursor;
+    }
+    return { ...status, readiness };
+  }
+
+  async applyPolicy(
+    desired: InstalledExecutionPolicy,
+    signal?: AbortSignal,
+    observed?: ExecutionPolicyStatus,
+  ): Promise<ExecutionPolicyStatus> {
+    // CAS needs the installed stamp. Only the confirmed reply needs all readiness pages.
+    const prior = observed ?? await this.#callPolicy(policyReadOperation, {}, {signal});
+    if (
+      prior.installed &&
+      (prior.installed.revision > desired.revision ||
+        (prior.installed.revision === desired.revision &&
+          prior.installed.digest !== desired.digest))
+    ) {
+      throw new Error("sidecar_policy_revision_conflict");
+    }
+    const binding = {
+      incarnation: prior.incarnation,
+      controllerEpoch: prior.controllerEpoch,
+      transferId: randomUUID(),
+      revision: desired.revision,
+      digest: desired.digest,
+    };
+    if (
+      prior.installed?.digest !== desired.digest ||
+      prior.installed.revision !== desired.revision
+    ) {
+      const bytes = executionPolicyBytes(desired.snapshot);
+      for (let offset = 0; offset < bytes.length;) {
+        const end = Math.min(bytes.length, offset + POLICY_BLOCK_BYTES);
+        const response = await this.#callPolicy(
+          policyStageOperation,
+          {
+            ...binding,
+            length: bytes.length,
+            offset,
+            block: bytes.subarray(offset, end).toString("base64"),
+          },
+          { signal },
+        );
+        if (response.offset !== end) throw new Error("sidecar_policy_stage_conflict");
+        offset = end;
+      }
+    }
+    const install = async () =>
+      this.#collectPolicyPages(
+        await this.#callPolicy(
+          policyApplyOperation,
+          { ...binding, base: prior.installed, configuration: desired.configuration },
+          { signal },
+        ),
+        signal,
+      );
+    let status: ExecutionPolicyStatus;
+    try {
+      status = await install();
+    } catch (error) {
+      signal?.throwIfAborted();
+      const observed = await this.readPolicy(signal);
+      if (
+        observed.incarnation !== prior.incarnation ||
+        observed.controllerEpoch !== prior.controllerEpoch ||
+        observed.installed?.revision !== desired.revision ||
+        observed.installed.digest !== desired.digest
+      )
+        throw error;
+      status = await install();
+    }
+    if (
+      status.incarnation !== prior.incarnation ||
+      status.controllerEpoch !== prior.controllerEpoch ||
+      status.installed?.revision !== desired.revision ||
+      status.installed.digest !== desired.digest ||
+      status.configuration.environmentRevision!==desired.configuration.environmentRevision ||
+      status.configuration.operationsRevision!==desired.configuration.operationsRevision
+    )
+      throw new Error("sidecar_policy_confirmation_mismatch");
+    signal?.throwIfAborted();
+    this.#peer.assertReady();
+    if(this.#policy.confirmed && this.#policy.confirmed.revision>desired.revision)throw new Error("sidecar_policy_confirmation_superseded");
+    this.#policy.confirmed = desired;
+    return status;
+  }
+
+  acquireOpenCodeRoute(backendInstanceId: string, generation: number, signal?: AbortSignal) {
+    return this.#callPolicy(
+      policyAcquireOpenCodeRouteOperation,
+      { backendInstanceId, generation },
+      { signal },
+    );
+  }
+
+  async acquirePolicyRoute(
+    subject: ExecutionPolicyRouteSubject,
+    signal?: AbortSignal,
+  ): Promise<SidecarAgentToolCliMetadata> {
+    const result = await this.#callPolicy(policyAcquireRouteOperation, subject, { signal });
+    return validateAgentToolCliMetadata(result, true, this.#installation)!;
   }
 
   call<Request, Response>(
@@ -654,4 +876,18 @@ function validateAgentToolCliMetadata(
     throw new Error("sidecar_agent_tool_cli_metadata_invalid");
   }
   return Object.freeze({ ...metadata });
+}
+
+
+/** Preserve the shared connection and streams, while stamping each new request with recovery authority. */
+function narrowRecoveryView<T extends object>(target: T, channel?: SidecarRuntimeChannel): T {
+  return new Proxy(target, {
+    get(object, property) {
+      if (property === "runtimeChannel" && channel) return channel;
+      const member: unknown = Reflect.get(object, property, object);
+      if (property === "peer" && member instanceof SidecarProtocolPeer) return narrowRecoveryView(member);
+      if (typeof member !== "function") return member;
+      return (...args: unknown[]) => withRecoveryRequest(() => Reflect.apply(member, object, args));
+    },
+  });
 }

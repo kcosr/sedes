@@ -58,6 +58,8 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
     string,
     PreparedCodexConnectionConfiguration
   >;
+  readonly #liveConnection: (id: string) => AgentConnectionProfile | undefined;
+  readonly #liveConfigured: (id: string) => { readonly enabled: boolean } | undefined;
   readonly #materializedById: ReadonlyMap<string, AgentConnectionProfile>;
   readonly #drivers = new Map<string, CodexConversationBackendDriver>();
   readonly #guardedDrivers = new Map<string, ConversationBackendDriver>();
@@ -84,6 +86,7 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
     readonly fastModeSessions?: CodexFastModeSessionRegistry;
     readonly managedTui?: CodexManagedTuiController;
     readonly connections: readonly PreparedCodexConnectionConfiguration[];
+    readonly targetDefinition?: (id: string) => { readonly enabled: boolean } | undefined;
     readonly materializedConnections: readonly AgentConnectionProfile[];
     readonly now?: () => string;
     readonly onError?: (error: unknown) => void;
@@ -119,6 +122,8 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
         void lease.release().catch(this.#onError);
       }
     });
+    this.#liveConnection = id => input.materializedConnections.find(profile => profile.id === id);
+    this.#liveConfigured = id => input.targetDefinition?.(id) ?? this.#configuredByTemplateId.get(id);
     this.#configuredByTemplateId = new Map(
       input.connections.map((connection) => [connection.id, connection]),
     );
@@ -145,8 +150,8 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
   }
 
   create(connection: AgentConnectionProfile): ConversationBackendDriver {
-    const configured = this.#configuredByTemplateId.get(connection.templateId);
-    const materialized = this.#materializedById.get(connection.id);
+    const configured = this.#liveConfigured(connection.templateId);
+    const materialized = this.#liveConnection(connection.id);
     if (
       !configured ||
       !materialized ||
@@ -161,7 +166,7 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
       throw new Error("codex_driver_factory_connection_mismatch");
     }
     let driver = this.#drivers.get(connection.id);
-    if (!driver) {
+    if (driver?.connection.configurationRevision !== connection.configurationRevision) {
       driver = new CodexConversationBackendDriver({
         usageSink: this.#usageSink,
         nativeNamespace: this.#nativeNamespace,
@@ -186,9 +191,8 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
         now: this.#now,
         onError: this.#onError,
       });
+      this.#guardedDrivers.delete(connection.id);
       this.#drivers.set(connection.id, driver);
-    } else if (!sameConnection(driver.connection, connection)) {
-      throw new Error("codex_driver_factory_configuration_changed");
     }
     const selected = driver;
     const residency = this.#client.residency;

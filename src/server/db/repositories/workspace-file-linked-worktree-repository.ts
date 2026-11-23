@@ -1,3 +1,4 @@
+import { workspaceFileRootAuthority, type FileRootAdmission } from "./workspace-file-root-authority.js";
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { DomainError } from "../../domain/errors.js";
@@ -27,6 +28,7 @@ export type WorkspaceFileLinkedWorktreeRootRecord = {
 };
 
 export type DiscoveredLinkedWorktree = {
+  readonly authority?: FileRootAdmission;
   readonly canonicalPath: string;
   readonly canonicalCheckoutPath: string;
   readonly canonicalGitDir: string;
@@ -196,14 +198,12 @@ export class WorkspaceFileLinkedWorktreeRepository {
       .transaction(() => {
         this.#getWorkspace(scope, workspaceId);
         const active = this.list(scope, workspaceId);
-        const discoveredIdentities = new Set(
-          discovered.map(({ identityToken }) => identityToken),
-        );
-        const tombstoned = input.complete
-          ? active.filter(
-              ({ identityToken }) => !discoveredIdentities.has(identityToken),
-            )
-          : [];
+        const authority = workspaceFileRootAuthority(this.database, scope, workspaceId);
+        const discoveries = new Map(discovered.map(candidate => [candidate.identityToken, candidate]));
+        const tombstoned = active.filter(root => {
+          const candidate = discoveries.get(root.identityToken);
+          return !authority.stillAdmitted(root.rootId, candidate?.canonicalPath ?? root.canonicalPath) || (!candidate && input.complete);
+        });
         const tombstonedRootIds = tombstoned.map(({ rootId }) => rootId);
         const clearedThreadIds: string[] = [];
         for (const { rootId } of tombstoned) {
@@ -269,6 +269,7 @@ export class WorkspaceFileLinkedWorktreeRepository {
         );
 
         for (const candidate of discovered) {
+          const grant = authority.admit(candidate.canonicalPath, candidate.authority);
           const current = activeByIdentity.get(candidate.identityToken);
           if (!current) {
             if (
@@ -289,9 +290,9 @@ export class WorkspaceFileLinkedWorktreeRepository {
                    canonical_path, canonical_checkout_path, canonical_git_dir,
                    identity_token, display_label, branch_ref, head_oid,
                    provenance_kind, ahead_count, behind_count, availability, revision,
-                   first_seen_at, last_seen_at, unavailable_at
+                   first_seen_at, last_seen_at, unavailable_at, authority_root_id, authority_root_generation
                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                   'available', 1, ?, ?, NULL)`,
+                   'available', 1, ?, ?, NULL, ?, ?)`,
               )
               .run(
                 scope.tenantId,
@@ -309,7 +310,7 @@ export class WorkspaceFileLinkedWorktreeRepository {
                 candidate.aheadCount,
                 candidate.behindCount,
                 input.now,
-                input.now,
+                input.now, grant.id, grant.generation,
               );
             continue;
           }

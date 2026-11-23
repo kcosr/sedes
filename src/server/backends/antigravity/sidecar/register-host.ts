@@ -1,3 +1,6 @@
+import { SidecarOperationError } from "../../../../internal/sidecar-protocol/operation-registry.js";
+import { launchAdmission, currentBackendGrant, type ProviderPolicyAttachment } from "../../provider-policy-admission.js";
+import { runtimeLaunchDigest } from "../../provider-launch-digest.js";
 import type { SidecarOperationRegistry } from "../../../../internal/sidecar-protocol/operation-registry.js";
 import type { SidecarRuntimeChannel } from "../../../sidecar/runtime-channel.js";
 import type { PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
@@ -7,7 +10,7 @@ import type { AntigravityHostAuthority } from "../host/native-host.js";
 import { antigravityHostCommandSchema, antigravityHostCommandLane, antigravityRuntimeOperations, type AntigravityHostCommand } from "./wire.js";
 
 /** SSH and outbound peers borrow the same persistent execution-host resources. */
-export function registerAntigravityHost(input: { readonly registry: SidecarOperationRegistry;
+export function registerAntigravityHost(input: ProviderPolicyAttachment & { readonly registry: SidecarOperationRegistry;
   readonly channel: SidecarRuntimeChannel; readonly hosts: AntigravityHostRegistry;
   readonly services: PersistentSidecarServiceRegistry; readonly controllerEpoch: number }): () => void {
   let detached = false; const attached = new Map<string, "normal" | "retained">();
@@ -21,8 +24,12 @@ export function registerAntigravityHost(input: { readonly registry: SidecarOpera
     assertCurrent(); signal.throwIfAborted();
     if (command.controllerEpoch !== input.controllerEpoch || command.serviceIncarnation !== input.services.serviceIncarnation) throw new AntigravityError("antigravity_controller_stale");
     if (command.action === "ensure" || command.action === "lookup" || command.action === "lookup_retained") {
+      const admission = command.action === "ensure" ? launchAdmission(input, "antigravity", command.configuration.backendInstanceId,
+        runtimeLaunchDigest.antigravity(command.configuration, command.configuration.startupEnvironmentVariables)) : undefined;
       const host = command.action === "lookup_retained" ? await input.hosts.lookupRetained(command.backendInstanceId, input.controllerEpoch)
-        : await input.hosts[command.action](command.configuration, input.controllerEpoch);
+        : command.action === "ensure" ? await input.hosts.ensure(command.configuration, input.controllerEpoch, admission)
+        : await input.hosts.lookup(command.configuration, input.controllerEpoch);
+      if (host) admission?.bind(host);
       assertCurrent(); if (!host) return null;
       if (!attached.has(host.runtimeId) || command.action !== "lookup_retained") attached.set(host.runtimeId, command.action === "lookup_retained" ? "retained" : "normal");
       return { runtimeId: host.runtimeId };
@@ -30,7 +37,19 @@ export function registerAntigravityHost(input: { readonly registry: SidecarOpera
     if (command.action === "release") { await input.hosts.release(command.runtimeId, command.input.handleId, signal, authority); return { ok: true }; }
     const mode = attached.get(command.runtimeId); if (!mode) throw new AntigravityError("antigravity_runtime_not_attached");
     const host = input.hosts.get(command.runtimeId);
-    const callAuthority = mode === "retained" ? { assertCurrent, assertAdmission: () => { throw new AntigravityError("antigravity_recovery_read_only"); } } : authority;
+    const callAuthority = { assertCurrent, assertAdmission: () => {
+      if (mode === "retained") throw new AntigravityError("antigravity_recovery_read_only");
+      try { currentBackendGrant(input, host); }
+      catch (cause) { throw new AntigravityError("antigravity_recovery_read_only", "not_sent", { cause }); }
+      const tools = command.action === "create" || command.action === "attach" ? command.input.agentTools : undefined;
+      if (tools) {
+        if (!input.validateAgentToolRoute) throw new AntigravityError("antigravity_tool_route_denied");
+        input.validateAgentToolRoute(host.input.configuration.backendInstanceId, tools.endpoint, tools.executableDirectory, tools.inheritedPath);
+      }
+      authority.assertAdmission();
+    } };
+    if (["catalog", "list", "attach", "connect"].includes(command.action)) callAuthority.assertAdmission();
+    if (command.action === "history" && !host.hasRetainedSession(command.input)) callAuthority.assertAdmission();
     switch (command.action) {
       case "connect": return host.connect(signal, callAuthority);
       case "catalog": return host.catalog(command.input, signal, callAuthority);
@@ -60,7 +79,8 @@ export function registerAntigravityHost(input: { readonly registry: SidecarOpera
       return await input.channel.encodeBody({ status: "ok", runtimeVersion, value });
     } catch (error) {
       return await input.channel.encodeBody({ status: "failed", runtimeVersion, failure: error instanceof AntigravityError
-        ? { code: error.code, delivery: error.delivery } : { code: "antigravity_host_request_failed", delivery: "sent_outcome_unknown" } });
+        ? { code: error.code, delivery: error.delivery } : error instanceof SidecarOperationError ? { code: "antigravity_policy_denied", delivery: "not_sent" }
+        : { code: "antigravity_host_request_failed", delivery: "sent_outcome_unknown" } });
     }
   });
   return () => { detached = true; attached.clear(); };

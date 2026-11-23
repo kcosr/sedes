@@ -1,3 +1,4 @@
+import { canonicalLocalWorkspaceRoots, type LocalWorkspaceRootGrant } from "./local-workspace-roots.js";
 import {
   createHmac,
   randomBytes,
@@ -33,12 +34,15 @@ import {
   type ExecutionEnvironmentProvider,
   type ExecutionScope,
   type ValidatedWorkspace,
+  type ExecutionWorkspaceValidationOptions,
 } from "./contracts.js";
+import { workspaceRootGrant, type WorkspaceRootGrant } from "./workspace-root-grant.js";
 import { pathIsWithin } from "../path-containment.js";
 
 export interface LocalExecutionEnvironmentOptions {
   readonly environmentId: string;
   readonly scope: RequestScope;
+  readonly readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
   readonly allowedRoots: readonly string[];
   readonly label?: string;
   readonly environment?: Readonly<Record<string, string | undefined>>;
@@ -99,7 +103,7 @@ function filesystemErrorCode(error: unknown): string | undefined {
 interface LocalDirectoryCursor {
   readonly version: 1;
   readonly environmentId: string;
-  readonly authorityRevision: number;
+  readonly rootGeneration?: number;
   readonly kind: "roots" | "directory";
   readonly pathFingerprint: string;
   readonly pageSize: number;
@@ -129,6 +133,7 @@ function directoryIdentity(value: {
 export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
   readonly environment: EnvironmentSummary;
   readonly #scope: RequestScope;
+  readonly #readWorkspaceRoots?: () => readonly LocalWorkspaceRootGrant[];
   readonly #roots: Promise<readonly string[]>;
   readonly #workspaceIds = new Map<string, string>();
   readonly #environment: Readonly<Record<string, string | undefined>>;
@@ -169,7 +174,9 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     }
     this.#configurationRevision = options.configurationRevision;
     this.#activeConfigurationRevision = options.activeConfigurationRevision;
-    this.#roots = Promise.all(
+    const readRoots = options.readWorkspaceRoots;
+    if (readRoots) this.#readWorkspaceRoots = () => canonicalLocalWorkspaceRoots(readRoots());
+    this.#roots = options.readWorkspaceRoots ? Promise.resolve([]) : Promise.all(
       [...new Set(options.allowedRoots.map((root) => path.resolve(root)))].map(
         async (root) => {
           const canonical = await canonicalDirectory(root);
@@ -207,6 +214,7 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     environmentId: string,
   ): "available" | "unavailable" {
     return !this.#closed &&
+      (!this.#readWorkspaceRoots || this.#readWorkspaceRoots().length > 0) &&
       sameScope(scope, this.#scope) &&
       environmentId === this.environment.id
       ? "available"
@@ -219,7 +227,8 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
   ): Promise<DirectoryBrowseResult> {
     await this.#assertActive(scope, request.environmentId);
     request.signal?.throwIfAborted();
-    const roots = await this.#roots.catch(() => {
+    const grants = this.#readWorkspaceRoots?.();
+    const roots = grants?.map(root => root.path) ?? await this.#roots.catch(() => {
       throw new Error("directory_browse_not_allowed");
     });
     if (request.location.kind === "roots") {
@@ -229,14 +238,15 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
       if (
         cursor &&
         (cursor.kind !== "roots" ||
-          cursor.pathFingerprint !== "" ||
+          cursor.pathFingerprint !== this.#directoryPathFingerprint(JSON.stringify(grants ?? roots)) ||
           cursor.pageSize !== request.pageSize)
       ) {
         throw new Error("directory_browse_cursor_invalid");
       }
       const offset = cursor?.offset ?? 0;
-      const entries = roots
-        .map((root) => ({ name: path.basename(root) || root, path: root }))
+      const visibleRoots = grants?.map(root => directoryBrowsePathSchema.safeParse(root.path).success ? root.path : root.declaredPath) ?? roots;
+      const entries = visibleRoots
+        .map((root) => ({ name: path.basename(root) || "Filesystem root", path: root }))
         .sort(
           (left, right) =>
             left.name.localeCompare(right.name) ||
@@ -249,9 +259,8 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
           ? this.#encodeDirectoryCursor({
               version: 1,
               environmentId: this.environment.id,
-              authorityRevision: this.#configurationRevision,
               kind: "roots",
-              pathFingerprint: "",
+              pathFingerprint: this.#directoryPathFingerprint(JSON.stringify(grants ?? roots)),
               pageSize: request.pageSize,
               offset: nextOffset,
             })
@@ -269,19 +278,30 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     }
     let candidateStat;
     let canonicalPath: string;
+    // A configured alias can name a native directory that the browser path format cannot encode.
+    const requested = request.location.path;
+    const declaredRoot = grants?.find(root => root.declaredPath === requested && !directoryBrowsePathSchema.safeParse(root.path).success);
+    const nativePath = declaredRoot?.path ?? requested;
     try {
-      candidateStat = await lstat(request.location.path);
+      candidateStat = await lstat(nativePath);
       if (!candidateStat.isDirectory() || candidateStat.isSymbolicLink()) {
         throw new Error("directory_browse_not_allowed");
       }
-      canonicalPath = await realpath(request.location.path);
+      canonicalPath = await realpath(nativePath);
     } catch {
       throw new Error("directory_browse_not_allowed");
     }
-    const containingRoot = roots
+    const cursor = request.cursor ? this.#decodeDirectoryCursor(request.cursor) : undefined;
+    const grant = grants && (cursor ? grants.find(root => root.generation === cursor.rootGeneration && pathIsWithin(root.path, canonicalPath))
+      : workspaceRootGrant(grants, canonicalPath));
+    if (grants && !grant) throw new Error(cursor ? "directory_browse_cursor_invalid" : "directory_browse_not_allowed");
+    const containingRoot = grant?.path ?? roots
       .filter((root) => pathIsWithin(root, canonicalPath))
       .sort((left, right) => right.length - left.length)[0];
     if (!containingRoot) throw new Error("directory_browse_not_allowed");
+    const selected = grants?.find(root => root.id === grant?.id);
+    const displayPath = selected && !directoryBrowsePathSchema.safeParse(selected.path).success
+      ? path.join(selected.declaredPath, path.relative(selected.path, canonicalPath)) : canonicalPath;
 
     let handle;
     try {
@@ -293,9 +313,6 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
       if (!before.isDirectory())
         throw new Error("directory_browse_not_allowed");
       const identity = directoryIdentity(before);
-      const cursor = request.cursor
-        ? this.#decodeDirectoryCursor(request.cursor)
-        : undefined;
       if (
         cursor &&
         (cursor.kind !== "directory" ||
@@ -337,7 +354,7 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
             continue;
           }
           const entryPath = path.join(canonicalPath, value.name);
-          const entry = { name: value.name, path: entryPath };
+          const entry = { name: value.name, path: path.join(displayPath, value.name) };
           if (!directoryBrowseEntrySchema.safeParse(entry).success) continue;
           try {
             const entryStat = await lstat(entryPath);
@@ -382,7 +399,7 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
           ? this.#encodeDirectoryCursor({
               version: 1,
               environmentId: this.environment.id,
-              authorityRevision: this.#configurationRevision,
+              ...(grant && { rootGeneration: grant.generation }),
               kind: "directory",
               pathFingerprint: this.#directoryPathFingerprint(canonicalPath),
               pageSize: request.pageSize,
@@ -390,14 +407,16 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
               directoryIdentity: identity,
             })
           : undefined;
+      if (grant && !this.#readWorkspaceRoots?.().some(current => current.id === grant.id && current.generation === grant.generation && current.path === grant.path))
+        throw new Error("directory_browse_not_allowed");
       const parent = path.dirname(canonicalPath);
       return directoryBrowseResultSchema.parse({
         location: {
           kind: "directory",
-          path: canonicalPath,
+          path: displayPath,
           ...(canonicalPath !== containingRoot &&
           pathIsWithin(containingRoot, parent)
-            ? { parentPath: parent }
+            ? { parentPath: path.dirname(displayPath) }
             : {}),
         },
         entries: page,
@@ -422,12 +441,16 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     scope: ExecutionScope,
     environmentId: string,
     candidatePath: string,
+    options: ExecutionWorkspaceValidationOptions = {},
   ): Promise<ValidatedWorkspace> {
+    const {binding, signal} = options;
+    signal?.throwIfAborted();
     await this.#assertActive(scope, environmentId);
     if (!path.isAbsolute(candidatePath)) {
       throw new ExecutionWorkspaceAdmissionDeniedError();
     }
-    const roots = await this.#roots.catch(() => {
+    const grants = this.#readWorkspaceRoots?.();
+    const roots = grants?.map(root => root.path) ?? await this.#roots.catch(() => {
       throw new Error("workspace_not_allowed");
     });
     // Do not reveal whether an arbitrary path outside operator-owned roots
@@ -435,25 +458,33 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     // moved-or-removed classification; canonical containment is checked again
     // below to reject symlink escape.
     const lexicalPath = path.resolve(candidatePath);
-    if (!roots.some((root) => pathIsWithin(root, lexicalPath))) {
+    if (!roots.some((root) => pathIsWithin(root, lexicalPath)) && !grants?.some(root => pathIsWithin(root.declaredPath, lexicalPath))) {
       throw new ExecutionWorkspaceAdmissionDeniedError();
     }
     const canonicalPath = await canonicalDirectory(candidatePath);
     if (!roots.some((root) => pathIsWithin(root, canonicalPath))) {
       throw new ExecutionWorkspaceAdmissionDeniedError();
     }
+    const grant = grants && workspaceRootGrant(grants, canonicalPath, binding);
+    if (grants && binding && !grant) throw new Error("workspace_authority_stale");
+    const trusted = await this.#workspaceTrusted(canonicalPath);
+    if (grants && (!grant || !this.#readWorkspaceRoots?.().some(current => current.id === grant.id && current.generation === grant.generation && current.path === grant.path))) {
+      throw new ExecutionWorkspaceAdmissionDeniedError();
+    }
+    signal?.throwIfAborted();
     const id = this.#workspaceIds.get(canonicalPath) ?? randomUUID();
     this.#workspaceIds.set(canonicalPath, id);
     return {
       canonicalPath,
-      authorityRevision: this.#configurationRevision,
+      ...(grant && { authorityRootId: grant.id }),
+      authorityRevision: grant?.generation ?? this.#configurationRevision,
       summary: {
         id,
         environmentId: this.environment.id,
         displayName: path.basename(canonicalPath) || canonicalPath,
         displayPath: canonicalPath,
         availability: "available",
-        trustState: (await this.#workspaceTrusted(canonicalPath))
+        trustState: trusted
           ? "trusted"
           : "untrusted",
         revision: 0,
@@ -464,12 +495,9 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
   async revalidateWorkspace(
     scope: ExecutionScope,
     workspace: ValidatedWorkspace,
+    signal?: AbortSignal,
   ): Promise<ValidatedWorkspace> {
-    const reopened = await this.validateWorkspace(
-      scope,
-      workspace.summary.environmentId,
-      workspace.canonicalPath,
-    );
+    const reopened = await this.validateWorkspace(scope, workspace.summary.environmentId, workspace.canonicalPath, {binding: workspace, signal});
     this.#workspaceIds.set(reopened.canonicalPath, workspace.summary.id);
     return {
       ...reopened,
@@ -481,18 +509,34 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     };
   }
 
+  #assertGrant(workspace: ValidatedWorkspace): void {
+    const current = this.#readWorkspaceRoots
+      ? workspaceRootGrant(this.#readWorkspaceRoots(), workspace.canonicalPath, workspace)
+      : workspace.authorityRevision === this.#configurationRevision;
+    if (!current) throw new Error("workspace_authority_stale");
+  }
+
+  async #boundWorkspace(scope: ExecutionScope, request: ExecutionEnvironmentLeaseRequest): Promise<ValidatedWorkspace> {
+    await this.#assertActive(scope, request.environmentId);
+    const original = request.workspace;
+    if (original.summary.environmentId !== request.environmentId) throw new Error("workspace_identity_changed");
+    this.#assertGrant(original);
+    const workspace = await this.revalidateWorkspace(scope, original);
+    if (workspace.authorityRootId !== original.authorityRootId || workspace.authorityRevision !== original.authorityRevision) {
+      throw new Error("workspace_authority_stale");
+    }
+    this.#assertGrant(workspace);
+    if (workspace.canonicalPath !== request.workspace.canonicalPath) {
+      throw new Error("workspace_identity_changed");
+    }
+    return workspace;
+  }
+
   async acquireLease(
     scope: ExecutionScope,
     request: ExecutionEnvironmentLeaseRequest,
   ): Promise<ExecutionEnvironmentLease> {
-    await this.#assertActive(scope, request.environmentId);
-    if (request.workspace.authorityRevision !== this.#configurationRevision) {
-      throw new Error("workspace_authority_stale");
-    }
-    const workspace = await this.revalidateWorkspace(scope, request.workspace);
-    if (workspace.canonicalPath !== request.workspace.canonicalPath) {
-      throw new Error("workspace_identity_changed");
-    }
+    const workspace = await this.#boundWorkspace(scope, request);
     const token = {};
     this.#leases.add(token);
     let released = false;
@@ -500,6 +544,11 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
       scope,
       environment: this.environment,
       workspace,
+      ...(this.#readWorkspaceRoots && { assertCurrent: () => {
+        if (released) throw new Error("workspace_authority_stale");
+        this.#assertGrant(workspace);
+        this.#assertAvailable(scope, request.environmentId);
+      } }),
       release: async () => {
         if (released) return;
         released = true;
@@ -512,14 +561,7 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     scope: ExecutionScope,
     request: ExecutionCommandRequest,
   ): Promise<ExecutionCommandResult> {
-    await this.#assertActive(scope, request.environmentId);
-    if (request.workspace.authorityRevision !== this.#configurationRevision) {
-      throw new Error("workspace_authority_stale");
-    }
-    const workspace = await this.revalidateWorkspace(scope, request.workspace);
-    if (workspace.canonicalPath !== request.workspace.canonicalPath) {
-      throw new Error("workspace_identity_changed");
-    }
+    const workspace = await this.#boundWorkspace(scope, request);
     return executePosixShellCommand({
       command: request.command,
       cwd: workspace.canonicalPath,
@@ -587,8 +629,7 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
       parsed.version !== 1 ||
       !("environmentId" in parsed) ||
       parsed.environmentId !== this.environment.id ||
-      !("authorityRevision" in parsed) ||
-      parsed.authorityRevision !== this.#configurationRevision ||
+      ("rootGeneration" in parsed && !Number.isSafeInteger(parsed.rootGeneration)) ||
       !("kind" in parsed) ||
       (parsed.kind !== "roots" && parsed.kind !== "directory") ||
       !("pathFingerprint" in parsed) ||

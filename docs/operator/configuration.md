@@ -731,6 +731,14 @@ Antigravity backend per environment may serve multiple targets. Set an optional
 absolute executable and native profile path in the backend editor. Configure
 target defaults from that runtime's advertised model and reasoning options.
 Remote execution requires the negotiated `antigravity_runtime` capability 4.
+When a migration disables competing Antigravity backends on a local host, open
+each candidate in **Settings → Backends**. **Confirm retirement** is available
+when Sedes knows of no current owner, active work, or pending cleanup for that
+candidate. Check the backend and host identified in the dialog. Independently
+verify that all of that backend's previous native processes have stopped before
+recording its retirement. Stop any surviving processes separately on the host.
+Each confirmation resolves one candidate.
+
 See [Antigravity](backends/antigravity.md) for fields, native mode semantics,
 and runtime ownership.
 
@@ -833,13 +841,34 @@ a thread. A stale edit or lifecycle confirmation must be refreshed before
 another attempt; an unknown operation outcome is not permission to retry it
 with a new identity.
 
+On SSH and paired hosts with the current sidecar, saving a supported backend,
+named connection, workspace root or optional feature updates the existing
+attachment. A new route accepts work after its host grant and prerequisites
+are confirmed. Existing providers and terminals on the host continue. Sedes
+fences access removed by a save and independently reports the application of
+each changed setting on **Overview**. Inspect a feature marked **Unsupported
+on this host** or **Could not apply** for its specific prerequisite. A
+disconnected host retains the desired revision until reconnection. Use
+**Retry apply** to request another attempt on a connected host.
+A compatible software upgrade remains available separately in the actions menu.
+**Execution policy conflict** means a known sidecar has a newer or divergent
+policy, as can happen after a database restore. Inspect active work and select
+**Restart sidecar** to replace that incarnation and install the saved policy.
+**Stop** leaves the sidecar shut down. Sedes verifies ownership and checks the
+current resource inventory before either action.
+
+Labels update immediately. Thread and execution defaults apply to new work.
+Connection compression is sampled on the next normal or recovery attachment.
+
 Backend startup defaults apply only to provider processes launched by Sedes.
-Native Pi, owned Codex, Claude, Grok, owned OpenCode, and Antigravity accept
-them; external Codex UDS/TCP, external OpenCode, and in-process Pi SDK do not.
-Saving new startup values does not change a running process or
-restart it. **Pending restart** marks unapplied startup definitions; use the
-backend's explicit restart action and review affected threads. A new process
-uses current definitions at its first launch.
+Native Pi, owned Codex, Claude, Grok, owned OpenCode and Antigravity accept
+startup defaults. External Codex UDS/TCP, external OpenCode and in-process Pi SDK
+use their existing process environment. Saving new startup values leaves running
+processes on their current settings. **Restart backend required** identifies a
+running provider with pending launch settings. Use **Restart backend** and review
+affected threads to apply the change now. A new process uses the current
+settings when it launches. Once the host confirms that launch, Settings keeps
+the revision marked **Applied** when the provider goes idle.
 
 Before removing a backend, its target, or an environment, stop the affected
 runtime. Recover any outcomes you need before confirming Stop. Removal requires confirmed shutdown;
@@ -856,7 +885,7 @@ operation results while main Sedes is disconnected. Pi SDK's reasoning loop
 still runs on main Sedes and does not survive its shutdown.
 
 **Disconnect** drops the main connection and persists that preference without
-stopping remote work. **Stop**, **Restart**, and **Upgrade and restart** operate
+stopping remote work. **Stop**, **Restart sidecar**, and **Upgrade and restart** operate
 on the service and require a current impact check. For a provider runtime
 that reports its work, such as remote Claude, the check lists running turns,
 background agents and commands, pending approvals, and conversations with
@@ -871,8 +900,7 @@ settled work and no live terminals, active turns, pending approvals, unsettled
 results, or unknown ownership. A shell at a prompt is live. Final terminal output must be handed off or preserved before
 replacement. A blocker keeps the row at **Upgrade available** or **Upgrade
 required** with the reason shown and **Upgrade and restart** offered; the host
-is not reported unreachable. A saved revision that cannot apply while remote
-work is active shows **Changes pending** with **Restart** offered. An explicit
+is not reported unreachable. An explicit
 restart confirmation authorizes interruption of active work and abandonment of
 unrecovered transient outcomes. Explicit Stop attempts owned-process cleanup even
 when provider state is unknown; retained outcomes do not veto it. Provider-native

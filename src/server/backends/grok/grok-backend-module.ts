@@ -90,6 +90,8 @@ class GrokBackendModuleRuntime implements BackendModuleRuntime {
       ]),
     );
     const resolveConnectionDefaults = (connection: AgentConnectionProfile) => {
+      const current = input.context.targetDefinition?.(connection.templateId);
+      if (current?.kind === "grok_acp") return current.enabled === connection.enabled ? current.moduleConfiguration.defaults : undefined;
       const configured = preparedConnections.get(connection.templateId);
       return configured?.enabled === connection.enabled
         ? configured.configuration.defaults
@@ -130,7 +132,7 @@ class GrokBackendModuleRuntime implements BackendModuleRuntime {
       startupEnvironmentVariables: input.startupEnvironmentVariables,
       scope: input.context.scope,
       instance: input.context.instance,
-      connections: input.context.connections,
+      get connections() { return input.context.connections; },
       configuration: input.configuration,
       environmentChannel: input.context.environmentChannel,
       environment: input.childEnvironment,
@@ -314,6 +316,7 @@ function grokConfiguration(
     throw new Error("grok_backend_configuration_invalid");
   }
   return {
+    readCurrentBackend: input.readCurrentBackend,
     backend: input.backend as GrokBackendConfigurationInput["backend"],
     connections:
       input.connections as GrokBackendConfigurationInput["connections"],

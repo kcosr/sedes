@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { type WorkspacePolicyGuard } from "./workspace-policy-guard.js";
 import {
   SidecarOperationError,
   type WorkspaceSkillsV1Handlers,
@@ -12,7 +14,7 @@ export class WorkspaceSkillsSidecarHost {
   readonly #homeDirectory: string | undefined;
   #closed = false;
 
-  constructor(options: { readonly homeDirectory?: string } = {}) {
+  constructor(readonly options: { readonly policyGuard?: WorkspacePolicyGuard; readonly homeDirectory?: string } = {}) {
     this.#homeDirectory = options.homeDirectory;
     this.handlers = {
       readCatalog: (request, context) =>
@@ -67,16 +69,21 @@ export class WorkspaceSkillsSidecarHost {
       throw new SidecarOperationError("workspace_skills_unavailable");
     }
     try {
-      return await scanWorkspaceSkills({
+      const check = this.options.policyGuard?.capture("workspace_skills", request.policyRootPath);
+      const result = await scanWorkspaceSkills({
         workspacePath: request.declaredPath,
         policyRootPath: request.policyRootPath,
         ...(this.#homeDirectory ? { homeDirectory: this.#homeDirectory } : {}),
         signal,
       });
+      check?.();
+      return check ? { ...result, catalogFingerprint: createHash("sha256")
+        .update(JSON.stringify([check.identity, result.catalogFingerprint])).digest("hex") } : result;
     } catch (error) {
       if (signal.aborted) {
         throw new SidecarOperationError("workspace_skills_cancelled");
       }
+      if (error instanceof SidecarOperationError) throw error;
       if (error instanceof WorkspaceSkillsScannerError) {
         const code =
           error.code === "workspace_skills_limit_exceeded"

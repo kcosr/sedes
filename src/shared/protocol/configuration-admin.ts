@@ -147,7 +147,9 @@ export const configurationDocumentSchema = z.strictObject({
         backend.moduleConfiguration.connection.channel.authentication.secret.source !== "protected_file") {
       context.addIssue({ code: "custom", path: ["targets", index], message: "Remote OpenCode requires an owner-protected password file on the execution host." });
     }
-    if (environment !== undefined && environment.kind !== "local" && target.kind === "grok_acp") context.addIssue({ code: "custom", path: ["targets", index], message: "Grok requires a local environment." });
+    if (environment && environment.kind !== "local" && target.kind === "grok_acp" && (target.enabled || backend?.enabled)) {
+      context.addIssue({ code: "custom", path: ["targets", index], message: "Grok requires a local environment." });
+    }
     if (environment?.kind === "outbound" && environment.platform === "win32" && target.kind === "claude_agent_sdk" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "Claude requires a macOS or Linux execution host." });
     if (environment?.kind === "outbound" && environment.platform === "win32" && target.kind === "pi_rpc" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "Pi requires a macOS or Linux execution host." });
     if (environment?.kind === "outbound" && environment.platform === "win32" && target.kind === "antigravity_acp" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "Antigravity requires a macOS or Linux execution host." });
@@ -163,14 +165,28 @@ export const configurationDocumentSchema = z.strictObject({
 });
 
 export const configurationResourceKindSchema = z.enum(["environment", "backend"]);
-export const configurationLifecycleActionSchema = z.enum(["connect", "disconnect", "start", "stop", "restart", "upgrade"]);
+export const configurationLifecycleActionSchema = z.enum(["connect", "disconnect", "start", "stop", "restart", "upgrade", "confirm_retirement"]);
+export const configurationEffectSchema = z.strictObject({
+  component: z.enum(["presentation", "defaults", "host_policy", "provider_launch", "connection_compression", "ownership"]),
+  subjectId: z.string().min(1).max(256), subjectLabel: z.string().min(1).max(4096).optional(), desiredRevision: configurationRevisionSchema, effectiveRevision: configurationRevisionSchema.nullable(),
+  state: z.enum(["unknown", "applied", "awaiting_host", "unsupported", "failed", "future_defaults", "next_attachment", "next_launch", "restart_backend"]),
+  detail: z.string().min(1).max(512).optional(),
+  providerLaunch: z.strictObject({
+    owner: z.enum(["main", "host"]),
+    desiredDigest: z.string().regex(/^[a-f0-9]{64}$/),
+    confirmedDigest: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  }).optional(),
+  lastHostConfirmation: z.strictObject({ revision: configurationRevisionSchema, digest: z.string().regex(/^[a-f0-9]{64}$/), incarnation: z.string().min(1).max(256), epoch: configurationRevisionSchema }).optional(),
+});
+export type ConfigurationEffect = z.infer<typeof configurationEffectSchema>;
 export const configurationRuntimeStateSchema = z.strictObject({
   resourceKind: configurationResourceKindSchema, resourceId: configurationIdSchema,
   desiredRevision: configurationRevisionSchema, effectiveRevision: configurationRevisionSchema.nullable(),
   applyState: z.enum(["pending", "applied", "rejected", "unavailable"]),
   startupEnvironmentPending: z.boolean().optional(),
+  effects: z.array(configurationEffectSchema).max(512).optional(),
   preference: z.enum(["automatic", "disconnected", "stopped"]),
-  connectionState: z.enum(["unknown", "connected", "disconnected", "unreachable", "recovery_required", "stopped", "reconciling"]),
+  connectionState: z.enum(["unknown", "connected", "disconnected", "unreachable", "recovery_required", "policy_conflict", "stopped", "reconciling"]),
   incarnation: z.string().min(1).max(256).nullable(),
   softwareVersion: z.string().min(1).max(128).nullable(),
   upgradeState: z.enum(["unknown", "current", "pending", "required"]),

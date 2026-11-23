@@ -1,3 +1,4 @@
+import { type WorkspacePolicyGuard } from "./workspace-policy-guard.js";
 import {
   SidecarOperationError,
   type WorkspaceContextV1Handlers,
@@ -11,7 +12,7 @@ export class WorkspaceContextSidecarHost {
   readonly handlers: WorkspaceContextV1Handlers;
   #closed = false;
 
-  constructor() {
+  constructor(readonly options: { readonly policyGuard?: WorkspacePolicyGuard } = {}) {
     this.handlers = {
       readContext: (request, context) => this.#read(request, context.signal),
     };
@@ -27,11 +28,14 @@ export class WorkspaceContextSidecarHost {
     if (this.#closed)
       throw new SidecarOperationError("workspace_context_unavailable");
     try {
-      return await discoverWorkspaceContext({
+      const check = this.options.policyGuard?.capture("workspace_context", request.policyRootPath);
+      const result = await discoverWorkspaceContext({
         workspacePath: request.declaredPath,
         policyRoots: [request.policyRootPath],
         signal,
       });
+      check?.();
+      return result;
     } catch (error) {
       if (signal.aborted)
         throw new SidecarOperationError("workspace_context_cancelled");

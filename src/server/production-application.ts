@@ -1,3 +1,5 @@
+import { storedFileRootBinding } from "./db/repositories/workspace-file-root-authority.js";
+import { canonicalLocalWorkspaceRoots } from "./execution/local-workspace-roots.js";
 import { ThreadAppliedToolPolicySetRepository } from "./db/repositories/thread-applied-tool-policy-set-repository.js";
 import { ToolPolicyRepository } from "./db/repositories/tool-policy-repository.js";
 import { ToolPolicyService } from "./tool-policies/tool-policy-service.js";
@@ -14,8 +16,9 @@ import { ClientControlService } from "./domain/client-control-service.js";
 import type { BackendRuntimeDiagnostic } from "./backends/module.js";
 import { backendLifecycleActions } from "./configuration-admin/configuration-backend-lifecycle.js";
 import { UsageService } from "./usage/usage-service.js";
-import { mergeEnvironmentVariableOverrides } from "../shared/protocol/environment-variables.js";
+import { providerStartupEnvironmentVariables } from "./backends/provider-launch-digest.js";
 import { EnvironmentVariablesService } from "./environment-variables/environment-variables-service.js";
+import { antigravityOwners } from "./configuration-admin/configuration-ownership.js";
 import { fencePriorLifecycleForStop } from "./configuration-admin/configuration-lifecycle-fencing.js";
 import { QuestionRequestService } from "./domain/question-request-service.js";
 import { randomUUID } from "node:crypto";
@@ -71,8 +74,9 @@ import { OutboundSidecarProvisioner } from "./sidecar/outbound-sidecar-provision
 import { ConfigurationAdminService, type ConfigurationRuntimeAdapter } from "./configuration-admin/configuration-admin-service.js";
 import { ConfigurationProjection } from "./configuration-admin/configuration-projection.js";
 import { configurationFingerprint } from "./config/configuration-fingerprint.js";
-import { withoutConnectionCompression } from "./configuration-admin/configuration-identities.js";
-import type { ConfigurationRuntimeState } from "../shared/protocol/configuration-admin.js";
+import { workspaceRootGrant } from "./execution/workspace-root-grant.js";
+import { ExecutionHostQueue } from "./runtime/execution-host-queue.js";
+import type { ConfigurationEnvironment, ConfigurationRuntimeState } from "../shared/protocol/configuration-admin.js";
 import type { SidecarServiceStatus } from "../internal/sidecar-protocol/service-management-v1.js";
 import {
   ConversationActorManager,
@@ -228,7 +232,7 @@ import {
 import { SidecarClientSession } from "./sidecar/sidecar-client-session.js";
 import { SidecarRuntimeOwner } from "./sidecar/sidecar-runtime.js";
 import { CompositeWorkspaceFileProvider } from "./workspace-files/composite-workspace-file-provider.js";
-import { type WorkspaceFileProvider } from "./workspace-files/contracts.js";
+import { WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID, type WorkspaceFileProvider } from "./workspace-files/contracts.js";
 import { SingleUserIdentityProvider } from "./identity/identity-provider.js";
 import { AuthenticationRepository } from "./authentication/authentication-repository.js";
 import { AuthenticationAdmission, deriveClientNavigationNamespace } from "./authentication/authentication-admission.js";
@@ -402,6 +406,14 @@ function connectionProfile(
   };
 }
 
+function environmentTransportFingerprint(environment: ConfigurationEnvironment): string {
+  switch (environment.kind) {
+    case "ssh": return configurationFingerprint({kind: environment.kind, hostAlias: environment.hostAlias});
+    case "outbound": return configurationFingerprint({kind: environment.kind, pairingId: environment.pairingId, platform: environment.platform});
+    case "local": return configurationFingerprint({kind: environment.kind, workspaceIsolation: environment.workspaceIsolation});
+  }
+}
+
 /**
  * End-state production composition. Production always owns the configured Pi
  * SDK backend through the normalized registry and actor boundaries; fake
@@ -524,11 +536,7 @@ export async function startProductionApplication(
         // Lifecycle preference/receipt revisions do not change the host's
         // configuration. A command must retain management access after its
         // intent is committed, and unrelated hosts must stay connected.
-        return definition ? configurationFingerprint({
-          environment: withoutConnectionCompression(definition),
-          backends: snapshot.configuration.targets.filter(target => target.executionEnvironmentId === environmentId)
-            .map(target => ({id: target.backendInstanceId, kind: target.kind})),
-        }) : undefined;
+        return definition ? environmentTransportFingerprint(definition) : undefined;
       },
     });
     resources.defer("outbound connection registry", () => outboundConnections.close());
@@ -665,11 +673,11 @@ export async function startProductionApplication(
     const appliedEnvironmentRevisions = new Map<string, number>();
     const appliedEnvironmentFingerprints = new Map<string, string>();
     const environmentPreparationFailures = new Map<string, unknown>();
-    const environmentRuntimeFingerprint = (id: string) => configurationFingerprint({
-      environment: (() => { const found = desiredConfiguration.configuration.executionEnvironments.find(item => item.id === id); if (!found) return null; const { environmentVariables: _variables, ...transport } = withoutConnectionCompression(found); return transport; })(),
-      backends: desiredConfiguration.configuration.targets.filter(target => target.executionEnvironmentId === id)
-        .map(target => ({id: target.backendInstanceId, kind: target.kind})),
-    });
+    const environmentRuntimeFingerprint = (id: string) => {
+      const found = desiredConfiguration.configuration.executionEnvironments.find(item => item.id === id);
+      return found ? environmentTransportFingerprint(found) : undefined;
+    };
+    let onHostPolicyChange: ((environmentId: string) => void) | undefined;
     const agentToolSidecarRuntimes = new Map<string, SidecarRuntimeOwner<SidecarClientSession>>();
     let sidecarArtifactPromise: Promise<SidecarArtifactRegistration> | undefined;
     const sidecarArtifact = (): Promise<SidecarArtifactRegistration> => {
@@ -695,10 +703,22 @@ export async function startProductionApplication(
       return await createExecutionEnvironmentRuntime({
         configured, record, scope, stateDirectory: config.stateDirectory, environment,
         toolProvenanceKey, installationId: sidecarInstallationId,
-        authorizedRuntimeCapabilities: [{capabilityId: "environment_variables", majorVersion: 1, operations: ["variables.resolve"]}, ...new Map(backendConfigurationFile.backends
-          .filter(backend => profiles.some(profile => profile.backendInstanceId === backend.id && profile.executionEnvironmentId === environmentId))
-          .flatMap(backend => compiledBackendModuleCatalog.requireModule(backend.kind).remoteRuntimeCapabilities ?? [])
-          .map(capability => [capability.capabilityId, capability] as const)).values()],
+        authorizedRuntimeCapabilities: [{capabilityId: "environment_variables", majorVersion: 1, operations: ["variables.resolve"]}, ...compiledBackendModuleCatalog.remoteRuntimeCapabilities()],
+        readWorkspaceBinding: (id, rootId) => {
+          if (rootId && rootId !== "primary") return storedFileRootBinding(inventoryRepository.database, scope, id, rootId);
+          const workspace = inventoryRepository.getWorkspace(scope, id);
+          return {authorityRootId: workspace.authorityRootId ?? undefined, authorityRevision: workspace.environmentConfigurationRevision};
+        },
+        readWorkspaceRoots: () => configurationProjection.hostPolicy(scope, environmentId)?.snapshot.roots ?? [],
+        ...(configured.kind !== "local" ? {
+          policyRecovery: configurationProjection.policyRecovery(scope, environmentId),
+          readDesiredPolicy: () => {
+            const policy = configurationProjection.hostPolicy(scope, environmentId);
+            if (!policy) throw new Error("execution_environment_configuration_missing");
+            return policy;
+          },
+          onPolicyChanged: () => onHostPolicyChange?.(environmentId),
+        } : {}),
         activeEnvironmentRecord: () => inventoryRepository.getEnvironment(scope, environmentId),
         automaticConnectionEnabled: () => configurationRepository.runtime(scope, "environment", environmentId).preference === "automatic",
         connectionCompression: () => {
@@ -739,7 +759,7 @@ export async function startProductionApplication(
       for (const [backendId, profiles] of runtime.networkProfiles) advertisedWorkspaceIsolationNetworkProfiles.set(backendId, profiles);
       const desired = configurationRepository.runtime(scope, "environment", id);
       appliedEnvironmentRevisions.set(id, desired.desiredRevision);
-      appliedEnvironmentFingerprints.set(id, environmentRuntimeFingerprint(id));
+      appliedEnvironmentFingerprints.set(id, environmentRuntimeFingerprint(id)!);
       if (desiredConfiguration.configuration.executionEnvironments.find(item => item.id === id)?.kind === "local") {
         inventoryRepository.updateEnvironmentAvailability(scope, id, {available: true, now: Date.now()});
       }
@@ -784,6 +804,25 @@ export async function startProductionApplication(
             eventScope,
             applicationThreadIds,
           ),
+      },
+      (candidate, workspace, target) => {
+        const host = environmentRuntimes.get(target.environmentId);
+        const owner = host?.sidecarRuntime;
+        const grants = () => owner ? owner.acquirableWorkspaceRoots() :
+          canonicalLocalWorkspaceRoots(configurationProjection.hostPolicy(candidate, target.environmentId)?.snapshot.roots ?? []);
+        const feature = () => owner ? owner.acquirableCapabilityGeneration("workspace_files") : 0;
+        const binding = target.rootId === "primary" ? {authorityRootId: workspace.authorityRootId ?? undefined,
+          authorityRevision: workspace.environmentConfigurationRevision} : storedFileRootBinding(inventoryRepository.database, candidate, workspace.id, target.rootId);
+        const grant = target.rootId === WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID ? workspaceRootGrant(grants(), target.canonicalPath) :
+          binding && workspaceRootGrant(grants(), target.canonicalPath, binding);
+        const generation = feature();
+        return () => {
+          if (!host || environmentRuntimes.get(target.environmentId) !== host || generation === undefined ||
+              generation !== feature() || !grant || !workspaceRootGrant(grants(), target.canonicalPath,
+                {authorityRootId: grant.id, authorityRevision: grant.generation})) {
+            throw new DomainError("conflict", "The Files grant changed during capture.");
+          }
+        };
       },
     );
     const workspaceDiffReviews = new WorkspaceDiffReviewService(
@@ -836,7 +875,18 @@ export async function startProductionApplication(
       ]),
     );
     const backendStartupAbort = new AbortController();
+    const targetGeneration = (profile: AgentConnectionProfile): number | undefined => {
+      const owner = environmentRuntimes.get(profile.executionEnvironmentId)?.sidecarRuntime;
+      if (owner) return owner.acquirableTargetGeneration(profile.backendInstanceId, profile.templateId);
+      return configurationProjection.hostPolicy(scope, profile.executionEnvironmentId)?.snapshot.backends
+        .find(backend => backend.id === profile.backendInstanceId)?.targets.find(target => target.id === profile.templateId)?.generation;
+    };
     const runtimeModules = new PrincipalBackendRuntimeCollection({scope, registry,
+      connectionGeneration: targetGeneration,
+      withConnectionAuthorization: (profile, generation, operation, signal) => {
+        const owner = environmentRuntimes.get(profile.executionEnvironmentId)?.sidecarRuntime;
+        return owner ? owner.withTargetAuthorization(profile.backendInstanceId, profile.templateId, generation, operation, signal) : operation();
+      },
       desiredInstanceRevision: id => backendConfiguration.getBackend(scope, id).configurationRevision,
     });
     resources.defer("backend runtime collection", () => runtimeModules.close(), {
@@ -871,16 +921,22 @@ export async function startProductionApplication(
     const startupEnvironmentFingerprint = (id: string): string => {
       const document = desiredConfiguration.configuration;
       const backend = document.backends.find(item => item.id === id);
-      if (!backend || backend.kind === "pi" || ((backend.kind === "codex_app_server" || backend.kind === "opencode") && backend.moduleConfiguration.connection.ownership === "external")) return configurationFingerprint({});
+      if (!backend) return configurationFingerprint({});
       const target = document.targets.find(item => item.backendInstanceId === id && item.enabled);
       const host = document.executionEnvironments.find(item => item.id === target?.executionEnvironmentId);
-      return configurationFingerprint(mergeEnvironmentVariableOverrides(host?.environmentVariables?.startup ?? {}, backend.environmentVariables?.startup ?? {}));
+      return configurationFingerprint(providerStartupEnvironmentVariables(backend, host?.environmentVariables?.startup));
+    };
+    const backendHost = (id: string): string | undefined =>
+      desiredConfiguration.configuration.targets.find(target => target.backendInstanceId === id)?.executionEnvironmentId ??
+      runtimeModules.executionEnvironmentId(id);
+    const desiredBackendPolicy = (id: string) => {
+      const host = backendHost(id);
+      return host && desiredConfiguration.configuration.executionEnvironments.some(item => item.id === host)
+        ? configurationProjection.hostPolicy(scope, host)?.snapshot.backends.find(backend => backend.id === id)
+        : undefined;
     };
     const backendRuntimeFingerprint = (id: string): string => configurationFingerprint({
-      backend: (() => { const backend = backendConfigurationFile.backends.find(item => item.id === id); if (!backend) return null;
-        const { environmentVariables: _variables, ...configuration } = backend; return configuration; })(),
-      targets: backendConfigurationFile.targets.filter(target => target.backendInstanceId === id),
-      startupEnvironment: startupEnvironmentFingerprint(id),
+      id, environment: backendHost(id) ?? null, launch: desiredBackendPolicy(id)?.launchDigest ?? null,
     });
     const startupEnvironmentPending = (id: string): boolean => appliedStartupEnvironmentFingerprints.has(id) &&
       appliedStartupEnvironmentFingerprints.get(id) !== startupEnvironmentFingerprint(id);
@@ -889,7 +945,6 @@ export async function startProductionApplication(
     type BackendStartupAttempt = {
       readonly handle: BackendRuntimeStartup;
       readonly fingerprint: string;
-      readonly revision: number;
       readonly environmentId: string;
       readonly environmentRuntime: ExecutionEnvironmentRuntime;
       readonly localProvider: boolean;
@@ -932,7 +987,7 @@ export async function startProductionApplication(
       const definition = snapshot.configuration.backends.find(item => item.id === id);
       const record = snapshot.runtimes.find(item => item.resourceKind === "backend" && item.resourceId === id);
       return !attempt.cancelled && !backendStartupAbort.signal.aborted && definition?.enabled === true &&
-        record?.preference === "automatic" && record.desiredRevision === attempt.revision &&
+        record?.preference === "automatic" &&
         backendRuntimeFingerprint(id) === attempt.fingerprint &&
         environmentRuntimes.get(attempt.environmentId) === attempt.environmentRuntime;
     };
@@ -943,7 +998,7 @@ export async function startProductionApplication(
       let publicationError: unknown;
       let publishSnapshot = false;
       try {
-        await serializeConfiguration(async () => {
+        await hostQueue.run([attempt.environmentId], async () => {
           if (backendStartups.get(id) !== attempt || !backendStartupIsCurrent(id, attempt)) { discard = true; return; }
           if (started.status === "failed") {
             recordBackendStartupFailure(id, attempt.fingerprint, started.error, attempt.localProvider); outcome = "failed";
@@ -951,7 +1006,9 @@ export async function startProductionApplication(
             await attempt.handle.publish();
             const runtime = runtimeModules.runtimes.get(id);
             if (runtime) backendSidecarBindings.set(runtime, attempt.sidecarBinding);
-            recordBackendApplied(id, attempt.revision, attempt.fingerprint, attempt.startupFingerprint);
+            runtimeModules.updateConnections(id, profiles.filter(profile => profile.backendInstanceId === id),
+              desiredConfiguration.configuration.targets.filter(target => target.backendInstanceId === id));
+            recordBackendApplied(id, configurationRepository.runtime(scope, "backend", id).desiredRevision, attempt.fingerprint, attempt.startupFingerprint);
             observationFailures.delete(`backend:${id}`); outcome = "applied";
           }
           backendStartups.delete(id);
@@ -965,14 +1022,14 @@ export async function startProductionApplication(
       if (discard) {
         let cleanupError: unknown;
         try { await attempt.handle.discard(); } catch (error) { cleanupError = error; }
-        await serializeConfiguration(async () => {
+        await hostQueue.run([attempt.environmentId], async () => {
           const current = backendStartups.get(id) === attempt;
           if (publicationError !== undefined && current && backendStartupIsCurrent(id, attempt)) {
             recordBackendStartupFailure(id, attempt.fingerprint, publicationError, attempt.localProvider);
           }
           if (current) backendStartups.delete(id);
           if (cleanupError !== undefined) recordBackendStartupFailure(id, attempt.fingerprint, cleanupError, attempt.localProvider);
-          if (!backendStartupAbort.signal.aborted) await reconcileLiveConfiguration();
+          if (!backendStartupAbort.signal.aborted) scheduleHostReconciliation(attempt.environmentId);
         });
       }
       if (publishSnapshot && !drain.isDraining) await activeApplicationSnapshots.publishAuthoritativeReplacement(scope)
@@ -1003,10 +1060,21 @@ export async function startProductionApplication(
         const environmentId = [...environmentIds][0]!;
         const environmentChannel = environmentChannels.get(environmentId);
         const operations = environmentOperations.get(environmentId);
-        const cli = agentToolCli.get(environmentId);
+        const environmentRuntime = environmentRuntimes.get(environmentId);
+        if (configured.kind === "pi" && environmentRuntime?.ensureLocalPiBackend) {
+          await environmentRuntime.ensureLocalPiBackend(backendId);
+          const isolation = environmentRuntime.workspaceIsolations.get(backendId);
+          if (isolation) workspaceIsolations.set(backendId, isolation);
+          const networks = environmentRuntime.networkProfiles.get(backendId);
+          if (networks) advertisedWorkspaceIsolationNetworkProfiles.set(backendId, networks);
+        }
+        const cli = environmentRuntime?.agentToolCliRuntime
+          ? managedSshAgentToolCliAvailability({scope, executionEnvironmentId: environmentId, runtime: environmentRuntime.agentToolCliRuntime, backendInstanceId: backendId})
+          : agentToolCli.get(environmentId);
         if (!environmentChannel || !operations || !cli) throw new Error("backend_runtime_environment_unavailable");
         const prepared = compiledBackendModuleCatalog.prepare({
           backends: [configured],
+          readCurrentBackend: () => desiredConfiguration.configuration.backends.find(item => item.id === backendId),
           connections: backendConfigurationFile.targets.filter(target => target.backendInstanceId === backendId),
           executionEnvironments: backendConfigurationFile.executionEnvironments,
           environment,
@@ -1019,6 +1087,8 @@ export async function startProductionApplication(
           prepared,
           context: {
             database: database!, scope, usage,
+            assertNativeOwner: ownerId => configurationRepository.assertNativeOwner(scope, environmentId, "antigravity", ownerId),
+            confirmNativeOwner: (ownerId, expectedOwner) => configurationRepository.confirmNativeOwner(scope, environmentId, "antigravity", ownerId, expectedOwner),
             executionEnvironmentVariables: (threadId) => environmentVariables.effective(scope, threadId),
             instance: backendInstance(backendConfiguration.getBackend(scope, backendId)),
             connections, environmentChannel, environmentOperations: operations,
@@ -1026,6 +1096,16 @@ export async function startProductionApplication(
             toolProvenanceKey, agentTools, outputArtifacts, viewedImageCapture,
             agentToolSourceCapabilities: agentToolSources, agentToolCli: cli,
             ...(owner ? {
+              readCurrentLaunchConfiguration: () => {
+                const document = desiredConfiguration.configuration;
+                const backend = document.backends.find(item => item.id === backendId);
+                const host = document.executionEnvironments.find(item => item.id === environmentId);
+                if (!backend?.enabled || backend.kind !== configured.kind || !host ||
+                    !document.targets.some(target => target.enabled && target.backendInstanceId === backendId && target.executionEnvironmentId === environmentId) ||
+                    configurationRepository.runtime(scope, "backend", backendId).preference !== "automatic" ||
+                    configurationRepository.runtime(scope, "environment", environmentId).preference !== "automatic") return undefined;
+                return { backend, startupEnvironmentVariables: providerStartupEnvironmentVariables(backend, host.environmentVariables?.startup) };
+              },
               sidecarRuntime: {
                 async acquireExisting(signal = new AbortController().signal) {
                   const lease = await owner.acquireExisting(scope, environmentId, signal);
@@ -1041,6 +1121,15 @@ export async function startProductionApplication(
                     : await owner.acquireOperation(scope, environmentId, signal);
                   sidecarBinding.serviceIncarnation ??= lease.serviceStatus.serviceIncarnation;
                   return {channel: lease.session.runtimeChannel,
+                    ...(options.existingOnly ? {} : {
+                      async acquireOpenCodeRoute(id: string, routeSignal?: AbortSignal) {
+                        const generation = owner.policyRouteGeneration(id);
+                        if (id !== backendId || generation === undefined) throw new DomainError("runtime_unavailable", "The backend tool route is unavailable.");
+                        const route = await lease.session.acquireOpenCodeRoute(id, generation, routeSignal);
+                        if (owner.policyRouteGeneration(id) !== generation) throw new DomainError("runtime_unavailable", "The backend tool route changed.");
+                        return route.generation;
+                      },
+                    }),
                     controllerEpoch: lease.serviceStatus.controllerEpoch,
                     serviceIncarnation: lease.serviceStatus.serviceIncarnation,
                     closed: lease.session.closed, release: () => lease.release()};
@@ -1054,7 +1143,7 @@ export async function startProductionApplication(
         if (prepared.module.startupPolicy === "connect_provider") {
           const handle = await runtimeModules.reserveStartup(plan, retireBackendRuntime,
             { signal: backendStartupAbort.signal, startupTimeoutMs: 90_000 });
-          const attempt: BackendStartupAttempt = { handle, fingerprint, revision, environmentId,
+          const attempt: BackendStartupAttempt = { handle, fingerprint, environmentId,
             environmentRuntime: environmentRuntimes.get(environmentId)!, startupFingerprint,
             sidecarBinding,
             localProvider: inventoryRepository.getEnvironment(scope, environmentId).kind === "local",
@@ -1482,6 +1571,15 @@ export async function startProductionApplication(
     const executionTargets = new DatabaseExecutionTargetReader({
       configuration: backendConfiguration,
       registry,
+      targetAdmission: profile => {
+        const owner = environmentRuntimes.get(profile.executionEnvironmentId)?.sidecarRuntime;
+        const eligible = moduleRuntimes.has(profile.backendInstanceId) && targetGeneration(connectionProfile(profile)) !== undefined;
+        if (!owner) return {eligible};
+        return {
+          eligible: eligible && !backendPreparationFailures.has(profile.backendInstanceId),
+          confirmRemote: (signal: AbortSignal) => owner.confirmTargetSelection(profile.backendInstanceId, profile.templateId, signal),
+        };
+      },
       environmentOperations,
       workspaceIsolationNetworkProfiles:
         advertisedWorkspaceIsolationNetworkProfiles,
@@ -2298,7 +2396,7 @@ export async function startProductionApplication(
     const observedServices = new Map<string, SidecarServiceStatus | null>();
     const backendPresence = new Map<string, boolean>();
     const observedBackends = new Map<string, Awaited<ReturnType<NonNullable<BackendModuleRuntime["administration"]>["inspect"]>>>();
-    const remoteBackendObservations = new WeakMap<BackendModuleRuntime, { serviceIdentity: string; pending: Promise<void> }>();
+    const remoteBackendObservations = new WeakMap<BackendModuleRuntime, { serviceIdentity: string; refreshing: boolean }>();
     const observationFailures = new Map<string, "unreachable" | SidecarOwnershipRecoveryCode | BackendRuntimeDiagnostic>();
     const requiresOwnershipRecovery = (error: unknown): boolean => sidecarOwnershipRecoveryCode(error) !== undefined;
     const observationFailure = (error: unknown, backendId?: string) => sidecarOwnershipRecoveryCode(error) ??
@@ -2332,12 +2430,9 @@ export async function startProductionApplication(
         default: return `The sidecar could not be started on the host (${code}). Retry, or inspect the host.`;
       }
     };
-    let configurationTail: Promise<unknown> = Promise.resolve();
-    const serializeConfiguration = <Result>(operation: () => Promise<Result>): Promise<Result> => {
-      const result = configurationTail.catch(() => undefined).then(operation);
-      configurationTail = result.catch(() => undefined);
-      return result;
-    };
+    const hostQueue = new ExecutionHostQueue();
+    const resourceHost = (resource: Pick<ConfigurationRuntimeState, "resourceKind" | "resourceId">): string =>
+      resource.resourceKind === "environment" ? resource.resourceId : backendHost(resource.resourceId) ?? `backend:${resource.resourceId}`;
     const assertManagementScope = (candidate: RequestScope): void => {
       if (candidate.tenantId !== scope.tenantId || candidate.principalId !== scope.principalId) {
         throw new DomainError("not_found", "Configuration is unavailable in this scope.");
@@ -2355,7 +2450,63 @@ export async function startProductionApplication(
       const environmentId = profiles.find(profile => profile.backendInstanceId === id)?.executionEnvironmentId;
       return Boolean(configured && environmentId && inventoryRepository.getEnvironment(scope, environmentId).kind !== "local" && compiledBackendModuleCatalog.requireModule(configured.kind).remoteRuntimeCapabilities?.length);
     };
-    const recoverBackendAdministration = async (id: string) => {
+    // Migration candidates keep their original host/instance identity even if a saved definition was removed.
+    // Management "absent" and a successful exact retained lookup are evidence. A failed connection is not.
+    const inspectAntigravityOwners = async (environmentId: string, candidates: readonly string[]) => {
+      const probe = compiledBackendModuleCatalog.requireModule("antigravity").inspectRetainedOwner;
+      const owner = environmentRuntimes.get(environmentId)?.sidecarRuntime;
+      if (!owner || !probe) throw new DomainError("runtime_unavailable", "Connect the original execution host to inspect its retained Antigravity runtimes.", true);
+      const signal = managementSignal();
+      let incumbent: string | undefined;
+      try {
+        const service = await owner.inspectService(signal);
+        if (service) {
+          if (service.scope.tenantId !== scope.tenantId || service.scope.principalId !== scope.principalId ||
+              service.scope.executionEnvironmentId !== environmentId) {
+            throw new DomainError("conflict", "The retained execution host scope changed.");
+          }
+          if (service.state !== "ready") throw new DomainError("conflict", "Finish the execution host's outstanding cleanup before resolving Antigravity ownership.");
+          const borrowed = await owner.acquireRecovery(scope, environmentId, signal);
+          try {
+            if (borrowed.serviceStatus.serviceIncarnation !== service.serviceIncarnation) {
+              throw new DomainError("conflict", "The retained sidecar changed during ownership inspection.");
+            }
+            const lease = {
+              channel: borrowed.session.runtimeChannel,
+              closed: borrowed.session.closed,
+              controllerEpoch: borrowed.serviceStatus.controllerEpoch,
+              serviceIncarnation: borrowed.serviceStatus.serviceIncarnation,
+              release: () => borrowed.release(),
+            };
+            for (const id of candidates) {
+              if (!await probe(lease, id, signal)) continue;
+              if (incumbent) throw new DomainError("conflict", "The execution host reported conflicting retained Antigravity owners.");
+              incumbent = id;
+            }
+          } finally {
+            borrowed.release();
+          }
+        }
+        signal.throwIfAborted();
+      } catch (error) {
+        if (error instanceof DomainError) throw error;
+        throw new DomainError("runtime_unavailable", "Could not verify retained Antigravity ownership. Reconnect the original execution host and try again.", true);
+      }
+      if (incumbent) {
+        configurationRepository.confirmNativeOwner(scope, environmentId, "antigravity", incumbent);
+      } else {
+        for (const id of candidates) configurationRepository.confirmNativeOwner(scope, environmentId, "antigravity", null, id);
+      }
+    };
+
+    const confirmHostRetirement = (environmentId: string) => {
+      if (configurationRepository.unresolvedAntigravityCandidates(scope, environmentId).length ||
+          configurationRepository.retainedAntigravityOwner(scope, environmentId)) {
+        configurationRepository.confirmNativeOwner(scope, environmentId, "antigravity", null);
+      }
+    };
+
+    const recoverBackendAdministration = async (id: string, isCurrent = () => true) => {
       const connections = profiles.filter(profile => profile.backendInstanceId === id);
       const environmentId = connections[0]?.executionEnvironmentId;
       if (!environmentId || connections.some(profile => profile.executionEnvironmentId !== environmentId)) throw new DomainError("runtime_unavailable", "The backend execution identity cannot be recovered.", true);
@@ -2365,16 +2516,20 @@ export async function startProductionApplication(
       const owner = environmentRuntime?.sidecarRuntime;
       if (!owner) throw new DomainError("runtime_unavailable", "The execution host is unavailable for backend recovery.", true);
       const service = await owner.inspectService(managementSignal());
+      if (!isCurrent()) return undefined;
       observedServices.set(environmentId, service ?? null);
       if (!service) { backendPresence.set(id, false); observedBackends.delete(id); return undefined; }
       const configured = backendConfigurationFile.backends.find(item => item.id === id);
       if (!configured) throw new DomainError("runtime_unavailable", "The retained backend configuration is unavailable.", true);
       const prepared = compiledBackendModuleCatalog.prepare({
+        readCurrentBackend: () => desiredConfiguration.configuration.backends.find(item => item.id === id),
         backends: [configured], connections: backendConfigurationFile.targets.filter(target => target.backendInstanceId === id),
         executionEnvironments: backendConfigurationFile.executionEnvironments, environment,
       })[0];
       if (!prepared?.recoverAdministration) throw new DomainError("runtime_unavailable", "This backend does not support detached administration.", true);
       const administration = await prepared.recoverAdministration({
+        assertNativeOwner: ownerId => configurationRepository.assertNativeOwner(scope, environmentId, "antigravity", ownerId),
+        confirmNativeOwner: (ownerId, expectedOwner) => configurationRepository.confirmNativeOwner(scope, environmentId, "antigravity", ownerId, expectedOwner),
         database: database!, scope, instance: backendInstance(backendConfiguration.getBackend(scope, id)), connections,
         sidecarRuntime: {async acquireRecovery(signal = managementSignal()) {
           const lease = await owner.acquireRecovery(scope, environmentId, signal);
@@ -2382,6 +2537,7 @@ export async function startProductionApplication(
             serviceIncarnation: lease.serviceStatus.serviceIncarnation, closed: lease.session.closed, release: () => lease.release()};
         }},
       });
+      if (!isCurrent()) return undefined;
       backendPresence.set(id, administration !== undefined);
       if (!administration) observedBackends.delete(id);
       return administration;
@@ -2428,6 +2584,14 @@ export async function startProductionApplication(
       void admitted.catch(reportBackgroundError(`Backend ${backendId} retained work attachment`))
         .finally(() => retainedAttachments.delete(module));
     };
+    const confirmedHostPolicy = (environmentId: string) => {
+      const owner = environmentRuntimes.get(environmentId)?.sidecarRuntime;
+      const observed = owner?.policyStatus();
+      const desired = configurationProjection.hostPolicy(scope, environmentId);
+      if (!owner || !desired || !observed?.installed || observed.installed.revision !== desired.revision ||
+          observed.installed.digest !== desired.digest || owner.conflictsWithDesiredPolicy(observed.incarnation)) return undefined;
+      return { desired, observed };
+    };
     const captureAdministrativeResource = async (record: ConfigurationRuntimeState, refresh: boolean, refreshProvider = true) => {
       const current = configurationRepository.get(scope);
       const id = record.resourceId;
@@ -2436,6 +2600,7 @@ export async function startProductionApplication(
       let runtime: ConfigurationRuntimeState;
       let service: SidecarServiceStatus | undefined;
       let administration: BackendModuleRuntime["administration"];
+      let remoteBackendAbsenceConfirmed = false;
       let recoveryAction: "stop" | undefined;
       let backendObservation: Awaited<ReturnType<NonNullable<BackendModuleRuntime["administration"]>["inspect"]>> | undefined;
       if (record.resourceKind === "environment") {
@@ -2470,25 +2635,32 @@ export async function startProductionApplication(
         const observed = observedServices.has(id);
         const disconnected = record.preference === "disconnected" && observed && !service?.attached && !observationFailures.has(key);
         const stopped = record.preference === "stopped" && observed && (!service || service.state === "stopped") && !observationFailures.has(key);
+        const policyStatus = owner?.policyStatus();
+        const installedPolicy = policyStatus?.installed;
+        const desiredPolicy = remote && definition ? configurationProjection.hostPolicy(scope, id) : undefined;
+        // Only a successfully identified, quarantined incarnation is eligible for
+        // policy recovery. Cached inventory must never override an ownership failure.
+        const incarnation = service?.serviceIncarnation ?? policyStatus?.incarnation;
+        const quarantined = incarnation && owner?.conflictsWithDesiredPolicy(incarnation);
+        const policyConflict = quarantined && service && service.state !== "stopped" && !outboundOffline && !recoveryRequired && !observationFailures.has(key);
+        const policyConfirmed = desiredPolicy && installedPolicy?.revision === desiredPolicy.revision && installedPolicy.digest === desiredPolicy.digest &&
+          policyStatus?.incarnation === incarnation && !quarantined;
         const prepared = appliedEnvironmentFingerprints.get(id) === environmentRuntimeFingerprint(id) && appliedEnvironmentRevisions.get(id) === record.desiredRevision;
         const applied = definition === undefined
           ? !environmentRuntimes.has(id)
           : remote
-            ? prepared && (stopped || (disconnected && !service) || Boolean(service && service.configurationState === "applied" &&
-              service.effectiveConfiguration.environmentRevision === inventoryRepository.getEnvironment(scope, id).configurationRevision &&
-              service.effectiveConfiguration.operationsRevision === inventoryRepository.getEnvironment(scope, id).operationsConfigurationRevision &&
-              (record.preference !== "disconnected" || disconnected)))
+            ? prepared && (stopped || (disconnected && !service) || Boolean(policyConfirmed && (record.preference !== "disconnected" || disconnected)))
             : prepared;
         runtime = {...record,
           effectiveRevision: applied ? record.desiredRevision : record.effectiveRevision,
-          applyState: outboundOffline || observationFailures.has(key) || environmentPreparationFailures.has(id) ? "unavailable" : applied ? "applied" : "pending",
-          connectionState: outboundOffline ? "unreachable" : replacementReady ? "disconnected" : recoveryRequired ? "recovery_required" : stopped ? "stopped" : disconnected ? "disconnected" : observationFailures.has(key) ? "unreachable" : remote ? service?.attached ? "connected" : observed ? "disconnected" : "unknown" : environmentRuntimes.has(id) ? "connected" : "stopped",
+          applyState: policyConflict || outboundOffline || observationFailures.has(key) || environmentPreparationFailures.has(id) ? "unavailable" : applied ? "applied" : "pending",
+          connectionState: outboundOffline ? "unreachable" : policyConflict ? "policy_conflict" : replacementReady ? "disconnected" : recoveryRequired ? "recovery_required" : stopped ? "stopped" : disconnected ? "disconnected" : observationFailures.has(key) ? "unreachable" : remote ? service?.attached ? "connected" : observed ? "disconnected" : "unknown" : environmentRuntimes.has(id) ? "connected" : "stopped",
           incarnation: service?.serviceIncarnation ?? (remote ? null : environmentRuntimes.has(id) ? `local:${sidecarInstallationId}:${id}` : null),
           softwareVersion: service?.buildId ?? null,
           upgradeState: !remote ? "current" : !service || !owner ? "unknown" : service.artifactSha256 === owner.artifact.artifactSha256 ? "current" : service.runtimeWireVersion === SIDECAR_WIRE_VERSION ? "pending" : "required",
           activeResources: Math.max(blockers.length, terminalImpact.liveCount + terminalImpact.unknownCount),
-          supportedActions: owner && definition && !outboundOffline ? replacementReady ? ["connect", "disconnect", "start"] : ["connect", "disconnect", "start", "stop", "restart", "upgrade"] : [],
-          lastError: outboundOffline ? "The host connector is offline. Start it on the host or wait for it to reconnect; retained work has not been discarded." : recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : observationFailures.has(key) ? "The execution host is unreachable; retained work has not been discarded." : environmentPreparationFailures.has(id) ? "The environment could not apply its configuration. Check its settings and installed sidecar artifacts." : service?.state === "handoff_pending" ? "Final terminal history or operation outcomes must be recovered before this service can stop." : service?.state === "cleanup_unproven" ? "Resource cleanup is unconfirmed; replacement is blocked. Stop the service to retry its cleanup." : attachmentBlocks.has(id) && !service?.attached ? attachmentBlockMessage(attachmentBlocks.get(id)!) : null,
+          supportedActions: owner && definition && !outboundOffline ? policyConflict ? ["restart", "stop", "disconnect"] : replacementReady ? ["connect", "disconnect", "start"] : ["connect", "disconnect", "start", "stop", "restart", "upgrade"] : [],
+          lastError: policyConflict ? "The running service has a conflicting execution policy. Inspect its active work before restarting the service to recover." : outboundOffline ? "The host connector is offline. Start it on the host or wait for it to reconnect; retained work has not been discarded." : recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : observationFailures.has(key) ? "The execution host is unreachable; retained work has not been discarded." : environmentPreparationFailures.has(id) ? "The environment could not apply its configuration. Check its settings and installed sidecar artifacts." : service?.state === "handoff_pending" ? "Final terminal history or operation outcomes must be recovered before this service can stop." : service?.state === "cleanup_unproven" ? "Resource cleanup is unconfirmed; replacement is blocked. Stop the service to retry its cleanup." : attachmentBlocks.has(id) && !service?.attached ? attachmentBlockMessage(attachmentBlocks.get(id)!) : null,
         };
       } else {
         const definition = current.configuration.backends.find(item => item.id === id);
@@ -2503,32 +2675,45 @@ export async function startProductionApplication(
         // Local administration reads the current owned runtime without opening
         // it. Keep lazy startup transitions visible without requiring an impact
         // preview; remote inspection remains cached by service identity.
-        if (refresh || (!remote && owned?.administration) || (owned && remote && cached?.serviceIdentity !== serviceIdentity())) {
-          const observation = { serviceIdentity: serviceIdentity(), pending: Promise.resolve() };
+        if (refresh || (!remote && owned?.administration) || (owned && remote && !cached?.refreshing && cached?.serviceIdentity !== serviceIdentity())) {
+          // A passive poll serves cached data while an explicit lifecycle inspection is in flight.
+          const observation = { serviceIdentity: serviceIdentity(), refreshing: refresh };
           // Module preparation knows desired startup settings, not those of a
           // retained remote process. Recover its applied fingerprint once per
           // module/attachment using existing-only administration, never ensure.
-          observation.pending = (async () => {
+          if (owned && remote) remoteBackendObservations.set(owned, observation);
+          const isCurrent = () => !owned || !remote ||
+            (moduleRuntimes.get(id) === owned && remoteBackendObservations.get(owned) === observation);
+          const pending = (async () => {
             try {
-              administration = remote ? await recoverBackendAdministration(id) : owned?.administration;
-              if (administration) { observedBackends.set(id, await administration.inspect()); attachRetainedWork(id); }
+              const control = remote ? await recoverBackendAdministration(id, isCurrent) : owned?.administration;
+              const inventory = await control?.inspect();
+              if (!isCurrent()) return;
+              if (refresh) {
+                administration = control;
+                backendObservation = inventory;
+                remoteBackendAbsenceConfirmed = remote && control === undefined;
+              }
+              if (inventory) { observedBackends.set(id, inventory); attachRetainedWork(id); }
               observationFailures.delete(key);
             } catch (error) {
+              if (!isCurrent()) return;
               observationFailures.set(key, observationFailure(error, id));
-              if (owned && remote && remoteBackendObservations.get(owned) === observation) remoteBackendObservations.delete(owned);
+              if (owned && remote) remoteBackendObservations.delete(owned);
+            } finally {
+              observation.serviceIdentity = serviceIdentity();
+              observation.refreshing = false;
             }
-            finally { observation.serviceIdentity = serviceIdentity(); }
           })();
-          if (owned && remote) remoteBackendObservations.set(owned, observation);
-          await observation.pending;
-        } else if (cached) {
-          await cached.pending;
+          // Snapshot reads serve cached carrier evidence. Explicit impact and
+          // lifecycle checks await fresh evidence on their host's queue.
+          if (refresh || !remote) await pending;
         }
-        backendObservation = observedBackends.get(id);
+        const loaded = await backendThreads(id);
+        if (!refresh) backendObservation = observedBackends.get(id);
         if (backendObservation?.startupEnvironmentFingerprint) {
           appliedStartupEnvironmentFingerprints.set(id, backendObservation.startupEnvironmentFingerprint);
         }
-        const loaded = await backendThreads(id);
         // Background work outlives a settled turn and still ends with its runtime.
         const active = loaded.filter(item => item.runState !== "idle" || hasOutstandingBackgroundActivity(item.backgroundActivity));
         interruptions.push(...active.map(item => {
@@ -2544,28 +2729,51 @@ export async function startProductionApplication(
         const diagnostic = owned?.runtimeDiagnostic?.() ?? backendDiagnostic(id, backendPreparationFailures.get(id)) ??
           (typeof observedFailure === "object" ? observedFailure : undefined);
         recoveryAction = diagnostic?.recoveryAction;
-        const applied = intentionallyAbsent ? !owned && (record.preference !== "stopped" || !remote || backendPresence.get(id) === false) : appliedBackendRevisions.get(id) === record.desiredRevision && Boolean(owned) && !startupEnvironmentPending(id) &&
-          !diagnostic && !observationFailures.has(key) && (!owned?.administration || Boolean(backendObservation && backendObservation.state !== "unknown"));
+        const providerHost = remote ? backendHost(id) : undefined;
+        const policy = providerHost ? confirmedHostPolicy(providerHost) : undefined;
+        const grant = policy?.desired.snapshot.backends.find(backend => backend.id === id);
+        const observedLaunch = grant && policy?.observed.readiness.find(item =>
+          item.id === `backend:${id}` && item.generation === grant.generation)?.observedLaunchDigest;
+        // The current host's process evidence supersedes the existing main module's startup snapshot.
+        const launchPending = typeof observedLaunch === "string" ? observedLaunch !== grant?.launchDigest :
+          startupEnvironmentPending(id) || (appliedBackendFingerprints.has(id) && appliedBackendFingerprints.get(id) !== backendRuntimeFingerprint(id));
+        const applied = intentionallyAbsent ? !owned && (record.preference !== "stopped" || !remote || backendPresence.get(id) === false) : appliedBackendRevisions.get(id) === record.desiredRevision && Boolean(owned) && !launchPending &&
+          !diagnostic && !observationFailures.has(key) && (!owned?.administration ||
+            (backendObservation ? backendObservation.state !== "unknown" : observedLaunch !== undefined));
         const starting = backendStartups.has(id);
         runtime = {...record,
           effectiveRevision: applied ? record.desiredRevision : record.effectiveRevision,
           applyState: starting ? "pending" : diagnostic || backendPreparationFailures.has(id) || observationFailures.has(key) ? "unavailable" : applied ? "applied" : "pending",
-          startupEnvironmentPending: (Boolean(owned) || Boolean(backendObservation)) && startupEnvironmentPending(id),
+          startupEnvironmentPending: observedLaunch !== null && (Boolean(owned) || Boolean(backendObservation)) && launchPending,
           connectionState: starting ? "reconciling" : recoveryRequired ? "recovery_required" : diagnostic?.connectionState ?? (observationFailures.has(key) ? "unreachable" : record.preference === "disconnected" && !owned ? "disconnected" : !owned ? remote && backendPresence.get(id) !== false ? backendPresence.get(id) === true ? "disconnected" : "unknown" : "stopped" : owned.administration && !backendObservation ? "unknown" : "connected"),
-          incarnation: backendObservation?.incarnation ?? backendIncarnations.get(id) ?? null,
+          incarnation: backendObservation?.incarnation ?? (remote ? null : backendIncarnations.get(id) ?? null),
           softwareVersion: null,
           upgradeState: "current",
           activeResources: Math.max(active.length, backendObservation?.state === "active" || backendObservation?.state === "unknown" ? 1 : 0),
           supportedActions: backendLifecycleActions(definition, remote),
           lastError: starting ? null : recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : diagnostic?.message ?? (backendPreparationFailures.has(id) ? "This backend could not apply its configuration. Check its settings and execution environment." : observationFailures.has(key) ? "Provider state is unavailable; active work and retained outcomes may still exist." : null),
         };
+        if (definition?.kind === "antigravity" && !definition.enabled && !remote) {
+          const hostId = backendHost(id);
+          if (hostId && current.configuration.executionEnvironments.some(host => host.id === hostId && host.kind === "local") &&
+              configurationRepository.unresolvedAntigravityCandidates(scope, hostId).includes(id)) {
+            const host = inventoryRepository.getEnvironment(scope, hostId);
+            const idle = !owned && !starting && !active.length && !backendObservation && !observedFailure &&
+              !runtimeModules.failures.has(id) && !backendPreparationFailures.has(id);
+            runtime = {
+              ...runtime, connectionState: "unknown", applyState: "pending", effectiveRevision: null,
+              supportedActions: idle ? ["confirm_retirement"] : runtime.supportedActions.filter(action => action === "stop"),
+              lastError: idle ? "Verify this previous local Antigravity runtime is retired, then confirm its retirement."
+                : "Resolve current backend work or uncertain cleanup before confirming local retirement.",
+            };
+            if (idle) interruptions.push(`Confirm that all previous native processes for backend ${definition.label} (${id}) on ${host.label} (${hostId}) have been stopped.`);
+          }
+        }
       }
-      return {runtime, service, backendObservation, administration, recoveryAction, interruptions: interruptions.length > 128 ? [...interruptions.slice(0, 127), `${interruptions.length - 127} additional affected resources.`] : interruptions,
-        fence: configurationFingerprint({resourceKind: record.resourceKind, id, incarnation: runtime.incarnation,
-          // Main reattaching advances the controller epoch without changing any
-          // resource; the sidecar still validates the epoch it is finally given.
-          service: service ? {state: service.state, resources: service.resourcesFingerprint, configuration: service.desiredConfiguration} : null,
-          backend: backendObservation?.revision ?? null,
+      return {runtime, service, backendObservation, administration, remoteBackendAbsenceConfirmed, recoveryAction, interruptions: interruptions.length > 128 ? [...interruptions.slice(0, 127), `${interruptions.length - 127} additional affected resources.`] : interruptions,
+        fence: configurationFingerprint({resourceKind: record.resourceKind, id, incarnation: runtime.incarnation, policyConflict: runtime.connectionState === "policy_conflict",
+          service: service ? {epoch: service.controllerEpoch, state: service.state, resources: service.resourcesFingerprint, configuration: service.desiredConfiguration} : null,
+          backend: backendObservation?.revision ?? null, localRetirement: runtime.supportedActions.includes("confirm_retirement"),
           loaded: record.resourceKind === "backend" ? await backendThreads(id) : null}),
       };
     };
@@ -2608,64 +2816,102 @@ export async function startProductionApplication(
       accountUsages.replaceRuntimes(scope, moduleRuntimes);
       return installationAdvisories.replaceRuntimes(scope, moduleRuntimes);
     };
-    const reconcileLiveConfiguration = async (): Promise<void> => {
+    const replaceEnvironmentIfIdle = async (id: string, definition: ConfigurationEnvironment | undefined): Promise<void> => {
+      try {
+        const record = configurationRepository.runtime(scope, "environment", id);
+        const removedRevokedHost = !definition && hostPairings.pairingForEnvironment(scope, id)?.state === "revoked";
+        // Removal already passed the main-side resource guards. A revoked
+        // host cannot supply another remote observation; withdraw only its
+        // local attachment, without claiming the daemon has stopped.
+        if (!removedRevokedHost) {
+          const evidence = await captureAdministrativeResource(record, true);
+          if (evidence.runtime.activeResources > 0 || evidence.service?.resources.some(item => item.blockers.length > 0) || observationFailures.has(`environment:${id}`)) return;
+        }
+        const boundBackends = [...new Set([...moduleRuntimes.keys(), ...backendStartups.keys()])].filter(backendId =>
+          profiles.some(profile => profile.backendInstanceId === backendId && profile.executionEnvironmentId === id) ||
+          backendStartups.get(backendId)?.environmentId === id);
+        // Check every main-side actor before withdrawing any sibling runtime.
+        const loaded = await Promise.all(boundBackends.map(backendThreads));
+        if (loaded.some(threads => threads.some(thread => thread.runState !== "idle"))) {
+          environmentPreparationFailures.delete(id);
+          return;
+        }
+        for (const backendId of boundBackends) {
+          cancelBackendStartup(backendId);
+          await runtimeModules.remove(backendId, retireBackendRuntime);
+          backendStartups.delete(backendId);
+          appliedBackendFingerprints.delete(backendId); appliedBackendRevisions.delete(backendId);
+        }
+        await withdrawEnvironmentRuntime(id);
+        if (definition) {
+          const runtime = await createEnvironmentRuntime(id);
+          publishEnvironmentRuntime(runtime);
+          execution!.set(scope, id, runtime.provider);
+          workspaceFileRouter.set(scope, id, runtime.workspaceFiles);
+          executionAttachmentStager.set(scope, id, runtime.attachments);
+          agentToolCli.set(id, definition.kind === "local" ? localAgentToolCli : runtime.agentToolCliRuntime ? managedSshAgentToolCliAvailability({scope, executionEnvironmentId: id, runtime: runtime.agentToolCliRuntime}) : {availability: "unavailable", reason: "remote_environment"});
+        }
+      } catch (error) {
+        if (error instanceof ThreadRuntimeNotIdleError) environmentPreparationFailures.delete(id);
+        else environmentPreparationFailures.set(id, error);
+      }
+    };
+    const synchronizeHostPolicy = async (id: string, signal: AbortSignal, force = false): Promise<void> => {
+      const owner = environmentRuntimes.get(id)?.sidecarRuntime;
+      if (!owner || configurationRepository.runtime(scope, "environment", id).preference !== "automatic") return;
+      if (force) await owner.retryPolicy(signal);
+      else await owner.synchronizePolicy(signal);
+      const policy = confirmedHostPolicy(id);
+      if (!policy) return;
+      const { desired, observed } = policy;
+      const readiness = new Map(observed.readiness.map(item => [item.id, item]));
+      const launches = new Map<string, string | null>();
+      for (const grant of desired.snapshot.backends) {
+        const subject = readiness.get(`backend:${grant.id}`);
+        if (subject?.generation !== grant.generation || subject.observedLaunchDigest === undefined) continue;
+        launches.set(grant.id, subject.observedLaunchDigest);
+        const runtime = moduleRuntimes.get(grant.id);
+        if (!runtime || subject.observedLaunchDigest !== grant.launchDigest) continue;
+        const incarnation = backendSidecarBindings.get(runtime)?.serviceIncarnation;
+        if (incarnation && incarnation !== observed.incarnation) continue;
+        const fingerprint = backendRuntimeFingerprint(grant.id);
+        const startupFingerprint = startupEnvironmentFingerprint(grant.id);
+        if (appliedBackendFingerprints.get(grant.id) === fingerprint && appliedStartupEnvironmentFingerprints.get(grant.id) === startupFingerprint) continue;
+        // Both the cached inventory and any unfinished inspection belong to the previous launch.
+        appliedBackendFingerprints.set(grant.id, fingerprint);
+        appliedStartupEnvironmentFingerprints.set(grant.id, startupFingerprint);
+        observedBackends.delete(grant.id);
+        remoteBackendObservations.delete(runtime);
+      }
+      configurationRepository.observeHostPolicy(scope, id, desired,
+        new Map(observed.readiness.map(item => [item.id, item.state])),
+        {incarnation: observed.incarnation, epoch: observed.controllerEpoch, launchDigests: launches});
+    };
+    // A policy-changing save wakes a detached automatic host once. Display-only
+    // saves and readiness notifications do not request a fresh attachment.
+    const savedPolicyDeliveries = new Set<string>();
+    const reconcileHost = async (environmentId: string): Promise<void> => {
       const before = reconciliationFingerprint();
       const previousEnvironments = new Map(environmentRuntimes);
       const previousBackends = new Map(moduleRuntimes);
-      desiredConfiguration = configurationRepository.get(scope);
-      backendConfigurationFile = resolveDatabaseBackendConfiguration(desiredConfiguration.configuration, compiledBackendModuleCatalog);
-      profiles = configuredProfiles();
-      for (const [id, attempt] of backendStartups) if (!backendStartupIsCurrent(id, attempt)) cancelBackendStartup(id);
-      const environmentIds = new Set([...environmentRuntimes.keys(), ...desiredConfiguration.configuration.executionEnvironments.map(item => item.id)]);
-      for (const id of environmentIds) {
+      const id = environmentId;
+      if (desiredConfiguration.configuration.executionEnvironments.some(host => host.id === id) || environmentRuntimes.has(id)) {
         const definition = desiredConfiguration.configuration.executionEnvironments.find(item => item.id === id);
+        if (!definition || appliedEnvironmentFingerprints.get(id) !== environmentRuntimeFingerprint(id)) {
+          await replaceEnvironmentIfIdle(id, definition);
+        }
         if (definition && appliedEnvironmentFingerprints.get(id) === environmentRuntimeFingerprint(id)) {
           appliedEnvironmentRevisions.set(id, configurationRepository.runtime(scope, "environment", id).desiredRevision);
-          continue;
-        }
-        try {
-          const record = configurationRepository.runtime(scope, "environment", id);
-          const removedRevokedHost = !definition && hostPairings.pairingForEnvironment(scope, id)?.state === "revoked";
-          // Removal already passed the main-side resource guards. A revoked
-          // host cannot supply another remote observation; withdraw only its
-          // local attachment, without claiming the daemon has stopped.
-          if (!removedRevokedHost) {
-            const evidence = await captureAdministrativeResource(record, true);
-            if (evidence.runtime.activeResources > 0 || evidence.service?.resources.some(item => item.blockers.length > 0) || observationFailures.has(`environment:${id}`)) continue;
-          }
-          const boundBackends = [...new Set([...moduleRuntimes.keys(), ...backendStartups.keys()])].filter(backendId =>
-            profiles.some(profile => profile.backendInstanceId === backendId && profile.executionEnvironmentId === id) ||
-            backendStartups.get(backendId)?.environmentId === id);
-          // Check every main-side actor before withdrawing any sibling runtime.
-          const loaded = await Promise.all(boundBackends.map(backendThreads));
-          if (loaded.some(threads => threads.some(thread => thread.runState !== "idle"))) {
-            environmentPreparationFailures.delete(id);
-            continue;
-          }
-          for (const backendId of boundBackends) {
-            cancelBackendStartup(backendId);
-            await runtimeModules.remove(backendId, retireBackendRuntime);
-            backendStartups.delete(backendId);
-            appliedBackendFingerprints.delete(backendId); appliedBackendRevisions.delete(backendId);
-          }
-          await withdrawEnvironmentRuntime(id);
-          if (definition) {
-            const runtime = await createEnvironmentRuntime(id);
-            publishEnvironmentRuntime(runtime);
-            execution!.set(scope, id, runtime.provider);
-            workspaceFileRouter.set(scope, id, runtime.workspaceFiles);
-            executionAttachmentStager.set(scope, id, runtime.attachments);
-            agentToolCli.set(id, definition.kind === "local" ? localAgentToolCli : runtime.agentToolCliRuntime ? managedSshAgentToolCliAvailability({scope, executionEnvironmentId: id, runtime: runtime.agentToolCliRuntime}) : {availability: "unavailable", reason: "remote_environment"});
-          }
-        } catch (error) {
-          if (error instanceof ThreadRuntimeNotIdleError) environmentPreparationFailures.delete(id);
-          else environmentPreparationFailures.set(id, error);
+          await synchronizeHostPolicy(id, maintenanceSignal(), savedPolicyDeliveries.delete(id))
+            .catch(reportBackgroundError(`Execution host ${id} policy delivery`));
         }
       }
       for (const id of new Set([...moduleRuntimes.keys(), ...backendStartups.keys(), ...desiredConfiguration.configuration.backends.map(item => item.id)])) {
+        if ((backendHost(id) ?? `backend:${id}`) !== environmentId) continue;
         const definition = desiredConfiguration.configuration.backends.find(item => item.id === id);
         const record = configurationRepository.runtime(scope, "backend", id);
         if (!definition?.enabled || record.preference !== "automatic") {
+          if (!moduleRuntimes.has(id) && !backendStartups.has(id) && !runtimeModules.failures.has(id)) continue;
           cancelBackendStartup(id);
           try { await runtimeModules.remove(id, retireBackendRuntime); backendStartups.delete(id); appliedBackendFingerprints.delete(id); appliedBackendRevisions.delete(id); }
           catch (error) {
@@ -2678,19 +2924,17 @@ export async function startProductionApplication(
         // Keep its old effective revision until every bound environment applies.
         if (profiles.some(profile => profile.enabled && profile.backendInstanceId === id &&
           appliedEnvironmentFingerprints.get(profile.executionEnvironmentId) !== environmentRuntimeFingerprint(profile.executionEnvironmentId))) continue;
-        const configured = backendConfigurationFile.backends.find(item => item.id === id)!;
         const fingerprint = backendRuntimeFingerprint(id);
         const existing = moduleRuntimes.get(id);
         const boundService = existing && backendSidecarBindings.get(existing)?.serviceIncarnation;
-        const environmentId = profiles.find(profile => profile.backendInstanceId === id)?.executionEnvironmentId;
-        const observedService = environmentId ? observedServices.get(environmentId) : undefined;
+        const observedService = observedServices.get(environmentId);
         const replacedService = backendHasRemoteProvider(id) && boundService !== undefined &&
           observedService?.state === "ready" && observedService.configurationState === "applied" &&
           observedService.serviceIncarnation !== boundService;
         if (!replacedService && fingerprint === appliedBackendFingerprints.get(id)) { appliedBackendRevisions.set(id, record.desiredRevision); continue; }
         // A startup edit is desired state only. Saving must never restart a
         // running process, even when it currently has no active thread.
-        if (existing && startupEnvironmentPending(id) && await existing.startupEnvironmentState?.() !== "not_started") continue;
+        if (existing && !replacedService && await existing.startupEnvironmentState?.() !== "not_started") continue;
         if (existing) {
           const observed = await captureAdministrativeResource(record, Boolean(existing.administration));
           if (observed.runtime.activeResources > 0 || observed.backendObservation?.blockers.length || observationFailures.has(`backend:${id}`)) continue;
@@ -2714,21 +2958,89 @@ export async function startProductionApplication(
         executionTargets.invalidateHealth();
         discoveryServices = createDiscoveryServices();
       }
+      // Replacing advisory sources publishes through their existing subscriber.
+      const advisoryRuntimesChanged = installationAdvisories.replaceRuntimes(scope, moduleRuntimes);
+      accountUsages.replaceRuntimes(scope, moduleRuntimes);
+      if (changed && !advisoryRuntimesChanged) await activeApplicationSnapshots.publishAuthoritativeReplacement(scope);
+    };
+    const pendingHosts = new Set<string>();
+    const dirtyHosts = new Set<string>();
+    const scheduleHostReconciliation = (id: string): void => {
+      dirtyHosts.add(id);
+      if (pendingHosts.has(id) || managementAbort.signal.aborted) return;
+      pendingHosts.add(id);
+      void hostQueue.run([id], async () => {
+        dirtyHosts.delete(id);
+        await reconcileHost(id);
+      }).catch(reportBackgroundError(`Execution host ${id} settings`)).finally(() => {
+        pendingHosts.delete(id);
+        if (dirtyHosts.has(id)) scheduleHostReconciliation(id);
+      });
+    };
+    onHostPolicyChange = id => {
+      if (managementAbort.signal.aborted) return;
+      executionTargets.invalidateHealth();
+      scheduleHostReconciliation(id);
+      void activeApplicationSnapshots.publishAuthoritativeReplacement(scope).catch(reportBackgroundError("Execution host policy publication"));
+    };
+    const refreshWebSearch = async (): Promise<void> => {
       if (configurationFingerprint(webSearchConfiguration ?? null) !== configurationFingerprint(backendConfigurationFile.webSearch ?? null)) {
         webSearchConfiguration = backendConfigurationFile.webSearch;
+        const selectedConfiguration = webSearchConfiguration;
         const provider = new CodexCliWebSearchProvider({
           workDirectory: path.join(config.stateDirectory, "web-search", "workspace"),
           ...(webSearchConfiguration?.codexHome ? {codexHome: webSearchConfiguration.codexHome} : {}), environment,
         });
         const availability = webSearchConfiguration ? await provider.checkAvailability() : {available: false, reason: "Web search is not configured."};
+        if (webSearchConfiguration !== selectedConfiguration) return;
         webSearch.reconfigure(provider, availability);
         agentToolRuntimeAvailability.set("research.web_search", availability);
       }
+    };
+    const policyRevisions = new Map(desiredConfiguration.configuration.executionEnvironments
+      .filter(host => host.kind !== "local")
+      .map(host => [host.id, configurationProjection.hostPolicy(scope, host.id)?.revision] as const));
+    let publishedConfigurationRevision = desiredConfiguration.revision;
+    const scheduleLiveConfiguration = (snapshot = configurationRepository.get(scope), force = false): void => {
+      const previous = desiredConfiguration;
+      if (snapshot.revision < previous.revision || (!force && snapshot.revision === publishedConfigurationRevision)) return;
+      desiredConfiguration = snapshot;
+      backendConfigurationFile = resolveDatabaseBackendConfiguration(desiredConfiguration.configuration, compiledBackendModuleCatalog);
+      profiles = configuredProfiles();
+      // Publish main-side withdrawals and new target metadata before any
+      // remote wait. Newly granted targets still require the host's generation.
+      for (const id of moduleRuntimes.keys()) {
+        runtimeModules.updateConnections(id, profiles.filter(profile => profile.backendInstanceId === id),
+          desiredConfiguration.configuration.targets.filter(target => target.backendInstanceId === id));
+      }
+      for (const [id, attempt] of backendStartups) if (!backendStartupIsCurrent(id, attempt)) cancelBackendStartup(id);
       executionTargets.setDefaultTargetTemplateId(backendConfigurationFile.defaultTargetId);
-      // Replacing advisory sources publishes through their existing subscriber.
-      const advisoryRuntimesChanged = installationAdvisories.replaceRuntimes(scope, moduleRuntimes);
-      accountUsages.replaceRuntimes(scope, moduleRuntimes);
-      if (changed && !advisoryRuntimesChanged) await activeApplicationSnapshots.publishAuthoritativeReplacement(scope);
+      executionTargets.invalidateHealth();
+      discoveryServices = createDiscoveryServices();
+      void refreshWebSearch().catch(reportBackgroundError("Web search configuration"));
+      const touched = new Set<string>();
+      for (const host of previous.configuration.executionEnvironments) {
+        if (!desiredConfiguration.configuration.executionEnvironments.some(current => current.id === host.id)) touched.add(host.id);
+      }
+      for (const record of desiredConfiguration.runtimes) {
+        if (force || record.desiredRevision > publishedConfigurationRevision) touched.add(resourceHost(record));
+      }
+      for (const id of touched) {
+        const definition = snapshot.configuration.executionEnvironments.find(host => host.id === id);
+        if (definition && definition.kind !== "local") {
+          const revision = configurationProjection.hostPolicy(scope, id)?.revision;
+          if (revision !== undefined && revision !== policyRevisions.get(id)) savedPolicyDeliveries.add(id);
+          policyRevisions.set(id, revision);
+        } else {
+          policyRevisions.delete(id);
+          savedPolicyDeliveries.delete(id);
+        }
+        scheduleHostReconciliation(id);
+      }
+      if (previous.revision !== desiredConfiguration.revision && !drain.isDraining) {
+        void activeApplicationSnapshots.publishAuthoritativeReplacement(scope).catch(reportBackgroundError("Execution settings publication"));
+      }
+      publishedConfigurationRevision = snapshot.revision;
     };
     const detachBackend = async (id: string, effect?: () => Promise<void>): Promise<void> => {
       cancelBackendStartup(id);
@@ -2900,16 +3212,36 @@ export async function startProductionApplication(
       } catch { return undefined; }
     };
     const configurationRuntime: ConfigurationRuntimeAdapter = {
-      recoverLifecycle(candidate, input) { return serializeConfiguration(() => recoverLifecycleReceipt(candidate, input)); },
+      recoverLifecycle(candidate, input) { return hostQueue.run([resourceHost(input.request)], () => recoverLifecycleReceipt(candidate, input)); },
       async observe(candidate, snapshot) {
         assertManagementScope(candidate);
         return Promise.all(snapshot.runtimes.map(async record => (await captureAdministrativeResource(record, false)).runtime));
       },
-      async reconcile(candidate) { assertManagementScope(candidate); outboundConnections.refresh(candidate); await serializeConfiguration(reconcileLiveConfiguration); },
+      async reconcile(candidate) { assertManagementScope(candidate); outboundConnections.refresh(candidate); scheduleLiveConfiguration(); },
       async commitConfiguration(candidate, previous, next, commit) {
         assertManagementScope(candidate);
-        return serializeConfiguration(() => commitWithConfigurationRemovalGuard({
-          previous: previous.configuration, next, commit,
+        const nextTargets = new Set(next.targets.map(target => target.id));
+        const nextHosts = new Set(next.executionEnvironments.map(host => host.id));
+        const droppedHosts = previous.configuration.executionEnvironments.filter(host => !nextHosts.has(host.id)).map(host => host.id);
+        for (const target of previous.configuration.targets) if (!nextTargets.has(target.id)) droppedHosts.push(target.executionEnvironmentId);
+        const previousOwners = antigravityOwners(previous.configuration);
+        const ownershipChecks = new Map<string, string[]>();
+        for (const [hostId, [desired]] of antigravityOwners(next)) {
+          if (!desired || previousOwners.get(hostId)?.includes(desired) || next.executionEnvironments.find(host => host.id === hostId)?.kind === "local") continue;
+          const known = configurationRepository.retainedAntigravityOwner(scope, hostId);
+          const candidates = known ? (known === desired ? [] : [known]) : configurationRepository.unresolvedAntigravityCandidates(scope, hostId);
+          if (candidates.length) ownershipChecks.set(hostId, candidates);
+        }
+        const guardedCommit = () => commitWithConfigurationRemovalGuard({
+          previous: previous.configuration, next,
+          commit() {
+            const snapshot = commit();
+            // Publish durable admission changes before releasing deletion fences
+            // or yielding to another operation on this principal.
+            try { scheduleLiveConfiguration(snapshot); }
+            catch (error) { reportBackgroundError("Publishing committed execution settings")(error); }
+            return snapshot;
+          },
           async withBackendStopped(id, callback) {
             const admission = registry.suspend(scope, id);
             try {
@@ -2921,6 +3253,18 @@ export async function startProductionApplication(
               }
               if (moduleRuntimes.has(id) || (await backendThreads(id)).length > 0) throw new DomainError("conflict", "Stop the backend and recover retained outcomes before removing its definition or target.");
               if (backendHasRemoteProvider(id) && await recoverBackendAdministration(id)) throw new DomainError("conflict", "The remote backend still owns resources. Stop it and recover retained outcomes before removal.");
+              const hostId = backendHost(id);
+              const legacyCandidate = hostId && configurationRepository.unresolvedAntigravityCandidates(scope, hostId).includes(id);
+              const losesBinding = !next.targets.some(target => target.backendInstanceId === id && target.executionEnvironmentId === hostId);
+              if (hostId && losesBinding && (legacyCandidate || configurationRepository.retainedAntigravityOwner(scope, hostId) === id)) {
+                if (inventoryRepository.getEnvironment(scope, hostId).kind === "local") {
+                  throw new DomainError("conflict", "Confirm retirement of the prior local Antigravity backend before removing its definition or target.");
+                }
+                await inspectAntigravityOwners(hostId, [id]);
+              }
+              if (hostId && losesBinding && configurationRepository.retainedAntigravityOwner(scope, hostId) === id) {
+                throw new DomainError("conflict", "Stop the retained Antigravity owner before removing its definition or target.");
+              }
               const value = await callback();
               backendStartupBackoff.delete(id);
               return value;
@@ -2960,19 +3304,24 @@ export async function startProductionApplication(
               throw new DomainError("conflict", error instanceof TerminalServiceError ? error.message : "Execution host shutdown could not be confirmed. Keep its definition until retained work is recovered.");
             }
           },
-        }));
+        });
+        return hostQueue.run([...droppedHosts, ...ownershipChecks.keys()], async () => {
+          for (const [hostId, candidates] of ownershipChecks) await inspectAntigravityOwners(hostId, candidates);
+          return guardedCommit();
+        });
       },
       async impact(candidate, _request, record) {
         assertManagementScope(candidate);
-        return serializeConfiguration(() => captureAdministrativeResource(record, true));
+        return hostQueue.run([resourceHost(record)], () => captureAdministrativeResource(record, true));
       },
       async execute(candidate, input) {
         assertManagementScope(candidate);
-        const dispatched = await serializeConfiguration(async () => {
+        const dispatched = await hostQueue.run([resourceHost(input.request)], async () => {
           const {request} = input;
           const evidence = await captureAdministrativeResource(input.runtime, true, false);
           const result = (state: "applied" | "rejected" | "unavailable" | "unknown", runtime = evidence.runtime) => ({mutationId: request.mutationId, state, runtime});
-          if (request.expectedIncarnation !== evidence.runtime.incarnation ||
+          if (configurationRepository.get(scope).revision !== input.runtime.desiredRevision ||
+              request.expectedIncarnation !== evidence.runtime.incarnation ||
             (input.expectedFence !== null && input.expectedFence !== evidence.fence)) {
             return result("rejected", {...evidence.runtime, lastError: "Resource state changed. Inspect the current impact and confirm a new action."});
           }
@@ -2983,6 +3332,18 @@ export async function startProductionApplication(
           // later save or command has already advanced the live runtime record.
           const admitted = (): ConfigurationRuntimeState => ({...configurationRepository.runtime(scope, request.resourceKind, id),
             desiredRevision: input.runtime.desiredRevision, preference: input.runtime.preference});
+          if (request.action === "confirm_retirement") {
+            if (request.resourceKind !== "backend" || !input.expectedFence || !evidence.runtime.supportedActions.includes(request.action)) return result("rejected");
+            return database!.transaction(() => {
+              configurationRepository.confirmLocalAntigravityRetirement(scope, resourceHost(request), id);
+              const refreshed = configurationRepository.runtime(scope, "backend", id);
+              // The candidate and its action receipt settle together. A crash cannot replay this attestation.
+              return configurationRepository.completeLifecycle(scope, request, result("applied", {
+                ...refreshed, connectionState: "stopped", supportedActions: [], lastError: null,
+                effectiveRevision: refreshed.desiredRevision, applyState: "applied",
+              }));
+            })();
+          }
           // Retry proved-clean startup after host repair, or retry retained
           // cleanup with Stop. Neither path clears a sidecar ownership fence.
           const failedBackend = runtimeModules.failures.get(id);
@@ -2993,11 +3354,14 @@ export async function startProductionApplication(
               (failedBackend?.cleanupPending === false && !cleanupRecovery && (request.action === "connect" || request.action === "start") ||
                failedBackend?.cleanupPending === true && request.action === "stop"));
           if (cleanupRecovery && ["connect", "start", "restart"].includes(request.action)) return result("unavailable");
+          if (evidence.runtime.connectionState === "policy_conflict" && !evidence.runtime.supportedActions.includes(request.action)) return result("unavailable");
           if (evidence.runtime.connectionState === "recovery_required" && request.action !== "disconnect" &&
               !retryFailedBackend) return result("unavailable");
           if (["stop", "restart", "upgrade"].includes(request.action) && observationFailures.has(key)) return result("unavailable");
-          if (cleanupRecovery && request.action === "stop" && backendHasRemoteProvider(id) &&
-              (!evidence.administration || !evidence.backendObservation) && backendPresence.get(id) !== false) return result("unavailable");
+          if (request.resourceKind === "backend" && (request.action === "stop" || request.action === "restart") && backendHasRemoteProvider(id) &&
+              (!evidence.administration || !evidence.backendObservation) && !evidence.remoteBackendAbsenceConfirmed) {
+            return result("unavailable", {...evidence.runtime, lastError: "Could not confirm the remote provider's state. Inspect its current impact and try again."});
+          }
           const receiptOwner = request.resourceKind === "environment" ? environmentRuntimes.get(id)?.sidecarRuntime : undefined;
           const priorFence = await fencePriorLifecycleForStop({
             request, pending: configurationRepository.pendingLifecycle(scope),
@@ -3040,7 +3404,7 @@ export async function startProductionApplication(
               }
             };
             if (request.action === "connect" || request.action === "start") {
-              await reconcileLiveConfiguration();
+              await reconcileHost(id);
               const attached = await attach();
               if (attached.refused) return result(attached.refused, attached.runtime);
               effectConfirmed = true;
@@ -3053,8 +3417,9 @@ export async function startProductionApplication(
               const service = evidence.service;
               if (!service) {
                 await stopBackends(environmentBackendIds(id), async () => undefined);
+                confirmHostRetirement(id);
                 if (request.action !== "stop") {
-                  await reconcileLiveConfiguration();
+                  await reconcileHost(id);
                   const attached = await attach();
                   if (attached.refused) return result(attached.refused, attached.runtime);
                 } else observedServices.set(id, null);
@@ -3099,10 +3464,11 @@ export async function startProductionApplication(
                   throw error;
                 }
                 effectConfirmed = true;
+                confirmHostRetirement(id);
                 if (request.action !== "stop") {
                   // The old service is gone, so a pending saved revision can now
                   // replace the owner before the replacement service attaches.
-                  await reconcileLiveConfiguration();
+                  await reconcileHost(id);
                   const attached = await attach();
                   if (attached.refused) return result("applied", attached.runtime);
                 }
@@ -3132,6 +3498,16 @@ export async function startProductionApplication(
               backendPresence.set(id, false);
             }
             if (["connect", "start", "restart"].includes(request.action)) {
+              if (request.action === "connect" && evidence.runtime.effects?.some(effect =>
+                effect.component === "host_policy" && effect.state === "awaiting_host")) {
+                try {
+                  await synchronizeHostPolicy(resourceHost(request), lifecycleSignal(), true);
+                } catch (error) {
+                  reportBackgroundError(`Backend ${id} host policy retry`)(error);
+                  const after = await captureAdministrativeResource(admitted(), false);
+                  return result("unavailable", {...after.runtime, lastError: "The host could not confirm the saved settings."});
+                }
+              }
               await applyBackendRuntime(id, true);
               startupCompletion = backendStartups.get(id)?.completion;
             }
@@ -3152,7 +3528,7 @@ export async function startProductionApplication(
             const completion = startupCompletion;
             return async () => {
               const outcome = await completion;
-              return serializeConfiguration(() => finish(outcome === "superseded"));
+              return hostQueue.run([resourceHost(request)], () => finish(outcome === "superseded"));
             };
           }
           return finish();
@@ -3168,15 +3544,11 @@ export async function startProductionApplication(
     });
     const applyPairingMutation = async <Result>(candidate: RequestScope, commit: () => Result): Promise<Result> => {
       assertManagementScope(candidate);
-      return await serializeConfiguration(async () => {
-        const result = commit();
-        // Association decisions are already durable. Fence carriers immediately;
-        // a failed runtime application must not turn acceptance into a failure.
-        outboundConnections.refresh(candidate);
-        try { await reconcileLiveConfiguration(); }
-        catch (error) { reportBackgroundError("Outbound host reconciliation")(error); }
-        return result;
-      });
+      const result = commit();
+      // Fence revoked carriers before scheduling the host's runtime update.
+      outboundConnections.refresh(candidate);
+      scheduleLiveConfiguration();
+      return result;
     };
     const hostPairingAdmin: HostPairingAdministration = {
       async list(candidate) {
@@ -3207,12 +3579,21 @@ export async function startProductionApplication(
     const unsubscribeOutboundReconciliation = outboundConnections.subscribe(event => {
       if (event.scope.tenantId !== scope.tenantId || event.scope.principalId !== scope.principalId ||
         !event.connected || !event.environmentId || drain.isDraining) return;
-      void serializeConfiguration(async () => {
-        for (const profile of profiles.filter(item => item.executionEnvironmentId === event.environmentId)) {
-          backendStartupBackoff.delete(profile.backendInstanceId);
+      for (const profile of profiles.filter(item => item.executionEnvironmentId === event.environmentId)) {
+        backendStartupBackoff.delete(profile.backendInstanceId);
+      }
+      const id = event.environmentId;
+      void hostQueue.run([id], async () => {
+        if (!outboundConnections.isConnected(scope, id)) return;
+        if (configurationRepository.runtime(scope, "environment", id).preference !== "automatic") return;
+        const owner = environmentRuntimes.get(id)?.sidecarRuntime;
+        if (owner) {
+          observedServices.set(id, await owner.connect(maintenanceSignal(), {retryPolicy: false}));
+          await terminalService.reconcileRemote(scope, id);
         }
-        await reconcileLiveConfiguration();
-      }).catch(reportBackgroundError("Outbound host connected"));
+        await reconcileHost(id);
+        for (const backend of environmentBackendIds(id)) attachRetainedWork(backend);
+      }).catch(reportBackgroundError("Outbound host reconnection"));
     });
     resources.defer("outbound configuration subscription", unsubscribeOutboundReconciliation);
     const configurationOperationRecovery = new ConfigurationOperationRecoveryService({
@@ -3237,61 +3618,62 @@ export async function startProductionApplication(
           serviceIncarnation: lease.serviceStatus.serviceIncarnation, release: () => lease.release()};
       },
     });
-    let maintenanceRunning = false;
-    let lifecycleRecoveryOffset = 0;
+    const maintenanceHosts = new Set<string>();
     const maintenanceTimer = setInterval(() => {
-      if (maintenanceRunning || managementAbort.signal.aborted) return;
-      maintenanceRunning = true;
-      void serializeConfiguration(async () => {
-        await reconcileLiveConfiguration();
-        await Promise.all(configurationRepository.get(scope).runtimes.map(async record => {
-          const key = `${record.resourceKind}:${record.resourceId}`;
-          const owner = record.resourceKind === "environment" ? environmentRuntimes.get(record.resourceId)?.sidecarRuntime : undefined;
-          if (record.preference !== "automatic") {
-            // Intentional stop/disconnect suppresses attachment, not observation:
-            // the service's own status still proves that preference holds.
-            if (!owner) return;
-            try { observedServices.set(record.resourceId, await owner.inspectService(managementSignal()) ?? null); observationFailures.delete(key); }
-            catch (error) { observationFailures.set(key, observationFailure(error)); }
-            configurationRepository.observe(scope, (await captureAdministrativeResource(record, false)).runtime);
-            return;
-          }
-          if (owner) {
-            try {
-              // Owner admission performs an idle-only upgrade using authoritative service blockers.
-              observedServices.set(record.resourceId, await owner.connect(maintenanceSignal()));
-              attachmentBlocks.delete(record.resourceId);
-              await terminalService.reconcileRemote(scope, record.resourceId);
-              observationFailures.delete(key);
-            } catch (error) {
-              const code = requiresOwnershipRecovery(error) ? undefined : sidecarReportedCode(error);
-              // A sleeping or disconnected outbound host is expected; its
-              // offline state is already exposed by the administration view.
-              if (code !== "sidecar_transport_unavailable") {
-                reportBackgroundError(`Execution environment ${record.resourceId} attachment (automatic)`)(error);
-              }
-              if (code) {
-                attachmentBlocks.set(record.resourceId, code);
-                try { observedServices.set(record.resourceId, await owner.inspectService(managementSignal()) ?? null); observationFailures.delete(key); }
-                catch (probe) { observationFailures.set(key, observationFailure(probe)); }
-              } else observationFailures.set(key, observationFailure(error));
+      if (managementAbort.signal.aborted) return;
+      const records = configurationRepository.get(scope).runtimes;
+      for (const id of new Set(records.map(resourceHost))) {
+        if (maintenanceHosts.has(id)) continue;
+        maintenanceHosts.add(id);
+        void hostQueue.run([id], async () => {
+          await reconcileHost(id);
+          await Promise.all(configurationRepository.get(scope).runtimes.filter(record => resourceHost(record) === id).map(async record => {
+            const key = `${record.resourceKind}:${record.resourceId}`;
+            const owner = record.resourceKind === "environment" ? environmentRuntimes.get(record.resourceId)?.sidecarRuntime : undefined;
+            if (record.preference !== "automatic") {
+              // Intentional stop/disconnect suppresses attachment, not observation:
+              // the service's own status still proves that preference holds.
+              if (!owner) return;
+              try { observedServices.set(record.resourceId, await owner.inspectService(managementSignal()) ?? null); observationFailures.delete(key); }
+              catch (error) { observationFailures.set(key, observationFailure(error)); }
+              configurationRepository.observe(scope, (await captureAdministrativeResource(record, false)).runtime);
+              return;
             }
+            if (owner) {
+              try {
+                // Owner admission performs an idle-only upgrade using authoritative service blockers.
+                observedServices.set(record.resourceId, await owner.connect(maintenanceSignal(), {retryPolicy: false}));
+                attachmentBlocks.delete(record.resourceId);
+                await terminalService.reconcileRemote(scope, record.resourceId);
+                observationFailures.delete(key);
+              } catch (error) {
+                const code = requiresOwnershipRecovery(error) ? undefined : sidecarReportedCode(error);
+                // A sleeping or disconnected outbound host is expected; its
+                // offline state is already exposed by the administration view.
+                if (code !== "sidecar_transport_unavailable") {
+                  reportBackgroundError(`Execution environment ${record.resourceId} attachment (automatic)`)(error);
+                }
+                if (code) {
+                  attachmentBlocks.set(record.resourceId, code);
+                  try { observedServices.set(record.resourceId, await owner.inspectService(managementSignal()) ?? null); observationFailures.delete(key); }
+                  catch (probe) { observationFailures.set(key, observationFailure(probe)); }
+                } else observationFailures.set(key, observationFailure(error));
+              }
+            }
+            configurationRepository.observe(scope, (await captureAdministrativeResource(record, false)).runtime);
+          }));
+          const pending = configurationRepository.pendingLifecycle(scope).filter(entry =>
+            entry.result.runtime.preference === "automatic" && resourceHost(entry.request) === id);
+          for (const entry of pending) {
+            const recovered = await recoverLifecycleReceipt(scope, entry);
+            if (recovered) configurationRepository.completeLifecycle(scope, entry.request, recovered);
           }
-          configurationRepository.observe(scope, (await captureAdministrativeResource(record, false)).runtime);
-        }));
-        const pending = configurationRepository.pendingLifecycle(scope).filter(entry => entry.result.runtime.preference === "automatic");
-        const start = pending.length === 0 ? 0 : lifecycleRecoveryOffset % pending.length;
-        const selected = [...pending.slice(start), ...pending.slice(0, start)].slice(0, 8);
-        lifecycleRecoveryOffset = start + selected.length;
-        await Promise.all(selected.map(async entry => {
-          const recovered = await recoverLifecycleReceipt(scope, entry);
-          if (recovered) configurationRepository.completeLifecycle(scope, entry.request, recovered);
-        }));
-      }).catch(reportBackgroundError("Execution configuration maintenance")).finally(() => { maintenanceRunning = false; });
+        }).catch(reportBackgroundError(`Execution host ${id} maintenance`)).finally(() => maintenanceHosts.delete(id));
+      }
     }, 30_000);
     maintenanceTimer.unref();
     resources.defer("execution configuration maintenance", async () => {
-      clearInterval(maintenanceTimer); managementAbort.abort(); await configurationTail; await configurationAdmin.settleLifecycleOperations();
+      clearInterval(maintenanceTimer); managementAbort.abort(); await hostQueue.drain(); await configurationAdmin.settleLifecycleOperations();
     }, {mode: "ownership_critical"});
     resources.defer("backend startup work", async () => {
       backendStartupAbort.abort();
@@ -3433,8 +3815,7 @@ export async function startProductionApplication(
     );
     // Provider connection startup requires listening host carriers and must not
     // delay HTTP or Settings. Reconciliation publishes only completed modules.
-    if (hasDeferredBackendStartup) void serializeConfiguration(reconcileLiveConfiguration)
-      .catch(reportBackgroundError("Startup backend connections"));
+    if (hasDeferredBackendStartup) scheduleLiveConfiguration(desiredConfiguration, true);
     // Fork recovery can launch providers; it never delays serving requests.
     void forks
       .recoverInterruptedForks(scope)

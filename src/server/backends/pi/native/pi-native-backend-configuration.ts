@@ -6,14 +6,14 @@ import {
   type PiNativeConnectionDefaults,
 } from "../../../../shared/protocol/pi-configuration.js";
 import { mergeEnvironmentVariableOverrides } from "../../../../shared/protocol/environment-variables.js";
-import { compileBackendModelPolicy } from "../../model-policy.js";
+import { configuredModelPolicy } from "../../model-policy.js";
 import type { BackendModuleConfigurationInput } from "../../module.js";
 
 /** Pure preparation shared by administration and direct module callers. */
 export function parsePiNativeBackendConfiguration(input: BackendModuleConfigurationInput) {
   if (input.backend.kind !== "pi_native") throw new Error("pi_native_backend_kind_invalid");
   const moduleConfiguration = piNativeModuleConfigurationSchema.parse(input.backend.moduleConfiguration ?? {});
-  const modelPolicy = compileBackendModelPolicy(input.backend.modelPolicy, "provider_model_effort");
+  const modelPolicy = configuredModelPolicy(input, "provider_model_effort");
   const defaultsByConnectionId = new Map<string, PiNativeConnectionDefaults>();
   const environmentIds = new Set<string>();
   for (const connection of input.connections) {

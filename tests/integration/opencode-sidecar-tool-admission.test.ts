@@ -58,7 +58,7 @@ describe("OpenCode sidecar tool admission", () => {
       { ...f.target, session: { ...f.target.session, applicationThreadId: "foreign" } },
       { ...f.target, session: { ...f.target.session, bindingFingerprint: "changed" } },
     ]) await expect(f.client.admitToolSession(target, admission)).rejects.toBeDefined();
-    await expect(callOpenCodeRemoteRuntime(f.carrier.lease, { action: "tools_admit", runtimeId: f.client.runtimeId!,
+    await expect(callOpenCodeRemoteRuntime(f.carrier.lease, { action: "tools_admit", routeGeneration: 1, runtimeId: f.client.runtimeId!,
       nativeGeneration: "stale", target: f.target, admission })).rejects.toBeDefined();
     await f.carrier.close(); await f.attach({ recovery: true });
     // Existing-only recovery never authorizes a fresh tool route.

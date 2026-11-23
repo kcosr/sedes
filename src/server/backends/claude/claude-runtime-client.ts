@@ -62,6 +62,11 @@ export interface ClaudeRuntimeProbeResult {
 }
 
 export interface ClaudeRuntimeSessionOptions {
+  /** Host authority checked after worker initialization, before opening the native query. */
+  readonly assertLaunchAdmission?: () => void;
+  /** The durable Sedes binding for an application-owned query. Native callers
+   * without an application binding retain their exact launch authority. */
+  readonly applicationThreadId?: string;
   readonly executionEnvironment?: ResolvedEnvironmentVariables;
   readonly executablePath: string;
   readonly initializationTimeoutMs: number;
@@ -242,6 +247,9 @@ export interface ClaudeRuntimeClient {
 
 /** A runtime whose queries' inputs their caller owns: local workers, including the one a persistent owner runs. */
 export interface ClaudeOwnedRuntimeClient extends ClaudeRuntimeClient {
+  /** True only after no native generation, pending operation or history acquisition can survive disposal. */
+  emptyAfterCleanup?(): boolean;
+  disposeEmpty?(): void;
   createSession(options: ClaudeRuntimeSessionOptions): ClaudeOwnedRuntimeSession;
 }
 

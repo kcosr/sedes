@@ -139,6 +139,15 @@ an operation; the connected host must also advertise the corresponding support.
 Shell and provider execution use the host account's authority. Workspace roots
 are not an operating-system sandbox for shell processes.
 
+Once a host is paired, use its environment and backend settings to add a
+supported provider, create a named connection or change the allowed features
+and workspace roots. The connector carries the updated policy on the current
+attachment. Settings shows host confirmation and any missing prerequisite
+for each affected setting. For example, adding Claude to a host running Codex
+leaves the Codex turn and an open terminal running while Claude becomes
+available. Changes saved during intentional disconnection take effect after
+**Connect**.
+
 New and existing outbound environments default to **Compress connection
 traffic**. The environment editor can disable compression for future
 connections without interrupting current work. The same setting covers both
@@ -152,7 +161,7 @@ connector management and pairing retain their existing protocols. See
 | Attachments | Materialized on the execution host through the same granted attachment-staging capability. |
 | Workspace tools, context, and skills | Use the same remote engines and grants as SSH, including their search-tool and shell prerequisites. |
 | Terminals | Persistent sidecar-owned terminals reconnect with retained output when native PTY support is available. Missing native assets omit terminal support without disabling Files or provider connections. |
-| Codex | Provider connection and execution run through the persistent sidecar. Managed TUI additionally requires negotiated native PTY support. |
+| Codex | Provider connection and execution run through the persistent sidecar. Managed TUI additionally requires native PTY support and its authorization on the host. |
 | Pi SDK | The Pi SDK stays on the Sedes server; the paired host supplies remote workspace operations. Pi is not installed or executed remotely by this feature. |
 | Pi | On Linux/macOS, the installed stable Pi 1.4.0 or newer CLI and native authentication, configuration, MCP servers, and sessions run on the persistent sidecar host. Files, attachments, and CLI tools require their own grants. |
 | Claude | On Linux/macOS with Node.js 24.18+, the pinned Agent SDK and authenticated Claude Code installation run through the persistent sidecar. Native Windows Claude is unsupported. Files, attachments, and CLI tools require their own grants. |

@@ -94,13 +94,11 @@ describe("agent tool CLI availability", () => {
     const runtime = {
       canAcquireCapability: () => true,
       acquireAgentTools: async () => ({
-        session: {
-          closed,
-          agentToolCli: {
+        closed,
+        agentToolCli: {
             endpoint: "unix:///run/user/1000/sedes-agent-tools.sock",
             executableDirectory: "/home/agent/.local/state/sedes/sidecar/bin",
             inheritedPath: "/usr/local/bin:/usr/bin",
-          },
         },
         release: () => {
           releases += 1;
@@ -137,7 +135,7 @@ describe("agent tool CLI availability", () => {
       runtime: {
         canAcquireCapability: () => true,
         acquireAgentTools: async () => ({
-          session: { closed: Promise.resolve() },
+          closed: Promise.resolve(),
           release: () => {
             releases += 1;
           },
@@ -169,6 +167,9 @@ describe("agent tool CLI availability", () => {
       executableDirectory: "/home/agent/bin",
       inheritedPath: "/usr/bin\npoisoned",
     },
+    ...["/usr/bin\tbad", "/usr/bin\u007fbad", "x".repeat(16_385)].map(inheritedPath => ({
+      endpoint: "unix:///run/user/1000/sedes.sock", executableDirectory: "/home/agent/bin", inheritedPath,
+    })),
   ])("fails closed for invalid managed metadata %#", async (agentToolCli) => {
     let releases = 0;
     const availability = managedSshAgentToolCliAvailability({
@@ -177,7 +178,7 @@ describe("agent tool CLI availability", () => {
       runtime: {
         canAcquireCapability: () => true,
         acquireAgentTools: async () => ({
-          session: { closed: Promise.resolve(), agentToolCli },
+          closed: Promise.resolve(), agentToolCli,
           release: () => {
             releases += 1;
           },

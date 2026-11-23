@@ -167,6 +167,8 @@ export type CanonicalComposerAttachmentEvidence = Readonly<{
 
 /** Ordered, path-free immutable evidence captured under scoped ownership. */
 export interface CanonicalComposerAttachmentEvidenceResolver {
+  /** Only new provider deliveries need the current staging grant. */
+  readonly assertDeliverable?: () => void;
   resolve(): readonly CanonicalComposerAttachmentEvidence[];
 }
 
@@ -809,7 +811,8 @@ export interface ConversationBackendDriver {
   readonly instance: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
 
-  health(): Promise<BackendHealth>;
+  /** Explicit selection may wait for provider initialization already in progress. */
+  health(options?: { readonly waitForInitialization: AbortSignal }): Promise<BackendHealth>;
   catalog(context: BackendCatalogContext): Promise<BackendCatalog>;
   discover(
     input: DiscoverConversationsInput,

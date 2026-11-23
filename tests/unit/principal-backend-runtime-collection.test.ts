@@ -9,6 +9,7 @@ import {
   APPLICATION_ASSIGNED_CREATION_IDENTITY,
   BACKEND_BRANDS,
   type ConversationBackendDriver,
+  type ConversationHandle,
 } from "../../src/server/backends/contracts.js";
 import {
   type BackendModuleRuntime,
@@ -160,7 +161,7 @@ describe("principal backend runtime reconciliation", () => {
     await collection.close();
   });
 
-  it("denies new drivers when only the desired backend configuration revision changes", async () => {
+  it("keeps a confirmed target usable across unrelated backend revisions", async () => {
     let desiredRevision = 1;
     const {collection, registry} = fixture(() => desiredRevision);
     const initial = plan("one");
@@ -168,11 +169,35 @@ describe("principal backend runtime reconciliation", () => {
     expect(() => registry.driver(initial.context.connections[0]!)).not.toThrow();
     initial.createDriver.mockClear();
     desiredRevision = 2;
-    expect(() => registry.driver(initial.context.connections[0]!)).toThrow(
-      expect.objectContaining({ code: "runtime_unavailable", retryable: true }),
-    );
-    expect(initial.createDriver).not.toHaveBeenCalled();
+    expect(() => registry.driver(initial.context.connections[0]!)).not.toThrow();
+    expect(initial.createDriver).toHaveBeenCalledOnce();
     expect(initial.runtime.close).not.toHaveBeenCalled();
+    await collection.close();
+  });
+
+  it("keeps an existing handle's settlement controls after target withdrawal and regrant", async () => {
+    const { collection, registry } = fixture();
+    const initial = plan("one");
+    const profile = initial.context.connections[0]!;
+    const submit = vi.fn(), interrupt = vi.fn();
+    const nativeHandle = { submit, interrupt } as unknown as ConversationHandle;
+    initial.createDriver.mockImplementation(connection => ({
+      instance: initial.runtime.instance, connection, attach: async () => nativeHandle,
+    } as unknown as ConversationBackendDriver));
+    await collection.apply(initial, retire);
+    const driver = registry.driver(profile);
+    const handle = await driver.attach({} as Parameters<typeof driver.attach>[0]);
+    collection.updateConnections("one", [{ ...profile, enabled: false, configurationRevision: 2 }], []);
+    expect(() => handle.submit({} as Parameters<typeof handle.submit>[0])).toThrow("authorization changed");
+    handle.interrupt({} as Parameters<typeof handle.interrupt>[0]);
+    expect(interrupt).toHaveBeenCalledOnce();
+    const next = { ...profile, configurationRevision: 3 };
+    collection.updateConnections("one", [next], []);
+    expect(() => handle.submit({} as Parameters<typeof handle.submit>[0])).toThrow("authorization changed");
+    expect(submit).not.toHaveBeenCalled();
+    const fresh = await registry.driver(next).attach({} as Parameters<typeof driver.attach>[0]);
+    fresh.submit({} as Parameters<typeof fresh.submit>[0]);
+    expect(submit).toHaveBeenCalledOnce();
     await collection.close();
   });
 
@@ -221,7 +246,7 @@ describe("principal backend runtime reconciliation", () => {
     expect(peer.release).not.toHaveBeenCalled();
     expect(() => staleHealth()).toThrow("backend_registry_generation_changed");
     expect(() => registry.driver(first.context.connections[0]!)).toThrow(
-      "Configuration change pending",
+      "The target is no longer available.",
     );
     await expect(
       registry.driver(next.context.connections[0]!).health(),

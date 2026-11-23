@@ -2,7 +2,7 @@
 // replaced only at worker-main's provider boundary. Production builds never
 // import this file or the offline SDK fixture.
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { build } from "esbuild";
@@ -12,7 +12,8 @@ const root = process.cwd();
 const outputDirectory = process.argv[2];
 if (!outputDirectory || !path.isAbsolute(outputDirectory)) throw new Error("fixture_output_directory_required");
 const buildId = "sedes-outbound-claude-fixture";
-const worker = await build({
+const liveWorker = process.argv[3];
+const worker = liveWorker ? undefined : await build({
   entryPoints: [path.join(root, "src/server/backends/claude/worker/claude-runtime-worker-main.ts")],
   outfile: path.join(outputDirectory, "worker.mjs"), bundle: true, platform: "node", format: "esm",
   target: "node24", packages: "bundle", write: false, legalComments: "none",
@@ -26,8 +27,8 @@ const worker = await build({
     });
   } }],
 });
-const workerBytes = worker.outputFiles[0].contents;
-const workerManifest = {
+const workerBytes = liveWorker ? await readFile(liveWorker) : worker.outputFiles[0].contents;
+const workerManifest = liveWorker ? JSON.parse(await readFile(path.join(path.dirname(liveWorker), "manifest.json"), "utf8")) : {
   schemaVersion: 1, artifactId: "openai.sedes.claude-runtime-worker", filename: "sedes-claude-runtime-worker.mjs",
   modes: ["claude_runtime"], sha256: createHash("sha256").update(workerBytes).digest("hex"),
   bytes: workerBytes.byteLength, buildId, minimumNodeVersion: "24.18.0",

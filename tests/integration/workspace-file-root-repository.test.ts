@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { openOverlayDatabaseConnection } from "../../src/server/db/database.js";
-import { applyDatabaseMigrations } from "../../src/server/db/migrate.js";
-import { initialMigration } from "../../src/server/db/migrations/001-initial.js";
-import { seedSingleUserMigration } from "../../src/server/db/migrations/002-seed-single-user.js";
-import { workspaceFileRootsMigration } from "../../src/server/db/migrations/030-workspace-file-roots.js";
-import { workspaceFileLinkRootsMigration } from "../../src/server/db/migrations/035-workspace-file-link-roots.js";
-import { removeWorkspaceFileLinkRootRecencyMigration } from "../../src/server/db/migrations/036-remove-workspace-file-link-root-recency.js";
+import { realpathSync } from "node:fs";
+import Database from "better-sqlite3";
+import { executionPolicyDigest, type ExecutionPolicySnapshot } from "../../src/internal/sidecar-protocol/execution-policy.js";
+import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { storedFileRootBinding } from "../../src/server/db/repositories/workspace-file-root-authority.js";
+import { WorkspaceFileLinkedWorktreeRepository } from "../../src/server/db/repositories/workspace-file-linked-worktree-repository.js";
 import { WorkspaceFileRootRepository } from "../../src/server/db/repositories/workspace-file-root-repository.js";
 import type { DomainError } from "../../src/server/domain/errors.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
@@ -16,15 +15,16 @@ function domainError(code: DomainError["code"]) {
   return expect.objectContaining<Partial<DomainError>>({ code });
 }
 
+let schema: Buffer | undefined;
+
 function fixture() {
-  const database = openOverlayDatabaseConnection(":memory:");
-  applyDatabaseMigrations(database, [
-    initialMigration,
-    seedSingleUserMigration,
-    workspaceFileRootsMigration,
-    workspaceFileLinkRootsMigration,
-    removeWorkspaceFileLinkRootRecencyMigration,
-  ]);
+  if (!schema) {
+    const seeded = savedAgentDatabase();
+    schema = seeded.database.serialize();
+    seeded.database.close();
+  }
+  const database = new Database(schema);
+  database.pragma("foreign_keys = ON");
   const scope = new SingleUserIdentityProvider(database).getScope();
   const environmentId = (
     database
@@ -36,28 +36,75 @@ function fixture() {
       )
       .get(scope.tenantId, scope.principalId) as { readonly id: string }
   ).id;
+  const setRoots = (roots: ExecutionPolicySnapshot["roots"]) => {
+    const snapshot = {roots, capabilities: [], backends: []};
+    database.prepare("UPDATE live_execution_policies SET revision = revision + 1, snapshot_json = ?, digest = ? WHERE environment_id = ?")
+      .run(JSON.stringify(snapshot), executionPolicyDigest(snapshot), environmentId);
+  };
+  setRoots([{id: "ancestor", generation: 1, path: "/"}]);
   const workspaceId = randomUUID();
+  database.prepare("INSERT INTO projects(tenant_id,owner_principal_id,id,name,created_at,updated_at) VALUES (?,?,?,'Main',2,2)")
+    .run(scope.tenantId, scope.principalId, workspaceId);
   database
     .prepare(
       `
         INSERT INTO workspaces(
-          tenant_id, owner_principal_id, environment_id, id, canonical_path,
+          tenant_id, owner_principal_id, environment_id, id, project_id, canonical_path,
           display_name, availability, trust_state, revision, last_opened_at,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, '/projects/main', 'Main', 'available',
+        ) VALUES (?, ?, ?, ?, ?, '/projects/main', 'Main', 'available',
           'trusted', 0, 2, 2, 2)
       `,
     )
-    .run(scope.tenantId, scope.principalId, environmentId, workspaceId);
+    .run(scope.tenantId, scope.principalId, environmentId, workspaceId, workspaceId);
   return {
     database,
     scope,
+    setRoots,
     workspaceId,
     repository: new WorkspaceFileRootRepository(database),
   };
 }
 
 describe("workspace file-root repository", () => {
+  it("preserves the admitted grant of a supplemental root after a deeper root is added", () => {
+    const value = fixture();
+    try {
+      const temp = realpathSync("/tmp");
+      const root = value.repository.create(value.scope, value.workspaceId, {
+        path: `${temp}/repo`, canonicalPath: `${temp}/repo`, resolvedDisplayLabel: "Repo", mutationId: "attach", now: 100,
+      });
+      const link = value.repository.rememberLinkRoot(value.scope, value.workspaceId, `${temp}/linked`, 100);
+      const worktrees = new WorkspaceFileLinkedWorktreeRepository(value.database);
+      const candidate = {canonicalPath:`${temp}/checkout`, canonicalCheckoutPath:`${temp}/checkout`, canonicalGitDir:`${temp}/main/.git/worktrees/checkout`,
+        identityToken:"1".repeat(64), displayLabel:"checkout", branchRef:"refs/heads/test", headOid:"a".repeat(40),
+        provenanceKind:"unmerged" as const, aheadCount:1, behindCount:0};
+      const discover = () => worktrees.reconcileDiscovery(value.scope, value.workspaceId, [candidate], {complete:true, now:200});
+      const checkoutId = discover().roots[0]!.rootId;
+      const before = {authorityRootId: "ancestor", authorityRevision: 1};
+      const binding = (id: string) => storedFileRootBinding(value.database, value.scope, value.workspaceId, id);
+      value.setRoots([{id: "ancestor", path: "/", generation: 1}, {id: "deeper", path: "/tmp", generation: 2}]);
+      expect(discover().roots[0]!.rootId).toEqual(checkoutId);
+      expect(binding(root.rootId)).toEqual(before);
+      expect(binding(link.rootId)).toEqual(before);
+      expect(binding(value.repository.rememberLinkRoot(value.scope, value.workspaceId, `${temp}/linked`, 200).rootId)).toEqual(before);
+      expect(binding(value.repository.rememberLinkRoot(value.scope, value.workspaceId, `${temp}/new`, 200).rootId))
+        .toEqual({authorityRootId: "deeper", authorityRevision: 2});
+      value.setRoots([{id:"deeper", path:"/tmp", generation:2}]);
+      expect(() => value.repository.rememberLinkRoot(value.scope, value.workspaceId, `${temp}/linked`, 220, before)).toThrow(domainError("conflict"));
+      expect(binding(link.rootId)).toEqual(before);
+      const refreshed = value.repository.rememberLinkRoot(value.scope, value.workspaceId, `${temp}/linked`, 220);
+      expect(refreshed.rootId).not.toBe(link.rootId);
+      expect(binding(link.rootId)).toBeUndefined();
+      expect(binding(refreshed.rootId)).toEqual({authorityRootId:"deeper", authorityRevision:2});
+      const incomplete = worktrees.reconcileDiscovery(value.scope, value.workspaceId, [], {complete:false, now:220});
+      expect(incomplete.tombstonedRootIds).toEqual([checkoutId]);
+      const replacement = discover();
+      expect(replacement.roots[0]!.rootId).not.toBe(checkoutId);
+      expect(binding(replacement.roots[0]!.rootId)).toEqual({authorityRootId:"deeper", authorityRevision:2});
+    } finally { value.database.close(); }
+  });
+
   it("remembers hidden link roots without projecting them as attached roots", () => {
     const value = fixture();
     try {
@@ -620,10 +667,10 @@ describe("workspace file-root repository", () => {
         .prepare(
           `
             INSERT INTO workspaces(
-              tenant_id, owner_principal_id, environment_id, id,
+              tenant_id, owner_principal_id, environment_id, id, project_id,
               canonical_path, display_name, availability, trust_state,
               revision, last_opened_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, '/projects/other', 'Other', 'available',
+            ) VALUES (?, ?, ?, ?, ?, '/projects/other', 'Other', 'available',
               'trusted', 0, 3, 3, 3)
           `,
         )
@@ -632,6 +679,7 @@ describe("workspace file-root repository", () => {
           value.scope.principalId,
           environmentId,
           randomUUID(),
+          value.workspaceId,
         );
       expect(() =>
         value.repository.create(value.scope, value.workspaceId, {

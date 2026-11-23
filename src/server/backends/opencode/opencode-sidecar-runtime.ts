@@ -1,3 +1,5 @@
+import { launchAdmission, currentBackendGrant, type ProviderPolicyAttachment } from "../provider-policy-admission.js";
+import { runtimeLaunchDigest } from "../provider-launch-digest.js";
 import { randomUUID } from "node:crypto";
 import type { SidecarOperationRegistry } from "../../../internal/sidecar-protocol/operation-registry.js";
 import type { SidecarRuntimeChannel } from "../../sidecar/runtime-channel.js";
@@ -5,8 +7,7 @@ import type { PersistentSidecarServiceRegistry } from "../../sidecar/persistent-
 import type { OpenCodeRuntimeHostRegistry } from "./opencode-runtime-host-registry.js";
 import type { OpenCodeNativeHost } from "./opencode-native-host.js";
 import type { OpenCodeNativePort, OpenCodeObservationEnd, OpenCodePortObservation } from "./opencode-native-port.js";
-import { OPENCODE_CONTROL_MUTATIONS } from "./opencode-native-port.js";
-import { encodeOpenCodeNativeFailure, OPENCODE_OBSERVATION_WIRE_BYTES, parseOpenCodeReadInput, parseOpenCodeMutationInput } from "./opencode-native-codecs.js";
+import { OpenCodeNativeMutationDeliveryError, encodeOpenCodeNativeFailure, OPENCODE_OBSERVATION_WIRE_BYTES, parseOpenCodeReadInput, parseOpenCodeMutationInput } from "./opencode-native-codecs.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import { openCodeRuntimeCommandSchema, openCodeRuntimeCommandLane, openCodeRuntimeOperations,
   type OpenCodeRuntimeCommand, type OpenCodeRuntimeInfo } from "./opencode-runtime-wire.js";
@@ -18,7 +19,7 @@ interface ObservationAttachment { readonly purpose: "evidence" | "presentation";
 
 /** One handler registration for SSH and outbound peers. The service registry
  * owns native runtimes; this object owns only disposable attachment references. */
-export function registerOpenCodeRuntimeHost(input: {
+export function registerOpenCodeRuntimeHost(input: ProviderPolicyAttachment & {
   readonly registry: SidecarOperationRegistry;
   readonly channel: SidecarRuntimeChannel;
   readonly hosts: OpenCodeRuntimeHostRegistry;
@@ -65,11 +66,16 @@ export function registerOpenCodeRuntimeHost(input: {
     if (command.controllerEpoch !== input.controllerEpoch || command.serviceIncarnation !== input.services.serviceIncarnation) throw denied();
     switch (command.action) {
       case "ensure": case "lookup": case "lookup_recovery": {
-        const runtime = await input.hosts[command.action === "lookup_recovery" ? "lookup" : command.action](command.configuration, input.controllerEpoch);
+        const admission = command.action === "ensure" ? launchAdmission(input, "opencode", command.configuration.instance.id,
+          runtimeLaunchDigest.opencode(command.configuration, command.configuration.startupEnvironmentVariables), command.configuration.connections) : undefined;
+        const runtime = command.action === "ensure" ? await input.hosts.ensure(command.configuration, input.controllerEpoch, admission!.assertCurrent, admission!.bind)
+          : await input.hosts.lookup(command.configuration, input.controllerEpoch);
+        if (runtime) admission?.bind(runtime);
         assertController();
         if (!runtime) return null;
         const recovery = command.action === "lookup_recovery";
         if (!recovery) {
+          currentBackendGrant(input, runtime);
           input.services.assertAdmission(input.controllerEpoch);
           if (!command.configuration.instance.enabled || !command.configuration.connections.some(connection => connection.enabled)) throw denied();
         }
@@ -82,6 +88,9 @@ export function registerOpenCodeRuntimeHost(input: {
         input.services.assertAdmission(input.controllerEpoch);
         if (runtimes.get(command.runtimeId) !== "attached") throw denied();
         const runtime = input.hosts.getRuntime(command.runtimeId);
+        currentBackendGrant(input, runtime);
+        if (input.getExecutionPolicy().capabilities.find(capability =>
+          capability.id === "agent_tools_cli")?.generation !== command.routeGeneration) throw denied();
         if (runtime.snapshot().generation !== command.nativeGeneration) throw denied();
         const host = runtime.nativeHost;
         if (!host) throw denied();
@@ -151,28 +160,44 @@ export function registerOpenCodeRuntimeHost(input: {
     if (command.action === "acquire" || command.action === "acquire_retained") {
       const recovery = command.action === "acquire_retained";
       if (!recovery && runtimes.get(command.runtimeId) !== "attached") throw denied();
-      if (!recovery) input.services.assertAdmission(input.controllerEpoch);
+      if (!recovery) { currentBackendGrant(input, runtime); input.services.assertAdmission(input.controllerEpoch); }
       if (ports.size >= 4_096) throw denied();
       const host = input.hosts.get(command.runtimeId), port = recovery ? host.acquireRetained(command.target) : host.acquire(command.target), portId = randomUUID();
       ports.set(portId, { host, port, recovery }); return { portId, authority: port.authority };
     }
-    const { port, recovery } = portFor(command);
+    const { host, port, recovery } = portFor(command);
     switch (command.action) {
       case "release": releasePort(command.portId); return { ok: true };
       case "read": {
-        if (recovery && ["listSessions", "listModels", "listSkills", "getDefaultModel"].includes(command.method)) throw denied();
+        if (["listSessions", "listModels", "listSkills", "getDefaultModel"].includes(command.method)) {
+          if (recovery) throw denied();
+          currentBackendGrant(input, runtime);
+        }
         return port.read(command.method, parseOpenCodeReadInput(command.method, command.input),
           command.deadlineAt === null ? { signal } : { deadlineAt: command.deadlineAt, signal });
       }
       case "mutate": {
-        if (!OPENCODE_CONTROL_MUTATIONS.has(command.method)) {
-          // Outcome lookup is explicit: a recovery attachment never dispatches
-          // or infers a replay from an identity without its original request.
+        // The journal compares the immutable fingerprint first. A retry joins
+        // its admitted write or reads its recorded outcome across revocation.
+        const mutation = parseOpenCodeMutationInput(command.method, command.input);
+        const admit = () => {
+          if (command.method === "interruptSession" || command.method === "cancelInput" || command.method === "cancelForm" ||
+              (command.method === "replyPermission" && "decision" in mutation && mutation.decision === "reject")) return;
+          // Recovery has no authority to infer a previously forgotten outcome.
           if (recovery) throw denied();
-          input.services.assertAdmission(input.controllerEpoch);
-        }
-        // A disconnected/cancelled carrier cannot cancel an admitted write.
-        return port.mutate(command.method, parseOpenCodeMutationInput(command.method, command.input), command.control);
+          try {
+            const grant = currentBackendGrant(input, runtime);
+            input.services.assertAdmission(input.controllerEpoch);
+            return () => {
+              if (!input.services.hasInstalledBackend(grant.id, grant.kind, grant.generation))
+                throw new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_request_authority_mismatch");
+            };
+          } catch {
+            throw new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_request_authority_mismatch");
+          }
+        };
+        return host.mutate(port.authority, command.method, mutation,
+          command.control, undefined, admit);
       }
       case "outcome": return port.outcome(command.method, command.identity);
       case "acknowledge_mutation": await port.acknowledgeMutation(command.method, command.identity); return { ok: true };

@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
+import { SidecarProtocolDeliveryError } from "../../src/internal/sidecar-protocol/contracts.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +10,9 @@ import {
   type ExecutionAttachmentStager,
   UnsupportedExecutionAttachmentStager,
 } from "../../src/server/composer-attachments/execution-attachment-stager.js";
+import { ExecutionAttachmentStagingEngine } from "../../src/server/composer-attachments/execution-attachment-staging-engine.js";
 import { LocalExecutionAttachmentStager } from "../../src/server/composer-attachments/local-execution-attachment-stager.js";
+import { SidecarExecutionAttachmentStager } from "../../src/server/composer-attachments/sidecar-execution-attachment-stager.js";
 import type { ExecutionEnvironmentLease } from "../../src/server/execution/contracts.js";
 
 const roots: string[] = [];
@@ -92,6 +95,93 @@ describe("ExecutionAttachmentStager", () => {
       code: "ENOENT",
     });
     await stager.close();
+  });
+
+  it("returns the committed file when its workspace grant is withdrawn after publication", async () => {
+    const { stager, lease } = await fixture();
+    let authorized = true;
+    const original = ExecutionAttachmentStagingEngine.prototype.commit;
+    const commit = vi.spyOn(ExecutionAttachmentStagingEngine.prototype, "commit").mockImplementationOnce(async function (this: ExecutionAttachmentStagingEngine, handle) {
+      const result = await original.call(this, handle);
+      authorized = false;
+      return result;
+    });
+    try {
+      const bytes = Buffer.from("committed");
+      const result = await stager.materialize(scope, {
+        lease: {...lease, assertCurrent() { if (!authorized) throw new Error("grant withdrawn"); }},
+        applicationThreadId: randomUUID(), attachmentId: randomUUID(),
+        sha256: createHash("sha256").update(bytes).digest("hex"), sizeBytes: bytes.length,
+        safeExtension: "", content: async function* () { yield bytes; },
+      });
+      expect(await readFile(result.agentPath)).toEqual(bytes);
+    } finally {
+      commit.mockRestore();
+      await stager.close();
+    }
+  });
+
+  it("keeps a host commit or replay acknowledged while its reply was travelling", async () => {
+    const {stager: local, lease} = await fixture();
+    const sha256 = createHash("sha256").digest("hex");
+    const result = {agentPath: "/stage/a", sha256, sizeBytes: 0};
+    const uploadHandle = randomUUID();
+    let authorized = true;
+    let committed = false;
+    const call = vi.fn(async (definition: {operation: string}) => {
+      if (definition.operation === "materialization.open" && !committed) return {state: "upload", uploadHandle, nextOffset: 0};
+      if (definition.operation === "materialization.commit") {
+        committed = true;
+        authorized = false;
+        return result;
+      }
+      if (definition.operation === "materialization.open" && committed) {
+        authorized = false;
+        return {state: "ready", ...result};
+      }
+      throw new Error(`Unexpected ${definition.operation}`);
+    });
+    const runtime = {acquireOperation: async () => ({session: {call}, release() {}})} as unknown as
+      ConstructorParameters<typeof SidecarExecutionAttachmentStager>[0]["runtime"];
+    const remote = new SidecarExecutionAttachmentStager({scope, environmentId, installationKey: randomBytes(32), runtime});
+    try {
+      const request = {
+        lease: {...lease, assertCurrent() { if (!authorized) throw new Error("grant withdrawn"); }},
+        applicationThreadId: randomUUID(), attachmentId: randomUUID(),
+        sha256, sizeBytes: 0, safeExtension: "", content: async function* () {},
+      };
+      await expect(remote.materialize(scope, request)).resolves.toEqual(result);
+      authorized = true;
+      await expect(remote.materialize(scope, request)).resolves.toEqual(result);
+      expect(call.mock.calls.map(([op]) => op.operation)).toEqual(["materialization.open", "materialization.commit", "materialization.open"]);
+    } finally {
+      await local.close();
+      await remote.close();
+    }
+  });
+
+  it("retries cleanup against the original materialization generation", async () => {
+    const { stager: local, lease } = await fixture();
+    let generation = 1;
+    const call = vi.fn(async (_op: unknown, payload: { workspaceAuthority: { featureGeneration: number } }) => {
+      if (generation === 1) {
+        generation++;
+        throw new SidecarProtocolDeliveryError("lost_reply", "sent_outcome_unknown");
+      }
+      expect(payload.workspaceAuthority.featureGeneration).toBe(1);
+    });
+    const runtime = { acquireOperation: async () => ({ session: { call }, release() {} }) } as unknown as
+      ConstructorParameters<typeof SidecarExecutionAttachmentStager>[0]["runtime"];
+    const remote = new SidecarExecutionAttachmentStager({ scope, environmentId, runtime, installationKey: randomBytes(32),
+      readAttachmentGeneration: () => generation });
+    try {
+      await remote.release(scope, { lease: { ...lease, workspace: { ...lease.workspace, authorityRootId: "root" } },
+        applicationThreadId: randomUUID(), attachmentId: randomUUID(), expectedSha256: "a".repeat(64) });
+      expect(call).toHaveBeenCalledTimes(2);
+    } finally {
+      await local.close();
+      remote.close();
+    }
   });
 
   it("denies wrong scope and never falls back through the composite", async () => {

@@ -19,6 +19,10 @@ const REQUIRED_SHARED_SOURCES = Object.freeze([
 ]);
 
 const ALLOWED_REPOSITORY_SOURCES = new Set([
+  "src/server/backends/agent-tool-route.ts",
+  "src/server/backends/provider-policy-admission.ts",
+  "src/server/backends/provider-launch-digest.ts",
+  "src/server/db/connection-profile-id.ts",
   // Antigravity's provider-owned ACP runtime and passive native store reader.
   // Application repositories, signing/presentation and driver code stay on main.
   "src/server/backends/antigravity/port.ts",
@@ -226,6 +230,9 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/sidecar/workspace-tools-sidecar-host.ts",
   "src/server/sidecar/workspace-tools-shell-host.ts",
   "src/server/sidecar/workspace-context-sidecar-host.ts",
+  "src/server/sidecar/workspace-policy-guard.ts",
+  "src/server/execution/workspace-root-grant.ts",
+  "src/server/execution/remote-path.ts",
   "src/server/sidecar/workspace-skills-scanner.ts",
   "src/server/sidecar/workspace-skills-sidecar-host.ts",
   "src/server/sidecar/sanitized-sidecar-environment.ts",
@@ -235,7 +242,9 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/sidecar/sidecar-darwin-platform.ts",
   "src/server/sidecar/sidecar-windows-platform.ts",
   "src/server/sidecar/sidecar-windows-ipc.ts",
-  "src/server/sidecar/persistent-sidecar-service-registry.ts",
+  "src/server/sidecar/installed-execution-policy.ts",
+  "src/server/sidecar/execution-policy-routes.ts",
+  "src/server/sidecar/register-persistent-execution-policy.ts",
   "src/server/sidecar/persistent-sidecar-service-server.ts",
   "src/server/sidecar/persistent-sidecar-management-receipts.ts",
   "src/server/sidecar/sidecar-abandonment-archive.ts",

@@ -160,7 +160,7 @@ package bundles Claude Code 2.1.319; Sedes never runs it, removes it at
 install, and always uses the operator-installed executable.
 
 Upgrade local worker artifacts and persistent sidecars with this server:
-Claude requires `claude_runtime@4` and `claude_persistent_runtime@5` for its
+Claude requires `claude_runtime@4` and `claude_persistent_runtime@6` for its
 catalog, history, and manual-compaction behavior. Upgrade local workers and
 remote sidecars together with the server. Client protocol 132 also requires a
 matching browser or packaged-client build for skill alias search.
@@ -224,7 +224,7 @@ remote query, and the archive is refused while that query still has running
 work. The sidecar holds at most 32 Claude sessions, fork launches included.
 Beyond that, opening a thread or forking fails with a message naming the limit
 and asking you to archive or close idle Claude threads in that environment.
-These rules require sidecar runtime protocol 17.
+These rules require sidecar runtime protocol 18.
 
 A long-lived query keeps answering permission requests and accepting input
 indefinitely. It retains exact replay receipts for its newest 16,384 inputs and
@@ -592,7 +592,7 @@ an estimate against Claude's effective auto-compaction window. Read failures or
 query/model/compaction changes clear old estimates without interrupting work.
 Rebuild local workers and upgrade remote Claude sidecars with this server:
 the worker requires `query.context_usage`, and the persistent runtime requires
-`claude_persistent_runtime@5`. Context telemetry itself needs no browser
+`claude_persistent_runtime@6`. Context telemetry itself needs no browser
 protocol or database migration; follow the current upgrade requirements above.
 
 ## Recorded usage

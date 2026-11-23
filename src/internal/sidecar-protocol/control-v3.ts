@@ -1,5 +1,6 @@
 import { z } from "zod";
 import path from "node:path";
+import { boundedAgentToolPath, MAX_AGENT_TOOL_EXECUTABLE_DIRECTORY_BYTES, MAX_AGENT_TOOL_INHERITED_PATH_BYTES } from "../agent-tool-cli-protocol/path-limits.js";
 import { isAgentToolCliEndpoint } from "../agent-tool-cli-protocol/local-endpoint.js";
 import {
   SidecarOperationError,
@@ -221,7 +222,7 @@ export const sidecarAgentToolCliMetadataSchema = z.strictObject({
     .string()
     .refine(
       (value) =>
-        !containsControl(value) && Buffer.byteLength(value, "utf8") <= 16_384,
+        boundedAgentToolPath(value, MAX_AGENT_TOOL_INHERITED_PATH_BYTES),
       "A bounded PATH without control characters is required.",
     ),
 });
@@ -234,7 +235,7 @@ export interface ControlHelloRequest {
   readonly compression: SidecarFrameCompression;
   readonly expectedBuildId: string;
   readonly expectedArtifactSha256: string;
-  readonly authorizedSidecarCapabilities: readonly SidecarCapabilityRef[];
+  readonly supportedSidecarCapabilities: readonly SidecarCapabilityRef[];
   readonly offeredSedesCapabilities: readonly SidecarCapabilityInventory[];
 }
 
@@ -247,12 +248,12 @@ export interface ControlHelloResponse {
   readonly sidecarCapabilities: readonly SidecarCapabilityInventory[];
   readonly capabilityEvidence: readonly SidecarCapabilityEvidence[];
   readonly sedesCapabilities: readonly SidecarCapabilityInventory[];
-  readonly agentToolCli?: SidecarAgentToolCliMetadata;
+
 }
 
 export const controlHelloOperation = defineSidecarOperation({
   capabilityId: "control",
-  majorVersion: 2,
+  majorVersion: 3,
   operation: "hello",
   lane: "control",
   maximumDeadlineMilliseconds: 10_000,
@@ -260,7 +261,7 @@ export const controlHelloOperation = defineSidecarOperation({
     compression: z.enum(["none", "zstd"]),
     expectedBuildId: z.string().min(1).max(200),
     expectedArtifactSha256: z.string().regex(/^[0-9a-f]{64}$/u),
-    authorizedSidecarCapabilities: z.array(sidecarCapabilityRefSchema).max(32),
+    supportedSidecarCapabilities: z.array(sidecarCapabilityRefSchema).max(32),
     offeredSedesCapabilities: z.array(sidecarCapabilityInventorySchema).max(32),
   }) as z.ZodType<ControlHelloRequest>,
   responseSchema: z.strictObject({
@@ -272,13 +273,13 @@ export const controlHelloOperation = defineSidecarOperation({
     sidecarCapabilities: z.array(sidecarCapabilityInventorySchema).max(32),
     capabilityEvidence: z.array(sidecarCapabilityEvidenceSchema).max(32),
     sedesCapabilities: z.array(sidecarCapabilityInventorySchema).max(32),
-    agentToolCli: sidecarAgentToolCliMetadataSchema.optional(),
+
   }) as z.ZodType<ControlHelloResponse>,
 });
 
 export const controlPingOperation = defineSidecarOperation({
   capabilityId: "control",
-  majorVersion: 2,
+  majorVersion: 3,
   operation: "ping",
   lane: "control",
   maximumDeadlineMilliseconds: 5_000,
@@ -288,7 +289,7 @@ export const controlPingOperation = defineSidecarOperation({
 
 export const controlGoAwayOperation = defineSidecarOperation({
   capabilityId: "control",
-  majorVersion: 2,
+  majorVersion: 3,
   operation: "go_away",
   lane: "control",
   maximumDeadlineMilliseconds: 5_000,
@@ -298,24 +299,26 @@ export const controlGoAwayOperation = defineSidecarOperation({
   responseSchema: z.strictObject({ accepted: z.literal(true) }),
 });
 
-export interface ControlV2Registration {
+export function closedWorkerControl(inventory:readonly SidecarCapabilityInventory[]):boolean {
+  const controls=inventory.filter(c=>c.capabilityId==="control");
+  return controls.length===1 && controls[0]!.majorVersion===controlHelloOperation.majorVersion &&
+    equalOperations([...controls[0]!.operations].sort(),["go_away","hello","ping"]);
+}
+
+export interface ControlV3Registration {
   readonly buildId: string;
   readonly artifactSha256: string;
   readonly enabledSidecarCapabilities: readonly SidecarCapabilityRef[];
   readonly enabledSedesCapabilities: readonly SidecarCapabilityInventory[];
   readonly runtime?: SidecarRuntimeEvidence;
   readonly capabilityEvidence?: readonly SidecarCapabilityEvidence[];
-  readonly prepareSedesCapabilities?: (input: {
-    readonly sedesCapabilities: readonly SidecarCapabilityInventory[];
-    readonly signal: AbortSignal;
-  }) => Promise<SidecarAgentToolCliMetadata> | SidecarAgentToolCliMetadata;
   readonly onGoAway?: (reason: string) => void | Promise<void>;
 }
 
 /** Registers the sidecar-owned half of the asymmetric session handshake. */
-export function registerControlV2Operations(
+export function registerControlV3Operations(
   registry: SidecarOperationRegistry,
-  registration: ControlV2Registration,
+  registration: ControlV3Registration,
 ): void {
   validateRegistration(registration);
   const enabledSidecar = capabilityKeys(
@@ -334,7 +337,7 @@ export function registerControlV2Operations(
     registration.capabilityEvidence ?? [],
     enabledSidecar,
   );
-  registry.register(controlHelloOperation, async (request, context) => {
+  registry.register(controlHelloOperation, (request) => {
     if (
       request.expectedBuildId !== registration.buildId ||
       request.expectedArtifactSha256 !== registration.artifactSha256
@@ -342,9 +345,9 @@ export function registerControlV2Operations(
       throw new SidecarOperationError("sidecar_build_identity_mismatch");
     }
     const authorizedSidecar = capabilityKeys(
-      request.authorizedSidecarCapabilities,
+      request.supportedSidecarCapabilities,
     );
-    const requestedSidecarCapabilities = request.authorizedSidecarCapabilities
+    const requestedSidecarCapabilities = request.supportedSidecarCapabilities
       .filter((capability) => enabledSidecar.has(capabilityKey(capability)))
       .sort(
         (left, right) =>
@@ -389,22 +392,6 @@ export function registerControlV2Operations(
         return [offered];
       })
       .sort(compareCapabilities);
-    const agentToolCliAccepted = sedesCapabilities.some(
-      (capability) =>
-        capability.capabilityId === "agent_tools_cli" &&
-        capability.majorVersion === 6,
-    );
-    if (agentToolCliAccepted && !registration.prepareSedesCapabilities) {
-      throw new SidecarOperationError("sidecar_agent_tool_cli_not_ready");
-    }
-    const agentToolCli = agentToolCliAccepted
-      ? sidecarAgentToolCliMetadataSchema.parse(
-          await registration.prepareSedesCapabilities!({
-            sedesCapabilities,
-            signal: context.signal,
-          }),
-        )
-      : undefined;
     const sidecarCapabilities = registry
       .capabilities()
       .filter(
@@ -432,7 +419,7 @@ export function registerControlV2Operations(
             left.majorVersion - right.majorVersion,
         ),
       sedesCapabilities,
-      ...(agentToolCli ? { agentToolCli } : {}),
+
     };
   });
   registry.register(controlPingOperation, ({ pingId }) => ({ pingId }));
@@ -442,7 +429,7 @@ export function registerControlV2Operations(
   });
 }
 
-function validateRegistration(registration: ControlV2Registration): void {
+function validateRegistration(registration: ControlV3Registration): void {
   if (
     !registration.buildId ||
     registration.buildId.length > 200 ||
@@ -597,11 +584,6 @@ function validExecutableDirectory(value: string): boolean {
   return (
     ((path.posix.isAbsolute(value) && path.posix.normalize(value) === value && !value.includes("\\")) ||
       (/^[A-Za-z]:\\/u.test(value) && path.win32.normalize(value) === value)) &&
-    !containsControl(value) &&
-    Buffer.byteLength(value, "utf8") <= 4_096
+    boundedAgentToolPath(value, MAX_AGENT_TOOL_EXECUTABLE_DIRECTORY_BYTES)
   );
-}
-
-function containsControl(value: string): boolean {
-  return /[\u0000-\u001f\u007f]/u.test(value);
 }

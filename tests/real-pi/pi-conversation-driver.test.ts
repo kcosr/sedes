@@ -26,6 +26,9 @@ import type {
 } from "../../src/server/backends/contracts.js";
 import { BackendError } from "../../src/server/backends/contracts.js";
 import type { ValidatedWorkspace } from "../../src/server/execution/contracts.js";
+import { workspaceRootGrant, type WorkspaceRootGrant } from "../../src/server/execution/workspace-root-grant.js";
+import { rootGrantId } from "../../src/server/configuration-admin/configuration-execution-policy.js";
+import type { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { CanonicalInlineAgentToolService } from "../../src/server/agent-tools/invocation/canonical-inline-agent-tool-service.js";
 import { PageService } from "../../src/server/pages/page-service.js";
 import { PageAgentToolService } from "../../src/server/agent-tools/tools/page-agent-tool-service.js";
@@ -95,6 +98,7 @@ interface Fixture {
   readonly root: string;
   readonly sessionDirectory: string;
   readonly workspace: ValidatedWorkspace;
+  readonly rootGrant: WorkspaceRootGrant;
   readonly driverOptions: PiDriverOptions;
 }
 
@@ -122,9 +126,11 @@ async function createFixture(): Promise<Fixture> {
     mkdir(sessionDirectory, { recursive: true, mode: 0o700 }),
   ]);
   const canonicalPath = await realpath(workspacePath);
+  const rootGrant = { id: rootGrantId(scope, connection.executionEnvironmentId, canonicalPath), path: canonicalPath, generation: 1 };
   const workspace: ValidatedWorkspace = {
     canonicalPath,
-    authorityRevision: 0,
+    authorityRootId: rootGrant.id,
+    authorityRevision: rootGrant.generation,
     summary: {
       id: "real-pi-workspace",
       environmentId: connection.executionEnvironmentId,
@@ -139,6 +145,7 @@ async function createFixture(): Promise<Fixture> {
     root,
     sessionDirectory,
     workspace,
+    rootGrant,
     driverOptions: {
       instance,
       connection,
@@ -507,10 +514,24 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
     const pages = new PageService({ repository: {} as never,
       files: { readAbsoluteFile: async () => { throw new Error("inline preview must not read files"); } },
       inventory: {
-        getThread: () => ({ thread: { workspaceId: fixture.workspace.summary.id } }),
-        getWorkspace: () => ({ canonicalPath: fixture.workspace.canonicalPath, environmentId: connection.executionEnvironmentId, availability: "available" }),
-        getEnvironment: () => ({ availability: "available", configurationRevision: 1, operationsConfigurationRevision: 1 }),
-      } as never,
+        getThread: () => ({ thread: { workspaceId: fixture.workspace.summary.id } } as ReturnType<InventoryRepository["getThread"]>),
+        getWorkspace: () => ({
+          tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, id: fixture.workspace.summary.id, projectId: "project-1",
+          canonicalPath: fixture.workspace.canonicalPath, environmentId: connection.executionEnvironmentId,
+          authorityRootId: fixture.rootGrant.id, environmentConfigurationRevision: fixture.rootGrant.generation,
+          availability: "available", trustState: "trusted", displayName: fixture.workspace.summary.displayName,
+          revision: 0, lastOpenedAt: 0, createdAt: 0, updatedAt: 0,
+        }),
+        getEnvironment: () => ({ availability: "available" } as ReturnType<InventoryRepository["getEnvironment"]>),
+        workspaceAuthorityIsCurrent: (requested, workspace) =>
+          requested.tenantId === scope.tenantId && requested.principalId === scope.principalId &&
+          workspace.tenantId === requested.tenantId && workspace.ownerPrincipalId === requested.principalId &&
+          workspace.environmentId === connection.executionEnvironmentId && workspace.id === fixture.workspace.summary.id &&
+          workspace.canonicalPath === fixture.workspace.canonicalPath && Boolean(workspaceRootGrant([fixture.rootGrant], workspace.canonicalPath, {
+            ...(workspace.authorityRootId && { authorityRootId: workspace.authorityRootId }),
+            authorityRevision: workspace.environmentConfigurationRevision,
+          })),
+      },
     });
     const pageTools = new PageAgentToolService({ pages,
       capturePublication: () => { throw new Error("read-only Pi test must not publish"); },

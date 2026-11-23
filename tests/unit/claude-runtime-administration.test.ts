@@ -1,3 +1,5 @@
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
+import {attachFixturePolicy} from "../helpers/execution-policy-fixture.js";
 import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { randomUUID } from "node:crypto";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -25,8 +27,11 @@ async function fixture() {
   const hosts = new ClaudePersistentRuntimeRegistry({ scope, executionEnvironmentId: scope.executionEnvironmentId,
     environmentChannel: {} as ExecutionEnvironmentChannelProvider, environment: {}, services, artifact, createRuntime });
   const carrier = await createSidecarFramedCarrier();
-  const controllerEpoch = services.attach(serviceConfiguration);
-  const detach = registerClaudePersistentRuntimeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, controllerEpoch, onDetach: () => services.detach(controllerEpoch) });
+  const controllerEpoch = attachFixturePolicy(services, serviceConfiguration, "normal", {
+    roots: [], capabilities: [], backends: [{ id: configuration.backendInstanceId, kind: "claude_agent_sdk", generation: 1,
+      launchDigest: runtimeLaunchDigest.claude_agent_sdk(configuration), targets: [{ id: "claude", generation: 1 }] }],
+  });
+  const detach = registerClaudePersistentRuntimeHost({ getExecutionPolicy: () => services.executionPolicy(controllerEpoch), registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, controllerEpoch, onDetach: () => services.detach(controllerEpoch) });
   await carrier.start();
   const release = vi.fn();
   const context: BackendRuntimeRecoveryContext = {
@@ -37,7 +42,7 @@ async function fixture() {
     sidecarRuntime: { acquireRecovery: vi.fn(async () => ({ channel: carrier.mainChannel, controllerEpoch, serviceIncarnation: services.serviceIncarnation, closed: new Promise(() => {}), release })) },
   };
   cleanup.push(async () => { detach(); await carrier.close(); await native.runtime.close(); });
-  return { ...native, services, hosts, context, createRuntime, artifact, release, detach, controllerEpoch, connection: new ClaudeSidecarRuntimeConnection(carrier.mainChannel) };
+  return { ...native, services, hosts, context, createRuntime, artifact, release, detach, controllerEpoch, connection: new ClaudeSidecarRuntimeConnection(carrier.mainChannel, scope.backendInstanceId) };
 }
 
 it("recovers only existing providers and releases every administrative attachment", async () => {
@@ -100,7 +105,8 @@ it("rejects wrong scope, configuration drift, stale controller and changed incar
   await f.connection.ensure(configuration);
   const admin = (await recoverClaudeRuntimeAdministration({ context: f.context, configuration }))!;
   await expect(recoverClaudeRuntimeAdministration({ context: f.context, configuration: { ...configuration, principalId: "intruder" } })).rejects.toThrow("scope_denied");
-  await expect(recoverClaudeRuntimeAdministration({ context: f.context, configuration: { ...configuration, executablePath: "/changed" } })).rejects.toThrow();
+  await expect(recoverClaudeRuntimeAdministration({ context: f.context, configuration: { ...configuration, executablePath: "/changed" } })).resolves.toBeDefined();
+  await expect(recoverClaudeRuntimeAdministration({ context: f.context, configuration: { ...configuration, configDirectory: "/different-store" } })).rejects.toThrow();
   await expect(f.connection.lookup({ ...configuration, principalId: "intruder" }, f.controllerEpoch)).rejects.toThrow();
   await expect(f.connection.lookup(configuration, f.controllerEpoch + 1)).rejects.toThrow();
   const observed = await admin.inspect();
@@ -415,7 +421,7 @@ it("retains failed idle-eviction cleanup evidence and rejects the earlier stop c
   expect(f.hosts.lookup(configuration, f.controllerEpoch)).toBeUndefined();
 });
 
-it("allows exact pending permission settlement on a recovery controller but rejects new sessions and turns", async () => {
+it("lets a recovery controller deny a pending request and refuses approvals, sessions and turns", async () => {
   const f = await fixture();
   const runtimeId = await f.connection.ensure(configuration);
   const host = f.hosts.get(runtimeId);
@@ -423,10 +429,11 @@ it("allows exact pending permission settlement on a recovery controller but reje
   const request = { queryId: sessionId, sessionId, cwd: "/workspace", launch: "new" as const, environment: {}, enableCanUseTool: true };
   await host.execute({ runtimeId, controllerEpoch: f.controllerEpoch, action: "open", replay: "full", request }, () => {});
   const pending = f.sessions[0]!.options.canUseTool!("Read", {}, { requestId: "pending", toolUseID: "tool", signal: new AbortController().signal });
-  const epoch = f.services.attach(serviceConfiguration, "recovery");
+  const epoch = attachFixturePolicy(f.services, serviceConfiguration, "recovery");
   const authority = { runtimeId, controllerEpoch: epoch };
   await host.execute({ ...authority, action: "attach", replay: "unacknowledged", request: { sessionId } }, () => {});
-  const response = { behavior: "allow" as const, updatedInput: {} };
+  await expect(host.execute({ ...authority, action: "respond_permission", request: { sessionId, requestId: "pending", toolUseID: "tool", response: { behavior: "allow", updatedInput: {} } } }, () => {})).rejects.toThrow("sidecar_recovery_attachment_read_only");
+  const response = { behavior: "deny" as const, message: "Denied during recovery" };
   await host.execute({ ...authority, action: "respond_permission", request: { sessionId, requestId: "pending", toolUseID: "tool", response } }, () => {});
   await expect(pending).resolves.toEqual(response);
   await expect(host.execute({ ...authority, action: "send", request: { queryId: sessionId, operationId: randomUUID(), content: "new turn" } }, () => {})).rejects.toThrow("sidecar_recovery_attachment_read_only");
@@ -443,7 +450,7 @@ it("never uses retained recovery permission authority to approve work after host
     queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", environment: {}, enableCanUseTool: true,
   } }, () => {});
   const pending = f.sessions[0]!.options.canUseTool!("Read", {}, { requestId: "pending", toolUseID: "tool", signal: new AbortController().signal });
-  const epoch = f.services.attach(serviceConfiguration, "recovery");
+  const epoch = attachFixturePolicy(f.services, serviceConfiguration, "recovery");
   host.freezeAdmission();
   const base = { runtimeId, controllerEpoch: epoch, action: "respond_permission" as const };
   const request = { sessionId, requestId: "pending", toolUseID: "tool" };
@@ -456,7 +463,7 @@ it("reattaches pending startup configuration and explicitly retires the old host
   const f = await fixture();
   const runtimeId = await f.connection.ensure(configuration);
   const desired = { ...configuration, startupEnvironmentVariables: { TEST_START: { kind: "literal" as const, value: "new" } } };
-  await expect(f.connection.ensure(desired)).resolves.toBe(runtimeId);
+  await expect(f.connection.ensure(desired)).rejects.toMatchObject({ code: "backend_policy_denied" });
   await expect(f.connection.lookup(desired, f.controllerEpoch)).resolves.toBe(runtimeId);
   const admin = (await recoverClaudeRuntimeAdministration({ context: f.context, configuration: desired }))!;
   const snapshot = await admin.inspect();

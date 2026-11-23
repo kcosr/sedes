@@ -1,3 +1,5 @@
+import { attachFixturePolicy } from "../helpers/execution-policy-fixture.js";
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import Database from "better-sqlite3";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
@@ -55,9 +57,14 @@ async function fixture() {
   const carriers: { close(): Promise<void> }[] = [];
   async function attach() {
     const carrier = await createSidecarFramedCarrier();
-    const controllerEpoch = services.attach(serviceConfiguration);
+    const controllerEpoch = attachFixturePolicy(services, serviceConfiguration, "normal", {
+      roots: [{id:"workspace-root", path:"/workspace",generation:1}], capabilities:[],
+      backends:[{id:scope.backendInstanceId, kind:"claude_agent_sdk",generation:2,
+        launchDigest:runtimeLaunchDigest.claude_agent_sdk(configuration),targets:[{id:"profile",generation:3}]}],
+    });
     const detach = registerClaudePersistentRuntimeHost({
       registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, controllerEpoch,
+      getExecutionPolicy: () => services.executionPolicy(controllerEpoch),
       onDetach: () => services.detach(controllerEpoch),
     });
     await carrier.start();
@@ -69,7 +76,7 @@ async function fixture() {
     current = lease;
     const attached = {
       ...carrier, lease,
-      connection: new ClaudeSidecarRuntimeConnection(carrier.mainChannel),
+      connection: new ClaudeSidecarRuntimeConnection(carrier.mainChannel, scope.backendInstanceId),
       async close() {
         if (current === lease) current = undefined;
         detach();
@@ -217,6 +224,7 @@ describe("connected Claude replay reclamation recovery", () => {
     const sessionId = randomUUID();
     const received: SDKMessage[] = [];
     const first = firstClient.createSession(sessionOptions(sessionId, {
+      applicationThreadId: "thread",
       canUseTool: async () => ({ behavior: "deny", message: "No tool request expected in this fixture." }),
       onMessage: message => { received.push(message); },
     }));
@@ -249,6 +257,7 @@ describe("connected Claude replay reclamation recovery", () => {
     expect(native.closed).toBe(false);
 
     const secondCarrier = await f.attach();
+    expect(await secondCarrier.connection.lookup(configuration, secondCarrier.lease.controllerEpoch)).toBe(runtimeId);
     const attachment = claudePersistentAttachmentSchema.parse(await secondCarrier.connection.execute({
       runtimeId, controllerEpoch: secondCarrier.lease.controllerEpoch, action: "attach", replay: "full", request: { sessionId },
     }));
@@ -316,6 +325,7 @@ describe("Stop after main replacement", () => {
     const sessionId = randomUUID();
     // The same query authority a Claude handle opens with.
     const first = firstClient.createSession(sessionOptions(sessionId, {
+      applicationThreadId: "thread",
       canUseTool: async () => ({ behavior: "deny", message: "No tool request expected in this fixture." }),
     }));
     await first.start();

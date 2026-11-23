@@ -95,6 +95,7 @@ export interface BackendModuleExecutionEnvironmentConfiguration {
 }
 
 export interface BackendModuleConfigurationInput {
+  readonly readCurrentBackend?: () => import("../../shared/protocol/configuration-admin.js").ConfigurationBackend | undefined;
   readonly backend: BackendModuleBackendConfiguration;
   readonly connections: readonly BackendModuleConnectionConfiguration[];
   readonly executionEnvironments: readonly BackendModuleExecutionEnvironmentConfiguration[];
@@ -177,6 +178,8 @@ export interface BackendRuntimeRecoveryContext {
   readonly scope: RequestScope;
   readonly instance: AgentBackendInstance;
   readonly connections: readonly AgentConnectionProfile[];
+  readonly assertNativeOwner?: (backendInstanceId: string) => void;
+  readonly confirmNativeOwner?: (backendInstanceId: string | null, expectedOwner?: string) => void;
   readonly sidecarRuntime: {
     acquireRecovery(signal?: AbortSignal): Promise<SidecarRuntimeLease>;
   };
@@ -223,9 +226,18 @@ export interface BackendModuleRuntime {
 }
 
 export interface BackendModuleRuntimeContext {
+  /** Current target configuration after live reconciliation. */
+  readonly targetDefinition?: (templateId: string) => import("../../shared/protocol/configuration-admin.js").ConfigurationTarget | undefined;
+  readonly assertNativeOwner?: (backendInstanceId: string) => void;
+  readonly confirmNativeOwner?: (backendInstanceId: string | null, expectedOwner?: string) => void;
   readonly usage: UsageSink;
   /** Scope-bound immutable execution snapshot; secret references remain unresolved. */
   readonly executionEnvironmentVariables?: (applicationThreadId: string) => EnvironmentVariableOverrides;
+  /** Read the desired declarations at a new remote process launch. A withdrawn binding has no launch configuration. */
+  readonly readCurrentLaunchConfiguration?: () => {
+    readonly backend: import("../../shared/protocol/configuration-admin.js").ConfigurationBackend;
+    readonly startupEnvironmentVariables: EnvironmentVariableOverrides;
+  } | undefined;
   /** Persistent remote hosting channel, absent for direct local runtimes. */
   readonly sidecarRuntime?: SidecarRuntimeProvider;
   readonly database: Database.Database;
@@ -272,6 +284,7 @@ export type AgentToolCliRuntimeResolution =
       endpoint: string;
       executableDirectory: string;
       inheritedPath: string;
+      readonly routeGeneration?: number;
       /** Settles when this exact managed endpoint generation is no longer usable. */
       readonly closed: Promise<unknown>;
       /** Idempotent, non-throwing release of the endpoint lifecycle hold. */
@@ -326,6 +339,8 @@ export interface BackendModule {
   readonly startupPolicy: "composition_only" | "connect_provider";
   /** Map only known private failures to safe Settings diagnostics. */
   runtimeDiagnostic?(error: unknown): BackendRuntimeDiagnostic | undefined;
+  /** Existing-only inspection by a migrated backend ID, without a launch configuration. */
+  inspectRetainedOwner?(lease: SidecarRuntimeLease, backendInstanceId: string, signal: AbortSignal): Promise<boolean>;
   /** Compiled remote host grants, independently authorized from workspace operations. */
   readonly remoteRuntimeCapabilities?: readonly { readonly capabilityId: string; readonly majorVersion: number; readonly operations: readonly string[] }[];
   readonly backendKind: BackendKind;

@@ -145,6 +145,25 @@ describe("ComposerAttachmentDeliveryService", () => {
     });
   });
 
+  it("records a committed file and fences delivery when its captured feature grant expires", async () => {
+    let available = true;
+    const recordReadyMaterialization = vi.fn();
+    const service = new ComposerAttachmentDeliveryService(
+      { resolveForDelivery: () => [{ descriptor, sha256 }] } as unknown as ComposerAttachmentService,
+      { supports: () => true, materialize: async () => ({
+        sha256, sizeBytes: descriptor.byteSize, agentPath: "/staged/file",
+        assertDeliverable() { if (!available) throw new Error("grant withdrawn"); },
+      }) } as unknown as ExecutionAttachmentStager,
+      { findMaterialization: () => undefined, recordReadyMaterialization } as unknown as ComposerAttachmentMaterializationPersistence,
+    );
+    const first = await service.materialize(scope, "thread", lease, [descriptor]);
+    available = false;
+    expect(() => first.canonicalEvidence.assertDeliverable!()).toThrow("File attachments are unavailable");
+    await expect(first.canonicalBytes.read(first.attachments[0]!)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    await expect(service.materialize(scope, "thread", lease, [descriptor])).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(recordReadyMaterialization).toHaveBeenCalledTimes(2);
+  });
+
   it("marks stale ready evidence missing before recording verified evidence", async () => {
     const markMaterializationMissing = vi.fn(() => true);
     const recordReadyMaterialization = vi.fn(() => ({}));

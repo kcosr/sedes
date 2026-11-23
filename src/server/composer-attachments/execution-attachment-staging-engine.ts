@@ -44,6 +44,7 @@ export type ExecutionAttachmentStagingOpenResult =
     };
 
 interface ActiveUpload {
+  readonly assertCurrent?: () => void;
   readonly admissionId: string;
   readonly uploadHandle: string;
   readonly identity: ExecutionAttachmentStagingIdentity;
@@ -82,6 +83,7 @@ export class ExecutionAttachmentStagingError extends Error {
 export class ExecutionAttachmentStagingEngine {
   readonly #baseDirectory: string;
   readonly #sessionNonce: string;
+  readonly #captureCleanup: () => () => void;
   readonly #captureAdmission: () => () => void;
   readonly #uploads = new Map<string, ActiveUpload>();
   readonly #admissions = new Map<string, string>();
@@ -92,6 +94,7 @@ export class ExecutionAttachmentStagingEngine {
     readonly baseDirectory: string;
     readonly sessionNonce: string;
     readonly captureAdmission?: () => () => void;
+    readonly captureCleanup?: () => () => void;
   }) {
     if (
       !path.isAbsolute(input.baseDirectory) ||
@@ -104,13 +107,16 @@ export class ExecutionAttachmentStagingEngine {
     this.#baseDirectory = path.resolve(input.baseDirectory);
     this.#sessionNonce = input.sessionNonce;
     this.#captureAdmission = input.captureAdmission ?? (() => () => undefined);
+    this.#captureCleanup = input.captureCleanup ?? this.#captureAdmission;
   }
 
   async open(
     admissionId: string,
     identity: ExecutionAttachmentStagingIdentity,
+    assertCurrent?: () => void,
   ): Promise<ExecutionAttachmentStagingOpenResult> {
-    const assertAdmission = this.#captureAdmission();
+    const assertController = this.#captureAdmission();
+    const assertAdmission = () => { assertController(); assertCurrent?.(); };
     assertAdmission();
     this.#assertOpen();
     validateAdmissionId(admissionId);
@@ -189,6 +195,7 @@ export class ExecutionAttachmentStagingEngine {
       throw error;
     }
     const upload: ActiveUpload = {
+      ...(assertCurrent && { assertCurrent }),
       admissionId,
       uploadHandle,
       identity: Object.freeze({ ...identity }),
@@ -211,10 +218,11 @@ export class ExecutionAttachmentStagingEngine {
     readonly content: Uint8Array;
     readonly chunkSha256: string;
   }): Promise<{ readonly nextOffset: number }> {
-    const assertAdmission = this.#captureAdmission();
-    assertAdmission();
+    const assertController = this.#captureAdmission();
     this.#assertOpen();
     const upload = this.#upload(input.uploadHandle);
+    const assertAdmission = () => { assertController(); upload.assertCurrent?.(); };
+    assertAdmission();
     if (
       !Number.isSafeInteger(input.offset) ||
       input.offset < 0 ||
@@ -262,10 +270,11 @@ export class ExecutionAttachmentStagingEngine {
     readonly sha256: string;
     readonly sizeBytes: number;
   }> {
-    const assertAdmission = this.#captureAdmission();
-    assertAdmission();
+    const assertController = this.#captureAdmission();
     this.#assertOpen();
     const upload = this.#upload(uploadHandle);
+    const assertAdmission = () => { assertController(); upload.assertCurrent?.(); };
+    assertAdmission();
     if (upload.offset !== upload.identity.sizeBytes) {
       throw new ExecutionAttachmentStagingError(
         "composer_attachment_upload_size_mismatch",
@@ -350,7 +359,7 @@ export class ExecutionAttachmentStagingEngine {
   }
 
   async abort(uploadHandle: string): Promise<{ readonly aborted: true }> {
-    const assertAdmission = this.#captureAdmission();
+    const assertAdmission = this.#captureCleanup();
     assertAdmission();
     return this.#abort(uploadHandle, assertAdmission);
   }
@@ -377,7 +386,7 @@ export class ExecutionAttachmentStagingEngine {
       "scopeKey" | "threadId" | "attachmentId" | "sha256"
     >,
   ): Promise<{ readonly released: true }> {
-    const assertAdmission = this.#captureAdmission();
+    const assertAdmission = this.#captureCleanup();
     assertAdmission();
     this.#assertOpen();
     validateReleaseIdentity(identity);
@@ -863,4 +872,13 @@ function hasCode(error: unknown, code: string): boolean {
     "code" in error &&
     error.code === code
   );
+}
+
+// Scope private staged bytes to the workspace and grants admitting the transfer.
+// Their original identity remains available for exact cleanup after withdrawal.
+export function materializationScope(scopeKey: string, authority?: {
+  readonly path: string; readonly rootId: string; readonly rootGeneration: number; readonly featureGeneration?: number;
+}): string {
+  return authority ? createHash("sha256").update(JSON.stringify([scopeKey, authority.path, authority.rootId,
+    authority.rootGeneration, authority.featureGeneration ?? null])).digest("hex") : scopeKey;
 }

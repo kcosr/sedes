@@ -7,6 +7,7 @@ import type {
   ExecutionEnvironmentLeaseRequest,
   ExecutionEnvironmentProvider,
   ExecutionScope,
+  ExecutionWorkspaceValidationOptions,
   ValidatedWorkspace,
 } from "./contracts.js";
 
@@ -102,11 +103,12 @@ export class CompositeExecutionEnvironment
     scope: ExecutionScope,
     environmentId: string,
     candidatePath: string,
+    options?: ExecutionWorkspaceValidationOptions,
   ): Promise<ValidatedWorkspace> {
     const validated = await this.#provider(
       scope,
       environmentId,
-    ).validateWorkspace(scope, environmentId, candidatePath);
+    ).validateWorkspace(scope, environmentId, candidatePath, options);
     this.#assertWorkspaceEnvironment(validated, environmentId);
     return validated;
   }
@@ -114,11 +116,12 @@ export class CompositeExecutionEnvironment
   async revalidateWorkspace(
     scope: ExecutionScope,
     workspace: ValidatedWorkspace,
+    signal?: AbortSignal,
   ): Promise<ValidatedWorkspace> {
     const reopened = await this.#provider(
       scope,
       workspace.summary.environmentId,
-    ).revalidateWorkspace(scope, workspace);
+    ).revalidateWorkspace(scope, workspace, signal);
     this.#assertWorkspaceEnvironment(reopened, workspace.summary.environmentId);
     return reopened;
   }

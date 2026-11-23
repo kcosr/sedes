@@ -1,3 +1,5 @@
+import { launchAdmission, currentBackendGrant, type ProviderPolicyAttachment } from "../../provider-policy-admission.js";
+import { runtimeLaunchDigest } from "../../provider-launch-digest.js";
 import { environmentVariableOverridesSchema } from "../../../../shared/protocol/environment-variables.js";
 import { sidecarUpgradeBlockerSchema } from "../../../../internal/sidecar-protocol/service-management-v1.js";
 import { z } from "zod";
@@ -54,7 +56,7 @@ const eventDefinition = { ...capability, event: "runtime.event", schema: z.stric
  * Queued events are transient transport buffers, bounded independently of
  * provider output. An absent/slow subscriber is detached rather than blocking
  * the provider's stdout reader or evicting pending results. */
-export function registerCodexRuntimeHost(input: {
+export function registerCodexRuntimeHost(input: ProviderPolicyAttachment & {
   registry: SidecarOperationRegistry; channel: SidecarRuntimeChannel;
   hosts: CodexRuntimeHostRegistry; services: PersistentSidecarServiceRegistry;
   controllerEpoch: number; onDetach(): void;
@@ -63,6 +65,7 @@ export function registerCodexRuntimeHost(input: {
   let eventBytes = 0;
   let eventCount = 0;
   const events = new Map<string, CodexRuntimeEventOrder>();
+  const claimed = new WeakSet<ReturnType<CodexRuntimeHostRegistry["get"]>>();
   const attached = new Map<string, CodexRuntimeAuthority>();
   const eventOrder = (runtimeId: string) => {
     let order = events.get(runtimeId);
@@ -119,7 +122,14 @@ export function registerCodexRuntimeHost(input: {
   input.registry.register(codexRuntimeEnsureOperation, async ({ configuration }) => {
     if (detached) throw new Error("codex_runtime_attachment_detached");
     try {
-      const host = await input.hosts.ensure(configuration, input.controllerEpoch);
+      const admission = launchAdmission(input, "codex_app_server", configuration.instance.id,
+        runtimeLaunchDigest.codex_app_server(configuration, configuration.startupEnvironmentVariables), configuration.connections);
+      const host = await input.hosts.ensure(configuration, input.controllerEpoch, admission);
+      admission.bind(host);
+      for (const [runtimeId, authority] of attached) {
+        if (authority.scope.backendInstanceId === configuration.instance.id && runtimeId !== host.runtimeId) forgetAttachment(runtimeId);
+      }
+      claimed.add(host);
       return { runtimeId: host.runtimeId };
     } catch (error) {
       const refusal = codexNativeStoreRefusal(error);
@@ -129,17 +139,22 @@ export function registerCodexRuntimeHost(input: {
   });
   input.registry.register(codexRuntimeLookupOperation, async ({ configuration }) => {
     if (detached) throw new Error("codex_runtime_attachment_detached");
-    return { runtimeId: (await input.hosts.lookup(configuration, input.controllerEpoch))?.runtimeId ?? null };
+    const host = await input.hosts.lookup(configuration, input.controllerEpoch);
+    if (host) claimed.add(host);
+    return { runtimeId: host?.runtimeId ?? null };
   });
   input.registry.register(codexRuntimeExecuteOperation, async body => {
     if (detached) throw new Error("codex_runtime_attachment_detached");
     const command = codexRuntimeCommandSchema.parse(await input.channel.decodeBody(body));
     if (command.authority.controllerId !== String(input.controllerEpoch)) throw new Error("codex_runtime_controller_stale");
     const host = input.hosts.get(command.authority.runtimeId);
+    if (!claimed.has(host)) throw new SidecarOperationError("codex_runtime_not_attached");
     if (command.action === "inspect" || command.action === "stop" || command.action === "recover_outcomes" || command.action === "recover_outcome" || command.action === "acknowledge_recovered_outcome") {
       input.services.assertController(input.controllerEpoch);
       host.assertScope(command.authority);
     } else if (command.action !== "attach") host.assertAuthority(command.authority);
+    if (["shell_path", "idle", "wake", "retire"].includes(command.action) ||
+        (command.action === "submit" && !host.isRetainedThreadRead(command.input))) currentBackendGrant(input, host);
     const order = eventOrder(host.runtimeId);
     // Capture response affinity before a reply settles its pending request.
     const affinity = order.commandAffinity(command);
@@ -172,11 +187,18 @@ export function registerCodexRuntimeHost(input: {
         }) };
         break;
       }
-      case "wake":
+      case "wake": {
         input.services.assertAdmission(input.controllerEpoch);
         host.cancelIdle();
-        await input.hosts.getRuntime(host.runtimeId).supervisor.wake();
+        const runtime = input.hosts.getRuntime(host.runtimeId);
+        try { await runtime.supervisor.wake(); }
+        catch (error) {
+          if (!(error instanceof Error) || error.message !== "codex_runtime_configuration_restart_required") throw error;
+          throw new SidecarOperationError(input.hosts.canReplaceParkedLaunch(runtime)
+            ? "codex_runtime_relaunch_required" : "codex_runtime_configuration_restart_required");
+        }
         result = { ok: true }; break;
+      }
       case "attach": {
         input.services.assertController(input.controllerEpoch);
         const snapshot = await host.attach(command.authority, event => sendEvent(host.runtimeId, event));
@@ -209,7 +231,7 @@ export function registerCodexRuntimeHost(input: {
         // Exact pending requests belong to already-admitted work; the host
         // validates their generation, identity and response shape.
         input.services.assertController(input.controllerEpoch);
-        await host.respond(command.authority, command.input); result = { ok: true }; break;
+        await host.respond(command.authority, command.input, () => currentBackendGrant(input, host)); result = { ok: true }; break;
       case "inspect":
         result = await input.hosts.inspect(command.authority.runtimeId); break;
       case "stop":

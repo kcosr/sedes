@@ -1,4 +1,8 @@
+import { launchAdmission } from "../../src/server/backends/provider-policy-admission.js";
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
+import { attachFixturePolicy, installFixturePolicy } from "../helpers/execution-policy-fixture.js";
 import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
+import { createCodexRuntimeTransport } from "../../src/server/backends/codex/runtime/codex-runtime-transport.js";
 import { CodexRemoteRuntimeSupervisor } from "../../src/server/backends/codex/runtime/codex-remote-runtime-supervisor.js";
 import { CodexServerRequestRouter } from "../../src/server/backends/codex/codex-server-request-router.js";
 import { codexRuntimeMethod } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
@@ -12,13 +16,13 @@ import { sidecarAbandonmentEvidenceCarriesWork } from "../../src/server/sidecar/
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
 import { CodexSidecarRuntimeConnection, registerCodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-sidecar-runtime.js";
 
-const native = vi.hoisted(() => ({ launches: 0, closes: 0, cleanupFailure: false }));
+const native = vi.hoisted(() => ({ launches: 0, closes: 0, cleanupFailure: false, beforeReady: undefined as (() => Promise<void>) | undefined }));
 vi.mock("../../src/server/backends/codex/codex-runtime-config.js", () => ({
   resolveCodexRuntimeConfiguration: async (input: { startupEnvironmentVariables?: { PATH?: { kind: string; value?: string } }; connection: { ownership: string; channel: { codexHome?: string } } }) => ({ ...input,
     ...(input.connection.ownership === "owned" ? { childEnvironment: input.startupEnvironmentVariables?.PATH?.kind === "literal" ? { PATH: input.startupEnvironmentVariables.PATH.value } : {}, codexHome: input.connection.channel.codexHome } : {}),
   }),
 }));
-vi.mock("../../src/server/backends/codex/runtime/codex-runtime-transport.js", () => ({ createCodexRuntimeTransport: () => ({}) }));
+vi.mock("../../src/server/backends/codex/runtime/codex-runtime-transport.js", () => ({ createCodexRuntimeTransport: vi.fn(() => ({})) }));
 vi.mock("../../src/server/backends/codex/codex-daemon-supervisor.js", async () => {
   const { CodexSharedClientFacade } = await import("../../src/server/backends/codex/codex-client-facade.js");
   return { CodexDaemonSupervisor: class {
@@ -27,9 +31,15 @@ vi.mock("../../src/server/backends/codex/codex-daemon-supervisor.js", async () =
         requestWithReceipt: async () => ({ result: { data: [], nextCursor: null } as never, generation: 1, inboundSequence: 1 }) }),
       latestGeneration: () => 1, retireGeneration: async () => {},
     });
-    constructor() { native.launches++; }
-    async start() { this.client.updateLifecycle({ state: "ready", generation: 1 }); }
-    snapshot() { return { state: "ready", ...(native.cleanupFailure ? { cleanupUncertainty: {} } : {}) }; }
+    constructor(readonly input: { isLaunchCurrent?: () => boolean }) { native.launches++; }
+    async start() { await native.beforeReady?.(); this.client.updateLifecycle({ state: "ready", generation: 1 }); }
+    async park() { this.client.updateLifecycle({ state: "idle", generation: 1 }); }
+    async wake() {
+      if (this.client.lifecycleSnapshot().state !== "idle") return;
+      if (this.input.isLaunchCurrent?.() === false) throw new Error("codex_runtime_configuration_restart_required");
+      await this.start();
+    }
+    snapshot() { return { state: this.client.lifecycleSnapshot().state, ...(native.cleanupFailure ? { cleanupUncertainty: {} } : {}) }; }
     async close() { native.closes++; if (native.cleanupFailure) throw new Error("native_cleanup_unproven"); }
   } };
 });
@@ -41,26 +51,30 @@ const configuration = {
   connections: [{ id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "codex_app_server" as const, backendInstanceId: "backend", executionEnvironmentId: "remote", label: "Codex", enabled: true, configurationRevision: 1 }],
   connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: "/provider/codex.sock" } },
 };
-function fixture() {
+function codexGrant(config: Parameters<CodexRuntimeHostRegistry["ensure"]>[0]) {
+  return {roots: [], capabilities: [], backends: [{ id: config.instance.id, kind: "codex_app_server" as const, generation: 1,
+    launchDigest: runtimeLaunchDigest.codex_app_server(config, config.startupEnvironmentVariables), targets: [{id: "template", generation: 1}] }] };
+}
+function fixture(config: Parameters<CodexRuntimeHostRegistry["ensure"]>[0] = configuration) {
   const archive = vi.fn(async (_record: unknown) => {});
   const services = new PersistentSidecarServiceRegistry({ scope: { ...scope, installationId: "installation", executionEnvironmentId: "remote" }, buildId: "test", artifactSha256: "a".repeat(64), runtimeWireVersion: 1, configuration: serviceConfiguration, recordAbandonment: archive });
-  const epoch = services.attach(serviceConfiguration);
+  const epoch = attachFixturePolicy(services, serviceConfiguration, "normal", codexGrant(config));
   const hosts = new CodexRuntimeHostRegistry({ scope, executionEnvironmentId: "remote", environment: {}, environmentChannel: {} as ExecutionEnvironmentChannelProvider, services });
   return { services, hosts, epoch, archive };
 }
-beforeEach(() => { native.launches = 0; native.closes = 0; native.cleanupFailure = false; });
+beforeEach(() => { native.launches = 0; native.closes = 0; native.cleanupFailure = false; native.beforeReady = undefined; });
 
 it("reports native-store refusals over runtime.ensure before launch and keeps private failures off the wire", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-ensure-lock-"));
   const lock = path.join(directory, ".harness-codex-runtime.lock");
   const owner = path.join(lock, "owner.json");
-  const f = fixture();
-  const carrier = await createSidecarFramedCarrier();
-  const detach = registerCodexRuntimeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel,
-    hosts: f.hosts, services: f.services, controllerEpoch: f.epoch, onDetach: () => f.services.detach(f.epoch) });
-  const connection = new CodexSidecarRuntimeConnection(carrier.mainChannel);
   const owned = { ...configuration, connection: { ownership: "owned" as const,
     channel: { type: "process_stdio" as const, executablePath: process.execPath, workingDirectory: directory, codexHome: directory } } };
+  const f = fixture(owned);
+  const carrier = await createSidecarFramedCarrier();
+  const detach = registerCodexRuntimeHost({ getExecutionPolicy: () => f.services.executionPolicy(f.epoch), registry: carrier.hostRegistry, channel: carrier.hostChannel,
+    hosts: f.hosts, services: f.services, controllerEpoch: f.epoch, onDetach: () => f.services.detach(f.epoch) });
+  const connection = new CodexSidecarRuntimeConnection(carrier.mainChannel);
   try {
     await mkdir(lock, { mode: 0o700 });
     await carrier.start();
@@ -178,12 +192,13 @@ it("reports forced cleanup failure over the carrier and retries only the retaine
   const f = fixture();
   const host = await f.hosts.ensure(configuration, f.epoch);
   const carrier = await createSidecarFramedCarrier();
-  const detach = registerCodexRuntimeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel,
+  const detach = registerCodexRuntimeHost({ getExecutionPolicy: () => f.services.executionPolicy(f.epoch), registry: carrier.hostRegistry, channel: carrier.hostChannel,
     hosts: f.hosts, services: f.services, controllerEpoch: f.epoch, onDetach: () => f.services.detach(f.epoch) });
   const connection = new CodexSidecarRuntimeConnection(carrier.mainChannel);
   const authority = { scope: { ...scope, executionEnvironmentId: "remote", backendInstanceId: "backend" }, runtimeId: host.runtimeId, controllerId: String(f.epoch) };
   try {
     await carrier.start();
+    expect(await connection.lookup(configuration)).toBe(host.runtimeId);
     const close = vi.spyOn(f.hosts.getRuntime(host.runtimeId).supervisor, "close").mockRejectedValueOnce(new Error("unexpected_shutdown_error"));
     await expect(connection.stop(authority, (await connection.inspect(authority)).revision, true)).rejects.toMatchObject({
       name: "SidecarOperationError", code: "sidecar_operation_failed",
@@ -211,23 +226,60 @@ it("reports forced cleanup failure over the carrier and retries only the retaine
 it("looks up retained runtimes and permits receipt recovery while new admission is fenced", async () => {
   const f = fixture();
   const host = await f.hosts.ensure(configuration, f.epoch);
-  const epoch = f.services.attach({ ...serviceConfiguration, operationsRevision: 2 });
+  const epoch = f.services.attach({ ...serviceConfiguration, operationsRevision: 2 }, "recovery");
   await expect(f.hosts.lookup({ ...configuration, instance: { ...configuration.instance, enabled: false, configurationRevision: 0 } }, epoch)).resolves.toBe(host);
   await expect(f.hosts.ensure(configuration, epoch)).resolves.toBe(host);
   await expect(f.hosts.lookup({ ...configuration, connections: [{ ...configuration.connections[0]!, ownerPrincipalId: "intruder" }] }, epoch)).rejects.toThrow("scope_denied");
   await expect(f.hosts.lookup(configuration, f.epoch)).rejects.toThrow("controller_stale");
   const other = { ...configuration, instance: { ...configuration.instance, id: "other" }, connections: [{ ...configuration.connections[0]!, backendInstanceId: "other" }] };
   await expect(f.hosts.lookup(other, epoch)).resolves.toBeUndefined();
-  await expect(f.hosts.ensure(other, epoch)).rejects.toThrow("configuration_pending");
+  await expect(f.hosts.ensure(other, epoch)).rejects.toThrow("recovery_attachment_read_only");
   expect(native.launches).toBe(1);
   await f.hosts.stop(host.runtimeId, (await f.hosts.inspect(host.runtimeId)).revision, false);
+});
+
+it("binds the original launch before initialize and fences later replacements against installed policy", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-launch-stamp-"));
+  const owned = { ...configuration, connection: { ownership: "owned" as const, channel: { type: "process_stdio" as const, executablePath: "/usr/bin/false", workingDirectory: directory, codexHome: directory } } };
+  const changed = { ...owned, startupEnvironmentVariables: { TEST: { kind: "literal" as const, value: "new" } } };
+  const f = fixture(owned);
+  const carrier = await createSidecarFramedCarrier();
+  const detach = registerCodexRuntimeHost({ getExecutionPolicy: () => f.services.executionPolicy(f.epoch), registry: carrier.hostRegistry,
+    channel: carrier.hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: f.epoch, onDetach: () => f.services.detach(f.epoch) });
+  let initializing!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { initializing = resolve; });
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  native.beforeReady = () => { initializing(); return hold; };
+  const remote = new CodexSidecarRuntimeConnection(carrier.mainChannel);
+  try {
+    await carrier.start();
+    const launching = remote.ensure(owned);
+    await entered;
+    const original = codexGrant(owned);
+    const digest = original.backends[0]!.launchDigest;
+    expect(f.hosts.observedLaunchDigest("backend")).toBe(digest);
+    const spawn = vi.mocked(createCodexRuntimeTransport).mock.calls.at(-1)![0].assertLaunchAdmission!;
+    expect(spawn).not.toThrow();
+    installFixturePolicy(f.services, f.epoch, serviceConfiguration, codexGrant(changed));
+    expect(spawn).toThrow("backend_policy_denied");
+    release();
+    await expect(launching).rejects.toMatchObject({ code: "backend_policy_denied" });
+    await expect(remote.ensure(changed)).rejects.toMatchObject({ code: "codex_runtime_configuration_restart_required" });
+    expect(f.hosts.observedLaunchDigest("backend")).toBe(digest);
+    installFixturePolicy(f.services, f.epoch, serviceConfiguration, { ...original, backends: original.backends.map(grant => ({ ...grant, generation: 2 })) });
+    expect(spawn).toThrow("backend_policy_denied");
+    const host = await f.hosts.lookup(owned, f.epoch);
+    expect(host).toBeDefined();
+    expect(native.launches).toBe(1);
+    await f.hosts.stop(host!.runtimeId, (await f.hosts.inspect(host!.runtimeId)).revision, false);
+  } finally { release(); remote.close(); detach(); await carrier.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
 it("reattaches across pending startup edits while preserving native identity", async () => {
   const f = fixture();
   const host = await f.hosts.ensure(configuration, f.epoch);
   const desired = { ...configuration, startupEnvironmentVariables: { TEST_START: { kind: "literal" as const, value: "new" } } };
-  await expect(f.hosts.ensure(desired, f.epoch)).resolves.toBe(host);
+  await expect(f.hosts.ensure(desired, f.epoch)).rejects.toThrow("codex_runtime_configuration_restart_required");
   await expect(f.hosts.lookup(desired, f.epoch)).resolves.toBe(host);
   await expect(f.hosts.lookup({ ...desired, connection: { ...desired.connection, channel: { type: "unix_websocket", socketPath: "/changed" } } }, f.epoch)).rejects.toThrow("restart_required");
   await expect(f.hosts.lookup({ ...desired, connections: [{ ...desired.connections[0]!, ownerPrincipalId: "intruder" }] }, f.epoch)).rejects.toThrow("scope_denied");
@@ -238,21 +290,104 @@ it("reattaches across pending startup edits while preserving native identity", a
   expect(native.launches).toBe(1);
 });
 
+it.each([false, true])("wakes a parked provider under the latest saved launch configuration (retry after failed launch: %s)", async retry => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-parked-relaunch-"));
+  const owned = { ...configuration, connection: { ownership: "owned" as const,
+    channel: { type: "process_stdio" as const, executablePath: "/usr/bin/false", workingDirectory: directory, codexHome: directory } },
+    startupEnvironmentVariables: { PATH: { kind: "literal" as const, value: "/original/bin" } } };
+  let desired = owned;
+  const f = fixture(owned);
+  const carrier = await createSidecarFramedCarrier();
+  const detach = registerCodexRuntimeHost({ getExecutionPolicy: () => f.services.executionPolicy(f.epoch), registry: carrier.hostRegistry,
+    channel: carrier.hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: f.epoch, onDetach: () => f.services.detach(f.epoch) });
+  const compact = vi.fn(() => 0);
+  const pending = vi.fn<import("../../src/server/backends/codex/runtime/codex-runtime-receipt-store.js").CodexRuntimeReceiptSink["pending"]>(() => []);
+  const main = new CodexRemoteRuntimeSupervisor({
+    scope: { ...scope, executionEnvironmentId: "remote", backendInstanceId: owned.instance.id },
+    configuration: owned, readCurrentLaunchConfiguration: () => desired, serverRequests: new CodexServerRequestRouter(),
+    provider: { acquireExisting: vi.fn(), acquire: async () => ({ channel: carrier.mainChannel, controllerEpoch: f.epoch,
+      serviceIncarnation: f.services.serviceIncarnation, closed: new Promise<void>(() => {}), release() {} }) },
+    receipts: { reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending,
+      reconcileRecordedApplicationState: () => 0, compactRetiredRuntime: compact, releaseRejected: () => false },
+  });
+  try {
+    await carrier.start();
+    const original = await main.attachment();
+    await main.client.residency!.retain().release(true);
+    expect(main.client.lifecycleSnapshot().state).toBe("idle");
+    expect(f.hosts.observedLaunchDigest(owned.instance.id)).toBeNull();
+    desired = { ...owned, startupEnvironmentVariables: { PATH: { kind: "literal", value: "/changed/bin" } } };
+    installFixturePolicy(f.services, f.epoch, serviceConfiguration, codexGrant(desired));
+    const work = main.client.residency!.retain();
+    const request = () => main.client.request(codexRuntimeMethod("model/list"), {}, { timeoutMilliseconds: 1000 });
+    const heldTui = vi.spyOn(f.hosts.managedTui, "activity").mockReturnValue({ state: "active", revision: "terminal", blockers: ["live_terminal"] });
+    expect(f.hosts.observedLaunchDigest(owned.instance.id)).toBe(codexGrant(owned).backends[0]!.launchDigest);
+    await expect(request()).rejects.toMatchObject({ code: "codex_runtime_configuration_restart_required" });
+    expect((await main.attachment()).runtimeId).toBe(original.runtimeId);
+    expect(native.closes).toBe(0);
+    heldTui.mockRestore();
+    pending.mockReturnValueOnce([{ method: "turn/start", operationId: "turn", requestFingerprint: "0".repeat(64), state: "reserved",
+      correlation: { kind: "start", applicationThreadId: "thread", applicationOperationId: "operation" }, outcome: null }]);
+    await expect(request()).rejects.toMatchObject({ code: "codex_runtime_configuration_restart_required" });
+    expect((await main.attachment()).runtimeId).toBe(original.runtimeId);
+
+    const eligible = desired;
+    desired = { ...desired, connection: { ...desired.connection, channel: { ...desired.connection.channel, codexHome: directory + "-other-store" } } };
+    installFixturePolicy(f.services, f.epoch, serviceConfiguration, codexGrant(desired));
+    await expect(request()).rejects.toMatchObject({ code: "codex_runtime_configuration_restart_required" });
+    expect((await main.attachment()).runtimeId).toBe(original.runtimeId);
+    expect(native.closes).toBe(0);
+    desired = eligible;
+    installFixturePolicy(f.services, f.epoch, serviceConfiguration, codexGrant(desired));
+    if (retry) {
+      native.beforeReady = async () => { throw new Error("test_bootstrap_failed"); };
+      await expect(request()).rejects.toMatchObject({ code: "sidecar_operation_failed" });
+      expect(await f.hosts.lookup(eligible, f.epoch)).toBeUndefined();
+      native.beforeReady = undefined;
+      desired = { ...eligible, startupEnvironmentVariables: { PATH: { kind: "literal", value: "/newest/bin" } } };
+      installFixturePolicy(f.services, f.epoch, serviceConfiguration, codexGrant(desired));
+    }
+    const terminalResult = { data: [], nextCursor: null };
+    expect(await Promise.all([request(), request()])).toEqual([terminalResult, terminalResult]);
+    expect((await main.attachment()).runtimeId).not.toBe(original.runtimeId);
+    expect(main.client.lifecycleSnapshot()).toEqual({ state: "ready", generation: 2 });
+    expect(await main.appliedOwnedPath()).toBe(desired.startupEnvironmentVariables.PATH.value);
+    expect(f.hosts.observedLaunchDigest(owned.instance.id)).toBe(codexGrant(desired).backends[0]!.launchDigest);
+    expect(native.launches).toBe(retry ? 3 : 2);
+    expect(native.closes).toBe(retry ? 2 : 1);
+    if (retry) expect(compact).not.toHaveBeenCalled(); // An absent runtime after failed bootstrap carries no retirement receipt.
+    else expect(compact).toHaveBeenCalledWith(expect.objectContaining({ runtimeId: original.runtimeId }),
+      expect.objectContaining({ disposition: "confirmed_retired", runtimeId: original.runtimeId }));
+    expect(f.archive).not.toHaveBeenCalled();
+    await work.release();
+  } finally {
+    await main.close();
+    const host = await f.hosts.lookup(desired, f.epoch);
+    if (host) await f.hosts.stop(host.runtimeId, (await f.hosts.inspect(host.runtimeId)).revision, true);
+    detach(); await carrier.close(); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 it("reads the applied owned PATH across pending startup edits and changes it only after explicit restart", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-owned-path-"));
-  const f = fixture();
   const owned = { ...configuration, connection: { ownership: "owned" as const, channel: { type: "process_stdio" as const, executablePath: "/usr/bin/false", workingDirectory: directory, codexHome: directory } }, startupEnvironmentVariables: { PATH: { kind: "literal" as const, value: "/applied/bin" } } };
+  const f = fixture(owned);
   const desired = { ...owned, startupEnvironmentVariables: { PATH: { kind: "literal" as const, value: "/pending/bin" } } };
   const carrier = await createSidecarFramedCarrier();
-  const detach = registerCodexRuntimeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: f.epoch, onDetach: () => f.services.detach(f.epoch) });
+  const detach = registerCodexRuntimeHost({ getExecutionPolicy: () => f.services.executionPolicy(f.epoch), registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: f.epoch, onDetach: () => f.services.detach(f.epoch) });
   const connection = new CodexSidecarRuntimeConnection(carrier.mainChannel);
+  const getExecutionPolicy = () => f.services.executionPolicy(f.epoch);
   let host = await f.hosts.ensure(owned, f.epoch);
+  launchAdmission({ getExecutionPolicy }, "codex_app_server", "backend", codexGrant(owned).backends[0]!.launchDigest).bind(host);
   const authority = () => ({ scope: { ...scope, executionEnvironmentId: "remote", backendInstanceId: "backend" }, runtimeId: host.runtimeId, controllerId: String(f.epoch) });
   try {
-    await carrier.start(); await connection.attach(authority(), () => {});
+    await carrier.start();
+    await expect(connection.attach(authority(), () => {})).rejects.toMatchObject({ code: "codex_runtime_not_attached" });
+    expect(await connection.lookup(owned)).toBe(host.runtimeId);
+    await connection.attach(authority(), () => {});
     expect(await connection.appliedOwnedPath(authority())).toBe("/applied/bin");
     const appliedFingerprint = (await f.hosts.inspect(host.runtimeId)).startupEnvironmentFingerprint;
-    await expect(f.hosts.ensure(desired, f.epoch)).resolves.toBe(host);
+    await expect(f.hosts.ensure(desired, f.epoch)).rejects.toThrow("codex_runtime_configuration_restart_required");
     expect(await f.hosts.lookup(desired, f.epoch)).toBe(host);
     expect(await connection.appliedOwnedPath(authority())).toBe("/applied/bin");
     // A new main-server supervisor knows only desired configuration. It must
@@ -274,8 +409,23 @@ it("reads the applied owned PATH across pending startup edits and changes it onl
     await connection.attach(authority(), () => {});
     await expect(connection.appliedOwnedPath({ ...authority(), scope: { ...authority().scope, principalId: "other" } })).rejects.toThrow();
     await f.hosts.stop(host.runtimeId, (await f.hosts.inspect(host.runtimeId)).revision, false);
-    host = await f.hosts.ensure(desired, f.epoch); await connection.attach(authority(), () => {});
-    expect(await connection.appliedOwnedPath(authority())).toBe("/pending/bin");
+    const next = codexGrant(desired);
+    f.services.detach(f.epoch);
+    detach();
+    await carrier.close();
+    const epoch = attachFixturePolicy(f.services, serviceConfiguration, "normal", next);
+    const freshCarrier = await createSidecarFramedCarrier();
+    const release = registerCodexRuntimeHost({ getExecutionPolicy: () => f.services.executionPolicy(epoch), registry: freshCarrier.hostRegistry,
+      channel: freshCarrier.hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: epoch, onDetach: () => f.services.detach(epoch) });
+    try {
+      await freshCarrier.start();
+      const fresh = new CodexSidecarRuntimeConnection(freshCarrier.mainChannel);
+      const runtimeId = await fresh.ensure(desired);
+      host = f.hosts.get(runtimeId);
+      const current = { ...authority(), controllerId: String(epoch) };
+      await fresh.attach(current, () => {});
+      expect(await fresh.appliedOwnedPath(current)).toBe("/pending/bin");
+    } finally { release(); await freshCarrier.close(); }
     expect(native.launches).toBe(2);
   } finally { await f.hosts.stop(host.runtimeId, (await f.hosts.inspect(host.runtimeId)).revision, true); connection.close(); detach(); await carrier.close(); await rm(directory, { recursive: true, force: true }); }
 });

@@ -1,8 +1,10 @@
+import { assertSingleAntigravityOwner } from "./configuration-ownership.js";
 import { parseAntigravityBackendConfiguration } from "../backends/antigravity/backend-configuration.js";
 import { parseOpenCodeBackendConfiguration } from "../backends/opencode/opencode-backend-configuration.js";
 import { parsePiNativeBackendConfiguration } from "../backends/pi/native/pi-native-backend-configuration.js";
 import { mergeEnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
 import path from "node:path";
+import { directoryBrowsePathSchema } from "../../shared/protocol/directory-browser.js";
 import { configurationDocumentSchema, type ConfigurationDocument } from "../../shared/protocol/configuration-admin.js";
 import { parseCodexBackendConfiguration } from "../backends/codex/codex-backend-configuration.js";
 import { parseClaudeBackendConfiguration } from "../backends/claude/claude-backend-configuration.js";
@@ -14,9 +16,13 @@ import { DomainError } from "../domain/errors.js";
 /** Pure validation only: never contacts a provider, reads secrets, or starts work. */
 export function validateConfigurationDocument(value: unknown): ConfigurationDocument {
   const document = configurationDocumentSchema.parse(value);
+  assertSingleAntigravityOwner(document);
   for (const environment of document.executionEnvironments) {
     const pathModule = environment.kind === "outbound" ? environment.platform === "win32" ? path.win32 : path.posix : environment.kind === "ssh" ? path.posix : path;
     for (const root of environment.workspaceRoots) {
+      if (environment.kind === "local" && !directoryBrowsePathSchema.safeParse(root).success) {
+        throw new DomainError("bad_request", "A local workspace root must be a path the directory browser supports.");
+      }
       if (!pathModule.isAbsolute(root) || pathModule.normalize(root) !== root ||
         (root !== pathModule.parse(root).root && root.endsWith(pathModule.sep))) {
         throw new DomainError("bad_request", "Workspace roots must be canonical absolute paths in their execution environment.");

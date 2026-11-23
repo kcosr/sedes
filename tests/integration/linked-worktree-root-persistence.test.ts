@@ -1,9 +1,12 @@
+import { realpathSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { WorkspaceFileLinkedWorktreeRepository } from "../../src/server/db/repositories/workspace-file-linked-worktree-repository.js";
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+
+const worktrees = `${realpathSync("/tmp")}/worktrees`;
 
 describe("linked-worktree root persistence", () => {
   it("detects cross-workspace checkout overlap in both path directions and across principals", () => {
@@ -14,7 +17,7 @@ describe("linked-worktree root persistence", () => {
       const environment = inventory.listEnvironments(scope)[0]!;
       const workspace = inventory.upsertWorkspace(scope, {
         environmentId: environment.id,
-        canonicalPath: "/worktrees/main",
+        canonicalPath: `${worktrees}/main`,
         displayName: "Main",
         project: { kind: "new", name: "Main" },
         available: true,
@@ -70,8 +73,8 @@ describe("linked-worktree root persistence", () => {
       database.pragma("foreign_keys = OFF");
       for (const ownerPrincipalId of [scope.principalId, "other-principal"]) {
         for (const canonicalPath of [
-          "/worktrees/feature/nested",
-          "/worktrees",
+          `${worktrees}/feature/nested`,
+          worktrees,
         ]) {
           const otherWorkspaceId = insertWorkspace(
             ownerPrincipalId,
@@ -82,7 +85,7 @@ describe("linked-worktree root persistence", () => {
               scope,
               environment.id,
               workspace.id,
-              "/worktrees/feature",
+              `${worktrees}/feature`,
             ),
           ).toBe(true);
           database
@@ -104,7 +107,7 @@ describe("linked-worktree root persistence", () => {
       const environment = inventory.listEnvironments(scope)[0]!;
       const workspace = inventory.upsertWorkspace(scope, {
         environmentId: environment.id,
-        canonicalPath: "/worktrees/main",
+        canonicalPath: `${worktrees}/main`,
         displayName: "Main",
         project: { kind: "new", name: "Main" },
         available: true,
@@ -129,9 +132,9 @@ describe("linked-worktree root persistence", () => {
         workspace.id,
         [
           {
-            canonicalPath: "/worktrees/feature",
-            canonicalCheckoutPath: "/worktrees/feature",
-            canonicalGitDir: "/worktrees/main/.git/worktrees/feature",
+            canonicalPath: `${worktrees}/feature`,
+            canonicalCheckoutPath: `${worktrees}/feature`,
+            canonicalGitDir: `${worktrees}/main/.git/worktrees/feature`,
             identityToken: "1".repeat(64),
             displayLabel: "feature",
             branchRef: "refs/heads/feature",
@@ -180,9 +183,9 @@ describe("linked-worktree root persistence", () => {
         workspace.id,
         [
           {
-            canonicalPath: "/worktrees/feature",
-            canonicalCheckoutPath: "/worktrees/feature",
-            canonicalGitDir: "/worktrees/main/.git/worktrees/feature",
+            canonicalPath: `${worktrees}/feature`,
+            canonicalCheckoutPath: `${worktrees}/feature`,
+            canonicalGitDir: `${worktrees}/main/.git/worktrees/feature`,
             identityToken: "2".repeat(64),
             displayLabel: "feature",
             branchRef: "refs/heads/feature",
@@ -240,7 +243,7 @@ describe("linked-worktree root persistence", () => {
       const environment = inventory.listEnvironments(scope)[0]!;
       const source = inventory.upsertWorkspace(scope, {
         environmentId: environment.id,
-        canonicalPath: "/worktrees/source",
+        canonicalPath: `${worktrees}/source`,
         displayName: "Source",
         project: { kind: "new", name: "Source" },
         available: true,
@@ -250,7 +253,7 @@ describe("linked-worktree root persistence", () => {
       });
       const destination = inventory.upsertWorkspace(scope, {
         environmentId: environment.id,
-        canonicalPath: "/worktrees/destination",
+        canonicalPath: `${worktrees}/destination`,
         displayName: "Destination",
         project: { kind: "new", name: "Destination" },
         available: true,
@@ -275,9 +278,9 @@ describe("linked-worktree root persistence", () => {
         source.id,
         [
           {
-            canonicalPath: "/worktrees/feature",
-            canonicalCheckoutPath: "/worktrees/feature",
-            canonicalGitDir: "/worktrees/source/.git/worktrees/feature",
+            canonicalPath: `${worktrees}/feature`,
+            canonicalCheckoutPath: `${worktrees}/feature`,
+            canonicalGitDir: `${worktrees}/source/.git/worktrees/feature`,
             identityToken: "3".repeat(64),
             displayLabel: "feature",
             branchRef: "refs/heads/feature",

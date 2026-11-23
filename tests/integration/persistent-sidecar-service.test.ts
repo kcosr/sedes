@@ -1,3 +1,4 @@
+import {executionPolicyDigest} from "../../src/internal/sidecar-protocol/execution-policy.js";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -123,11 +124,15 @@ async function fixture(nativeAssets = false, selectedArtifact = artifact) {
       sessionNonce, carrierGeneration: 1, configuration, mode });
     const response = await readSidecarManagementRecord(stream, sidecarManagementResponseSchema, signal);
     if (response.value.outcome !== "ok") throw new Error(JSON.stringify(response.value));
-    return await SidecarClientSession.start({ connectionCompression: true, transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: 1, artifact: selectedArtifact,
+    const snapshot={roots:[{id:"primary",path:home,generation:1}],capabilities:[{id:"workspace_files",generation:1},{id:"interactive_terminal",generation:1}],backends:[]};
+    const desired = {snapshot,revision:1,digest:executionPolicyDigest(snapshot),configuration};
+    const session=await SidecarClientSession.start({ connectionCompression: true, transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: 1, artifact: selectedArtifact,
       installation: { accountHome: home, stateRoot: paths.stateRoot, nodeExecutable: process.execPath,
         environment: { HOME: home }, executableDirectory: home, executablePath: executable },
       authorizedCapabilities: [{ capabilityId: "workspace_files", majorVersion: 8 }, ...(nativeAssets ? [{ capabilityId: "interactive_terminal" as const, majorVersion: 2 as const }] : [])], authorizedRuntimeCapabilities: [],
-      sedesOperations: new SidecarOperationRegistry(), signal });
+      policyAttachment:mode, readDesiredPolicy:() => desired, sedesOperations: new SidecarOperationRegistry(), signal });
+    if(mode==="normal") await session.applyPolicy(desired);
+    return session;
   };
   return { home, scope, paths, request, status, stop, launch, attach };
 }
@@ -215,10 +220,10 @@ describe("bundled persistent sidecar service", () => {
     const detached = await service.status();
     expect(detached.resources.find(resource => resource.resourceId === "workspace-files")?.blockers).toContain("unsettled_outcome");
     const installer = localInstaller(service);
+    const snapshot={roots:[],backends:[],capabilities:[]};
     const owner = new SidecarRuntimeOwner({ connectionCompression: () => true, scope: { tenantId: service.scope.tenantId, principalId: service.scope.principalId },
-      executionEnvironmentId: service.scope.executionEnvironmentId, environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
+      executionEnvironmentId: service.scope.executionEnvironmentId, readDesiredPolicy:()=>({revision:1,configuration,snapshot,digest:executionPolicyDigest(snapshot)}),
       authorizedCapabilities: [], authorizedRuntimeCapabilities: [], isAutomaticConnectionEnabled: () => false,
-      activeEnvironmentConfigurationRevision: () => 1, activeOperationsConfigurationRevision: () => 1,
       artifact, provisioner: installer, sedesOperations: new SidecarOperationRegistry(), startSession: (input) => SidecarClientSession.start(input) });
     cleanups.push(() => owner.close());
     const authority = { tenantId: service.scope.tenantId, principalId: service.scope.principalId };
@@ -228,7 +233,7 @@ describe("bundled persistent sidecar service", () => {
     const recovery = recovered.session;
     expect(recovered.serviceStatus.attachmentMode).toBe("recovery");
     expect(await recovery.runtimeChannel.call(workspaceFilesMutationInspectOperation, { operationId })).toMatchObject({ state: "succeeded", result: { path: "note.txt" } });
-    await expect(recovery.runtimeChannel.call(workspaceFilesRootOpenOperation, { admissionId: randomUUID(), rootId: "primary", rootKind: "primary", declaredPath: workspace, policyRootPath: service.home })).rejects.toMatchObject({ code: "sidecar_operation_failed" });
+    await expect(recovery.runtimeChannel.call(workspaceFilesRootOpenOperation, { admissionId: randomUUID(), rootId: "primary", rootKind: "primary", declaredPath: workspace, policyRootPath: service.home })).rejects.toThrow("sidecar_recovery_attachment_read_only");
     expect(await recovery.runtimeChannel.call(workspaceFilesMutationAcknowledgeOperation, { operationId })).toEqual({ acknowledged: true });
     recovered.release(); await recovery.closed;
     await expect(owner.acquireOperation(authority, service.scope.executionEnvironmentId, signal)).rejects.toThrow("sidecar_unavailable");
@@ -247,8 +252,12 @@ describe("bundled persistent sidecar service", () => {
       await first.runtimeChannel.call(terminalCreateOperation, prepared);
       created = true;
       const attached = await first.runtimeChannel.call(terminalAttachOperation, identity);
-      expect(await first.runtimeChannel.call(terminalInputOperation, { ...identity, controllerToken: attached.controllerToken, controlSeq: 1,
-        data: Buffer.from("printf 'persistent-pty-marker\\n'\n").toString("base64url") })).toEqual({ outcome: "sent" });
+      const input = { ...identity, controllerToken: attached.controllerToken, controlSeq: 1,
+        data: Buffer.from("printf 'persistent-pty-marker\\n'\n").toString("base64url") };
+      expect(await first.runtimeChannel.call(terminalInputOperation, input)).toEqual({ outcome: "sent" });
+      const recovery = first.recoveryView();
+      await expect(recovery.call(terminalInputOperation, input)).resolves.toEqual({ outcome: "sent" });
+      await expect(recovery.call(terminalInputOperation, { ...input, controlSeq: 2 })).rejects.toThrow("terminal_admission_closed");
       await first.close("main_process_stopped");
       expect((await service.status()).resources.some(resource => resource.blockers.includes("live_terminal"))).toBe(true);
       const second = await service.attach();
@@ -275,10 +284,10 @@ describe("bundled persistent sidecar service", () => {
         const nextArtifact = { ...artifact, buildId: nextBuildId, artifactSha256: createHash("sha256").update(newBytes).digest("hex"),
           artifactBytes: newBytes.length, executableDirectory: newDirectory, executablePath: newExecutable };
         const installer = localInstaller(service, nextArtifact);
+        const snapshot={roots:[{id:"primary",path:service.home,generation:1}],capabilities:[{id:"workspace_files",generation:1},{id:"interactive_terminal",generation:1}],backends:[]};
         const owner = new SidecarRuntimeOwner({ connectionCompression: () => true, scope: { tenantId: service.scope.tenantId, principalId: service.scope.principalId },
-          executionEnvironmentId: service.scope.executionEnvironmentId, environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
+          executionEnvironmentId: service.scope.executionEnvironmentId, readDesiredPolicy:()=>({revision:1,configuration,snapshot,digest:executionPolicyDigest(snapshot)}),
           authorizedCapabilities: [{ capabilityId: "interactive_terminal", majorVersion: 2 }], authorizedRuntimeCapabilities: [], isAutomaticConnectionEnabled: () => true,
-          activeEnvironmentConfigurationRevision: () => 1, activeOperationsConfigurationRevision: () => 1,
           artifact: nextArtifact, provisioner: installer, sedesOperations: new SidecarOperationRegistry(), startSession: (input) => SidecarClientSession.start(input) });
         cleanups.push(() => owner.close());
         const authority = { tenantId: service.scope.tenantId, principalId: service.scope.principalId };

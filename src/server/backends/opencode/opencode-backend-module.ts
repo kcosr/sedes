@@ -219,7 +219,8 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       const admitted = context.connections.find(candidate => candidate.id === connection.id);
       if (!admitted || (["tenantId", "ownerPrincipalId", "backendInstanceId", "executionEnvironmentId", "templateId", "kind", "configurationRevision", "enabled"] as const)
         .some(key => admitted[key] !== connection[key])) return undefined;
-      return configuration.defaultsByConnectionId.get(admitted.templateId);
+      const current = context.targetDefinition?.(admitted.templateId);
+      return current?.kind === "opencode_http" ? current.moduleConfiguration.defaults : configuration.defaultsByConnectionId.get(admitted.templateId);
     };
     const adapterInput = { database: context.database, scope: context.scope, backendInstanceId: context.instance.id,
       settings, modelPolicy: configuration.modelPolicy, resolveConnectionDefaults };
@@ -248,9 +249,8 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
           return result;
         } finally { lease.release(); }
       } });
-    const connections = new Map(context.connections.map(connection => [connection.id, connection]));
     const discovery = { nativeNamespaceKey: (connection: AgentConnectionProfile) => {
-      const admitted = connections.get(connection.id);
+      const admitted = context.connections.find(profile => profile.id === connection.id);
       if (!admitted || connection.tenantId !== context.scope.tenantId || connection.ownerPrincipalId !== context.scope.principalId ||
           connection.backendInstanceId !== context.instance.id || connection.kind !== "opencode_http" ||
           connection.executionEnvironmentId !== admitted.executionEnvironmentId || connection.templateId !== admitted.templateId) {
@@ -258,7 +258,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       }
       return namespace;
     } };
-    const driverFactory = new OpenCodeBackendDriverFactory({ scope: context.scope, instance: context.instance, connections: context.connections,
+    const driverFactory = new OpenCodeBackendDriverFactory({ scope: context.scope, instance: context.instance, get connections() { return context.connections; },
       nativeNamespaceKey: namespace, repository, settings, catalog, skills, tools: this.#tools, usage: this.#usage,
       attachmentProvenanceKey: context.toolProvenanceKey, outputArtifacts: context.outputArtifacts, executionEnvironment: this.#executionEnvironment, modelPolicy: configuration.modelPolicy,
       observeHealth: () => {
@@ -324,7 +324,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
         binding.executionEnvironmentId !== source.sourceEnvironmentId) throw openCodeToolInvocationDenied();
     const context = this.driverFactory.create(connection).input;
     const input = { scope: source.scope, binding: { ...binding, createdAt: new Date(binding.createdAt).toISOString() }, opaqueBindingDetail,
-      workspace: { canonicalPath: workspace.canonicalPath, authorityRevision: workspace.environmentConfigurationRevision,
+      workspace: { canonicalPath: workspace.canonicalPath, ...(workspace.authorityRootId && { authorityRootId: workspace.authorityRootId }), authorityRevision: workspace.environmentConfigurationRevision,
         summary: { id: workspace.id, environmentId: workspace.environmentId, displayName: workspace.displayName,
           displayPath: workspace.canonicalPath, availability: workspace.availability, trustState: workspace.trustState, revision: workspace.revision } } };
     requireOpenCodeBinding(context, input);

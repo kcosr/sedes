@@ -46,8 +46,9 @@ function fixture() {
   };
   const bindings = { getBinding: vi.fn((_scope, threadId) => ({ ...binding(threadId), createdAt: 10 })) };
   const inventory = {
+    workspaceAuthorityIsCurrent: vi.fn(() => true),
     getThread: vi.fn(() => ({ thread: { workspaceId: "workspace" } })),
-    getWorkspace: vi.fn(() => ({ canonicalPath: "/workspace", availability: "available", environmentId: "environment" })),
+    getWorkspace: vi.fn(() => ({ canonicalPath: "/workspace", availability: "available", environmentId: "environment", environmentConfigurationRevision: 1 })),
     getEnvironment: vi.fn(() => environment),
   };
   const service = new ViewedImageCaptureService({ files, artifacts, bindings, inventory } as never);
@@ -245,7 +246,7 @@ describe("ViewedImageCaptureService", () => {
     const current = fixture();
     current.artifacts.publishCapturedImage.mockImplementation(async (_value, assertAllowed) => {
       await Promise.resolve();
-      current.environment.operationsConfigurationRevision += 1;
+      current.inventory.workspaceAuthorityIsCurrent.mockReturnValue(false);
       assertAllowed();
       current.published.set("unauthorized", descriptor);
       return descriptor;

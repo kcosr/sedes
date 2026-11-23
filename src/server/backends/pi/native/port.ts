@@ -75,6 +75,7 @@ export interface PiNativeEvent {
   readonly payload: Readonly<Record<string, unknown>>;
 }
 export interface PiNativeAttachment extends PiNativeSessionIdentity {
+  readonly toolPeerStamp?: string;
   readonly handleId: string;
   readonly generation: string;
   readonly throughSequence: number;

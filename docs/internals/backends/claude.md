@@ -40,7 +40,7 @@ enabled. One
 principal/backend runtime owns the SDK queries admitted by the shared Sedes
 conversation-runtime budget for that execution environment. A live Sedes thread
 has at most one warm query. The strict worker and persistent sidecar capabilities
-are `claude_runtime@4` and `claude_persistent_runtime@5`. Worker operations are
+are `claude_runtime@4` and `claude_persistent_runtime@6`. Worker operations are
 defined in `src/server/backends/claude/worker/claude-runtime-v4.ts`; older majors
 are not accepted.
 Closing a handle does not delete its Claude session, and attaching the same
@@ -51,6 +51,8 @@ two Claude processes never write one transcript. Unproven cleanup keeps the
 session reserved and fences the worker generation. The worker's fixed maximum
 of 32 simultaneous queries is a last-resort execution-environment safety guard,
 not a backend configuration surface.
+
+Each persistent command carries the backend instance ID and addresses a runtime discovered by the current controller. A recovery controller can deny a pending permission or replay an already recorded response. Recording a new approval requires the active instance grant. The host checks the installed launch digest and instance generation before starting a worker. After the previous worker’s cleanup is proved and its sessions and commands have settled, the next request can launch a worker with the current executable, timeout and startup variables. The persistent runtime keeps its ID, native configuration directory and settled operation receipts.
 
 The persistent service owns remote queries and their bounded retained events;
 SSH stdio or an outbound connection carries the current main-side attachment. Detach does not interrupt
@@ -241,6 +243,12 @@ closed. A replacement local generation reconstructs from Claude's authoritative
 store rather than replaying uncertain writes. Persistent remote workers retain
 the separate service-owned lifetime and reattachment contract described above.
 
+The remote Claude runtime keeps its settled command journal when the last native
+worker retires. Its next launch can use a saved executable, initialization
+timeout, or startup environment after the host proves cleanup and confirms
+there are no retained queries, provider operations, or paginated history reads.
+Changing the native configuration directory requires a different store identity.
+
 ## Current context telemetry
 
 The handle owns a volatile context estimate for its admitted query generation.
@@ -259,7 +267,7 @@ late responses cannot restore them. Missing telemetry leaves context unknown
 without failing the conversation. Persistent reads bind the current service,
 controller and startup identity and never launch or reconnect a runtime for the
 meter. The worker requires `query.context_usage` in its exact operation inventory;
-the persistent closed command union requires `claude_persistent_runtime@5`.
+the persistent closed command union requires `claude_persistent_runtime@6`.
 
 Counters continue to come from the transcript projection. Every `usage_changed`
 event replaces the complete context-and-counters snapshot. Neither the context
@@ -367,7 +375,7 @@ them. A native link missing from the transcript still ends the read, as it does
 in the SDK. Boundary rows appear only with `includeSystemMessages`. The summary
 row keeps the SDK's `isCompactSummary` marker, and a converted queued command
 its `isQueuedCommand` marker; the worker protocol carries both under sidecar
-wire 17. The SDK's derived `is_meta`, `interruptedByShutdown`, and
+wire 18. The SDK's derived `is_meta`, `interruptedByShutdown`, and
 `isCompletedLocalCommand` do not cross it.
 
 The earlier segments can be several times the size of the newest one, so only
@@ -1121,7 +1129,7 @@ The alias list is bounded to 128 names of at most 160 characters per skill.
 The catalog exposes at most 512 skills. Client protocol 132 carries the
 optional normalized field; Pi, Codex, Grok, and OpenCode omit it and retain
 their existing behavior. Native `builtin` classification stays private and
-is preserved by `claude_runtime@4` / `claude_persistent_runtime@5` catalogs.
+is preserved by `claude_runtime@4` / `claude_persistent_runtime@6` catalogs.
 Stale selections, terminal-only commands, unclassified builtins, malformed
 commands, and reset-producing forms fail before provider submission.
 
@@ -1150,14 +1158,17 @@ socket relay
 when `agent_tools_cli` is independently enabled and admitted. Its calls require
 a current authorized main-server connection; disconnected calls are not queued
 for later execution. For a remote Native query, the sidecar admits the MCP
-entry only when it names the sidecar's own `sedes` binary and live ingress,
-and the retained query's authority fingerprint includes it. A missing built
+entry only when it names the sidecar's own `sedes` binary and live ingress. A missing built
 CLI disables only the agent-tool presentation, not ordinary Claude
 conversation capabilities, and never falls back to another mode or surface. The injected encrypted
 thread source reference survives a Sedes restart, while every invocation still
 requires the exact current active Claude query and policy. For a service-owned
-remote query, losing the CLI carrier does not close the query. The sidecar validates the exact injected ingress/PATH and
-reattachment rejects changes to that query authority.
+remote query, the sidecar validates the injected CLI endpoint and PATH before
+launch. The resident process keeps its original tool setup. When main
+reconnects, the sidecar matches the application thread binding, native runtime
+and session, workspace path and permission callback contract. The same worker
+can deliver pending permission requests while a replacement tool route is still
+preparing. A newly prepared route applies to the next native query.
 
 Principal Tool clients are separate generic management-HTTP callers, not a
 Claude presentation mode. They are never injected into the Claude query
@@ -1320,8 +1331,8 @@ action only on exact native evidence. A lost reply or runtime authority keeps
 the operation uncertain; recovery consults its retained receipt and never
 resends a command whose outcome cannot be proven. Persistent sidecars carry
 the same command, result, and scoped receipt behavior. This operation requires
-the current `claude_runtime@4` / `claude_persistent_runtime@5` capability majors;
-the shared sidecar wire protocol is 17.
+the current `claude_runtime@4` / `claude_persistent_runtime@6` capability majors;
+the shared sidecar wire protocol is 18.
 
 Full accounting receipts are limited to 256 per native query and persistent
 session journal, including earlier query incarnations under the same authority.

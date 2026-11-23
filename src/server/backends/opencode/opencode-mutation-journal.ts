@@ -67,8 +67,8 @@ export class OpenCodeMutationJournal {
 
   async mutate<K extends OpenCodeMutationMethod>(authority: OpenCodeNativeAuthority, method: K,
     input: OpenCodeMutationInput<K>, control: OpenCodeMutationControl,
-    dispatch: (input: OpenCodeMutationInput<K>, signal: AbortSignal) => Promise<OpenCodeMutationOutput<K>>,
-    signal?: AbortSignal): Promise<OpenCodeMutationOutput<K>> {
+    dispatch: (input: OpenCodeMutationInput<K>, signal: AbortSignal, assertDispatch?: () => void) => Promise<OpenCodeMutationOutput<K>>,
+    signal?: AbortSignal, admit?: () => (() => void) | undefined): Promise<OpenCodeMutationOutput<K>> {
     if (control.deadlineAt !== null && (!Number.isSafeInteger(control.deadlineAt) || control.deadlineAt < 0)) throw refused("opencode_mutation_deadline_invalid");
     // Capture before admission: later caller mutation cannot change native input
     // or bypass the immutable request fingerprint. Resolved secrets never enter
@@ -86,6 +86,7 @@ export class OpenCodeMutationJournal {
     let entry = this.#entries.get(key);
     if (entry && entry.fingerprint !== fingerprint) throw refused("opencode_mutation_identity_conflict");
     if (!entry) {
+      const assertDispatch = admit?.();
       if (signal?.aborted) throw refused("opencode_mutation_cancelled_before_admission");
       if (this.#closed || this.#frozen) throw refused("opencode_mutation_admission_closed");
       if (control.deadlineAt !== null && control.deadlineAt <= Date.now()) throw refused("opencode_mutation_deadline_expired");
@@ -113,7 +114,7 @@ export class OpenCodeMutationJournal {
         // Its capacity was reserved at admission. Later control work can use
         // the extra reserve without revoking already-admitted ordinary work.
         admitted.dispatched = true;
-        return dispatch(captured, remaining === null ? new AbortController().signal : AbortSignal.timeout(Math.min(remaining, 2_147_483_647)));
+        return dispatch(captured, remaining === null ? new AbortController().signal : AbortSignal.timeout(Math.min(remaining, 2_147_483_647)), assertDispatch);
       }).then(result => {
         try {
           this.#settle(admitted, { status: "completed", result: snapshotBoundedJson(result, { ...limits, maximumEncodedBytes: resultBytes(method) }) });

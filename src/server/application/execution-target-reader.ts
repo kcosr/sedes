@@ -5,6 +5,7 @@ import type { BackendConfigurationRepository } from "../db/repositories/backend-
 import type { ConnectionProfileRecord } from "../db/repositories/backend-configuration-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { boundDisplayText } from "../conversations/payload-policy.js";
+import { withAbort } from "../runtime/with-abort.js";
 import { DomainError } from "../domain/errors.js";
 import type { EnvironmentOperations } from "../execution/environment-operations.js";
 
@@ -48,6 +49,11 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
     readonly input: {
       readonly configuration: BackendConfigurationRepository;
       readonly registry: AgentBackendRegistry;
+      readonly targetAdmission?: (profile: ConnectionProfileRecord) => {
+        readonly eligible: boolean;
+        /** Only an explicit selection may connect to this host. */
+        readonly confirmRemote?: (signal: AbortSignal) => Promise<boolean>;
+      };
       /** Static environment operation contributions; resolving them never starts a sidecar. */
       readonly environmentOperations?: ReadonlyMap<
         string,
@@ -218,6 +224,10 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
         unavailableReason: boundDisplayText("This backend is disabled."),
       };
     }
+    const admission = this.input.targetAdmission?.(profile);
+    if (admission && !admission.eligible) {
+      return {...base, available: false, unavailableReason: boundDisplayText("Waiting for the execution target to become ready.")};
+    }
     const environmentDisposition = this.#environmentDisposition(
       profile,
       backend.kind,
@@ -235,7 +245,6 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
       ...profile,
       enabled: true,
     } as const;
-    let driver;
     try {
       if (!this.input.registry.supportsConversationCreation(connection)) {
         return {
@@ -246,7 +255,6 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
           ),
         };
       }
-      driver = this.input.registry.driver(connection);
     } catch (error) {
       this.input.onHealthError?.(error, profile);
       return {
@@ -265,28 +273,56 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
       profile.id,
       profile.configurationRevision,
     ].join("\0");
-    const generation = this.#healthGeneration;
     const now = this.input.now?.() ?? Date.now();
     const cached = this.#health.get(cacheKey);
+    const recordAvailability = (available: boolean, generation: number) => {
+      if (generation === this.#healthGeneration) this.#health.set(cacheKey, {
+        available,
+        expiresAt: (this.input.now?.() ?? Date.now()) + (this.input.healthCacheMilliseconds ?? 5_000),
+      });
+    };
     let available: boolean;
+    let grantSignal: AbortSignal | undefined;
+    const waitingForTarget = () => ({
+      ...base, available: false, unavailableReason: boundDisplayText("Waiting for the execution target to become ready."),
+    });
+    if (admission?.confirmRemote && !useHealthCache) {
+      const deadline = AbortSignal.timeout(10_000);
+      grantSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+      const generation = this.#healthGeneration;
+      const confirmed = await withAbort(admission.confirmRemote(grantSignal), grantSignal).catch(error => {
+        if (!grantSignal?.aborted) throw error;
+        return false;
+      });
+      signal?.throwIfAborted();
+      if (!confirmed) {
+        if (!grantSignal.aborted) recordAvailability(false, generation);
+        return waitingForTarget();
+      }
+    }
+    const generation = this.#healthGeneration;
     if (useHealthCache && cached && cached.expiresAt > now) {
       available = cached.available;
+    } else if (useHealthCache && admission?.confirmRemote) {
+      // After an observation expires, offer the eligible target for selection.
+      // Selecting it probes its host without connecting to any sibling.
+      available = true;
     } else {
       try {
-        const health = await driver.health();
+        const driver = this.input.registry.driver(connection, grantSignal);
+        const providerSignal = grantSignal ? signal ?? new AbortController().signal : undefined;
+        const health = providerSignal
+          ? await withAbort(driver.health({waitForInitialization: providerSignal}), providerSignal)
+          : await driver.health();
         signal?.throwIfAborted();
         available = health.available;
       } catch (error) {
         signal?.throwIfAborted();
+        if (grantSignal?.aborted && error === grantSignal.reason) return waitingForTarget();
         this.input.onHealthError?.(error, profile);
         available = false;
       }
-      if (useHealthCache && generation === this.#healthGeneration) {
-        this.#health.set(cacheKey, {
-          available,
-          expiresAt: now + (this.input.healthCacheMilliseconds ?? 5_000),
-        });
-      }
+      recordAvailability(available, generation);
     }
     if (generation !== this.#healthGeneration) available = false;
     return available

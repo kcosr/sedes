@@ -18,6 +18,8 @@ const primary = {
   environmentId: "environment-1",
   canonicalPath: "/workspaces/one",
   displayName: "one",
+  authorityRootId: "project-root",
+  environmentConfigurationRevision: 7,
   availability: "available" as const,
   revision: 9,
 };
@@ -150,6 +152,7 @@ function fixture(input?: {
     revision: number;
   }>;
   files?: WorkspaceFileProvider;
+  captureFileGrant?: WorkspaceFileService["captureFileGrant"];
   linkedWorktrees?: Array<{
     rootId: string;
     canonicalPath: string;
@@ -171,6 +174,7 @@ function fixture(input?: {
   const workspace = input?.workspace ?? primary;
   const records = input?.roots ?? [];
   const inventory = {
+    workspaceAuthorityIsCurrent: vi.fn(() => true),
     assertWorkspaceActive: vi.fn(),
     getWorkspace: vi.fn((scope, workspaceId) => {
       if (scope !== owner || workspaceId !== workspace.id) {
@@ -260,11 +264,24 @@ function fixture(input?: {
       execution as never,
       files,
       applicationThreads,
+      input?.captureFileGrant,
     ),
   };
 }
 
 describe("WorkspaceFileService", () => {
+  it("cannot acquire a linked Files root for a thread whose original workspace grant was withdrawn", async () => {
+    const current = fixture();
+    current.inventory.workspaceAuthorityIsCurrent.mockReturnValue(false);
+    const path = `${primary.canonicalPath}/README.md`;
+    await expect(current.service.readAbsoluteFile(owner, "thread-1", path, 100)).rejects.toThrow("unavailable");
+    await expect(current.service.readAbsoluteImage(owner, "thread-1", path)).resolves.toBeUndefined();
+    await expect(current.service.resolveWorkspaceFileLink(owner, primary.id, {reference:{kind:"absolute", path}}))
+      .resolves.toEqual({status:"not_found"});
+    expect(current.files.discoverFileLinkRoot).not.toHaveBeenCalled();
+    expect(current.roots.rememberLinkRoot).not.toHaveBeenCalled();
+  });
+
   it("captures bounded page source through the exact Files provider with a revision-fenced download", async () => {
     const current = fixture();
     const bytes = await current.service.readAbsoluteFile(owner, "thread-1", "/workspaces/one/README.md", 100);
@@ -285,7 +302,10 @@ describe("WorkspaceFileService", () => {
       const current = fixture({ workspace: { ...primary, canonicalPath }, files });
 
       expect(Buffer.from(await current.service.readAbsoluteFile(owner, "thread-1", absolutePath, 100)).toString()).toBe("read me");
-      expect(current.execution.validateWorkspace).toHaveBeenCalledWith(owner, primary.environmentId, canonicalPath);
+      expect(current.execution.validateWorkspace).toHaveBeenCalledWith(owner, primary.environmentId, canonicalPath, {
+        binding: {authorityRootId: primary.authorityRootId, authorityRevision: primary.environmentConfigurationRevision},
+        signal: expect.any(AbortSignal),
+      });
       expect(files.resolveFileLink).toHaveBeenCalledWith(owner, expect.objectContaining({
         environmentId: primary.environmentId, canonicalPath, rootId: "primary",
       }), { kind: "absolute", path: absolutePath }, expect.any(AbortSignal));
@@ -335,7 +355,7 @@ describe("WorkspaceFileService", () => {
     expect(current.roots.rememberLinkRoot).not.toHaveBeenCalled();
     expect(files.discoverLinkedWorktrees).not.toHaveBeenCalled();
     expect(files.list).not.toHaveBeenCalled();
-    expect(current.execution.validateWorkspace).toHaveBeenCalledWith(owner, primary.environmentId, "/workspaces/captures");
+    expect(current.execution.validateWorkspace).toHaveBeenCalledWith(owner, primary.environmentId, "/workspaces/captures", {signal: expect.any(AbortSignal)});
   });
 
   it("does not probe denied or malformed absolute image paths or unavailable remote providers", async () => {
@@ -1281,6 +1301,25 @@ describe("WorkspaceFileService", () => {
     });
   });
 
+  it("returns not found if the selected listed root is revoked during link resolution", async () => {
+    let revoked = false;
+    const rootId = workspaceFileRootIdSchema.parse("root-1");
+    const current = fixture({
+      roots: [{ rootId, canonicalPath: "/workspaces/context", displayLabel: "Context", sortOrder: 0, availability: "available", revision: 1 }],
+      captureFileGrant: (_scope, _workspace, target) => () => {
+        if (target.rootId === rootId && revoked) throw new DomainError("conflict", "The Files grant changed.");
+      },
+    });
+    vi.mocked(current.files.resolveFileLink).mockImplementation(async () => {
+      revoked = true;
+      return "guide.md";
+    });
+    await expect(current.service.resolveThreadFileLink(owner, "thread-1", {
+      reference: { kind: "root_relative", rootId, path: "guide.md" },
+    })).resolves.toEqual({ status: "not_found" });
+    expect(current.roots.rememberLinkRoot).not.toHaveBeenCalled();
+  });
+
   it("resolves workspace-relative links only against the primary root", async () => {
     const current = fixture({
       roots: [
@@ -1432,9 +1471,7 @@ describe("WorkspaceFileService", () => {
       path: "src/index.ts",
     });
     expect(current.execution.validateWorkspace).toHaveBeenLastCalledWith(
-      owner,
-      primary.environmentId,
-      "/worktrees/sibling",
+      owner, primary.environmentId, "/worktrees/sibling", {signal: undefined},
     );
   });
 
@@ -1810,7 +1847,8 @@ describe("WorkspaceFileService", () => {
       fail = resolve;
     });
     const files = provider();
-    vi.mocked(files.watch).mockResolvedValue({ failed, close: vi.fn() });
+    const close = vi.fn();
+    vi.mocked(files.watch).mockResolvedValue({ failed, close });
     const current = fixture({ files });
     const listener = vi.fn();
     const subscription = await current.service.watch(
@@ -1821,6 +1859,7 @@ describe("WorkspaceFileService", () => {
     listener.mockClear();
     fail();
     await vi.waitFor(() => expect(listener).toHaveBeenCalledOnce());
+    expect(close).toHaveBeenCalledOnce();
     await expect(current.service.listRoots(owner, primary.id)).resolves.toEqual(
       {
         roots: [

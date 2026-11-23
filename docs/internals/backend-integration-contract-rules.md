@@ -113,7 +113,10 @@ order and fenced against newer events and responses completed during the read.
 Application abandonment can release an exact scoped terminal provider receipt,
 but cannot establish native non-consumption or discard a pending callback.
 
-Client protocol 178 exposes a bounded application-owned lookup for explicit
+Client protocol 179 adds per-effect execution settings and confirmed host
+generations to the strict configuration response.
+
+Client protocol 178 introduced a bounded application-owned lookup for explicit
 input abandonment at `POST /api/threads/:threadId/abandoned-input-operations`.
 It reads exact persisted operation IDs under the authenticated tenant,
 principal, and thread; it never queries a provider. Positive evidence includes
@@ -186,7 +189,21 @@ history acquisition, counters, delivery evidence, images and usage accounting.
 Native archived-session metadata does not select Sedes thread state, and native
 idle queries do not imply a different acquisition or paging contract. Pi,
 Codex, Claude and Grok retain their existing SDK/runtime admission and native
-semantics. All sidecar consumers use the current shared wire protocol 17,
+semantics. A persistent host announces compiled provider operations during
+discovery. Normal dispatch also needs an installed grant for that instance.
+Provider modules check backend-private commands at their actual effect boundary
+and preserve exact-instance inspection, acknowledgment and recovery for retained
+work. A new named connection can reuse an owned provider. The registered
+driver checks its current target generation when admitting work.
+
+An owned provider that launches a replacement worker reads the current backend
+and host startup declarations at that launch. The sidecar verifies the installed
+instance generation, launch digest and immutable native-store binding. A parked
+or exited worker can be replaced on ordinary demand once cleanup is proved and
+retained sessions, terminals and unsettled outcomes are accounted for. Verify
+both the retired-worker path and the refusal while work is retained.
+
+All sidecar consumers use the current shared wire protocol 18,
 retaining negotiated compression from version 15; OpenCode's private runtime
 capability is major 5. No browser contract
 or client protocol change follows from this private schema update.
@@ -3336,7 +3353,7 @@ exact-target interrupt. An authoritative idle observation accepts a no-op.
 A stale native target is nonapplication; old-turn disappearance alone never
 proves command acceptance. Drivers record operation/generation evidence before
 effects. Persistent Claude owner evidence survives main-client replacement;
-`claude_runtime@4` and `claude_persistent_runtime@5` are required, without
+`claude_runtime@4` and `claude_persistent_runtime@6` are required, without
 older-contract parsers.
 
 The deadline includes pending-input withdrawal and carrier/SDK acknowledgement.

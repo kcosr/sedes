@@ -41,7 +41,7 @@ function operationStore(onVerified?: (operationId: string) => void): PiNativeOpe
 }
 const submission = (text: string, id = randomUUID()): SubmitTurnInput => ({ applicationOperationId: id, mutationId: `${id}:mutation`, reconciliationToken: `${id}:token`, source: { kind: "user" }, text, contextExcerpts: [], taskContexts: [], attachments: [] });
 
-async function fixture(options: { mcp?: boolean; agentTools?: PiNativeAgentToolService; bundled?: boolean; streamingReply?: () => StreamingReply | undefined; onVerified?: (operationId: string) => void } = {}) {
+async function fixture(options: { bundledCli?: boolean; mcp?: boolean; agentTools?: PiNativeAgentToolService; bundled?: boolean; streamingReply?: () => StreamingReply | undefined; onVerified?: (operationId: string) => void } = {}) {
   const executablePath = process.env.SEDES_REAL_PI_NATIVE_EXECUTABLE;
   if (!executablePath || !path.isAbsolute(executablePath)) throw new Error("Set SEDES_REAL_PI_NATIVE_EXECUTABLE to an isolated stock Pi >=1.4.0 executable. This suite never uses PATH discovery.");
   const directory = await mkdtemp(path.join(tmpdir(), "sedes-pi-test-"));
@@ -90,6 +90,7 @@ lines.on("line", line => {
       send({ role: "assistant", content: "waiting" }, null); hanging.add(response); response.on("close", () => hanging.delete(response)); return;
     }
     const tool = user.includes("inspect-bootstrap") ? { name: "read", arguments: { path: "/proc/self/environ" } }
+      : user.includes("check-peer-cli") ? { name: "bash", arguments: { command: "sedes tool list --json" } }
       : user.includes("mcp-code") ? { name: "codemode", arguments: { code: 'text(await tools.mcp__fixture__echo({value:"code"}));' } }
       : user.includes("mcp-direct") ? { name: "mcp__fixture__echo", arguments: { value: "direct" } }
       : user.includes("write-code") ? { name: "codemode", arguments: { code: 'text(await tools.write({path:"denied.txt",content:"unauthorized"}));' } }
@@ -118,7 +119,7 @@ lines.on("line", line => {
   const channels = new LocalEnvironmentChannelProvider({ scope, executionEnvironmentId: "local-test", environment });
   cleanup.push(async () => channels.close());
   const runtime = { ...scope, backendInstanceId: "pi-native-test", executionEnvironmentId: "local-test", executablePath, agentDirectory, sessionDirectory, initializationTimeoutMs: 20_000, projectTrusted: false };
-  const remote = options.bundled ? await bundledSidecar(runtime, environment) : undefined;
+  const remote = options.bundled ? await bundledSidecar(runtime, environment, !!options.bundledCli) : undefined;
   if (remote) cleanup.push(() => remote.close());
   const authenticationKey = randomBytes(32);
   const host = remote?.port ?? new PiNativeHost({ configuration: runtime, channels, environment, authenticationKey, observationWaitMs: 10 });
@@ -126,7 +127,17 @@ lines.on("line", line => {
   const instance = { id: "pi-native-test", tenantId: scope.tenantId, kind: "pi_native" as const, label: "Pi", enabled: true, configurationRevision: 1, protocolRelease: "1.4.0" };
   const connection = { id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "pi_rpc" as const, backendInstanceId: instance.id, executionEnvironmentId: "local-test", label: "Pi", enabled: true, configurationRevision: 1 };
   const settings = { modelProvider: "fixture", modelId: "fixture", thinkingLevel: "off", toolMode: "read_only" as "read_only" | "ask" | "full", revision: 0 };
-  const driver = new PiNativeConversationDriver({ instance, connection, port: host, operations: operationStore(options.onVerified), usage: NO_USAGE_SINK, settings: { getSettings: () => settings }, modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "provider_model_effort"), ...(options.agentTools ? { agentTools: options.agentTools } : {}) });
+  let agentTools = options.agentTools;
+  if (remote && options.bundledCli) {
+    const route = await remote.cliRoute();
+    const facade = fixtureAgentTools().agentTools.input.facade;
+    agentTools = new PiNativeAgentToolService({
+      remote: true, cli: { availability: "available", ...route },
+      sourceCapabilities: { issue: () => remote.sourceCapability },
+      facade: { ...facade, readPolicy: source => ({ ...facade.readPolicy(source), presentation: { surface: "cli", mode: "progressive" } }) },
+    });
+  }
+  const driver = new PiNativeConversationDriver({ instance, connection, port: host, operations: operationStore(options.onVerified), usage: NO_USAGE_SINK, settings: { getSettings: () => settings }, modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "provider_model_effort"), ...(agentTools ? { agentTools } : {}) });
   cleanup.push(() => driver.close());
   const workspace = { canonicalPath: workspacePath, authorityRevision: 0, summary: { id: "workspace", environmentId: "local-test", displayName: "Offline", displayPath: workspacePath, availability: "available" as const, trustState: "untrusted" as const, revision: 0 } };
   const created = await driver.create({ scope, applicationThreadId: "thread", applicationOperationId: randomUUID(), source: { kind: "user" }, workspace, requestedBackendConversationId: randomUUID() });
@@ -298,9 +309,13 @@ it("runs native Sedes tools directly and through code mode with thread scope and
 });
 
 it.skipIf(process.platform === "win32")("runs the release sidecar bundle and preserves the native owner through framed-carrier replacement", async () => {
-  const f = await fixture({ bundled: true });
+  const f = await fixture({ bundled: true, bundledCli: true });
   let handle = await f.driver.attach(f.input);
   await completed(handle, "/skill:sample bundled");
+  await handle.perform({ action: "set_tool_access", mode: "full", applicationOperationId: randomUUID() });
+  f.settings.toolMode = "full"; f.settings.revision++;
+  await completed(handle, "check-peer-cli before reconnect");
+  expect(f.remote!.cliCalls).toHaveLength(1);
   await handle.submit(submission("hang-until-stop bundled"));
   await vi.waitFor(() => expect(f.hanging.size).toBe(1), { timeout: 10_000, interval: 25 });
   const before = await f.host.inspect();
@@ -313,7 +328,8 @@ it.skipIf(process.platform === "win32")("runs the release sidecar bundle and pre
   expect(after.retainedSessions[0]?.handleId).toBe(before.retainedSessions[0]?.handleId);
   expect(after.retainedSessions[0]?.generation).toBe(before.retainedSessions[0]?.generation);
   await handle.interrupt({ applicationOperationId: randomUUID(), deadlineAt: Date.now() + 10_000 });
-  await completed(handle, "completed after carrier replacement");
+  await completed(handle, "check-peer-cli after carrier replacement");
+  expect(f.remote!.cliCalls).toEqual([service.controllerEpoch, service.controllerEpoch + 1]);
   expect(JSON.stringify(await handle.history({ limit: 50 }))).toContain("native-offline-code-result");
 }, 60_000);
 

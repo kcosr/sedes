@@ -27,6 +27,7 @@ import { initializeEmptyBackendNormalizedDatabase } from "../../src/server/db/mi
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { ImageShowRepository } from "../../src/server/db/repositories/image-show-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
+import { executionPolicyRoots } from "../../src/server/configuration-admin/configuration-execution-policy.js";
 import { OutputImageArtifactRepository } from "../../src/server/db/repositories/output-image-artifact-repository.js";
 import { ThreadAgentToolPolicyRepository } from "../../src/server/db/repositories/thread-agent-tool-policy-repository.js";
 import { SingleUserIdentityProvider, type RequestScope } from "../../src/server/identity/identity-provider.js";
@@ -74,9 +75,11 @@ async function fixture(kind: "pi" | "codex_app_server") {
   const identity = new SingleUserIdentityProvider<Request>(database);
   const scope = identity.getScope();
   const inventory = new InventoryRepository(database);
-  const environment = inventory.updateEnvironmentAvailability(scope, environmentId, { available: true, now: 110 });
+  inventory.updateEnvironmentAvailability(scope, environmentId, { available: true, now: 110 });
+  const [grant] = executionPolicyRoots(database, scope, environmentId);
+  if (!grant) throw new Error("image_transport_fixture_root_missing");
   const workspace = inventory.upsertWorkspace(scope, { environmentId, canonicalPath: root, displayName: "Images", project: { kind: "new", name: "Images" },
-    available: true, trustState: "trusted", environmentConfigurationRevision: environment.configurationRevision, now: 120 });
+    available: true, trustState: "trusted", authorityRootId: grant.id, environmentConfigurationRevision: grant.generation, now: 120 });
   const profile = database.prepare("SELECT id FROM agent_connection_profiles LIMIT 1").get() as { id: string };
   const bindings = new ConversationBindingRepository(database);
   const thread = bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: profile.id, title: "Source", now: 130 });

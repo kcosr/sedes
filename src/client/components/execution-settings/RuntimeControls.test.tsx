@@ -71,6 +71,32 @@ async function availableMenuItems(): Promise<string[]> {
 }
 
 describe("runtime administration controls", () => {
+  it("shows each saved setting and offers retry without restarting the host", async () => {
+    const api = controls();
+    const observed = { ...runtime, upgradeState: "current" as const, applyState: "pending" as const,
+      effects: [
+        { component: "presentation", subjectId: "label", desiredRevision: 7, effectiveRevision: 7, state: "applied" },
+        { component: "host_policy", subjectId: "claude-build", desiredRevision: 7, effectiveRevision: 6, state: "awaiting_host",
+          lastHostConfirmation: { revision: 5, digest: "a".repeat(64), incarnation: "previous-incarnation", epoch: 2 } },
+        { component: "host_policy", subjectId: "capability:interactive_terminal", desiredRevision: 7, effectiveRevision: null, state: "unsupported", detail: "Missing PTY helper" },
+      ] satisfies NonNullable<ConfigurationRuntimeState["effects"]>,
+    };
+    render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
+      runtime={observed} showSidecar disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
+    const effects = within(screen.getByRole("list", { name: "Saved settings" })).getAllByRole("listitem");
+    expect(effects.map(row => row.querySelector("summary")?.textContent)).toEqual([
+      "Display settings · label · Applied", "Host access · claude-build · Awaiting host confirmation",
+      "Host access · Interactive terminals · Unsupported on this host · Missing PTY helper",
+    ]);
+    await userEvent.click(effects[1]!.querySelector("summary")!);
+    expect(within(effects[1]!).getByText("previous-incarnation")).toBeVisible();
+    expect(within(effects[1]!).getByText("6")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Restart sidecar" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Retry apply" }));
+    expect(api.configurationLifecycle).toHaveBeenCalledWith(expect.objectContaining({ action: "connect" }));
+    expect(api.configurationLifecycleImpact).not.toHaveBeenCalled();
+  });
+
   it("connects an external server after its Sedes attachment was retired", async () => {
     const api = controls();
     render(<RuntimeControls controls={api} revision={7} resourceKind="backend" resourceId={runtime.resourceId} label="Build host"
@@ -169,7 +195,7 @@ describe("runtime administration controls", () => {
     render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={{ ...runtime, upgradeState: "current", applyState: "applied" }} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
     await user.click(moreActions());
-    await user.click(await screen.findByRole("menuitem", { name: "Restart" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Restart sidecar" }));
     await user.click(await screen.findByRole("button", { name: "Cancel" }));
     expect(moreActions()).toHaveFocus();
   });
@@ -277,6 +303,58 @@ describe("runtime administration controls", () => {
     expect(within(headerActions()).getByRole("button", { name: "Retry connection" })).toBeEnabled();
     await user.click(moreActions());
     expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Disconnect", "Stop"]);
+  });
+
+  it("offers an impact-confirmed restart for a known sidecar policy conflict", async () => {
+    const api = controls();
+    api.configurationLifecycleImpact.mockResolvedValue({ ...impact, action: "restart", expiresAt: new Date(Date.now() + 120_000).toISOString() });
+    render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
+      runtime={{ ...runtime, connectionState: "policy_conflict", supportedActions: ["restart", "stop", "disconnect"] }}
+      disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
+    expect(screen.getByLabelText("Header status")).toHaveTextContent("Execution policy conflict");
+    expect(await availableMenuItems()).toEqual(["Disconnect", "Stop"]);
+    fireEvent.click(within(headerActions()).getByRole("button", { name: "Restart sidecar" }));
+    const confirmation = await screen.findByRole("dialog", { name: "Restart Build host?" });
+    expect(confirmation).toHaveTextContent("Terminal shell will end");
+    expect(api.configurationLifecycle).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Confirm restart" }));
+    await waitFor(() => expect(api.configurationLifecycle).toHaveBeenCalledWith(expect.objectContaining({
+      action: "restart", expectedRevision: 7, expectedIncarnation: impact.incarnation, impactToken: impact.token,
+    })));
+  });
+
+  it("requires operator confirmation for a migrated candidate even with an empty impact inventory", async () => {
+    const api = controls();
+    const candidate: ConfigurationRuntimeState = { ...runtime, resourceKind: "backend", resourceId: "older-ag", connectionState: "unknown",
+      incarnation: null, activeResources: 0, supportedActions: ["confirm_retirement"], upgradeState: "current" };
+    const preview = { ...impact, action: "confirm_retirement" as const, resourceKind: candidate.resourceKind, resourceId: candidate.resourceId,
+      incarnation: null, activeResources: 0, interruptions: [], expiresAt: new Date(Date.now() + 120_000).toISOString() };
+    api.configurationLifecycleImpact.mockResolvedValue(preview);
+    const props: RuntimeControllerOptions = { controls: api, revision: 7, resourceKind: "backend", resourceId: candidate.resourceId, label: "Legacy Antigravity",
+      enabled: false, disabled: false, onRuntime: vi.fn(), onRefresh: vi.fn(async () => true) };
+    const view = render(<RuntimeControls {...props} runtime={{ ...candidate, supportedActions: [] }} />);
+    expect(screen.queryByRole("button", { name: "Confirm retirement" })).toBeNull();
+    view.rerender(<RuntimeControls {...props} enabled runtime={candidate} />);
+    expect(screen.queryByRole("button", { name: "Confirm retirement" })).toBeNull();
+    view.rerender(<RuntimeControls {...props} runtime={candidate} />);
+    expect(screen.getByLabelText("Header status")).toHaveTextContent("Retirement unverified");
+    await userEvent.click(within(headerActions()).getByRole("button", { name: "Confirm retirement" }));
+    const dialog = await screen.findByRole("dialog", { name: "Confirm retirement of Legacy Antigravity?" });
+    expect(dialog).toHaveTextContent("Independently check the named host");
+    expect(dialog).not.toHaveTextContent("Running work will be interrupted");
+    expect(api.configurationLifecycle).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "I verified the processes have stopped" }));
+    await waitFor(() => expect(api.configurationLifecycle).toHaveBeenCalledWith(expect.objectContaining({
+      action: "confirm_retirement", resourceKind: "backend", resourceId: candidate.resourceId, expectedIncarnation: null, expectedRevision: 7, impactToken: preview.token,
+    })));
+  });
+
+  it("shows the host-confirmed provider restart requirement in Activity", () => {
+    render(<RuntimeControls controls={controls()} revision={7} resourceKind="backend" resourceId="claude" label="Claude"
+      runtime={{ ...runtime, resourceKind: "backend", resourceId: "claude", effects: [
+        { component: "provider_launch", subjectId: "backend:claude", desiredRevision: 7, effectiveRevision: 6, state: "restart_backend" },
+      ] }} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
+    expect(screen.getByLabelText("Technical details")).toHaveTextContent("ConfigurationRestart backend required");
   });
 
   it("explains paused controls and lists technical details as facts", async () => {

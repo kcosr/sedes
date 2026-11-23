@@ -1,7 +1,9 @@
+import {closedWorkerControl} from "../../../internal/sidecar-protocol/control-v3.js";
 import { attachmentDiagnostic } from "../../diagnostics/attachment-diagnostics.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { RetainedRuntimeLifecycle } from "../retained-runtime-lifecycle.js";
 import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
+import { boundedAgentToolPath, MAX_AGENT_TOOL_PATH_BYTES } from "../../../internal/agent-tool-cli-protocol/path-limits.js";
 import { isAgentToolCliEndpoint } from "../../../internal/agent-tool-cli-protocol/local-endpoint.js";
 import { randomBytes } from "node:crypto";
 import { SidecarOperationError } from "../../../internal/sidecar-protocol/operation-registry.js";
@@ -64,6 +66,7 @@ export interface ClaudeManagedRuntimeOwnerOptions {
   readonly executablePath: string;
   readonly configDirectory?: string;
   readonly startupEnvironmentVariables?: EnvironmentVariableOverrides;
+  readonly assertLaunchAdmission?: () => void;
   readonly initializationTimeoutMs: number;
   readonly onBackgroundError?: (error: unknown) => void;
 }
@@ -79,6 +82,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
   readonly #workingDirectory: string;
   readonly #executablePath: string;
   readonly #startupEnvironmentVariables: EnvironmentVariableOverrides;
+  readonly #assertLaunchAdmission?: () => void;
   readonly #configDirectory: string | undefined;
   readonly #initializationTimeoutMs: number;
   readonly #onBackgroundError: (error: unknown) => void;
@@ -95,7 +99,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
       this.#current = undefined;
       if (current) {
         this.#retiring = this.#retire(current, "claude_last_conversation_evicted");
-        await this.#retiring;
+        try { await this.#retiring; } finally { this.#retiring = undefined; }
       }
       this.#releaseDirectory();
     },
@@ -141,6 +145,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
     }
     this.#scope = Object.freeze({ ...options.scope });
     this.#artifact = Promise.resolve(options.artifact);
+    this.#assertLaunchAdmission = options.assertLaunchAdmission;
     this.#channels = options.channels;
     this.#workingDirectory = options.workingDirectory;
     this.#executablePath = options.executablePath;
@@ -148,6 +153,18 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
     this.#startupEnvironmentVariables = options.startupEnvironmentVariables ?? {};
     this.#initializationTimeoutMs = options.initializationTimeoutMs;
     this.#onBackgroundError = options.onBackgroundError ?? (() => undefined);
+  }
+
+  emptyAfterCleanup(): boolean {
+    return !this.#closed && !this.#starting && !this.#current && !this.#retiring &&
+      this.#retirementFailure === undefined && !this.#releaseDirectoryReservation && !this.#historyAcquisitions.size;
+  }
+
+  disposeEmpty(): void {
+    if (!this.emptyAfterCleanup()) throw new Error("claude_persistent_configuration_restart_required");
+    this.#closed = true;
+    this.#closeController.abort();
+    void this.#artifact.catch(() => undefined);
   }
 
   async startupEnvironmentState(): Promise<"not_started" | "started" | "unknown"> {
@@ -319,6 +336,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
     try {
       const artifact = await this.#artifact;
       this.#assertOpen();
+      this.#assertLaunchAdmission?.();
       this.#releaseDirectoryReservation ??= reserveNativeDirectorySelector(this.#scope, this.#configDirectory);
       const carrierGeneration = ++this.#generation;
       const sessionNonce = randomBytes(32).toString("base64url");
@@ -328,6 +346,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
         artifact,
         workingDirectory: this.#workingDirectory,
         identity: { carrierGeneration, sessionNonce },
+        ...(this.#assertLaunchAdmission && { assertLaunchAdmission: this.#assertLaunchAdmission }),
       }, this.#closeController.signal);
       this.#assertOpen();
       const transport = new LengthPrefixedSidecarFrameTransport({
@@ -359,7 +378,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
         compression: "none",
         expectedBuildId: artifact.buildId,
         expectedArtifactSha256: artifact.artifactSha256,
-        authorizedSidecarCapabilities: [{
+        supportedSidecarCapabilities: [{
           capabilityId: CLAUDE_RUNTIME_CAPABILITY_ID,
           majorVersion: CLAUDE_RUNTIME_MAJOR_VERSION,
         }],
@@ -377,7 +396,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
           attachmentDiagnostic("claude_worker_process_closed", { ...this.#scope, pid: process.pid, carrierGeneration, reason: closure.reason, exitCode: closure.exitCode, signal: closure.signal }, closure.cause);
           this.#generationEnded(owned, managedWorkerClosureError(closure));
         },
-        (error) => this.#generationEnded(owned, error),
+        (error) => this.#generationEnded(owned, managedWorkerClosureError({ reason: "closure_failed", cause: error })),
       );
       return owned;
     } catch (error) {
@@ -551,7 +570,6 @@ function assertExactHello(
     readonly artifactSha256: string;
     readonly sidecarCapabilities: readonly SidecarCapabilityInventory[];
     readonly sedesCapabilities: readonly SidecarCapabilityInventory[];
-    readonly agentToolCli?: unknown;
   };
   const expectedWorker = claudeRuntimeWorkerOperations
     .map(({ operation }) => operation).sort();
@@ -562,7 +580,7 @@ function assertExactHello(
     item.capabilityId !== "control" && item !== worker);
   if (value.buildId !== artifact.buildId ||
       value.artifactSha256 !== artifact.artifactSha256 ||
-      value.agentToolCli !== undefined || !worker || unexpected.length ||
+      !closedWorkerControl(value.sidecarCapabilities) || !worker || unexpected.length ||
       JSON.stringify([...worker.operations].sort()) !== JSON.stringify(expectedWorker) ||
       JSON.stringify(value.sedesCapabilities) !== JSON.stringify([hostInventory()])) {
     throw new Error("claude_managed_runtime_capability_mismatch");
@@ -680,7 +698,7 @@ function assertQueryEnvironment(
       (value.SEDES_AGENT_TOOL_CLI_MODE !== "progressive" &&
         value.SEDES_AGENT_TOOL_CLI_MODE !== "individual") ||
       !/^[A-Za-z0-9_-]{32,256}$/u.test(value.SEDES_AGENT_TOOL_SOURCE_CAPABILITY!) ||
-      value.PATH!.length > 16_384 || /[\u0000\r\n]/u.test(value.PATH!)) {
+      !boundedAgentToolPath(value.PATH!, MAX_AGENT_TOOL_PATH_BYTES)) {
     throw new Error("claude_managed_runtime_environment_invalid");
   }
 }

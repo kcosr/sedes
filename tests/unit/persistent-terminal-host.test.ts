@@ -13,6 +13,28 @@ import { terminalHostFixture } from "../helpers/persistent-terminal-fixture.js";
 afterEach(() => vi.restoreAllMocks());
 
 describe("PersistentTerminalHost", () => {
+  it("replays settled controls while fenced and rejects fresh effects before consuming a sequence", async () => {
+    let recovery = false;
+    const fixture = terminalHostFixture({ isRecovery: () => recovery });
+    const { identity, process } = await fixture.create();
+    const { controllerToken } = await fixture.caller.call(terminalAttachOperation, identity);
+    const input = { ...identity, controllerToken, controlSeq: 1, data: "YQ" };
+    const resize = { ...identity, controllerToken, controlSeq: 2, rows: 20, columns: 80 };
+    const inputResult = await fixture.caller.call(terminalInputOperation, input);
+    const resizeResult = await fixture.caller.call(terminalResizeOperation, resize);
+    recovery = true;
+    await expect(fixture.caller.call(terminalInputOperation, input)).resolves.toEqual(inputResult);
+    await expect(fixture.caller.call(terminalResizeOperation, resize)).resolves.toEqual(resizeResult);
+    await expect(fixture.caller.call(terminalInputOperation, { ...input, data: "Yg" })).rejects.toThrow("terminal_control_sequence_reused");
+    await expect(fixture.caller.call(terminalInputOperation, { ...input, controlSeq: 3 })).rejects.toThrow("terminal_admission_closed");
+    await expect(fixture.caller.call(terminalResizeOperation, { ...resize, controlSeq: 3 })).rejects.toThrow("terminal_admission_closed");
+    expect(process.writes).toHaveLength(1);
+    expect(process.resize).toHaveBeenCalledOnce();
+    recovery = false;
+    await expect(fixture.caller.call(terminalInputOperation, { ...input, controlSeq: 3 })).resolves.toEqual(inputResult);
+    process.exit();
+  });
+
   it("cannot open a terminal before the uncovered launch marker is durable", async () => {
     const beforeLaunch = vi.fn(async () => { throw new Error("coverage_write_failed"); });
     const fixture = terminalHostFixture({ beforeLaunch });
@@ -54,7 +76,8 @@ describe("PersistentTerminalHost", () => {
   });
 
   it("retains producer input receipts across upstream controller replacement without storing input bytes", async () => {
-    const fixture = terminalHostFixture();
+    let recovery = false;
+    const fixture = terminalHostFixture({ isRecovery: () => recovery });
     const { identity, process } = await fixture.create();
     const producerId = randomUUID();
     const first = await fixture.caller.call(terminalAttachOperation, identity);
@@ -63,12 +86,15 @@ describe("PersistentTerminalHost", () => {
     };
     await fixture.caller.call(terminalInputOperation, input);
     fixture.disconnect();
+    recovery = true;
     const caller = fixture.connect();
     const attached = await caller.call(terminalAttachOperation, identity);
     const control = { ...identity, controllerToken: attached.controllerToken };
     expect(await caller.call(terminalProducerOperation, { ...control, producerId })).toEqual({ highWater: 1 });
     expect(await caller.call(terminalInputOperation, { ...input, ...control })).toEqual({ outcome: "sent" });
     expect(process.writes).toHaveLength(1);
+    await expect(caller.call(terminalInputOperation, { ...input, ...control, controlSeq: 2, data: "Yg" })).rejects.toThrow("terminal_admission_closed");
+    recovery = false;
     expect(await caller.call(terminalInputOperation, { ...input, ...control, controlSeq: 2, data: "Yg" })).toMatchObject({ outcome: "not_sent", diagnosticCode: "terminal_input_sequence_conflict" });
     expect(await caller.call(terminalInputOperation, { ...input, ...control, controlSeq: 3, producer: { producerId, inputSeq: 2 } })).toEqual({ outcome: "sent" });
     expect(process.writes).toHaveLength(2);
@@ -199,7 +225,7 @@ describe("PersistentTerminalHost", () => {
     expect(final.snapshot.exit).toMatchObject({ disposition: "interrupted", diagnosticCode: "upgrade", cleanupConfirmed: true });
     const bytes = await fixture.caller.call(terminalSnapshotChunkOperation, { ...control, snapshotId: final.snapshot.snapshotId, offset: 0 });
     expect(Buffer.from(bytes.data, "base64url").toString()).toContain("retained final output");
-    await expect(fixture.caller.call(terminalInputOperation, { ...control, controlSeq: 1, data: "YQ" })).rejects.toThrow("service_draining");
+    await expect(fixture.caller.call(terminalInputOperation, { ...control, controlSeq: 1, data: "YQ" })).rejects.toThrow("terminal_admission_closed");
     await expect(fixture.caller.call(terminalAcknowledgeOperation, { ...control, finalSeq: final.snapshot.seq - 1 })).rejects.toThrow("terminal_final_handoff_mismatch");
     await fixture.caller.call(terminalAcknowledgeOperation, { ...control, finalSeq: final.snapshot.seq });
     expect(resource.snapshot()).toMatchObject({ state: "idle", blockers: [] });

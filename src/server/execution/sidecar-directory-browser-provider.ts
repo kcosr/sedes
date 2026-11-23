@@ -1,3 +1,4 @@
+import { type WorkspaceRootGrant, workspaceRootGrant } from "./workspace-root-grant.js";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   isNormalizedRemotePath,
@@ -30,14 +31,20 @@ export class SidecarDirectoryBrowserProvider {
   readonly #paths: ReturnType<typeof remotePath>;
   readonly #scope: RequestScope;
   readonly #environmentId: string;
-  readonly #policyRoots: readonly string[];
+  readonly #policyRoots: () => readonly string[];
+  readonly #confirmed?: () => boolean;
   readonly #runtime: SidecarRuntimeOwner<SidecarClientSession>;
   readonly #rootCursorKey = randomBytes(32);
 
-  constructor(input: {
+  constructor(readonly input: {
+    readonly readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
+    readonly confirmWorkspacePolicy?: (path: string | undefined, signal: AbortSignal) => Promise<void>;
+    readonly readFeatureGeneration?: () => number | undefined;
     readonly platform: RemotePlatform;
     readonly scope: RequestScope;
     readonly environmentId: string;
+    readonly confirmed?: () => boolean;
+    readonly readPolicyRoots?: () => readonly string[];
     readonly policyRoots: readonly string[];
     readonly runtime: SidecarRuntimeOwner<SidecarClientSession>;
   }) {
@@ -45,7 +52,7 @@ export class SidecarDirectoryBrowserProvider {
       !input.scope.tenantId ||
       !input.scope.principalId ||
       !input.environmentId ||
-      input.policyRoots.length < 1 ||
+      (!input.readPolicyRoots && input.policyRoots.length < 1) ||
       input.policyRoots.length > 16 ||
       input.policyRoots.some(
         (root) => !isNormalizedRemotePath(root, input.platform),
@@ -56,15 +63,17 @@ export class SidecarDirectoryBrowserProvider {
     this.#paths = remotePath(input.platform);
     this.#scope = Object.freeze({ ...input.scope });
     this.#environmentId = input.environmentId;
-    this.#policyRoots = Object.freeze([...new Set(input.policyRoots)]);
+    const roots = Object.freeze([...new Set(input.policyRoots)]);
+    this.#policyRoots = input.readPolicyRoots ?? (() => roots);
     this.#runtime = input.runtime;
+    this.#confirmed = input.confirmed;
   }
 
   directoryBrowsingAvailability(
     scope: ExecutionScope,
     environmentId: string,
   ): "available" | "unavailable" {
-    return this.#sameAuthority(scope, environmentId)
+    return this.#sameAuthority(scope, environmentId) && this.#confirmed?.() !== false
       ? "available"
       : "unavailable";
   }
@@ -77,6 +86,15 @@ export class SidecarDirectoryBrowserProvider {
     if (request.signal?.aborted) {
       throw request.signal.reason ?? new Error("directory_browse_cancelled");
     }
+    const signal = request.signal ?? new AbortController().signal;
+    await this.input.confirmWorkspacePolicy?.(request.location.kind === "roots" ? undefined : request.location.path, signal);
+    if (this.#confirmed?.() === false) {
+      // A direct browse can be the first request on a lazily attached SSH
+      // host. The operation lease joins its handshake and policy confirmation.
+      const lease = await this.#runtime.acquireOperation(scope, request.environmentId, signal);
+      lease.release();
+      if (!this.#confirmed()) throw new Error("directory_browse_unavailable");
+    }
     if (request.location.kind === "roots") {
       return this.#browseRoots(request);
     }
@@ -84,12 +102,25 @@ export class SidecarDirectoryBrowserProvider {
       throw new Error("directory_browse_cursor_invalid");
     }
     const directoryPath = request.location.path;
-    const policyRoot = this.#policyRoots
+    const grants = this.input.readWorkspaceRoots?.();
+    const featureGeneration = this.input.readFeatureGeneration?.();
+    const continuation = grants && request.cursor ? this.#directoryCursor(request.cursor, featureGeneration) : undefined;
+    const grant = grants && (continuation
+      ? grants.find(root => root.generation === continuation.rootGeneration && isWithinRemoteRoot(directoryPath, root.path))
+      : workspaceRootGrant(grants, directoryPath));
+    if ((this.input.readFeatureGeneration && featureGeneration === undefined) || (grants && !grant))
+      throw new Error(continuation ? "directory_browse_cursor_invalid" : "directory_browse_not_allowed");
+    const assertCurrent = () => {
+      if ((this.input.readFeatureGeneration && this.input.readFeatureGeneration() !== featureGeneration) ||
+          (grant && !this.input.readWorkspaceRoots?.().some(current => current.id === grant.id && current.generation === grant.generation))) {
+        throw new Error("directory_browse_not_allowed");
+      }
+    };
+    const policyRoot = grant?.path ?? this.#policyRoots()
       .filter((root) => isWithinRemoteRoot(directoryPath, root))
       .sort((left, right) => right.length - left.length)[0];
     if (!policyRoot) throw new Error("directory_browse_not_allowed");
 
-    const signal = request.signal ?? new AbortController().signal;
     let lease: Awaited<
       ReturnType<SidecarRuntimeOwner<SidecarClientSession>["acquireOperation"]>
     >;
@@ -104,16 +135,18 @@ export class SidecarDirectoryBrowserProvider {
       throw classifySidecarError(error);
     }
     try {
+      assertCurrent();
       const result = await lease.session.call(
         directoryBrowserListImmediateOperation,
         {
           rootPath: policyRoot,
           directoryPath,
           pageSize: request.pageSize,
-          ...(request.cursor ? { cursor: request.cursor } : {}),
+          ...(request.cursor ? { cursor: continuation?.hostCursor ?? request.cursor } : {}),
         },
         { signal },
       );
+      assertCurrent();
       validateSidecarResponse(result, directoryPath, policyRoot, this.#paths);
       const parent = this.#paths.dirname(result.directoryPath);
       return directoryBrowseResultSchema.parse({
@@ -126,7 +159,8 @@ export class SidecarDirectoryBrowserProvider {
             : {}),
         },
         entries: result.entries,
-        ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+        ...(result.nextCursor ? { nextCursor: grant && featureGeneration !== undefined
+          ? this.#encodeDirectoryCursor(grant.generation, featureGeneration, result.nextCursor) : result.nextCursor } : {}),
         truncated: result.truncated,
       });
     } catch (error) {
@@ -147,10 +181,10 @@ export class SidecarDirectoryBrowserProvider {
       throw new Error("directory_browse_cursor_invalid");
     }
     const offset = decoded?.offset ?? 0;
-    if (offset > this.#policyRoots.length) {
+    if (offset > this.#policyRoots().length) {
       throw new Error("directory_browse_cursor_invalid");
     }
-    const entries = this.#policyRoots
+    const entries = this.#policyRoots()
       .map((root) => ({ name: this.#paths.basename(root) || root, path: root }))
       .sort(
         (left, right) =>
@@ -169,10 +203,25 @@ export class SidecarDirectoryBrowserProvider {
     });
   }
 
+  #encodeDirectoryCursor(root: number, feature: number, hostCursor: string): string {
+    const payload = `dir.${root}.${feature}.${hostCursor}`;
+    const signature = createHmac("sha256", this.#rootCursorKey).update(payload).digest("base64url");
+    return `${signature}.${payload}`;
+  }
+
+  #directoryCursor(cursor: string, feature: number | undefined): {rootGeneration: number; hostCursor: string} {
+    const [signature, kind, rootGeneration, featureGeneration, ...tail] = cursor.split(".");
+    const hostCursor = tail.join(".");
+    if (!hostCursor || !signature || kind !== "dir" || feature === undefined || String(feature) !== featureGeneration ||
+      !Number.isSafeInteger(Number(rootGeneration)) || this.#encodeDirectoryCursor(Number(rootGeneration), feature, hostCursor) !== cursor)
+      throw new Error("directory_browse_cursor_invalid");
+    return {rootGeneration: Number(rootGeneration), hostCursor};
+  }
+
   #encodeRootCursor(offset: number, pageSize: number): string {
     const payload = `roots.${offset.toString(36)}.${pageSize.toString(36)}`;
     const signature = createHmac("sha256", this.#rootCursorKey)
-      .update(`${this.#environmentId}\0${payload}`)
+      .update(JSON.stringify([this.#environmentId, this.input.readWorkspaceRoots?.() ?? this.#policyRoots(), this.input.readFeatureGeneration?.(), payload]))
       .digest("base64url");
     return `${payload}.${signature}`;
   }
@@ -194,7 +243,7 @@ export class SidecarDirectoryBrowserProvider {
     }
     const payload = `${kind}.${offsetText}.${pageSizeText}`;
     const expected = createHmac("sha256", this.#rootCursorKey)
-      .update(`${this.#environmentId}\0${payload}`)
+      .update(JSON.stringify([this.#environmentId, this.input.readWorkspaceRoots?.() ?? this.#policyRoots(), this.input.readFeatureGeneration?.(), payload]))
       .digest();
     let actual: Buffer;
     try {

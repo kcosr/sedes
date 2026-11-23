@@ -44,7 +44,7 @@ function configuration(modelPolicy: unknown) {
 }
 
 describe("backend model-policy reconciliation", () => {
-  it("revisions a backend with absent module configuration after a policy-only edit", () => {
+  it("changes Pi model admission while preserving its runtime and target grants", () => {
     const database = openOverlayDatabase(":memory:");
     try {
       const scope = new SingleUserIdentityProvider(database).getScope();
@@ -60,6 +60,7 @@ describe("backend model-policy reconciliation", () => {
       }, 100);
       const before = repository.getBackend(scope, "pi-primary");
 
+      const beforePolicy = fixture.projection.hostPolicy(scope, localEnvironmentId)!;
       const { document } = convertLegacyConfiguration({
         configuration: configuration({
           type: "allowlist",
@@ -70,12 +71,10 @@ describe("backend model-policy reconciliation", () => {
       fixture.repository.save(scope, { mutationId: randomUUID(), expectedRevision: 0, configuration: document }, next => fixture.projection.project(scope, next));
       const after = repository.getBackend(scope, "pi-primary");
 
-      expect(after.configurationRevision).toBe(
-        before.configurationRevision + 1,
-      );
-      expect(after.configurationFingerprint).not.toBe(
-        before.configurationFingerprint,
-      );
+      expect(after.configurationRevision).toBe(before.configurationRevision);
+      expect(after.configurationFingerprint).not.toBe(before.configurationFingerprint);
+      expect(fixture.projection.hostPolicy(scope, localEnvironmentId)!.snapshot.backends).toEqual(beforePolicy.snapshot.backends);
+      expect(fixture.repository.get(scope).configuration.backends[0]!.modelPolicy).toEqual(document.backends[0]!.modelPolicy);
     } finally {
       database.close();
     }

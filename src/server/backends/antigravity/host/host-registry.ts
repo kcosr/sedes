@@ -1,3 +1,4 @@
+import { observedLaunchDigest, type ProviderLaunchAdmission } from "../../provider-policy-admission.js";
 import type { RequestScope } from "../../../identity/identity-provider.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../../execution/environment-channel.js";
 import type { PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
@@ -11,6 +12,12 @@ type Entry = { readonly host: AntigravityHost; readonly fingerprint: string; rea
 export class AntigravityHostRegistry {
   readonly #hosts = new Map<string, Entry>();
   readonly #retired = new Map<string, ReadonlySet<string>>();
+  observedLaunchDigest(id: string): string | null | undefined {
+    const resident = this.#hosts.get(id);
+    if (resident) return observedLaunchDigest(resident.host);
+    return null;
+  }
+
   constructor(readonly input: {
     readonly scope: RequestScope;
     readonly executionEnvironmentId: string;
@@ -19,16 +26,18 @@ export class AntigravityHostRegistry {
     readonly services: PersistentSidecarServiceRegistry;
     readonly createHost?: (configuration: AntigravityRuntimeConfiguration) => AntigravityHost;
   }) {}
-  async ensure(raw: AntigravityRuntimeConfiguration, epoch: number): Promise<AntigravityHost> {
+  async ensure(raw: AntigravityRuntimeConfiguration, epoch: number, admission?: ProviderLaunchAdmission): Promise<AntigravityHost> {
     const configuration = this.#configuration(raw); this.input.services.assertController(epoch);
     const existing = this.#hosts.get(configuration.backendInstanceId);
     if (existing) { if (existing.fingerprint !== identity(configuration)) throw new AntigravityError("antigravity_configuration_restart_required"); return existing.host; }
+    if (this.#hosts.size) throw new AntigravityError("antigravity_native_namespace_in_use");
     this.input.services.assertAdmission(epoch);
     const host = this.input.createHost?.(configuration) ?? new AntigravityHost({ configuration,
       channels: this.input.channels, environment: this.input.environment,
       history: createAntigravityNativeHistoryReader(configuration),
       removeProbe: session => removeAntigravityProbeSession(configuration, session),
     });
+    admission?.bind(host);
     let unregister = () => {};
     unregister = this.input.services.register({ resourceId: host.runtimeId, kind: "provider", snapshot: () => {
       const { state, revision, blockers } = host.snapshot();
@@ -46,7 +55,8 @@ export class AntigravityHostRegistry {
   async lookup(raw: AntigravityRuntimeConfiguration, epoch: number): Promise<AntigravityHost | undefined> {
     const configuration = this.#configuration(raw); this.input.services.assertController(epoch);
     const entry = this.#hosts.get(configuration.backendInstanceId);
-    if (entry && entry.fingerprint !== identity(configuration)) throw new AntigravityError("antigravity_configuration_restart_required"); return entry?.host;
+    if (entry && entry.host.input.configuration.geminiDirectory !== configuration.geminiDirectory) throw new AntigravityError("antigravity_configuration_scope_denied");
+    return entry?.host;
   }
   async lookupRetained(backendInstanceId: string, epoch: number): Promise<AntigravityHost | undefined> {
     this.input.services.assertController(epoch); return this.#hosts.get(backendInstanceId)?.host;
@@ -79,5 +89,5 @@ export class AntigravityHostRegistry {
   }
 }
 function identity(configuration: AntigravityRuntimeConfiguration) {
-  const { startupEnvironmentVariables: _startup, ...rest } = configuration; return configurationFingerprint(rest);
+  return configurationFingerprint({ ...configuration, startupEnvironmentVariables: configuration.startupEnvironmentVariables ?? {} });
 }

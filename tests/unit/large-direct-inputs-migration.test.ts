@@ -5,7 +5,7 @@ import { ConversationBindingRepository } from "../../src/server/db/repositories/
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { savedAgentDatabase, insertPreRootGrantWorkspace } from "../support/saved-agent-fixture.js";
 import { largeDirectInputText } from "../support/large-direct-input.js";
 
 describe("large direct-input storage migration", () => {
@@ -20,7 +20,7 @@ describe("large direct-input storage migration", () => {
     try {
       const inventory = new InventoryRepository(database);
       const environment = inventory.getLocalEnvironment(scope);
-      const workspace = inventory.upsertWorkspace(scope, {
+      const workspace = insertPreRootGrantWorkspace(database, scope, {
         id: randomUUID(), environmentId: environment.id, canonicalPath: "/tmp/large-direct-migration",
         displayName: "Large direct input", project: { kind: "new", name: "Large direct input" },
         available: true, trustState: "trusted", environmentConfigurationRevision: environment.configurationRevision, now: 200,

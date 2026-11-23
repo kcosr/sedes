@@ -38,7 +38,7 @@ export interface OpenCodeRuntimeInput {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly connection: OpenCodeRuntimeConnection;
   readonly externalPassword?: (signal?: AbortSignal) => Promise<string>;
-  readonly agentTools?: { readonly cli: () => OpenCodeHostToolEndpoint | undefined; readonly invoke: OpenCodeHostToolInvoker };
+  readonly agentTools?: { readonly bindRouteToEndpoint?: boolean; readonly cli: (backendInstanceId: string) => OpenCodeHostToolEndpoint | undefined; readonly invoke: (...args: [...Parameters<OpenCodeHostToolInvoker>, backendInstanceId: string]) => ReturnType<OpenCodeHostToolInvoker> };
   /** When supplied, the module startup stack owns release after proved runtime cleanup. */
   readonly ownershipLease?: OpenCodeRuntimeOwnershipLease;
   /** Host-owned Sedes lifecycle storage; independent of native provider paths. */
@@ -259,8 +259,8 @@ export class OpenCodeRuntime {
       this.#runtimeVersion = info.version;
       this.#input.onRuntimeVersionAssessment?.(assessOpenCodeRuntimeVersion(info.version));
       this.#adapter = new OpenCodeHttpNativeAdapter(this.#client);
-      if (this.#input.agentTools) this.#tools = new OpenCodeHostAgentTools({ adapter: this.#adapter,
-        cli: this.#input.agentTools.cli, invoke: this.#input.agentTools.invoke,
+      if (this.#input.agentTools) this.#tools = new OpenCodeHostAgentTools({ adapter: this.#adapter, bindRouteToEndpoint: this.#input.agentTools.bindRouteToEndpoint,
+        cli: () => this.#input.agentTools!.cli(this.#input.authority.backendInstanceId), invoke: (...args) => this.#input.agentTools!.invoke(...args, this.#input.authority.backendInstanceId),
         capture: target => this.captureToolInvocation(target), assertCurrent: signal => this.assertCurrent(signal) });
       this.#host = new OpenCodeNativeHost({ ...this.#input.authority, runtimeId: this.#runtimeId,
         nativeGeneration: this.#generation }, this.#adapter, {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { isAgentToolCliEndpoint } from "../../../../internal/agent-tool-cli-protocol/local-endpoint.js";
-import { normalizedAbsolutePath } from "../../../../shared/absolute-path.js";
+import { toolPeerStamp, validToolPath, validToolDirectory } from "../../agent-tool-route.js";
 import { BackendAgentToolRequestError, type BackendAgentToolFacade, type BackendAgentToolAccessDecisionAuthority, type TrustedAgentToolSource } from "../../../agent-tools/adapters/backend-facade.js";
 import type { AgentToolContractArtifact, AgentToolDescription, SedesToolInvocationResult } from "../../../agent-tools/contracts/agent-tool-contracts.js";
 import type { AgentToolSourceCapabilityIssuer } from "../../../agent-tools/application/database-agent-tool-source-authority.js";
@@ -95,8 +95,7 @@ export class PiNativeAgentToolService {
   }
 
   #validateEndpoint(available: Extract<AgentToolCliAvailability | AgentToolCliRuntimeResolution, { availability: "available" }>): void {
-    if (!normalizedAbsolutePath(available.executableDirectory) || available.executableDirectory.includes("\\") ||
-        available.inheritedPath.includes("\0") || available.inheritedPath.length > 65_536 ||
+    if (!validToolDirectory(available.executableDirectory) || !validToolPath(available.inheritedPath) ||
         !(this.input.remote ? isAgentToolCliEndpoint(available.endpoint) : validLocalEndpoint(available.endpoint)))
       throw new Error("pi_native_cli_environment_invalid");
   }
@@ -142,7 +141,10 @@ export class PiNativeAgentToolService {
 
   createBridge(input: { attachment: PiNativeAttachment; conversation: AttachConversationInput; port: PiNativePort; getToolMode: () => Mode;
     clientControlAuthority: (userEntryId: string) => BackendAgentToolAccessDecisionAuthority }): PiNativeAgentToolBridge {
-    return new PiNativeAgentToolBridge(this.input.facade, input);
+    return new PiNativeAgentToolBridge(this.input.facade, input, () => {
+      const endpoint = this.#lease ?? this.input.cli;
+      return endpoint.availability === "available" && input.attachment.toolPeerStamp === toolPeerStamp(endpoint.endpoint);
+    });
   }
 }
 
@@ -155,7 +157,7 @@ export class PiNativeAgentToolBridge {
   constructor(readonly facade: BackendAgentToolFacade, readonly input: {
     attachment: PiNativeAttachment; conversation: AttachConversationInput; port: PiNativePort; getToolMode: () => Mode;
     clientControlAuthority: (userEntryId: string) => BackendAgentToolAccessDecisionAuthority;
-  }) {
+  }, readonly cliPeerCurrent: () => boolean) {
     this.#source = source(input.conversation);
     const entries = facade.eligibleCatalog("pi_rpc").map(artifact => {
       const name = artifact.adapters.pi?.name;
@@ -184,7 +186,7 @@ export class PiNativeAgentToolBridge {
         if (artifacts.some(artifact => !readOnly(artifact))) tools.push({ name: "sedes_act", label: "Sedes action", description: "Invoke one described Sedes operation with write, external, or model-usage effects.", parameters: envelopeParameters, readOnly: false });
         instructions = "Use sedes_catalog to list the current Sedes operations, then describe the selected IDs. Pass the exact described toolId, schemaVersion, and input to sedes_read for side-effect-free reads or sedes_act for other operations. Treat the described scope, effects and input schema as authoritative.";
       }
-    } else if (policy.enabled && policy.presentation.surface === "cli") {
+    } else if (policy.enabled && policy.presentation.surface === "cli" && this.cliPeerCurrent()) {
       instructions = "Sedes operations are available through the sedes CLI on this execution host. Use `sedes tool list --json`, then `sedes tool describe TOOL_ID --json`, then `sedes tool invoke TOOL_ID --input-file PATH --json` with the described input schema. The environment supplies the current thread authority; do not copy credentials into prompts or files.";
     }
     return { tools, instructions };

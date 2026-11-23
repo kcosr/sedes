@@ -11,8 +11,10 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import { callRuntime } from "../runtime/runtime-errors.js";
 import { environmentAdmitsForegroundOperation } from "../domain/environment-operational-state.js";
 import {
+  assertResourceScope,
   grantProjectAccessCaller,
   projectScopeRefs,
+  requireAdmittedEnvironment,
   requireAdmittedResource,
   requireAdmittedResources,
   resourceWithinScope,
@@ -169,10 +171,24 @@ export class WorkspaceApplicationService {
       signal,
     );
     if (request.projectId === undefined) {
-      // Admission authorized only the environment, not any existing project.
       try {
         return this.#admit(scope, validated, {
           project: { kind: "new", name: validated.summary.displayName },
+          requireExistingProject: (projectId) => {
+            // The path selected this existing location. Check its live project
+            // membership inside the upsert against the caller's host boundary.
+            const project = this.input.inventory.getProject(scope, projectId);
+            for (const location of project.locations) {
+              if (location.removedAt !== null) continue;
+              requireAdmittedEnvironment(environmentAuthority, location.environmentId);
+              assertResourceScope([{
+                kind: "project",
+                id: projectId,
+                projectId,
+                environmentId: location.environmentId,
+              }], environmentAuthority);
+            }
+          },
         });
       } catch (error) {
         if (!(error instanceof RemovedLocationError)) throw error;
@@ -264,8 +280,9 @@ export class WorkspaceApplicationService {
         scope,
         request.environmentId,
         request.path,
+        {signal},
       ),
-    );
+    ).catch(error => { signal.throwIfAborted(); throw error; });
     signal.throwIfAborted();
     if (validated.summary.environmentId !== request.environmentId) {
       throw new DomainError(
@@ -290,6 +307,7 @@ export class WorkspaceApplicationService {
       | {
           readonly project: InventoryProjectAssignment;
           readonly restoreRemoved?: true;
+          readonly requireExistingProject?: (projectId: string) => void;
         }
       | {
           readonly id: string;
@@ -304,6 +322,7 @@ export class WorkspaceApplicationService {
       displayName: validated.summary.displayName,
       available: validated.summary.availability === "available",
       trustState: validated.summary.trustState,
+      ...(validated.authorityRootId && { authorityRootId: validated.authorityRootId, rebindAuthority: true }),
       environmentConfigurationRevision: validated.authorityRevision,
       now: this.input.now?.() ?? Date.now(),
     });

@@ -19,6 +19,7 @@ import {
 export const CLAUDE_FORK_LAUNCH_PERMISSION_MODE = "default" as const satisfies PermissionMode;
 
 export interface ClaudeRuntimeForkOptions {
+  readonly assertLaunchAdmission?: () => void;
   readonly executionEnvironment?: ResolvedEnvironmentVariables;
   readonly executablePath: string;
   readonly initializationTimeoutMs: number;
@@ -113,6 +114,7 @@ export async function runClaudeForkLaunch(
   let session: ClaudeRuntimeSession | undefined;
   try {
     session = createSession({
+      assertLaunchAdmission: options.assertLaunchAdmission,
       ...(options.executionEnvironment
         ? { executionEnvironment: options.executionEnvironment }
         : {}),
@@ -145,6 +147,7 @@ export async function runClaudeForkLaunch(
   let initialization: Awaited<ReturnType<ClaudeRuntimeSession["start"]>>;
   try {
     initialization = await session.start();
+    options.assertLaunchAdmission?.();
   } catch (error) {
     await closeLaunch(session);
     const refusal = launchRefusal(error, session);

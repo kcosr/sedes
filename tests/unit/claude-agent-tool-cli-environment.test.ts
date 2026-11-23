@@ -1,4 +1,5 @@
 import path from "node:path";
+import { claudeRuntimeQueryEnvironmentSchema } from "../../src/server/backends/claude/worker/claude-runtime-v4.js";
 import { describe, expect, it } from "vitest";
 import {
   claudeAgentToolCliEnvironment,
@@ -73,6 +74,21 @@ describe("Claude agent-tool CLI environment", () => {
       PATH: "/ignored",
       SEDES_AGENT_TOOL_CLIENT_TOKEN: "must-not-reach-claude",
     });
+  });
+
+  it("uses UTF-8 component limits through worker decoding and rejects C0 and DEL", () => {
+    const build = (inheritedPath: string) => claudeAgentToolCliEnvironment({
+      availability: { availability: "available", executableDirectory: "/bin", endpoint: "unix:///tmp/cli.sock", inheritedPath },
+      applicationThreadId: "thread", sourceCapability: capabilityA, mode: "individual", parentEnvironment: {},
+    });
+    const maximum = "é".repeat(8192);
+    const environment = build(maximum);
+    expect(claudeRuntimeQueryEnvironmentSchema.parse(environment)).toEqual(environment);
+    expect(() => build(maximum + "é")).toThrow("cli_path_invalid");
+    for (const control of ["\u0001", "\u007f"]) {
+      expect(() => build("/bin" + control)).toThrow("cli_path_invalid");
+      expect(claudeRuntimeQueryEnvironmentSchema.safeParse({ ...environment, PATH: control }).success).toBe(false);
+    }
   });
 
   it("uses the executable as PATH when the inherited PATH is empty", () => {

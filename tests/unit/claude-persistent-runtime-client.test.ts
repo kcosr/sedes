@@ -15,7 +15,7 @@ vi.mock("../../src/server/backends/claude/runtime/claude-sidecar-runtime.js", as
     constructor() { connectionState.instances.push(this); }
     readonly ensureInputs: unknown[] = [];
     async ensure(configuration: unknown) { this.ensureInputs.push(configuration); return "runtime"; }
-    async lookup(_configuration: unknown, _epoch: number): Promise<string | undefined> { return "runtime"; }
+    async lookup(_configuration: unknown, _epoch: number): Promise<string | undefined> { return connectionState.instances.length === 1 ? undefined : "runtime"; }
     onEvent(_runtimeId: string, listener: (event: ClaudePersistentEvent) => void) { this.listener = listener; return () => { this.listener = undefined; }; }
     close() {}
   },
@@ -30,7 +30,7 @@ function setup(input: { nativeDefault?: boolean; supportsRuntime?: boolean; runt
   const carriers: { lost: ReturnType<typeof deferred<void>>; release: ReturnType<typeof vi.fn> }[] = [];
   const acquire = vi.fn(async (_signal?: AbortSignal, _options?: { existingOnly?: boolean }) => {
     const lost = deferred<void>(); const release = vi.fn(); carriers.push({ lost, release });
-    return { channel: { assertReady: vi.fn(), supportsOperation: (operation: { majorVersion: number }) => input.supportsRuntime !== false && operation.majorVersion === (input.runtimeMajor ?? 5) } as unknown as SidecarRuntimeChannel, controllerEpoch: carriers.length, serviceIncarnation: "service", closed: lost.promise, release };
+    return { channel: { assertReady: vi.fn(), supportsOperation: (operation: { majorVersion: number }) => input.supportsRuntime !== false && operation.majorVersion === (input.runtimeMajor ?? 6) } as unknown as SidecarRuntimeChannel, controllerEpoch: carriers.length, serviceIncarnation: "service", closed: lost.promise, release };
   });
   const client = new ClaudePersistentRuntimeClient({ scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "claude" }, sidecarRuntime: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire }, executablePath: "/bin/claude", ...(input.nativeDefault ? {} : { configDirectory: "/config" }), initializationTimeoutMs: 1000 });
   const options: ClaudeRuntimeSessionOptions = { executablePath: "/bin/claude", initializationTimeoutMs: 1000, sessionId: SESSION_ID, cwd: "/work", launch: "new", environment: {}, onMessage: vi.fn() };
@@ -461,7 +461,7 @@ it("fences existing session identity when the sidecar runtime is replaced", asyn
   const session = client.createSession({ ...options, onFailure });
   await session.start();
   const { ClaudeSidecarRuntimeConnection } = await import("../../src/server/backends/claude/runtime/claude-sidecar-runtime.js");
-  const ensure = vi.spyOn(ClaudeSidecarRuntimeConnection.prototype, "ensure").mockResolvedValue("replacement-runtime");
+  const ensure = vi.spyOn(ClaudeSidecarRuntimeConnection.prototype, "lookup").mockResolvedValue("replacement-runtime");
   try {
     carriers[0]!.lost.resolve(); await vi.advanceTimersByTimeAsync(1001);
     expect(connectionState.instances[1]!.execute.mock.calls.some(([command]) => command.action === "open")).toBe(false);
@@ -698,7 +698,7 @@ it("leaves the omitted SSH native store unresolved despite main-server environme
   await client.close();
 });
 
-it.each([undefined, 2, 3, 4])("fails closed when Claude runtime support is absent or uses an old major (%s)", async runtimeMajor => {
+it.each([undefined, 2, 3, 4, 5])("fails closed when Claude runtime support is absent or uses an old major (%s)", async runtimeMajor => {
   const { client, carriers, options } = setup(runtimeMajor === undefined ? { supportsRuntime: false } : { runtimeMajor });
   await expect(client.createSession(options).start()).rejects.toThrow("claude_remote_runtime_unsupported");
   expect(connectionState.instances).toHaveLength(0);

@@ -8,7 +8,7 @@ import type {
   ConversationBackendDriver,
 } from "../../src/server/backends/contracts.js";
 import { APPLICATION_ASSIGNED_CREATION_IDENTITY } from "../../src/server/backends/contracts.js";
-import { AgentBackendRegistry } from "../../src/server/backends/registry.js";
+import { AgentBackendRegistry, type BackendDriverFactory } from "../../src/server/backends/registry.js";
 import type { BackendConfigurationRepository } from "../../src/server/db/repositories/backend-configuration-repository.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 import { DomainError } from "../../src/server/domain/errors.js";
@@ -59,6 +59,8 @@ function profile(
 }
 
 function fixture(input?: {
+  readonly targetAdmission?: ConstructorParameters<typeof DatabaseExecutionTargetReader>[0]["targetAdmission"];
+  readonly withConnectionAuthorization?: BackendDriverFactory["withConnectionAuthorization"];
   readonly unavailableProfileId?: string;
   readonly throwingProfileId?: string | "all";
   readonly disabledBackendId?: string;
@@ -113,6 +115,7 @@ function fixture(input?: {
       scope,
       instance: backend,
       connectionKinds: [connectionKind],
+      ...(input?.withConnectionAuthorization && {connectionGeneration: () => 1, withConnectionAuthorization: input.withConnectionAuthorization}),
       supportsConversationCreation,
       ...(supportsConversationCreation
         ? { creationIdentity: APPLICATION_ASSIGNED_CREATION_IDENTITY }
@@ -164,6 +167,7 @@ function fixture(input?: {
     reader: new DatabaseExecutionTargetReader({
       configuration,
       registry,
+      ...(input?.targetAdmission && {targetAdmission: input.targetAdmission}),
       environmentOperations: input?.environmentOperations,
       workspaceIsolationNetworkProfiles:
         input?.workspaceIsolationNetworkProfiles,
@@ -529,6 +533,146 @@ describe("execution-target catalog reader", () => {
         { id: "profile-z", available: true },
       ],
     });
+  });
+
+  it("lists eligible remote targets without confirming or probing any host and checks only an explicitly selected target", async () => {
+    const confirm = vi.fn(async (_id: string, _signal: AbortSignal) => true);
+    let eligible = true;
+    const current = fixture({targetAdmission: profile => ({
+      eligible: profile.id === "profile-z" || eligible,
+      confirmRemote: signal => confirm(profile.id, signal),
+    })});
+    expect((await current.reader.read(scope)).executionTargets.every(target => target.available)).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(current.health).not.toHaveBeenCalled();
+    const signal = new AbortController().signal;
+    await current.reader.requireAgentSelectable(scope, "profile-z", signal);
+    expect(confirm).toHaveBeenCalledWith("profile-z", expect.any(AbortSignal));
+    expect(current.health).toHaveBeenCalledTimes(1);
+    current.health.mockResolvedValueOnce({available: false});
+    await expect(current.reader.requireSelectable(scope, "profile-a")).rejects.toThrow();
+    const snapshot = await current.reader.read(scope);
+    expect(snapshot.executionTargets.find(target => target.id === "profile-a")?.available).toBe(false);
+    expect(current.health).toHaveBeenCalledTimes(2);
+    current.reader.invalidateHealth();
+    eligible = false;
+    expect((await current.reader.read(scope)).executionTargets.find(target => target.id === "profile-a")?.available).toBe(false);
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(current.health).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["confirmation", "reacquisition"] as const)("treats a grant timeout or cancellation during %s separately from provider health", async phase => {
+    const deadline = new AbortController();
+    const timer = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    try {
+      for (const cancellation of ["caller", "deadline"] as const) {
+        const caller = new AbortController();
+        let markEntered!: () => void;
+        const entered = new Promise<void>(resolve => { markEntered = resolve; });
+        const untilAbort = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => {
+          markEntered();
+          signal.addEventListener("abort", () => reject(signal.reason), {once: true});
+        });
+        const current = fixture({
+          targetAdmission: () => ({eligible: true, confirmRemote: async signal => phase === "confirmation" ? untilAbort(signal) : true}),
+          withConnectionAuthorization: (_profile, _generation, run, signal) =>
+            phase === "reacquisition" ? untilAbort(signal!) : run(),
+        });
+        const selected = current.reader.requireAgentSelectable(scope, "profile-a", caller.signal);
+        await entered;
+        if (cancellation === "caller") {
+          caller.abort(new Error("caller left"));
+          await expect(selected).rejects.toBe(caller.signal.reason);
+        } else {
+          deadline.abort(new Error("selection timed out"));
+          await expect(selected).rejects.toMatchObject({code: "runtime_unavailable"});
+        }
+        expect(current.onHealthError).not.toHaveBeenCalled();
+        expect(current.health).not.toHaveBeenCalled();
+        expect((await current.reader.read(scope)).executionTargets.find(target => target.id === "profile-a")?.available).toBe(true);
+      }
+    } finally {
+      timer.mockRestore();
+    }
+  });
+
+  it.each([
+    ["codex_app_server", "codex_app_server", 20_000, true],
+    ["opencode", "opencode_http", 35_000, true],
+    ["opencode", "opencode_http", 35_000, false],
+  ] as const)("observes %s health over %s at %i ms (available=%s)", async (backendKind, connectionKind, startup, available) => {
+    vi.useFakeTimers();
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(milliseconds => {
+      setTimeout(() => deadline.abort(new Error("grant expired")), milliseconds); return deadline.signal;
+    });
+    try {
+      const current = fixture({backendKind, connectionKind, targetAdmission: () => ({eligible: true, confirmRemote: async () => true})});
+      const providerFailure = new Error("native initialization refused");
+      current.health.mockImplementationOnce(() => new Promise((resolve, reject) =>
+        setTimeout(() => available ? resolve({available}) : reject(providerFailure), startup)));
+      const selection = current.reader.requireAgentSelectable(scope, "profile-a");
+      const result = available ? expect(selection).resolves.toBeUndefined()
+        : expect(selection).rejects.toMatchObject({code: "runtime_unavailable"});
+      await vi.advanceTimersByTimeAsync(startup);
+      expect(deadline.signal.aborted).toBe(true);
+      await result;
+      if (available) expect(current.onHealthError).not.toHaveBeenCalled();
+      else expect(current.onHealthError).toHaveBeenCalledWith(providerFailure, expect.objectContaining({id: "profile-a"}));
+      expect((await current.reader.read(scope)).executionTargets.find(target => target.id === "profile-a")?.available).toBe(available);
+    } finally { timeout.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it("propagates a caller abort during provider startup and records a genuine provider failure", async () => {
+    const current = fixture({targetAdmission: () => ({eligible: true, confirmRemote: async () => true})});
+    const caller = new AbortController();
+    let markEntered!: () => void;
+    const entered = new Promise<void>(resolve => {markEntered = resolve;});
+    let finish!: (value: {available:boolean}) => void;
+    current.health.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; markEntered(); }));
+    const selected = current.reader.requireAgentSelectable(scope, "profile-a", caller.signal);
+    await entered;
+    caller.abort(new Error("caller left"));
+    await expect(selected).rejects.toBe(caller.signal.reason);
+    finish({available: true});
+    expect(current.onHealthError).not.toHaveBeenCalled();
+    const listed = async () => (await current.reader.read(scope)).executionTargets.find(target => target.id === "profile-a")?.available;
+    expect(await listed()).toBe(true);
+    const failure = new Error("provider unavailable");
+    current.health.mockRejectedValueOnce(failure);
+    await expect(current.reader.requireAgentSelectable(scope, "profile-a")).rejects.toMatchObject({code: "runtime_unavailable"});
+    expect(current.onHealthError).toHaveBeenCalledWith(failure, expect.objectContaining({id: "profile-a"}));
+    expect(await listed()).toBe(false);
+  });
+
+  it.each(["remote", "local"] as const)("replaces a cached healthy target after a failed explicit %s observation", async kind => {
+    let confirmed = true;
+    const current = fixture(kind === "remote" ? {targetAdmission: () => ({eligible: true, confirmRemote: async () => confirmed})} : {});
+    const listed = async () => (await current.reader.read(scope)).executionTargets.find(target => target.id === "profile-a")?.available;
+    await current.reader.requireSelectable(scope, "profile-a");
+    expect(await listed()).toBe(true);
+    if (kind === "remote") confirmed = false;
+    else current.health.mockResolvedValueOnce({available: false});
+    await expect(current.reader.requireAgentSelectable(scope, "profile-a")).rejects.toMatchObject({code: "runtime_unavailable"});
+    expect(await listed()).toBe(false);
+  });
+
+  it("offers a remote target again after a failed health observation expires", async () => {
+    let now = 0;
+    const confirm = vi.fn(async () => true);
+    const current = fixture({now: () => now, targetAdmission: () => ({eligible: true, confirmRemote: confirm})});
+    current.health.mockResolvedValueOnce({available: false});
+    await expect(current.reader.requireSelectable(scope, "profile-a")).rejects.toThrow();
+    const listed = async () => (await current.reader.read(scope)).executionTargets.find(target => target.id === "profile-a")?.available;
+
+    now = 4_999;
+    expect(await listed()).toBe(false);
+    now = 5_000;
+    expect(await listed()).toBe(true);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(current.health).toHaveBeenCalledTimes(1);
+    await current.reader.requireSelectable(scope, "profile-a");
+    expect(current.health).toHaveBeenCalledTimes(2);
   });
 
   it("caches snapshot health briefly but rechecks an explicit selection", async () => {

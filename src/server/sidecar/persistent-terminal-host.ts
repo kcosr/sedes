@@ -1,3 +1,5 @@
+import { type WorkspacePolicyGuard } from "./workspace-policy-guard.js";
+import { realpath } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import {
@@ -31,6 +33,7 @@ type OpenTerminal = (input: RemoteTerminalPrepare & { readonly scope: RequestSco
 type FrozenSnapshot = { readonly metadata: RemoteTerminalSnapshot; readonly bytes: Uint8Array };
 type ProducerState = { highWater: number; readonly receipts: Map<number, { readonly fingerprint: string; readonly result: InteractiveTerminalWriteResult }> };
 type Terminal = {
+  readonly assertCurrent?: () => void;
   readonly input: RemoteTerminalPrepare;
   readonly process: InteractiveTerminalProcess;
   readonly emulator: TerminalHeadlessEmulator;
@@ -55,7 +58,7 @@ type Terminal = {
   cleanupUnproven: boolean;
   stopReason?: string;
 };
-type Ticket = { readonly input: RemoteTerminalPrepare; readonly expiresAt: number; created: boolean };
+type Ticket = { readonly assertCurrent?: () => void; readonly input: RemoteTerminalPrepare; readonly expiresAt: number; created: boolean };
 
 /**
  * One authenticated installation/principal/environment's persistent PTYs.
@@ -77,7 +80,9 @@ export class PersistentTerminalHost {
   #mailbox = Promise.resolve();
   #stopping = false;
 
-  constructor(input: {
+  constructor(readonly input: {
+    readonly policyGuard?: WorkspacePolicyGuard;
+    readonly isRecovery?: () => boolean;
     readonly scope: RequestScope;
     readonly environmentId: string;
     readonly openTerminal?: OpenTerminal;
@@ -120,8 +125,12 @@ export class PersistentTerminalHost {
     const inspect = <T>(operation: () => T | Promise<T>) => this.#enqueue(() => { attachment.assertController(); return operation(); });
     registry.register(terminalPrepareOperation, (request) => run(() => this.#prepare(request)));
     registry.register(terminalCreateOperation, ({ ticket }) => run(() => this.#create(ticket, admit)));
+    const read = (terminal: Terminal): Terminal => {
+      if (!this.input.isRecovery?.()) terminal.assertCurrent?.();
+      return terminal;
+    };
     registry.register(terminalAttachOperation, (request) => inspect(() => {
-      const terminal = this.#get(request);
+      const terminal = read(this.#get(request));
       if (terminal.finalAcknowledged) throw failure("terminal_history_transferred");
       terminal.controllerToken = randomUUID();
       terminal.controlSeq = 0;
@@ -132,7 +141,7 @@ export class PersistentTerminalHost {
       return { controllerToken: terminal.controllerToken, snapshot: this.#snapshot(terminal) };
     }));
     registry.register(terminalReadOperation, (request) => inspect(() => {
-      const terminal = this.#controlled(request);
+      const terminal = read(this.#controlled(request));
       if (request.afterSeq < terminal.floorSeq || request.afterSeq > terminal.headSeq) {
         return { kind: "snapshot" as const, snapshot: this.#snapshot(terminal) };
       }
@@ -148,22 +157,26 @@ export class PersistentTerminalHost {
       return { kind: "records" as const, records, headSeq: terminal.headSeq };
     }));
     registry.register(terminalSnapshotChunkOperation, (request) => inspect(() => {
-      const snapshot = this.#controlled(request).snapshot;
+      const snapshot = read(this.#controlled(request)).snapshot;
       if (!snapshot || snapshot.metadata.snapshotId !== request.snapshotId) throw failure("terminal_snapshot_expired", true);
       if (request.offset > snapshot.bytes.byteLength || request.offset % TERMINAL_REMOTE_CHUNK_BYTES !== 0) throw failure("terminal_snapshot_offset_invalid");
       return { data: Buffer.from(snapshot.bytes.subarray(request.offset, request.offset + TERMINAL_REMOTE_CHUNK_BYTES)).toString("base64url") };
     }));
-    registry.register(terminalInputOperation, (request) => run(async () => {
+    registry.register(terminalInputOperation, (request) => inspect(async () => {
       const terminal = this.#controlled(request);
-      return await this.#control(terminal, request.controlSeq, { kind: "input", data: request.data, producer: request.producer }, async () => {
+      const bytes = Buffer.from(request.data, "base64url");
+      const producer = request.producer;
+      const prior = producer && terminal.producers.get(producer.producerId)?.receipts.get(producer.inputSeq);
+      const replay = prior && prior.fingerprint === createHash("sha256").update(bytes).digest("hex") ? prior.result : undefined;
+      return this.#control(terminal, request.controlSeq, { kind: "input", data: request.data, producer }, admit, async () => {
         if (terminal.exit) return { outcome: "not_sent" as const, diagnosticCode: "terminal_exited" };
-        return await this.#write(terminal, Buffer.from(request.data, "base64url"), request.producer);
-      });
+        return this.#write(terminal, bytes, producer);
+      }, replay);
     }));
-    registry.register(terminalProducerOperation, (request) => inspect(() => ({ highWater: this.#controlled(request).producers.get(request.producerId)?.highWater ?? 0 })));
-    registry.register(terminalResizeOperation, (request) => run(async () => {
+    registry.register(terminalProducerOperation, (request) => inspect(() => ({ highWater: read(this.#controlled(request)).producers.get(request.producerId)?.highWater ?? 0 })));
+    registry.register(terminalResizeOperation, (request) => inspect(async () => {
       const terminal = this.#controlled(request);
-      return await this.#control(terminal, request.controlSeq, { kind: "resize", rows: request.rows, columns: request.columns }, async () => {
+      return await this.#control(terminal, request.controlSeq, { kind: "resize", rows: request.rows, columns: request.columns }, admit, async () => {
         if (terminal.exit) throw failure("terminal_exited");
         await terminal.process.resize(request);
         terminal.emulator.resize(request.rows, request.columns);
@@ -220,21 +233,25 @@ export class PersistentTerminalHost {
     await Promise.all([...this.#terminals.values()].map((terminal) => this.#stopTerminal(terminal, reason, force)));
   }
 
-  #prepare(input: RemoteTerminalPrepare): { ticket: string } {
+  async #prepare(input: RemoteTerminalPrepare): Promise<{ ticket: string }> {
     if (this.#stopping) throw failure("terminal_admission_closed");
     if (!isAbsolute(input.initialCwd) || input.initialCwd.includes("\0")) throw failure("terminal_cwd_invalid");
+    const assertCurrent = this.input.policyGuard?.capture("interactive_terminal", input.initialCwd, input.workspaceAuthority);
+    if (assertCurrent && (await realpath(input.initialCwd)) !== input.initialCwd) throw failure("terminal_cwd_invalid");
+    assertCurrent?.();
     if (this.#terminals.has(key(input))) throw failure("terminal_already_exists");
     const now = Date.now();
     for (const [ticket, prepared] of this.#tickets) {
       if (prepared.expiresAt < now) { this.#tickets.delete(ticket); continue; }
       if (key(prepared.input) === key(input)) {
         if (JSON.stringify(prepared.input) !== JSON.stringify(input)) throw failure("terminal_creation_identity_reused");
+        prepared.assertCurrent?.();
         return { ticket };
       }
     }
     if (this.#tickets.size >= this.#maximumTerminals) throw failure("terminal_admission_capacity", true);
     const ticket = randomUUID();
-    this.#tickets.set(ticket, { input, expiresAt: now + 60_000, created: false });
+    this.#tickets.set(ticket, { input, ...(assertCurrent && { assertCurrent }), expiresAt: now + 60_000, created: false });
     return { ticket };
   }
 
@@ -243,6 +260,7 @@ export class PersistentTerminalHost {
     const prepared = this.#tickets.get(ticket);
     if (!prepared || prepared.expiresAt < Date.now()) throw failure("terminal_creation_ticket_expired");
     if (prepared.created) return { created: true };
+    prepared.assertCurrent?.();
     for (const terminal of this.#terminals.values()) {
       if (this.#terminals.size < this.#maximumTerminals) break;
       if (terminal.exit && terminal.finalAcknowledged && !terminal.cleanupUnproven) this.#forget(terminal);
@@ -267,10 +285,12 @@ export class PersistentTerminalHost {
         await this.#beforeLaunch();
         admit();
       }
+      if (prepared.assertCurrent && (await realpath(input.initialCwd)) !== input.initialCwd) throw failure("terminal_cwd_invalid");
+      prepared.assertCurrent?.();
       emulator = new TerminalHeadlessEmulator({ rows: input.rows, columns: input.columns,
         onData: (bytes) => { void process.write(bytes).catch(() => undefined); },
       });
-      process = await this.#open({ ...input, scope: this.#scope, environmentId: this.#environmentId });
+      process = await this.#open({ ...input, scope: this.#scope, environmentId: this.#environmentId, ...(prepared.assertCurrent && { assertWorkspaceCurrent: prepared.assertCurrent }) });
     } catch (error) {
       emulator?.dispose();
       unregister(); settleLaunch();
@@ -278,7 +298,7 @@ export class PersistentTerminalHost {
     }
     // Once spawned, retain ownership even if the RPC's controller disconnects.
     terminal = {
-      input, process, emulator, unregister,
+      input, process, emulator, unregister, ...(prepared.assertCurrent && { assertCurrent: prepared.assertCurrent }),
       unsubscribeOutput: () => undefined, unsubscribeExit: () => undefined,
       records: [], recordBytes: 0, pendingBytes: 0, outputPaused: false,
       headSeq: 0, floorSeq: 0, rows: input.rows, columns: input.columns,
@@ -366,7 +386,7 @@ export class PersistentTerminalHost {
     return metadata;
   }
 
-  async #control<T>(terminal: Terminal, seq: number, payload: unknown, perform: () => Promise<T>): Promise<T> {
+  async #control<T>(terminal: Terminal, seq: number, payload: unknown, admit: () => void, perform: () => Promise<T>, settled?: T): Promise<T> {
     const fingerprint = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
     if (seq <= terminal.controlSeq) {
       const receipt = terminal.receipts.get(seq);
@@ -375,11 +395,19 @@ export class PersistentTerminalHost {
       return receipt.result as T;
     }
     if (seq !== terminal.controlSeq + 1) throw failure("terminal_control_sequence_gap");
-    // Admission advances first. A thrown write/resize may already have taken effect.
-    terminal.controlSeq = seq;
-    let result: T;
-    try { result = await perform(); }
-    catch (error) { throw new SidecarOperationError("terminal_control_outcome_unknown", false, { cause: error }); }
+    let result = settled;
+    if (result === undefined) {
+      if (this.input.isRecovery?.()) throw failure("terminal_admission_closed");
+      try { admit(); } catch (cause) { throw new SidecarOperationError("terminal_admission_closed", false, { cause }); }
+      terminal.assertCurrent?.();
+      // Only advance after admission. A thrown PTY operation may have taken effect.
+      terminal.controlSeq = seq;
+      try { result = await perform(); }
+      catch (error) { throw new SidecarOperationError("terminal_control_outcome_unknown", false, { cause: error }); }
+    } else {
+      // A new upstream controller can join the producer receipt without sending bytes.
+      terminal.controlSeq = seq;
+    }
     terminal.receipts.set(seq, { fingerprint, result });
     while (terminal.receipts.size > 256) terminal.receipts.delete(terminal.receipts.keys().next().value!);
     return result;

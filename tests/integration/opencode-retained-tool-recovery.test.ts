@@ -76,10 +76,10 @@ describe("OpenCode retained tool owner recovery", () => {
     expect(f.promptCount()).toBe(1);
   });
 
-  it("refuses changed native configuration before either retained or normal attachment", async () => {
+  it("preserves immutable native store identity before either retained or normal attachment", async () => {
     const f = fixture(), first = await f.attach(), original = f.client(); await original.start();
     await first.close(); await f.attach();
-    const replacement = f.client({ ...f.configuration, configDirectory: "/changed/native/config" });
+    const replacement = f.client({ ...f.configuration, nativeStorePath: "/changed/native/opencode.db" });
     await expect(replacement.startRetained()).rejects.toBeDefined();
     await expect(replacement.start()).rejects.toBeDefined();
     expect(f.owners).toHaveLength(1); expect(f.owners[0]!.start).toHaveBeenCalledOnce();

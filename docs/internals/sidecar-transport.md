@@ -7,12 +7,12 @@ worker carriers share the framing but select no compression.
 
 ## Framing and negotiation
 
-Runtime wire version 17 preserves the OpenCode observation-continuity failure
-response required for journal-change recovery. It retains the OpenCode 2.1.1
-schema cutover from version 16 and negotiated compression and `HSC2` framing
-from version 15. OpenCode's current private runtime capability **5** selects
-the 2.2.6 SDK/schema profile independently of this framing version. It uses one
-parser with a 16-byte header:
+Runtime wire version 18 uses control major 3. Hello authenticates the serving
+build and discovers supported operations in each direction. The connection
+selects its compression mode once. A separately installed policy authorizes
+work on persistent SSH and paired hosts. Local worker contexts keep their
+fixed dispatch tables. OpenCode's private runtime capability **5** selects
+the 2.2.6 SDK/schema profile. The `HSC2` frame header occupies 16 bytes.
 
 | Offset | Field |
 | --- | --- |
@@ -44,6 +44,73 @@ The stable management-v1 protocol remains separate and plain. A service with
 an incompatible runtime wire version follows the explicit upgrade-required
 path; no HSC1 parser or opportunistic compatibility mode is retained.
 
+## Live execution policy
+
+A normal persistent attachment reads the current service incarnation, controller
+epoch, installed policy stamp and readiness through `policy.read`. Main derives
+the desired snapshot from the principal's saved settings. It binds staging and
+apply to that incarnation and epoch. A fresh controller confirms the installed
+revision and SHA-256 digest before issuing ordinary work, including when the
+daemon already has the desired snapshot.
+
+`policy.stage` transfers canonical UTF-8 policy data up to 512 KiB in blocks of
+at most 6 KiB before base64 encoding. Main waits for the acknowledged offset
+before sending the next block. `policy.apply` checks the expected prior stamp
+and the new digest, installs the complete snapshot, and updates the management
+revision pair. An equal revision and digest can confirm a new epoch or settle a
+lost reply. Main reads the actual installation before retrying delivery.
+
+New work requires host support, a matching saved and confirmed subject
+generation, and the application's resource checks. Individual roots, targets,
+backends and capabilities have separate generations. Main withdraws removed
+grants at save and exposes additions after host confirmation. A running
+attachment can update these grants while unrelated turns, terminals and file
+watches stay on their original connection.
+
+Reading the target picker uses saved settings and available readiness and
+health observations. It performs no remote health probes and opens no SSH
+connections. Selecting a target or starting work confirms that host's grants
+on demand. Explicit remote selection allows ten seconds to confirm the grant and
+reacquire the carrier. Once admitted, provider health uses the provider’s own
+startup limit. When Codex is already attaching to its native runtime,
+selection can wait for that attempt to finish. A workspace keeps its confirmed
+root when a newly saved nested root also contains its path. A new open can
+retry policy delivery when its path has no applicable confirmed root.
+Cancelling that request releases its wait while shared delivery continues.
+A save after an idle disconnect can also initiate delivery on the affected host. A known unsupported subject stays unavailable. After carrier
+loss, unchanged grants from the last confirmed incarnation keep targets and
+features selectable. A foreground driver call or
+new turn on a held handle reacquires the carrier and confirms the target on its
+current controller before entering the provider. Discovery of a different
+incarnation discards the previous selection evidence. Exact settlement, such
+as download cancellation and shell result acknowledgement, uses controller
+authority even while policy synchronization or service draining is in progress.
+
+For a hosted backend, readiness can report the retained provider's launch
+digest, an explicitly empty registry entry, or no inventory observation. A
+confirmed exit clears the old digest so Settings shows the edit will apply on
+the next launch. Missing observations preserve evidence for the same service
+incarnation. A replacement service has to establish its own evidence.
+
+Main polls preparing subjects every two seconds and refreshes settled readiness
+every 30 seconds. Failed delivery is retried after 1, 2, 4, 8, 16 and 30
+seconds, then on a five-minute retry, a new save, explicit retry or reconnection.
+A confirmed conflict between restored local state and a newer or divergent
+installed policy fences ordinary work until the operator replaces that service
+incarnation. Managed route descriptors travel through a scoped
+`policy.acquire_route` call bound to a backend instance and feature generation.
+Their endpoint and PATH stay outside hello and policy status. The daemon keeps
+each listener while its backend and feature grants retain their generations.
+CLI calls return a retryable unavailable error until a replacement controller
+confirms those grants. Withdrawal retires the listener, and regranting access
+creates a new endpoint.
+
+Recovery can borrow a restricted view of the current connection for an exact
+retained operation or attach to an existing service through management. An
+offline recovery attachment never launches the daemon. Explicit stop or
+disconnect suppresses automatic reconnection. A binary or runtime wire change
+continues to use the management upgrade and impact checks.
+
 ## Codec and resource bounds
 
 Eligible operation frames of at least 1 KiB use asynchronous native zstd level 1
@@ -74,7 +141,10 @@ Diagnostics for frame and queue bytes likewise describe decoded data.
 Outbound entries progress through queued, preparing, prepared, and writing
 states. Preparation is separate from the active carrier write. Each queue charge
 is released exactly once. Controls queued during encoding take the next write
-before the prepared operation; operation order is preserved.
+before the prepared operation. Staging has its own bounded queue. At a
+writable boundary, a staged block that has waited 500 ms can advance ahead of
+bulk operation writes after one due control frame and one ready interactive
+frame. Reserved settlement capacity remains available to foreground work.
 
 Cancellation before a carrier write reports `not_sent` and discards any encoded
 result. Once writing starts, the existing delivery-uncertainty rules apply.
@@ -101,10 +171,10 @@ does not retire an owner, revoke a carrier, or restart a provider. Every normal
 and recovery attachment samples the latest principal-scoped value; an active
 carrier keeps its negotiated mode.
 
-Native Pi, Codex, Claude, OpenCode, and Antigravity remote runtime traffic
-benefits from this transport. Pi SDK keeps its model loop local while its remote
-workspace operations use it. Grok remains
-local-only. Existing operating-system and capability restrictions remain
+Codex, Claude, OpenCode, native Pi and Antigravity use this transport for
+remote runtime traffic. Pi SDK runs its model loop locally and uses the
+transport for remote workspace operations. Grok runs locally. Existing
+operating-system and capability restrictions remain
 authoritative. Browser response compression is a separate installation policy;
 provider-native connections do not use this codec.
 

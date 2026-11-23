@@ -1,3 +1,4 @@
+import { createWorkspacePolicyGuard } from "../../src/server/sidecar/workspace-policy-guard.js";
 import { randomUUID } from "node:crypto";
 import {
   mkdtemp,
@@ -24,6 +25,42 @@ afterEach(async () => {
 });
 
 describe("WorkspaceFilesSidecarHost", () => {
+  it("binds handles to installed roots and rejects an in-flight read after withdrawal and regrant", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "sedes-files-grant-"));
+    roots.push(parent);
+    const child = path.join(parent, "child");
+    await mkdir(child);
+    const primary = { id: "primary-root", path: child, generation: 1 };
+    const ancestor = { id: "ancestor", path: parent, generation: 3 };
+    let grants = [primary];
+    let complete!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const pause = new Promise<void>(resolve => { complete = resolve; });
+    const engine = {
+      close: () => undefined, validateRoot: async () => undefined,
+      list: async () => { started(); await pause; return { entries: ["secret"], scanTruncated: false }; },
+    } as unknown as WorkspaceFilesEngine;
+    const host = new WorkspaceFilesSidecarHost({
+      policyGuard: createWorkspacePolicyGuard(() => ({ roots: grants, capabilities: [{ id: "workspace_files", generation: 2 }], backends: [] })),
+      sessionNonce: "n".repeat(32), engine, sendInvalidation: async () => {}, sendWatchFailure: async () => {},
+      openDownloadStream: () => { throw new Error("unexpected_stream"); }, onDownloadCleanupFailure: () => {},
+    });
+    try {
+      const request = { admissionId: randomUUID(), rootId: "primary" as const, rootKind: "primary" as const, declaredPath: child, policyRootPath: child };
+      await expect(host.handlers.rootOpen({ ...request, declaredPath: parent, policyRootPath: parent }, context())).rejects.toThrow("workspace_policy_denied");
+      const { rootHandle } = await host.handlers.rootOpen(request, context());
+      grants.push(ancestor);
+      const pending = host.handlers.list({ rootHandle, pageSize: 20 }, context());
+      await entered;
+      grants = [ancestor, { ...primary, generation: 4 }];
+      complete();
+      await expect(pending).rejects.toThrow("workspace_policy_revoked");
+      await expect(host.handlers.rootOpen(request, context())).rejects.toThrow("workspace_policy_revoked");
+      await expect(host.handlers.rootClose({ rootHandle }, context())).resolves.toEqual({ closed: true });
+    } finally { complete(); host.close(); }
+  });
+
   it("rechecks the checkout removal path against the declared policy root", async () => {
     const policy = await mkdtemp(
       path.join(tmpdir(), "h-sidecar-remove-policy-"),
@@ -35,7 +72,10 @@ describe("WorkspaceFilesSidecarHost", () => {
     const workspace = path.join(policy, "workspace");
     const linked = path.join(policy, "linked");
     await Promise.all([mkdir(workspace), mkdir(linked)]);
-    const removeLinkedWorktree = vi.fn(async () => undefined);
+    const rootGrant = {id:"policy", path:policy, generation:1};
+    const linkedGrant = {id:"linked", path:linked, generation:2};
+    let grants = [rootGrant, linkedGrant];
+    const removeLinkedWorktree = vi.fn(async (target: {assertCurrent:()=>void}) => target.assertCurrent());
     const engine = {
       validateRoot: async () => undefined,
       removeLinkedWorktree,
@@ -43,6 +83,7 @@ describe("WorkspaceFilesSidecarHost", () => {
     } as unknown as WorkspaceFilesEngine;
     const host = new WorkspaceFilesSidecarHost({
       sessionNonce: "n".repeat(32),
+      policyGuard: createWorkspacePolicyGuard(() => ({roots:grants, capabilities:[{id:"workspace_files",generation:3}], backends:[]})),
       engine,
       sendInvalidation: async () => undefined,
       sendWatchFailure: async () => undefined,
@@ -62,9 +103,14 @@ describe("WorkspaceFilesSidecarHost", () => {
         },
         context(),
       );
+      const linkedRoot = await host.handlers.rootOpen({
+        admissionId: randomUUID(), rootId: "linked", rootKind: "linked_worktree", declaredPath: linked, policyRootPath: linked,
+      }, context());
       const request = {
         operationId: randomUUID(),
         rootHandle: primary.rootHandle,
+        linkedRootHandle: linkedRoot.rootHandle,
+        checkoutAuthority: {authorityRootId:"policy",authorityRevision:1},
         canonicalCheckoutPath: linked,
         policyRootPath: policy,
         canonicalGitDir: path.join(workspace, ".git", "worktrees", "linked"),
@@ -90,6 +136,12 @@ describe("WorkspaceFilesSidecarHost", () => {
         ),
       ).rejects.toMatchObject({ code: "workspace_file_root_unavailable" });
       expect(removeLinkedWorktree).toHaveBeenCalledTimes(1);
+      removeLinkedWorktree.mockImplementationOnce(async target => {
+        grants = [rootGrant, {...linkedGrant, generation:4}];
+        target.assertCurrent();
+      });
+      await expect(host.handlers.removeLinkedWorktree({...request, operationId:randomUUID()}, context()))
+        .rejects.toMatchObject({code:"workspace_policy_revoked"});
     } finally {
       host.close();
     }
@@ -753,6 +805,47 @@ describe("WorkspaceFilesSidecarHost", () => {
     }
   });
 
+  it("retries dirty watches through a transient fence and terminates a revoked watch once", async () => {
+    const policy = await mkdtemp(path.join(tmpdir(), "sedes-watch-fence-"));
+    roots.push(policy);
+    const grant = {id: "root", path: policy, generation: 1};
+    const snapshot = {roots: [grant], capabilities: [{id: "workspace_files", generation: 2}], backends: []};
+    let attached = true;
+    let invalidate!: () => void;
+    const subscription = {failed: new Promise<void>(() => undefined), close: vi.fn()};
+    const engine = {
+      validateRoot: async () => undefined,
+      watch: async (_root: unknown, callback: () => void) => { invalidate = callback; return subscription; },
+      close: vi.fn(),
+    } as unknown as WorkspaceFilesEngine;
+    const sendInvalidation = vi.fn(async () => undefined);
+    const sendWatchFailure = vi.fn(async () => undefined);
+    const host = new WorkspaceFilesSidecarHost({
+      policyGuard: createWorkspacePolicyGuard(() => attached ? snapshot : undefined),
+      sessionNonce: "n".repeat(32), engine, sendInvalidation, sendWatchFailure,
+      openDownloadStream: () => { throw new Error("unexpected_stream"); }, onDownloadCleanupFailure: () => {},
+    });
+    try {
+      const {rootHandle} = await host.handlers.rootOpen({
+        admissionId: randomUUID(), rootId: "primary", rootKind: "primary", declaredPath: policy, policyRootPath: policy,
+      }, context());
+      const {subscriptionHandle} = await host.handlers.watchOpen({rootHandle}, context());
+      attached = false;
+      invalidate();
+      invalidate();
+      expect(sendInvalidation).not.toHaveBeenCalled();
+      expect(sendWatchFailure).not.toHaveBeenCalled();
+      attached = true;
+      await vi.waitFor(() => expect(sendInvalidation).toHaveBeenCalledWith(subscriptionHandle), {timeout:2000});
+      snapshot.roots.length = 0;
+      invalidate();
+      invalidate();
+      expect(subscription.close).toHaveBeenCalledOnce();
+      expect(sendWatchFailure).toHaveBeenCalledExactlyOnceWith(subscriptionHandle);
+      expect(sendInvalidation).toHaveBeenCalledOnce();
+    } finally { host.close(); }
+  });
+
   it("emits one path-free terminal event when an established watch fails", async () => {
     const policy = await mkdtemp(path.join(tmpdir(), "h-sidecar-watch-"));
     roots.push(policy);
@@ -810,7 +903,7 @@ describe("WorkspaceFilesSidecarHost", () => {
     }
   });
 
-  it("closes the watcher of an open cancelled while the watcher was starting", async () => {
+  it.each(["cancelled", "revoked"])("closes the watcher of an open %s while the watcher was starting", async reason => {
     const policy = await mkdtemp(path.join(tmpdir(), "h-sidecar-watch-"));
     roots.push(policy);
     const workspace = path.join(policy, "workspace");
@@ -826,7 +919,10 @@ describe("WorkspaceFilesSidecarHost", () => {
       },
       close: vi.fn(),
     } as unknown as WorkspaceFilesEngine;
+    let generation = 1;
     const host = new WorkspaceFilesSidecarHost({
+      policyGuard: createWorkspacePolicyGuard(() => ({ roots: [{ id: "root", path: policy, generation }],
+        capabilities: [{ id: "workspace_files", generation: 1 }], backends: [] })),
       sessionNonce: "n".repeat(32),
       engine,
       sendInvalidation: async () => undefined,
@@ -853,9 +949,10 @@ describe("WorkspaceFilesSidecarHost", () => {
         { ...context(), signal: controller.signal },
       );
       await started.promise;
-      controller.abort(new Error("caller_cancelled"));
+      if (reason === "cancelled") controller.abort(new Error("caller_cancelled"));
+      else generation++;
       watchReady.resolve(subscription);
-      await expect(pending).rejects.toThrow("caller_cancelled");
+      await expect(pending).rejects.toThrow(reason === "cancelled" ? "caller_cancelled" : "workspace_policy_revoked");
       expect(subscription.close).toHaveBeenCalledOnce();
     } finally {
       host.close();

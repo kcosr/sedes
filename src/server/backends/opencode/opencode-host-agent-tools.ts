@@ -43,10 +43,10 @@ export const openCodeHostToolAdmissionResultSchema = z.strictObject({
   registrationControl: openCodeMutationControlSchema.refine(control => control.identity.origin === "host" && control.identity.step === "register-mcp"),
   cliAdmissionId: z.string().regex(/^[A-Za-z0-9_-]{43}$/u).nullable(),
 });
-interface HostSession { readonly target: OpenCodeHostToolTarget; readonly admission: OpenCodeHostToolAdmission;
+interface HostSession { readonly endpoint?: string; readonly target: OpenCodeHostToolTarget; readonly admission: OpenCodeHostToolAdmission;
   readonly result: OpenCodeHostToolAdmissionResult; readonly owner: AbortController; }
 interface HostRegistration { readonly channel: OpenCodeMcpChannel; readonly ready: Promise<void>; }
-interface HostLocation { name: string; admissionId: string; admissionCount: number; retryAfter: number;
+interface HostLocation { readonly endpoint?: string; name: string; admissionId: string; admissionCount: number; retryAfter: number;
   registration?: HostRegistration; task?: Promise<void>; failed?: boolean; }
 export interface OpenCodeHostToolEndpoint {
   readonly endpoint: string;
@@ -62,6 +62,7 @@ export class OpenCodeHostAgentTools {
   #closed = false;
   #admissions = 0;
   constructor(readonly options: { readonly adapter: OpenCodeHttpNativeAdapter;
+    readonly bindRouteToEndpoint?: boolean;
     readonly cli: () => OpenCodeHostToolEndpoint | undefined;
     readonly capture: (target: OpenCodeHostToolTarget) => OpenCodeToolInvocationStamp;
     readonly invoke: OpenCodeHostToolInvoker;
@@ -71,12 +72,16 @@ export class OpenCodeHostAgentTools {
   async admit(target: OpenCodeHostToolTarget, value: OpenCodeHostToolAdmission, signal?: AbortSignal): Promise<OpenCodeHostToolAdmissionResult> {
     target = openCodeHostToolTargetSchema.parse(target);
     const admission = openCodeHostToolAdmissionSchema.parse(value);
+    // Remote endpoint names bind both the backend instance and the tool grant generation.
+    const endpoint = this.options.bindRouteToEndpoint ? this.options.cli()?.endpoint : undefined;
+    if (this.options.bindRouteToEndpoint && !endpoint) throw denied();
     if (admission.cli) {
       const known = this.#cliCapabilities.get(admission.cli.sourceCapability);
       if (known && !sameTarget(known.target, target)) throw denied();
       if (!known && this.#cliCapabilities.size >= 4_096) throw capacityReached();
     }
     await this.#assertTarget(target, signal);
+    if (endpoint && endpoint !== this.options.cli()?.endpoint) throw denied();
     if (admission.cli) {
       // Concurrent admission can change the capability index during validation.
       const known = this.#cliCapabilities.get(admission.cli.sourceCapability);
@@ -85,21 +90,26 @@ export class OpenCodeHostAgentTools {
       // CLI authority needs no native MCP registration, catalogue or workspace
       // slot. Keep its exact session bound and subject to the same live limit.
       const key = target.session.applicationThreadId, previous = this.#sessions.get(key);
-      if (previous && sameTarget(previous.target, target) && JSON.stringify(previous.admission) === JSON.stringify(admission)) return previous.result;
+      if (previous && previous.endpoint === endpoint && sameTarget(previous.target, target) && JSON.stringify(previous.admission) === JSON.stringify(admission)) return previous.result;
       if (!previous && this.#sessions.size >= 1_000) throw capacityReached();
       previous?.owner.abort();
       const result = Object.freeze({ registrationAdmissionId: randomBytes(32).toString("base64url"),
         registrationName: registrationName(), registrationControl: registrationControl(randomBytes(32).toString("base64url")),
         cliAdmissionId: randomBytes(32).toString("base64url") });
-      const entry = { target: structuredClone(target), admission, result, owner: new AbortController() };
+      const entry = { endpoint, target: structuredClone(target), admission, result, owner: new AbortController() };
       this.#sessions.set(key, entry); this.#cliCapabilities.set(admission.cli.sourceCapability, entry);
       return result;
     }
     let location = this.#locations.get(target.directory);
+    if (location && location.endpoint !== endpoint) {
+      location.registration?.channel.revoke();
+      this.#locations.delete(target.directory);
+      location = undefined;
+    }
     if (!location) {
       if (this.#locations.size >= 64) throw denied();
       const admissionId = randomBytes(32).toString("base64url");
-      location = { name: registrationName(), admissionId, admissionCount: 0, retryAfter: 0 };
+      location = { endpoint, name: registrationName(), admissionId, admissionCount: 0, retryAfter: 0 };
       this.#locations.set(target.directory, location);
     }
     if (!location.task && (location.failed || location.registration?.channel.revoked)) {
@@ -117,7 +127,7 @@ export class OpenCodeHostAgentTools {
     if (!previous && this.#sessions.size >= 1_000) throw capacityReached();
     const result = Object.freeze({ registrationAdmissionId: location.admissionId, registrationName: location.name, registrationControl: registrationControl(randomBytes(32).toString("base64url")),
       cliAdmissionId: admission.cli ? randomBytes(32).toString("base64url") : null });
-    this.#sessions.set(key, { target: structuredClone(target), admission, result, owner: new AbortController() });
+    this.#sessions.set(key, { endpoint, target: structuredClone(target), admission, result, owner: new AbortController() });
     return result;
   }
 
@@ -170,7 +180,7 @@ export class OpenCodeHostAgentTools {
   }
   #require(target: OpenCodeHostToolTarget): HostSession {
     const entry = this.#sessions.get(target.session.applicationThreadId);
-    if (this.#closed || this.options.adapter.client.lifetime.aborted || !entry || entry.owner.signal.aborted || !sameTarget(entry.target, target)) throw denied();
+    if (this.#closed || this.options.adapter.client.lifetime.aborted || !entry || !!entry.endpoint && this.options.cli()?.endpoint !== entry.endpoint || entry.owner.signal.aborted || !sameTarget(entry.target, target)) throw denied();
     return entry;
   }
   async #assertTarget(target: OpenCodeHostToolTarget, signal?: AbortSignal): Promise<void> {
@@ -182,7 +192,8 @@ export class OpenCodeHostAgentTools {
     await this.options.assertCurrent(signal); signal?.throwIfAborted();
     if (this.#closed || session.parentID || session.fork || session.location.directory !== target.directory) throw denied();
   }
-  async #call(directory: string, request: OpenCodeMcpRequest, signal: AbortSignal): Promise<unknown> {
+  async #call(directory: string, location: HostLocation, request: OpenCodeMcpRequest, signal: AbortSignal): Promise<unknown> {
+    if (this.#locations.get(directory) !== location || !!location.endpoint && location.endpoint !== this.options.cli()?.endpoint) throw denied();
     const entries = [...this.#sessions.values()].filter(entry => entry.target.directory === directory && entry.target.session.nativeSessionID === request.sessionID);
     if (entries.length !== 1) throw denied();
     const entry = entries[0]!;
@@ -190,7 +201,7 @@ export class OpenCodeHostAgentTools {
     const stamp = request.operation === "invoke" ? this.options.capture(entry.target) : undefined;
     const invocationSignal = AbortSignal.any([signal, entry.owner.signal]);
     await this.#assertTarget(entry.target, invocationSignal);
-    if (this.#require(entry.target) !== entry) throw denied();
+    if (this.#locations.get(directory) !== location || this.#require(entry.target) !== entry) throw denied();
     invocationSignal.throwIfAborted();
     return this.options.invoke(entry.admission.sourceCapability, request, invocationSignal, stamp);
   }
@@ -216,7 +227,7 @@ export class OpenCodeHostAgentTools {
       if (inventory.location.directory !== directory || inventory.data.some(item => item.name === location.name)) throw denied();
       await this.#assertTarget(entry.target, signal); this.#require(entry.target);
       const channel = await this.#ingress.admit({ catalog: entry.admission.catalog,
-        invoke: (request, signal) => this.#call(directory, request, signal) });
+        invoke: (request, signal) => this.#call(directory, location, request, signal) });
       try { await this.#assertTarget(entry.target, signal); this.#require(entry.target); }
       catch (error) { channel.revoke(); throw error; }
       location.admissionCount++; this.#admissions++;

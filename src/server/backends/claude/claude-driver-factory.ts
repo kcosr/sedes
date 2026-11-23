@@ -1,3 +1,4 @@
+import { ConnectionDriverCache } from "../connection-driver-cache.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import {
@@ -44,7 +45,7 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
   readonly #modelPolicy: CompiledBackendModelPolicy;
   readonly #attachmentProvenanceKey: Uint8Array;
   readonly #outputArtifacts: OutputArtifactPublisher;
-  readonly #connections: ReadonlyMap<string, AgentConnectionProfile>;
+  readonly #connection: (id: string) => AgentConnectionProfile | undefined;
   readonly #agentToolCli: AgentToolCliAvailability;
   readonly #agentToolSourceCapabilities: AgentToolSourceCapabilityIssuer;
   readonly #agentTools: BackendAgentToolFacade;
@@ -55,7 +56,7 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
         source: ClaudeRuntimeVersionObservationSource,
       ) => ClaudeRuntimeVersionObservation)
     | undefined;
-  readonly #drivers = new Map<string, ClaudeConversationBackendDriver>();
+  readonly #drivers = new ConnectionDriverCache<ClaudeConversationBackendDriver>();
   readonly #activeSessions = new Set<string>();
   #closed = false;
 
@@ -110,20 +111,18 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
       input.childEnvironment,
     );
     this.#beginVersionObservation = input.beginVersionObservation;
-    this.#connections = new Map(
-      input.connections.map((connection) => [connection.id, connection]),
-    );
+    this.#connection = id => input.connections.find(profile => profile.id === id);
     if (
       input.instance.kind !== "claude_agent_sdk" ||
       input.instance.tenantId !== input.scope.tenantId ||
-      this.#connections.size !== input.connections.length
+      new Set(input.connections.map(profile => profile.id)).size !== input.connections.length
     ) {
       throw new Error("claude_driver_factory_configuration_invalid");
     }
   }
 
   create(connection: AgentConnectionProfile): ConversationBackendDriver {
-    const configured = this.#connections.get(connection.id);
+    const configured = this.#connection(connection.id);
     if (
       this.#closed ||
       !configured ||
@@ -137,7 +136,7 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
       throw new Error("claude_driver_factory_connection_mismatch");
     }
     let driver = this.#drivers.get(connection.id);
-    if (!driver) {
+    if (driver?.connection.configurationRevision !== connection.configurationRevision) {
       driver = new ClaudeConversationBackendDriver({
         usage: this.#usage,
         nativeNamespace: this.#nativeNamespace,

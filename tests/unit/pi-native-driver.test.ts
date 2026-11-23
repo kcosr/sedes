@@ -216,6 +216,21 @@ describe("native Pi driver", () => {
     fixture.port.readHistory = async () => { throw new PiNativeError("history_capacity", "not_sent"); };
     await expect(driver.openHistory(conversation)).rejects.toMatchObject({ backendCode: "history_capacity", retryable: true, crossedSubmissionBoundary: false });
   });
+  it("uses live model policy when serving a cached native catalog", async () => {
+    let allowed = true;
+    const { driver, fixture } = setup({ modelPolicy: {
+      ...compileBackendModelPolicy({ type: "catalog" }, "provider_model_effort"),
+      filterReasoningEfforts: (_identity, offered) => allowed ? offered : [],
+    } });
+    fixture.port.catalog = vi.fn(async () => ({ models: [{ provider: "provider", id: "first", reasoning: true }], commands: [] }));
+    expect((await driver.catalog(conversation)).models).toHaveLength(1);
+    allowed = false;
+    expect((await driver.catalog(conversation)).models).toEqual([]);
+    allowed = true;
+    expect((await driver.catalog(conversation)).models).toHaveLength(1);
+    expect(fixture.port.catalog).toHaveBeenCalledOnce();
+  });
+
   it("coalesces native catalog reads, refreshes explicit pickers, and preserves passive snapshots on failure", async () => {
     const { driver, fixture } = setup();
     const firstCatalog = { models: [{ provider: "provider", id: "first", reasoning: true }], commands: [{ name: "skill:first", source: "skill" }] };

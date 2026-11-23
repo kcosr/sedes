@@ -1,3 +1,4 @@
+import { ConnectionDriverCache } from "../connection-driver-cache.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import type {
   AgentBackendInstance,
@@ -50,7 +51,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
   readonly #resolveRemoteWorkspace?: PiDriverOptions["resolveRemoteWorkspace"];
   readonly #isolatedWorkspaces?: PiIsolatedWorkspaceResolver;
   readonly #discoverySnapshots = new PiDiscoverySnapshotStore();
-  readonly #drivers = new Map<string, PiConversationBackendDriver>();
+  readonly #drivers = new ConnectionDriverCache<PiConversationBackendDriver>();
   readonly #claimNativeSession: PiDriverOptions["claimNativeSession"];
   readonly #modelPolicy: CompiledBackendModelPolicy;
   readonly #outputArtifacts: OutputArtifactPublisher;
@@ -121,7 +122,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
       throw new Error("pi_driver_factory_connection_mismatch");
     }
     let driver = this.#drivers.get(connection.id);
-    if (!driver) {
+    if (driver?.connection.configurationRevision !== connection.configurationRevision) {
       driver = new PiConversationBackendDriver({
         claimNativeSession: this.#claimNativeSession,
         usage: this.#usage,
@@ -149,11 +150,6 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
         ...(this.now ? { now: this.now } : {}),
       });
       this.#drivers.set(connection.id, driver);
-    } else if (
-      driver.connection.configurationRevision !==
-      connection.configurationRevision
-    ) {
-      throw new Error("pi_driver_factory_configuration_changed");
     }
     return driver;
   }

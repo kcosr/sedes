@@ -5,7 +5,7 @@ import type { SidecarLaunchRecorder } from "./sidecar-launch-ledger.js";
 // pre-spawn recorder in their implementation. Enumerate operations within
 // their exact major version so new operations always start on the manual path.
 const coveredOperations: ReadonlyMap<string, readonly string[]> = new Map([
-  ["control:2", ["hello", "ping", "go_away"]],
+  ["control:3", ["hello", "ping", "go_away", "policy.read", "policy.stage", "policy.apply", "policy.acquire_route", "policy.acquire_opencode_route", "policy.authorize_variables"]],
   ["runtime_bodies:1", ["body.offer"]],
   ["environment_variables:1", ["variables.resolve"]],
   ["directory_browser:1", ["directories.list"]],
@@ -26,7 +26,7 @@ const coveredOperations: ReadonlyMap<string, readonly string[]> = new Map([
   ["codex_managed_tui:3", ["tui.control", "tui.execute"]],
   ["pi_native_runtime:3", ["runtime.control", "runtime.execute"]],
   ["antigravity_runtime:4", ["runtime.control", "runtime.execute"]],
-  ["claude_persistent_runtime:5", ["runtime.lookup", "runtime.inspect", "runtime.stop", "runtime.ensure", "runtime.execute"]],
+  ["claude_persistent_runtime:6", ["runtime.lookup", "runtime.inspect", "runtime.stop", "runtime.ensure", "runtime.execute"]],
   ["opencode_runtime:5", ["runtime.execute", "runtime.control"]],
 ]);
 

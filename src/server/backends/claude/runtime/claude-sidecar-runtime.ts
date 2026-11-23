@@ -1,3 +1,5 @@
+import { launchAdmission, currentBackendGrant, observedLaunchDigest, type ProviderPolicyAttachment } from "../../provider-policy-admission.js";
+import { runtimeLaunchDigest } from "../../provider-launch-digest.js";
 import { z } from "zod";
 import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostics.js";
 import { sidecarUpgradeBlockerSchema } from "../../../../internal/sidecar-protocol/service-management-v1.js";
@@ -9,7 +11,7 @@ import { claudePersistentCommandSchema, claudePersistentConfigurationSchema, cla
   type ClaudePersistentCommand, type ClaudePersistentConfiguration, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import type { ClaudePersistentRuntimeRegistry } from "./claude-persistent-runtime-registry.js";
 
-const capability = { capabilityId: "claude_persistent_runtime", majorVersion: 5 } as const;
+const capability = { capabilityId: "claude_persistent_runtime", majorVersion: 6 } as const;
 const stopRefusals = new Map<string, BackendRuntimeControlRejectedError["reason"]>([
   ["claude_persistent_confirmation_stale", "confirmation_stale"],
   ["claude_persistent_restart_blocked", "blocked"],
@@ -48,13 +50,15 @@ export const claudePersistentRuntimeStopOperation = {
 } satisfies SidecarOperationDefinition<z.infer<typeof stopRequestSchema>, { stopped: true }>;
 export const claudePersistentRuntimeOperations = [claudePersistentRuntimeEnsureOperation, claudePersistentRuntimeExecuteOperation,
   claudePersistentRuntimeLookupOperation, claudePersistentRuntimeInspectOperation, claudePersistentRuntimeStopOperation] as const;
+const executeEnvelope = z.strictObject({ backendInstanceId: claudePersistentConfigurationSchema.shape.backendInstanceId, command: claudePersistentCommandSchema });
 const eventDefinition = { ...capability, event: "runtime.event", schema: z.strictObject({ runtimeId: z.string().uuid(), body: sidecarRuntimeBodySchema }) };
 
-export function registerClaudePersistentRuntimeHost(input: {
+export function registerClaudePersistentRuntimeHost(input: ProviderPolicyAttachment & {
   registry: SidecarOperationRegistry; channel: SidecarRuntimeChannel; hosts: ClaudePersistentRuntimeRegistry;
   controllerEpoch: number; onDetach(): void;
 }): () => void {
   let detached = false;
+  const claimed = new WeakSet<ReturnType<ClaudePersistentRuntimeRegistry["get"]>>();
   const attached = new Set<string>();
   let eventCount = 0;
   let eventBytes = 0;
@@ -75,7 +79,11 @@ export function registerClaudePersistentRuntimeHost(input: {
     if (!host || host.runtimeId !== request.runtimeId) throw new Error("claude_persistent_administration_incarnation_changed");
     return host;
   };
-  input.registry.register(claudePersistentRuntimeLookupOperation, request => ({ runtimeId: existing(request)?.runtimeId ?? null }));
+  input.registry.register(claudePersistentRuntimeLookupOperation, request => {
+    const host = existing(request);
+    if (host) claimed.add(host);
+    return { runtimeId: host?.runtimeId ?? null };
+  });
   input.registry.register(claudePersistentRuntimeInspectOperation, request => input.hosts.inspect(assertIncarnation(request).runtimeId));
   input.registry.register(claudePersistentRuntimeStopOperation, async request => {
     try { await input.hosts.stop(assertIncarnation(request).runtimeId, request.expectedRevision, request.force); }
@@ -87,14 +95,29 @@ export function registerClaudePersistentRuntimeHost(input: {
   });
   input.registry.register(claudePersistentRuntimeEnsureOperation, configuration => {
     if (detached) throw new Error("claude_persistent_attachment_detached");
-    return { runtimeId: input.hosts.ensure(configuration, input.controllerEpoch).runtimeId };
+    const admission = launchAdmission(input, "claude_agent_sdk", configuration.backendInstanceId,
+      runtimeLaunchDigest.claude_agent_sdk(configuration, configuration.startupEnvironmentVariables));
+    const host = input.hosts.ensure(configuration, input.controllerEpoch, admission);
+    admission.bind(host.workerIdentity);
+    claimed.add(host);
+    return { runtimeId: host.runtimeId };
   });
   input.registry.register(claudePersistentRuntimeExecuteOperation, async (body, context) => {
     if (detached) throw new Error("claude_persistent_attachment_detached");
-    const command = claudePersistentCommandSchema.parse(await input.channel.decodeBody(body));
+    const { backendInstanceId, command } = executeEnvelope.parse(await input.channel.decodeBody(body));
     if (command.controllerEpoch !== input.controllerEpoch) throw new Error("claude_persistent_controller_stale");
     context.signal.throwIfAborted();
     const host = input.hosts.get(command.runtimeId);
+    if (!claimed.has(host) || host.input.configuration.backendInstanceId !== backendInstanceId)
+      throw new SidecarOperationError("claude_persistent_runtime_not_attached");
+    if (["open", "fork", "probe", "list", "info", "messages", "transcript", "rename"].includes(command.action) &&
+        !input.isRecoveryController?.() && host.canReplaceWorker()) {
+      const grant = currentBackendGrant(input, host.workerIdentity);
+      if (grant.launchDigest !== observedLaunchDigest(host.workerIdentity)) {
+        // No native command has been dispatched. Main may ensure the saved configuration and retry once.
+        throw new SidecarOperationError("claude_persistent_launch_configuration_expired");
+      }
+    }
     attached.add(host.runtimeId);
     const result = await host.execute(command, event => {
       if (detached) return;
@@ -118,14 +141,14 @@ export function registerClaudePersistentRuntimeHost(input: {
           stage, frameBytes: bytes, queuedEventBytes: eventBytes, queuedEventCount: eventCount, requestedClose: true }, error);
         detach();
       }).finally(() => { eventCount--; eventBytes -= bytes; });
-    });
+    }, () => currentBackendGrant(input, host.workerIdentity));
     return await input.channel.encodeBody(result);
   });
   return detach;
 }
 
 export class ClaudeSidecarRuntimeConnection {
-  constructor(readonly channel: SidecarRuntimeChannel) {}
+  constructor(readonly channel: SidecarRuntimeChannel, readonly backendInstanceId: string) {}
   close(): void {}
   async ensure(configuration: ClaudePersistentConfiguration): Promise<string> {
     return (await this.channel.call(claudePersistentRuntimeEnsureOperation, configuration)).runtimeId;
@@ -145,7 +168,7 @@ export class ClaudeSidecarRuntimeConnection {
     }
   }
   async execute(command: ClaudePersistentCommand, options?: { signal?: AbortSignal; deadlineMilliseconds?: number }): Promise<unknown> {
-    const body = await this.channel.encodeBody(claudePersistentCommandSchema.parse(command));
+    const body = await this.channel.encodeBody(executeEnvelope.parse({ backendInstanceId: this.backendInstanceId, command }));
     return await this.channel.decodeBody(await this.channel.call(claudePersistentRuntimeExecuteOperation, body, options));
   }
   onEvent(runtimeId: string, listener: (event: ClaudePersistentEvent) => void): () => void {

@@ -5,24 +5,31 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
-import { PersistentSidecarServiceServer } from "../../src/server/sidecar/persistent-sidecar-service-server.js";
+import { PersistentSidecarServiceServer, type PersistentSidecarRuntimeAttachmentContext } from "../../src/server/sidecar/persistent-sidecar-service-server.js";
 import { PersistentSidecarManagementReceipts } from "../../src/server/sidecar/persistent-sidecar-management-receipts.js";
 import { sidecarSocketByteStream } from "../../src/server/sidecar/sidecar-socket-byte-stream.js";
 import { readSidecarManagementRecord, writeSidecarManagementRecord } from "../../src/internal/sidecar-protocol/service-management-channel.js";
 import { sidecarManagementResponseSchema, type SidecarManagementRequest } from "../../src/internal/sidecar-protocol/service-management-v1.js";
 import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelopes.js";
 
+import {
+  SidecarOperationRegistry, SidecarProtocolPeer, LengthPrefixedSidecarFrameTransport,
+  controlHelloOperation, registerControlV3Operations, workspaceFilesDownloadCancelOperation,
+  workspaceContextReadOperation, WORKSPACE_CONTEXT_V1_LIMITS, WORKSPACE_TOOLS_V2_LIMITS, WORKSPACE_TOOLS_SHELL_V2_LIMITS,
+  workspaceFilesRootValidateOperation, workspaceToolsShellAcknowledgeOperation,
+} from "../../src/internal/sidecar-protocol/index.js";
+
 const scope = { installationId: "installation-a", tenantId: "tenant-a", principalId: "principal-a", executionEnvironmentId: "ssh-a" };
 const configuration = { environmentRevision: 1, operationsRevision: 2 };
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
-async function setup(options: { readonly onStopped?: () => Promise<void>; readonly receiptsDirectory?: string } = {}) {
+async function setup(options: { readonly onStopped?: () => Promise<void>; readonly receiptsDirectory?: string; readonly onRuntimeAttachment?: (context: PersistentSidecarRuntimeAttachmentContext) => void } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "sd-svc-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const registry = new PersistentSidecarServiceRegistry({ scope, configuration, buildId: "build-a", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION });
   const receiptsDirectory = options.receiptsDirectory ?? path.join(directory, "receipts");
   const receipts = new PersistentSidecarManagementReceipts(receiptsDirectory);
-  const server = new PersistentSidecarServiceServer({ registry, endpointPath: path.join(directory, "s"), receipts, onStopped: options.onStopped ?? (async () => undefined), onRuntimeAttachment: () => undefined });
+  const server = new PersistentSidecarServiceServer({ registry, endpointPath: path.join(directory, "s"), receipts, onStopped: options.onStopped ?? (async () => undefined), onRuntimeAttachment: options.onRuntimeAttachment ?? (() => undefined) });
   await server.listen();
   cleanups.push(async () => { if (registry.status().state !== "stopped") await server.stop(true, "test_cleanup"); });
   const open = async () => {
@@ -48,6 +55,58 @@ describe("persistent sidecar management service", () => {
     expect(endpoint.listening).toBe(true);
     const status = await request({ managementVersion: 1, requestId: randomUUID(), scope, operation: "status" });
     expect(status.outcome).toBe("ok");
+  });
+
+  it("settles exact streams before policy synchronization, while draining, and during handoff", async () => {
+    const capabilities = [{capabilityId: "workspace_files", majorVersion: 8}, {capabilityId: "workspace_tools", majorVersion: 2}, {capabilityId: "workspace_context", majorVersion: 1}];
+    const validate = vi.fn(() => ({ validated: true as const }));
+    const { registry, open } = await setup({onRuntimeAttachment({registry: operations}) {
+      operations.register(workspaceFilesDownloadCancelOperation, () => ({cancelled: true}));
+      operations.register(workspaceToolsShellAcknowledgeOperation, () => ({acknowledged: true}));
+      operations.register(workspaceFilesRootValidateOperation, validate);
+      operations.register(workspaceContextReadOperation, () => {throw Error("unexpected_context_read");});
+      registerControlV3Operations(operations, {buildId: "build-a", artifactSha256: "a".repeat(64),
+        enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: [], capabilityEvidence: [
+          {capabilityId: "workspace_tools", majorVersion: 2, limits: WORKSPACE_TOOLS_V2_LIMITS, ...WORKSPACE_TOOLS_SHELL_V2_LIMITS},
+          {capabilityId: "workspace_context", majorVersion: 1, limits: WORKSPACE_CONTEXT_V1_LIMITS},
+        ]});
+    }});
+    const stream = await open();
+    const sessionNonce = "n".repeat(32);
+    await writeSidecarManagementRecord(stream, {managementVersion: 1, requestId: randomUUID(), scope, operation: "attach",
+      expectedBuildId: "build-a", expectedArtifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
+      configuration, carrierGeneration: 1, sessionNonce, mode: "normal"});
+    const response = await readSidecarManagementRecord(stream, sidecarManagementResponseSchema, AbortSignal.timeout(2000));
+    expect(response.value.outcome).toBe("ok");
+    const peer = new SidecarProtocolPeer({role: "sedes", sessionNonce, registry: new SidecarOperationRegistry(),
+      transport: new LengthPrefixedSidecarFrameTransport({stream: response.stream, assurance: {kind: "test", carrierGeneration: 1}})});
+    peer.start();
+    cleanups.push(() => peer.close("test_complete"));
+    await peer.call(controlHelloOperation, {compression: "none", expectedBuildId: "build-a", expectedArtifactSha256: "a".repeat(64),
+      supportedSidecarCapabilities: capabilities, offeredSedesCapabilities: []});
+    const streamId = randomUUID();
+    const checkSettlement = async () => {
+      await expect(peer.call(workspaceFilesDownloadCancelOperation, {streamId})).resolves.toEqual({cancelled: true});
+      await expect(peer.call(workspaceToolsShellAcknowledgeOperation, {streamId})).resolves.toEqual({acknowledged: true});
+      await expect(peer.call(workspaceFilesRootValidateOperation, {rootKind: "primary", declaredPath: "/root", policyRootPath: "/root"})).rejects.toThrow();
+      expect(validate).not.toHaveBeenCalled();
+    };
+    await checkSettlement();
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const unregister = registry.register({resourceId: "provider-a", kind: "provider", snapshot: () => ({state: "idle", revision: "one", blockers: []}),
+      prepareRestart: () => gate, stop: async () => {throw new Error("sidecar_resource_handoff_pending");}});
+    const status = registry.status();
+    const stop = registry.stop({expectedServiceIncarnation: status.serviceIncarnation, controllerEpoch: status.controllerEpoch,
+      expectedConfiguration: configuration, expectedResourcesFingerprint: status.resourcesFingerprint, force: true, reason: "test_stop"});
+    try {
+      expect(registry.status().state).toBe("draining");
+      await checkSettlement();
+    } finally { finish(); }
+    await expect(stop).rejects.toThrow("sidecar_resource_handoff_pending");
+    expect(registry.status().state).toBe("handoff_pending");
+    unregister();
+    await checkSettlement();
   });
 
   it("keeps management usable when the runtime version is incompatible", async () => {

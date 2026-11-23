@@ -33,7 +33,7 @@ export const openCodeRuntimeCommandSchema = z.discriminatedUnion("action", [
   z.strictObject({ ...runtime, action: z.literal("stop"), expectedRevision: id, force: z.boolean() }),
   z.strictObject({ ...runtime, action: z.literal("acquire"), nativeGeneration: id, target: openCodeRuntimeTargetSchema }),
   z.strictObject({ ...runtime, action: z.literal("acquire_retained"), nativeGeneration: id, target: openCodeRuntimeTargetSchema }),
-  z.strictObject({ ...runtime, action: z.literal("tools_admit"), nativeGeneration: id, target: openCodeHostToolTargetSchema, admission: openCodeHostToolAdmissionSchema }),
+  z.strictObject({ ...runtime, action: z.literal("tools_admit"), routeGeneration: position.positive(), nativeGeneration: id, target: openCodeHostToolTargetSchema, admission: openCodeHostToolAdmissionSchema }),
   z.strictObject({ ...scope, action: z.literal("release") }),
   z.strictObject({ ...scope, action: z.literal("read"), method: readMethod, input: z.unknown(), deadlineAt: position.nullable() }),
   z.strictObject({ ...scope, action: z.literal("mutate"), method: mutationMethod, input: z.unknown(), control: openCodeMutationControlSchema }),

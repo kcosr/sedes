@@ -25,6 +25,7 @@ export class OwnedStdioTransportFactory implements FramedTransportFactory {
     readonly environment: Readonly<Record<string, string>>;
     readonly sqliteHome: string;
     readonly limits?: Partial<OwnedNdjsonStdioLimits>;
+    readonly assertLaunchAdmission?: () => void;
     readonly sensitiveValues?: readonly string[];
     /** Test fixtures only. Production uses the exact app-server command. */
     readonly commandArguments?: readonly string[];
@@ -34,6 +35,7 @@ export class OwnedStdioTransportFactory implements FramedTransportFactory {
       // Keep byte/exit diagnostics without retaining native stderr contents.
       retainStderr: false,
       scope: input.scope,
+      assertLaunchAdmission: input.assertLaunchAdmission,
       channels: input.channels,
       process: input.process,
       environment: input.environment,

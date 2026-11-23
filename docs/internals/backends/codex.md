@@ -241,6 +241,14 @@ loss. A sent mutation stays governed by its method-specific delivery
 classification and durable recovery evidence. Reconnection never makes it
 safe to repeat automatically.
 
+An owned remote process keeps its applied executable and startup variables while
+running. After it parks or exits with cleanup proved, its next use samples the
+saved launch configuration. The host checks the original backend grant generation,
+native-store identity, retained outcomes, pending interactions and managed TUI
+before replacing the parked owner. Main checks its durable operation receipts
+before attaching the same client facade to the new runtime. A withdrawn launch
+contract stops autonomous retries of the old process.
+
 Transport implementations also own their generation boundaries:
 
 - Owned stdio probes the executable, verifies that initialized app-server has

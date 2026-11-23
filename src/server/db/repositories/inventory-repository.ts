@@ -1,3 +1,6 @@
+import { hostExecutionPolicy } from "../../configuration-admin/configuration-execution-policy.js";
+import { canonicalLocalWorkspaceRoots } from "../../execution/local-workspace-roots.js";
+import { workspaceRootGrant } from "../../execution/workspace-root-grant.js";
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { prepareCached } from "../prepared-statements.js";
@@ -56,6 +59,7 @@ export type InventoryWorkspaceRecord = {
   readonly availability: "available" | "unavailable";
   readonly trustState: "trusted" | "untrusted";
   readonly revision: number;
+  readonly authorityRootId?: string | null;
   readonly environmentConfigurationRevision: number;
   readonly lastOpenedAt: number;
   readonly createdAt: number;
@@ -77,11 +81,15 @@ export type InventoryProjectAssignment =
   | { readonly kind: "new"; readonly name: string };
 
 type WorkspaceObservation = {
+  /** A fresh explicit admission may restore revoked authority for this exact location. */
+  readonly rebindAuthority?: true;
+  readonly requireExistingProject?: (projectId: string) => void;
   readonly environmentId: string;
   readonly canonicalPath: string;
   readonly displayName: string;
   readonly available: boolean;
   readonly trustState: "trusted" | "untrusted";
+  readonly authorityRootId?: string | null;
   readonly environmentConfigurationRevision: number;
   readonly now: number;
 };
@@ -359,6 +367,7 @@ const workspaceColumns = `
   canonical_path AS canonicalPath,
   display_name AS displayName,
   availability, trust_state AS trustState, revision,
+  authority_root_id AS authorityRootId,
   environment_configuration_revision AS environmentConfigurationRevision,
   last_opened_at AS lastOpenedAt,
   created_at AS createdAt, updated_at AS updatedAt
@@ -803,11 +812,26 @@ export class InventoryRepository {
     return this.getEnvironment(scope, environmentId);
   }
 
+  workspaceAuthorityIsCurrent(scope: RequestScope, workspace: InventoryWorkspaceRecord): boolean {
+    const environment = this.getEnvironment(scope, workspace.environmentId);
+    const desired = this.#workspaceRoots(scope, environment);
+    if (!desired) return !workspace.authorityRootId && workspace.environmentConfigurationRevision === environment.configurationRevision;
+    return !!workspaceRootGrant(desired, workspace.canonicalPath, {
+      ...(workspace.authorityRootId && { authorityRootId: workspace.authorityRootId }),
+      authorityRevision: workspace.environmentConfigurationRevision,
+    });
+  }
+
+  #workspaceRoots(scope: RequestScope, environment: InventoryEnvironmentRecord) {
+    const roots = hostExecutionPolicy(this.database, scope, environment.id)?.snapshot.roots;
+    return roots && environment.kind === "local" ? canonicalLocalWorkspaceRoots(roots) : roots;
+  }
+
   upsertWorkspace(
     scope: RequestScope,
     input: InventoryWorkspaceUpsert,
   ): InventoryWorkspaceRecord {
-    this.getEnvironment(scope, input.environmentId);
+    const environment = this.getEnvironment(scope, input.environmentId);
     return this.database.transaction(() => {
       const existing = prepareCached(this.database,
           `
@@ -823,6 +847,21 @@ export class InventoryRepository {
           input.environmentId,
           input.canonicalPath,
         ) as InventoryWorkspaceRecord | undefined;
+      if (input.authorityRootId) {
+        const roots = this.#workspaceRoots(scope, environment);
+        if (!roots || !workspaceRootGrant(roots, input.canonicalPath, { authorityRootId: input.authorityRootId, authorityRevision: input.environmentConfigurationRevision })) {
+          throw new DomainError("conflict", "The workspace root changed during admission.");
+        }
+        if (existing?.authorityRootId && workspaceRootGrant(roots, input.canonicalPath, {
+          authorityRootId: existing.authorityRootId, authorityRevision: existing.environmentConfigurationRevision,
+        })) {
+          input = { ...input, authorityRootId: existing.authorityRootId, environmentConfigurationRevision: existing.environmentConfigurationRevision };
+        } else if (existing && !input.rebindAuthority) {
+          throw new DomainError("conflict", "Reopen this workspace to authorize its current root.");
+        }
+      } else if (existing?.authorityRootId) {
+        throw new DomainError("conflict", "Workspace revalidation must retain its root grant.");
+      }
       if (!existing) {
         if (!input.project) {
           throw new DomainError("not_found", "The workspace was not found.");
@@ -834,10 +873,10 @@ export class InventoryRepository {
               INSERT INTO workspaces(
                 tenant_id, owner_principal_id, environment_id, id, project_id,
                 canonical_path, display_name, availability, trust_state,
-                revision, environment_configuration_revision,
+                revision, authority_root_id, environment_configuration_revision,
                 last_opened_at, created_at, updated_at
               )
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
             `,
           )
           .run(
@@ -850,6 +889,7 @@ export class InventoryRepository {
             input.displayName,
             input.available ? "available" : "unavailable",
             input.trustState,
+            input.authorityRootId ?? null,
             input.environmentConfigurationRevision,
             input.now,
             input.now,
@@ -911,12 +951,14 @@ export class InventoryRepository {
           projectId: project.id,
         });
       }
+      input.requireExistingProject?.(existing.projectId);
       const availability = input.available ? "available" : "unavailable";
       const changed =
         removed ||
         existing.displayName !== input.displayName ||
         existing.availability !== availability ||
         existing.trustState !== input.trustState ||
+        existing.authorityRootId !== (input.authorityRootId ?? null) ||
         existing.environmentConfigurationRevision !==
           input.environmentConfigurationRevision;
       prepareCached(this.database,
@@ -924,7 +966,7 @@ export class InventoryRepository {
             UPDATE workspaces
             SET removed_at = NULL, removed_with_project = 0,
               display_name = ?, availability = ?, trust_state = ?,
-              environment_configuration_revision = ?,
+              authority_root_id = ?, environment_configuration_revision = ?,
               last_opened_at = ?, updated_at = ?,
               revision = revision + ?
             WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
@@ -934,6 +976,7 @@ export class InventoryRepository {
           input.displayName,
           availability,
           input.trustState,
+          input.authorityRootId ?? null,
           input.environmentConfigurationRevision,
           input.now,
           input.now,
@@ -942,6 +985,18 @@ export class InventoryRepository {
           scope.principalId,
           existing.id,
         );
+      if (input.rebindAuthority && input.authorityRootId) {
+        // The retained checkout belongs to this exact scoped source. A fresh admission
+        // restores its access without changing the allocation's lifecycle or clone identity.
+        prepareCached(this.database, `
+          UPDATE pi_sandbox_allocations SET source_authority_root_id = ?, source_authority_generation = ?
+          WHERE tenant_id = ? AND owner_principal_id = ? AND execution_environment_id = ?
+            AND source_workspace_id = ? AND source_canonical_path = ?
+            AND (source_authority_root_id IS NOT ? OR source_authority_generation IS NOT ?)
+        `).run(input.authorityRootId, input.environmentConfigurationRevision,
+          scope.tenantId, scope.principalId, input.environmentId, existing.id, existing.canonicalPath,
+          input.authorityRootId, input.environmentConfigurationRevision);
+      }
       if (removed) this.#touchProjectMembership(scope, existing.projectId, input.now);
       if (changed) this.#bumpGeneration(scope);
       return this.getWorkspace(scope, existing.id);

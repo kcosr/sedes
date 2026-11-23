@@ -1,3 +1,5 @@
+import { attachFixturePolicy } from "../helpers/execution-policy-fixture.js";
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
 import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { authenticatedProductionFetch } from "../helpers/authenticated-production-client.js";
 import { randomUUID } from "node:crypto";
@@ -7,6 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ConfigurationProjection } from "../../src/server/configuration-admin/configuration-projection.js";
 import { ConfigurationAdminService } from "../../src/server/configuration-admin/configuration-admin-service.js";
 import { ApplicationSnapshotPublicationBoundary } from "../../src/server/application/application-snapshot-service.js";
 import { DatabaseExecutionTargetReader } from "../../src/server/application/execution-target-reader.js";
@@ -18,6 +21,7 @@ import { SidecarRuntimeOwner, SidecarUnavailableError } from "../../src/server/s
 import { SidecarServiceManagementError, SidecarServiceStagingError } from "../../src/server/sidecar/sidecar-provisioner.js";
 import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelopes.js";
 import type { SidecarServiceStatus } from "../../src/internal/sidecar-protocol/service-management-v1.js";
+import type { InstalledExecutionPolicy } from "../../src/internal/sidecar-protocol/execution-policy.js";
 import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled-module-catalog.js";
 import { BackendRuntimeControlRejectedError } from "../../src/server/backends/runtime-control.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
@@ -83,10 +87,13 @@ async function fixture() {
     defaultTargetId: "idle-pi-target", webSearch: null,
   });
   await service.save(scope, { mutationId: randomUUID(), expectedRevision: 0, configuration: document });
+  await vi.waitFor(async () => {
+    const current = await service.get(scope);
+    expect(current.runtimes.map(runtime => ({ id: runtime.resourceId, applyState: runtime.applyState }))).toEqual(expect.arrayContaining([
+      { id: environmentId, applyState: "applied" }, { id: "idle-pi", applyState: "applied" }, { id: "busy-claude", applyState: "applied" },
+    ]));
+  }, { timeout: 5000 });
   const snapshot = await service.get(scope);
-  expect(snapshot.runtimes.map(runtime => ({id: runtime.resourceId, applyState: runtime.applyState}))).toEqual(expect.arrayContaining([
-    {id: environmentId, applyState: "applied"}, {id: "idle-pi", applyState: "applied"}, {id: "busy-claude", applyState: "applied"},
-  ]));
   return { service, scope, environmentId, snapshot };
 }
 
@@ -133,6 +140,139 @@ function addBackgroundOpenCode(configuration: ConfigurationDocument, environment
 }
 
 describe("production configuration reconciliation", () => {
+  function addAntigravity(document: ConfigurationDocument, environmentId: string, id: string, enabled: boolean) {
+    document.backends.push({
+      id, kind: "antigravity", label: id, enabled, modelPolicy: { type: "catalog" },
+      moduleConfiguration: { initializationTimeoutMs: 30_000 },
+    });
+    document.targets.push({
+      id: id + "-target", kind: "antigravity_acp", label: id, enabled,
+      executionEnvironmentId: environmentId, backendInstanceId: id, moduleConfiguration: { defaults: {} },
+    });
+  }
+
+  function retainMigrationCandidates(service: ConfigurationAdminService, scope: Parameters<typeof service.get>[0], hostId: string) {
+    const insert = service.repository.database.prepare(`INSERT INTO execution_configuration_ownership_conflicts
+      (tenant_id, owner_principal_id, environment_id, backend_id, target_ids_json) VALUES (?, ?, ?, ?, ?)`);
+    for (const id of ["legacy-a", "legacy-b"]) insert.run(scope.tenantId, scope.principalId, hostId, id, JSON.stringify([id + "-target"]));
+  }
+
+  it("requires independent scoped retirement confirmations for two migrated local Antigravity candidates", async () => {
+    const { service, scope, environmentId, snapshot } = await fixture();
+    const configuration = structuredClone(snapshot.configuration);
+    for (const id of ["legacy-a", "legacy-b"]) addAntigravity(configuration, environmentId, id, false);
+    const { revision } = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    retainMigrationCandidates(service, scope, environmentId);
+    const current = await service.get(scope);
+    for (const id of ["legacy-a", "legacy-b"]) {
+      expect(current.runtimes.find(r => r.resourceId === id)).toMatchObject({ connectionState: "unknown", supportedActions: ["confirm_retirement"] });
+    }
+    const removed = structuredClone(configuration);
+    removed.backends = removed.backends.filter(b => b.id !== "legacy-a");
+    removed.targets = removed.targets.filter(t => t.backendInstanceId !== "legacy-a");
+    await expect(service.save(scope, { mutationId: randomUUID(), expectedRevision: revision, configuration: removed })).rejects.toThrow(/confirm retirement/i);
+    await expect(service.save(scope, { mutationId: randomUUID(), expectedRevision: revision, configuration: {
+      ...configuration, targets: removed.targets,
+    } })).rejects.toThrow(/requires a target that fixes its execution environment/);
+    const third = structuredClone(configuration);
+    addAntigravity(third, environmentId, "replacement", true);
+    const saveReplacement = () => service.save(scope, { mutationId: randomUUID(), expectedRevision: service.repository.get(scope).revision, configuration: third });
+    await expect(saveReplacement()).rejects.toThrow(/retained Antigravity/);
+
+    const action = (resourceId: string) => ({
+      expectedRevision: service.repository.get(scope).revision, resourceKind: "backend" as const, resourceId, action: "confirm_retirement" as const,
+    });
+    const command = async (id: string) => {
+      const impact = await service.impact(scope, action(id));
+      expect(impact.interruptions.join(" ")).toContain(id);
+      expect(impact.interruptions.join(" ")).toContain(environmentId);
+      return { ...action(id), mutationId: randomUUID(), expectedIncarnation: impact.incarnation, impactToken: impact.token };
+    };
+    const orphan = await command("legacy-a");
+    // Simulate main dying after durable admission and before the atomic confirmation.
+    expect(service.repository.beginLifecycle(scope, orphan).result.state).toBe("pending");
+    expect((await service.lifecycle(scope, orphan)).state).toBe("rejected");
+    expect(service.repository.unresolvedAntigravityCandidates(scope, environmentId)).toEqual(["legacy-a", "legacy-b"]);
+
+    const first = await command("legacy-a");
+    await expect(service.lifecycle(scope, { ...first, impactToken: null })).rejects.toThrow(/confirmation/);
+    await expect(service.lifecycle(scope, { ...first, resourceId: "legacy-b" })).rejects.toThrow(/confirmation/);
+    expect(() => service.repository.confirmLocalAntigravityRetirement(scope, randomUUID(), "legacy-a")).toThrow(/no longer/);
+    const confirmed = await service.lifecycle(scope, first);
+    expect(confirmed).toMatchObject({ state: "applied", runtime: { connectionState: "stopped" } });
+    expect(service.repository.unresolvedAntigravityCandidates(scope, environmentId)).toEqual(["legacy-b"]);
+    await expect(saveReplacement()).rejects.toThrow(/retained Antigravity/);
+    expect(await service.lifecycle(scope, first)).toEqual(confirmed);
+    expect((await service.lifecycleReceipt(scope, orphan.mutationId)).state).toBe("rejected");
+
+    const last = await command("legacy-b");
+    expect((await service.lifecycle(scope, last)).state).toBe("applied");
+    expect(service.repository.unresolvedAntigravityCandidates(scope, environmentId)).toEqual([]);
+    await expect(saveReplacement()).resolves.toMatchObject({ revision: last.expectedRevision + 2 });
+  });
+
+  it("preserves a positively identified local Antigravity incumbent when an earlier retirement impact is confirmed", async () => {
+    const { service, scope, environmentId, snapshot } = await fixture();
+    const configuration = structuredClone(snapshot.configuration);
+    for (const id of ["legacy-a", "legacy-b"]) addAntigravity(configuration, environmentId, id, false);
+    const { revision } = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    retainMigrationCandidates(service, scope, environmentId);
+    const action = { expectedRevision: revision, resourceKind: "backend" as const, resourceId: "legacy-a", action: "confirm_retirement" as const };
+    const impact = await service.impact(scope, action);
+    service.repository.confirmNativeOwner(scope, environmentId, "antigravity", "legacy-b");
+    const result = await service.lifecycle(scope, { ...action, mutationId: randomUUID(), expectedIncarnation: impact.incarnation, impactToken: impact.token });
+    expect(result.state).toBe("rejected");
+    expect(service.repository.retainedAntigravityOwner(scope, environmentId)).toBe("legacy-b");
+    expect(() => service.repository.confirmLocalAntigravityRetirement(scope, environmentId, "legacy-b")).toThrow(/no longer/);
+  });
+
+  it("looks up the original remote Antigravity instances after their saved definitions were removed", async () => {
+    const { service, scope, snapshot } = await fixture();
+    const hostId = randomUUID();
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.executionEnvironments.push({ id: hostId, kind: "ssh", hostAlias: "remote-legacy", label: "Legacy SSH",
+      workspaceRoots: ["/workspace"], connectionCompression: true, operations: { kind: "sidecar", enabledCapabilities: ["workspace_context", "workspace_tools"] } });
+    const services = new PersistentSidecarServiceRegistry({
+      scope: { ...scope, installationId: "installation", executionEnvironmentId: hostId },
+      buildId: "legacy-inspection", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
+      configuration: { environmentRevision: 0, operationsRevision: 0 },
+    });
+    services.attach({ environmentRevision: 0, operationsRevision: 0 });
+    const carrier = await createSidecarFramedCarrier();
+    try {
+      const inspect = vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockResolvedValue(services.status());
+      vi.spyOn(SidecarRuntimeOwner.prototype, "synchronizePolicy").mockResolvedValue();
+      const retry = vi.spyOn(SidecarRuntimeOwner.prototype, "retryPolicy").mockResolvedValue();
+      vi.spyOn(SidecarRuntimeOwner.prototype, "connect").mockResolvedValue(services.status());
+      const recover = vi.spyOn(SidecarRuntimeOwner.prototype, "acquireRecovery").mockImplementation(async () => ({
+        session: { runtimeChannel: carrier.mainChannel, closed: carrier.mainTransport.closed, negotiatedCapabilities: [], close: async () => {} },
+        serviceStatus: services.status(), carrierGeneration: 1, release() {},
+      }));
+      const module = compiledBackendModuleCatalog.requireModule("antigravity");
+      const lookup = vi.spyOn(module, "inspectRetainedOwner").mockImplementation(async (_lease, id) => id === "legacy-b");
+      const { revision } = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+      await vi.waitFor(() => expect(retry).toHaveBeenCalled());
+      retainMigrationCandidates(service, scope, hostId);
+      addAntigravity(configuration, hostId, "replacement", true);
+      const save = () => service.save(scope, { mutationId: randomUUID(), expectedRevision: revision, configuration });
+
+      inspect.mockRejectedValue(new SidecarUnavailableError());
+      await expect(save()).rejects.toThrow();
+      expect(service.repository.unresolvedAntigravityCandidates(scope, hostId)).toEqual(["legacy-a", "legacy-b"]);
+      inspect.mockResolvedValue(services.status());
+      await expect(save()).rejects.toThrow(/retained Antigravity/);
+      expect(service.repository.retainedAntigravityOwner(scope, hostId)).toBe("legacy-b");
+      expect(lookup.mock.calls.map(([,id]) => id)).toEqual(["legacy-a", "legacy-b"]);
+      expect(recover).toHaveBeenCalledWith(scope, hostId, expect.any(AbortSignal));
+      lookup.mockRejectedValueOnce(new Error("Lost retained inspection response"));
+      await expect(save()).rejects.toThrow();
+      expect(service.repository.retainedAntigravityOwner(scope, hostId)).toBe("legacy-b");
+      lookup.mockResolvedValue(false);
+      await expect(save()).resolves.toMatchObject({ revision: revision + 1 });
+      expect(lookup.mock.lastCall?.[1]).toBe("legacy-b");
+    } finally { await carrier.close(); }
+  });
+
   it("publishes the bound ephemeral listener to local backend tool runtimes", async () => {
     vi.spyOn(agentToolCliAvailability, "resolveLocalAgentToolCliAvailability").mockResolvedValue({
       availability: "available", endpoint: "http://127.0.0.1:0", executableDirectory: "/fixture/bin", inheritedPath: "/usr/bin",
@@ -176,6 +316,7 @@ describe("production configuration reconciliation", () => {
   }, 15_000);
 
   it.each(["idle", "active", "cleanup_unproven", "carrier", "unreachable"] as const)("refreshes a replaced Pi sidecar only after %s retirement is safe", async disposition => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID(), backendId = "replaced-native-pi";
     const configuration = structuredClone(snapshot.configuration);
@@ -208,8 +349,12 @@ describe("production configuration reconciliation", () => {
             environment: {}, launch: nativeLaunch });
           hosts.push(host); return host;
         } });
-      const controllerEpoch = services.attach({ environmentRevision: 0, operationsRevision: 0 });
-      const detach = registerPiNativeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts: registry, services, controllerEpoch });
+      const controllerEpoch = attachFixturePolicy(services, { environmentRevision: 0, operationsRevision: 0 }, "normal", {
+        roots: [], capabilities: [], backends: [{ id: backendId, kind: "pi_native", generation: 1,
+          launchDigest: runtimeLaunchDigest.pi_native({ initializationTimeoutMs: 30_000, projectTrusted: false }),
+          targets: [{ id: "replaced-native-target", generation: 1 }] }],
+      });
+      const detach = registerPiNativeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts: registry, services, controllerEpoch, getExecutionPolicy: () => services.executionPolicy(controllerEpoch), isRecoveryController: () => services.recoveryController });
       await carrier.start();
       return { carrier, services, hosts, registry,
         lease: () => ({ session: { runtimeChannel: carrier.mainChannel, closed: carrier.mainTransport.closed,
@@ -226,12 +371,17 @@ describe("production configuration reconciliation", () => {
       vi.spyOn(SidecarRuntimeOwner.prototype, "acquireRecovery").mockImplementation(async () => current.lease());
       const stop = vi.spyOn(SidecarRuntimeOwner.prototype, "controlService");
       await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
-      expect(modules).toHaveLength(1);
+      await vi.waitFor(() => expect(modules).toHaveLength(1));
       const first = modules[0]!;
       // A metadata read pins the real Pi port to this authenticated service;
       // there is no native child or active thread to require a manual restart.
       const initial = await first.administration!.inspect();
-      const reconcile = () => service.options.runtime!.reconcile(scope, service.repository.get(scope));
+      // Production maintenance notices replacement outside a settings save. The
+      // impact read on the same host queue provides a completion barrier.
+      const reconcile = async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+        await service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "restart", expectedRevision: service.repository.get(scope).revision });
+      };
       await reconcile();
       expect(modules).toHaveLength(1);
       const close = vi.spyOn(first, "close");
@@ -282,6 +432,7 @@ describe("production configuration reconciliation", () => {
   }, 15_000);
 
   it("refreshes a remote OpenCode module whose service identity was captured during deferred startup", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID(), backendId = "background-opencode";
     const configuration = structuredClone(snapshot.configuration);
@@ -351,15 +502,20 @@ describe("production configuration reconciliation", () => {
       release();
       await vi.waitFor(() => expect(collection.runtimes.get(backendId)).toBe(created[0]));
       const first = created[0]!, close = vi.spyOn(first, "close");
-      const reconcile = () => service.options.runtime!.reconcile(scope, service.repository.get(scope));
+      const observe = () => service.impact(scope, { resourceKind: "environment", resourceId: environmentId,
+        action: "restart", expectedRevision: service.repository.get(scope).revision });
+      const reconcile = async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+        await observe();
+      };
       await reconcile();
       expect(created).toHaveLength(1);
       expect(close).not.toHaveBeenCalled();
       const original = current;
       current = await createPeer("replacement-service"); peers.push(current);
       await original.carrier.close();
-      await service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "restart",
-        expectedRevision: service.repository.get(scope).revision });
+      // Observe the replacement identity before maintenance decides whether to retire the original module.
+      await observe();
       await reconcile();
       await vi.waitFor(() => {
         expect(created).toHaveLength(2);
@@ -405,13 +561,13 @@ describe("production configuration reconciliation", () => {
     configuration.targets.push({ id: "compression-pi-target", kind: "pi_sdk", label: "Remote workspace Pi", enabled: true,
       backendInstanceId: "compression-pi", executionEnvironmentId: environmentId });
     await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
-    expect((await service.get(scope)).runtimes.find(item => item.resourceId === "compression-pi")).toMatchObject({ applyState: "applied" });
+    await vi.waitFor(() => expect(apply.mock.contexts.some(collection => (collection as PrincipalBackendRuntimeCollection).runtimes.has("compression-pi"))).toBe(true));
     expect(creations).toBe(1);
     const collection = apply.mock.contexts[0] as PrincipalBackendRuntimeCollection;
     const backend = collection.runtimes.get("compression-pi");
     expect(backend).toBeDefined();
     const initial = await service.get(scope);
-    const initialRuntimes = initial.runtimes.filter(item => [environmentId, "compression-pi"].includes(item.resourceId));
+    const initialBackend = initial.runtimes.find(item => item.resourceId === "compression-pi");
     const close = vi.spyOn(runtime!, "close");
     const remove = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "remove");
     const policy = captured!.connectionCompression;
@@ -424,7 +580,9 @@ describe("production configuration reconciliation", () => {
       await service.save(scope, { mutationId: randomUUID(), expectedRevision: before.revision, configuration });
       const after = await service.get(scope);
       expect(after.revision).toBe(before.revision + 1);
-      expect(after.runtimes.filter(item => [environmentId, "compression-pi"].includes(item.resourceId))).toEqual(initialRuntimes);
+      expect(after.runtimes.find(item => item.resourceId === environmentId)?.effects).toContainEqual(
+        expect.objectContaining({ component: "connection_compression", state: "next_attachment", desiredRevision: after.revision }));
+      expect(after.runtimes.find(item => item.resourceId === "compression-pi")).toEqual(initialBackend);
       expect(policy()).toBe(connectionCompression);
       expect(creations).toBe(1);
       expect(collection.runtimes.get("compression-pi")).toBe(backend);
@@ -433,9 +591,11 @@ describe("production configuration reconciliation", () => {
     }
     configuration.executionEnvironments.find(item => item.id === environmentId)!.workspaceRoots.push("/additional-root");
     await service.save(scope, { mutationId: randomUUID(), expectedRevision: (await service.get(scope)).revision, configuration });
-    expect(creations).toBe(2);
-    expect(close).toHaveBeenCalledOnce();
-    expect(remove).toHaveBeenCalledWith("compression-pi", expect.objectContaining({ run: expect.any(Function) }));
+    expect(creations).toBe(1);
+    expect(close).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect((await service.get(scope)).runtimes.find(item => item.resourceId === environmentId)?.effects).toContainEqual(
+      expect.objectContaining({ component: "host_policy", subjectLabel: "/additional-root", state: "awaiting_host" }));
   });
 
   it("attaches a replacement module's retained work before the old pass settles", async () => {
@@ -585,6 +745,7 @@ describe("production configuration reconciliation", () => {
   });
 
   it.each(["opencode_executable_unavailable", "opencode_owned_cleanup_unproved"])("backs off %s startup failures while permitting initial attachment and explicit retries after proved cleanup", async code => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const { service, scope, snapshot, environmentId } = await fixture();
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -621,7 +782,7 @@ describe("production configuration reconciliation", () => {
     }
     expect(start).toHaveBeenCalledOnce();
     now += 5_000;
-    await save();
+    await vi.advanceTimersByTimeAsync(30_000);
     await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2));
     await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === "background-opencode")?.applyState).toBe("unavailable"));
     unavailable = false;
@@ -812,6 +973,7 @@ describe("production configuration reconciliation", () => {
     configuration.targets.push({ ...structuredClone(original), id: removedId });
     configuration.targets.push({ ...structuredClone(original), id: disabledId, enabled: false });
     await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === backendId)?.connectionState).toBe("connected"));
     const lifecycle = async (action: "stop" | "start") => {
       const current = await service.get(scope);
       const impact = await service.impact(scope, { resourceKind: "backend", resourceId: backendId, action, expectedRevision: current.revision });
@@ -911,19 +1073,19 @@ describe("production configuration reconciliation", () => {
       return prepared;
     }));
     const saved = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
-    expect((await service.get(scope)).runtimes.find(item => item.resourceId === backendId))
-      .toMatchObject({ connectionState: "connected", applyState: "applied", startupEnvironmentPending: false });
+    await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(item => item.resourceId === backendId))
+      .toMatchObject({ connectionState: "connected", incarnation: "retained-provider", startupEnvironmentPending: false }));
     configuration.backends.find(item => item.id === backendId)!.environmentVariables!.startup = { BUILD_STAGE: { kind: "literal", value: "B" } };
     await service.save(scope, { mutationId: randomUUID(), expectedRevision: saved.revision, configuration });
-    expect((await service.get(scope)).runtimes.find(item => item.resourceId === backendId))
-      .toMatchObject({ connectionState: "connected", applyState: "pending", startupEnvironmentPending: true });
+    await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(item => item.resourceId === backendId))
+      .toMatchObject({ connectionState: "connected", applyState: "pending", startupEnvironmentPending: true }));
     await application!.close();
     application = undefined;
     inspect.mockClear(); recover.mockClear(); inspectService.mockClear();
     if (failFirstInspection) inspect.mockRejectedValueOnce(new Error("transient_observation_failure"));
     const restarted = await openApplication();
-    expect((await restarted.service.get(restarted.scope)).runtimes.find(item => item.resourceId === backendId))
-      .toMatchObject({ connectionState: "connected", applyState: "pending", startupEnvironmentPending: true, incarnation: "retained-provider" });
+    await vi.waitFor(async () => expect((await restarted.service.get(restarted.scope)).runtimes.find(item => item.resourceId === backendId))
+      .toMatchObject({ connectionState: "connected", applyState: "pending", startupEnvironmentPending: true, incarnation: "retained-provider" }));
     await restarted.service.get(restarted.scope);
     expect(inspect).toHaveBeenCalledTimes(failFirstInspection ? 2 : 1);
     expect(recover).toHaveBeenCalledTimes(failFirstInspection ? 2 : 1);
@@ -933,6 +1095,159 @@ describe("production configuration reconciliation", () => {
     expect(stop).not.toHaveBeenCalled();
     // Two production boots, persisted settings edits, and retained-runtime
     // recovery need the same bounded budget as the other restart cases.
+  }, 15_000);
+
+  it.each([false, true])("applies a natural remote relaunch without replacing its module (park observed before launch: %s)", async observeInitialPark => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const { service, scope, snapshot } = await fixture();
+    const environmentId = randomUUID(), backendId = "remote-launch-claude";
+    const configuration = structuredClone(snapshot.configuration);
+    const hostStartup = { HOST_STAGE: { kind: "literal" as const, value: "A" }, BUILD_STAGE: { kind: "literal" as const, value: "host" } };
+    const backendStartup = { BUILD_STAGE: { kind: "literal" as const, value: "A" } };
+    const moduleConfiguration = { executablePath: "/bin/claude", configDirectory: "/config/claude", initializationTimeoutMs: 1000,
+      permissionPolicy: { allowedModes: ["default" as const] } };
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Remote host", hostAlias: "test-target",
+      connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" },
+      environmentVariables: { execution: {}, startup: hostStartup } });
+    configuration.backends.push({ id: backendId, kind: "claude_agent_sdk", label: "Claude", enabled: true,
+      modelPolicy: { type: "catalog" }, environmentVariables: { execution: {}, startup: backendStartup }, moduleConfiguration });
+    configuration.targets.push({ id: "remote-launch-target", backendInstanceId: backendId, executionEnvironmentId: environmentId,
+      kind: "claude_agent_sdk", label: "Claude", enabled: true, moduleConfiguration: { defaults: { permissionMode: "default" } } });
+
+    const firstStartup = structuredClone({ ...hostStartup, ...backendStartup });
+    const firstDigest = runtimeLaunchDigest.claude_agent_sdk(moduleConfiguration, firstStartup);
+    let observedDigest: string | null = firstDigest;
+    const incumbent = { state: "active" as const, incarnation: "first-provider", revision: "first-revision",
+      blockers: ["active_work" as const], startupEnvironmentFingerprint: configurationFingerprint(firstStartup) };
+    const inspect = vi.fn<NonNullable<BackendModuleRuntime["administration"]>["inspect"]>().mockResolvedValue(incumbent);
+    const contexts: BackendModuleRuntimeContext[] = [];
+    const stop = vi.fn();
+    const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
+    vi.spyOn(compiledBackendModuleCatalog, "prepare").mockImplementation(input => prepare(input).map(prepared => {
+      if (prepared.backendInstanceId !== backendId) return prepared;
+      const create = prepared.createRuntime.bind(prepared);
+      prepared.createRuntime = context => {
+        contexts.push(context);
+        const runtime = create(context);
+        vi.spyOn(runtime, "startupEnvironmentState").mockResolvedValue("started");
+        return runtime;
+      };
+      prepared.recoverAdministration = async () => ({ stop, restart: stop, inspect });
+      return prepared;
+    }));
+    let notifyHost!: () => void;
+    let replaceController!: () => void;
+    const createEnvironment = environmentRuntime.createExecutionEnvironmentRuntime;
+    vi.spyOn(environmentRuntime, "createExecutionEnvironmentRuntime").mockImplementation(async input => {
+      const runtime = await createEnvironment(input);
+      if (runtime.environmentId !== environmentId) return runtime;
+      const owner = runtime.sidecarRuntime!;
+      const host = new PersistentSidecarServiceRegistry({ scope: { ...scope, installationId: input.installationId, executionEnvironmentId: environmentId },
+        buildId: "remote-launch", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
+        configuration: input.readDesiredPolicy!().configuration });
+      replaceController = () => { host.attach(input.readDesiredPolicy!().configuration); };
+      replaceController();
+      notifyHost = input.onPolicyChanged!;
+      vi.spyOn(owner, "inspectService").mockImplementation(async () => host.status());
+      let installed: InstalledExecutionPolicy | undefined;
+      const synchronize = async () => { installed = input.readDesiredPolicy!(); };
+      vi.spyOn(owner, "retryPolicy").mockImplementation(synchronize);
+      vi.spyOn(owner, "synchronizePolicy").mockImplementation(synchronize);
+      vi.spyOn(owner, "policyStatus").mockImplementation(() => installed && ({
+        installed: { revision: installed.revision, digest: installed.digest }, configuration: installed.configuration,
+        incarnation: host.serviceIncarnation, controllerEpoch: host.controllerEpoch,
+        readiness: installed.snapshot.backends.map(backend => ({ id: `backend:${backend.id}`, generation: backend.generation,
+          state: "ready" as const, observedLaunchDigest: observedDigest })),
+      }));
+      return runtime;
+    });
+    const settings = async () => (await service.get(scope)).runtimes.find(runtime => runtime.resourceId === backendId)!;
+    const initial = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    await vi.waitFor(async () => expect(await settings()).toMatchObject({ applyState: "applied", effectiveRevision: initial.revision,
+      incarnation: incumbent.incarnation, activeResources: 1, startupEnvironmentPending: false }));
+    const readLaunch = contexts[0]!.readCurrentLaunchConfiguration!;
+    expect(readLaunch()?.startupEnvironmentVariables).toEqual(firstStartup);
+
+    hostStartup.HOST_STAGE.value = "B";
+    backendStartup.BUILD_STAGE.value = "B";
+    moduleConfiguration.executablePath = "/opt/claude";
+    const edited = await service.save(scope, { mutationId: randomUUID(), expectedRevision: initial.revision, configuration });
+    const nextStartup = { ...hostStartup, ...backendStartup };
+    const nextDigest = runtimeLaunchDigest.claude_agent_sdk(moduleConfiguration, nextStartup);
+    await vi.waitFor(async () => expect(await settings()).toMatchObject({ applyState: "pending", effectiveRevision: initial.revision,
+      startupEnvironmentPending: true, effects: expect.arrayContaining([expect.objectContaining({ component: "provider_launch",
+        state: "restart_backend", providerLaunch: { owner: "host", desiredDigest: nextDigest, confirmedDigest: firstDigest } })]) }));
+    const launch = readLaunch();
+    expect(launch?.backend).toMatchObject({ id: backendId, moduleConfiguration: { executablePath: "/opt/claude" } });
+    expect(launch?.startupEnvironmentVariables).toEqual(nextStartup);
+
+    // Management sees a new controller on the same service. The next ordinary
+    // Settings poll starts an asynchronous inventory read of the original process.
+    replaceController();
+    await service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "restart", expectedRevision: edited.revision });
+    function pendingInspection() {
+      type Inventory = Awaited<ReturnType<typeof inspect>>;
+      let resolve!: (value: Inventory) => void;
+      const promise = new Promise<Inventory>(done => { resolve = done; });
+      return {promise, resolve};
+    }
+    const superseded = pendingInspection();
+    const inspectOld = vi.fn(() => superseded.promise);
+    inspect.mockImplementation(inspectOld);
+    await vi.waitFor(async () => {
+      expect(await settings()).toMatchObject({ incarnation: incumbent.incarnation, activeResources: 1 });
+      expect(inspectOld).toHaveBeenCalled();
+    });
+
+    if (observeInitialPark) {
+      observedDigest = null;
+      notifyHost();
+      await vi.waitFor(async () => expect(await settings()).toMatchObject({ applyState: "pending", effectiveRevision: initial.revision,
+        startupEnvironmentPending: false, effects: expect.arrayContaining([expect.objectContaining({ component: "provider_launch",
+          state: "next_launch", providerLaunch: { owner: "host", desiredDigest: nextDigest, confirmedDigest: null } })]) }));
+    }
+
+    // B launches while the old inventory read is in flight. Hold the new read
+    // too, so only the host's launch evidence can establish B's status.
+    const current = pendingInspection();
+    const replacement = { state: "idle" as const, incarnation: "second-provider", revision: "second-revision", blockers: [],
+      startupEnvironmentFingerprint: configurationFingerprint(nextStartup) };
+    const inspectNew = vi.fn(() => current.promise);
+    inspect.mockImplementation(inspectNew);
+    const applied = (resident: string | null) => ({ applyState: "applied", effectiveRevision: edited.revision,
+      startupEnvironmentPending: false, effects: expect.arrayContaining([expect.objectContaining({ component: "provider_launch",
+        state: "applied", effectiveRevision: edited.revision, providerLaunch: { owner: "host", desiredDigest: nextDigest, confirmedDigest: resident } })]) });
+    observedDigest = nextDigest;
+    notifyHost();
+    try {
+      await vi.waitFor(async () => {
+        expect(await settings()).toMatchObject({ ...applied(nextDigest), incarnation: null, activeResources: 0 });
+        expect(inspectNew).toHaveBeenCalled();
+      });
+      superseded.resolve(incumbent);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(await settings()).toMatchObject({ ...applied(nextDigest), incarnation: null, activeResources: 0 });
+
+      // B parks on the same service before its fresh administrative read completes.
+      observedDigest = null;
+      notifyHost();
+      await vi.waitFor(async () => expect(await settings()).toMatchObject(applied(null)));
+      for (let poll = 0; poll < 2; poll++) {
+        expect(await settings()).toMatchObject({ ...applied(null), incarnation: null, activeResources: 0 });
+      }
+      current.resolve(replacement);
+      await vi.waitFor(async () => expect(await settings()).toMatchObject({ ...applied(null), incarnation: "second-provider", activeResources: 0 }));
+    } finally {
+      superseded.resolve(incumbent);
+      current.resolve(replacement);
+    }
+    expect(contexts).toHaveLength(1);
+    expect(stop).not.toHaveBeenCalled();
+
+    configuration.backends.find(backend => backend.id === backendId)!.enabled = false;
+    configuration.targets.find(target => target.backendInstanceId === backendId)!.enabled = false;
+    await service.save(scope, { mutationId: randomUUID(), expectedRevision: edited.revision, configuration });
+    expect(readLaunch()).toBeUndefined();
   }, 15_000);
 
   it("keeps owned startup changes pending until an explicit backend restart", async () => {
@@ -990,6 +1305,74 @@ describe("production configuration reconciliation", () => {
     expect(stops).toHaveBeenCalledOnce();
     expect(launches).toEqual([{ BUILD_STAGE: { kind: "literal", value: "A" } }, { BUILD_STAGE: { kind: "literal", value: "B" } }]);
   });
+
+  it.each(["stop", "restart"] as const)("keeps the remote %s control handle while Settings reads a new controller epoch", async action => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const { service, scope, snapshot } = await fixture();
+    const environmentId = randomUUID(), backendId = "controlled-claude";
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Controlled host", hostAlias: "test-target",
+      connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.backends.push({ id: backendId, kind: "claude_agent_sdk", label: "Controlled Claude", enabled: true, modelPolicy: { type: "catalog" },
+      moduleConfiguration: { initializationTimeoutMs: 1000, permissionPolicy: { allowedModes: ["default"] } } });
+    configuration.targets.push({ id: "controlled-target", backendInstanceId: backendId, executionEnvironmentId: environmentId,
+      kind: "claude_agent_sdk", label: "Controlled Claude", enabled: true, moduleConfiguration: { defaults: { permissionMode: "default" } } });
+
+    const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
+    const host = new PersistentSidecarServiceRegistry({ scope: { ...scope, installationId: "test-installation", executionEnvironmentId: environmentId },
+      buildId: "controlled", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION, configuration: serviceConfiguration });
+    host.attach(serviceConfiguration);
+    const inspectService = vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockImplementation(async () => host.status());
+    vi.spyOn(SidecarRuntimeOwner.prototype, "connect").mockImplementation(async () => host.status());
+    vi.spyOn(SidecarRuntimeOwner.prototype, "retryPolicy").mockResolvedValue();
+    vi.spyOn(SidecarRuntimeOwner.prototype, "synchronizePolicy").mockResolvedValue();
+
+    let running = true;
+    const stop = vi.fn(async () => {
+      if (action === "restart") throw new BackendRuntimeControlRejectedError("blocked");
+      running = false;
+    });
+    const owner = { inspect: async () => ({ state: "idle" as const, incarnation: "controlled-provider", revision: "controlled-revision", blockers: [] }),
+      stop, restart: stop };
+    const recover = vi.fn(async () => running ? owner : undefined);
+    const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
+    vi.spyOn(compiledBackendModuleCatalog, "prepare").mockImplementation(input => prepare(input).map(prepared => {
+      if (prepared.backendInstanceId === backendId) prepared.recoverAdministration = recover;
+      return prepared;
+    }));
+    const { revision } = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    const settings = async () => (await service.get(scope)).runtimes.find(runtime => runtime.resourceId === backendId);
+    await vi.waitFor(async () => expect(await settings()).toMatchObject({ incarnation: "controlled-provider", connectionState: "connected" }));
+    const target = { action, resourceKind: "backend" as const, resourceId: backendId, expectedRevision: revision };
+    const impact = await service.impact(scope, target);
+    expect(impact.incarnation).toBe("controlled-provider");
+
+    // The command first learns the new service epoch from management. Pause
+    // recovery before it returns the provider handle, then let Settings read.
+    const epoch = host.attach(serviceConfiguration);
+    let releaseRecovery!: () => void;
+    const gate = new Promise<void>(resolve => { releaseRecovery = resolve; });
+    const heldRecovery = vi.fn(async () => { await gate; return owner; });
+    recover.mockImplementationOnce(heldRecovery);
+    const mutationId = randomUUID();
+    const operation = service.lifecycle(scope, { ...target, mutationId, expectedIncarnation: impact.incarnation, impactToken: impact.token });
+    try {
+      await vi.waitFor(() => expect(heldRecovery).toHaveBeenCalledOnce());
+      expect(await inspectService.mock.results.at(-1)!.value).toMatchObject({ controllerEpoch: epoch });
+      await settings();
+      expect(stop).not.toHaveBeenCalled();
+    } finally { releaseRecovery(); }
+    const receipt = await operation;
+    expect(stop).toHaveBeenCalledExactlyOnceWith({ expectedRevision: "controlled-revision", force: true });
+    expect(await service.lifecycleReceipt(scope, mutationId)).toEqual(receipt);
+    if (action === "stop") {
+      expect(running).toBe(false);
+      expect(receipt).toMatchObject({ state: "applied", runtime: { connectionState: "stopped" } });
+    } else {
+      expect(running).toBe(true);
+      expect(receipt).toMatchObject({ state: "rejected", runtime: { lastError: expect.stringContaining("refused shutdown") } });
+    }
+  }, 15_000);
 
   it("allows another backend Stop after a confirmed provider refusal but fences uncertain transport outcomes", async () => {
     const { service, scope, snapshot } = await fixture();
@@ -1283,6 +1666,59 @@ describe("production configuration reconciliation", () => {
     expect(service.repository.pendingLifecycle(scope)).toEqual([]);
   });
 
+  it.each(["restart", "stop", "ownership lost"] as const)("requires current impact and proved ownership for policy conflict recovery: %s", async scenario => {
+    const { service, scope, snapshot } = await fixture();
+    const environmentId = randomUUID();
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Build host", hostAlias: "test-target", connectionCompression: true, workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    const status: SidecarServiceStatus = { scope: { ...scope, installationId: "installation", executionEnvironmentId: environmentId },
+      serviceIncarnation: "restored-policy-service", buildId: "current", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
+      controllerEpoch: 3, attached: true, attachmentMode: "normal", state: "ready", configurationState: "applied",
+      desiredConfiguration: { environmentRevision: 5, operationsRevision: 5 }, effectiveConfiguration: { environmentRevision: 5, operationsRevision: 5 },
+      resources: [{ resourceId: "dev-shell", kind: "terminal", state: "active", revision: "1", blockers: ["live_terminal"] }], resourcesFingerprint: "b".repeat(64) };
+    const replacement = { ...status, serviceIncarnation: "replacement", resources: [], resourcesFingerprint: "c".repeat(64) };
+    const inspect = vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockResolvedValue(status);
+    const connect = vi.spyOn(SidecarRuntimeOwner.prototype, "connect").mockResolvedValue(replacement);
+    const deliverPolicy = vi.spyOn(SidecarRuntimeOwner.prototype, "retryPolicy").mockResolvedValue();
+    vi.spyOn(SidecarRuntimeOwner.prototype, "synchronizePolicy").mockResolvedValue();
+    const control = vi.spyOn(SidecarRuntimeOwner.prototype, "controlService").mockImplementation(async ({ operation }) => {
+      inspect.mockResolvedValue(operation === "stop" ? undefined : replacement);
+      return undefined;
+    });
+    const saved = await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    // Saving starts the new host on its own queue. Use the fixture's policy carrier
+    // and wait for that owner before introducing the restored-host conflict.
+    await vi.waitFor(() => expect(deliverPolicy).toHaveBeenCalled(), { timeout: 5_000 });
+    const projection = new ConfigurationProjection(service.repository.database, {});
+    projection.policyRecovery(scope, environmentId).requireRecovery(status.serviceIncarnation,
+      { revision: 4, digest: "a".repeat(64) }, { revision: 5, digest: "b".repeat(64) });
+    const action = scenario === "stop" ? "stop" : "restart";
+    const request = { resourceKind: "environment", resourceId: environmentId, action, expectedRevision: saved.revision } as const;
+    const impact = await service.impact(scope, request);
+    expect(impact.interruptions).toContain("terminal dev-shell (active): live_terminal");
+    expect(impact.incarnation).toBe(status.serviceIncarnation);
+    expect((await service.get(scope)).runtimes.find(item => item.resourceId === environmentId))
+      .toMatchObject({ connectionState: "policy_conflict", applyState: "unavailable", supportedActions: ["restart", "stop", "disconnect"] });
+    await expect(service.impact(scope, { ...request, action: "start" })).rejects.toMatchObject({ code: "bad_request" });
+    const command = { ...request, mutationId: randomUUID(), expectedIncarnation: impact.incarnation };
+    await expect(service.lifecycle(scope, { ...command, impactToken: null })).rejects.toMatchObject({ code: "conflict" });
+    if (scenario === "ownership lost") inspect.mockRejectedValue(new SidecarServiceManagementError("sidecar_service_target_identity_unavailable"));
+    const result = await service.lifecycle(scope, { ...command, impactToken: impact.token });
+    if (scenario === "ownership lost") {
+      expect(result).toMatchObject({ state: "rejected", runtime: { connectionState: "recovery_required" } });
+      const next = await service.impact(scope, { ...request, expectedRevision: (await service.get(scope)).revision });
+      expect(await service.lifecycle(scope, { ...command, expectedRevision: next.configurationRevision, impactToken: next.token, mutationId: randomUUID() }))
+        .toMatchObject({ state: "unavailable", runtime: { connectionState: "recovery_required" } });
+      expect(control).not.toHaveBeenCalled();
+      expect(connect).not.toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject({ state: "applied", runtime: { connectionState: action === "stop" ? "stopped" : "connected" } });
+      expect(control).toHaveBeenCalledWith(expect.objectContaining({ operation: action, force: true,
+        expectedServiceIncarnation: status.serviceIncarnation, controllerEpoch: status.controllerEpoch, expectedResourcesFingerprint: status.resourcesFingerprint }), expect.any(AbortSignal), expect.any(Function));
+      expect(projection.policyRecovery(scope, environmentId).blocked(status.serviceIncarnation)).toBe(true);
+    }
+  });
+
   it("distinguishes stale sidecar ownership from host connectivity and blocks duplicate startup", async () => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();
@@ -1332,6 +1768,7 @@ describe("production configuration reconciliation", () => {
   });
 
   it("keeps unchanged maintenance passes silent and local disconnect unavailable", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const { service, scope, snapshot } = await fixture();
     for (const runtime of snapshot.runtimes.filter(runtime => runtime.resourceKind === "backend")) {
       expect(runtime.supportedActions).toEqual(["connect", "start", "stop", "restart"]);
@@ -1343,26 +1780,17 @@ describe("production configuration reconciliation", () => {
     }
     const publish = vi.spyOn(ApplicationSnapshotPublicationBoundary.prototype, "publishAuthoritativeReplacement");
     const invalidate = vi.spyOn(DatabaseExecutionTargetReader.prototype, "invalidateHealth");
-    for (let pass = 0; pass < 3; pass++) await service.options.runtime!.reconcile(scope, snapshot);
+    for (let pass = 0; pass < 3; pass++) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await service.impact(scope, { resourceKind: "backend", resourceId: "idle-pi", action: "stop", expectedRevision: snapshot.revision });
+    }
     expect(publish).not.toHaveBeenCalled();
     expect(invalidate).not.toHaveBeenCalled();
   });
 
-  it("leaves every sibling runtime and its applied revision intact while an environment edit waits for main-side work", async () => {
+  it("publishes environment metadata without inspecting or disturbing sibling work", async () => {
     const { service, scope, environmentId, snapshot } = await fixture();
-    const database = service.repository.database;
-    const prepare = database.prepare.bind(database);
-    // Model the coordinator's loaded actor evidence without making a provider call.
-    vi.spyOn(database, "prepare").mockImplementation(sql => {
-      if (sql.startsWith("SELECT id FROM application_threads WHERE tenant_id = ? AND owner_principal_id = ? AND backend_instance_id = ? ORDER BY id")) {
-        return { all: (_tenant: string, _principal: string, backendId: string) => [{ id: `${backendId}-thread` }] } as ReturnType<typeof database.prepare>;
-      }
-      return prepare(sql);
-    });
-    let busy = true;
-    vi.spyOn(ThreadRuntimeCoordinator.prototype, "captureLoadedRuntime").mockImplementation(async (_scope, threadId) => ({
-      threadId, runState: busy && threadId === "busy-claude-thread" ? "running" : "idle",
-    }) as Awaited<ReturnType<ThreadRuntimeCoordinator["captureLoadedRuntime"]>>);
+    const capture = vi.spyOn(ThreadRuntimeCoordinator.prototype, "captureLoadedRuntime");
     const remove = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "remove");
     const apply = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "apply");
     const updated = structuredClone(snapshot.configuration);
@@ -1371,17 +1799,15 @@ describe("production configuration reconciliation", () => {
     for (let pass = 0; pass < 3; pass++) await service.options.runtime!.reconcile(scope, service.repository.get(scope));
     expect(remove).not.toHaveBeenCalled();
     expect(apply).not.toHaveBeenCalled();
-    const pending = await service.get(scope);
-    for (const id of [environmentId, "idle-pi", "busy-claude"]) {
-      expect(pending.runtimes.find(runtime => runtime.resourceId === id)).toMatchObject({
-        applyState: "pending", desiredRevision: snapshot.revision + 1, effectiveRevision: snapshot.revision, lastError: null,
-      });
+    expect(capture).not.toHaveBeenCalled();
+    const updatedState = await service.get(scope);
+    expect(updatedState.configuration.executionEnvironments[0]?.label).toBe("Changed local environment");
+    expect(updatedState.runtimes.find(runtime => runtime.resourceId === environmentId)).toMatchObject({
+      applyState: "applied", desiredRevision: updatedState.revision, effectiveRevision: updatedState.revision,
+    });
+    for (const id of ["idle-pi", "busy-claude"]) {
+      expect(updatedState.runtimes.find(runtime => runtime.resourceId === id))
+        .toEqual(snapshot.runtimes.find(runtime => runtime.resourceId === id));
     }
-    busy = false;
-    await service.options.runtime!.reconcile(scope, pending);
-    expect(remove).toHaveBeenCalledTimes(2);
-    expect(apply).toHaveBeenCalledTimes(2);
-    const applied = await service.get(scope);
-    expect(applied.runtimes.every(runtime => runtime.applyState === "applied" && runtime.effectiveRevision === pending.revision)).toBe(true);
   });
 });

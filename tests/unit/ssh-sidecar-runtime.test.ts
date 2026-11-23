@@ -1,3 +1,8 @@
+import { RemoteExecutionEnvironment } from "../../src/server/execution/remote-execution-environment.js";
+import { AgentBackendRegistry } from "../../src/server/backends/registry.js";
+import type { AgentConnectionProfile, ConversationBackendDriver } from "../../src/server/backends/contracts.js";
+import { executionPolicyDigest, type InstalledExecutionPolicy } from "../../src/internal/sidecar-protocol/execution-policy.js";
+import { ownerPolicy, ownerPolicyPeer } from "../helpers/sidecar-owner-policy.js";
 import { SshInteractiveTerminalProvider } from "../../src/server/execution/ssh-interactive-terminal-provider.js";
 import { managedSshAgentToolCliAvailability } from "../../src/server/runtime/agent-tool-cli-availability.js";
 import { describe, expect, it, vi } from "vitest";
@@ -45,6 +50,7 @@ const installation = Object.freeze({
 function fixture(
   options: {
     readonly idleMilliseconds?: number;
+    readonly readDesiredPolicy?: () => InstalledExecutionPolicy;
     readonly sessionCloseError?: Error;
     readonly sessionCloseGate?: Promise<void>;
     readonly agentTools?: boolean;
@@ -85,8 +91,7 @@ function fixture(
   const owner = new SidecarRuntimeOwner({ connectionCompression: options.connectionCompression ?? (() => true),
     scope,
     executionEnvironmentId: environmentId,
-    environmentConfigurationRevision: environmentRevision,
-    operationsConfigurationRevision: operationsRevision,
+    readDesiredPolicy: options.readDesiredPolicy ?? (() => ownerPolicy(["workspace_files", ...(options.terminal ? ["interactive_terminal"] : []), ...(options.agentTools ? ["agent_tools_cli"] : [])], {environmentRevision, operationsRevision})),
     authorizedRuntimeCapabilities: [],
     isAutomaticConnectionEnabled: () => true,
     isTransportAvailable: options.isTransportAvailable,
@@ -97,8 +102,6 @@ function fixture(
         ? ([{ capabilityId: "agent_tools_cli", majorVersion: 6 }] as const)
         : []),
     ],
-    activeEnvironmentConfigurationRevision: () => environmentRevision,
-    activeOperationsConfigurationRevision: () => operationsRevision,
     artifact,
     provisioner: management,
     sedesOperations: new SidecarOperationRegistry(),
@@ -205,16 +208,10 @@ describe("SidecarRuntimeOwner", () => {
     expect(value.provisioner.attachExisting).not.toHaveBeenCalled();
     expect(value.launch).toHaveBeenCalledOnce();
 
-    // New operations still require current configuration and retire the stale
-    // carrier. Subsequent recovery attaches existing work without a launch.
-    await expect(value.owner.acquireOperation(scope, environmentId, signal))
-      .rejects.toMatchObject({ cause: { message: "sidecar_revision_changed" } });
-    expect(original.session.close).toHaveBeenCalledWith("sidecar_revision_changed");
-    const recovered = await value.owner.acquireExisting(scope, environmentId, signal);
-    expect(recovered.session).not.toBe(original.session);
-    expect(recovered.carrierGeneration).toBeGreaterThan(original.carrierGeneration);
-    expect(value.provisioner.attachExisting).toHaveBeenCalledOnce();
-    expect(value.launch).toHaveBeenCalledOnce();
+    await value.owner.synchronizePolicy(signal);
+    const recovered = await value.owner.acquireOperation(scope, environmentId, signal);
+    expect(recovered.carrierGeneration).toBe(original.carrierGeneration);
+    expect(original.session.close).not.toHaveBeenCalled();
     recovered.release(); retained.release(); original.release(); await value.owner.close();
   });
 
@@ -320,7 +317,92 @@ describe("SidecarRuntimeOwner", () => {
     await value.owner.close();
   });
 
-  it.each([true, false])("retains verified PTY capability through idle and gates explicit disconnect (PTY=%s)", async terminalSupported => {
+  it("lets an explicit selection cancel its join without losing the host's in-flight synchronization", async () => {
+    const base = ownerPolicy();
+    const snapshot = {...base.snapshot, backends: [{...base.snapshot.backends[0]!, targets: [{id: "target", generation: 1}]}]};
+    const value = fixture({readDesiredPolicy: () => ({...base, snapshot, digest: executionPolicyDigest(snapshot)})});
+    const gate = deferred<void>();
+    const session = new FakeSession();
+    const apply = vi.spyOn(session, "applyPolicy").mockImplementation(async desired => {
+      await gate.promise;
+      return session.policy.applyPolicy(desired);
+    });
+    value.startSession.mockResolvedValueOnce(session);
+    const controller = new AbortController();
+    try {
+      const selection = value.owner.confirmTargetSelection("backend", "target", controller.signal);
+      await vi.waitFor(() => expect(apply).toHaveBeenCalledOnce());
+      controller.abort(new Error("selection_cancelled"));
+      await expect(selection).rejects.toThrow("selection_cancelled");
+      expect(value.owner.activeOperationLeaseCount).toBe(0);
+      gate.resolve();
+      await expect(value.owner.confirmTargetSelection("backend", "target")).resolves.toBe(true);
+      expect(value.startSession).toHaveBeenCalledOnce();
+    } finally { gate.resolve(); await value.owner.close(); }
+  });
+
+  it("reacquires confirmation for a Pi SDK driver and held handle after idle and transport loss", async () => {
+    vi.useFakeTimers();
+    let generation = 1;
+    const value = fixture({idleMilliseconds: 5000, readDesiredPolicy() {
+      const policy = ownerPolicy();
+      const snapshot = {...policy.snapshot, backends: [{...policy.snapshot.backends[0]!, kind: "pi",
+        targets: [{id: "target", generation}]}]};
+      return {...policy, revision: generation, snapshot, digest: executionPolicyDigest(snapshot)};
+    }});
+    const registry = new AgentBackendRegistry();
+    const instance = {id: "backend", kind: "pi" as const, label: "Pi", enabled: true,
+      protocolRelease: "test", configurationRevision: 1, tenantId: scope.tenantId};
+    const connection: AgentConnectionProfile = {id: "profile", templateId: "target", kind: "pi_sdk", backendInstanceId: instance.id,
+      label: "Pi SDK", enabled: true, tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, executionEnvironmentId: environmentId, configurationRevision: 1};
+    const submit = vi.fn(async () => "submitted");
+    const attach = vi.fn(async () => ({submit}));
+    registry.register({scope, instance, connectionKinds: ["pi_sdk"], supportsConversationCreation: false,
+      connectionGeneration: profile => value.owner.acquirableTargetGeneration(profile.backendInstanceId, profile.templateId),
+      withConnectionAuthorization: (profile, generation, run) => value.owner.withTargetAuthorization(profile.backendInstanceId, profile.templateId, generation, run),
+      create: () => ({instance, connection, attach}) as unknown as ConversationBackendDriver,
+    });
+    try {
+      const cold = registry.driver(connection);
+      expect(value.startSession).not.toHaveBeenCalled();
+      expect(await value.owner.confirmTargetSelection(instance.id, connection.templateId)).toBe(true);
+      await cold.attach({} as Parameters<typeof cold.attach>[0]);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(value.owner.policyStatus()).toBeUndefined();
+      const driver = registry.driver(connection);
+      expect(value.startSession).toHaveBeenCalledTimes(1);
+      const handle = await driver.attach({} as Parameters<typeof driver.attach>[0]);
+      expect(value.startSession).toHaveBeenCalledTimes(2);
+      await value.owner.disconnectTransport("carrier_lost");
+      // No background reconnect: foreground submit joins the new epoch first.
+      const input = {} as Parameters<typeof handle.submit>[0];
+      const gate = deferred<void>();
+      const fresh = new FakeSession();
+      const apply = vi.spyOn(fresh, "applyPolicy").mockImplementation(async desired => {
+        await gate.promise;
+        return fresh.policy.applyPolicy(desired);
+      });
+      value.startSession.mockResolvedValueOnce(fresh);
+      const submission = handle.submit(input);
+      await vi.waitFor(() => expect(apply).toHaveBeenCalledOnce());
+      expect(submit).not.toHaveBeenCalled();
+      gate.resolve();
+      await expect(submission).resolves.toBe("submitted");
+      expect(value.startSession).toHaveBeenCalledTimes(3);
+      await value.owner.disconnectTransport("carrier_lost");
+      generation++;
+      await expect(handle.submit(input)).rejects.toThrow();
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(value.startSession).toHaveBeenCalledTimes(3);
+      // A freshly saved generation can request its own confirmation while idle.
+      const replacement = await registry.driver(connection).attach({} as Parameters<typeof driver.attach>[0]);
+      expect(value.startSession).toHaveBeenCalledTimes(4);
+      await expect(replacement.submit(input)).resolves.toBe("submitted");
+      await expect(handle.submit(input)).rejects.toThrow();
+    } finally { await value.owner.close(); vi.useRealTimers(); }
+  });
+
+  it.each([true, false])("retains eligible PTY selection across idle retirement and reacquires live authority (PTY=%s)", async terminalSupported => {
     vi.useFakeTimers();
     let connected = true;
     const value = fixture({ idleMilliseconds: 5000, terminal: true, terminalSupported, isTransportAvailable: () => connected });
@@ -329,6 +411,7 @@ describe("SidecarRuntimeOwner", () => {
     try {
       expect(provider.availability(scope, environmentId)).toBe("available");
       expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(true);
+      expect(value.owner.policyCapabilityGeneration("interactive_terminal")).toBeUndefined();
       expect(value.owner.canAcquireCapability("interactive_terminal", 99)).toBe(false);
       const first = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
       expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(terminalSupported);
@@ -346,6 +429,7 @@ describe("SidecarRuntimeOwner", () => {
       expect(value.owner.negotiatedCapabilities).toEqual(first.session.negotiatedCapabilities);
       expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(terminalSupported);
       expect(provider.availability(scope, environmentId)).toBe(terminalSupported ? "available" : "unavailable");
+      expect(value.owner.policyCapabilityGeneration("interactive_terminal")).toBeUndefined();
       connected = false;
       expect(provider.availability(scope, environmentId)).toBe("unavailable");
       expect(value.owner.negotiatedCapabilities).toEqual([]);
@@ -363,7 +447,7 @@ describe("SidecarRuntimeOwner", () => {
     vi.useFakeTimers();
     let connected = true;
     const value = fixture({ agentTools: true, idleMilliseconds: 5000, transportKind, isTransportAvailable: () => connected });
-    const cli = managedSshAgentToolCliAvailability({ scope, executionEnvironmentId: environmentId, runtime: value.owner });
+    const cli = managedSshAgentToolCliAvailability({ scope, executionEnvironmentId: environmentId, backendInstanceId:"backend", runtime: value.owner });
     if (cli.availability !== "managed") throw new Error("Expected managed CLI");
     try {
       const first = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
@@ -374,7 +458,7 @@ describe("SidecarRuntimeOwner", () => {
       first.release();
       await vi.advanceTimersByTimeAsync(5000);
       expect(first.session.close).toHaveBeenCalledWith("sidecar_idle_expired");
-      expect(cli.provider.inspect?.()).toEqual({ availability: "available" });
+      expect(cli.provider.inspect?.()).toEqual({ availability: "unavailable", reason: "sidecar_unavailable" });
       expect(value.startSession).toHaveBeenCalledOnce();
       connected = false;
       expect(cli.provider.inspect?.()).toEqual({ availability: "unavailable", reason: "sidecar_unavailable" });
@@ -672,7 +756,7 @@ describe("SidecarRuntimeOwner", () => {
       const agentTools = await value.owner.acquireAgentTools(
         scope,
         environmentId,
-        signal,
+        signal, "backend",
       );
       operation.release();
       expect(value.owner.activeOperationLeaseCount).toBe(0);
@@ -709,57 +793,118 @@ describe("SidecarRuntimeOwner", () => {
     await value.owner.close();
   });
 
-  it("fences environment and operations revisions without a fallback", async () => {
-    const value = fixture();
-    value.setOperationsRevision(8);
-    await expect(
-      value.owner.acquireOperation(
-        scope,
-        environmentId,
-        new AbortController().signal,
-      ),
-    ).rejects.toBeInstanceOf(SidecarUnavailableError);
-    expect(value.install).not.toHaveBeenCalled();
-
-    const other = fixture();
-    other.setEnvironmentRevision(4);
-    await expect(
-      other.owner.acquireOperation(
-        scope,
-        environmentId,
-        new AbortController().signal,
-      ),
-    ).rejects.toMatchObject({
-      diagnosticCode: "sidecar_unavailable",
-    });
-    expect(other.launch).not.toHaveBeenCalled();
+  it("installs a newly saved Files grant on an idle-expired host without a maintenance tick", async () => {
+    vi.useFakeTimers();
+    let filesEnabled = false;
+    const value = fixture({idleMilliseconds: 5000, readDesiredPolicy: () => ownerPolicy(
+      filesEnabled ? ["workspace_files"] : [], {environmentRevision: 1, operationsRevision: filesEnabled ? 2 : 1},
+    )});
+    const signal = new AbortController().signal;
+    try {
+      await value.owner.retryPolicy(signal);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(value.owner.policyStatus()).toBeUndefined();
+      filesEnabled = true;
+      await value.owner.retryPolicy(signal);
+      expect(value.startSession).toHaveBeenCalledTimes(2);
+      expect(value.owner.policyCapabilityGeneration("workspace_files")).toBe(1);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(value.owner.policyStatus()).toBeUndefined();
+    } finally {
+      await value.owner.close();
+      vi.useRealTimers();
+    }
   });
 
-  it("closes and evicts the admitted generation when its revision becomes stale", async () => {
+  it("retries policy on demand and respects an explicit host disconnect", async () => {
     const value = fixture();
-    const watch = await value.owner.acquireWatch(
-      scope,
-      environmentId,
-      new AbortController().signal,
-    );
+    const signal = new AbortController().signal;
+    try {
+      await value.owner.retryPolicy(signal);
+      expect(value.launch).toHaveBeenCalledOnce();
+      const synchronize = vi.spyOn(value.owner, "synchronizePolicy");
+      await value.owner.retryPolicy(signal);
+      expect(synchronize).toHaveBeenCalledWith(signal, true);
+      expect(value.launch).toHaveBeenCalledOnce();
+      await value.owner.disconnect();
+      await expect(value.owner.retryPolicy(signal)).rejects.toBeInstanceOf(SidecarUnavailableError);
+      expect(value.launch).toHaveBeenCalledOnce();
+    } finally {
+      await value.owner.close();
+    }
+  });
+
+  it("revalidates a bound SSH workspace beneath a pending nested root without resetting backoff", async () => {
+    const base = ownerPolicy();
+    const existing = {id: "existing", path: "/home/u", generation: 1};
+    const nested = {id: "nested", path: "/home/u/proj", generation: 2};
+    const separate = {id: "separate", path: "/new", generation: 1};
+    const make = (roots: (typeof existing)[], revision: number) => {
+      const snapshot = {...base.snapshot, roots};
+      return {...base, snapshot, revision, digest: executionPolicyDigest(snapshot)};
+    };
+    let desired = make([existing], 1);
+    const value = fixture({readDesiredPolicy: () => desired});
+    const remote = new RemoteExecutionEnvironment({
+      kind: "ssh", platform: "linux", scope, environmentId, allowedRoots: [existing.path],
+      configurationRevision: 1, activeConfigurationRevision: () => 1, directoryBrowser: () => undefined,
+      readWorkspaceRoots: () => value.owner.acquirableWorkspaceRoots(),
+      confirmWorkspacePolicy: (path, binding, signal) => value.owner.confirmWorkspacePolicy(path, binding, signal),
+    });
+    const signal = new AbortController().signal;
+    const watch = await value.owner.acquireWatch(scope, environmentId, signal);
+    const gate = deferred<void>();
+    try {
+      const original = await remote.validateWorkspace(scope, environmentId, nested.path);
+      expect(original.authorityRootId).toBe(existing.id);
+      desired = make([existing, nested, separate], 2);
+      const installed = watch.session.applyPolicy.bind(watch.session);
+      const apply = vi.spyOn(watch.session, "applyPolicy").mockRejectedValueOnce(new Error("policy delivery interrupted"));
+      await expect(value.owner.synchronizePolicy()).rejects.toThrow("policy delivery interrupted");
+      for (const options of [{}, {binding: original}]) {
+        const opened = await remote.validateWorkspace(scope, environmentId, nested.path, options);
+        expect(opened.authorityRootId).toBe(existing.id);
+      }
+      expect((await remote.revalidateWorkspace(scope, original)).authorityRootId).toBe(existing.id);
+      expect(apply).toHaveBeenCalledTimes(1);
+
+      const caller = new AbortController();
+      const entered = deferred<void>();
+      apply.mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await gate.promise;
+        return installed(...args);
+      });
+      const opening = remote.validateWorkspace(scope, environmentId, separate.path, {signal: caller.signal});
+      await entered.promise;
+      caller.abort(new Error("opening cancelled"));
+      await expect(opening).rejects.toBe(caller.signal.reason);
+      expect((await remote.revalidateWorkspace(scope, original)).authorityRootId).toBe(existing.id);
+      gate.resolve();
+      await value.owner.synchronizePolicy();
+      expect(apply).toHaveBeenCalledTimes(2);
+      expect((await remote.validateWorkspace(scope, environmentId, nested.path)).authorityRootId).toBe(nested.id);
+      expect((await remote.revalidateWorkspace(scope, original)).authorityRootId).toBe(existing.id);
+      desired = make([nested, separate], 3);
+      await expect(remote.revalidateWorkspace(scope, original)).rejects.toThrow("workspace_authority_stale");
+      expect(apply).toHaveBeenCalledTimes(2);
+      expect(value.launch).toHaveBeenCalledOnce();
+    } finally { gate.resolve(); watch.release(); remote.close(); await value.owner.close(); }
+  });
+
+  it("applies environment and operation revisions to the admitted service while a watch is open", async () => {
+    const value = fixture();
+    const signal = new AbortController().signal;
+    const watch = await value.owner.acquireWatch(scope, environmentId, signal);
+    value.setEnvironmentRevision(4);
     value.setOperationsRevision(8);
-
-    await expect(
-      value.owner.acquireOperation(
-        scope,
-        environmentId,
-        new AbortController().signal,
-      ),
-    ).rejects.toBeInstanceOf(SidecarUnavailableError);
-    expect(value.sessions[0]?.close).toHaveBeenCalledWith(
-      "sidecar_revision_changed",
-    );
-    expect(value.onLifecycleEvidence.mock.calls).toEqual([
-      [{ availability: "available" }],
-    ]);
-
-    watch.release();
-    await value.owner.close();
+    await value.owner.synchronizePolicy(signal);
+    const second = await value.owner.acquireOperation(scope, environmentId, signal);
+    expect(second.session).toBe(watch.session);
+    expect(value.owner.policyStatus()?.configuration).toEqual({environmentRevision:4,operationsRevision:8});
+    expect(value.launch).toHaveBeenCalledOnce();
+    expect(watch.session.close).not.toHaveBeenCalled();
+    watch.release(); second.release(); await value.owner.close();
   });
 
   it("propagates ownership-critical session cleanup failures", async () => {
@@ -822,15 +967,12 @@ describe("SidecarRuntimeOwner", () => {
     const owner = new SidecarRuntimeOwner({ connectionCompression: () => true,
       scope,
       executionEnvironmentId: environmentId,
-      environmentConfigurationRevision: 3,
-      operationsConfigurationRevision: 7,
+      readDesiredPolicy: () => ownerPolicy(),
       authorizedRuntimeCapabilities: [],
       isAutomaticConnectionEnabled: () => true,
       authorizedCapabilities: [
         { capabilityId: "workspace_files", majorVersion: 8 },
       ],
-      activeEnvironmentConfigurationRevision: () => 3,
-      activeOperationsConfigurationRevision: () => 7,
       artifact,
       provisioner: { transportKind: "ssh_stdio",
         ...managementInstaller(),
@@ -874,15 +1016,12 @@ describe("SidecarRuntimeOwner", () => {
     const owner = new SidecarRuntimeOwner({ connectionCompression: () => true,
       scope,
       executionEnvironmentId: environmentId,
-      environmentConfigurationRevision: 3,
-      operationsConfigurationRevision: 7,
+      readDesiredPolicy: () => ownerPolicy(),
       authorizedRuntimeCapabilities: [],
       isAutomaticConnectionEnabled: () => true,
       authorizedCapabilities: [
         { capabilityId: "workspace_files", majorVersion: 8 },
       ],
-      activeEnvironmentConfigurationRevision: () => 3,
-      activeOperationsConfigurationRevision: () => 7,
       artifact,
       provisioner: { transportKind: "ssh_stdio", ...managementInstaller(), install, launch: vi.fn() },
       sedesOperations: new SidecarOperationRegistry(),
@@ -976,15 +1115,12 @@ describe("SidecarRuntimeOwner", () => {
     const owner = new SidecarRuntimeOwner({ connectionCompression: () => true,
       scope,
       executionEnvironmentId: environmentId,
-      environmentConfigurationRevision: 3,
-      operationsConfigurationRevision: 7,
+      readDesiredPolicy: () => ownerPolicy(),
       authorizedRuntimeCapabilities: [],
       isAutomaticConnectionEnabled: () => true,
       authorizedCapabilities: [
         { capabilityId: "workspace_files", majorVersion: 8 },
       ],
-      activeEnvironmentConfigurationRevision: () => 3,
-      activeOperationsConfigurationRevision: () => 7,
       artifact,
       provisioner: { transportKind: "ssh_stdio", ...managementInstaller(), install, launch: vi.fn() },
       sedesOperations: new SidecarOperationRegistry(),
@@ -1027,7 +1163,15 @@ describe("SidecarRuntimeOwner", () => {
 
 class FakeSession implements SidecarRuntimeSession {
   readonly negotiatedCapabilities: SidecarRuntimeSession["negotiatedCapabilities"];
-  readonly agentToolCli: SidecarRuntimeSession["agentToolCli"];
+  readonly agentToolCli: {endpoint:string;executableDirectory:string;inheritedPath:string} | undefined;
+  readonly policy = ownerPolicyPeer(serviceStatus(), id => id === "agent_tools_cli" ? !!this.agentToolCli : this.negotiatedCapabilities.some(capability => capability.capabilityId === id));
+  readPolicy = this.policy.readPolicy;
+  applyPolicy = this.policy.applyPolicy;
+  recoveryView() { return this; }
+  async acquirePolicyRoute() {
+    if (!this.agentToolCli) throw Error("route unavailable");
+    return this.agentToolCli;
+  }
   readonly #closed = deferred<void>();
   readonly #closeError: Error | undefined;
   readonly #closeGate: Promise<void> | undefined;

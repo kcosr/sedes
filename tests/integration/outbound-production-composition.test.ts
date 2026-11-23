@@ -1,15 +1,22 @@
-import { buildProductionSidecarArtifact, buildProductionOutboundConnector } from "../support/production-carrier-fixture.js";
+import { buildProductionSidecarArtifact, buildProductionOutboundConnector, productionOpenSshAvailable, startProductionSshServer, terminateChild } from "../support/production-carrier-fixture.js";
 import { AuthenticationRepository } from "../../src/server/authentication/authentication-repository.js";
+import Database from "better-sqlite3";
+import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
+import { loadOrCreateToolProvenanceKey, deriveSidecarInstallationIdentity } from "../../src/server/security/installation-secret.js";
+import { PrincipalBackendRuntimeCollection } from "../../src/server/runtime/principal-backend-runtime-collection.js";
 import { once } from "node:events";
 import { execFile as execFileCallback, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
+import { homedir } from "node:os";
+import { buildToolDisabledWorker, LIVE_CLAUDE_MODEL } from "../support/live-claude-worker.js";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OutboundClaudeFixtureEvent } from "../support/outbound-claude-sdk-fixture.js";
 import { normalizedThreadSnapshotSchema, threadEventEnvelopeSchema } from "../../src/shared/protocol/conversation.js";
 import { OutboundCodexFixture } from "../support/outbound-codex-fixture.js";
+import { decodeCodexModelSetting } from "../../src/server/backends/codex/codex-setting-values.js";
 import { CodexAccountUsageSource } from "../../src/server/backends/codex/codex-account-usage.js";
 import { terminalAdmissionSchema, terminalMutationResultSchema, terminalResourceSchema, terminalServerFrameSchema, decodeTerminalBinaryFrame, encodeTerminalBinaryFrame, TERMINAL_WEBSOCKET_PATH, TERMINAL_WEBSOCKET_PROTOCOL, type TerminalServerFrame, type TerminalResource } from "../../src/shared/protocol/terminals.js";
 import { WebSocket } from "ws";
@@ -153,7 +160,10 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
       const afterPolicy = configurationSnapshotSchema.parse(await fixture.json("/api/configuration", "PUT", {
         mutationId: randomUUID(), expectedRevision: beforePolicy.revision, configuration: beforePolicy.configuration,
       }));
-      expect(afterPolicy.runtimes).toEqual(beforePolicy.runtimes);
+      expect(afterPolicy.runtimes.find(runtime => runtime.resourceId === fixture.environmentId)?.effects).toContainEqual(
+        expect.objectContaining({ component: "connection_compression", state: "next_attachment", desiredRevision: afterPolicy.revision }));
+      expect(afterPolicy.runtimes.filter(runtime => runtime.resourceKind === "backend"))
+        .toEqual(beforePolicy.runtimes.filter(runtime => runtime.resourceKind === "backend"));
       expect(await fixture.serviceStatus()).toMatchObject({ serviceIncarnation: attached!.serviceIncarnation, controllerEpoch: attached!.controllerEpoch });
       await viewer.command(`printf 'COMPRESSION_${connectionCompression}=%s\\n' "$$"\n`);
       await fixture.waitFor(async () => viewer.output.includes(`COMPRESSION_${connectionCompression}=${shellPid}`));
@@ -254,8 +264,139 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     expect((await fixture.pairings()).pairings[0]!.state).toBe("revoked");
   }, 120_000);
 
+  for (const carrier of ["outbound", "ssh"] as const) {
+    it.skipIf(carrier === "ssh" && !productionOpenSshAvailable)(`adds Claude during a streaming Codex turn and a live terminal over ${carrier}`, async () => {
+      const fixture = await OutboundFixture.create("offline");
+      cleanups.push(() => fixture.close());
+      await fixture.startBusyHost(carrier);
+      const codexTarget = await fixture.addCodexBackend();
+      const workspace = await fixture.json("/api/workspaces/open", "POST", { path: fixture.workspace, environmentId: fixture.environmentId,
+        project: { kind: "new", name: "Live settings" } }) as { id: string };
+      const codexThread = await fixture.submit(workspace.id, codexTarget, "Hold this Codex turn during settings apply.");
+      await fixture.waitFor(async () => (await fixture.thread(codexThread)).runState === "running");
+      fixture.codex!.appendOutput("Before settings update.");
+      await fixture.waitFor(async () => JSON.stringify((await fixture.thread(codexThread)).itemsById).includes("Before settings update."));
+
+      const terminal = terminalMutationResultSchema.parse(await fixture.json(`/api/threads/${codexThread}/terminals`, "POST", {
+        mutationId: randomUUID(), displayName: "Settings continuity", rows: 24, columns: 80,
+      })).terminal!;
+      fixture.terminalIds.push(terminal.terminalId);
+      const viewer = await TerminalViewer.open(fixture, terminal);
+      await viewer.command(`printf 'BEFORE_PID=%s\\n' "$$"\n`);
+      await fixture.waitFor(async () => /BEFORE_PID=\d+/.test(viewer.output));
+      const shellPid = /BEFORE_PID=(\d+)/.exec(viewer.output)![1]!;
+      const attached = await fixture.serviceStatus();
+      expect(attached).toMatchObject({ state: "ready", attached: true });
+      const descriptor = persistentSidecarPaths(fixture.hostHome, process.getuid!(), fixture.serviceScope!).descriptorPath;
+      const originalProcess = JSON.parse(await readFile(descriptor, "utf8")).process;
+      const providerId = attached!.resources.find(resource => resource.kind === "provider" && resource.state === "active")?.resourceId;
+      expect(providerId).toBeTruthy();
+      const before = await fixture.configuration();
+      const impact = configurationLifecycleImpactSchema.parse(await fixture.json("/api/configuration/lifecycle/impact", "POST", {
+        resourceKind: "backend", resourceId: "outbound-codex-backend", action: "stop", expectedRevision: before.revision,
+      }));
+      expect(impact.incarnation).toBe(providerId);
+      const remove = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "remove");
+      cleanups.push(async () => { remove.mockRestore(); });
+      const files = `/api/workspaces/${workspace.id}/files/content?rootId=primary&path=example.txt`;
+      expect(await fixture.json(files)).toMatchObject({ availability: "unavailable" });
+      const newTarget = await fixture.addClaudeBackend();
+      const claudeThread = await fixture.submit(workspace.id, newTarget, "Confirm that the new backend is ready.");
+      await fixture.waitFor(async () => JSON.stringify((await fixture.thread(claudeThread)).itemsById).includes("Offline outbound Claude response."));
+      expect((await fixture.claudeEvents()).filter(event => event.event === "send")).toHaveLength(1);
+      const secondTarget = await fixture.addCodexBackend("second-codex");
+      const second = await fixture.json("/api/threads", "POST", { workspaceId: workspace.id, title: "Second Codex", executionWorkspace: { kind: "direct" },
+        configuration: { kind: "custom", targetId: secondTarget } }) as { threadId: string };
+      expect((await fixture.thread(second.threadId)).thread.targetId).toBe(secondTarget);
+      const document = await fixture.configuration();
+      const existing = document.configuration.targets.find(target => target.id === "outbound-codex")!;
+      const host = document.configuration.executionEnvironments.find(environment => environment.id === fixture.environmentId)!;
+      if (host.kind === "local" || host.operations.kind !== "sidecar") throw new Error("expected_remote_sidecar");
+      host.operations.enabledCapabilities.push("workspace_files");
+      document.configuration.targets.push({ ...existing, id: "named-codex", label: "Named Codex connection" });
+      await fixture.json("/api/configuration", "PUT", { mutationId: randomUUID(), expectedRevision: document.revision, configuration: document.configuration });
+      await fixture.waitFor(async () => (await fixture.snapshot()).executionTargets.some(target => target.label.text === "Named Codex connection" && target.available));
+      await fixture.waitFor(async () => workspaceFileContentResultSchema.parse(await fixture.json(files)).availability === "available");
+      expect(await fixture.json(files)).toMatchObject({ availability: "available", content: "before\n" });
+      expect((await fixture.thread(claudeThread)).agentTools.runtimeAvailability.availability).toBe("unavailable");
+      const tools = await fixture.configuration();
+      const toolHost = tools.configuration.executionEnvironments.find(environment => environment.id === fixture.environmentId)!;
+      if (toolHost.kind === "local" || toolHost.operations.kind !== "sidecar") throw new Error("expected_remote_sidecar");
+      toolHost.operations.enabledCapabilities.push("agent_tools_cli");
+      await fixture.json("/api/configuration", "PUT", { mutationId: randomUUID(), expectedRevision: tools.revision, configuration: tools.configuration });
+      await fixture.waitFor(async () => (await fixture.configuration()).runtimes.some(runtime => runtime.resourceId === "outbound-claude-backend"
+        && runtime.effects?.some(effect => effect.subjectId === "route:outbound-claude-backend" && effect.state === "applied")));
+      await fixture.waitFor(async () => (await fixture.thread(claudeThread)).agentTools.runtimeAvailability.availability === "available");
+      expect((await fixture.thread(codexThread)).runState).toBe("running");
+      expect(await fixture.serviceStatus()).toMatchObject({
+        serviceIncarnation: attached!.serviceIncarnation, controllerEpoch: attached!.controllerEpoch, attached: true, attachmentMode: "normal",
+      });
+      expect(JSON.parse(await readFile(descriptor, "utf8")).process).toEqual(originalProcess);
+      expect((await fixture.serviceStatus())?.resources).toContainEqual(expect.objectContaining({ kind: "provider", resourceId: providerId, state: "active" }));
+      expect((await fixture.configuration()).runtimes.find(runtime => runtime.resourceId === "outbound-codex-backend"))
+        .toMatchObject({ incarnation: providerId, connectionState: "connected" });
+      expect(remove).not.toHaveBeenCalled();
+      await viewer.command(`printf 'AFTER_PID=%s\\n' "$$"\n`);
+      await fixture.waitFor(async () => viewer.output.includes(`AFTER_PID=${shellPid}`));
+      const output = viewer.frames.filter(frame => frame.type === "output").map(frame => frame.seq);
+      expect(output).toEqual([...new Set(output)].sort((a, b) => a - b));
+      fixture.codex!.appendOutput("After settings update.");
+      fixture.codex!.completeTurn();
+      await fixture.waitFor(async () => (await fixture.thread(codexThread)).runState === "idle");
+      const history = await fixture.thread(codexThread);
+      const messages = history.orderedTurnIds.flatMap(id => history.turnsById[id]!.orderedItemIds)
+        .map(id => history.itemsById[id]!).filter(item => item.kind === "assistant_message");
+      expect(messages.map(message => message.markdown.text)).toEqual(["Before settings update.", "After settings update."]);
+      expect(fixture.codex!.requests.filter(request => request.method === "initialize")).toHaveLength(1);
+      expect(fixture.codex!.requests.filter(request => request.method === "turn/start")).toHaveLength(1);
+      expect(fixture.codex!.errors).toEqual([]);
+      expect(fixture.threadStreamErrors).toEqual([]);
+      await viewer.close();
+    }, 120_000);
+  }
+
+  it.skipIf(process.env.SEDES_LIVE_EXECUTION_SETTINGS !== "1" || !productionOpenSshAvailable)(
+    "adds the first Claude backend while authenticated Luna streams over disposable SSH", async () => {
+      const socket = process.env.SEDES_REAL_CODEX_UDS_SOCKET;
+      expect(process.env.SEDES_REAL_CODEX_UDS_MODEL).toBe("gpt-5.6-luna");
+      if (!socket || !path.isAbsolute(socket) || path.resolve(socket) !== socket) throw new Error("live_settings_socket_invalid");
+      const existing = await stat(socket, { bigint: true });
+      expect(existing.isSocket()).toBe(true);
+      expect(existing.mode & 0o777n).toBe(0o600n);
+      const executablePath = process.env.SEDES_REAL_CLAUDE_EXECUTABLE;
+      if (!executablePath || !path.isAbsolute(executablePath)) throw new Error("live_settings_claude_executable_required");
+      const configDirectory = process.env.SEDES_REAL_CLAUDE_CONFIG_DIRECTORY ?? path.join(homedir(), ".claude");
+      if (!path.isAbsolute(configDirectory)) throw new Error("live_settings_claude_config_directory_invalid");
+      const fixture = await OutboundFixture.create("live");
+      cleanups.push(() => fixture.close());
+      await fixture.startBusyHost("ssh");
+      const target = await fixture.addCodexBackend("live-luna", socket);
+      const service = await fixture.serviceStatus();
+      const workspace = await fixture.json("/api/workspaces/open", "POST", { path: fixture.workspace, environmentId: fixture.environmentId,
+        project: { kind: "new", name: "Live settings canary" } }) as { id: string };
+      const marker = `LIVE_SETTINGS_${randomUUID().replaceAll("-", "")}`;
+      const threadId = await fixture.submit(workspace.id, target,
+        `Write 192 numbered lines. Each line must include ${marker} and its line number. End with ${marker}_DONE. Do not use tools.`, "luna");
+      await fixture.waitFor(async () => {
+        const thread = await fixture.thread(threadId);
+        return thread.runState === "running" && Object.values(thread.itemsById).some(item => item.kind === "assistant_message" && item.markdown.text.includes(marker));
+      }, 50, 120_000);
+      const claudeTarget = await fixture.addClaudeBackend({ executablePath: await realpath(executablePath), configDirectory: await realpath(configDirectory) });
+      const claudeThread = await fixture.submit(workspace.id, claudeTarget, `Reply with exactly ${marker}_CLAUDE. Use no tools.`, "sonnet");
+      await fixture.waitFor(async () => {
+        const thread = await fixture.thread(claudeThread);
+        return thread.runState === "idle" && Object.values(thread.itemsById).some(item => item.kind === "assistant_message" && item.markdown.text.includes(`${marker}_CLAUDE`));
+      }, 150, 120_000);
+      expect((await fixture.thread(threadId)).runState).toBe("running");
+      await fixture.waitFor(async () => (await fixture.thread(threadId)).runState === "idle", 300, 180_000);
+      const history = await fixture.thread(threadId);
+      expect(Object.values(history.itemsById).some(item => item.kind === "assistant_message" && item.markdown.text.includes(`${marker}_DONE`))).toBe(true);
+      expect(await fixture.serviceStatus()).toMatchObject({ serviceIncarnation: service!.serviceIncarnation, controllerEpoch: service!.controllerEpoch });
+      expect((await stat(socket, { bigint: true })).ino).toBe(existing.ino);
+    }, 360_000);
+
   it("keeps the same Claude worker and pending permission through outbound reconnect and main restart", async () => {
-    const fixture = await OutboundFixture.create(true);
+    const fixture = await OutboundFixture.create("offline");
     cleanups.push(() => fixture.close());
     await fixture.startMain();
     fixture.startConnector();
@@ -346,9 +487,11 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
 });
 
 class OutboundFixture {
+  sshServer?: Awaited<ReturnType<typeof startProductionSshServer>>;
   application: RunningApplication | undefined;
   connector: ChildProcess | undefined;
   codex: OutboundCodexFixture | undefined;
+  readonly codexFixtures: OutboundCodexFixture[] = [];
   environmentId = "";
   readonly terminalIds: string[] = [];
   readonly terminalProducerId = randomUUID();
@@ -370,7 +513,7 @@ class OutboundFixture {
       this.credential = this.authentication.exchangePairing({ token: pairing.token, clientName: "Outbound fixture", kind: "device" })!.credential;
     }
   get url() { return `http://127.0.0.1:${this.port}`; }
-  static async create(offlineClaude = false) {
+  static async create(worker: "release" | "offline" | "live" = "release") {
     // Keep the fake provider UDS short on macOS too; the host HOME remains
     // long enough to cover the old agent CLI endpoint length regression.
     const directory = await mkdtemp(path.join(await realpath("/tmp"), "sedes-out-prod-"));
@@ -388,9 +531,10 @@ class OutboundFixture {
       const configurationPath = path.join(directory, "server.json");
       await writeFile(configurationPath, JSON.stringify({ schemaVersion: 11, packagedClients: [] }));
       const artifactDirectory = path.join(directory, "artifact");
-      const artifact = offlineClaude ? await (async () => {
+      const artifact = worker !== "release" ? await (async () => {
         const { NODE_ENV: _nodeEnvironment, ...buildEnvironment } = process.env;
-        await execFile(process.execPath, ["tests/support/build-outbound-claude-sidecar-fixture.mjs", artifactDirectory], { cwd: process.cwd(), env: buildEnvironment, maxBuffer: 2 * 1024 * 1024 });
+        const installed = worker === "live" ? await buildToolDisabledWorker(directory, path.join(directory, "claude-audit.jsonl")) : undefined;
+        await execFile(process.execPath, ["tests/support/build-outbound-claude-sidecar-fixture.mjs", artifactDirectory, ...(installed ? [installed.executablePath] : [])], { cwd: process.cwd(), env: buildEnvironment, maxBuffer: 2 * 1024 * 1024 });
         return loadSidecarArtifactRegistration(path.join(artifactDirectory, "manifest.json"));
       })() : await buildProductionSidecarArtifact(artifactDirectory);
       const connectorPath = path.join(directory, "connector.mjs");
@@ -398,48 +542,124 @@ class OutboundFixture {
       return new OutboundFixture(directory, hostHome, workspace, configurationPath, path.join(directory, "main"), connectorPath, artifact);
     } catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }
   }
+  async startBusyHost(carrier: "outbound" | "ssh") {
+    const operations = { kind: "sidecar" as const, enabledCapabilities: ["interactive_terminal" as const] };
+    if (carrier === "ssh") {
+      const binDirectory = path.join(this.directory, "bin");
+      await mkdir(binDirectory);
+      this.sshServer = await startProductionSshServer({ directory: this.directory, binDirectory, remoteHome: this.hostHome });
+      const originalPath = process.env.PATH;
+      process.env.PATH = `${binDirectory}${path.delimiter}${originalPath ?? ""}`;
+      cleanups.push(async () => { if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath; });
+      await this.startMain();
+      const saved = await this.configuration();
+      this.environmentId = randomUUID();
+      const database = new Database(path.join(this.stateDirectory, "overlay.sqlite"), { readonly: true });
+      try {
+        this.serviceScope = { ...new SingleUserIdentityProvider(database).getScope(),
+          installationId: deriveSidecarInstallationIdentity(await loadOrCreateToolProvenanceKey(this.stateDirectory)), executionEnvironmentId: this.environmentId };
+      } finally { database.close(); }
+      saved.configuration.executionEnvironments.push({ kind: "ssh", id: this.environmentId, label: "Disposable SSH host",
+        hostAlias: "sedes-production-fixture", connectionCompression: true, workspaceRoots: [this.workspace], operations });
+      await this.json("/api/configuration", "PUT", { mutationId: randomUUID(), expectedRevision: saved.revision, configuration: saved.configuration });
+      await this.waitFor(async () => (await this.configuration()).runtimes.some(runtime =>
+        runtime.resourceId === this.environmentId && runtime.supportedActions.includes("connect")));
+      const current = await this.configuration();
+      const environment = current.runtimes.find(runtime => runtime.resourceId === this.environmentId)!;
+      if (environment.connectionState !== "connected") await this.json("/api/configuration/lifecycle", "POST", {
+        mutationId: randomUUID(), resourceKind: "environment", resourceId: this.environmentId, action: "connect",
+        expectedRevision: current.revision, expectedIncarnation: environment.incarnation, impactToken: null,
+      });
+    } else {
+      await this.startMain();
+      this.startConnector();
+      await this.waitFor(async () => (await this.pairings()).registrations.length === 1);
+      const pending = (await this.pairings()).registrations[0]!;
+      const accepted = acceptHostRegistrationResultSchema.parse(await this.json("/api/host-registrations/accept", "POST", {
+        mutationId: randomUUID(), registrationId: pending.id, expectedRegistrationRevision: pending.revision,
+        expectedConfigurationRevision: (await this.configuration()).revision, label: "Disposable paired host", workspaceRoots: [this.workspace], operations,
+      }));
+      this.environmentId = accepted.pairing.executionEnvironmentId;
+      await this.waitFor(async () => { try { await this.readBinding(); return true; } catch { return false; } });
+    }
+    await this.waitFor(async () => (await this.snapshot()).environments.some(environment => environment.id === this.environmentId && environment.available));
+  }
+
+  async submit(workspaceId: string, targetId: string, text: string, live?: "luna" | "sonnet") {
+    const created = await this.json("/api/threads", "POST", { workspaceId, title: text, executionWorkspace: { kind: "direct" },
+      configuration: { kind: "custom", targetId } }) as { threadId: string };
+    const route = `/api/threads/${created.threadId}`;
+    let snapshot = await this.thread(created.threadId);
+    for (const settingId of ["model", "thinking_level"] as const) {
+      const options = snapshot.capabilities.settings.find(setting => setting.id === settingId)?.options.filter(option => option.available) ?? [];
+      const option = options.find(option => !live || (settingId === "model"
+        ? (live === "sonnet" ? option.value === LIVE_CLAUDE_MODEL : decodeCodexModelSetting(option.value).modelId === "gpt-5.6-luna")
+        : option.value === "low"));
+      if (!option) {
+        if (live) throw new Error(`live_settings_missing_${settingId}`);
+        continue;
+      }
+      await this.json(`${route}/operations`, "POST", { kind: "perform", mutationId: randomUUID(), expectedThreadRevision: snapshot.thread.threadRevision,
+        expectedSettingsRevision: snapshot.settings.revision, operation: { action: "set_setting", settingId, value: option.value } });
+      snapshot = await this.thread(created.threadId);
+    }
+    await this.json(`${route}/draft`, "PUT", { text, contextExcerpts: [], attachmentIds: [], taskReferenceIds: [], expectedRevision: snapshot.draft.revision });
+    snapshot = await this.thread(created.threadId);
+    await this.openThreadEvents(created.threadId);
+    const delivery = await this.json(`${route}/operations`, "POST", { kind: "deliver", mode: "submit", mutationId: randomUUID(),
+      expectedThreadRevision: snapshot.thread.threadRevision, expectedDraftRevision: snapshot.draft.revision });
+    expect(delivery, `Delivery: ${JSON.stringify(delivery)}; fixture: ${JSON.stringify(this.codex?.requests.map(request => request.method))} ${this.codex?.errors.map(String).join(",")}`).toMatchObject({ status: "delivery_accepted" });
+    await this.openThreadEvents(created.threadId);
+    return created.threadId;
+  }
   async startMain() {
     this.application = await startProductionApplication({ ...process.env, APP_STATE_DIR: this.stateDirectory,
-      SEDES_CONFIG_FILE: this.configurationPath, PORT: String(this.port) }, { sidecarArtifactRegistration: this.artifact });
+      SEDES_CONFIG_FILE: this.configurationPath, PORT: String(this.port) }, { sidecarArtifactRegistration: this.artifact, ...(this.sshServer ? { sidecarAccountHomeForTests: this.hostHome } : {}) });
     this.port = this.application.listening.port;
   }
-  async addCodexBackend() {
-    const socketPath = path.join(this.hostHome, "codex.sock");
-    this.codex = await OutboundCodexFixture.start(socketPath, { codexHome: path.join(this.hostHome, ".codex"), workspacePath: this.workspace });
+  async addCodexBackend(id = "outbound-codex", liveSocket?: string) {
+    const socketPath = liveSocket ?? path.join(this.hostHome, `${id}.sock`);
+    if (!liveSocket) {
+      const codex = await OutboundCodexFixture.start(socketPath, { codexHome: path.join(this.hostHome, `.${id}`), workspacePath: this.workspace });
+      this.codex ??= codex;
+      this.codexFixtures.push(codex);
+    }
+    const backendId = `${id}-backend`;
     const snapshot = await this.configuration();
     const configuration = snapshot.configuration;
-    configuration.backends.push({ id: "outbound-codex-backend", kind: "codex_app_server", label: "Fake remote Codex", enabled: true, modelPolicy: { type: "catalog" }, moduleConfiguration: {
+    configuration.backends.push({ id: backendId, kind: "codex_app_server", label: id, enabled: true, modelPolicy: liveSocket ? { type: "allowlist", allowed: [{ modelIds: ["gpt-5.6-luna"], reasoningEfforts: ["low"] }] } : { type: "catalog" }, moduleConfiguration: {
       connection: { ownership: "external", channel: { type: "unix_websocket", socketPath } },
       policy: { allowedSandboxModes: ["read-only"], allowedNetworkAccess: ["disabled"], allowedApprovalPolicies: ["never"], allowedApprovalReviewers: ["user"] },
     } });
-    configuration.targets.push({ id: "outbound-codex", kind: "codex_app_server", label: "Remote fixture", backendInstanceId: "outbound-codex-backend", executionEnvironmentId: this.environmentId, enabled: true, moduleConfiguration: { defaults: { sandboxMode: "read-only", networkAccess: "disabled", approvalPolicy: "never", approvalReviewer: "user", model: { type: "catalogDefault" } } } });
-    configuration.defaultTargetId = "outbound-codex";
+    configuration.targets.push({ id, kind: "codex_app_server", label: id, backendInstanceId: backendId, executionEnvironmentId: this.environmentId, enabled: true, moduleConfiguration: { defaults: { sandboxMode: "read-only", networkAccess: "disabled", approvalPolicy: "never", approvalReviewer: "user", model: liveSocket ? { type: "fixed", modelId: "gpt-5.6-luna" } : { type: "catalogDefault" } } } });
+    configuration.defaultTargetId = id;
     await this.json("/api/configuration", "PUT", { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
-    await this.waitFor(async () => (await this.snapshot()).executionTargets.some(target => target.environmentId === this.environmentId && target.available));
-    return (await this.snapshot()).defaultNewThreadTargetId!;
+    await this.waitFor(async () => (await this.snapshot()).executionTargets.some(target => target.backendInstanceId === backendId && target.available));
+    return (await this.snapshot()).executionTargets.find(target => target.backendInstanceId === backendId && target.available)!.id;
   }
-  async addClaudeBackend() {
-    const configDirectory = path.join(this.hostHome, "claude-config");
-    await mkdir(configDirectory, { mode: 0o700 });
-    // Only documented version/auth commands are supplied by this executable;
-    // the test SDK runs inside the real managed worker, without a live provider.
-    const executablePath = path.join(this.hostHome, "claude-fixture");
-    await writeFile(executablePath, `#!${process.execPath}
+  async addClaudeBackend(live?: { executablePath: string; configDirectory: string }) {
+    const configDirectory = live?.configDirectory ?? path.join(this.hostHome, "claude-config");
+    const executablePath = live?.executablePath ?? path.join(this.hostHome, "claude-fixture");
+    if (!live) {
+      await mkdir(configDirectory, { mode: 0o700 });
+      // Only the documented version/auth commands are supplied by this executable.
+      await writeFile(executablePath, `#!${process.execPath}
 if (process.argv.slice(2).join(" ") === "--version") console.log("2.1.287 (Claude Code)");
 else if (process.argv.slice(2).join(" ") === "auth status --json") console.log(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max" }));
 else process.exit(64);
 `, { mode: 0o700 });
+    }
     const snapshot = await this.configuration();
     const configuration = snapshot.configuration;
-    configuration.backends.push({ id: "outbound-claude-backend", kind: "claude_agent_sdk", label: "Offline remote Claude", enabled: true, modelPolicy: { type: "catalog" }, moduleConfiguration: {
-      executablePath, configDirectory, initializationTimeoutMs: 10_000, permissionPolicy: { allowedModes: ["default"] },
+    configuration.backends.push({ id: "outbound-claude-backend", kind: "claude_agent_sdk", label: "Remote Claude", enabled: true, modelPolicy: { type: "catalog" }, moduleConfiguration: {
+      executablePath, configDirectory, initializationTimeoutMs: live ? 30_000 : 10_000, permissionPolicy: { allowedModes: [live ? "dontAsk" : "default"] },
     } });
-    configuration.targets.push({ id: "outbound-claude", kind: "claude_agent_sdk", label: "Remote Claude fixture", backendInstanceId: "outbound-claude-backend", executionEnvironmentId: this.environmentId, enabled: true, moduleConfiguration: { defaults: { permissionMode: "default" } } });
+    configuration.targets.push({ id: "outbound-claude", kind: "claude_agent_sdk", label: "Remote Claude fixture", backendInstanceId: "outbound-claude-backend", executionEnvironmentId: this.environmentId, enabled: true, moduleConfiguration: { defaults: { permissionMode: live ? "dontAsk" : "default" } } });
     configuration.defaultTargetId = "outbound-claude";
     await this.json("/api/configuration", "PUT", { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
     await this.waitFor(async () => {
       const state = await this.snapshot();
-      return state.executionTargets.some(target => target.id === state.defaultNewThreadTargetId && target.available);
+      return state.executionTargets.some(target => target.id === state.defaultNewThreadTargetId && target.backend.brand === "claude" && target.available);
     });
     return (await this.snapshot()).defaultNewThreadTargetId!;
   }
@@ -551,10 +771,10 @@ else process.exit(64);
     if (!this.serviceScope) return undefined;
     return inspectAtEndpoint(persistentSidecarPaths(this.hostHome, process.getuid!(), this.serviceScope).endpointPath, this.serviceScope);
   }
-  async waitFor(predicate: () => Promise<boolean>, pollMilliseconds = 50) {
-    const deadline = Date.now() + 20_000;
+  async waitFor(predicate: () => Promise<boolean>, pollMilliseconds = 50, timeoutMilliseconds = 20_000) {
+    const deadline = Date.now() + timeoutMilliseconds;
     while (Date.now() < deadline) { if (await predicate()) return; await new Promise(resolve => setTimeout(resolve, pollMilliseconds)); }
-    throw new Error(`outbound_fixture_timeout\n${this.logs}\nThread SSE: ${this.threadStreamDiagnostics.join("\n")}\nCodex:${JSON.stringify(this.codex?.requests)} Errors:${JSON.stringify(this.codex?.errors)}\nService:${JSON.stringify(await this.serviceStatus())}\nSnapshot:${JSON.stringify(await this.snapshot())}\n${JSON.stringify(await this.configuration())}`);
+    throw new Error(`outbound_fixture_timeout\n${this.logs}\nThread SSE: ${this.threadStreamDiagnostics.join("\n")}\nThread stream errors: ${this.threadStreamErrors.join("\n")}\nCodex:${JSON.stringify(this.codex?.requests.slice(-32).map(request => request.method))} Errors:${this.codex?.errors.map(String).join(", ")}\nService:${JSON.stringify(await this.serviceStatus())}\nSnapshot:${JSON.stringify(await this.snapshot())}\n${JSON.stringify(await this.configuration())}`);
   }
   async close() {
     const failures: unknown[] = [];
@@ -596,7 +816,8 @@ else process.exit(64);
     // running with ppid 1: every fixture process runs from this directory.
     await attempt(() => terminateProcessesReferencing(this.directory));
     if (scope) await attempt(() => rm(persistentSidecarPaths(this.hostHome, process.getuid!(), scope).socketDirectory, { recursive: true, force: true }));
-    await attempt(async () => this.codex?.close());
+    if (this.sshServer) await attempt(() => terminateChild(this.sshServer!.child));
+    for (const codex of this.codexFixtures) await attempt(() => codex.close());
     await attempt(async () => this.authentication.close());
     await attempt(() => rm(this.directory, { recursive: true, force: true }));
     if (failures.length > 0) throw failures[0];

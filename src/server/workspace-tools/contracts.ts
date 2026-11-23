@@ -15,6 +15,7 @@ import type {
 } from "../../internal/sidecar-protocol/index.js";
 
 export interface WorkspaceToolRoot {
+  readonly assertCurrent?: () => void;
   readonly canonicalPath: string;
   readonly operationKey: string;
   readonly homePath: string;

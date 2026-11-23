@@ -8,7 +8,7 @@ import {
   LengthPrefixedSidecarFrameTransport,
   SidecarOperationRegistry,
   SidecarProtocolPeer,
-  registerControlV2Operations,
+  registerControlV3Operations,
   type SidecarByteStream,
   type SidecarByteStreamClosure,
 } from "../../src/internal/sidecar-protocol/index.js";
@@ -256,6 +256,23 @@ describe("ClaudeManagedRuntimeOwner", () => {
     })).toThrow("claude_managed_runtime_environment_invalid");
   });
 
+  it("keeps a live worker usable but refuses a new generation after its launch grant changes", async () => {
+    const harness = runtimeHarness();
+    let current = true;
+    const owner = harness.owner({ assertLaunchAdmission: () => { if (!current) throw new Error("backend_policy_denied"); } });
+    try {
+      await expect(listSessions(owner)).resolves.toEqual([]);
+      expect(owner.emptyAfterCleanup()).toBe(false);
+      current = false;
+      await expect(listSessions(owner)).resolves.toEqual([]);
+      harness.generations[0]!.finish({ reason: "exit", exitCode: CLAUDE_RUNTIME_WORKER_CLEANUP_PROVEN_FAILURE_EXIT_CODE, signal: null });
+      await waitUntil(() => harness.backgroundErrors.length === 1);
+      expect(owner.emptyAfterCleanup()).toBe(true);
+      await expect(listSessions(owner)).rejects.toThrow("backend_policy_denied");
+      expect(harness.open).toHaveBeenCalledOnce();
+    } finally { await owner.close(); }
+  });
+
   it("replaces a failed generation when the outer status proves cleanup", async () => {
     vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -369,6 +386,8 @@ describe("ClaudeManagedRuntimeOwner", () => {
       signal: null,
     });
     await waitUntil(() => harness.backgroundErrors.length === 1);
+    expect(owner.emptyAfterCleanup()).toBe(false);
+    expect(() => owner.disposeEmpty()).toThrow("claude_persistent_configuration_restart_required");
     await expect(listSessions(owner)).rejects.toThrow(
       "claude_managed_runtime_cleanup_unproven",
     );
@@ -499,7 +518,7 @@ function memoryWorkerGeneration(
     ...handlers,
     getSessionMessages: ({ sessionId, ...options }) => historyPager.getPage(sessionId, options, async () => history),
   } : handlers);
-  registerControlV2Operations(registry, {
+  registerControlV3Operations(registry, {
     buildId: artifact.buildId,
     artifactSha256: artifact.artifactSha256,
     enabledSidecarCapabilities: [{

@@ -52,18 +52,6 @@ type ThreadTargetRow = {
   readonly backingState: "unbound" | "creating" | "bound" | "creation_unknown";
 };
 
-type WorkspaceRow = {
-  readonly id: string;
-  readonly environmentId: string;
-  readonly canonicalPath: string;
-  readonly displayName: string;
-  readonly availability: "available" | "unavailable";
-  readonly trustState: "trusted" | "untrusted";
-  readonly revision: number;
-  readonly authorityRevision: number;
-  readonly environmentConfigurationRevision: number;
-};
-
 export interface BackendBindingDetailReader {
   getBindingDetail(
     scope: RequestScope,
@@ -152,39 +140,6 @@ function threadTarget(
     .get(scope.tenantId, scope.principalId, applicationThreadId) as
     ThreadTargetRow | undefined;
   if (!row) throw new DomainError("not_found", "The thread was not found.");
-  return row;
-}
-
-function workspaceRow(
-  database: Database.Database,
-  scope: RequestScope,
-  workspaceId: string,
-  environmentId: string,
-): WorkspaceRow {
-  const row = database
-    .prepare(
-      `
-        SELECT workspace.id, workspace.environment_id AS environmentId,
-          workspace.canonical_path AS canonicalPath,
-          workspace.display_name AS displayName,
-          workspace.availability, workspace.trust_state AS trustState,
-          workspace.revision,
-          workspace.environment_configuration_revision AS authorityRevision,
-          environment.configuration_revision AS environmentConfigurationRevision
-        FROM workspaces AS workspace
-        JOIN execution_environments AS environment
-          ON environment.tenant_id = workspace.tenant_id
-          AND environment.owner_principal_id = workspace.owner_principal_id
-          AND environment.id = workspace.environment_id
-        WHERE workspace.tenant_id = ? AND workspace.owner_principal_id = ?
-          AND workspace.environment_id = ? AND workspace.id = ?
-      `,
-    )
-    .get(scope.tenantId, scope.principalId, environmentId, workspaceId) as
-    WorkspaceRow | undefined;
-  if (!row) {
-    throw new DomainError("not_found", "The thread workspace was not found.");
-  }
   return row;
 }
 
@@ -513,11 +468,9 @@ export class DatabaseConversationTargetStore {
     environmentId: string,
     requireCurrentAuthority = false,
   ): ValidatedWorkspace {
-    const row = workspaceRow(this.#database, scope, workspaceId, environmentId);
-    if (
-      requireCurrentAuthority &&
-      row.authorityRevision !== row.environmentConfigurationRevision
-    ) {
+    const row = this.#inventory.getWorkspace(scope, workspaceId);
+    if (row.environmentId !== environmentId) throw new DomainError("not_found", "The thread workspace was not found.");
+    if (requireCurrentAuthority && !this.#inventory.workspaceAuthorityIsCurrent(scope, row)) {
       throw new DomainError(
         "conflict",
         "The workspace authority is stale for its execution environment.",
@@ -525,7 +478,8 @@ export class DatabaseConversationTargetStore {
     }
     return {
       canonicalPath: row.canonicalPath,
-      authorityRevision: row.authorityRevision,
+      ...(row.authorityRootId && { authorityRootId: row.authorityRootId }),
+      authorityRevision: row.environmentConfigurationRevision,
       summary: {
         id: row.id,
         environmentId: row.environmentId,
@@ -571,6 +525,7 @@ export class DatabaseConversationTargetStore {
       displayName: revalidated.summary.displayName,
       available: revalidated.summary.availability === "available",
       trustState: revalidated.summary.trustState,
+      ...(revalidated.authorityRootId && { authorityRootId: revalidated.authorityRootId }),
       environmentConfigurationRevision: revalidated.authorityRevision,
       now: this.#now(),
     });
@@ -579,6 +534,7 @@ export class DatabaseConversationTargetStore {
     }
     return {
       canonicalPath: persisted.canonicalPath,
+      ...(persisted.authorityRootId && { authorityRootId: persisted.authorityRootId }),
       authorityRevision: persisted.environmentConfigurationRevision,
       summary: {
         id: persisted.id,

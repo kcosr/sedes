@@ -819,17 +819,19 @@ restarts. **Stop** requests service shutdown and persists stop preference even
 if the host is unreachable; only confirmed cleanup is displayed as stopped.
 **Connect** or **Start** explicitly resumes an intentionally suppressed runtime.
 
-Runtime wire version **17** preserves OpenCode observation-continuity failures
-for recovery after a sidecar journal changes. It retains the OpenCode 2.1.1
-schema cutover from version 16 and negotiated traffic compression from version
-15. OpenCode runtime capability **5** requires the current 2.2.6 schema profile.
-Upgrade both server and sidecar. Wire 17 does not change browser or Android
-client protocols. An incompatible
-service cannot attach through an older framing mode. Idle services follow the
-existing automatic upgrade path; active or unreconciled work still blocks
-automatic replacement. Inspect the interruption impact before using **Upgrade
-and restart**. The separate stable management protocol remains available for
-status and lifecycle actions.
+Runtime wire version **18** uses a live permission policy on each normal
+attachment. Saving a new supported backend or feature updates that policy while
+other providers and terminals keep running. On **Overview**, check the
+individual setting for **Awaiting host confirmation**, **Applied**, or its
+specific failure. Retry a transient apply failure with **Retry apply**. A
+provider with changed launch settings can require **Restart backend**.
+
+Deploy the matching server and sidecar for wire 18. Before upgrading main,
+drain turns and recover retained results that need the older runtime wire.
+The stable management protocol still supports impact checks, status, Stop
+and upgrade for an incompatible daemon. An idle outdated service can upgrade
+automatically. Active work and unreconciled outcomes block automatic
+replacement. Review the interruption impact before **Upgrade and restart**.
 
 A stop, restart, or upgrade whose acknowledgement was lost stays **unknown**
 until its durable service receipt settles it or a later explicit Stop safely

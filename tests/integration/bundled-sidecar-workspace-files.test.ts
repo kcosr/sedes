@@ -1,3 +1,6 @@
+import { SedesToolLocalClient } from "../../src/cli/sedes-tool-local-client.js";
+import {installFramedFixturePolicy} from "../helpers/execution-policy-fixture.js";
+import {policyAcquireRouteOperation,policyReadOperation} from "../../src/internal/sidecar-protocol/execution-policy.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   spawn,
@@ -11,7 +14,6 @@ import {
   lstat,
   mkdtemp,
   readFile,
-  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -197,7 +199,7 @@ describe("bundled sedes sidecar", () => {
         settleShell(terminal as WorkspaceToolsShellTerminal),
     };
     const shell = new WorkspaceToolsShellHost({
-      resolveWorkspace: () => workspaceRoot,
+      resolveWorkspace: () => ({ cwd: workspaceRoot, assertCurrent() {} }),
       openStream: () => stream,
       admitOperation: async (
         _workspaceHandle,
@@ -300,7 +302,7 @@ describe("bundled sedes sidecar", () => {
         peer.call(controlHelloOperation, { compression: "zstd",
           expectedBuildId: buildId,
           expectedArtifactSha256: artifactSha256,
-          authorizedSidecarCapabilities: [
+          supportedSidecarCapabilities: [
             { capabilityId: "workspace_files", majorVersion: 8 },
             { capabilityId: "workspace_tools", majorVersion: 2 },
             { capabilityId: "workspace_context", majorVersion: 1 },
@@ -321,6 +323,8 @@ describe("bundled sedes sidecar", () => {
         ]),
       });
 
+      await installFramedFixturePolicy(peer,{roots:[{id:"primary",generation:1,path:policyRoot}],backends:[],
+        capabilities:hello.sidecarCapabilities.filter(c=>c.capabilityId!=="control").map(c=>({id:c.capabilityId,generation:1}))});
       const attachmentBytes = Buffer.from([0, 255, 1, 128, 42]);
       const attachmentId = randomUUID();
       const threadId = randomUUID();
@@ -760,7 +764,7 @@ describe("bundled sedes sidecar", () => {
         const hello = await peer.call(controlHelloOperation, { compression: "zstd",
           expectedBuildId: buildId,
           expectedArtifactSha256: artifactSha256,
-          authorizedSidecarCapabilities: [
+          supportedSidecarCapabilities: [
             { capabilityId: "workspace_files", majorVersion: 8 },
             { capabilityId: "codex_runtime", majorVersion: 1 },
             { capabilityId: "interactive_terminal", majorVersion: 2 },
@@ -768,6 +772,7 @@ describe("bundled sedes sidecar", () => {
           ],
           offeredSedesCapabilities: [],
         });
+        await installFramedFixturePolicy(peer,{roots:[{id:"primary",generation:1,path:temporaryRoot}],capabilities:[{id:"workspace_files",generation:1}],backends:[]});
         const capabilities = hello.sidecarCapabilities.map(
           (capability) => capability.capabilityId,
         );
@@ -860,7 +865,7 @@ describe("bundled sedes sidecar", () => {
       const hello = await peer.call(controlHelloOperation, { compression: "zstd",
         expectedBuildId: buildId,
         expectedArtifactSha256: artifactSha256,
-        authorizedSidecarCapabilities: [
+        supportedSidecarCapabilities: [
           { capabilityId: "workspace_tools", majorVersion: 2 },
           { capabilityId: "workspace_context", majorVersion: 1 },
           { capabilityId: "workspace_skills", majorVersion: 1 },
@@ -883,6 +888,7 @@ describe("bundled sedes sidecar", () => {
           }),
         ]),
       );
+      await installFramedFixturePolicy(peer,{roots:[{id:"primary",generation:1,path:policyRoot}],capabilities:[{id:"workspace_skills",generation:1}],backends:[]});
       const catalog = await peer.call(workspaceSkillsCatalogReadOperation, {
         admissionId: randomUUID(),
         declaredPath: workspaceRoot,
@@ -978,6 +984,7 @@ describe("bundled sedes sidecar", () => {
       stderr,
       exited,
       stream: serviceStream,
+      reattach,
     } = await startServiceAttachment({
       home: temporaryRoot,
       bundlePath,
@@ -1002,7 +1009,7 @@ describe("bundled sedes sidecar", () => {
     registry.register(agentToolsInvokeOperation, () => {
       throw new Error("unexpected_agent_tool_invoke");
     });
-    const peer = new SidecarProtocolPeer({
+    let peer = new SidecarProtocolPeer({
       role: "sedes",
       transport,
       sessionNonce,
@@ -1011,28 +1018,27 @@ describe("bundled sedes sidecar", () => {
     peer.start();
 
     try {
-      const hello = await stage(
-        "hello",
-        peer.call(controlHelloOperation, { compression: "zstd",
-          expectedBuildId: buildId,
-          expectedArtifactSha256: artifactSha256,
-          authorizedSidecarCapabilities: [
-            { capabilityId: "workspace_files", majorVersion: 8 },
-          ],
-          offeredSedesCapabilities: [
-            {
-              capabilityId: "agent_tools_cli",
-              majorVersion: 6,
-              operations: [
-                agentToolsDescribeOperation.operation,
-                agentToolsCatalogOperation.operation,
-                agentToolsInvokeOperation.operation,
-              ],
-            },
-          ],
-        }),
-        stderr,
-      );
+      const discovery = {
+        compression: "zstd" as const,
+        expectedBuildId: buildId,
+        expectedArtifactSha256: artifactSha256,
+        supportedSidecarCapabilities: [
+          { capabilityId: "workspace_files", majorVersion: 8 },
+          {capabilityId:"codex_runtime",majorVersion:1},
+        ],
+        offeredSedesCapabilities: [
+          {
+            capabilityId: "agent_tools_cli",
+            majorVersion: 6,
+            operations: [
+              agentToolsDescribeOperation.operation,
+              agentToolsCatalogOperation.operation,
+              agentToolsInvokeOperation.operation,
+            ],
+          },
+        ],
+      };
+      const hello = await stage("hello", peer.call(controlHelloOperation, discovery), stderr);
       expect(hello).toMatchObject({
         buildId,
         artifactSha256,
@@ -1050,17 +1056,18 @@ describe("bundled sedes sidecar", () => {
             operations: ["catalog.describe", "catalog.list", "tool.invoke"],
           },
         ],
-        agentToolCli: {
-          endpoint: `unix://${path.join(
-            await realpath("/tmp"),
-            `sedes-agent-tools-${process.geteuid!()}`,
-            AGENT_TOOL_ENDPOINT_KEY,
-            "agent-tools.sock",
-          )}`,
-          executableDirectory: temporaryRoot,
-        },
       });
-      const ingressPath = hello.agentToolCli!.endpoint.slice("unix://".length);
+      expect(hello).not.toHaveProperty("agentToolCli");
+      const policy = {
+        roots: [],
+        capabilities: [{ id: "agent_tools_cli", generation: 1 }],
+        backends: [{ id: "fixture", kind: "codex_app_server", generation: 1, launchDigest: "a".repeat(64), targets: [] }],
+      };
+      await installFramedFixturePolicy(peer, policy);
+      await vi.waitFor(async()=>expect((await peer.call(policyReadOperation,{})).readiness).toContainEqual({id:"route:fixture",generation:1,state:"ready"}));
+      const cliRoute=await peer.call(policyAcquireRouteOperation,{capabilityId:"agent_tools_cli",generation:1,backendInstanceId:"fixture"});
+      expect(cliRoute.executableDirectory).toBe(temporaryRoot);
+      const ingressPath=cliRoute.endpoint.slice("unix://".length);
       expect((await lstat(ingressPath)).mode & 0o777).toBe(0o600);
       expect((await lstat(path.dirname(ingressPath))).mode & 0o777).toBe(0o700);
       const sourceCapability = "c".repeat(48);
@@ -1071,7 +1078,7 @@ describe("bundled sedes sidecar", () => {
           stdio: ["ignore", "pipe", "pipe"],
           env: {
             ...process.env,
-            SEDES_AGENT_TOOL_ENDPOINT: hello.agentToolCli!.endpoint,
+            SEDES_AGENT_TOOL_ENDPOINT: cliRoute.endpoint,
             SEDES_AGENT_TOOL_SOURCE_CAPABILITY: sourceCapability,
             SEDES_AGENT_TOOL_CLI_MODE: "progressive",
           },
@@ -1099,6 +1106,37 @@ describe("bundled sedes sidecar", () => {
         code: 0,
         signal: null,
       });
+      const original = new SedesToolLocalClient(ingressPath, sourceCapability);
+      const unavailable = { code: "unavailable", retryable: true };
+      await expect(original.listTools()).rejects.toMatchObject(unavailable);
+
+      async function replaceController(mode: "normal" | "recovery") {
+        const nonce = randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", "");
+        const stream = await reattach(nonce, mode);
+        peer = new SidecarProtocolPeer({
+          role: "sedes", registry, sessionNonce: nonce,
+          transport: new LengthPrefixedSidecarFrameTransport({
+            assurance: { kind: "test_stdio", carrierGeneration: 7 }, stream,
+          }),
+        });
+        peer.start();
+        await peer.call(controlHelloOperation, discovery);
+      }
+      await replaceController("recovery");
+      await expect(original.listTools()).rejects.toMatchObject(unavailable);
+      await peer.close("end_recovery");
+      await replaceController("normal");
+      await expect(original.listTools()).rejects.toMatchObject(unavailable);
+      await installFramedFixturePolicy(peer, policy);
+      await expect(original.listTools()).resolves.toEqual({ tools: [] });
+      await installFramedFixturePolicy(peer, { ...policy, capabilities: [] });
+      await expect(original.listTools()).rejects.toThrow();
+      await installFramedFixturePolicy(peer, { ...policy, capabilities: [{ id: "agent_tools_cli", generation: 2 }] });
+      const nextRoute = await vi.waitFor(() => peer.call(policyAcquireRouteOperation, {
+        capabilityId: "agent_tools_cli", generation: 2, backendInstanceId: "fixture",
+      }));
+      expect(nextRoute.endpoint).not.toBe(cliRoute.endpoint);
+      await expect(original.listTools()).rejects.toThrow();
       expect(Buffer.concat(stderr).toString("utf8")).toBe("");
     } finally {
       await peer.close("integration_cleanup").catch(() => undefined);
@@ -1268,7 +1306,7 @@ async function startServiceAttachment(input: {
         await peer.call(controlHelloOperation, { compression: "zstd",
           expectedBuildId: input.buildId,
           expectedArtifactSha256: input.artifactSha256,
-          authorizedSidecarCapabilities: [
+          supportedSidecarCapabilities: [
             { capabilityId: "workspace_files", majorVersion: 8 },
             { capabilityId: "workspace_tools", majorVersion: 2 },
             { capabilityId: "workspace_context", majorVersion: 1 },
@@ -1321,7 +1359,17 @@ async function startServiceAttachment(input: {
     throw new Error(
       `fixture_service_attach_failed:${JSON.stringify(response.value)}`,
     );
-  return { child, stderr, exited, stream: response.stream };
+  async function reattach(nonce: string, mode: "normal" | "recovery") {
+    const stream = await open();
+    await writeSidecarManagementRecord(stream, attachRequest(nonce, mode));
+    const next = await readSidecarManagementRecord(stream, sidecarManagementResponseSchema, AbortSignal.timeout(5_000));
+    if (next.value.outcome !== "ok") {
+      await stream.close("fixture_attach_failed");
+      throw new Error(JSON.stringify(next.value));
+    }
+    return next.stream;
+  }
+  return { child, stderr, exited, stream: response.stream, reattach };
 }
 
 async function acknowledgeRetainedResults(

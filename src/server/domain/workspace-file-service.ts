@@ -1,3 +1,4 @@
+import type { FileRootAdmission } from "../db/repositories/workspace-file-root-authority.js";
 import { normalizedAbsolutePath } from "../../shared/absolute-path.js";
 import { WORKSPACE_FILE_MAX_PATH_BYTES } from "../../shared/workspace-file-limits.js";
 import { isWithinRemoteRoot, pathForRemoteRoot } from "../execution/remote-path.js";
@@ -65,6 +66,7 @@ import type { WorkspaceFileLinkedWorktreeRepository } from "../db/repositories/w
 import {
   ExecutionWorkspaceAdmissionDeniedError,
   type ExecutionEnvironmentProvider,
+  type ValidatedWorkspace,
 } from "../execution/contracts.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type {
@@ -140,6 +142,17 @@ type RootOperationLifecycle = {
   readonly drainCallbacks: Set<() => void>;
 };
 
+function workspaceBinding(workspace: InventoryWorkspaceRecord) {
+  return {authorityRootId: workspace.authorityRootId ?? undefined, authorityRevision: workspace.environmentConfigurationRevision};
+}
+
+function validatedFileRoot(workspace: ValidatedWorkspace): {authority?: FileRootAdmission} {
+  return workspace.authorityRootId ? {authority: {
+    authorityRootId: workspace.authorityRootId,
+    authorityRevision: workspace.authorityRevision,
+  }} : {};
+}
+
 function derivedRootDisplayLabel(canonicalPath: string): string {
   const basename = pathForRemoteRoot(canonicalPath)
     .basename(canonicalPath)
@@ -189,7 +202,7 @@ export class WorkspaceFileService {
   constructor(
     readonly inventory: Pick<
       InventoryRepository,
-      "getWorkspace" | "listWorkspaces" | "getThread" | "assertWorkspaceActive"
+      "getWorkspace" | "listWorkspaces" | "getThread" | "assertWorkspaceActive" | "workspaceAuthorityIsCurrent"
     >,
     readonly roots: WorkspaceFileRootRepository,
     readonly linkedWorktrees: WorkspaceFileLinkedWorktreeRepository,
@@ -201,6 +214,7 @@ export class WorkspaceFileService {
         applicationThreadIds: readonly string[],
       ): void | Promise<void>;
     },
+    readonly captureFileGrant?: (scope: RequestScope, workspace: InventoryWorkspaceRecord, target: WorkspaceFileRootTarget) => () => void,
   ) {}
 
   async listRoots(
@@ -401,6 +415,7 @@ export class WorkspaceFileService {
         : { displayLabel: input.displayLabel }),
       canonicalPath,
       resolvedDisplayLabel: displayLabel,
+      ...validatedFileRoot(validated),
       mutationId: input.mutationId,
       now: Date.now(),
     });
@@ -570,6 +585,10 @@ export class WorkspaceFileService {
           try {
             await this.providers.removeLinkedWorktree(scope, {
               primaryRoot,
+              linkedRoot: {workspaceId, environmentId: workspace.environmentId, rootId, canonicalPath: root.canonicalPath},
+              ...(admittedCheckout.authorityRootId && {checkoutAuthority: {
+                authorityRootId: admittedCheckout.authorityRootId, authorityRevision: admittedCheckout.authorityRevision,
+              }}),
               canonicalCheckoutPath: root.canonicalCheckoutPath,
               canonicalGitDir: root.canonicalGitDir,
               identityToken: root.identityToken,
@@ -814,6 +833,7 @@ export class WorkspaceFileService {
   /** Read exact bounded bytes in the thread's execution environment. Never treats a remote path as local. */
   async readAbsoluteFile(
     scope: RequestScope, threadId: string, absolutePath: string, maximumBytes: number, signal?: AbortSignal,
+    retainGrant?: (assertCurrent: () => void) => void,
   ): Promise<Uint8Array> {
     if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > 16_777_216) {
       throw new DomainError("bad_request", "Invalid file capture limit.");
@@ -824,13 +844,17 @@ export class WorkspaceFileService {
     const operationSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     return this.#withWorkspaceOperation(scope, workspace.id, async () => {
       operationSignal.throwIfAborted();
-      if (workspace.availability !== "available") throw new DomainError("not_found", "The source file is unavailable.");
+      if (workspace.availability !== "available" || !this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) throw new DomainError("not_found", "The source file is unavailable.");
       const located = await this.#primaryCaptureTarget(scope, workspace, absolutePath, operationSignal) ??
         await this.#linkedCaptureTarget(scope, workspace, absolutePath, operationSignal);
       if (!located) throw new DomainError("not_found", "The source file is unavailable through Files.");
       const { target } = located;
+      const grant = this.#captureSourceGrant(scope, workspace, target);
+      grant();
+      retainGrant?.(grant);
       return this.#withRootOperation(scope, workspace.id, target.rootId, async () => {
         const metadata = await this.providers.read(scope, target, located.path, operationSignal);
+        grant();
         if (metadata.availability !== "available") throw new DomainError("not_found", "The source file is unavailable.");
         if (metadata.sizeBytes < 1 || metadata.sizeBytes > maximumBytes) throw new DomainError("bad_request", "The source file exceeds the capture limit or is empty.");
         return this.providers.withDownload(scope, target, { path: located.path, expectedRevision: metadata.revision }, async source => {
@@ -844,6 +868,7 @@ export class WorkspaceFileService {
             chunks.push(Buffer.from(chunk));
           }, operationSignal);
           operationSignal.throwIfAborted();
+          grant();
           if (size !== source.sizeBytes) throw new DomainError("conflict", "The source file changed during capture.");
           return Buffer.concat(chunks);
         }, operationSignal);
@@ -857,6 +882,7 @@ export class WorkspaceFileService {
     threadId: string,
     absolutePath: string,
     signal?: AbortSignal,
+    retainGrant?: (assertCurrent: () => void) => void,
   ): Promise<Extract<WorkspaceFileContentResult, {
     availability: "available";
     contentKind: "image";
@@ -868,21 +894,37 @@ export class WorkspaceFileService {
     const operationSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     return this.#withWorkspaceOperation(scope, workspace.id, async () => {
       operationSignal.throwIfAborted();
-      if (workspace.availability !== "available") return undefined;
+      if (workspace.availability !== "available" || !this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) return undefined;
       const located = await this.#primaryCaptureTarget(scope, workspace, absolutePath, operationSignal) ??
         await this.#linkedCaptureTarget(scope, workspace, absolutePath, operationSignal);
       operationSignal.throwIfAborted();
       if (!located) return undefined;
       const { target } = located;
+      const grant = this.#captureSourceGrant(scope, workspace, target);
+      grant();
+      retainGrant?.(grant);
       return this.#withRootOperation(scope, workspace.id, target.rootId, async () => {
         operationSignal.throwIfAborted();
         const result = this.#providerResult(target.rootId,
           await this.providers.read(scope, target, located.path, operationSignal));
         operationSignal.throwIfAborted();
+        grant();
         return result.availability === "available" && result.contentKind === "image" &&
           result.previewState === "available" ? result : undefined;
       }, () => controller.abort(new Error("viewed_image_root_retired")));
     });
+  }
+
+  #captureSourceGrant(scope: RequestScope, workspace: InventoryWorkspaceRecord, target: WorkspaceFileRootTarget) {
+    const source = this.captureFileGrant?.(scope, workspace, target);
+    const primary = target.rootId !== WORKSPACE_FILE_PRIMARY_ROOT_ID && this.captureFileGrant?.(scope, workspace, {
+      workspaceId: workspace.id, environmentId: workspace.environmentId, rootId: WORKSPACE_FILE_PRIMARY_ROOT_ID, canonicalPath: workspace.canonicalPath,
+    });
+    return () => {
+      if (!this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) throw new DomainError("conflict", "The project workspace root changed during capture.");
+      source?.();
+      if (primary) primary();
+    };
   }
 
   /** An image inside Primary reads through it, like a listed link match, without a hidden root. */
@@ -895,7 +937,7 @@ export class WorkspaceFileService {
     if (!isWithinRemoteRoot(absolutePath, workspace.canonicalPath) ||
         !this.providers.supportsPrimaryRoot(scope, workspace.environmentId)) return undefined;
     const reopened = await untilAborted(this.execution.validateWorkspace(
-      scope, workspace.environmentId, workspace.canonicalPath), signal).catch(() => undefined);
+      scope, workspace.environmentId, workspace.canonicalPath, {binding: workspaceBinding(workspace), signal}), signal).catch(() => undefined);
     signal.throwIfAborted();
     if (reopened?.canonicalPath !== workspace.canonicalPath) return undefined;
     const target: WorkspaceFileRootTarget = {
@@ -1388,6 +1430,7 @@ export class WorkspaceFileService {
     preferredRootId: WorkspaceFileLinkedWorktreeRootId | null,
   ): Promise<WorkspaceFileLinkResolveResult> {
     const workspace = this.inventory.getWorkspace(scope, workspaceId);
+    if (!this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) return {status: "not_found"};
     const roots = await this.#resolvedRoots(
       scope,
       workspace,
@@ -1466,7 +1509,17 @@ export class WorkspaceFileService {
       }
     }
     const selectedMatch = mostSpecificWorkspaceFileRootMatch(matches);
+    if (!this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) return {status: "not_found"};
     if (selectedMatch) {
+      try {
+        this.#captureSourceGrant(scope, workspace, {
+          workspaceId, environmentId: workspace.environmentId,
+          rootId: selectedMatch.rootId, canonicalPath: selectedMatch.canonicalPath,
+        })();
+      } catch (error) {
+        if (error instanceof DomainError && error.code === "conflict") return { status: "not_found" };
+        throw error;
+      }
       return {
         status: "resolved",
         rootId: selectedMatch.rootId,
@@ -1495,14 +1548,16 @@ export class WorkspaceFileService {
     absolutePath: string,
   ): Promise<WorkspaceFileLinkResolveResult> {
     const candidate = await this.#absoluteFileCandidate(scope, workspace, absolutePath);
-    if (!candidate) return { status: "not_found" };
+    if (!candidate || !this.inventory.workspaceAuthorityIsCurrent(scope, workspace)) return { status: "not_found" };
     let remembered;
     try {
+      this.#captureSourceGrant(scope, workspace, candidate.target)();
       remembered = this.roots.rememberLinkRoot(
         scope,
         workspace.id,
         candidate.target.canonicalPath,
         Date.now(),
+        ...(candidate.authority ? [candidate.authority] as const : []),
       );
     } catch (error) {
       if (error instanceof DomainError && error.code === "conflict") {
@@ -1524,8 +1579,10 @@ export class WorkspaceFileService {
     workspace: InventoryWorkspaceRecord,
     absolutePath: string,
     signal?: AbortSignal,
-  ): Promise<{ readonly target: WorkspaceFileRootTarget; readonly path: string } | undefined> {
+  ): Promise<{ readonly target: WorkspaceFileRootTarget; readonly path: string; readonly authority?: FileRootAdmission } | undefined> {
     signal?.throwIfAborted();
+    // A failed lookup within the primary cannot acquire a hidden overlapping grant.
+    if (isWithinRemoteRoot(absolutePath, workspace.canonicalPath)) return undefined;
     if (!normalizedAbsolutePath(absolutePath) ||
         Buffer.byteLength(absolutePath, "utf8") > WORKSPACE_FILE_MAX_PATH_BYTES) {
       return undefined;
@@ -1539,7 +1596,7 @@ export class WorkspaceFileService {
       .validateWorkspace(
         scope,
         workspace.environmentId,
-        paths.dirname(absolutePath),
+        paths.dirname(absolutePath), {signal},
       ), signal)
       .catch(() => undefined);
     signal?.throwIfAborted();
@@ -1565,7 +1622,7 @@ export class WorkspaceFileService {
       .validateWorkspace(
         scope,
         workspace.environmentId,
-        discovered.canonicalPath,
+        discovered.canonicalPath, {signal},
       ), signal)
       .catch(() => undefined);
     signal?.throwIfAborted();
@@ -1611,7 +1668,7 @@ export class WorkspaceFileService {
     ) {
       return undefined;
     }
-    return { target: candidateTarget, path: relativePath };
+    return { target: candidateTarget, path: relativePath, ...validatedFileRoot(validated) };
   }
 
   async watch(
@@ -1693,6 +1750,7 @@ export class WorkspaceFileService {
                 const current = subscriptions.get(target.rootId);
                 if (closed || current?.subscription !== subscription) return;
                 subscriptions.delete(target.rootId);
+                void Promise.resolve().then(() => subscription.close()).catch(() => undefined);
                 const failedKey = this.#watchabilityKey(scope, target);
                 if (this.#watchability.get(failedKey) !== false) {
                   this.#watchability.set(failedKey, false);
@@ -1827,7 +1885,7 @@ export class WorkspaceFileService {
       };
     }
     const reopened = await this.execution
-      .validateWorkspace(scope, workspace.environmentId, linkRoot.canonicalPath)
+      .validateWorkspace(scope, workspace.environmentId, linkRoot.canonicalPath, {signal})
       .catch(() => undefined);
     if (reopened?.canonicalPath !== linkRoot.canonicalPath) {
       return { diagnosticCode: ROOT_UNAVAILABLE };
@@ -1845,6 +1903,7 @@ export class WorkspaceFileService {
           workspaceId: target.workspaceId,
           environmentId: target.environmentId,
           rootKind: "link_only",
+          rootId: target.rootId,
           canonicalPath: target.canonicalPath,
         },
         ...optionalAbortSignal(signal),
@@ -1913,7 +1972,7 @@ export class WorkspaceFileService {
       (retained.expiresAt === Number.POSITIVE_INFINITY ||
         (!force && retained.expiresAt > Date.now()))
     ) {
-      return retained.promise;
+      return untilAborted(retained.promise, signal);
     }
     const promise = this.#refreshLinkedWorktrees(scope, workspace, signal);
     const entry = { promise, expiresAt: Number.POSITIVE_INFINITY };
@@ -1959,7 +2018,7 @@ export class WorkspaceFileService {
       // must retain the last successful topology and thread preference.
       return;
     }
-    const admitted: WorkspaceFileDiscoveredLinkedWorktree[] = [];
+    const admitted: (WorkspaceFileDiscoveredLinkedWorktree & {authority?: FileRootAdmission})[] = [];
     let admissionComplete = true;
     for (const candidate of discovery.worktrees) {
       signal?.throwIfAborted();
@@ -1969,9 +2028,10 @@ export class WorkspaceFileService {
         validated = await this.execution.validateWorkspace(
           scope,
           workspace.environmentId,
-          candidate.canonicalPath,
+          candidate.canonicalPath, {signal},
         );
       } catch (error) {
+        signal?.throwIfAborted();
         if (!(error instanceof ExecutionWorkspaceAdmissionDeniedError)) {
           admissionComplete = false;
         }
@@ -1981,7 +2041,7 @@ export class WorkspaceFileService {
         admissionComplete = false;
         continue;
       }
-      admitted.push(candidate);
+      admitted.push({...candidate, ...validatedFileRoot(validated)});
     }
     const reconciliation = this.linkedWorktrees.reconcileDiscovery(
       scope,
@@ -2108,6 +2168,7 @@ export class WorkspaceFileService {
             scope,
             workspace.environmentId,
             candidate.canonicalPath,
+            {signal, binding: candidate.kind === "primary" ? workspaceBinding(workspace) : undefined},
           );
           if (reopened.canonicalPath !== candidate.canonicalPath) {
             return {
@@ -2122,6 +2183,7 @@ export class WorkspaceFileService {
               workspaceId: workspace.id,
               environmentId: workspace.environmentId,
               rootKind: candidate.kind,
+              rootId: candidate.rootId,
               canonicalPath: candidate.canonicalPath,
             },
             ...optionalAbortSignal(signal),
@@ -2135,7 +2197,7 @@ export class WorkspaceFileService {
               const admittedCheckout = await this.execution.validateWorkspace(
                 scope,
                 workspace.environmentId,
-                candidate.canonicalCheckoutPath,
+                candidate.canonicalCheckoutPath, {signal},
               );
               removal =
                 admittedCheckout.canonicalPath ===

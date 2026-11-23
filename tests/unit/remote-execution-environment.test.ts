@@ -262,3 +262,31 @@ describe("RemoteExecutionEnvironment", () => {
     expect(browseDirectories).not.toHaveBeenCalled();
   });
 });
+
+it("keeps the original root on ordinary leases and requires revalidation after its withdrawal", async () => {
+  const parent = { id: "parent", path: "/srv/work", generation: 8 };
+  const child = { id: "child", path: "/srv/work/group", generation: 9 };
+  let roots = [parent];
+  const host = new RemoteExecutionEnvironment({
+    kind: "ssh", platform: "linux", scope, environmentId: "ssh-environment",
+    allowedRoots: [parent.path], readWorkspaceRoots: () => roots,
+    configurationRevision: 1, activeConfigurationRevision: () => 1, directoryBrowser: () => undefined,
+  });
+  const original = await host.validateWorkspace(scope, host.environment.id, "/srv/work/group/repo");
+  const request = { environmentId: host.environment.id, workspace: original };
+  roots = [parent, child];
+  const lease = await host.acquireLease(scope, request);
+  expect(lease.workspace.authorityRootId).toBe(parent.id);
+  expect((await host.validateWorkspace(scope, host.environment.id, original.canonicalPath)).authorityRootId).toBe(child.id);
+  roots = [child];
+  expect(() => lease.assertCurrent?.()).toThrow("workspace_authority_stale");
+  await expect(host.acquireLease(scope, request)).rejects.toThrow("workspace_authority_stale");
+  roots.push({ ...parent, generation: 10 });
+  await expect(host.acquireLease(scope, request)).rejects.toThrow("workspace_authority_stale");
+  await expect(host.revalidateWorkspace(scope, original)).rejects.toThrow("workspace_authority_stale");
+  const refreshed = await host.validateWorkspace(scope, host.environment.id, original.canonicalPath);
+  expect(refreshed.summary.id).toBe(original.summary.id);
+  expect(refreshed.authorityRootId).toBe(child.id);
+  await lease.release();
+  host.close();
+});

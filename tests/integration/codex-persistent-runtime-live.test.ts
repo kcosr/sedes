@@ -42,7 +42,7 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
   let runtimeId: string | undefined;
   let nativeThreadId: string | undefined;
   try {
-    const first = await service.attach(); sessions.push(first);
+    const first = await service.attach(configuration); sessions.push(first);
     const connection = new CodexSidecarRuntimeConnection(first.session.runtimeChannel);
     runtimeId = await connection.ensure(configuration);
     const authority = { scope, runtimeId, controllerId: String(first.status.controllerEpoch) };
@@ -108,7 +108,7 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
     database = new Database(filename);
     receipts = new CodexRuntimeReceiptStore(database);
     expect(receipts.pending(authority).find(value => value.operationId === operationId)?.state).toBe("reserved");
-    const second = await service.attach(); sessions.push(second);
+    const second = await service.attach(configuration); sessions.push(second);
     expect(second.status.serviceIncarnation).toBe(first.status.serviceIncarnation);
     expect(second.status.controllerEpoch).toBeGreaterThan(first.status.controllerEpoch);
     const reconnected = new CodexSidecarRuntimeConnection(second.session.runtimeChannel);

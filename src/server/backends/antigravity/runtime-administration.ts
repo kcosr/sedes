@@ -36,7 +36,7 @@ export async function recoverAntigravityAdministration(
       if (!retained && operations.every(supported => !supported)) return await run(undefined, undefined);
       if (!operations.every(Boolean)) throw new AntigravityError("antigravity_remote_unsupported");
       port = new AntigravityRemotePort({
-        configuration, existingOnly: true,
+        configuration, existingOnly: true, confirmNativeOwner: context.confirmNativeOwner,
         sidecarRuntime: {
           acquire: async () => { throw new AntigravityError("antigravity_recovery_launch_denied"); },
           acquireExisting: async () => ({ ...lease, release() {} }),
@@ -47,6 +47,7 @@ export async function recoverAntigravityAdministration(
       catch (error) {
         if (!(error instanceof AntigravityError && error.code === "antigravity_retained_runtime_missing" &&
             error.delivery === "not_sent")) throw error;
+        context.confirmNativeOwner?.(null, configuration.backendInstanceId);
       }
       if (inspection) {
         if (retained && inspection.runtimeId !== retained.runtimeId) throw incarnationChanged();

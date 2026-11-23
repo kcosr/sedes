@@ -499,6 +499,23 @@ native thread retained. It never stops the shared app-server. The outer carrier
 is local Unix, so this live canary does not qualify actual SSH networking;
 controlled OpenSSH integration tests cover that carrier separately.
 
+The live execution-settings test uses disposable OpenSSH and a packaged sidecar.
+It adds the first Claude backend during a streaming Luna-low turn and sends one
+Sonnet 5.5-low prompt through the new backend. It checks both responses and the
+original sidecar incarnation and controller epoch. This gate uses authenticated
+capacity and leaves the new native conversations in their provider stores.
+Run it with permission for both providers.
+
+```sh
+env -u NODE_ENV \
+  SEDES_LIVE_EXECUTION_SETTINGS=1 \
+  SEDES_REAL_CODEX_UDS_SOCKET=/canonical/absolute/path/to/codex.sock \
+  SEDES_REAL_CODEX_UDS_MODEL=gpt-5.6-luna \
+  SEDES_REAL_CLAUDE_EXECUTABLE=/absolute/path/to/claude \
+  SEDES_REAL_CLAUDE_CONFIG_DIRECTORY=/absolute/provider-home \
+  npm test -- tests/integration/outbound-production-composition.test.ts -t 'authenticated Luna streams'
+```
+
 The generated-image canary is a further opt-in inside the Codex live suite. It
 requires the approved shared UDS endpoint and exact Luna model, asks the live
 provider to generate one image, and exercises the normalized artifact path:

@@ -421,6 +421,8 @@ export const workspaceFilesRemoveLinkedWorktreeOperation = definition({
   requestSchema: z.strictObject({
     operationId: z.string().uuid(),
     rootHandle: rootHandleSchema,
+    linkedRootHandle: rootHandleSchema,
+    checkoutAuthority: z.strictObject({authorityRootId: z.string().min(1).max(128), authorityRevision: z.number().int().positive().safe()}),
     canonicalCheckoutPath: absolutePathSchema,
     policyRootPath: absolutePathSchema,
     canonicalGitDir: absolutePathSchema,

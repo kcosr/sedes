@@ -497,7 +497,7 @@ export class AntigravityHandle implements ConversationHandle {
     if (this.#pendingSubmit || this.#projection.snapshot.runState !== "idle") throw unsupported("Wait for the current Antigravity turn to settle.");
     await this.#configure();
     const prompt = await buildAntigravityPrompt(this.scope, input, this.driver.input.agentTools?.instructions(
-      this.driver.toolSource(this.binding.applicationThreadId, this.attached.workspace.summary.id)));
+      this.driver.toolSource(this.binding.applicationThreadId, this.attached.workspace.summary.id), this.attachment.toolPeerStamp));
     this.#pendingSubmit = input.applicationOperationId; this.#streaming = true;
     let outcome: AntigravityOutcome;
     try { outcome = await this.#request(input.applicationOperationId, { type: "prompt", prompt }); }
@@ -523,7 +523,7 @@ export class AntigravityHandle implements ConversationHandle {
     if (input.target.kind !== "conversation") throw unsupported("Antigravity steer targets the conversation.");
     this.#assertSelection(antigravityConfigValue(this.#setup, "model"), antigravityConfigValue(this.#setup, "thought_level"));
     const prompt = await buildAntigravityPrompt(this.scope, { ...input, source: { kind: "user" } },
-      this.driver.input.agentTools?.instructions(this.driver.toolSource(this.binding.applicationThreadId, this.attached.workspace.summary.id)), "steer");
+      this.driver.input.agentTools?.instructions(this.driver.toolSource(this.binding.applicationThreadId, this.attached.workspace.summary.id), this.attachment.toolPeerStamp), "steer");
     const outcome = await this.#request(input.applicationOperationId, { type: "steer", prompt });
     if (outcome.status === "failed") { await this.#ackReceipt(input.applicationOperationId).catch(() => undefined); throw outcomeError(outcome); }
     this.#streaming = true;

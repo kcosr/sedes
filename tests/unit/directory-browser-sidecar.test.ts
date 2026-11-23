@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -59,6 +59,26 @@ describe("directory_browser@1 sidecar", () => {
       });
     } finally {
       host.close();
+    }
+  });
+
+  it("discards an old attachment's cursor and outstanding enumeration on close", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "h-directory-browser-"));
+    const first = new DirectoryBrowserSidecarHost({ sessionNonce: "a".repeat(48) });
+    const next = new DirectoryBrowserSidecarHost({ sessionNonce: "b".repeat(48) });
+    try {
+      await Promise.all(["a", "b"].map(name => mkdir(path.join(root, name))));
+      const request = { rootPath: root, directoryPath: root, pageSize: 1 };
+      const cursor = (await first.handlers.listImmediate(request, context())).nextCursor;
+      const pending = first.handlers.listImmediate(request, context());
+      first.close();
+      await expect(pending).rejects.toThrow("directory_browser_cancelled");
+      await expect(next.handlers.listImmediate({ ...request, cursor }, context())).rejects.toThrow("directory_browser_cursor_invalid");
+      expect((await next.handlers.listImmediate(request, context())).entries).toHaveLength(1);
+    } finally {
+      first.close();
+      next.close();
+      await rm(root, { recursive: true, force: true });
     }
   });
 

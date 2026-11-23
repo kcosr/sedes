@@ -7,7 +7,7 @@ import { readFile } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { SidecarByteStream } from "../../../../internal/sidecar-protocol/contracts.js";
-import { registerControlV2Operations } from "../../../../internal/sidecar-protocol/control-v2.js";
+import { registerControlV3Operations } from "../../../../internal/sidecar-protocol/control-v3.js";
 import { LengthPrefixedSidecarFrameTransport } from "../../../../internal/sidecar-protocol/length-prefixed-frame-transport.js";
 import { SidecarOperationRegistry } from "../../../../internal/sidecar-protocol/operation-registry.js";
 import { SidecarProtocolPeer } from "../../../../internal/sidecar-protocol/protocol-peer.js";
@@ -184,7 +184,7 @@ async function runInternalWorker(
     },
   });
   registerClaudeRuntimeV4WorkerOperations(registry, host.handlers);
-  registerControlV2Operations(registry, {
+  registerControlV3Operations(registry, {
     buildId: __SEDES_CLAUDE_RUNTIME_WORKER_BUILD_ID__,
     artifactSha256,
     enabledSidecarCapabilities: [

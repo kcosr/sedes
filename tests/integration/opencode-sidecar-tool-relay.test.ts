@@ -41,8 +41,7 @@ async function fixture(presentation: "mcp" | "cli" = "mcp", openCodeTools = true
       authority: { scope: source.scope, executionEnvironmentId: "environment" },
       sources: { resolveCapabilityInExecutionEnvironment: resolve }, tools, openCodeTools,
     });
-    await carrier.start({ prepareSedesCapabilities: () => ({ endpoint: "unix:///fixture/agent-tools.sock",
-      executableDirectory: "/fixture/bin", inheritedPath: "/usr/bin" }) }); attachment.replace(carrier.hostPeer, ++epoch); attachment.ready(epoch);
+    await carrier.start(); attachment.replace(carrier.hostPeer, ++epoch); attachment.ready(epoch);
     return carrier;
   };
   await connect();

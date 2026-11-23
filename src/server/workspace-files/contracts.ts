@@ -48,6 +48,7 @@ export interface WorkspaceFileRootTarget {
 }
 
 export interface WorkspaceFileRootValidationTarget {
+  readonly rootId?: WorkspaceFileRootId;
   readonly workspaceId: string;
   readonly environmentId: string;
   readonly rootKind:
@@ -80,6 +81,8 @@ export interface WorkspaceFileLinkedWorktreeDiscoveryResult {
 
 export interface WorkspaceLinkedWorktreeRemovalTarget {
   readonly primaryRoot: WorkspaceFileRootTarget;
+  readonly linkedRoot: WorkspaceFileRootTarget;
+  readonly checkoutAuthority?: {readonly authorityRootId: string; readonly authorityRevision: number};
   readonly canonicalCheckoutPath: string;
   readonly canonicalGitDir: string;
   readonly identityToken: string;

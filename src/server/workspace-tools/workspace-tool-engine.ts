@@ -763,6 +763,7 @@ export class WorkspaceToolEngine {
       if (current?.isSymbolicLink() || current?.isDirectory())
         throw new WorkspaceToolError("workspace_tools_path_symlink_denied");
       await temporary.close();
+      this.#root.assertCurrent?.();
       await rename(temporaryPath, path.join(parentPath, name));
       remove = false;
       if (process.platform !== "win32") await parent.sync();

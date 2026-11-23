@@ -38,7 +38,7 @@ type WriteEntry = {
   readonly signal?: AbortSignal;
   readonly settlement: boolean;
   readonly onWriteDiagnostic?: SidecarFrameSendOptions["onWriteDiagnostic"];
-  readonly queuedAt?: number;
+  readonly queuedAt: number;
   readonly resolve: (value: { readonly disposition: "sent" }) => void;
   readonly reject: (error: Error) => void;
   abort?: () => void;
@@ -57,6 +57,10 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
   readonly #limits: SidecarProtocolLimits;
   readonly #inbound: BoundedAsyncQueue<EncodedFrame>;
   readonly #controlWrites: WriteEntry[] = [];
+  readonly #stagingWrites: WriteEntry[] = [];
+  readonly #interactiveWrites: WriteEntry[] = [];
+  #agedControlServed = false;
+  #agedInteractiveServed = false;
   readonly #operationWrites: WriteEntry[] = [];
   readonly #resolveClosed: (closure: SidecarTransportClosure) => void;
   readonly #rejectClosed: (error: Error) => void;
@@ -129,7 +133,7 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
     options: SidecarFrameSendOptions,
   ): Promise<{ readonly disposition: "sent" }> {
     if (
-      bytes.byteLength === 0 ||
+      bytes.byteLength === 0 || (options.lane === "staging" && (bytes.byteLength + HEADER_BYTES > 12_288 || options.settlement || this.#stagingWrites.length > 0)) ||
       bytes.byteLength > this.#limits.maximumFrameBytes
     ) {
       return Promise.reject(
@@ -149,7 +153,7 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
       );
     }
     const queuedCount =
-      this.#controlWrites.length +
+      this.#stagingWrites.length + this.#interactiveWrites.length + this.#controlWrites.length +
       this.#operationWrites.length +
       (this.#preparingWrite && !this.#preparingWrite.settled ? 1 : 0) +
       (this.#preparedWrite ? 1 : 0) +
@@ -177,7 +181,8 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
         lane: options.lane,
         ...(options.signal ? { signal: options.signal } : {}),
         settlement: options.settlement === true,
-        ...(options.onWriteDiagnostic ? { onWriteDiagnostic: options.onWriteDiagnostic, queuedAt: performance.now() } : {}),
+        queuedAt: performance.now(),
+        ...(options.onWriteDiagnostic ? { onWriteDiagnostic: options.onWriteDiagnostic } : {}),
         resolve,
         reject,
         state: "queued",
@@ -189,7 +194,7 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
         entry.signal.addEventListener("abort", entry.abort, { once: true });
       }
       this.#queuedWriteBytes += entry.payloadBytes;
-      (options.lane === "control"
+      (options.lane === "staging" ? this.#stagingWrites : options.lane === "interactive" ? this.#interactiveWrites : options.lane === "control"
         ? this.#controlWrites
         : this.#operationWrites
       ).push(entry);
@@ -208,7 +213,7 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
 
   diagnosticSnapshot(): Readonly<{ queuedWriteBytes: number; queuedWriteFrames: number; activeWriteBytes: number }> {
     return { queuedWriteBytes: this.#queuedWriteBytes,
-      queuedWriteFrames: this.#controlWrites.filter(entry => !entry.settled).length + this.#operationWrites.filter(entry => !entry.settled).length +
+      queuedWriteFrames: this.#stagingWrites.length + this.#interactiveWrites.length + this.#controlWrites.filter(entry => !entry.settled).length + this.#operationWrites.filter(entry => !entry.settled).length +
         (this.#preparingWrite && !this.#preparingWrite.settled ? 1 : 0) + (this.#preparedWrite ? 1 : 0),
       activeWriteBytes: this.#activeWrite?.payloadBytes ?? 0 };
   }
@@ -386,17 +391,34 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
     this.#pendingBytes -= length;
   }
 
+  #nextWrite():WriteEntry|undefined {
+    const staged = this.#stagingWrites[0];
+    const aged = staged !== undefined && performance.now() - staged.queuedAt >= 500;
+    if (this.#controlWrites.length && (!aged || !this.#agedControlServed)) {
+      this.#agedControlServed = aged;
+      return this.#controlWrites.shift();
+    }
+    if (this.#interactiveWrites.length && (!aged || !this.#agedInteractiveServed)) {
+      this.#agedInteractiveServed = aged;
+      return this.#interactiveWrites.shift();
+    }
+    if (aged) {
+      this.#agedControlServed = this.#agedInteractiveServed = false;
+      return this.#stagingWrites.shift();
+    }
+    return this.#preparedWrite ?? this.#operationWrites.shift() ?? this.#stagingWrites.shift();
+  }
+
   async #pumpWrites(): Promise<void> {
     if (this.#pumping) return;
     this.#pumping = true;
     try {
       while (this.#acceptingWrites) {
-        const entry =
-          this.#controlWrites.shift() ?? this.#preparedWrite ?? this.#operationWrites.shift();
+        const entry = this.#nextWrite();
         if (!entry) break;
         if (this.#preparedWrite === entry) this.#preparedWrite = undefined;
         if (entry.settled) continue;
-        if (!entry.framed && (this.#compression !== "zstd" || entry.lane === "control" ||
+        if (!entry.framed && (this.#compression !== "zstd" || entry.lane !== "operation" ||
             entry.settlement || entry.payloadBytes < SIDECAR_COMPRESSION_MINIMUM_BYTES)) {
           entry.framed = frameBytes(entry.payload!, 0, entry.payloadBytes);
           entry.payload = undefined;
@@ -472,6 +494,8 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
       if (this.#preparedWrite === entry) this.#preparedWrite = undefined;
       if (!removeQueued(this.#controlWrites, entry)) {
         removeQueued(this.#operationWrites, entry);
+        removeQueued(this.#stagingWrites, entry);
+        removeQueued(this.#interactiveWrites, entry);
       }
     }
     rejectWrite(
@@ -504,6 +528,8 @@ export class LengthPrefixedSidecarFrameTransport implements SidecarFrameTranspor
     }
     for (const entry of [
       ...this.#controlWrites.splice(0),
+      ...this.#stagingWrites.splice(0),
+      ...this.#interactiveWrites.splice(0),
       ...this.#operationWrites.splice(0),
       ...(this.#preparingWrite ? [this.#preparingWrite] : []),
       ...(this.#preparedWrite ? [this.#preparedWrite] : []),

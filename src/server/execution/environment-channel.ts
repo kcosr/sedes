@@ -556,6 +556,7 @@ export interface ExecutionEnvironmentChannelProvider {
       readonly artifact: ManagedWorkerArtifactRegistration;
       readonly workingDirectory: string;
       readonly identity: ManagedWorkerLaunchIdentity;
+      readonly assertLaunchAdmission?: () => void;
     },
     signal: AbortSignal,
   ) => Promise<SidecarByteStream>;
@@ -573,6 +574,7 @@ export interface ExecutionEnvironmentChannelProvider {
       readonly arguments: readonly string[];
       readonly environment: Readonly<Record<string, string>>;
       readonly cleanup: EnvironmentOwnedProcessCleanupPolicy;
+      readonly assertLaunchAdmission?: () => void;
     },
     signal: AbortSignal,
   ): Promise<EnvironmentOwnedProcessChannel>;

@@ -1,16 +1,18 @@
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
+import { attachFixturePolicy, installFixturePolicy } from "../helpers/execution-policy-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmod, copyFile, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SidecarFrameWriteError, SidecarOperationRegistry, SidecarProtocolPeer, controlHelloOperation, registerControlV2Operations,
+import { SidecarFrameWriteError, SidecarOperationRegistry, SidecarProtocolPeer, controlHelloOperation, registerControlV3Operations,
   type SidecarFrame, type SidecarFrameSendOptions, type SidecarFrameTransport, type SidecarTransportClosure } from "../../src/internal/sidecar-protocol/index.js";
 import { SidecarRuntimeChannel, type SidecarRuntimeLease } from "../../src/server/sidecar/runtime-channel.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import { AntigravityHost } from "../../src/server/backends/antigravity/host/native-host.js";
 import { AntigravityHostRegistry } from "../../src/server/backends/antigravity/host/host-registry.js";
-import { AntigravityRemotePort } from "../../src/server/backends/antigravity/sidecar/remote-port.js";
+import { AntigravityRemotePort, inspectRetainedAntigravityOwner } from "../../src/server/backends/antigravity/sidecar/remote-port.js";
 import { registerAntigravityHost } from "../../src/server/backends/antigravity/sidecar/register-host.js";
 import { AntigravityAcpConnection } from "../../src/server/backends/antigravity/acp-connection.js";
 import { antigravityHistorySchema, antigravityRuntimeCapability } from "../../src/server/backends/antigravity/sidecar/wire.js";
@@ -46,16 +48,17 @@ async function fixture() {
 }
 async function attachment(f: Awaited<ReturnType<typeof fixture>>, mode: "normal" | "recovery" = "normal") {
   const left = new Transport(), right = new Transport(); left.peer = right; right.peer = left;
-  const epoch = f.services.attach(serviceConfiguration, mode);
+  const epoch = attachFixturePolicy(f.services, serviceConfiguration, mode, { roots: [], capabilities: [],
+    backends: [{ id: f.configuration.backendInstanceId, kind: "antigravity", generation: 1, launchDigest: runtimeLaunchDigest.antigravity(f.configuration), targets: [{id:"target", generation:1}] }] });
   const leftRegistry = new SidecarOperationRegistry(), rightRegistry = new SidecarOperationRegistry();
   const sedes = new SidecarProtocolPeer({ role: "sedes", transport: left, sessionNonce: "n".repeat(48), registry: leftRegistry });
   const sidecar = new SidecarProtocolPeer({ role: "sidecar", transport: right, sessionNonce: "n".repeat(48), registry: rightRegistry });
   const channel = new SidecarRuntimeChannel(sedes, leftRegistry), hostChannel = new SidecarRuntimeChannel(sidecar, rightRegistry);
-  const detach = registerAntigravityHost({ registry: rightRegistry, channel: hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: epoch });
+  const detach = registerAntigravityHost({ registry: rightRegistry, channel: hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: epoch, getExecutionPolicy: () => f.services.executionPolicy(epoch), isRecoveryController: () => f.services.recoveryController });
   const capabilities = rightRegistry.capabilities().map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion }));
-  registerControlV2Operations(rightRegistry, { buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: leftRegistry.capabilities() });
+  registerControlV3Operations(rightRegistry, { buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: leftRegistry.capabilities() });
   sedes.start(); sidecar.start();
-  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), authorizedSidecarCapabilities: capabilities, offeredSedesCapabilities: leftRegistry.capabilities() });
+  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), supportedSidecarCapabilities: capabilities, offeredSedesCapabilities: leftRegistry.capabilities() });
   const release = vi.fn();
   const lease: SidecarRuntimeLease = { channel, controllerEpoch: epoch, serviceIncarnation: f.services.serviceIncarnation, closed: left.closed, release };
   let disconnected = false;
@@ -68,6 +71,18 @@ function proxy(f: Awaited<ReturnType<typeof fixture>>, getLease: () => SidecarRu
   const port = new AntigravityRemotePort({ configuration: f.configuration, sidecarRuntime: runtime }); cleanup.push(() => port.close()); return { port, runtime };
 }
 describe("Antigravity persistent sidecar", () => {
+  it("inspects a retained owner by its original ID without its saved definition or launch authority", async () => {
+    const f = await fixture(), initial = await attachment(f);
+    await proxy(f, () => initial.lease).port.create({ cwd: f.cwd, operationId: "original" });
+    await initial.disconnect();
+    const recovery = await attachment(f, "recovery");
+    const signal = AbortSignal.timeout(5000);
+    await expect(inspectRetainedAntigravityOwner(recovery.lease, "other", signal)).resolves.toBe(false);
+    await expect(inspectRetainedAntigravityOwner(recovery.lease, f.configuration.backendInstanceId, signal)).resolves.toBe(true);
+    expect(f.launched).toHaveBeenCalledOnce();
+    expect(f.createHost).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { outcome: "selected", concurrent: false }, { outcome: "selected", concurrent: true },
     { outcome: "selected", concurrent: "published" }, { outcome: "cancelled", concurrent: false },
@@ -108,6 +123,18 @@ describe("Antigravity persistent sidecar", () => {
     expect(resumed.runtime.acquire).toHaveBeenCalledTimes(outcome === "selected" ? 1 : 0);
     expect(f.launched).toHaveBeenCalledOnce(); expect(f.createHost).toHaveBeenCalledOnce();
   });
+  it("returns retained create receipts after backend withdrawal without launching a second peer", async () => {
+    const f = await fixture(), carrier = await attachment(f), { port } = proxy(f, () => carrier.lease);
+    const request = { cwd: f.cwd, operationId: "original" };
+    const identity = await port.create(request);
+    installFixturePolicy(f.services, carrier.epoch, serviceConfiguration, { roots: [], capabilities: [], backends: [] });
+    await expect(port.create(request)).resolves.toEqual(identity);
+    await port.acknowledgeCreation({ operationId: request.operationId, ...identity });
+    await expect(port.create(request)).resolves.toEqual(identity);
+    await expect(port.create({ ...request, operationId: "new" })).rejects.toMatchObject({ delivery: "not_sent" });
+    expect(f.launched).toHaveBeenCalledOnce();
+  });
+
   it("uses one retained fallback when normal reconnect encounters configuration drift", async () => {
     const f = await fixture(), first = await attachment(f); let current = first.lease;
     const { port, runtime } = proxy(f, () => current);
@@ -156,7 +183,8 @@ describe("Antigravity persistent sidecar", () => {
   });
   it("rejects an unchanged response without a caller revision", async () => {
     const f = await fixture(), connected = await attachment(f), { port } = proxy(f, () => connected.lease);
-    const host = await f.hosts.ensure(f.configuration, connected.epoch);
+    await port.connect();
+    const host = (await f.hosts.lookup(f.configuration, connected.epoch))!;
     vi.spyOn(host, "readHistory").mockResolvedValue(null);
     await expect(port.readHistory({ sessionId: "native-session", cwd: f.cwd }))
       .rejects.toMatchObject({ code: "antigravity_history_revision_unproven" });
@@ -169,10 +197,11 @@ describe("Antigravity persistent sidecar", () => {
   });
   it("publishes normalized provider ownership through service status", async () => {
     const f = await fixture(), connected = await attachment(f);
-    const host = await f.hosts.ensure(f.configuration, connected.epoch);
+    const { port } = proxy(f, () => connected.lease);
+    await port.connect();
+    const host = (await f.hosts.lookup(f.configuration, connected.epoch))!;
     const resource = () => f.services.status().resources.find(value => value.resourceId === host.runtimeId);
     expect(resource()).toEqual({ resourceId: host.runtimeId, kind: "provider", state: "idle", revision: host.snapshot().revision, blockers: [] });
-    const { port } = proxy(f, () => connected.lease);
     await port.create({ cwd: f.cwd, operationId: "create" });
     const retained = host.snapshot();
     expect(retained.retainedSessions).toHaveLength(1);
@@ -224,6 +253,14 @@ describe("Antigravity persistent sidecar", () => {
     await resumed.port.request({ handleId: original.handleId, operationId: "send", command: { type: "prompt", prompt: [{ type: "text", text: "hello" }] } });
     await vi.waitFor(async () => expect(await resumed.port.outcome({ handleId: original.handleId, operationId: "send" })).toMatchObject({ status: "completed" }));
     expect(resumed.runtime.acquire).toHaveBeenCalledOnce(); expect(recovery.release).toHaveBeenCalledOnce(); expect(f.createHost).toHaveBeenCalledOnce();
+  });
+  it("distinguishes a changed startup contract from exact retained lookup", async () => {
+    const f = await fixture(), connected = await attachment(f);
+    const host = await f.hosts.ensure(f.configuration, connected.epoch);
+    const changed = { ...f.configuration, startupEnvironmentVariables: { NOTE: { kind: "literal" as const, value: "changed" } } };
+    await expect(f.hosts.ensure(changed, connected.epoch)).rejects.toMatchObject({ code: "antigravity_configuration_restart_required" });
+    await expect(f.hosts.lookup(changed, connected.epoch)).resolves.toBe(host);
+    expect(f.createHost).toHaveBeenCalledOnce();
   });
   it("denies wrong scope, unavailable runtime capability, and stale controllers before execution", async () => {
     const f = await fixture(), connected = await attachment(f);

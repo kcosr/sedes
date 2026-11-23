@@ -94,6 +94,8 @@ import { TaskRepository } from "../../src/server/db/repositories/task-repository
 import { ThreadLineageRepository } from "../../src/server/db/repositories/thread-lineage-repository.js";
 import { OverlayRepository } from "../support/schema9/overlay-repository.js";
 import { AutomationRepository } from "../../src/server/db/repositories/automation-repository.js";
+import { executionPolicyRoots, writeExecutionPolicy } from "../../src/server/configuration-admin/configuration-execution-policy.js";
+import { convertLegacyConfiguration } from "../../src/server/config/legacy-configuration-import.js";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
 import {
   applyBackendNormalizationMigration,
@@ -691,6 +693,8 @@ async function fixture(
     appliedAt: Date.now(),
   });
   applyDatabaseMigrations(database, backendNormalizedMigrations);
+  const {document} = convertLegacyConfiguration({configuration, localWorkspaceRoots: [root], sourceLabel: "http-fixture"});
+  database.transaction(() => writeExecutionPolicy(database, owner, legacyEnvironment.id, document))();
   const foreignPrincipalId = randomUUID();
   database
     .prepare(
@@ -748,6 +752,7 @@ async function fixture(
     environmentId: legacyEnvironment.id,
     scope: owner,
     allowedRoots: [root],
+    readWorkspaceRoots: () => executionPolicyRoots(database, owner, legacyEnvironment.id),
     workspaceTrusted: () => true,
     configurationRevision: 0,
     activeConfigurationRevision: () => 0,

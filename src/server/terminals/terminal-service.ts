@@ -191,6 +191,12 @@ export class TerminalService {
           true,
         );
       }
+      const assertWorkspaceCurrent = () => {
+        if (!this.#inventory.workspaceAuthorityIsCurrent(scope, workspace)) {
+          throw new TerminalServiceError("environment_unavailable", "The terminal workspace root changed. Revalidate the workspace.", true);
+        }
+      };
+      if (workspace.authorityRootId !== undefined) assertWorkspaceCurrent();
       const provider = this.#providers.get(thread.environmentId);
       if (
         !provider ||
@@ -255,6 +261,10 @@ export class TerminalService {
           terminalId: starting.terminalId,
           incarnationId,
           initialCwd: starting.initialCwd,
+          ...(workspace.authorityRootId && {
+            workspaceAuthority: { authorityRootId: workspace.authorityRootId, authorityRevision: workspace.environmentConfigurationRevision },
+            assertWorkspaceCurrent,
+          }),
           ...(starting.shellProfile ? { shellProfile: starting.shellProfile } : {}),
           rows: starting.rows,
           columns: starting.columns,

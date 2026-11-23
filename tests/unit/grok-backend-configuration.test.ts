@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { validateConfigurationDocument } from "../../src/server/configuration-admin/configuration-validation.js";
 import { parseGrokBackendConfiguration } from "../../src/server/backends/grok/grok-backend-configuration.js";
 import type { BackendModelPolicy } from "../../src/server/backends/model-policy.js";
 
@@ -143,6 +144,20 @@ describe("Grok backend configuration scaffold", () => {
         kind: "local" | "ssh";
       }>
     )[0]!.kind = "ssh";
+    const { protocolRelease: _release, ...backend } = ssh.backend;
+    const remote = {
+      executionEnvironments: [{ id: localId, kind: "ssh", label: "Remote", hostAlias: "remote", workspaceRoots: ["/work"],
+        connectionCompression: true, operations: {kind: "sidecar", enabledCapabilities: ["workspace_files"]} }],
+      backends: [{...backend, label: "Grok"}],
+      targets: ssh.connections.map(target => ({...target, label: "Remote Grok"})),
+      defaultTargetId: null, webSearch: null,
+    };
+    expect(() => validateConfigurationDocument(remote)).toThrow("Grok requires a local environment");
+    const disabled = {...remote, backends: remote.backends.map(item => ({...item, enabled: false})),
+      targets: remote.targets.map(item => ({...item, enabled: false}))};
+    expect(validateConfigurationDocument(disabled).targets).toHaveLength(1);
+    expect(() => validateConfigurationDocument({...disabled, targets: remote.targets})).toThrow("Grok requires a local environment");
+    expect(() => validateConfigurationDocument({...disabled, backends: remote.backends})).toThrow("Grok requires a local environment");
     expect(() => parseGrokBackendConfiguration(ssh)).toThrow(
       "grok_execution_environment_invalid",
     );

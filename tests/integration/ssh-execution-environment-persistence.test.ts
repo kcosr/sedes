@@ -1,3 +1,4 @@
+import { executionPolicyRoots } from "../../src/server/configuration-admin/configuration-execution-policy.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { configurationDocumentSchema, type ConfigurationDocument, type ConfigurationEnvironment } from "../../src/shared/protocol/configuration-admin.js";
@@ -108,7 +109,7 @@ describe("SSH execution environment persistence", () => {
       const changed = fixture.inventory.getLocalEnvironment(fixture.scope);
       expect(changed.configurationFingerprint).not.toBe(first.configurationFingerprint);
       expect(changed).toMatchObject({ configurationRevision: first.configurationRevision + 1, revision: first.revision + 1,
-        availability: "unavailable", diagnosticCode: "configuration_apply_pending" });
+        availability: "available", diagnosticCode: null });
       fixture.save(localDocument(["/workspace/b"]));
       expect(fixture.inventory.getLocalEnvironment(fixture.scope)).toEqual(changed);
     } finally { fixture.database.close(); }
@@ -132,7 +133,7 @@ describe("SSH execution environment persistence", () => {
       fixture.inventory.updateEnvironmentAvailability(fixture.scope, sshEnvironmentId, { available: true, now: 350 });
       fixture.save(remoteDocument({ label: "Server", workspaceRoots: ["/workspace/remote"] }));
       const reconfigured = fixture.inventory.getEnvironment(fixture.scope, sshEnvironmentId);
-      expect(reconfigured).toMatchObject({ availability: "unavailable", diagnosticCode: "configuration_apply_pending", revision: 3,
+      expect(reconfigured).toMatchObject({ availability: "available", diagnosticCode: null, revision: 3,
         configurationRevision: 1, operationsConfigurationRevision: 0, operationsConfigurationFingerprint: relabeled.operationsConfigurationFingerprint });
       expect(reconfigured.configurationFingerprint).not.toBe(relabeled.configurationFingerprint);
       for (const privateField of ["hostAlias", "workspaceRoots", "operations"]) expect(reconfigured).not.toHaveProperty(privateField);
@@ -143,33 +144,34 @@ describe("SSH execution environment persistence", () => {
     } finally { fixture.database.close(); }
   });
 
-  it("advances operations authority and requires apply when sidecar grants change", () => {
+  it("advances operations authority while keeping the host and workspace available", () => {
     const fixture = migratedFixture();
     try {
       fixture.save(remoteDocument());
       fixture.inventory.updateEnvironmentAvailability(fixture.scope, sshEnvironmentId, { available: true, now: 250 });
       const before = fixture.inventory.getEnvironment(fixture.scope, sshEnvironmentId);
+      const grant = executionPolicyRoots(fixture.database, fixture.scope, sshEnvironmentId)[0]!;
       const workspace = fixture.inventory.upsertWorkspace(fixture.scope, {
         environmentId: sshEnvironmentId, canonicalPath: "/home/operator/projects/sedes", displayName: "Sedes", project: { kind: "new", name: "Sedes" }, available: true,
-        trustState: "untrusted", environmentConfigurationRevision: before.configurationRevision, now: 275,
+        trustState: "untrusted", authorityRootId: grant.id, environmentConfigurationRevision: grant.generation, now: 275,
       });
       const operations: SshEnvironment["operations"] = { kind: "sidecar", enabledCapabilities: ["agent_tools_cli"] };
       fixture.save(remoteDocument({ operations }));
       const after = fixture.inventory.getEnvironment(fixture.scope, sshEnvironmentId);
-      expect(after).toMatchObject({ availability: "unavailable", diagnosticCode: "configuration_apply_pending", revision: before.revision + 1,
+      expect(after).toMatchObject({ availability: "available", diagnosticCode: null, revision: before.revision + 1,
         configurationRevision: before.configurationRevision, configurationFingerprint: before.configurationFingerprint,
         operationsConfigurationRevision: before.operationsConfigurationRevision + 1 });
       expect(after.operationsConfigurationFingerprint).not.toBe(before.operationsConfigurationFingerprint);
-      expect(fixture.inventory.getWorkspace(fixture.scope, workspace.id)).toMatchObject({ environmentConfigurationRevision: before.configurationRevision, revision: workspace.revision });
+      expect(fixture.inventory.getWorkspace(fixture.scope, workspace.id)).toMatchObject({ authorityRootId: grant.id, environmentConfigurationRevision: grant.generation, revision: workspace.revision });
       fixture.save(remoteDocument({ operations }));
       expect(fixture.inventory.getEnvironment(fixture.scope, sshEnvironmentId)).toEqual(after);
       fixture.save(remoteDocument({ operations: { kind: "sidecar", enabledCapabilities: ["workspace_files", "workspace_tools", "workspace_context", "composer_attachments", "agent_tools_cli"] } }));
       const allEnabled = fixture.inventory.getEnvironment(fixture.scope, sshEnvironmentId);
-      expect(allEnabled).toMatchObject({ availability: "unavailable", diagnosticCode: "configuration_apply_pending", revision: after.revision + 1,
+      expect(allEnabled).toMatchObject({ availability: "available", diagnosticCode: null, revision: after.revision + 1,
         configurationRevision: after.configurationRevision, configurationFingerprint: after.configurationFingerprint,
         operationsConfigurationRevision: after.operationsConfigurationRevision + 1 });
       expect(allEnabled.operationsConfigurationFingerprint).not.toBe(after.operationsConfigurationFingerprint);
-      expect(fixture.inventory.getWorkspace(fixture.scope, workspace.id)).toMatchObject({ environmentConfigurationRevision: before.configurationRevision, revision: workspace.revision });
+      expect(fixture.inventory.getWorkspace(fixture.scope, workspace.id)).toMatchObject({ authorityRootId: grant.id, environmentConfigurationRevision: grant.generation, revision: workspace.revision });
     } finally { fixture.database.close(); }
   });
 
@@ -203,7 +205,7 @@ describe("SSH execution environment persistence", () => {
       fixture.save(remoteDocument());
       expect(fixture.inventory.listEnvironments(fixture.scope)).toContainEqual(expect.objectContaining({
         id: sshEnvironmentId, label: "srv", availability: "unavailable", diagnosticCode: "configuration_apply_pending",
-        configurationRevision: before.configurationRevision,
+        configurationRevision: before.configurationRevision + 1,
       }));
       expect(fixture.database.pragma("foreign_key_check")).toEqual([]);
     } finally { fixture.database.close(); }
@@ -266,6 +268,10 @@ describe("SSH execution environment persistence", () => {
       const otherPrincipal = { ...fixture.scope, principalId: randomUUID() };
       fixture.database.prepare("INSERT INTO principals(tenant_id, id, kind, created_at) VALUES (?, ?, 'local_human', 0)")
         .run(otherPrincipal.tenantId, otherPrincipal.principalId);
+      expect(() => fixture.administration!.repository.save(otherPrincipal, {
+        mutationId: randomUUID(), expectedRevision: 0, configuration: remoteDocument(),
+      }, document => fixture.administration!.projection.project(otherPrincipal, document))).toThrow(expect.objectContaining({code: "not_found"}));
+      expect(fixture.administration!.repository.get(otherPrincipal).revision).toBe(0);
       expect(fixture.inventory.listEnvironments(otherPrincipal)).toEqual([]);
       expect(() => fixture.inventory.getEnvironment(otherPrincipal, localEnvironmentId)).toThrow("not found");
       expect(fixture.database.pragma("foreign_key_check")).toEqual([]);

@@ -251,6 +251,36 @@ describe("sidecar agent-tool relay", () => {
     });
   });
 
+  it("binds reverse calls to the source backend and aborts outstanding tool work when its route is withdrawn", async () => {
+    const route = new AbortController();
+    const release = vi.fn();
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const tools = fixture({
+      invoke: async ({signal}) => {
+        started();
+        return await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), {once:true}));
+      },
+    }).tools;
+    const registry = new SidecarOperationRegistry();
+    registerSidecarAgentToolRelayOperations(registry, {
+      tools, authority:{scope, executionEnvironmentId: environmentId},
+      sources:{resolveCapabilityInExecutionEnvironment: () => ({source, presentation:"cli", backendInstanceId:"incumbent"})},
+      authorizeSource: (_backend, binding) => binding.capabilityGeneration === 3 && binding.backendGeneration === 4,
+      retainRoute: () => ({signal:route.signal,release}),
+    });
+    const invoke = registry.resolve(agentToolsInvokeOperation)!.handler;
+    const binding = { backendInstanceId:"incumbent", capabilityGeneration:3, backendGeneration:4 };
+    const request = {sourceCapability, toolId:"agent.context", schemaVersion:5, requestId:"invocation1", input:{}};
+    await expect(invoke({...request,routeBinding:{...binding,backendInstanceId:"other"}},context()))
+      .resolves.toMatchObject({outcome:"error",error:{code:"permission_denied"}});
+    const running = invoke({...request,routeBinding:binding},context());
+    await ready;
+    route.abort();
+    await expect(running).resolves.toMatchObject({outcome:"error",error:{code:"cancelled"}});
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("uses adapter mcp for every operation when the reference names MCP", async () => {
     const current = fixture({}, "mcp");
     await current.registry

@@ -44,10 +44,10 @@ describe("execution host environment variables", () => {
   it("resolves remote refs only through the admitted host and releases failed leases", async () => {
     const overrides = { TOKEN: { kind: "secret" as const, source: { kind: "environment" as const, name: "PROVIDER_TOKEN" } } };
     const release = vi.fn();
-    const call = vi.fn().mockResolvedValue({ values: { TOKEN: "remote-value" } });
-    const resolver = createThreadEnvironmentResolver({ executionEnvironmentVariables: (id: string) => { expect(id).toBe("thread-one"); return overrides; }, environmentOperations: { environmentKind: "ssh" }, sidecarRuntime: { acquire: async () => ({ release, channel: { supportsOperation: () => true, call } }) } } as unknown as BackendModuleRuntimeContext);
+    const call=vi.fn(async (definition)=>definition.capabilityId==="control"?{ticket:"test-ticket"}:{values:{TOKEN:"remote-value"}});
+    const resolver = createThreadEnvironmentResolver({ instance:{id:"backend"},executionEnvironmentVariables: (id: string) => { expect(id).toBe("thread-one"); return overrides; }, environmentOperations: { environmentKind: "ssh" }, sidecarRuntime: { acquire: async () => ({ release, channel: { supportsOperation: () => true, call } }) } } as unknown as BackendModuleRuntimeContext);
     expect(await resolver("thread-one")).toEqual({ TOKEN: "remote-value" });
-    expect(call).toHaveBeenCalledWith(environmentVariablesResolveOperation, { overrides });
+    expect(call).toHaveBeenCalledWith(environmentVariablesResolveOperation, { backendInstanceId:"backend",threadId:"thread-one",ticket:"test-ticket",overrides });
     expect(release).toHaveBeenCalledOnce();
     call.mockRejectedValueOnce(new Error("host-disconnected"));
     await expect(resolver("thread-one")).rejects.toThrow("host-disconnected");

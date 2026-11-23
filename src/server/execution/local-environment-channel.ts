@@ -408,6 +408,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
       readonly artifact: ManagedWorkerArtifactRegistration;
       readonly workingDirectory: string;
       readonly identity: ManagedWorkerLaunchIdentity;
+      readonly assertLaunchAdmission?: () => void;
     },
     signal: AbortSignal,
   ): Promise<SidecarByteStream> {
@@ -418,6 +419,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
       artifact: input.artifact,
       workingDirectory: input.workingDirectory,
       identity: input.identity,
+      assertLaunchAdmission: input.assertLaunchAdmission,
       signal,
     });
   }
@@ -484,6 +486,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
       readonly arguments: readonly string[];
       readonly environment: Readonly<Record<string, string>>;
       readonly cleanup: EnvironmentOwnedProcessCleanupPolicy;
+      readonly assertLaunchAdmission?: () => void;
     },
     signal: AbortSignal,
   ): Promise<EnvironmentOwnedProcessChannel> {
@@ -497,6 +500,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
       readonly arguments: readonly string[];
       readonly environment: Readonly<Record<string, string>>;
       readonly cleanup: EnvironmentOwnedProcessCleanupPolicy;
+      readonly assertLaunchAdmission?: () => void;
     },
     signal: AbortSignal,
   ): Promise<EnvironmentOwnedProcessChannel> {
@@ -515,6 +519,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
       Awaited<ReturnType<typeof spawnWindowsOwnedProcess>> | undefined;
     if (process.platform === "win32") {
       windowsOwnership = await spawnWindowsOwnedProcess({
+        assertLaunchAdmission: input.assertLaunchAdmission,
         executable: input.prepared.executable.canonicalPath,
         arguments: input.arguments,
         cwd: input.prepared.workingDirectory.canonicalPath,
@@ -523,11 +528,13 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
       });
       child = windowsOwnership.child;
     } else {
+      input.assertLaunchAdmission?.();
       const intent = this.#launchRecorder ? await this.#launchRecorder.armOwnedProcess() : undefined;
       if (intent) {
         this.#assertScope(scope);
         signal.throwIfAborted();
       }
+      input.assertLaunchAdmission?.();
       child = spawn(
         input.prepared.executable.canonicalPath,
         [...input.arguments],

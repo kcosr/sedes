@@ -18,7 +18,14 @@ export interface ExecutionDirectoryBrowseRequest extends ParsedDirectoryBrowseRe
 export interface ValidatedWorkspace {
   readonly summary: WorkspaceSummary;
   readonly canonicalPath: string;
+  /** Scoped root grant for policy-managed environments. */
+  readonly authorityRootId?: string;
   readonly authorityRevision: number;
+}
+
+export interface ExecutionWorkspaceValidationOptions {
+  readonly binding?: Pick<ValidatedWorkspace, "authorityRootId" | "authorityRevision">;
+  readonly signal?: AbortSignal;
 }
 
 /** Definitive operator-policy denial, distinct from unavailable validation. */
@@ -33,6 +40,7 @@ export interface ExecutionEnvironmentLease {
   readonly scope: ExecutionScope;
   readonly environment: EnvironmentSummary;
   readonly workspace: ValidatedWorkspace;
+  readonly assertCurrent?: () => void;
   release(): Promise<void>;
 }
 
@@ -89,10 +97,12 @@ export interface ExecutionEnvironmentProvider {
     scope: ExecutionScope,
     environmentId: string,
     candidatePath: string,
+    options?: ExecutionWorkspaceValidationOptions,
   ): Promise<ValidatedWorkspace>;
   revalidateWorkspace(
     scope: ExecutionScope,
     workspace: ValidatedWorkspace,
+    signal?: AbortSignal,
   ): Promise<ValidatedWorkspace>;
   acquireLease(
     scope: ExecutionScope,

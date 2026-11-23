@@ -65,6 +65,7 @@ function fixture(overrides?: {
   readonly discoverWorkspace?: ReturnType<typeof vi.fn>;
   readonly removed?: { readonly location: boolean; readonly project: boolean };
   readonly resolveProject?: ReturnType<typeof vi.fn>;
+  readonly memberEnvironmentIds?: readonly string[];
 }) {
   const getEnvironment =
     overrides?.getEnvironment ??
@@ -86,6 +87,7 @@ function fixture(overrides?: {
     overrides?.validateWorkspace ??
     vi.fn(async () => ({
       canonicalPath: "/srv/projects/sedes",
+      authorityRootId: "projects-root",
       authorityRevision: 11,
       summary: {
         id: "provider-private-workspace-id",
@@ -125,6 +127,7 @@ function fixture(overrides?: {
   const getProject = vi.fn(() => ({
     id: "project-a",
     removedAt: overrides?.removed?.project ? 100 : null,
+    locations: (overrides?.memberEnvironmentIds ?? ["environment-a"]).map(environmentId => ({environmentId, removedAt:null})),
   }));
   const handoffAuthoritativeReplacement = vi.fn();
   const discoverWorkspace =
@@ -179,6 +182,7 @@ describe("WorkspaceApplicationService", () => {
   it("validates and records an existing environment path without exposing the native path", async () => {
     const current = fixture();
 
+    const signal = new AbortController().signal;
     await expect(
       current.service.openWorkspace(
         scope,
@@ -187,7 +191,7 @@ describe("WorkspaceApplicationService", () => {
           path: "/srv/projects/sedes",
           project: { kind: "existing", projectId: "project-a" },
         },
-        new AbortController().signal,
+        signal,
       ),
     ).resolves.toEqual({
       workspaceId: "workspace-a",
@@ -201,6 +205,7 @@ describe("WorkspaceApplicationService", () => {
       scope,
       "environment-a",
       "/srv/projects/sedes",
+      { signal },
     );
     expect(current.upsertWorkspace).toHaveBeenCalledWith(scope, {
       project: { kind: "existing", projectId: "project-a" },
@@ -210,6 +215,8 @@ describe("WorkspaceApplicationService", () => {
       displayName: "sedes",
       available: true,
       trustState: "trusted",
+      authorityRootId: "projects-root",
+      rebindAuthority: true,
       environmentConfigurationRevision: 11,
       now: 123,
     });
@@ -391,6 +398,16 @@ describe("WorkspaceApplicationService", () => {
     )).rejects.toMatchObject({ code: "permission_denied" });
     expect(current.validateWorkspace).toHaveBeenCalledOnce();
     expect(current.upsertWorkspace).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks an existing location's project before an omitted-project open can reuse it", async () => {
+    const current = fixture({
+      memberEnvironmentIds: ["environment-a", "environment-b"],
+      upsertWorkspace: vi.fn((_scope, input) => { input.requireExistingProject("project-hidden"); throw new Error("should not write"); }),
+    });
+    await expect(current.service.openWorkspaceForAgent(scope, {environmentId:"environment-a", path:"/srv/projects/sedes"}, agentAuthority))
+      .rejects.toMatchObject({code:"permission_denied"});
+    expect(current.handoffAuthoritativeReplacement).not.toHaveBeenCalled();
   });
 
   it("authorizes a named project against its current membership and binds the commit to it", async () => {
@@ -583,8 +600,9 @@ describe("WorkspaceApplicationService", () => {
 
   it("restores a known location under its own identity and project", async () => {
     const current = fixture({ removed: { location: true, project: false } });
+    const signal = new AbortController().signal;
     await expect(
-      current.service.restoreLocation(scope, "workspace-a"),
+      current.service.restoreLocation(scope, "workspace-a", { signal }),
     ).resolves.toEqual({
       workspaceId: "workspace-a",
       environmentId: "environment-a",
@@ -596,6 +614,7 @@ describe("WorkspaceApplicationService", () => {
       scope,
       "environment-a",
       "/srv/projects/sedes",
+      { signal },
     );
     expect(current.upsertWorkspace).toHaveBeenCalledWith(scope, {
       id: "workspace-a",
@@ -606,6 +625,8 @@ describe("WorkspaceApplicationService", () => {
       displayName: "sedes",
       available: true,
       trustState: "trusted",
+      authorityRootId: "projects-root",
+      rebindAuthority: true,
       environmentConfigurationRevision: 11,
       now: 123,
     });

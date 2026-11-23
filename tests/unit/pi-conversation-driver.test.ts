@@ -6138,7 +6138,7 @@ describe("Pi conversation backend driver", () => {
         };
       },
     };
-    const modelPolicy = compileBackendModelPolicy(
+    const restricted = compileBackendModelPolicy(
       {
         type: "allowlist",
         allowed: [
@@ -6151,6 +6151,10 @@ describe("Pi conversation backend driver", () => {
       },
       "provider_model_effort",
     );
+    let visible = true;
+    const modelPolicy: CompiledBackendModelPolicy = { ...restricted,
+      filterReasoningEfforts: (model, efforts) => visible ? restricted.filterReasoningEfforts(model, efforts) : [],
+    };
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
@@ -6175,6 +6179,11 @@ describe("Pi conversation backend driver", () => {
         },
       ],
     });
+
+    visible = false;
+    expect((await driver.catalog({ scope, workspace: fixture.workspace })).models).toEqual([]);
+    visible = true;
+    expect((await driver.catalog({ scope, workspace: fixture.workspace })).models).toHaveLength(1);
 
     const created = await driver.create({
       scope,

@@ -64,6 +64,8 @@ export class CodexSharedClientFacade {
   readonly persistentSessions: CodexPersistentSessionAccess | undefined;
   readonly residency: RetainedRuntimeLifecycle | undefined;
   readonly #current: () => CodexReadyClientGeneration | undefined;
+  /** A remote supervisor exposes its current attempt without launching a new one. */
+  readonly pendingInitialization: (() => Promise<void> | undefined) | undefined;
   readonly #latestGeneration: () => number;
   readonly #retireGeneration: (
     generation: number,
@@ -81,6 +83,7 @@ export class CodexSharedClientFacade {
     readonly residency?: RetainedRuntimeLifecycle;
     readonly persistentSessions?: CodexPersistentSessionAccess;
     readonly current: () => CodexReadyClientGeneration | undefined;
+    readonly pendingInitialization?: () => Promise<void> | undefined;
     readonly latestGeneration: () => number;
     readonly retireGeneration: (
       generation: number,
@@ -91,6 +94,7 @@ export class CodexSharedClientFacade {
     this.persistentSessions = input.persistentSessions;
     this.residency = input.residency;
     this.#current = input.current;
+    this.pendingInitialization = input.pendingInitialization;
     this.#latestGeneration = input.latestGeneration;
     this.#retireGeneration = input.retireGeneration;
     this.#onListenerError = input.onListenerError ?? (() => undefined);

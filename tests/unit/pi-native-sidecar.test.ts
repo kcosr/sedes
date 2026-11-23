@@ -1,3 +1,5 @@
+import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
+import { attachFixturePolicy, installFixturePolicy } from "../helpers/execution-policy-fixture.js";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import { createPiNativeSessionProcess } from "../../src/server/backends/pi/native/rpc/pi-native-launch.js";
 import { assessPiRuntimeVersion } from "../../src/server/backends/pi/native/runtime-release.js";
@@ -7,7 +9,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { SidecarFrameWriteError, SidecarOperationRegistry, SidecarProtocolPeer, controlHelloOperation,
-  registerControlV2Operations, type SidecarFrame, type SidecarFrameSendOptions, type SidecarFrameTransport,
+  registerControlV3Operations, type SidecarFrame, type SidecarFrameSendOptions, type SidecarFrameTransport,
   type SidecarTransportClosure } from "../../src/internal/sidecar-protocol/index.js";
 import { SidecarRuntimeChannel, type SidecarRuntimeLease, type SidecarRuntimeProvider } from "../../src/server/sidecar/runtime-channel.js";
 import { sidecarRuntimeBodySchema } from "../../src/server/sidecar/runtime-body-channel.js";
@@ -71,16 +73,19 @@ async function fixture(options: { maximumEventBytes?: number; maximumOperations?
 
 async function attachment(f: Awaited<ReturnType<typeof fixture>>, mode: "normal" | "recovery" = "normal") {
   const left = new Transport(), right = new Transport(); left.peer = right; right.peer = left;
-  const epoch = f.services.attach(serviceConfiguration, mode);
+  const epoch = attachFixturePolicy(f.services, serviceConfiguration, mode, { roots: [], capabilities: [],
+    backends: [{ id: configuration.backendInstanceId, kind: "pi_native", generation: 1, launchDigest: runtimeLaunchDigest.pi_native(configuration), targets: [{id:"target", generation:1}] }] });
   const leftRegistry = new SidecarOperationRegistry(), rightRegistry = new SidecarOperationRegistry();
   const sedes = new SidecarProtocolPeer({ role: "sedes", transport: left, sessionNonce: "n".repeat(48), registry: leftRegistry });
   const sidecar = new SidecarProtocolPeer({ role: "sidecar", transport: right, sessionNonce: "n".repeat(48), registry: rightRegistry });
   const channel = new SidecarRuntimeChannel(sedes, leftRegistry), hostChannel = new SidecarRuntimeChannel(sidecar, rightRegistry);
-  const detach = registerPiNativeHost({ registry: rightRegistry, channel: hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: epoch });
+  const detach = registerPiNativeHost({ validateAgentToolRoute: (id, endpoint, _directory, _path, mergedPath) => {
+    if (id !== configuration.backendInstanceId || endpoint !== "unix:///fixture/pi.sock" || mergedPath !== "/tools:/bin") throw new Error("tool route denied");
+  }, registry: rightRegistry, channel: hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: epoch, getExecutionPolicy: () => f.services.executionPolicy(epoch), isRecoveryController: () => f.services.recoveryController });
   const capabilities = rightRegistry.capabilities().map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion }));
-  registerControlV2Operations(rightRegistry, { buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: leftRegistry.capabilities() });
+  registerControlV3Operations(rightRegistry, { buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: leftRegistry.capabilities() });
   sedes.start(); sidecar.start();
-  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), authorizedSidecarCapabilities: capabilities, offeredSedesCapabilities: leftRegistry.capabilities() });
+  await sedes.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), supportedSidecarCapabilities: capabilities, offeredSedesCapabilities: leftRegistry.capabilities() });
   const release = vi.fn();
   const lease: SidecarRuntimeLease = { channel, controllerEpoch: epoch, serviceIncarnation: f.services.serviceIncarnation, closed: left.closed, release };
   let disconnected = false;
@@ -448,13 +453,13 @@ setInterval(() => {}, 1000);
     expect(f.launches).toHaveBeenCalledTimes(2);
   });
 
-  it("resolves canonical session directories through strict read-only remote and recovery calls without launching Pi", async () => {
+  it("requires normal admission to resolve a new canonical session directory", async () => {
     const f = await fixture(), first = await attachment(f), original = proxy(first.lease);
     expect(await original.port.resolveSessionDirectory({ cwd: identity.cwd })).toBe("/execution-host/canonical/sessions");
     await expect(original.port.resolveSessionDirectory({ cwd: identity.cwd, unexpected: true } as { cwd: string })).rejects.toMatchObject({ delivery: "not_sent" });
     await first.disconnect();
     const next = await attachment(f, "recovery"), { port, runtime } = proxy(next.lease, true);
-    expect(await port.resolveSessionDirectory({ cwd: identity.cwd })).toBe("/execution-host/canonical/sessions");
+    await expect(port.resolveSessionDirectory({ cwd: identity.cwd })).rejects.toMatchObject({ delivery: "not_sent" });
     expect(runtime.acquire).not.toHaveBeenCalled();
     expect(f.createHost).toHaveBeenCalledTimes(1);
     expect(f.launches).not.toHaveBeenCalled();
@@ -602,12 +607,53 @@ setInterval(() => {}, 1000);
     expect(reconcile).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])("coalesces concurrent catalog callers and fences their results if revoked (%s)", async revoke => {
+    const f = await fixture(), carrier = await attachment(f), { port } = proxy(carrier.lease);
+    const gate = deferred<void>();
+    f.requests.mockImplementation(async command => {
+      await gate.promise;
+      switch ((command as { type: string }).type) {
+        case "get_available_models": return { models: [] };
+        case "get_commands": return { commands: [] };
+        default: return idleState;
+      }
+    });
+    const first = port.catalog({ cwd: "/workspace" });
+    const second = port.catalog({ cwd: "/workspace" });
+    const results = Promise.allSettled([first, second]);
+    try {
+      await vi.waitFor(() => expect(f.requests).toHaveBeenCalledTimes(3));
+      if (revoke) installFixturePolicy(f.services, carrier.epoch, serviceConfiguration, { roots: [], capabilities: [], backends: [] });
+    } finally { gate.resolve(); }
+    const [a, b] = await results;
+    expect(a.status).toBe(revoke ? "rejected" : "fulfilled");
+    expect(b).toEqual(a);
+    expect(f.launches).toHaveBeenCalledOnce();
+  });
+
+  it("replays a journaled prompt after withdrawal and refuses a fresh operation", async () => {
+    const f = await fixture(), carrier = await attachment(f), { port } = proxy(carrier.lease);
+    const session = await port.attach(identity);
+    const gate = deferred<unknown>();
+    f.requests.mockImplementation(() => gate.promise);
+    const request = { handleId: session.handleId, operationId: "existing", retainOutcome: true,
+      command: { channel: "rpc" as const, command: { type: "prompt", message: "hello" } } };
+    await expect(port.request(request)).resolves.toEqual({ status: "pending" });
+    installFixturePolicy(f.services, carrier.epoch, serviceConfiguration, { roots: [], capabilities: [], backends: [] });
+    await expect(port.request(request)).resolves.toEqual({ status: "pending" });
+    await expect(port.request({ ...request, operationId: "new" })).rejects.toMatchObject({ delivery: "not_sent" });
+    gate.resolve({ ok: true });
+    await vi.waitFor(async () => expect(await port.request(request)).toEqual({ status: "completed", result: { ok: true } }));
+    expect(f.requests).toHaveBeenCalledOnce();
+  });
+
   it("carries only the strict main-owned tool environment beside user overrides", async () => {
     const f = await fixture(), first = await attachment(f), { port } = proxy(first.lease);
     await port.attach({ ...identity, executionEnvironment: { CUSTOM: { kind: "literal", value: "custom" } },
-      agentToolEnvironment: { SEDES_AGENT_TOOL_ENDPOINT: null, SEDES_AGENT_TOOL_SOURCE_CAPABILITY: "authority", PATH: "/tools:/bin" } });
-    expect(f.launches.mock.calls[0]?.[0].executionEnvironment).toEqual({ CUSTOM: "custom", SEDES_AGENT_TOOL_ENDPOINT: null,
+      agentToolEnvironment: { SEDES_AGENT_TOOL_ENDPOINT: "unix:///fixture/pi.sock", SEDES_AGENT_TOOL_SOURCE_CAPABILITY: "authority", PATH: "/tools:/bin" } });
+    expect(f.launches.mock.calls[0]?.[0].executionEnvironment).toEqual({ CUSTOM: "custom", SEDES_AGENT_TOOL_ENDPOINT: "unix:///fixture/pi.sock",
       SEDES_AGENT_TOOL_SOURCE_CAPABILITY: "authority", PATH: "/tools:/bin" });
+    await expect(port.attach({ ...identity, agentToolEnvironment: { PATH: "/foreign/bin" } })).rejects.toThrow();
     await expect(port.attach({ ...identity, agentToolEnvironment: { NODE_OPTIONS: "--inspect" } as never })).rejects.toThrow();
     expect(f.launches).toHaveBeenCalledTimes(1);
   });
@@ -796,10 +842,31 @@ setInterval(() => {}, 1000);
     vi.spyOn(f.services, "recordAbandonment").mockImplementation(() => recording.promise);
     const authority = { assertCurrent: () => f.services.assertController(connection.epoch), assertAdmission: () => f.services.assertAdmission(connection.epoch) };
     const stopping = f.hosts.stop(host.runtimeId, host.snapshot().revision, true, undefined, authority);
-    f.services.attach(serviceConfiguration);
+    attachFixturePolicy(f.services, serviceConfiguration);
     recording.resolve();
     await expect(stopping).rejects.toThrow("sidecar_controller_stale");
     expect(await f.hosts.lookupRetained(configuration.backendInstanceId, f.services.controllerEpoch)).toBe(host);
+  });
+
+  it("retains the original launch digest when policy changes before ensure returns", async () => {
+    const f = await fixture(), carrier = await attachment(f), { port } = proxy(carrier.lease);
+    const original = runtimeLaunchDigest.pi_native(configuration);
+    const changed = { ...configuration, startupEnvironmentVariables: { NOTE: { kind: "literal" as const, value: "changed" } } };
+    const ensure = f.hosts.ensure.bind(f.hosts);
+    const seen = vi.fn();
+    vi.spyOn(f.hosts, "ensure").mockImplementationOnce(async (...args) => {
+      const host = await ensure(...args);
+      seen(f.hosts.observedLaunchDigest(configuration.backendInstanceId));
+      const previous = f.services.executionPolicy(carrier.epoch);
+      installFixturePolicy(f.services, carrier.epoch, serviceConfiguration, { ...previous,
+        backends: previous.backends.map(grant => ({ ...grant, launchDigest: runtimeLaunchDigest.pi_native(changed, changed.startupEnvironmentVariables) })) });
+      return host;
+    });
+    await expect(port.attach(identity)).rejects.toThrow();
+    expect(seen).toHaveBeenCalledExactlyOnceWith(original);
+    await expect(f.hosts.ensure(changed, carrier.epoch)).rejects.toMatchObject({ code: "pi_native_configuration_restart_required" });
+    expect(f.hosts.observedLaunchDigest(configuration.backendInstanceId)).toBe(original);
+    expect(f.launches).not.toHaveBeenCalled();
   });
 
   it("scope-checks registry creation and requires restart for identity edits", async () => {
@@ -809,6 +876,9 @@ setInterval(() => {}, 1000);
     expect(first).toBe(second); expect(f.createHost).toHaveBeenCalledTimes(1);
     await expect(f.hosts.ensure({ ...configuration, executablePath: "/other/pi" }, connection.epoch)).rejects.toThrow("pi_native_configuration_restart_required");
     await expect(f.hosts.ensure({ ...configuration, startupEnvironmentVariables: {} }, connection.epoch)).resolves.toBe(first);
+    const changed = { ...configuration, startupEnvironmentVariables: { NOTE: { kind: "literal" as const, value: "changed" } } };
+    await expect(f.hosts.ensure(changed, connection.epoch)).rejects.toMatchObject({ code: "pi_native_configuration_restart_required" });
+    await expect(f.hosts.lookup(changed, connection.epoch)).resolves.toBe(first);
   });
 });
 

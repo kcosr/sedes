@@ -2,7 +2,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   LengthPrefixedSidecarFrameTransport, SidecarOperationRegistry, SidecarProtocolPeer,
-  controlHelloOperation, controlPingOperation, registerControlV2Operations,
+  controlHelloOperation, controlPingOperation, registerControlV3Operations,
   type SidecarByteStream, type SidecarByteStreamClosure, type SidecarHeartbeatDiagnostic,
 } from "../../src/internal/sidecar-protocol/index.js";
 
@@ -92,14 +92,14 @@ async function fixture(throwObserver = false, diagnosticsEnabled?: () => boolean
   const streams = streamPair();
   const mainRegistry = new SidecarOperationRegistry();
   const sidecarRegistry = new SidecarOperationRegistry();
-  registerControlV2Operations(sidecarRegistry, { buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: [], enabledSedesCapabilities: [] });
+  registerControlV3Operations(sidecarRegistry, { buildId: "test", artifactSha256: "a".repeat(64), enabledSidecarCapabilities: [], enabledSedesCapabilities: [] });
   const observe = (record: SidecarHeartbeatDiagnostic) => { records.push(record); if (throwObserver) throw new Error("private-observer-error"); };
   const main = new SidecarProtocolPeer({ role: "sedes", registry: mainRegistry, sessionNonce: "private-authentication-nonce-000000000000000000000",
     transport: new LengthPrefixedSidecarFrameTransport({ assurance: { kind: "test", carrierGeneration: 7 }, stream: streams.left }), onDiagnostic: observe, diagnosticsEnabled });
   const sidecar = new SidecarProtocolPeer({ role: "sidecar", registry: sidecarRegistry, sessionNonce: "private-authentication-nonce-000000000000000000000",
     transport: new LengthPrefixedSidecarFrameTransport({ assurance: { kind: "test", carrierGeneration: 7 }, stream: streams.right }), onDiagnostic: observe, diagnosticsEnabled });
   main.start(); sidecar.start();
-  await main.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), authorizedSidecarCapabilities: [], offeredSedesCapabilities: [] });
+  await main.call(controlHelloOperation, { compression: "none", expectedBuildId: "test", expectedArtifactSha256: "a".repeat(64), supportedSidecarCapabilities: [], offeredSedesCapabilities: [] });
   return { main, sidecar, records, streams, close: async () => { await main.close("test_complete"); await sidecar.close("test_complete"); } };
 }
 

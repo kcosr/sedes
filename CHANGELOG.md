@@ -7,6 +7,16 @@ User-facing changes are collected here before release. See the
 
 ### Breaking Changes
 
+- Execution Settings uses client protocol **179** and runtime wire **18**.
+  Upgrade clients, the server, sidecar and bundled workers together. On a current host, adding a supported
+  backend, connection, workspace root or operation applies to the existing
+  service while other turns and terminals continue. Settings shows which
+  changes are ready, which need the host, and which apply on the provider's
+  next launch. If an upgrade disables competing Antigravity backends on a local
+  host, Settings lets you confirm each previous runtime’s retirement after
+  inspecting that host. See [execution settings](docs/user/settings.md#saving-and-runtime-state).
+  ([#150](https://github.com/kcosr/sedes/pull/150))
+
 - Native Pi reduces round trips before sending a message on an attached thread.
   Drain retained native Pi work using the currently installed main and sidecar
   before upgrading both to native Pi runtime capability **3**.

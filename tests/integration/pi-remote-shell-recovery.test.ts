@@ -11,7 +11,7 @@ import {
   WORKSPACE_CONTEXT_V1_LIMITS,
   WORKSPACE_TOOLS_SHELL_V2_LIMITS,
   WORKSPACE_TOOLS_V2_LIMITS,
-  registerControlV2Operations,
+  registerControlV3Operations,
   registerWorkspaceToolsShellV2Operations,
   workspaceContextV1Operations,
   workspaceToolsV2Operations,
@@ -111,7 +111,7 @@ async function shellFixture() {
   const host = new WorkspaceToolsShellHost({
     resolveWorkspace: (handle) => {
       if (handle !== workspaceHandle) throw new Error("unexpected_workspace_handle");
-      return directory;
+      return { cwd: directory, assertCurrent() {} };
     },
     openStream: (input) => currentPeer.openOutgoingStream({
       ...input, capabilityId: "workspace_tools", majorVersion: 2,
@@ -147,7 +147,7 @@ async function shellFixture() {
       registry.register(definition as never, () => { throw new Error("unexpected_non_shell_operation"); });
     }
     registerWorkspaceToolsShellV2Operations(registry, { ...host.handlers, start, inspect, cancel });
-    registerControlV2Operations(registry, {
+    registerControlV3Operations(registry, {
       ...artifact,
       enabledSidecarCapabilities: capabilities,
       enabledSedesCapabilities: [],

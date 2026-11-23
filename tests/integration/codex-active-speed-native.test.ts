@@ -192,11 +192,12 @@ child.on('exit', code => process.exit(code ?? 1));
 `);
       await chmod(relayPath, 0o700);
       sidecar = await createPersistentCodexLiveSidecar({ ...f.scope, executionEnvironmentId: connection.executionEnvironmentId });
-      attachment = await sidecar.attach();
+      const configuration = { instance, connections: [connection], connection: {
+        ownership: "owned" as const, channel: { type: "process_stdio" as const, executablePath: relayPath, workingDirectory: workspacePath, codexHome: home },
+      } };
+      attachment = await sidecar.attach(configuration);
       const remote = new CodexSidecarRuntimeConnection(attachment.session.runtimeChannel);
-      const runtimeId = await remote.ensure({ instance, connections: [connection], connection: {
-        ownership: "owned", channel: { type: "process_stdio", executablePath: relayPath, workingDirectory: workspacePath, codexHome: home },
-      } });
+      const runtimeId = await remote.ensure(configuration);
       const receipts = new CodexRuntimeReceiptStore(f.database, undefined, (scope, id) => sessions.controller(scope, id)?.publicationChanged());
       const authority = { scope: runtimeScope, runtimeId, controllerId: String(attachment.status.controllerEpoch) };
       sidecarAuthority = authority;

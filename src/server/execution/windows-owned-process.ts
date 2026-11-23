@@ -10,6 +10,7 @@ import type { EnvironmentProcessClosure } from "./environment-channel.js";
 // and acknowledges cleanup only once the kernel reports zero active processes.
 export async function spawnWindowsOwnedProcess(input: {
   executable: string;
+  assertLaunchAdmission?: () => void;
   arguments: readonly string[];
   cwd: string;
   environment: Readonly<Record<string, string>>;
@@ -162,6 +163,8 @@ export async function spawnWindowsOwnedProcess(input: {
     });
   });
   const script = `$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\n$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')\nAdd-Type -TypeDefinition @'\n${WINDOWS_JOB_SOURCE}\n'@\n$c = $env:SEDES_WINDOWS_JOB_CONTROL.Split(':')\nexit ([SedesOwnedProcess]::Run([int]$c[0], $c[1]))`;
+  try { input.assertLaunchAdmission?.(); }
+  catch (error) { server.close(); throw error; }
   const child = spawn(
     path.join(
       process.env.SystemRoot ?? "C:\\Windows",

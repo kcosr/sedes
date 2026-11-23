@@ -1,3 +1,6 @@
+import { SidecarOperationError } from "../../../../../internal/sidecar-protocol/operation-registry.js";
+import { launchAdmission, currentBackendGrant, type ProviderPolicyAttachment } from "../../../provider-policy-admission.js";
+import { runtimeLaunchDigest } from "../../../provider-launch-digest.js";
 import type { SidecarOperationRegistry } from "../../../../../internal/sidecar-protocol/operation-registry.js";
 import type { SidecarRuntimeChannel } from "../../../../sidecar/runtime-channel.js";
 import type { PersistentSidecarServiceRegistry } from "../../../../sidecar/persistent-sidecar-service-registry.js";
@@ -8,7 +11,7 @@ import { piNativeHostCommandSchema, piNativeHostCommandLane, piNativeRuntimeOper
   type PiNativeHostCommand } from "./wire.js";
 
 /** One registration serves SSH and outbound carriers. No peer owns the host. */
-export function registerPiNativeHost(input: {
+export function registerPiNativeHost(input: ProviderPolicyAttachment & {
   readonly registry: SidecarOperationRegistry;
   readonly channel: SidecarRuntimeChannel;
   readonly hosts: PiNativeHostRegistry;
@@ -24,13 +27,17 @@ export function registerPiNativeHost(input: {
   const authority: PiNativeHostAuthority = { assertCurrent, assertAdmission: () => {
     assertCurrent(); input.services.assertAdmission(input.controllerEpoch);
   } };
+  const catalogAuthorities = new WeakMap<object, PiNativeHostAuthority>();
   const run = async (command: PiNativeHostCommand, signal: AbortSignal): Promise<unknown> => {
     assertCurrent(); signal.throwIfAborted();
     if (command.controllerEpoch !== input.controllerEpoch || command.serviceIncarnation !== input.services.serviceIncarnation) throw new PiNativeError("pi_native_controller_stale");
     if (command.action === "ensure" || command.action === "lookup" || command.action === "lookup_retained") {
-      const host = command.action === "lookup_retained"
-        ? await input.hosts.lookupRetained(command.backendInstanceId, input.controllerEpoch)
-        : await input.hosts[command.action](command.configuration, input.controllerEpoch);
+      const admission = command.action === "ensure" ? launchAdmission(input, "pi_native", command.configuration.backendInstanceId,
+        runtimeLaunchDigest.pi_native(command.configuration, command.configuration.startupEnvironmentVariables)) : undefined;
+      const host = command.action === "lookup_retained" ? await input.hosts.lookupRetained(command.backendInstanceId, input.controllerEpoch)
+        : command.action === "ensure" ? await input.hosts.ensure(command.configuration, input.controllerEpoch, admission)
+        : await input.hosts.lookup(command.configuration, input.controllerEpoch);
+      if (host) admission?.bind(host);
       assertCurrent();
       if (!host) return null;
       if (!attached.has(host.runtimeId) || command.action !== "lookup_retained") attached.set(host.runtimeId, command.action === "lookup_retained" ? "retained" : "normal");
@@ -45,9 +52,30 @@ export function registerPiNativeHost(input: {
     const mode = attached.get(command.runtimeId);
     if (!mode) throw new PiNativeError("pi_native_runtime_not_attached");
     const host = input.hosts.get(command.runtimeId);
-    const callAuthority = mode === "retained" ? { assertCurrent, assertAdmission: () => { throw new PiNativeError("pi_native_recovery_read_only"); } } : authority;
+    const callAuthority = { assertCurrent, assertAdmission: () => {
+      if (mode === "retained") throw new PiNativeError("pi_native_recovery_read_only");
+      try { currentBackendGrant(input, host); }
+      catch (cause) { throw new PiNativeError("pi_native_recovery_read_only", "not_sent", { cause }); }
+      const cli = command.action === "attach" ? command.input.agentToolEnvironment : undefined;
+      if (cli && Object.values(cli).some(value => typeof value === "string")) {
+        if (!cli.SEDES_AGENT_TOOL_ENDPOINT || !cli.PATH || !input.validateAgentToolRoute)
+          throw new PiNativeError("pi_native_tool_route_denied");
+        input.validateAgentToolRoute(host.input.configuration.backendInstanceId, cli.SEDES_AGENT_TOOL_ENDPOINT, undefined, undefined, cli.PATH);
+      }
+      authority.assertAdmission();
+    } };
+    if (["catalog", "list", "create", "attach", "fork", "resolve_session_directory"].includes(command.action)) callAuthority.assertAdmission();
+    if (command.action === "history" && !host.hasRetainedSession(command.input)) callAuthority.assertAdmission();
     switch (command.action) {
-      case "catalog": return host.catalog(command.input, signal, callAuthority);
+      case "catalog": {
+        // Readers on this controller share one probe for the same host and cwd.
+        // The current caller's admission has already been checked above.
+        const owner = catalogAuthorities.get(host) ?? callAuthority;
+        catalogAuthorities.set(host, owner);
+        const result = await host.catalog(command.input, signal, owner);
+        callAuthority.assertAdmission();
+        return result;
+      }
       case "resolve_session_directory": return host.resolveSessionDirectory(command.input, signal, callAuthority);
       case "create": return host.create(command.input, signal, callAuthority);
       case "fork": return host.fork(command.input, signal, callAuthority);
@@ -85,6 +113,7 @@ export function registerPiNativeHost(input: {
     } catch (error) {
       return await input.channel.encodeBody({ status: "failed", runtimeVersion: version(command), failure: error instanceof PiNativeError
         ? { code: error.code, delivery: error.delivery }
+        : error instanceof SidecarOperationError ? { code: "pi_native_policy_denied", delivery: "not_sent" }
         : { code: "pi_native_host_request_failed", delivery: "sent_outcome_unknown" } });
     }
   });

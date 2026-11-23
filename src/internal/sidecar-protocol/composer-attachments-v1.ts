@@ -28,6 +28,12 @@ const agentPathSchema = z
       !/^[a-z]:\\$/iu.test(value),
     "composer_attachment_agent_path_invalid",
   );
+const workspaceAuthoritySchema = z.strictObject({
+  path: z.string().min(1).max(4096).refine(normalizedAbsolutePath),
+  rootId: sha256Schema,
+  rootGeneration: z.number().int().positive(),
+  featureGeneration: z.number().int().positive(),
+});
 const canonicalBase64Schema = z
   .string()
   .min(4)
@@ -65,6 +71,7 @@ export const composerAttachmentsMaterializationOpenOperation = definition({
   requestSchema: z.strictObject({
     admissionId: uuidSchema,
     scopeKey: sha256Schema,
+    workspaceAuthority: workspaceAuthoritySchema.optional(),
     threadId: uuidSchema,
     attachmentId: uuidSchema,
     sha256: sha256Schema,
@@ -131,6 +138,7 @@ export const composerAttachmentsMaterializationReleaseOperation = definition({
   operation: "materialization.release",
   requestSchema: z.strictObject({
     scopeKey: sha256Schema,
+    workspaceAuthority: workspaceAuthoritySchema.optional(),
     threadId: uuidSchema,
     attachmentId: uuidSchema,
     expectedSha256: sha256Schema,

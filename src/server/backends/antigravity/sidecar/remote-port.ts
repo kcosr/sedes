@@ -19,7 +19,8 @@ export class AntigravityRemotePort implements AntigravityPort {
   readonly #handles = new Set<string>();
   readonly #lifetime = new AbortController();
   constructor(readonly input: { readonly configuration: AntigravityRuntimeConfiguration;
-    readonly sidecarRuntime: SidecarRuntimeProvider; readonly existingOnly?: boolean }) {}
+    readonly assertNativeOwner?: (backendInstanceId: string) => void;
+    readonly confirmNativeOwner?: (id: string | null, expectedOwner?: string) => void; readonly sidecarRuntime: SidecarRuntimeProvider; readonly existingOnly?: boolean }) {}
   async #get(signal?: AbortSignal, existingOnly = false): Promise<Attachment> {
     signal?.throwIfAborted(); if (this.#closed) throw new AntigravityError("antigravity_remote_closed");
     const normal = !existingOnly && !this.input.existingOnly;
@@ -48,13 +49,18 @@ export class AntigravityRemotePort implements AntigravityPort {
       lease.channel.assertReady();
       if (!antigravityRuntimeOperations.every(operation => lease.channel.supportsOperation(operation))) throw new AntigravityError("antigravity_remote_unsupported");
       if (this.#identity && lease.serviceIncarnation !== this.#identity.serviceIncarnation) throw new AntigravityError("antigravity_runtime_incarnation_changed", "sent_outcome_unknown");
-      const value = await call(lease, retained
+      let value = await call(lease, retained
         ? { action: "lookup_retained", backendInstanceId: this.input.configuration.backendInstanceId }
-        : { action: this.#identity ? "lookup" : "ensure", configuration: this.input.configuration }, this.#lifetime.signal);
+        : { action: "lookup", configuration: this.input.configuration }, this.#lifetime.signal);
+      if (value === null && !this.#identity && !retained) {
+        this.input.assertNativeOwner?.(this.input.configuration.backendInstanceId);
+        value = await call(lease, { action: "ensure", configuration: this.input.configuration }, this.#lifetime.signal);
+      }
       if (value === null) throw new AntigravityError("antigravity_retained_runtime_missing");
       const { runtimeId } = runtimeSchema.parse(value);
       if (this.#identity && runtimeId !== this.#identity.runtimeId) throw new AntigravityError("antigravity_runtime_incarnation_changed", "sent_outcome_unknown");
       if (this.#closed) throw new AntigravityError("antigravity_remote_closed");
+      this.input.confirmNativeOwner?.(this.input.configuration.backendInstanceId);
       this.#identity = { runtimeId, serviceIncarnation: lease.serviceIncarnation };
       const attachment = { lease, runtimeId, retained, released: false }; this.#attachment = attachment;
       void lease.closed.then(() => this.#discard(attachment), () => this.#discard(attachment)); return attachment;
@@ -102,12 +108,21 @@ export class AntigravityRemotePort implements AntigravityPort {
     catch (error) { if (error instanceof AntigravityError && error.code === "antigravity_retained_runtime_missing") return "absent" as const; throw error; }
   }
   async inspect(signal?: AbortSignal) { return antigravityInspectionSchema.parse(await this.#invoke("inspect", {}, signal, true)); }
-  async stop(input: Parameters<AntigravityPort["stop"]>[0], signal?: AbortSignal) { antigravitySuccessSchema.parse(await this.#invoke("stop", input, signal, true)); }
+  async stop(input: Parameters<AntigravityPort["stop"]>[0], signal?: AbortSignal) { antigravitySuccessSchema.parse(await this.#invoke("stop", input, signal, true)); this.input.confirmNativeOwner?.(null, this.input.configuration.backendInstanceId); }
   async close() {
     if (this.#closed) return; this.#closed = true; this.#lifetime.abort();
     if (this.#attachment) this.#discard(this.#attachment);
     await Promise.allSettled([this.#opening?.promise]);
   }
+}
+/** Inspect an exact migrated candidate even when its saved launch definition is gone. */
+export async function inspectRetainedAntigravityOwner(lease: SidecarRuntimeLease, backendInstanceId: string, signal: AbortSignal): Promise<boolean> {
+  lease.channel.assertReady();
+  if (!lease.channel.supportsOperation(antigravityControlOperation)) throw new AntigravityError("antigravity_remote_unsupported");
+  const retained = await call(lease, { action: "lookup_retained", backendInstanceId }, signal);
+  if (retained === null) return false;
+  runtimeSchema.parse(retained);
+  return true;
 }
 async function call(lease: SidecarRuntimeLease, input: AntigravityHostCommandInput, signal?: AbortSignal): Promise<unknown> {
   let crossed = false;
@@ -121,7 +136,7 @@ async function call(lease: SidecarRuntimeLease, input: AntigravityHostCommandInp
     };
     // Observation cancellation ends the caller wait after the admitted bounded
     // exchange drains; aborting an in-flight write would destroy a shared carrier.
-    const observation = ["observe", "outcome", "acknowledge", "acknowledge_operation", "inspect"].includes(command.action);
+    const observation = ["lookup_retained", "observe", "outcome", "acknowledge", "acknowledge_operation", "inspect"].includes(command.action);
     const response = observation && signal ? await drainObservation(signal, invoke) : await invoke(signal);
     if (response.status === "failed") throw new AntigravityError(response.failure.code, response.failure.delivery);
     return response.value;

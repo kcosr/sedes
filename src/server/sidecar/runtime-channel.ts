@@ -34,6 +34,7 @@ export interface SidecarRuntimeLease {
   readonly controllerEpoch: number;
   readonly serviceIncarnation: string;
   readonly closed: Promise<unknown>;
+  readonly acquireOpenCodeRoute?: (backendInstanceId: string, signal?: AbortSignal) => Promise<number>;
   release(): void;
 }
 export interface SidecarRuntimeProvider {

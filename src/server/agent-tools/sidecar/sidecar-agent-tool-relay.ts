@@ -16,6 +16,8 @@ import { openCodeToolInvokeOperation } from "../../backends/opencode/opencode-to
 import { assertOpenCodeInvocationSource, runWithOpenCodeInvocation } from "../../backends/opencode/opencode-tool-invocation.js";
 import type { z } from "zod";
 
+import type { AgentToolRouteBinding } from "../../../internal/sidecar-protocol/agent-tools-v6.js";
+
 export interface SidecarAgentToolRelayAuthority {
   readonly scope: RequestScope;
   readonly executionEnvironmentId: string;
@@ -35,6 +37,8 @@ export function registerSidecarAgentToolRelayOperations(
     readonly sources: EnvironmentScopedAgentToolSourceResolver;
     readonly tools: BackendAgentToolFacade;
     readonly openCodeTools?: boolean;
+    readonly retainRoute?: (binding: AgentToolRouteBinding) => {signal: AbortSignal; release(): void};
+    readonly authorizeSource?: (backendId: string, binding: AgentToolRouteBinding) => boolean;
   },
 ): void {
   const scope = Object.freeze({ ...input.authority.scope });
@@ -43,14 +47,20 @@ export function registerSidecarAgentToolRelayOperations(
     throw new Error("sidecar_agent_tool_relay_authority_invalid");
   }
 
-  const resolve = async (sourceCapability: string, signal: AbortSignal) => {
+  const resolve = async (sourceCapability: string, signal: AbortSignal, binding?: AgentToolRouteBinding) => {
     const caller = await input.sources.resolveCapabilityInExecutionEnvironment(
       scope,
       executionEnvironmentId,
       sourceCapability,
       signal,
     );
+    const assertCurrent = () => {
+      if (input.authorizeSource && (!caller.backendInstanceId || !binding || caller.backendInstanceId !== binding.backendInstanceId ||
+        !input.authorizeSource(caller.backendInstanceId, binding))) throw new CanonicalAgentToolRequestError("permission_denied", "The execution host tool route has changed.");
+    };
+    assertCurrent();
     return {
+      assertCurrent,
       source: caller.source,
       adapter: caller.presentation === "mcp" ? ("mcp" as const) : ("cli" as const),
       ...(caller.accessDecisionAuthority ? { accessDecisionAuthority: caller.accessDecisionAuthority } : {}),
@@ -59,9 +69,10 @@ export function registerSidecarAgentToolRelayOperations(
 
   registry.register(
     agentToolsCatalogOperation,
-    async ({ sourceCapability }, { signal }) => {
+    async ({ sourceCapability, routeBinding }, { signal }) => {
       try {
-        const { source, adapter } = await resolve(sourceCapability, signal);
+        const { source, adapter, assertCurrent } = await resolve(sourceCapability, signal, routeBinding);
+        assertCurrent();
         assertOpen(signal);
         return {
           outcome: "ok" as const,
@@ -75,9 +86,10 @@ export function registerSidecarAgentToolRelayOperations(
 
   registry.register(
     agentToolsDescribeOperation,
-    async ({ sourceCapability, toolIds }, { signal }) => {
+    async ({ sourceCapability, routeBinding, toolIds }, { signal }) => {
       try {
-        const { source, adapter } = await resolve(sourceCapability, signal);
+        const { source, adapter, assertCurrent } = await resolve(sourceCapability, signal, routeBinding);
+        assertCurrent();
         assertOpen(signal);
         return {
           outcome: "ok" as const,
@@ -90,14 +102,18 @@ export function registerSidecarAgentToolRelayOperations(
   );
 
   const invoke = async (
-    { sourceCapability, toolId, schemaVersion, requestId, input: toolInput }: z.infer<typeof agentToolsInvokeOperation.requestSchema>,
+    { sourceCapability, routeBinding, toolId, schemaVersion, requestId, input: toolInput }: z.infer<typeof agentToolsInvokeOperation.requestSchema>,
     signal: AbortSignal,
     validateSource?: (source: Awaited<ReturnType<typeof resolve>>["source"]) => void,
   ) => {
+      let route: {signal: AbortSignal; release(): void} | undefined;
       try {
-        const { source, adapter, accessDecisionAuthority } = await resolve(sourceCapability, signal);
+        const { source, adapter, accessDecisionAuthority, assertCurrent } = await resolve(sourceCapability, signal, routeBinding);
+        assertCurrent();
         validateSource?.(source);
-        assertOpen(signal);
+        route = routeBinding && input.retainRoute?.(routeBinding);
+        const invocationSignal = route ? AbortSignal.any([signal, route.signal]) : signal;
+        assertOpen(invocationSignal);
         return {
           outcome: "ok" as const,
           result: await input.tools.invoke({
@@ -109,12 +125,14 @@ export function registerSidecarAgentToolRelayOperations(
               requestId,
               input: toolInput,
             },
-            signal,
+            signal: invocationSignal,
             ...(accessDecisionAuthority ? { accessDecisionAuthority } : {}),
           }),
         };
       } catch (error) {
         return relayError(error);
+      } finally {
+        route?.release();
       }
   };
   registry.register(agentToolsInvokeOperation, (request, { signal }) => invoke(request, signal, source => {

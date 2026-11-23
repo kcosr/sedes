@@ -6,6 +6,7 @@ import {
   open,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   symlink,
@@ -90,6 +91,89 @@ const WEBP_SIGNATURE = Buffer.from([
 ]);
 
 describe("LocalWorkspaceFileProvider", () => {
+  it("discovers an absolute file link beneath a configured symlink and rejects escapes", async () => {
+    const current = await fixture();
+    const directory = path.join(current.root, "actual");
+    const alias = path.join(current.root, "alias");
+    await mkdir(directory);
+    await symlink(directory, alias, "dir");
+    await writeFile(path.join(directory, "visible.txt"), "visible");
+    await writeFile(path.join(current.root, "outside.txt"), "outside");
+    await symlink(current.root, path.join(directory, "escape"), "dir");
+    const provider = new LocalWorkspaceFileProvider({
+      scope, environmentId, readWorkspaceRoots: () => [{id:"declared-alias", path:alias, generation:1}],
+    });
+    try {
+      await expect(provider.discoverFileLinkRoot(scope, environmentId, path.join(alias, "visible.txt")))
+        .resolves.toEqual({canonicalPath:await realpath(directory), relativePath:"visible.txt"});
+      await expect(provider.discoverFileLinkRoot(scope, environmentId, path.join(alias, "escape", "outside.txt")))
+        .resolves.toBeUndefined();
+    } finally { provider.close(); current.provider.close(); }
+  });
+
+  it("closes the OS watch once when the bound root grant is withdrawn", async () => {
+    const current = await fixture();
+    const root = {id:"root", path:current.root, generation:1};
+    let granted = true;
+    const watchers = new LocalWorkspaceFileWatcherRegistry();
+    const close = vi.fn(), listener = vi.fn();
+    const subscribe = vi.spyOn(watchers,"subscribe").mockResolvedValue({ close, failed: new Promise<void>(() => {}) });
+    const provider = new LocalWorkspaceFileProvider({scope,environmentId,watchers,
+      readWorkspaceRoots:() => granted ? [root] : [], readWorkspaceBinding:() => ({authorityRootId:root.id,authorityRevision:root.generation})});
+    try {
+      const sub = await provider.watch(scope,current.workspace,listener);
+      granted = false;
+      subscribe.mock.calls[0]![2]();
+      await sub.failed;
+      await sub.close();
+      expect(close).toHaveBeenCalledOnce();
+      expect(listener).not.toHaveBeenCalled();
+    } finally { provider.close(); current.provider.close(); }
+  });
+
+  it("creates no temporary file for a queued write whose original grant was withdrawn", async () => {
+    const current = await fixture();
+    const root = { id: "root", path: current.root, generation: 1 };
+    let granted = true;
+    const provider = new LocalWorkspaceFileProvider({
+      scope, environmentId, readWorkspaceRoots: () => granted ? [root] : [],
+      readWorkspaceBinding: () => ({authorityRootId:root.id,authorityRevision:root.generation}),
+      testHooks: { beforeWriteCommit: () => { granted = false; } },
+    });
+    try {
+      await writeFile(path.join(current.root, "a.txt"), "before");
+      const content = await provider.read(scope,current.workspace,"a.txt");
+      if (!("revision" in content) || !content.revision) throw new Error("missing_revision");
+      const changes = {path:"a.txt", content:"changed", expectedRevision:content.revision};
+      const results = await Promise.allSettled([provider.write(scope,current.workspace,changes), provider.write(scope,current.workspace,changes)]);
+      for (const result of results) expect(result).toMatchObject({status:"rejected", reason: expect.any(WorkspaceFileRootUnavailableError)});
+      expect(vi.mocked(open).mock.calls.filter(([filename]) => String(filename).endsWith(".tmp"))).toHaveLength(1);
+      expect(await readFile(path.join(current.root,"a.txt"),"utf8")).toBe("before");
+    } finally { provider.close(); current.provider.close(); }
+  });
+
+  it("rechecks the workspace's original root before committing a write despite an overlapping grant", async () => {
+    const current = await fixture();
+    const original = { id: "original", path: current.root, generation: 4 };
+    const ancestor = { id: "ancestor", path: path.dirname(current.root), generation: 5 };
+    let grants = [original, ancestor];
+    const provider = new LocalWorkspaceFileProvider({
+      scope, environmentId, readWorkspaceRoots: () => grants,
+      readWorkspaceBinding: () => ({ authorityRootId: original.id, authorityRevision: original.generation }),
+      testHooks: { beforeWriteCommit: () => { grants = [ancestor, { ...original, generation: 6 }]; } },
+    });
+    try {
+      const filename = path.join(current.root, "keep.txt");
+      await writeFile(filename, "kept");
+      const content = await provider.read(scope, current.workspace, "keep.txt");
+      if (!("revision" in content) || typeof content.revision !== "string") throw new Error("missing_revision");
+      await expect(provider.write(scope, current.workspace, { path: "keep.txt", content: "replace", expectedRevision: content.revision }))
+        .rejects.toBeInstanceOf(WorkspaceFileRootUnavailableError);
+      expect(await readFile(filename, "utf8")).toBe("kept");
+      await expect(provider.read(scope, current.workspace, "keep.txt")).rejects.toBeInstanceOf(WorkspaceFileRootUnavailableError);
+    } finally { provider.close(); current.provider.close(); }
+  });
+
   it("streams exact saved bytes through a descriptor without using preview limits", async () => {
     const current = await fixture();
     const bytes = Buffer.alloc(17 * 1_024 * 1_024 + 37, 0x5a);
@@ -344,9 +428,16 @@ describe("LocalWorkspaceFileProvider", () => {
     ).toThrow("workspace_file_environment_unavailable");
   });
 
-  it("compares a nested supplemental repository beneath a non-repository Primary", async () => {
+  it("keeps a supplemental comparison usable across deeper grant additions and fences it on removal", async () => {
     const current = await fixture();
     const directory = path.join(current.root, "repository");
+    const original = {id:"parent", path:current.root, generation:1};
+    const deeper = {id:"child", path:directory, generation:2};
+    let grants = [original];
+    const provider = new LocalWorkspaceFileProvider({
+      scope, environmentId, readWorkspaceRoots: () => grants,
+      readWorkspaceBinding: () => ({authorityRootId: original.id, authorityRevision: original.generation}),
+    });
     await mkdir(directory);
     await execFile("git", ["init", "-q", directory]);
     await writeFile(path.join(directory, "tracked.txt"), "before\n");
@@ -362,19 +453,19 @@ describe("LocalWorkspaceFileProvider", () => {
       canonicalPath: directory,
     };
     await expect(
-      current.provider.diffRepositories(scope, current.workspace),
+      provider.diffRepositories(scope, current.workspace),
     ).resolves.toEqual({ status: "available", repositories: [] });
-    const catalog = await current.provider.diffRepositories(scope, nested);
+    const catalog = await provider.diffRepositories(scope, nested);
     if (catalog.status !== "available") throw new Error("repository unavailable");
     const repository = catalog.repositories[0]!;
     expect(repository.rootId).toBe(nested.rootId);
-    const refs = await current.provider.diffRefCatalog(scope, nested, {
+    const refs = await provider.diffRefCatalog(scope, nested, {
       repositoryId: repository.repositoryId,
       pageSize: 20,
     });
     if (refs.status !== "available") throw new Error("revisions unavailable");
     const base = refs.revisions.find((revision) => revision.kind === "local_branch")!;
-    const created = await current.provider.diffCreateComparison(scope, nested, {
+    const created = await provider.diffCreateComparison(scope, nested, {
       repositoryId: repository.repositoryId,
       mode: "direct",
       base: { kind: "revision", revisionId: base.revisionId },
@@ -385,7 +476,8 @@ describe("LocalWorkspaceFileProvider", () => {
       comparisonId: created.comparison.comparisonId,
       fingerprint: created.comparison.fingerprint,
     };
-    const changed = await current.provider.diffChangedFiles(scope, nested, {
+    grants = [original, deeper];
+    const changed = await provider.diffChangedFiles(scope, nested, {
       ...comparison,
       pageSize: 20,
     });
@@ -395,13 +487,16 @@ describe("LocalWorkspaceFileProvider", () => {
       files: [expect.objectContaining({ newPath: "tracked.txt", changeKind: "modified" })],
     });
     if (changed.status !== "available") throw new Error("changed files unavailable");
-    await expect(current.provider.diffPatch(scope, nested, {
+    await expect(provider.diffPatch(scope, nested, {
       ...comparison,
       fileId: changed.files[0]!.fileId,
     })).resolves.toMatchObject({
       status: "available",
       patch: expect.stringContaining("+after"),
     });
+    grants = [deeper];
+    expect(() => provider.diffChangedFiles(scope, nested, { ...comparison, pageSize:20 })).toThrow(WorkspaceFileRootUnavailableError);
+    provider.close();
     current.provider.close();
   });
 
@@ -672,6 +767,7 @@ describe("LocalWorkspaceFileProvider", () => {
     await expect(
       current.provider.removeLinkedWorktree(scope, {
         primaryRoot: primary,
+        linkedRoot: {...primary, rootId:workspaceFileRootIdSchema.parse("linked"), canonicalPath:discovered.canonicalPath},
         canonicalCheckoutPath: discovered.canonicalCheckoutPath,
         canonicalGitDir: discovered.canonicalGitDir,
         identityToken: discovered.identityToken,
@@ -680,6 +776,7 @@ describe("LocalWorkspaceFileProvider", () => {
     await rm(dirtyPath);
     await current.provider.removeLinkedWorktree(scope, {
       primaryRoot: primary,
+      linkedRoot: {...primary, rootId:workspaceFileRootIdSchema.parse("linked"), canonicalPath:discovered.canonicalPath},
       canonicalCheckoutPath: discovered.canonicalCheckoutPath,
       canonicalGitDir: discovered.canonicalGitDir,
       identityToken: discovered.identityToken,
@@ -812,6 +909,7 @@ describe("LocalWorkspaceFileProvider", () => {
     await expect(
       current.provider.removeLinkedWorktree(scope, {
         primaryRoot: current.workspace,
+        linkedRoot: {...current.workspace, rootId:workspaceFileRootIdSchema.parse("linked"), canonicalPath:discovered.canonicalPath},
         canonicalCheckoutPath: discovered.canonicalCheckoutPath,
         canonicalGitDir: discovered.canonicalGitDir,
         identityToken: discovered.identityToken,

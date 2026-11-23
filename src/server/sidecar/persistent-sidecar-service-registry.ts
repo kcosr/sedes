@@ -1,3 +1,4 @@
+import {inRecoveryRequest} from "../../internal/sidecar-protocol/recovery-context.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { SidecarAbandonmentRecord } from "./sidecar-abandonment-archive.js";
 import {
@@ -13,6 +14,10 @@ import {
   type SidecarServiceScope,
   type SidecarServiceStatus,
 } from "../../internal/sidecar-protocol/service-management-v1.js";
+
+import { InstalledExecutionPolicyStore } from "./installed-execution-policy.js";
+import type {ExecutionPolicySnapshot, ExecutionPolicyStatus, PolicyStageRequest, PolicyApplyRequest} from "../../internal/sidecar-protocol/execution-policy.js";
+import { SidecarOperationError } from "../../internal/sidecar-protocol/operation-registry.js";
 
 export interface SidecarResourceStopContext {
   /** Explicit operator interruption may abandon delivery state, never process cleanup. */
@@ -47,6 +52,7 @@ export class PersistentSidecarServiceRegistry {
   readonly #refreshes = new Map<SidecarResourceParticipant, Promise<void>>();
   readonly #observationFailures = new Set<SidecarResourceParticipant>();
   readonly #recordAbandonment: ((record: SidecarAbandonmentRecord) => Promise<void>) | undefined;
+  readonly #policy = new InstalledExecutionPolicyStore();
   #controllerEpoch = 0;
   #attached = false;
   #attachmentMode: "none" | "normal" | "recovery" = "none";
@@ -100,11 +106,54 @@ export class PersistentSidecarServiceRegistry {
   /** Synchronous fencing is atomic with respect to new JS admission callbacks. */
   assertAdmission(controllerEpoch: number): void {
     this.assertController(controllerEpoch);
-    if (this.#attachmentMode === "recovery") throw new Error("sidecar_recovery_attachment_read_only");
+    if (this.recoveryController) throw new Error("sidecar_recovery_attachment_read_only");
     if (this.#state !== "ready") throw new Error("sidecar_service_not_accepting_work");
-    if (!sameSidecarServiceConfiguration(this.#desiredConfiguration, this.#effectiveConfiguration)) {
-      throw new Error("sidecar_configuration_pending");
-    }
+    this.#policy.current(controllerEpoch);
+  }
+
+  get recoveryController(): boolean {
+    return this.#attachmentMode === "recovery" || inRecoveryRequest();
+  }
+
+  /** A resident journal can finish admitted work across a detach while its original grant holds. */
+  hasInstalledBackend(id: string, kind: string, generation: number, launchDigest?: string): boolean {
+    return this.#policy.hasInstalledBackend(id, kind, generation, launchDigest);
+  }
+
+  executionPolicy(epoch: number): ExecutionPolicySnapshot {
+    this.assertAdmission(epoch);
+    return this.#policy.current(epoch);
+  }
+
+  readPolicy(
+    epoch: number,
+    ready: Parameters<InstalledExecutionPolicyStore["status"]>[3],
+    observeBackend?:Parameters<InstalledExecutionPolicyStore["status"]>[4],
+  ): ExecutionPolicyStatus {
+    this.assertController(epoch);
+    return this.#policy.status(this.serviceIncarnation, epoch, this.#effectiveConfiguration, ready,observeBackend);
+  }
+
+  stagePolicy(epoch: number, request: PolicyStageRequest) {
+    this.#assertPolicyWrite(epoch, request);
+    return this.#policy.stage(request);
+  }
+
+  applyPolicy(epoch: number, request: PolicyApplyRequest): void {
+    this.#assertPolicyWrite(epoch, request);
+    const installed = this.#policy.apply(request);
+    this.#effectiveConfiguration = this.#desiredConfiguration = installed.configuration;
+  }
+
+  #assertPolicyWrite(
+    epoch: number,
+    request: { incarnation: string; controllerEpoch: number },
+  ): void {
+    this.assertController(epoch);
+    if (request.incarnation !== this.serviceIncarnation || request.controllerEpoch !== epoch)
+      throw new SidecarOperationError("sidecar_controller_stale");
+    if (this.recoveryController || this.#state !== "ready")
+      throw new SidecarOperationError("sidecar_policy_update_denied");
   }
 
   assertController(controllerEpoch: number): void {
@@ -116,12 +165,8 @@ export class PersistentSidecarServiceRegistry {
     if (this.#state !== "ready" && this.#state !== "handoff_pending") throw new Error("sidecar_service_not_ready");
     if (this.#controllerEpoch >= Number.MAX_SAFE_INTEGER) throw new Error("sidecar_controller_epoch_exhausted");
     this.detach(this.#controllerEpoch);
-    this.#desiredConfiguration = Object.freeze(sidecarServiceConfigurationSchema.parse(configuration));
-    if (!sameSidecarServiceConfiguration(this.#desiredConfiguration, this.#effectiveConfiguration)) {
-      // Existing hosts may have cached grants. A changed revision needs a clean
-      // service replacement; an idle observation alone cannot reauthorize them.
-      if (this.#resources.size === 0) this.#effectiveConfiguration = this.#desiredConfiguration;
-    }
+    if (mode === "normal") this.#desiredConfiguration = Object.freeze(sidecarServiceConfigurationSchema.parse(configuration));
+    this.#policy.invalidateAttachment();
     this.#attached = true;
     this.#attachmentMode = mode;
     return ++this.#controllerEpoch;
@@ -129,6 +174,7 @@ export class PersistentSidecarServiceRegistry {
 
   detach(controllerEpoch: number): void {
     if (!this.#attached || controllerEpoch !== this.#controllerEpoch) return;
+    this.#policy.invalidateAttachment();
     this.#attached = false;
     this.#attachmentMode = "none";
     for (const participant of this.#resources.values()) {
@@ -206,6 +252,7 @@ export class PersistentSidecarServiceRegistry {
     // Fence before observing blockers. All hosts must call assertAdmission
     // before committing launches or mutations, including after awaited probes.
     const previousState = this.#state;
+    this.#policy.discardStaging();
     this.#state = "draining";
     this.#stopPromise = undefined;
     // Check the user's observation before our own native refresh can settle it.

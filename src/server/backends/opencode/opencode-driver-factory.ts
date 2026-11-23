@@ -15,13 +15,11 @@ export class OpenCodeBackendDriverFactory implements BackendDriverFactory {
     } });
   readonly scope: RequestScope;
   readonly instance: AgentBackendInstance;
-  readonly #connections: ReadonlyMap<string, AgentConnectionProfile>;
-  constructor(readonly input: Omit<OpenCodeDriverContext, "connection"> & { connections: readonly AgentConnectionProfile[] }) {
+  constructor(readonly input: Omit<OpenCodeDriverContext, "connection"> & { readonly connections: readonly AgentConnectionProfile[] }) {
     this.scope = Object.freeze({ ...input.scope }); this.instance = input.instance;
-    this.#connections = new Map(input.connections.map(connection => [connection.id, Object.freeze({ ...connection })]));
   }
   create(connection: AgentConnectionProfile): OpenCodeConversationBackendDriver {
-    const admitted = this.#connections.get(connection.id);
+    const admitted = this.input.connections.find(profile => profile.id === connection.id);
     if (!admitted || (["tenantId", "ownerPrincipalId", "templateId", "kind", "backendInstanceId", "executionEnvironmentId", "enabled", "configurationRevision"] as const)
           .some(key => admitted[key] !== connection[key]) || !connection.enabled || !this.instance.enabled ||
         this.instance.kind !== "opencode" || this.instance.tenantId !== this.scope.tenantId ||

@@ -30,7 +30,7 @@ import { PiThreadPresentationProvider } from "./pi-thread-presentation-provider.
 import { ManagedTerminalCarrierError } from "../../terminal/managed-terminal-carrier.js";
 import { resolveStateDirectory } from "../../config/config.js";
 import {
-  compileBackendModelPolicy,
+  configuredModelPolicy,
   type CompiledBackendModelPolicy,
 } from "../model-policy.js";
 import { PiAutomationExecutionPolicy } from "./pi-automation-execution-policy.js";
@@ -223,8 +223,8 @@ class PreparedPiBackendModule implements PreparedBackendModule {
   constructor(module: BackendModule, input: BackendModuleConfigurationInput) {
     this.module = module;
     this.backendInstanceId = input.backend.id;
-    this.#modelPolicy = compileBackendModelPolicy(
-      input.backend.modelPolicy,
+    this.#modelPolicy = configuredModelPolicy(
+      input,
       "provider_model_effort",
     );
     const executionEnvironmentIds = new Set(

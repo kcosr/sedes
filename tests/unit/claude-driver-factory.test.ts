@@ -6,6 +6,7 @@ import type {
   AgentConnectionProfile,
   AttachConversationInput,
 } from "../../src/server/backends/contracts.js";
+import type { ClaudeConversationBackendDriver } from "../../src/server/backends/claude/claude-conversation-driver.js";
 import { ClaudeBackendDriverFactory } from "../../src/server/backends/claude/claude-driver-factory.js";
 import type { ClaudeRuntimeClient } from "../../src/server/backends/claude/claude-runtime-client.js";
 import type { ClaudeThreadRepository } from "../../src/server/backends/claude/claude-thread-repository.js";
@@ -98,6 +99,7 @@ describe("ClaudeBackendDriverFactory", () => {
     const runtimeClient = { getSessionInfo } as unknown as ClaudeRuntimeClient;
     const firstConnection = connection("claude-first");
     const secondConnection = connection("claude-second");
+    const connections = [firstConnection, secondConnection];
     const factory = new ClaudeBackendDriverFactory({
       usage: NO_USAGE_SINK,
       nativeNamespace: "claude-test-native",
@@ -115,7 +117,7 @@ describe("ClaudeBackendDriverFactory", () => {
       ),
       attachmentProvenanceKey: new Uint8Array(32),
       outputArtifacts: createInMemoryOutputArtifactPublisher(),
-      connections: [firstConnection, secondConnection],
+      connections,
       agentToolCli: {
         availability: "unavailable",
         reason: "cli_unavailable",
@@ -153,6 +155,13 @@ describe("ClaudeBackendDriverFactory", () => {
     await vi.waitFor(() => expect(pending).toHaveLength(2));
     pending[1]!.reject(new Error("retry attach failed"));
     await expect(retry).rejects.toMatchObject({ category: "unavailable" });
+    const oldClose = vi.spyOn(firstDriver as ClaudeConversationBackendDriver, "close");
+    const revised = { ...firstConnection, configurationRevision: firstConnection.configurationRevision + 1 };
+    connections[0] = revised;
+    const replacement = factory.create(revised);
+    expect(replacement).not.toBe(firstDriver);
+    expect(oldClose).not.toHaveBeenCalled();
     await factory.close();
+    expect(oldClose).toHaveBeenCalledOnce();
   });
 });
