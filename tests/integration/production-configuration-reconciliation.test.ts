@@ -1185,7 +1185,13 @@ describe("production configuration reconciliation", () => {
     // Settings poll starts an asynchronous inventory read of the original process.
     replaceController();
     await service.impact(scope, { resourceKind: "environment", resourceId: environmentId, action: "restart", expectedRevision: edited.revision });
-    const superseded = Promise.withResolvers<Awaited<ReturnType<typeof inspect>>>();
+    function pendingInspection() {
+      type Inventory = Awaited<ReturnType<typeof inspect>>;
+      let resolve!: (value: Inventory) => void;
+      const promise = new Promise<Inventory>(done => { resolve = done; });
+      return {promise, resolve};
+    }
+    const superseded = pendingInspection();
     const inspectOld = vi.fn(() => superseded.promise);
     inspect.mockImplementation(inspectOld);
     await vi.waitFor(async () => {
@@ -1203,7 +1209,7 @@ describe("production configuration reconciliation", () => {
 
     // B launches while the old inventory read is in flight. Hold the new read
     // too, so only the host's launch evidence can establish B's status.
-    const current = Promise.withResolvers<Awaited<ReturnType<typeof inspect>>>();
+    const current = pendingInspection();
     const replacement = { state: "idle" as const, incarnation: "second-provider", revision: "second-revision", blockers: [],
       startupEnvironmentFingerprint: configurationFingerprint(nextStartup) };
     const inspectNew = vi.fn(() => current.promise);
