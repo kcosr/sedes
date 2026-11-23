@@ -12,6 +12,11 @@ import type {
 export type EnvironmentResourceKind =
   | "global"
   | "environment"
+  | "backend"
+  | "target"
+  | "configuration_target"
+  | "thread_template"
+  | "principal_management"
   | "workspace"
   | "project"
   | "project_subtree"
@@ -27,6 +32,14 @@ export type EnvironmentAuthorityDeclaration =
   | { readonly kind: "public_information" }
   | { readonly kind: "installation_directory" }
   | { readonly kind: "environment_neutral" }
+  | { readonly kind: "principal_management" }
+  | { readonly kind: "configuration_command"; readonly resource: "environment" | "backend" | "principal"; readonly inputField?: string }
+  | { readonly kind: "runtime_resource" }
+  | { readonly kind: "runtime_receipt" }
+  | { readonly kind: "policy_selection" }
+  | { readonly kind: "policy_preview" }
+  | { readonly kind: "template_query" }
+  | { readonly kind: "direct_resource"; readonly resource: "backend" | "target" | "configuration_target" | "thread_template"; readonly inputField?: string; readonly defaultToSource?: never }
   | {
       readonly kind: "direct_resource";
       readonly resource: "environment" | "workspace" | "thread";
@@ -43,7 +56,7 @@ export type EnvironmentAuthorityDeclaration =
     }
   | {
       readonly kind: "scoped_query";
-      readonly resource: "environment" | "workspace" | "thread" | "task" | "workpad";
+      readonly resource: "environment" | "backend" | "workspace" | "thread" | "task" | "workpad";
     }
   | {
       readonly kind: "scope_transition";
@@ -90,6 +103,8 @@ export interface TrustedEnvironmentAuthorityGrant extends ResolvedEnvironmentAut
 
 export interface EnvironmentAuthorityResourceFact {
   readonly id: string;
+  readonly backendInstanceId?: string;
+  readonly revision?: number;
   readonly threadId?: string;
   readonly environmentId: string;
   readonly projectId?: string;
@@ -120,8 +135,28 @@ export interface EnvironmentAuthorityProjectFact {
   readonly label?: string;
 }
 
+export interface EnvironmentAuthorityRuntimeReceiptFact {
+  readonly resourceKind: "environment" | "backend";
+  readonly resourceId: string;
+  readonly environmentId: string;
+}
+
+export interface EnvironmentAuthorityConfigurationMutationFact {
+  readonly toolId: string;
+  readonly sourceThreadId: string;
+  readonly inputDigest: string;
+  readonly scopeFacts: { readonly environmentIds: readonly string[]; readonly crossEnvironment: boolean };
+}
+
 /** Bounded application/configuration facts only; implementations must not attach providers or probe paths. */
 export interface AgentToolEnvironmentAuthorityReader {
+  resolveConfiguredEnvironment(scope: RequestScope, id: string): EnvironmentAuthorityResourceFact | undefined;
+  resolveBackend(scope: RequestScope, id: string): EnvironmentAuthorityResourceFact | undefined;
+  resolveTarget(scope: RequestScope, id: string): EnvironmentAuthorityResourceFact | undefined;
+  resolveConfigurationTarget(scope: RequestScope, id: string): EnvironmentAuthorityResourceFact | undefined;
+  resolveThreadTemplate(scope: RequestScope, id: string): EnvironmentAuthorityResourceFact | undefined;
+  resolveRuntimeReceipt(scope: RequestScope, mutationId: string): EnvironmentAuthorityRuntimeReceiptFact | undefined;
+  resolveConfigurationMutation(scope: RequestScope, mutationId: string): EnvironmentAuthorityConfigurationMutationFact | undefined;
   resolveEnvironment(
     scope: RequestScope,
     id: string,
@@ -219,7 +254,7 @@ export class AgentToolEnvironmentAuthorityResolver {
       return {...ref, ...(projectId ? {projectId} : {})};
     });
     const isQuery = request.tool.environmentAuthority.kind === "scoped_query" ||
-      request.tool.environmentAuthority.kind === "installation_directory";
+      request.tool.environmentAuthority.kind === "installation_directory" || request.tool.environmentAuthority.kind === "template_query";
     const resolvedResourceRefs = uniqueSortedRefs(isQuery
       ? filterResourceScopeRefs(identifiedRefs, request)
       : identifiedRefs);
@@ -279,6 +314,65 @@ export class AgentToolEnvironmentAuthorityResolver {
     request: ResolveEnvironmentAuthorityInput,
   ): readonly ResolvedEnvironmentResourceRef[] {
     const declaration = request.tool.environmentAuthority;
+    const input = inputObject(request.input);
+    if (declaration.kind === "principal_management") return principalManagementRefs(request);
+    if (declaration.kind === "configuration_command") {
+      const receipt = typeof input.mutationId === "string" ? this.reader.resolveConfigurationMutation(request.scope, input.mutationId) : undefined;
+      if (receipt) {
+        if (request.defaults.kind !== "thread_agent" || receipt.toolId !== request.tool.id || receipt.sourceThreadId !== request.defaults.threadId) return deny();
+        // Input equality and stale-revision replay belong to the durable command service.
+        return [...(receipt.scopeFacts.crossEnvironment ? principalManagementRefs(request) : []),
+          ...receipt.scopeFacts.environmentIds.map(id => resourceRef("environment", { id, environmentId: id }))];
+      }
+      if (declaration.resource === "principal") {
+        const refs = [...principalManagementRefs(request)];
+        if (typeof input.configurationTargetId === "string") {
+          const target = required(this.reader.resolveConfigurationTarget(request.scope, input.configurationTargetId));
+          refs.push(resourceRef("environment", { id: target.environmentId, environmentId: target.environmentId }));
+        }
+        return refs;
+      }
+      const id = readStringPath(input, declaration.inputField ?? `${declaration.resource}Id`);
+      if (!id) return deny();
+      const fact = required(declaration.resource === "environment" ? this.reader.resolveConfiguredEnvironment(request.scope, id) : this.reader.resolveBackend(request.scope, id));
+      // Narrow command receipts retain the owning environment, including after removal.
+      return [resourceRef("environment", { id: fact.environmentId, environmentId: fact.environmentId })];
+    }
+    if (declaration.kind === "runtime_resource") {
+      if (typeof input.resourceId !== "string") return deny();
+      const kind = input.resourceKind;
+      if (kind !== "environment" && kind !== "backend") return deny();
+      const receipt = typeof input.mutationId === "string" ? this.reader.resolveRuntimeReceipt(request.scope, input.mutationId) : undefined;
+      if (receipt) {
+        if (receipt.resourceKind !== kind || receipt.resourceId !== input.resourceId) return deny();
+        return [resourceRef(kind, { id: receipt.resourceId, environmentId: receipt.environmentId })];
+      }
+      return [resourceRef(kind, required(kind === "environment" ? this.reader.resolveConfiguredEnvironment(request.scope, input.resourceId) : this.reader.resolveBackend(request.scope, input.resourceId)))];
+    }
+    if (declaration.kind === "runtime_receipt") {
+      if (typeof input.mutationId !== "string") return deny();
+      const fact = required(this.reader.resolveRuntimeReceipt(request.scope, input.mutationId));
+      return [resourceRef(fact.resourceKind, {id: fact.resourceId, environmentId: fact.environmentId})];
+    }
+    if (declaration.kind === "policy_selection") {
+      const target = inputObject(input.target);
+      if (target.kind === "account") return principalManagementRefs(request);
+      if (target.kind === "environment" && typeof target.executionEnvironmentId === "string")
+        return [resourceRef("environment", required(this.reader.resolveConfiguredEnvironment(request.scope, target.executionEnvironmentId)))];
+      if (target.kind === "backend" && typeof target.backendId === "string")
+        return [resourceRef("backend", required(this.reader.resolveBackend(request.scope, target.backendId)))];
+      return deny();
+    }
+    if (declaration.kind === "policy_preview") {
+      if (typeof input.targetId !== "string") return deny();
+      return [resourceRef("target", required(this.reader.resolveTarget(request.scope, input.targetId))),
+        ...(typeof input.agentId === "string" ? [{kind: "saved_agent" as const, ...required(this.reader.resolveSavedAgent(request.scope, input.agentId))}] : [])];
+    }
+    if (declaration.kind === "template_query") return [
+      ...allowedEnvironments(request, this.reader).map(fact => resourceRef("environment", fact)),
+      ...(request.resourceScope?.allowOtherProjects === false
+        ? projectScopeRefs(required(this.reader.resolveProject(request.scope, requiredDefaultProjectId(request))), request, "exact") : []),
+    ];
     if (declaration.kind === "source_only") {
       return [
         resourceRef("thread", {
@@ -308,7 +402,7 @@ export class AgentToolEnvironmentAuthorityResolver {
     >,
   ): readonly ResolvedEnvironmentResourceRef[] {
     const object = inputObject(request.input);
-    const inputField = declaration.inputField ?? `${declaration.resource}Id`;
+    const inputField = declaration.inputField ?? (declaration.resource === "thread_template" ? "templateId" : declaration.resource === "configuration_target" ? "configurationTargetId" : `${declaration.resource}Id`);
     const supplied = inputField.split(".").reduce<unknown>((value, key) =>
       value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined, object,
       );
@@ -333,7 +427,7 @@ export class AgentToolEnvironmentAuthorityResolver {
       return [
         resourceRef(
           "environment",
-          required(this.reader.resolveEnvironment(request.scope, id)),
+          required(request.tool.id === "environment.get" ? this.reader.resolveConfiguredEnvironment(request.scope, id) : this.reader.resolveEnvironment(request.scope, id)),
         ),
         ...(typeof projectId === "string"
           ? projectScopeRefs(
@@ -343,6 +437,13 @@ export class AgentToolEnvironmentAuthorityResolver {
             )
           : []),
       ];
+    }
+    if (declaration.resource === "backend" || declaration.resource === "target" || declaration.resource === "configuration_target" || declaration.resource === "thread_template") {
+      const fact = declaration.resource === "backend" ? this.reader.resolveBackend(request.scope, id)
+        : declaration.resource === "target" ? this.reader.resolveTarget(request.scope, id)
+        : declaration.resource === "configuration_target" ? this.reader.resolveConfigurationTarget(request.scope, id)
+        : this.reader.resolveThreadTemplate(request.scope, id);
+      return [resourceRef(declaration.resource, required(fact))];
     }
     if (declaration.resource === "workspace")
       return [
@@ -408,6 +509,10 @@ export class AgentToolEnvironmentAuthorityResolver {
     >["resource"],
   ): readonly ResolvedEnvironmentResourceRef[] {
     const input = inputObject(request.input);
+    if (resource === "backend") {
+      if (typeof input.environmentId === "string") return [resourceRef("environment", required(this.reader.resolveEnvironment(request.scope, input.environmentId)))];
+      return allowedEnvironments(request, this.reader).map(fact => resourceRef("environment", fact));
+    }
     if (resource === "workspace") {
       const scope = inputObject(input.scope ?? { kind: "default_environment" });
       if (scope.kind === "default_environment")
@@ -983,10 +1088,11 @@ export function resourceWithinScope(ref: ResolvedEnvironmentResourceRef, caller:
   const policy = caller.resourceScope;
   if (caller.defaults.kind !== "thread_agent") return true;
   if (!policy) return false;
+  if (ref.kind === "principal_management") return policy.allowOtherEnvironments;
   if (ref.kind === "global" || ref.kind === "saved_agent") return true;
   if (!policy.allowOtherEnvironments && (ref.outsideEveryEnvironment ||
       ref.environmentId && ref.environmentId !== caller.defaults.environmentId)) return false;
-  const projectOwned = ["workspace", "thread", "thread_family", "automation", "project", "project_subtree"].includes(ref.kind) ||
+  const projectOwned = ["workspace", "thread", "thread_family", "automation", "project", "project_subtree", "thread_template"].includes(ref.kind) ||
     ((ref.kind === "task" || ref.kind === "workpad") && (ref.threadId !== undefined || ref.environmentId !== undefined));
   if (!policy.allowOtherProjects && !ref.projectId && projectOwned) return false;
   if (ref.projectId && !policy.allowOtherProjects && ref.projectId !== caller.defaults.projectId) return false;
@@ -1003,6 +1109,13 @@ export function assertResourceScope(refs: readonly ResolvedEnvironmentResourceRe
   throw new CanonicalAgentToolRequestError("permission_denied", environment
     ? "Cross-environment access is disabled for this thread. Enable access to other environments in its tool settings to continue."
     : "Access to other projects is disabled for this thread. Enable access to other projects in its tool settings to continue.");
+}
+
+function principalManagementRefs(request: ResolveEnvironmentAuthorityInput): readonly ResolvedEnvironmentResourceRef[] {
+  if (request.defaults.kind !== "thread_agent" || request.resourceScope?.allowOtherEnvironments !== true) {
+    throw new CanonicalAgentToolRequestError("permission_denied", "Principal-wide management requires access to other environments.");
+  }
+  return [{kind: "principal_management", id: request.scope.principalId, outsideEveryEnvironment: true}];
 }
 
 function requiredDefaultWorkspaceId(
@@ -1051,6 +1164,7 @@ function resourceRef(
     ...(fact.projectId ? { projectId: fact.projectId } : {}),
     ...(fact.label ? { label: fact.label } : {}),
     ...(fact.threadId ? { threadId: fact.threadId } : {}),
+    ...(fact.revision !== undefined ? { revision: fact.revision } : {}),
   });
 }
 

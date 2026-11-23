@@ -10,7 +10,7 @@ import {
   SidecarOperationRegistry,
   SidecarProtocolPeer,
   agentToolsCatalogOperation,
-  agentToolsV6Operations,
+  agentToolsV7Operations,
   controlHelloOperation,
   controlPingOperation,
   terminalPrepareOperation,
@@ -67,7 +67,7 @@ const workspaceCapability = Object.freeze({
 });
 const agentToolsCapability = Object.freeze({
   capabilityId: "agent_tools_cli",
-  majorVersion: 6,
+  majorVersion: 7,
 });
 const agentToolsInventory = Object.freeze({
   ...agentToolsCapability,
@@ -139,7 +139,7 @@ describe("SidecarClientSession", () => {
     host.start();
     const sedesOperations = new SidecarOperationRegistry(), invoked = vi.fn(() => ({ outcome: "error" as const,
       error: { code: "permission_denied" as const, message: "Fixture denied without executing a tool.", retryable: false } }));
-    for (const operation of agentToolsV6Operations) sedesOperations.register(operation as never, (() => ({ outcome: "ok", tools: [] })) as never);
+    for (const operation of agentToolsV7Operations) sedesOperations.register(operation as never, (() => ({ outcome: "ok", tools: [] })) as never);
     sedesOperations.register(openCodeToolInvokeOperation, invoked);
     const session = await SidecarClientSession.start({ connectionCompression: true, stream: streams.left, transportKind, carrierGeneration: 1, sessionNonce, artifact, installation,
       signal: new AbortController().signal, authorizedCapabilities: [agentToolsCapability], authorizedRuntimeCapabilities: [runtime], sedesOperations });
@@ -170,7 +170,7 @@ describe("SidecarClientSession", () => {
     { name: "missing private operation", runtime: "opencode_runtime", cli: true, registered: false },
   ])("rejects private OpenCode relay inventory with $name before hello", async ({ runtime, cli, registered }) => {
     const streams = byteStreamPair(), sedesOperations = new SidecarOperationRegistry();
-    if (cli) for (const operation of agentToolsV6Operations) sedesOperations.register(operation as never, (() => { throw new Error("unreachable"); }) as never);
+    if (cli) for (const operation of agentToolsV7Operations) sedesOperations.register(operation as never, (() => { throw new Error("unreachable"); }) as never);
     if (registered) sedesOperations.register(openCodeToolInvokeOperation, () => { throw new Error("unreachable"); });
     try {
       await expect(SidecarClientSession.start({ connectionCompression: true, stream: streams.left, transportKind: "ssh_stdio", carrierGeneration: 1, sessionNonce, artifact, installation,
@@ -606,7 +606,7 @@ describe("SidecarClientSession", () => {
       });
       sidecar.start();
       const sedesOperations = new SidecarOperationRegistry();
-      for (const definition of agentToolsV6Operations) {
+      for (const definition of agentToolsV7Operations) {
         sedesOperations.register(
           definition as never,
           ((request: unknown) => {
@@ -662,9 +662,9 @@ describe("SidecarClientSession", () => {
       const sedesOperations = new SidecarOperationRegistry();
       const selected =
         variant === "missing"
-          ? agentToolsV6Operations.slice(0, -1)
+          ? agentToolsV7Operations.slice(0, -1)
           : [
-              ...agentToolsV6Operations,
+              ...agentToolsV7Operations,
               { ...agentToolsCatalogOperation, operation: "catalog.extra" },
             ];
       for (const definition of selected) {

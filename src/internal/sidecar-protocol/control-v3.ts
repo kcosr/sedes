@@ -52,7 +52,7 @@ const identifierSchema = z
   .min(1)
   .max(120)
   .regex(/^[a-z][a-z0-9_.-]*$/u);
-const AGENT_TOOLS_CLI_V6_OPERATIONS = Object.freeze([
+const AGENT_TOOLS_CLI_V7_OPERATIONS = Object.freeze([
   "catalog.describe",
   "catalog.list",
   "tool.invoke",
@@ -543,8 +543,8 @@ function capabilityInventories(
       result.has(key) ||
       !canonicalOperations(parsed.operations) ||
       (parsed.capabilityId === "agent_tools_cli" &&
-        (parsed.majorVersion !== 6 ||
-          !equalOperations(parsed.operations, AGENT_TOOLS_CLI_V6_OPERATIONS)))
+        (parsed.majorVersion !== 7 ||
+          !equalOperations(parsed.operations, AGENT_TOOLS_CLI_V7_OPERATIONS)))
     ) {
       throw new Error("sidecar_control_registration_invalid");
     }

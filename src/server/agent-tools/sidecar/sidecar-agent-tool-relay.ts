@@ -16,7 +16,7 @@ import { openCodeToolInvokeOperation } from "../../backends/opencode/opencode-to
 import { assertOpenCodeInvocationSource, runWithOpenCodeInvocation } from "../../backends/opencode/opencode-tool-invocation.js";
 import type { z } from "zod";
 
-import type { AgentToolRouteBinding } from "../../../internal/sidecar-protocol/agent-tools-v6.js";
+import type { AgentToolRouteBinding } from "../../../internal/sidecar-protocol/agent-tools-v7.js";
 
 export interface SidecarAgentToolRelayAuthority {
   readonly scope: RequestScope;

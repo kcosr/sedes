@@ -1,3 +1,4 @@
+import { executionBackendDefaults } from "../../../shared/execution-configuration-defaults.js";
 import type { ReactNode } from "react";
 import { Callout } from "../ui/callout.js";
 import type { KeyValueItem } from "../ui/key-value-list.js";
@@ -72,18 +73,13 @@ function labelsOf(options: ReadonlyArray<{ readonly value: string; readonly labe
   return values.map(value => labelOf(options, value)).join(", ") || "None";
 }
 
-function commonBackend(id: string) { return { id, label: "", enabled: true, modelPolicy: { type: "catalog" as const } }; }
-function commonTarget(id: string, backendInstanceId: string, executionEnvironmentId: string) {
-  return { id, label: "Default connection", backendInstanceId, executionEnvironmentId, enabled: true };
-}
-
 /** Registered administration editors are the only browser surface that understands these typed configuration settings. */
 export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
   pi_native: {
     label: "Pi", description: "Runs the installed Pi CLI on the selected Linux or macOS execution host, locally, over SSH, or through an outbound connection. Native Windows Pi is unsupported.",
     supportsProviderIds: true, supportsRemoteWorkspace: true,
-    createBackend: (id) => ({ ...commonBackend(id), kind: "pi_native", moduleConfiguration: { initializationTimeoutMs: 30_000, projectTrusted: false } }),
-    createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "pi_rpc", moduleConfiguration: { defaults: {} } }),
+    createBackend: executionBackendDefaults.pi_native.createBackend,
+    createTarget: executionBackendDefaults.pi_native.createTarget,
     renderConnection: (props) => props.value.kind === "pi_native" ? <PiNativeConnectionEditor {...props} value={props.value} /> : unsupportedEditor(),
     renderTarget: (props) => props.value.kind === "pi_rpc" ? <PiNativeTargetEditor {...props} value={props.value} /> : unsupportedEditor(),
     summarizeTarget: (value) => {
@@ -104,8 +100,8 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
   pi: {
     label: "Pi SDK", description: "The SDK and model connection run on Sedes. A remote environment supplies workspace tools only.",
     supportsProviderIds: true, supportsRemoteWorkspace: true,
-    createBackend: (id) => ({ ...commonBackend(id), kind: "pi" }),
-    createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "pi_sdk" }),
+    createBackend: executionBackendDefaults.pi.createBackend,
+    createTarget: executionBackendDefaults.pi.createTarget,
     renderConnection: () => <p className="execution-muted">Uses the Pi installation and authentication available to the Sedes server account.</p>,
     renderTarget: () => <p className="execution-muted">Models and reasoning defaults come from the Pi catalog and thread settings.</p>,
     summarizeTarget: () => "Pi catalog and thread defaults",
@@ -114,8 +110,8 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
   antigravity: {
     label: "Antigravity", description: "Runs the installed Antigravity CLI on the selected Linux or macOS execution host, locally, over SSH, or through an outbound connection.",
     supportsProviderIds: false, supportsRemoteWorkspace: true,
-    createBackend: id => ({ ...commonBackend(id), kind: "antigravity", moduleConfiguration: { initializationTimeoutMs: 30_000 } }),
-    createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "antigravity_acp", moduleConfiguration: { defaults: {} } }),
+    createBackend: executionBackendDefaults.antigravity.createBackend,
+    createTarget: executionBackendDefaults.antigravity.createTarget,
     renderConnection: props => props.value.kind === "antigravity" ? <AntigravityConnectionEditor {...props} value={props.value} /> : unsupportedEditor(),
     renderTarget: props => props.value.kind === "antigravity_acp" ? <AntigravityTargetEditor {...props} value={props.value} /> : unsupportedEditor(),
     summarizeTarget: value => {
@@ -135,13 +131,8 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
     label: "Codex", description: "Connect to an existing app-server, or let the execution environment manage a stdio process.",
     supportsProviderIds: false, supportsRemoteWorkspace: true,
     stopEffect: value => value.kind === "codex_app_server" && value.moduleConfiguration.connection.ownership === "external" ? "attachment" : "service",
-    createBackend: (id) => ({ ...commonBackend(id), kind: "codex_app_server", moduleConfiguration: {
-      connection: { ownership: "owned", channel: { type: "process_stdio", workingDirectory: "" } },
-      policy: { allowedSandboxModes: ["read-only"], allowedNetworkAccess: ["disabled"], allowedApprovalPolicies: ["on-request"], allowedApprovalReviewers: ["user"] },
-    } }),
-    createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "codex_app_server", moduleConfiguration: {
-      defaults: { sandboxMode: "read-only", networkAccess: "disabled", approvalPolicy: "on-request", approvalReviewer: "user", model: { type: "catalogDefault" } },
-    } }),
+    createBackend: executionBackendDefaults.codex_app_server.createBackend,
+    createTarget: executionBackendDefaults.codex_app_server.createTarget,
     renderConnection: (props) => props.value.kind === "codex_app_server" ? <CodexConnectionEditor {...props} value={props.value} /> : unsupportedEditor(),
     renderPolicy: (props) => props.value.kind === "codex_app_server" ? <CodexPolicyEditor {...props} value={props.value} /> : unsupportedEditor(),
     renderTarget: (props) => props.value.kind === "codex_app_server" ? <CodexTargetEditor {...props} value={props.value} /> : unsupportedEditor(),
@@ -182,10 +173,8 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
   claude_agent_sdk: {
     label: "Claude", description: "Uses an authenticated Claude Code installation with Node.js 24.18 or newer on a Linux or macOS execution host. SSH and outbound connections are supported; native Windows Claude is unsupported.",
     supportsProviderIds: false, supportsRemoteWorkspace: true,
-    createBackend: (id) => ({ ...commonBackend(id), kind: "claude_agent_sdk", moduleConfiguration: {
-      initializationTimeoutMs: 20_000, permissionPolicy: { allowedModes: ["default"] },
-    } }),
-    createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "claude_agent_sdk", moduleConfiguration: { defaults: { permissionMode: "default" } } }),
+    createBackend: executionBackendDefaults.claude_agent_sdk.createBackend,
+    createTarget: executionBackendDefaults.claude_agent_sdk.createTarget,
     renderConnection: (props) => props.value.kind === "claude_agent_sdk" ? <ClaudeConnectionEditor {...props} value={props.value} /> : unsupportedEditor(),
     renderPolicy: (props) => props.value.kind === "claude_agent_sdk" ? <ClaudePolicyEditor {...props} value={props.value} /> : unsupportedEditor(),
     renderTarget: (props) => props.value.kind === "claude_agent_sdk" ? <SelectField label="Default permission mode" layout="stacked" disabled={props.disabled}
@@ -208,11 +197,8 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
   grok_build: {
     label: "Grok", description: "A local Grok ACP process uses the execution account's native authentication. Remote Grok is unsupported.",
     supportsProviderIds: false, supportsRemoteWorkspace: false,
-    createBackend: (id) => ({ ...commonBackend(id), kind: "grok_build", moduleConfiguration: {
-      connection: { ownership: "owned", channel: { type: "process_stdio", workingDirectoryPolicy: "workspace" } },
-      authentication: { type: "native" }, security: { profile: "unrestricted_v1", sandboxProfile: "off", networkAccess: "enabled", approvalMode: "full_access" },
-    } }),
-    createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "grok_acp", moduleConfiguration: { defaults: { model: { type: "catalogDefault" }, reasoningEffort: { type: "modelDefault" } } } }),
+    createBackend: executionBackendDefaults.grok_build.createBackend,
+    createTarget: executionBackendDefaults.grok_build.createTarget,
     renderConnection: (props) => props.value.kind === "grok_build" ? <GrokConnectionEditor {...props} value={props.value} /> : unsupportedEditor(),
     renderPolicy: () => <Callout tone="warning">Grok runs in the workspace with full access, networking enabled, and no sandbox. Authentication is managed by its native installation.</Callout>,
     renderTarget: (props) => props.value.kind === "grok_acp" ? <GrokTargetEditor {...props} value={props.value} /> : unsupportedEditor(),
@@ -235,12 +221,8 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
     validationError: (value, environment) => value.kind === "opencode" && environment && environment.kind !== "local"
       && value.moduleConfiguration.connection.channel.type === "http" && value.moduleConfiguration.connection.channel.authentication.secret.source === "environment"
       ? "Remote OpenCode requires a protected password file on the execution host. Choose Protected file and enter its path to save this backend." : undefined,
-    createBackend: (id) => ({ ...commonBackend(id), kind: "opencode", moduleConfiguration: {
-      connection: { ownership: "owned", channel: { type: "process_stdio" } },
-    } }),
-    createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "opencode_http", moduleConfiguration: {
-      defaults: { model: { type: "catalogDefault" }, variant: { type: "modelDefault" } },
-    } }),
+    createBackend: executionBackendDefaults.opencode.createBackend,
+    createTarget: executionBackendDefaults.opencode.createTarget,
     renderConnection: (props) => props.value.kind === "opencode" ? <OpenCodeBackendEditor {...props} value={props.value} /> : unsupportedEditor(),
     renderTarget: (props) => props.value.kind === "opencode_http" ? <OpenCodeTargetEditor {...props} value={props.value} /> : unsupportedEditor(),
     summarizeTarget: (value) => {

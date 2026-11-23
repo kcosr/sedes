@@ -18,6 +18,13 @@ const threads = new Map([
   ["other-project-remote", {id:"other-project-remote",environmentId:"remote",workspaceId:"other-remote",projectId:"other"}],
 ]);
 const reader: AgentToolEnvironmentAuthorityReader = {
+  resolveConfiguredEnvironment: () => undefined,
+  resolveBackend: () => undefined,
+  resolveTarget: () => undefined,
+  resolveConfigurationTarget: () => undefined,
+  resolveThreadTemplate: () => undefined,
+  resolveRuntimeReceipt: () => undefined,
+  resolveConfigurationMutation: () => undefined,
   resolveEnvironment: (_scope,id) => ({id,environmentId:id}),
   resolveWorkspace: (_scope,id) => { const fact=[...threads.values()].find(thread=>thread.workspaceId===id); return fact ? {...fact,id} : undefined; },
   resolveWorkspaceProject: (_scope,id) => [...threads.values()].find(thread=>thread.workspaceId===id)?.projectId,

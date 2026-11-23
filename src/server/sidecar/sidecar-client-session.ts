@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { AGENT_TOOL_CLI_CAPABILITY } from "../../internal/agent-tool-cli-protocol/capability.js";
 import { assertApprovedVariableRequest } from "../environment-variables/runtime-environment.js";
 import { closedWorkerControl } from "../../internal/sidecar-protocol/control-v3.js";
 import {
@@ -33,7 +34,7 @@ import {
   SidecarOperationRegistry,
   SidecarProtocolPeer,
   SidecarTransportCleanupError,
-  agentToolsV6Operations,
+  agentToolsV7Operations,
   controlGoAwayOperation,
   controlHelloOperation,
   controlPingOperation,
@@ -796,7 +797,7 @@ function validateAuthorizedCapabilities(
             : capability.capabilityId === "workspace_tools"
               ? 2
             : capability.capabilityId === "agent_tools_cli"
-              ? 6
+              ? AGENT_TOOL_CLI_CAPABILITY.majorVersion
               : capability.capabilityId === "interactive_terminal" ? 2 : 1) ||
         capability.capabilityId !==
           order.filter((id) =>
@@ -823,7 +824,7 @@ function validateSedesCapabilities(
   runtimeAuthorized: boolean,
   openCodeToolsAuthorized: boolean,
 ): readonly SidecarCapabilityInventory[] {
-  const expectedOperations = agentToolsV6Operations
+  const expectedOperations = agentToolsV7Operations
     .map(({ operation }) => operation)
     .sort();
   const selected = capabilities.filter((capability) => capability.capabilityId !== "runtime_bodies" || runtimeAuthorized);
@@ -834,7 +835,7 @@ function validateSedesCapabilities(
         capabilityId === "runtime_bodies" ? runtimeAuthorized && majorVersion === 1 && JSON.stringify(operations) === JSON.stringify([sidecarRuntimeBodyOffer.operation]) :
         capabilityId === "opencode_tools" ? openCodeToolsAuthorized && majorVersion === 3 && JSON.stringify(operations) === JSON.stringify(["tools.invoke"]) :
         capabilityId === "agent_tools_cli" && agentToolCliAuthorized &&
-        majorVersion === 6 &&
+        majorVersion === AGENT_TOOL_CLI_CAPABILITY.majorVersion &&
         JSON.stringify([...operations].sort()) ===
           JSON.stringify(expectedOperations),
     );

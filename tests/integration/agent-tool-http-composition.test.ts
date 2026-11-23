@@ -88,7 +88,14 @@ function createCrossEnvironmentComposition() {
   };
   const policies = { get: () => policy } as unknown as ThreadAgentToolPolicyRepository;
   const environmentAuthority = new AgentToolEnvironmentAuthorityResolver({
-    resolveEnvironment: () => undefined,
+    resolveConfiguredEnvironment: () => undefined,
+      resolveBackend: () => undefined,
+      resolveTarget: () => undefined,
+      resolveConfigurationTarget: () => undefined,
+      resolveThreadTemplate: () => undefined,
+      resolveRuntimeReceipt: () => undefined,
+      resolveConfigurationMutation: () => undefined,
+      resolveEnvironment: () => undefined,
     resolveWorkspace: () => undefined,
     resolveAutomation: () => undefined,
     resolveThread: (_scope, id) =>

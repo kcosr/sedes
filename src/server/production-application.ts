@@ -162,6 +162,8 @@ import { AgentThreadControlService } from "./agent-tools/application/agent-threa
 import { AgentThreadInventoryControlService } from "./agent-tools/application/agent-thread-inventory-control-service.js";
 import { DatabaseAgentToolApplicationReader } from "./agent-tools/application/database-agent-tool-application-reader.js";
 import { DatabaseAgentToolSourceAuthority } from "./agent-tools/application/database-agent-tool-source-authority.js";
+import { ExecutionManagementAccess } from "./agent-tools/application/execution-management-access.js";
+import { ExecutionConfigurationTools } from "./agent-tools/execution/execution-configuration-tools.js";
 import { CanonicalInlineAgentToolService } from "./agent-tools/invocation/canonical-inline-agent-tool-service.js";
 import { SourceScopedAgentToolService } from "./agent-tools/application/source-scoped-agent-tool-service.js";
 import { PrincipalAgentToolClientService } from "./agent-tools/application/principal-agent-tool-client-service.js";
@@ -169,6 +171,8 @@ import { AgentToolEnvironmentAuthorityResolver } from "./agent-tools/environment
 import { PolicyCheckedAgentToolHttpService } from "./agent-tools/http/agent-tool-http-service.js";
 import { AutomationAgentToolService } from "./agent-tools/tools/automation-agent-tool-service.js";
 import { ThreadWorktreeAgentToolService } from "./agent-tools/tools/thread-worktree-agent-tool-service.js";
+import { RuntimeAgentToolService } from "./agent-tools/tools/runtime-agent-tool-service.js";
+import { PolicyManagementAgentToolService } from "./agent-tools/tools/policy-management-agent-tool-service.js";
 import { CodexCliWebSearchProvider } from "./web-search/codex-cli-web-search-provider.js";
 import type { WebSearchProviderAvailability } from "./web-search/web-search-provider.js";
 import { WebSearchService } from "./web-search/web-search-service.js";
@@ -2114,6 +2118,7 @@ export async function startProductionApplication(
       notifications,
     });
     const clientControlTools = new ClientControlToolService(clientControls, actors, mutations.activity, agentToolSources, turnReplySpeech);
+    const executionManagementAccess = new ExecutionManagementAccess(agentToolSources, agentToolPolicies);
     const canonicalAgentTools = new CanonicalInlineAgentToolService({
       clientControls: clientControlTools,
       workpads: new WorkpadAgentToolService({ workpads, authorityReader: agentToolSources }),
@@ -2142,6 +2147,22 @@ export async function startProductionApplication(
       }),
       application: agentToolApplication,
       management: managementAgentTools,
+      // Administration is composed below once its runtime adapter is ready.
+      // Tool construction only retains these references; invocation resolves
+      // the same live service used by Settings after startup has completed.
+      executionConfiguration: new ExecutionConfigurationTools({
+        configuration: () => configurationAdmin,
+        access: executionManagementAccess,
+      }),
+      executionRuntime: new RuntimeAgentToolService(() => configurationAdmin, executionManagementAccess),
+      policyManagement: new PolicyManagementAgentToolService({
+        policySets,
+        templates: threadTemplates,
+        toolPolicies: agentToolPolicies,
+        principalToolClients: principalAgentToolClients,
+        authorityReader: agentToolSources,
+        mutations,
+      }),
       automations: automationAgentTools,
       savedAgents,
       threadCreation: savedAgents,
@@ -2177,7 +2198,6 @@ export async function startProductionApplication(
       {},
       agentToolPolicyDependencies.catalog,
     );
-    agentTools.bind(sourceScopedAgentTools);
     const httpAgentTools = new PolicyCheckedAgentToolHttpService(
       sourceScopedAgentTools,
     );
@@ -2186,11 +2206,6 @@ export async function startProductionApplication(
       publisher: automations,
     });
 
-    await queueDispatcher.recover(scope);
-    await completionCallbackDispatcher.deliverReady(scope);
-    await mutations.recoverUncertain(scope);
-    observeAutomationQueue.recover();
-    observeAutomationTurns.recover();
     scheduler = new DurableScheduler(
       [
         automations,
@@ -2346,7 +2361,6 @@ export async function startProductionApplication(
         }),
       );
     };
-    scheduler.start();
     resources.defer("durable scheduler", () => scheduler?.stop(), {
       mode: "ownership_critical",
     });
@@ -3690,6 +3704,16 @@ export async function startProductionApplication(
         mode: "ownership_critical",
       },
     );
+    // Recovered turns, callbacks and due automations may invoke management
+    // tools immediately. Publish the facade and dispatch startup work only
+    // after all tool services and their cleanup boundaries are ready.
+    agentTools.bind(sourceScopedAgentTools);
+    await queueDispatcher.recover(scope);
+    await completionCallbackDispatcher.deliverReady(scope);
+    await mutations.recoverUncertain(scope);
+    observeAutomationQueue.recover();
+    observeAutomationTurns.recover();
+    scheduler.start();
     const app = createNormalizedApp({
       usage,
       environmentVariables,

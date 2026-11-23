@@ -49,20 +49,30 @@ describe("connection compression migration", () => {
       database.close();
       database = openOverlayDatabase(filename, { migrate: false });
       applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 157));
-      const repository = new ConfigurationRepository(database);
-      for (const owner of [scope, otherScope]) {
-        expect(repository.get(owner)).toEqual({ revision: 9, configuration: migratedDocument, runtimes: [] });
+      // Check 157's exact transformation independently, then bring the fixture
+      // to the current schema before exercising the current repository.
+      const replayCases = [scope, otherScope].map(owner => {
+        const storedDocument = database.prepare("SELECT configuration_json, revision, updated_at FROM principal_execution_configuration WHERE tenant_id = ? AND owner_principal_id = ?")
+          .get(owner.tenantId, owner.principalId) as { configuration_json: string; revision: number; updated_at: number };
+        expect(JSON.parse(storedDocument.configuration_json)).toEqual(migratedDocument);
+        expect(storedDocument).toMatchObject({ revision: 9, updated_at: 123 });
         const row = database.prepare("SELECT request_json, request_fingerprint, result_json, created_at FROM execution_configuration_receipts WHERE tenant_id = ? AND owner_principal_id = ? AND operation = 'save'")
           .get(owner.tenantId, owner.principalId) as { request_json: string; request_fingerprint: string; result_json: string; created_at: number };
         const request = JSON.parse(row.request_json);
         expect(request.configuration.executionEnvironments[1]).toMatchObject({ label: "Historical SSH", connectionCompression: true });
         expect(row.request_fingerprint).toBe(configurationFingerprint(request));
         expect(row.created_at).toBe(456);
-        expect(repository.replaySave(owner, request)).toEqual(configurationSnapshotSchema.parse(JSON.parse(row.result_json)));
-        expect(repository.replaySave({ ...owner, principalId: owner.principalId === scope.principalId ? otherScope.principalId : scope.principalId }, request)).toBeUndefined();
-        expect(() => repository.get({ ...owner, principalId: randomUUID() })).toThrow("ownership");
         expect(database.prepare("SELECT request_fingerprint, request_json, result_json FROM execution_configuration_receipts WHERE owner_principal_id = ? AND operation = 'lifecycle'").get(owner.principalId))
           .toEqual({ request_fingerprint: "a".repeat(64), request_json: '{"retained":"request"}', result_json: '{"state":"applied","retained":"result"}' });
+        return { owner, request, result: configurationSnapshotSchema.parse(JSON.parse(row.result_json)) };
+      });
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      const repository = new ConfigurationRepository(database);
+      for (const { owner, request, result } of replayCases) {
+        expect(repository.get(owner)).toEqual({ revision: 9, configuration: migratedDocument, runtimes: [] });
+        expect(repository.replaySave(owner, request)).toEqual(result);
+        expect(repository.replaySave({ ...owner, principalId: owner.principalId === scope.principalId ? otherScope.principalId : scope.principalId }, request)).toBeUndefined();
+        expect(() => repository.get({ ...owner, principalId: randomUUID() })).toThrow("ownership");
       }
     } finally {
       database.close();

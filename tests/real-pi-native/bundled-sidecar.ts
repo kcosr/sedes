@@ -93,7 +93,7 @@ export async function bundledSidecar(configuration: PiNativeRuntimeConfiguration
     }
     session = await SidecarClientSession.start({ connectionCompression: true, transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: generation, artifact,
       installation: { accountHome: home, stateRoot: paths.stateRoot, nodeExecutable: process.execPath, environment: { HOME: home }, executableDirectory: artifact.executableDirectory, executablePath: artifact.executablePath },
-      authorizedCapabilities: cliEnabled ? [{ capabilityId: "agent_tools_cli", majorVersion: 6 }] : [], authorizedRuntimeCapabilities: [piNativeRuntimeCapability],
+      authorizedCapabilities: cliEnabled ? [{ capabilityId: "agent_tools_cli", majorVersion: 7 }] : [], authorizedRuntimeCapabilities: [piNativeRuntimeCapability],
       policyAttachment: "normal", readDesiredPolicy: () => policy, sedesOperations, signal });
     await session.applyPolicy(policy, signal);
     lease = { channel: session.runtimeChannel, closed: session.closed, controllerEpoch, serviceIncarnation, release() {} };

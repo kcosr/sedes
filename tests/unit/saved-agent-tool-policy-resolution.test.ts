@@ -495,6 +495,13 @@ describe("new-thread tool policy snapshots", () => {
       await current.service.createThread(scope,{...request(),toolPolicySelection:{kind:"policy_set",policySetId:policy.id}},caller);
       expect(current.initialized).toHaveBeenCalledOnce();
       const reader: AgentToolEnvironmentAuthorityReader = {
+  resolveConfiguredEnvironment: () => undefined,
+  resolveBackend: () => undefined,
+  resolveTarget: () => undefined,
+  resolveConfigurationTarget: () => undefined,
+  resolveThreadTemplate: () => undefined,
+  resolveRuntimeReceipt: () => undefined,
+  resolveConfigurationMutation: () => undefined,
         resolveEnvironment: (_scope, id) => ({id,environmentId:id}),
         resolveProject: (_scope, id) => ({id,membershipRevision:0,memberEnvironmentIds:[id === "remote-only" ? "environment-b" : environmentId]}),
         resolveWorkspace: () => undefined,

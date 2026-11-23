@@ -1,4 +1,10 @@
 import { createAutomationListToolDefinition, createAutomationDeleteToolDefinition } from "../tools/automation-management-tools.js";
+import { createExecutionConfigurationToolDefinitions } from "../tools/execution-configuration-management-tools.js";
+import type { ExecutionConfigurationTools } from "../execution/execution-configuration-tools.js";
+import { createRuntimeManagementToolDefinitions } from "../tools/runtime-management-tools.js";
+import type { RuntimeAgentToolService } from "../tools/runtime-agent-tool-service.js";
+import { createPolicyManagementToolDefinitions } from "../tools/policy-management-tools.js";
+import type { PolicyManagementAgentToolService } from "../tools/policy-management-agent-tool-service.js";
 import { createClientControlToolDefinitions, type ClientControlToolService } from "../tools/client-control-tools.js";
 import { createPageToolDefinitions } from "../tools/page-management-tools.js";
 import type { PageAgentToolService } from "../tools/page-agent-tool-service.js";
@@ -113,6 +119,9 @@ export function createCanonicalAgentToolDefinitions(input: {
   readonly threadControl?: AgentThreadControlToolServices;
   readonly webSearch?: WebSearchExecutor;
   readonly threadWorktrees?: AgentThreadWorktreeService;
+  readonly executionConfiguration?: ExecutionConfigurationTools;
+  readonly executionRuntime?: RuntimeAgentToolService;
+  readonly policyManagement?: PolicyManagementAgentToolService;
   readonly additionalDefinitions?: readonly AgentToolDefinition[];
 }): readonly AgentToolDefinition[] {
   const suppliedDomainServices = [
@@ -180,6 +189,9 @@ export function createCanonicalAgentToolDefinitions(input: {
         ]
       : []),
     ...serviceBackedDefinitions,
+    ...(input.executionConfiguration ? createExecutionConfigurationToolDefinitions(input.executionConfiguration) : []),
+    ...(input.executionRuntime ? createRuntimeManagementToolDefinitions(input.executionRuntime) : []),
+    ...(input.policyManagement ? createPolicyManagementToolDefinitions(input.policyManagement) : []),
     ...(input.webSearch
       ? [createWebSearchToolDefinition(input.webSearch)]
       : []),

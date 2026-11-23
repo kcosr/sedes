@@ -88,9 +88,9 @@ const columns = `
   updated_at AS updatedAt
 `;
 
-function queryFingerprint(pageSize: number): string {
+function queryFingerprint(pageSize: number, continuationKey?: string): string {
   return createHash("sha256")
-    .update(JSON.stringify(["thread_templates", pageSize]))
+    .update(JSON.stringify(["thread_templates", pageSize, ...(continuationKey === undefined ? [] : [continuationKey])]))
     .digest("hex");
 }
 
@@ -229,7 +229,15 @@ export class ThreadTemplateRepository {
 
   listPage(
     scope: RequestScope,
-    input: { readonly cursor?: string; readonly pageSize: number },
+    input: {
+      readonly cursor?: string;
+      readonly pageSize: number;
+      readonly visibility?: {
+        readonly environmentIds: readonly string[];
+        readonly projectId?: string;
+        readonly continuationKey: string;
+      };
+    },
   ): ThreadTemplateListPageRecord {
     if (
       !Number.isInteger(input.pageSize) ||
@@ -238,12 +246,31 @@ export class ThreadTemplateRepository {
     ) {
       throw new Error("thread_template_page_size_invalid");
     }
-    const fingerprint = queryFingerprint(input.pageSize);
+    const fingerprint = queryFingerprint(input.pageSize, input.visibility?.continuationKey);
     const after = input.cursor
       ? decodeCursor(input.cursor, fingerprint)
       : undefined;
     const conditions = ["tenant_id = ?", "owner_principal_id = ?"];
     const parameters: unknown[] = [scope.tenantId, scope.principalId];
+    if (input.visibility) {
+      // Apply caller scope before pagination. A cursor must never carry the
+      // name or identifier of a template the caller cannot read.
+      conditions.push(`EXISTS (
+        SELECT 1 FROM workspaces AS workspace
+        JOIN agent_connection_profiles AS profile
+          ON profile.tenant_id = workspace.tenant_id
+          AND profile.owner_principal_id = workspace.owner_principal_id
+          AND profile.execution_environment_id = workspace.environment_id
+        WHERE workspace.tenant_id = thread_templates.tenant_id
+          AND workspace.owner_principal_id = thread_templates.owner_principal_id
+          AND workspace.id = thread_templates.workspace_id
+          AND profile.id = thread_templates.target_id
+          AND profile.execution_environment_id IN (SELECT value FROM json_each(?))
+          ${input.visibility.projectId === undefined ? "" : "AND workspace.project_id = ?"}
+      )`);
+      parameters.push(JSON.stringify(input.visibility.environmentIds));
+      if (input.visibility.projectId !== undefined) parameters.push(input.visibility.projectId);
+    }
     if (after) {
       conditions.push(`(
         lower(name) > ?

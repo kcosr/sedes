@@ -168,6 +168,9 @@ describe("Sedes CLI", () => {
       threadControl: {} as NonNullable<Dependencies["threadControl"]>,
       threadWorktrees: {} as NonNullable<Dependencies["threadWorktrees"]>,
       webSearch: {} as NonNullable<Dependencies["webSearch"]>,
+      executionConfiguration: {} as NonNullable<Dependencies["executionConfiguration"]>,
+      executionRuntime: {} as NonNullable<Dependencies["executionRuntime"]>,
+      policyManagement: {} as NonNullable<Dependencies["policyManagement"]>,
     });
     const tools = canonical.catalogSummaries("cli", "thread_agent");
     expect(tools.map(({ id }) => id).sort()).toEqual(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES.map(({ id }) => id).sort());

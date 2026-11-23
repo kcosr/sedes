@@ -210,6 +210,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
     ).toEqual({
       id: threadId,
       environmentId,
+      backendInstanceId: "backend-1",
       workspaceId,
       projectId: "project-1",
       label: "Source thread",
@@ -482,4 +483,42 @@ describe("DatabaseAgentToolSourceAuthority", () => {
       ),
     ).toThrowError(expect.objectContaining({ code: "cancelled" }));
   });
+  it("resolves configured disabled resources and exact target ID spaces without exposing another principal", () => {
+    const configuredId = "019196f7-a0a8-7bc4-a89b-8cf013978499";
+    const scope = {tenantId, principalId};
+    const configuration = {
+      executionEnvironments:[{id:configuredId,kind:"local",label:"Configured",workspaceRoots:["/work"],workspaceIsolation:{kind:"bubblewrap",networkProfiles:["isolated"]}}],
+      backends:[{id:"disabled-backend",kind:"pi",label:"Disabled",enabled:false,modelPolicy:{type:"catalog"}}],
+      targets:[{id:"configuration-target",kind:"pi_sdk",label:"Disabled target",enabled:false,backendInstanceId:"disabled-backend",executionEnvironmentId:configuredId}],
+      defaultTargetId:null,webSearch:null,
+    };
+    database.exec(`CREATE TABLE principal_execution_configuration(tenant_id TEXT, owner_principal_id TEXT, configuration_json TEXT);
+      CREATE TABLE agent_connection_profiles(tenant_id TEXT, owner_principal_id TEXT, id TEXT, template_id TEXT, execution_environment_id TEXT);
+      CREATE TABLE thread_templates(tenant_id TEXT, owner_principal_id TEXT, id TEXT, revision INTEGER, name TEXT, workspace_id TEXT, target_id TEXT);`);
+    database.prepare("INSERT INTO principal_execution_configuration VALUES(?,?,?)").run(tenantId,principalId,JSON.stringify(configuration));
+    database.prepare("INSERT INTO agent_connection_profiles VALUES(?,?,?,?,?)").run(tenantId,principalId,"projected-target","configuration-target",configuredId);
+    expect(authority.resolveConfiguredEnvironment(scope,configuredId)).toEqual({id:configuredId,environmentId:configuredId,label:"Configured"});
+    expect(authority.resolveConfiguredEnvironment(scope,environmentId)).toBeUndefined();
+    expect(authority.resolveBackend(scope,"disabled-backend")).toEqual({id:"disabled-backend",environmentId:configuredId,label:"Disabled"});
+    expect(authority.resolveTarget(scope,"projected-target")).toEqual({id:"projected-target",environmentId:configuredId,backendInstanceId:"disabled-backend",label:"Disabled target"});
+    expect(authority.resolveConfigurationTarget(scope,"configuration-target")?.id).toBe("configuration-target");
+    expect(authority.resolveConfigurationTarget(scope,"projected-target")).toBeUndefined();
+    expect(authority.resolveTarget(scope,"configuration-target")).toBeUndefined();
+    for (const other of [{tenantId:"other",principalId},{tenantId,principalId:"other"}]) {
+      expect(authority.resolveConfiguredEnvironment(other,configuredId)).toBeUndefined();
+      expect(authority.resolveBackend(other,"disabled-backend")).toBeUndefined();
+      expect(authority.resolveTarget(other,"projected-target")).toBeUndefined();
+    }
+    database.prepare("UPDATE workspaces SET environment_id=? WHERE id=?").run(configuredId,workspaceId);
+    database.prepare("INSERT INTO thread_templates VALUES(?,?,?,?,?,?,?)").run(tenantId,principalId,"template",7,"Template",workspaceId,"projected-target");
+    expect(authority.resolveThreadTemplate(scope,"template")).toEqual({id:"template",revision:7,label:"Template",workspaceId,projectId:"project-1",environmentId:configuredId});
+    expect(authority.resolveThreadTemplate({tenantId,principalId:"other"},"template")).toBeUndefined();
+    database.prepare("UPDATE workspaces SET environment_id=? WHERE id=?").run(environmentId,workspaceId);
+    expect(authority.resolveThreadTemplate(scope,"template")).toBeUndefined();
+    configuration.backends=[]; configuration.targets=[];
+    database.prepare("UPDATE principal_execution_configuration SET configuration_json=?").run(JSON.stringify(configuration));
+    expect(authority.resolveBackend(scope,"disabled-backend")).toBeUndefined();
+    expect(authority.resolveTarget(scope,"projected-target")).toBeUndefined();
+  });
+
 });

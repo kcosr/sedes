@@ -571,7 +571,11 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     scope: RequestScope,
     applicationThreadId: string,
     operation: ThreadApplicationOperation,
+    options?: { readonly assertPolicyAuthority: () => void },
   ): Promise<ThreadApplicationMutationResult> {
+    if (options && operation.kind !== "set_agent_tool_policy") {
+      return Promise.reject(new Error("thread_policy_authority_operation_invalid"));
+    }
     if (this.#closing) {
       return Promise.reject(new Error("thread_mutation_gateway_closed"));
     }
@@ -594,7 +598,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           applicationThreadId,
         ) !== undefined;
       try {
-        return await this.#mutate(scope, applicationThreadId, operation);
+        return await this.#mutate(scope, applicationThreadId, operation, options?.assertPolicyAuthority);
       } finally {
         if (
           uncertaintyBlockedQueue &&
@@ -877,6 +881,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     scope: RequestScope,
     applicationThreadId: string,
     operation: ThreadApplicationOperation,
+    assertPolicyAuthority?: () => void,
   ): Promise<ThreadApplicationMutationResult> {
     if (operation.kind === "recover_uncertain") {
       return this.#recoverCurrent(scope, applicationThreadId);
@@ -974,7 +979,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       );
     }
     if (operation.kind === "set_agent_tool_policy") {
-      return this.#setAgentToolPolicy(scope, applicationThreadId, operation);
+      return this.#setAgentToolPolicy(scope, applicationThreadId, operation, assertPolicyAuthority);
     }
     if (operation.kind === "deliver") {
       return this.#deliver(scope, applicationThreadId, operation);
@@ -3250,7 +3255,9 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       ThreadApplicationOperation,
       { readonly kind: "set_agent_tool_policy" }
     >,
+    assertAuthority?: () => void,
   ): Promise<ThreadApplicationMutationResult> {
+    assertAuthority?.();
     const aggregate = this.input.inventory.getThread(
       scope,
       applicationThreadId,
@@ -3299,6 +3306,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
             await this.input.runtimes.releaseProviderResidency(
               scope, applicationThreadId, { failurePolicy: "propagate" },
             );
+            assertAuthority?.();
             return this.input.agentToolPolicies.update(
               scope,
               applicationThreadId,
@@ -3352,6 +3360,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         throw error;
       }
     } else {
+      assertAuthority?.();
       this.input.agentToolPolicies.update(scope, applicationThreadId, {
         expectedRevision: operation.expectedPolicyRevision,
         enabled: operation.enabled,

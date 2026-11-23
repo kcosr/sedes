@@ -106,6 +106,13 @@ const projects = new Map<string, EnvironmentAuthorityProjectFact>([
 ]);
 
 const reader: AgentToolEnvironmentAuthorityReader = {
+  resolveConfiguredEnvironment: () => undefined,
+  resolveBackend: () => undefined,
+  resolveTarget: () => undefined,
+  resolveConfigurationTarget: () => undefined,
+  resolveThreadTemplate: () => undefined,
+  resolveRuntimeReceipt: () => undefined,
+  resolveConfigurationMutation: () => undefined,
   resolveEnvironment: (_scope, id) =>
     environments.find((environment) => environment.id === id),
   resolveWorkspace: (_scope, id) => workspaces.get(id),
@@ -194,7 +201,7 @@ describe("agent-tool environment authority", () => {
   });
 
   it("declares an explicit disposition for the complete canonical catalog", () => {
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(52);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(88);
     expect(
       CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES.every(
         ({ environmentAuthority }) => environmentAuthority.kind.length > 0,

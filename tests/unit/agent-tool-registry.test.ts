@@ -1,3 +1,6 @@
+import type { ExecutionConfigurationTools } from "../../src/server/agent-tools/execution/execution-configuration-tools.js";
+import type { RuntimeAgentToolService } from "../../src/server/agent-tools/tools/runtime-agent-tool-service.js";
+import type { PolicyManagementAgentToolService } from "../../src/server/agent-tools/tools/policy-management-agent-tool-service.js";
 import type { WorkpadAgentToolService } from "../../src/server/agent-tools/tools/workpad-agent-tool-service.js";
 import type { PageAgentToolService } from "../../src/server/agent-tools/tools/page-agent-tool-service.js";
 import type { ImageShowAgentToolService } from "../../src/server/agent-tools/tools/image-show-agent-tool-service.js";
@@ -146,6 +149,7 @@ describe("AgentToolRegistry", () => {
       "images",
       "automations",
       "research",
+      "execution",
     ]);
     expect(Object.isFrozen(CANONICAL_AGENT_TOOL_GROUPS)).toBe(true);
     expect(CANONICAL_AGENT_TOOL_GROUPS.every(Object.isFrozen)).toBe(true);
@@ -160,7 +164,7 @@ describe("AgentToolRegistry", () => {
         ({ id, schemaVersion }) => `${id}@${schemaVersion}`,
       ),
     );
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(52);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(88);
   });
 
   it("assembles the complete production catalog only with every domain adapter", () => {
@@ -180,6 +184,9 @@ describe("AgentToolRegistry", () => {
       workpads: {} as WorkpadAgentToolService,
       pages: {} as PageAgentToolService,
       images: {} as ImageShowAgentToolService,
+      executionConfiguration: {} as ExecutionConfigurationTools,
+      executionRuntime: {} as RuntimeAgentToolService,
+      policyManagement: {} as PolicyManagementAgentToolService,
     });
 
     expect(definitions.map(({ id }) => id)).toEqual(
@@ -245,10 +252,13 @@ describe("AgentToolRegistry", () => {
       workpads: {} as WorkpadAgentToolService,
       pages: {} as PageAgentToolService,
       images: {} as ImageShowAgentToolService,
+      executionConfiguration: {} as ExecutionConfigurationTools,
+      executionRuntime: {} as RuntimeAgentToolService,
+      policyManagement: {} as PolicyManagementAgentToolService,
     });
     const summaries = canonical.catalogSummaries("cli", "thread_agent");
 
-    expect(summaries).toHaveLength(52);
+    expect(summaries).toHaveLength(88);
     expect(
       Buffer.byteLength(JSON.stringify({ tools: summaries }), "utf8"),
     ).toBeLessThanOrEqual(AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES);
@@ -258,6 +268,24 @@ describe("AgentToolRegistry", () => {
       expect(summary).not.toHaveProperty("execution");
       expect(summary).not.toHaveProperty("adapters");
     }
+  });
+
+  it("rejects a producer catalog beyond the shared discovery budget", () => {
+    const canonical = new CanonicalInlineAgentToolService({
+      application: { readThreadStatus: async () => undefined },
+    });
+    for (let index = 0; index < 24; index++) {
+      const id = `example.catalog_${index}`;
+      canonical.registry.register(definition({
+        id, description: "x".repeat(2_000),
+        adapters: {
+          pi: { name: `sedes_example_catalog_${index}`, label: "Catalog entry" },
+          http: { invocation: "inline" }, cli: { command: id },
+        },
+      }));
+    }
+    expect(() => canonical.catalogSummaries("cli", "thread_agent"))
+      .toThrowError(expect.objectContaining({ code: "internal_error" }));
   });
 
   it("rejects an aggregate description response above the transport limit", () => {
@@ -322,6 +350,9 @@ describe("AgentToolRegistry", () => {
       workpads: {} as WorkpadAgentToolService,
       pages: {} as PageAgentToolService,
       images: {} as ImageShowAgentToolService,
+      executionConfiguration: {} as ExecutionConfigurationTools,
+      executionRuntime: {} as RuntimeAgentToolService,
+      policyManagement: {} as PolicyManagementAgentToolService,
     });
     const invocable = definitions
       .filter(({ deployment }) => deployment?.eligible === true)
@@ -430,6 +461,9 @@ describe("AgentToolRegistry", () => {
       workpads: {} as WorkpadAgentToolService,
       pages: {} as PageAgentToolService,
       images: {} as ImageShowAgentToolService,
+      executionConfiguration: {} as ExecutionConfigurationTools,
+      executionRuntime: {} as RuntimeAgentToolService,
+      policyManagement: {} as PolicyManagementAgentToolService,
     });
     for (const definition of definitions) {
       expect(definition.execution.uncertainExternalOutcome, definition.id).toBe(

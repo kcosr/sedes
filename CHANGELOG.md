@@ -7,6 +7,12 @@ User-facing changes are collected here before release. See the
 
 ### Breaking Changes
 
+- Remote Sedes tools require the server and sidecars to use the
+  `agent_tools_cli@7` contract. Rebuild/update them together for the new Execution
+  catalog group; older tool relays fail closed. See
+  [agent-managed configuration](docs/operator/configuration.md#agent-managed-configuration).
+  ([#152](https://github.com/kcosr/sedes/pull/152))
+
 - Execution Settings uses client protocol **179** and runtime wire **18**.
   Upgrade clients, the server, sidecar and bundled workers together. On a current host, adding a supported
   backend, connection, workspace root or operation applies to the existing
@@ -105,6 +111,14 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88), [#92](https://github.com/kcosr/sedes/pull/92), [#95](https://github.com/kcosr/sedes/pull/95), [#111](https://github.com/kcosr/sedes/pull/111))
 
 ### Added
+
+- Thread agents can manage execution environments, backends, variables,
+  runtime lifecycle, tool-policy sets/defaults and other threads' or templates'
+  tool settings through explicitly granted Sedes tools. Configuration edits
+  preserve omitted settings, and authorized detail reads return literal variable
+  values. See [agent-managed configuration](docs/operator/configuration.md#agent-managed-configuration)
+  and [tool-policy delegation](docs/user/tool-policies.md#delegate-management-to-an-agent).
+  ([#152](https://github.com/kcosr/sedes/pull/152))
 
 - Copy a file path and line number directly from a file link in an agent reply.
   ([#147](https://github.com/kcosr/sedes/pull/147))

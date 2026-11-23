@@ -139,7 +139,7 @@ function validateDefinition(
       definition.majorVersion === 3 && definition.operation === "tools.invoke" &&
       definition.lane === "operation") ||
     (definition.capabilityId === "agent_tools_cli" &&
-      definition.majorVersion === 6 &&
+      definition.majorVersion === 7 &&
       definition.operation === "tool.invoke" &&
       definition.lane === "operation") ||
     (definition.capabilityId === "claude_runtime" &&

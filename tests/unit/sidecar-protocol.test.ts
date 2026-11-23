@@ -43,7 +43,7 @@ const workspaceCapability = Object.freeze({
 });
 const agentToolCapability = Object.freeze({
   capabilityId: "agent_tools_cli",
-  majorVersion: 6,
+  majorVersion: 7,
 });
 const agentToolInventory = Object.freeze({
   ...agentToolCapability,
@@ -67,7 +67,7 @@ const workspaceEchoOperation = defineSidecarOperation({
 
 const agentToolCatalogOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 6,
+  majorVersion: 7,
   operation: "catalog.list",
   lane: "operation",
   maximumDeadlineMilliseconds: 1_000,
@@ -76,7 +76,7 @@ const agentToolCatalogOperation = defineSidecarOperation({
 });
 const agentToolDescribeOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 6,
+  majorVersion: 7,
   operation: "catalog.describe",
   lane: "operation",
   maximumDeadlineMilliseconds: 1_000,
@@ -85,7 +85,7 @@ const agentToolDescribeOperation = defineSidecarOperation({
 });
 const agentToolInvokeOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 6,
+  majorVersion: 7,
   operation: "tool.invoke",
   lane: "operation",
   maximumDeadlineMilliseconds: "caller_abort",
@@ -555,7 +555,7 @@ describe("sidecar private protocol", () => {
         requestNamespace: "sedes",
         requestId: randomUUID(),
         capabilityId: "agent_tools_cli",
-        majorVersion: 6,
+        majorVersion: 7,
         operation: "catalog.list",
         deadline: { mode: "finite", milliseconds: 1_000 },
         payload: { sourceCapability },

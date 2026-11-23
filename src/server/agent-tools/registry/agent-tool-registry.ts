@@ -11,7 +11,7 @@ import {
   AGENT_TOOL_MAXIMUM_RESPONSE_BYTES,
 } from "../contracts/agent-tool-transport-limits.js";
 import {
-  compileCanonicalAgentToolSchema,
+  createCanonicalAgentToolSchemaCompiler,
   type CanonicalSchemaValidator,
   type CanonicalAgentToolRootSchema,
 } from "../schema/canonical-json-schema.js";
@@ -36,6 +36,7 @@ const groupIds = new Set([
   "images",
   "automations",
   "research",
+  "execution",
 ]);
 const reservedCliCommandRoots = new Set(["tool"]);
 
@@ -235,7 +236,13 @@ function validateEnvironmentAuthority(definition: AgentToolDefinition): void {
     authority.kind === "source_only" ||
     authority.kind === "public_information" ||
     authority.kind === "installation_directory" ||
-    authority.kind === "environment_neutral"
+    authority.kind === "environment_neutral" ||
+    authority.kind === "principal_management" ||
+    authority.kind === "runtime_resource" ||
+    authority.kind === "runtime_receipt" ||
+    authority.kind === "policy_selection" ||
+    authority.kind === "policy_preview" ||
+    authority.kind === "template_query"
   ) {
     if (Object.keys(authority).length !== 1) {
       throw new Error("agent_tool_environment_authority_invalid");
@@ -244,7 +251,7 @@ function validateEnvironmentAuthority(definition: AgentToolDefinition): void {
   }
   if (authority.kind === "direct_resource") {
     if (
-      !["environment", "workspace", "thread", "thread_family", "task", "workpad", "saved_agent", "automation"].includes(
+      !["environment", "workspace", "thread", "thread_family", "task", "workpad", "saved_agent", "automation", "backend", "target", "configuration_target", "thread_template"].includes(
         authority.resource,
       ) ||
       (authority.inputField !== undefined &&
@@ -257,7 +264,8 @@ function validateEnvironmentAuthority(definition: AgentToolDefinition): void {
           typeof authority.projectInputField !== "string" ||
           !/^[a-z][A-Za-z0-9]{0,63}$/.test(authority.projectInputField))) ||
       ((authority.resource === "thread_family" ||
-        authority.resource === "task" || authority.resource === "workpad" || authority.resource === "saved_agent" || authority.resource === "automation") &&
+        authority.resource === "task" || authority.resource === "workpad" || authority.resource === "saved_agent" || authority.resource === "automation" ||
+        authority.resource === "backend" || authority.resource === "target" || authority.resource === "configuration_target" || authority.resource === "thread_template") &&
         authority.defaultToSource !== undefined) ||
       Object.keys(authority).some(
         (key) =>
@@ -276,10 +284,18 @@ function validateEnvironmentAuthority(definition: AgentToolDefinition): void {
   }
   if (
     authority.kind === "scoped_query" &&
-    ["environment", "workspace", "thread", "task", "workpad"].includes(
+    ["environment", "workspace", "thread", "task", "workpad", "backend"].includes(
       authority.resource,
     ) &&
     Object.keys(authority).every((key) => ["kind", "resource"].includes(key))
+  )
+    return;
+  if (
+    authority.kind === "configuration_command" &&
+    ["environment", "backend", "principal"].includes(authority.resource) &&
+    (authority.inputField === undefined ||
+      /^[a-z][A-Za-z0-9]{0,63}$/.test(authority.inputField)) &&
+    Object.keys(authority).every(key => ["kind", "resource", "inputField"].includes(key))
   )
     return;
   if (
@@ -373,6 +389,7 @@ function normalizedArtifact(
 }
 
 export class AgentToolRegistry {
+  readonly #schemaCompiler = createCanonicalAgentToolSchemaCompiler();
   readonly #byId = new Map<string, RegisteredAgentTool>();
   readonly #adapterNames = new Map<AgentToolAdapter, Map<string, string>>();
   readonly #cliCommandPaths = new Map<string, string>();
@@ -450,10 +467,10 @@ export class AgentToolRegistry {
     validateEffects(definition as AgentToolDefinition);
     validateCatalog(definition as AgentToolDefinition);
     validateEnvironmentAuthority(definition as AgentToolDefinition);
-    const inputValidator = compileCanonicalAgentToolSchema(
+    const inputValidator = this.#schemaCompiler.compile(
       definition.inputSchema,
     );
-    const outputValidator = compileCanonicalAgentToolSchema(
+    const outputValidator = this.#schemaCompiler.compile(
       definition.outputSchema,
     );
     const inputSchema = inputValidator.schema;

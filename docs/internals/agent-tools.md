@@ -26,6 +26,7 @@ backends must also follow the
 
 - [Policy and caller ownership](#policy-ownership-and-persistence)
 - [Environment authority](#resource-scope)
+- [Execution and tool-settings management](#execution-and-tool-settings-management)
 - [Workspaces and projects](#workspaces-and-projects)
 - [Catalog and backend presentations](#catalog-and-effects)
 - [Native MCP presentation](#native-mcp-presentation)
@@ -88,12 +89,14 @@ provider projection; it does not restart a stopped or archived thread. The next
 runtime attachment constructs its tools from the saved policy. All compiled
 backends share this publication path.
 
-Named policy management is a browser/API operation; ordinary tool callers
-select an existing policy through `thread.create@6` or Saved Agent contracts.
+Thread agents with the explicit management grants can author named policy sets
+and defaults through `tool_policy.*`; ordinary creation still selects an
+existing policy through `thread.create@6` or Saved Agent contracts.
 `saved_agent.list/get/options/create/update@7` use `toolPolicySelection` and
-optional `toolPresentation` instead of an embedded policy. Environment-variable
-bindings remain user-managed browser/API configuration: canonical Saved Agent
-tools neither accept them nor expose stored literal values or secret references.
+optional `toolPresentation` instead of an embedded policy. Canonical Saved Agent
+tools neither accept environment-variable bindings nor expose their stored
+values. Environment/backend management has a separate explicit read/write
+contract below.
 
 Each named set is limited to 128 KiB of serialized JSON. Policy lists use
 principal-bound keyset cursors with at most 100 sets and 512 KiB per page;
@@ -151,12 +154,15 @@ scope before sorting, pagination, snippets, full-record materialization or
 runtime inspection. Hidden results do not contribute counts or continuation
 positions. Explicit resource requests outside scope fail with an explanation;
 Sedes never requests an application access approval or redirects the operation.
-Only user-facing policy edits can broaden access. Thread-initiated creation or
-Agent configuration cannot exceed the source's exact tools or scope flags.
+Thread-initiated creation or Agent configuration cannot exceed the source's
+exact tools or scope flags. Separately granted policy administration can author
+broader sets and future defaults, but cannot broaden the caller's applied
+snapshot or bypass this assignment ceiling.
 Provider-native permission prompts remain independent.
 
-Every canonical operation declares source-only, public-information, directory,
-neutral, direct-resource, scoped-query or scope-transition authority. Direct
+Every canonical operation declares its resource authority, including explicit
+management and prospective-creation authority where no existing resource is
+the target. Direct
 reads/writes recheck exact resource identity and mutable scope at execution.
 Moves check both the source and destination. Continuations bind the effective
 project/environment scope, policy revision, trusted source defaults and relevant
@@ -190,6 +196,123 @@ unrestricted policies become true/true; environment policies become false/true.
 Legacy thread-only policies are disabled because the new project scope would
 be broader. Their exact selected IDs are preserved for user review. Explicit
 Saved Agent policies migrate into named sets with presentation kept separately.
+
+## Execution and tool-settings management
+
+These version-1 canonical operations are thread-agent-only and disabled in
+existing policies until their exact IDs are enabled. Execution and policy
+administration use the **Execution** group; thread/template tool settings use
+**Threads**. The existing `environment.list` remains a bounded directory.
+
+| Operations | Contract |
+| --- | --- |
+| `environment.get` | Read one environment's settings, revision and runtime effects. |
+| `environment.create`, `environment.rename`, `environment.configure`, `environment.remove` | Create local/SSH definitions or edit/remove an admitted environment. |
+| `backend.list`, `backend.get`, `backend.options` | Discover admitted backends, detailed settings, compatible configuration and defaults. |
+| `backend.create`, `backend.rename`, `backend.configure`, `backend.remove` | Create a backend and its first connection atomically; edit/remove a backend and its connections. |
+| `execution.defaults.get`, `execution.defaults.update` | Read, set or clear the default connection for future threads. |
+| `runtime.impact`, `runtime.connect`, `runtime.disconnect`, `runtime.start`, `runtime.stop`, `runtime.restart`, `runtime.upgrade`, `runtime.operation.get` | Use existing lifecycle impact, execution and receipt recovery. |
+| `tool_policy.options`, `tool_policy.list`, `tool_policy.get`, `tool_policy.create`, `tool_policy.update`, `tool_policy.remove` | Discover eligible tools and manage principal-owned policy sets. |
+| `tool_policy.defaults.get`, `tool_policy.defaults.update`, `tool_policy.preview` | Read/change an authorized selection and resolve effective policy/presentation for a target. |
+| `thread.tool_settings.get`, `thread.tool_settings.update` | Read or replace another thread's applied policy snapshot and supported presentation. |
+| `thread_template.list`, `thread_template.get`, `thread_template.update` | Read existing templates and patch their policy/presentation settings. |
+
+Existing `thread.create` and `saved_agent.*` remain the creation and Saved Agent
+authoring paths. Template tools do not add general template creation or change
+other template settings. There are no account/environment/backend presentation
+defaults; supported choices and their default still come from the backend.
+
+### Configuration edits and values
+
+Execution configuration, policy sets, defaults and receipts are principal-owned.
+Resource lookup derives the owning environment and, for thread/template work,
+project from server state. Environment creation, account defaults and
+principal-wide policy administration require other-environment authority.
+Read/rename grants do not grant create/configure authority. Create/configure
+explicitly delegate administration of executable paths, variables, credentials
+and privilege settings, subject to the existing configuration validators.
+
+Configure operations accept typed partial edits. Omitted fields, including
+nested siblings, remain unchanged; `null` explicitly clears an optional field.
+A supplied ordinary array replaces only that array. Variable maps and connection
+collections use named/ID-addressed operations, preserving omitted entries.
+Switching a mutable settings variant requires a complete valid new subobject;
+identity fields cannot be changed. The adapter loads and validates the complete
+document before using `ConfigurationAdminService`; callers never replace the
+whole principal configuration. Settings and tools share creation defaults.
+
+Authorized `environment.get` and `backend.get` return exact configured literal
+variable values, including literals named `API_TOKEN`. They do not mask values
+or infer secrecy from names. Secret references remain references and are never
+resolved for tool output. List summaries omit variable settings; mutation
+results, replayed receipts, diagnostics and status/error messages omit variable
+values. Template and Saved Agent outputs continue to omit `environmentVariables`
+while preserving their stored bindings on policy edits. A literal submitted as
+tool input remains visible as input.
+
+Each connection returned by backend list/get/create/configure has two IDs:
+`configurationTargetId` is the persisted configuration target ID, used for
+connection edits and `execution.defaults.update`; `targetId` is the projected
+connection-profile UUID, used by policy preview, thread creation, Saved Agents
+and templates. Defaults get returns both IDs. All mapping is principal-scoped.
+
+### Admission and replay
+
+Source safety is separate from access to other resources. The source environment
+definition permits label edits only. Its calling backend permits label,
+`modelPolicy`, and supported model/reasoning connection-default edits, but not
+access/permission changes. Sibling backends on that host can be managed when
+the change preserves the calling backend and route. Source-disrupting runtime
+actions and changes to the source thread's tool settings are rejected.
+
+Configuration mutations require `expectedRevision` and stable `mutationId`.
+The configuration transaction stores a bounded result together with tool/caller
+identity, input digest and retained scope facts. Replay matches before ID
+allocation or document reconstruction and inside the transaction. It returns
+the original result even after later edits/removal, after checking current
+authority; changed input conflicts. It never returns the private full-document
+receipt or copies literal inputs into command metadata. New stale edits conflict
+instead of silently rebasing. Saved revision and runtime readiness remain
+separate; an offline host can have durably saved, pending configuration.
+
+The serialized configuration mutation result is capped at 60 KiB, leaving
+headroom within the durable receipt's 64 KiB limit. `runtimes` retains the saved
+runtime states, while `effectsScope: "current_command"` limits their `effects`
+to settings changed by this command. These compact effects contain component,
+subject ID, desired/effective revisions and state, without detailed launch
+evidence. `effectsOmitted` counts additional current-command effects excluded
+to fit the result budget. Earlier pending effects are outside that count, so
+zero does not establish complete pending-state coverage. Use `environment.get`
+or `backend.get` for the resource's complete current effects; replay returns
+the original saved result, not a refreshed status.
+
+Lifecycle tools retain short-lived impact tokens, incarnation/ownership fences,
+durable mutation replay and truthful pending/unknown outcomes. Receipt lookup
+can settle or withdraw an unadmitted operation, so `runtime.operation.get` is a
+write with durable external effects, not a read-only inspection. Disruptive
+actions declare destructive application effects and durable external effects.
+They cannot override a hung management command or independently kill processes.
+Operator retirement confirmation, SSH setup, outbound pairing and provider
+installation/authentication retain their existing workflows.
+
+Policy-set/default authoring may grant broader future capabilities under its
+explicit administrative permission. Applying policies to threads, Saved Agents
+or templates still enforces the caller's exact-tool and resource-scope ceiling,
+including inherited selections. Targeted default reads validate resource scope
+first and return inherit/revision 0 when that valid target has no selection.
+Existing threads retain independent snapshots. Thread updates use
+`expectedPolicyRevision`; their `mutationId` is correlation only, not durable
+replay. After an uncertain response, inspect current policy before another edit.
+Policy-set, selection and template writes likewise retain revision/readback
+semantics; do not automatically recreate a policy after a lost response.
+
+All seven compiled backends use these same domain and authority checks through
+their supported canonical presentations in the matrix below. No provider
+runtime, supported topology, or transport permission is added: Grok remains
+local/CLI-only, Pi SDK remote CLI remains unsupported, and remote native
+presentations retain their required sidecar admission. Backend options and
+lifecycle actions reject combinations their existing implementation does not
+support.
 
 ## Workspaces and projects
 
@@ -268,7 +391,9 @@ The canonical catalog groups operations under:
 - **Files** — source-thread linked-worktree discovery and thread worktree
   preference selection;
 - **Threads** — inventory, status, messages, creation, send, fork,
-  archive/restore, and related controls;
+  archive/restore, thread/template tool settings, and related controls;
+- **Execution** — environment/backend configuration, runtime lifecycle,
+  default connections and tool-policy administration;
 - **Client controls** — current-client navigation, interaction completion,
   revision-checked basic voice settings, and spoken replay of an ended turn's
   reply;
@@ -593,8 +718,8 @@ native Pi, Codex, Claude, Grok, OpenCode, and Antigravity, plus their admitted
 remote relays.
 Pi SDK SSH and Grok SSH CLI topologies remain unsupported.
 The owner-only local CLI frame and managed relay capability use
-`agent_tools_cli@6`, which admits the closed Images catalog group and carries
-bounded model media separately from JSON output. Stale peers fail closed and
+`agent_tools_cli@7`, which admits the closed Images and Execution catalog groups
+and carries bounded model media separately from JSON output. Stale peers fail closed and
 must be upgraded together.
 The in-memory conformance backend exercises normalized catalog,
 admission, and invocation behavior without creating a production presentation
@@ -834,7 +959,7 @@ into a native multimodal tool. This is
 transient model-visible content, independent of durable page revisions and
 output-artifact publication.
 
-The sidecar's `agent_tools_cli@6` and OpenCode's private `opencode_tools@3`
+The sidecar's `agent_tools_cli@7` and OpenCode's private `opencode_tools@3`
 reverse operation carry the same validated result. Their exact capability
 versions are negotiated before dispatch; there is no fallback to the earlier
 media-free contracts. OpenCode's ephemeral local MCP bridge additionally
@@ -1012,7 +1137,7 @@ references for one thread and ingress differ, and the server derives the
 calling adapter (`cli` for discovery and `http` for invocation over HTTP,
 `cli` over the relay, or `mcp`) from the reference rather than from the
 request. Both presentations therefore share the same routes and
-`agent_tools_cli@6` frames without a wire discriminator, and admission rejects
+`agent_tools_cli@7` frames without a wire discriminator, and admission rejects
 a reference whose presentation does not match the thread's current surface.
 CLI references keep the bytes issued before MCP presentation existed.
 
@@ -1041,7 +1166,7 @@ Sedes adds CLI variables, so injection cannot discard its normal `HOME`,
 `PATH`, or external login.
 
 Codex over SSH can use CLI presentation only when the environment explicitly
-enables `agent_tools_cli` and the sidecar advertises `agent_tools_cli@6`.
+enables `agent_tools_cli` and the sidecar advertises `agent_tools_cli@7`.
 Sedes deploys one owner-only Unix socket beside the managed sidecar, and the
 sidecar relays the strict v6 agent-tool protocol over its current persistent-service
 connection. Codex and sidecar health remain independent. Missing
@@ -1050,7 +1175,7 @@ unverifiable environment isolation fails closed. Network access is currently
 still required for this admission even though the agent endpoint itself is a
 Unix socket.
 
-Claude over SSH or an outbound connection uses the same independently admitted `agent_tools_cli@6` relay
+Claude over SSH or an outbound connection uses the same independently admitted `agent_tools_cli@7` relay
 with its exact thread/query context. The sidecar retains the provider query
 when main disconnects, but tool invocation still needs current main-server
 authority and fails closed while that connection is absent. Remote Grok
@@ -1061,7 +1186,7 @@ admitted sidecar relay over SSH/outbound. Its resident process retains scoped
 CLI credentials while every invocation rechecks current main-server authority.
 
 Antigravity uses the admitted host endpoint locally and the independently
-authorized `agent_tools_cli@6` relay on SSH/outbound hosts for both MCP and CLI.
+authorized `agent_tools_cli@7` relay on SSH/outbound hosts for both MCP and CLI.
 OpenCode uses its private tool relay on qualified remote Linux runtimes.
 
 A Pi SDK SSH target never receives the CLI in remote Bash. The Pi SDK model loop and
@@ -1078,9 +1203,11 @@ its wire shape is unchanged.
 
 Every invocation is independent. `requestId` is correlation metadata, not a
 deduplication key. A write that returns `timed_out` has an indeterminate outcome
-and may already have applied; repeating it is a new invocation and can create a
-second resource/run or fail a domain revision check. Adapters do not retry
-writes automatically.
+and may already have applied. Configuration and lifecycle operations with durable
+domain receipts must be retried with their original `mutationId` and unchanged
+input, or inspected through their receipt operation. Other writes can create a
+second resource/run or fail a domain revision check when repeated. Adapters do
+not retry writes automatically.
 
 A direct resource outside the configured scope fails admission immediately.
 For admitted work, caller cancellation and source-runtime replacement abort
@@ -1161,7 +1288,8 @@ retry. Live provider and skill gates remain separately opt-in.
   automatic write retry, or generic asynchronous invocation lifecycle.
 - Tool clients do not authenticate the management UI/API, use Unix/sidecar
   ingress, impersonate a thread, receive interactive access approvals, or
-  manage other credentials through agent tools.
+  manage other credentials through agent tools. Execution/policy administration
+  and thread/template tool-settings operations are thread-agent-only.
 - No Native Grok presentation, no Native MCP on Windows execution hosts, no
   Grok SSH target, no Pi SDK remote CLI, and no surface or transport fallback.
 - Missing CLI or sidecar admission disables agent tools for that presentation;
