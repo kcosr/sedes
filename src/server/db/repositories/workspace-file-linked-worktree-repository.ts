@@ -1,4 +1,4 @@
-import { grantForNewFileRoot } from "./workspace-file-root-authority.js";
+import { workspaceFileRootAuthority, type FileRootAdmission } from "./workspace-file-root-authority.js";
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { DomainError } from "../../domain/errors.js";
@@ -28,6 +28,7 @@ export type WorkspaceFileLinkedWorktreeRootRecord = {
 };
 
 export type DiscoveredLinkedWorktree = {
+  readonly authority?: FileRootAdmission;
   readonly canonicalPath: string;
   readonly canonicalCheckoutPath: string;
   readonly canonicalGitDir: string;
@@ -197,14 +198,12 @@ export class WorkspaceFileLinkedWorktreeRepository {
       .transaction(() => {
         this.#getWorkspace(scope, workspaceId);
         const active = this.list(scope, workspaceId);
-        const discoveredIdentities = new Set(
-          discovered.map(({ identityToken }) => identityToken),
-        );
-        const tombstoned = input.complete
-          ? active.filter(
-              ({ identityToken }) => !discoveredIdentities.has(identityToken),
-            )
-          : [];
+        const authority = workspaceFileRootAuthority(this.database, scope, workspaceId);
+        const discoveries = new Map(discovered.map(candidate => [candidate.identityToken, candidate]));
+        const tombstoned = active.filter(root => {
+          const candidate = discoveries.get(root.identityToken);
+          return candidate ? !authority.stillAdmitted(root.rootId, candidate.canonicalPath) : input.complete;
+        });
         const tombstonedRootIds = tombstoned.map(({ rootId }) => rootId);
         const clearedThreadIds: string[] = [];
         for (const { rootId } of tombstoned) {
@@ -270,6 +269,7 @@ export class WorkspaceFileLinkedWorktreeRepository {
         );
 
         for (const candidate of discovered) {
+          const grant = authority.admit(candidate.canonicalPath, candidate.authority);
           const current = activeByIdentity.get(candidate.identityToken);
           if (!current) {
             if (
@@ -283,7 +283,6 @@ export class WorkspaceFileLinkedWorktreeRepository {
               // owns this path is gone. Defer replacement until a complete pass.
               continue;
             }
-            const grant = grantForNewFileRoot(this.database, scope, workspaceId, candidate.canonicalPath);
             this.database
               .prepare(
                 `INSERT INTO workspace_file_linked_worktree_roots(
@@ -311,7 +310,7 @@ export class WorkspaceFileLinkedWorktreeRepository {
                 candidate.aheadCount,
                 candidate.behindCount,
                 input.now,
-                input.now, grant?.id ?? null, grant?.generation ?? null,
+                input.now, grant.id, grant.generation,
               );
             continue;
           }

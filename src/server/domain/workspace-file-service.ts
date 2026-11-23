@@ -1,3 +1,4 @@
+import type { FileRootAdmission } from "../db/repositories/workspace-file-root-authority.js";
 import { normalizedAbsolutePath } from "../../shared/absolute-path.js";
 import { WORKSPACE_FILE_MAX_PATH_BYTES } from "../../shared/workspace-file-limits.js";
 import { isWithinRemoteRoot, pathForRemoteRoot } from "../execution/remote-path.js";
@@ -65,6 +66,7 @@ import type { WorkspaceFileLinkedWorktreeRepository } from "../db/repositories/w
 import {
   ExecutionWorkspaceAdmissionDeniedError,
   type ExecutionEnvironmentProvider,
+  type ValidatedWorkspace,
 } from "../execution/contracts.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type {
@@ -139,6 +141,13 @@ type RootOperationLifecycle = {
   readonly drained: Set<() => void>;
   readonly drainCallbacks: Set<() => void>;
 };
+
+function validatedFileRoot(workspace: ValidatedWorkspace): {authority?: FileRootAdmission} {
+  return workspace.authorityRootId ? {authority: {
+    authorityRootId: workspace.authorityRootId,
+    authorityRevision: workspace.authorityRevision,
+  }} : {};
+}
 
 function derivedRootDisplayLabel(canonicalPath: string): string {
   const basename = pathForRemoteRoot(canonicalPath)
@@ -402,6 +411,7 @@ export class WorkspaceFileService {
         : { displayLabel: input.displayLabel }),
       canonicalPath,
       resolvedDisplayLabel: displayLabel,
+      ...validatedFileRoot(validated),
       mutationId: input.mutationId,
       now: Date.now(),
     });
@@ -1516,6 +1526,7 @@ export class WorkspaceFileService {
         workspace.id,
         candidate.target.canonicalPath,
         Date.now(),
+        ...(candidate.authority ? [candidate.authority] as const : []),
       );
     } catch (error) {
       if (error instanceof DomainError && error.code === "conflict") {
@@ -1537,7 +1548,7 @@ export class WorkspaceFileService {
     workspace: InventoryWorkspaceRecord,
     absolutePath: string,
     signal?: AbortSignal,
-  ): Promise<{ readonly target: WorkspaceFileRootTarget; readonly path: string } | undefined> {
+  ): Promise<{ readonly target: WorkspaceFileRootTarget; readonly path: string; readonly authority?: FileRootAdmission } | undefined> {
     signal?.throwIfAborted();
     if (!normalizedAbsolutePath(absolutePath) ||
         Buffer.byteLength(absolutePath, "utf8") > WORKSPACE_FILE_MAX_PATH_BYTES) {
@@ -1624,7 +1635,7 @@ export class WorkspaceFileService {
     ) {
       return undefined;
     }
-    return { target: candidateTarget, path: relativePath };
+    return { target: candidateTarget, path: relativePath, ...validatedFileRoot(validated) };
   }
 
   async watch(
@@ -1858,6 +1869,7 @@ export class WorkspaceFileService {
           workspaceId: target.workspaceId,
           environmentId: target.environmentId,
           rootKind: "link_only",
+          rootId: target.rootId,
           canonicalPath: target.canonicalPath,
         },
         ...optionalAbortSignal(signal),
@@ -1972,7 +1984,7 @@ export class WorkspaceFileService {
       // must retain the last successful topology and thread preference.
       return;
     }
-    const admitted: WorkspaceFileDiscoveredLinkedWorktree[] = [];
+    const admitted: (WorkspaceFileDiscoveredLinkedWorktree & {authority?: FileRootAdmission})[] = [];
     let admissionComplete = true;
     for (const candidate of discovery.worktrees) {
       signal?.throwIfAborted();
@@ -1994,7 +2006,7 @@ export class WorkspaceFileService {
         admissionComplete = false;
         continue;
       }
-      admitted.push(candidate);
+      admitted.push({...candidate, ...validatedFileRoot(validated)});
     }
     const reconciliation = this.linkedWorktrees.reconcileDiscovery(
       scope,

@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import { executionPolicyDigest, type ExecutionPolicySnapshot } from "../../src/internal/sidecar-protocol/execution-policy.js";
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 import { storedFileRootBinding } from "../../src/server/db/repositories/workspace-file-root-authority.js";
+import { WorkspaceFileLinkedWorktreeRepository } from "../../src/server/db/repositories/workspace-file-linked-worktree-repository.js";
 import { WorkspaceFileRootRepository } from "../../src/server/db/repositories/workspace-file-root-repository.js";
 import type { DomainError } from "../../src/server/domain/errors.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
@@ -74,14 +75,32 @@ describe("workspace file-root repository", () => {
         path: `${temp}/repo`, canonicalPath: `${temp}/repo`, resolvedDisplayLabel: "Repo", mutationId: "attach", now: 100,
       });
       const link = value.repository.rememberLinkRoot(value.scope, value.workspaceId, `${temp}/linked`, 100);
+      const worktrees = new WorkspaceFileLinkedWorktreeRepository(value.database);
+      const candidate = {canonicalPath:`${temp}/checkout`, canonicalCheckoutPath:`${temp}/checkout`, canonicalGitDir:`${temp}/main/.git/worktrees/checkout`,
+        identityToken:"1".repeat(64), displayLabel:"checkout", branchRef:"refs/heads/test", headOid:"a".repeat(40),
+        provenanceKind:"unmerged" as const, aheadCount:1, behindCount:0};
+      const discover = () => worktrees.reconcileDiscovery(value.scope, value.workspaceId, [candidate], {complete:true, now:200});
+      const checkoutId = discover().roots[0]!.rootId;
       const before = {authorityRootId: "ancestor", authorityRevision: 1};
       const binding = (id: string) => storedFileRootBinding(value.database, value.scope, value.workspaceId, id);
       value.setRoots([{id: "ancestor", path: "/", generation: 1}, {id: "deeper", path: "/tmp", generation: 2}]);
+      expect(discover().roots[0]!.rootId).toEqual(checkoutId);
       expect(binding(root.rootId)).toEqual(before);
       expect(binding(link.rootId)).toEqual(before);
       expect(binding(value.repository.rememberLinkRoot(value.scope, value.workspaceId, `${temp}/linked`, 200).rootId)).toEqual(before);
       expect(binding(value.repository.rememberLinkRoot(value.scope, value.workspaceId, `${temp}/new`, 200).rootId))
         .toEqual({authorityRootId: "deeper", authorityRevision: 2});
+      value.setRoots([{id:"deeper", path:"/tmp", generation:2}]);
+      expect(() => value.repository.rememberLinkRoot(value.scope, value.workspaceId, `${temp}/linked`, 220, before)).toThrow(domainError("conflict"));
+      expect(binding(link.rootId)).toEqual(before);
+      const refreshed = value.repository.rememberLinkRoot(value.scope, value.workspaceId, `${temp}/linked`, 220);
+      expect(refreshed.rootId).not.toBe(link.rootId);
+      expect(binding(link.rootId)).toBeUndefined();
+      expect(binding(refreshed.rootId)).toEqual({authorityRootId:"deeper", authorityRevision:2});
+      const replacement = discover();
+      expect(replacement.tombstonedRootIds).toEqual([checkoutId]);
+      expect(replacement.roots[0]!.rootId).not.toBe(checkoutId);
+      expect(binding(replacement.roots[0]!.rootId)).toEqual({authorityRootId:"deeper", authorityRevision:2});
     } finally { value.database.close(); }
   });
 

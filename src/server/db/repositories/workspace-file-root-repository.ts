@@ -1,4 +1,4 @@
-import { grantForNewFileRoot } from "./workspace-file-root-authority.js";
+import { workspaceFileRootAuthority, type FileRootAdmission } from "./workspace-file-root-authority.js";
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { DomainError } from "../../domain/errors.js";
@@ -161,6 +161,7 @@ export class WorkspaceFileRootRepository {
     workspaceId: string,
     canonicalPath: string,
     now: number,
+    validated?: FileRootAdmission,
   ): WorkspaceFileLinkRootRecord {
     return this.database
       .transaction(() => {
@@ -180,8 +181,13 @@ export class WorkspaceFileRootRepository {
             workspaceId,
             canonicalPath,
         ) as WorkspaceFileLinkRootRecord | undefined;
+        const authority = workspaceFileRootAuthority(this.database, scope, workspaceId);
+        const grant = authority.admit(canonicalPath, validated);
+        if (existing && authority.stillAdmitted(existing.rootId, canonicalPath)) return existing;
         if (existing) {
-          return existing;
+          this.database.prepare(`DELETE FROM workspace_file_link_roots
+            WHERE tenant_id = ? AND owner_principal_id = ? AND workspace_id = ? AND root_id = ?`)
+            .run(scope.tenantId, scope.principalId, workspaceId, existing.rootId);
         }
         const count = this.database
           .prepare(
@@ -204,7 +210,6 @@ export class WorkspaceFileRootRepository {
           );
         }
         const rootId = `link-${randomUUID()}`;
-        const grant = grantForNewFileRoot(this.database, scope, workspaceId, canonicalPath);
         this.database
           .prepare(
             `
@@ -220,7 +225,7 @@ export class WorkspaceFileRootRepository {
             workspaceId,
             rootId,
             canonicalPath,
-            now, grant?.id ?? null, grant?.generation ?? null,
+            now, grant.id, grant.generation,
           );
         return this.findLinkRoot(scope, workspaceId, rootId)!;
       })
@@ -274,6 +279,7 @@ export class WorkspaceFileRootRepository {
       /** Validated storage values resolved from the original request. */
       readonly canonicalPath: string;
       readonly resolvedDisplayLabel: string;
+      readonly authority?: FileRootAdmission;
       readonly sortOrder?: number;
       readonly mutationId: string;
       readonly now: number;
@@ -383,7 +389,7 @@ export class WorkspaceFileRootRepository {
             }
           ).nextSortOrder;
         const rootId = randomUUID();
-        const grant = grantForNewFileRoot(this.database, scope, workspaceId, input.canonicalPath);
+        const grant = workspaceFileRootAuthority(this.database, scope, workspaceId).admit(input.canonicalPath, input.authority);
         try {
           this.database
             .prepare(
@@ -404,7 +410,7 @@ export class WorkspaceFileRootRepository {
               input.resolvedDisplayLabel,
               sortOrder,
               input.now,
-              input.now, grant?.id ?? null, grant?.generation ?? null,
+              input.now, grant.id, grant.generation,
             );
         } catch (error) {
           if (isConstraintError(error)) {
