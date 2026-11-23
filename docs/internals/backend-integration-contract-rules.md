@@ -1674,6 +1674,11 @@ Capability checks must cover:
 - feature registration and schema version; and
 - any concurrency or confirmation rule.
 
+The shared mutation gateway admits a registered rename during an active turn,
+but requires an idle or failed thread for compaction and settings actions. A
+backend that advertises rename must apply it while a turn is running instead of
+adding its own idle gate; otherwise Sedes offers Rename and the backend rejects it.
+
 Unsupported behavior is a normal disposition. Omit the capability and reject a
 direct request. Do not expose disabled imitations, infer support from a provider
 name, or silently route to another target or environment.

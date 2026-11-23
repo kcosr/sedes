@@ -1748,7 +1748,9 @@ class PiNativeConversationHandle implements ConversationHandle {
     }
     if (prior.state !== "prepared") throw reject("pi_native_action_unresolved", undefined, true);
     await this.#refresh(false);
-    if (this.#state.isIdle !== true) throw reject("pi_native_settings_busy");
+    // Rename only appends session metadata, so it may run during a turn.
+    // Settings and compaction change what an active turn depends on.
+    if (input.action !== "rename" && this.#state.isIdle !== true) throw reject("pi_native_settings_busy");
     if (input.action === "set_tool_access") {
       if (!["read_only", "ask", "full"].includes(input.mode)) throw reject("pi_native_tool_mode_invalid");
       try { await this.#applyToolPolicy(input.mode as PiNativeSettings["toolMode"], input.applicationOperationId, boundary); }

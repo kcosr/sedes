@@ -114,8 +114,9 @@ the SDK backend's Bubblewrap workspace isolation.
 ## Conversation controls and history
 
 Pi supports Send, turn-scoped Steer, Queue, Stop, rename, manual compact, model
-and thinking changes, and tool-access changes. Steer targets the exact active
-turn. Queue is the shared Sedes queue and sends only after authoritative turn
+and thinking changes, and tool-access changes. Rename also works while a turn is
+running; compact and setting changes wait for an idle thread. Steer targets the
+exact active turn. Queue is the shared Sedes queue and sends only after authoritative turn
 settlement. Stop reconciles accepted and cleared native inputs; an unknown
 outcome stays in recovery rather than being retried automatically.
 
