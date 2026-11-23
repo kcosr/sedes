@@ -97,6 +97,14 @@ function fixture() {
 }
 
 describe("agent execution configuration",()=>{
+  it("denies a cross-provider source connection patch without an internal error", async()=>{
+    const f=fixture();
+    const before=f.repository.get(f.scope);
+    await expect(f.call("backend.configure",{...f.mutation(),backendId:"source-pi",connections:{update:[{
+      configurationTargetId:"source-target",changes:{moduleConfiguration:{}},
+    }]}})).rejects.toMatchObject({code:"permission_denied"});
+    expect(f.repository.get(f.scope)).toEqual(before);
+  });
   it.each(executionBackendKinds)("creates %s and its initial connection atomically with shared defaults",async kind=>{
     const f=fixture();const before=structuredClone(f.repository.get(f.scope).configuration.backends[0]);
     f.activeBackends.add("source-pi");

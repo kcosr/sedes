@@ -198,8 +198,20 @@ describe("source route safety", () => {
     const cleared = Object.fromEntries(Object.entries(before).filter(([key]) => key !== field));
     expect(() => access.sourceBackendChange(context(),backend,backend,[target],[{...target,moduleConfiguration:{defaults:cleared}} as ConfigurationTarget])).toThrow(denied);
     expect(() => access.sourceBackendChange(context(),backend,backend,[target],[{...target,moduleConfiguration:{defaults:{}}} as ConfigurationTarget])).toThrow(denied);
-    if (kind === "antigravity_acp")
-      expect(() => access.sourceBackendChange(context(),backend,backend,[target],[{...target,moduleConfiguration:{}} as ConfigurationTarget])).toThrow(denied);
+    expect(() => access.sourceBackendChange(context(),backend,backend,[target],[{...target,moduleConfiguration:{}} as ConfigurationTarget])).toThrow(denied);
+  });
+
+  it.each([
+    ["pi_sdk", undefined],
+    ["grok_acp", { model: { type: "catalogDefault" }, reasoningEffort: { type: "modelDefault" } }],
+    ["opencode_http", { model: { type: "catalogDefault" }, variant: { type: "modelDefault" } }],
+  ])("denies cross-provider missing-default patches on %s without an internal error", (kind, defaults) => {
+    const target = { id: "connection", kind, label: "Connection", backendInstanceId: backend.id,
+      executionEnvironmentId: "env-a", enabled: true,
+      ...(defaults ? { moduleConfiguration: { defaults } } : {}),
+    } as ConfigurationTarget;
+    const changed = { ...target, moduleConfiguration: {} } as ConfigurationTarget;
+    expect(() => access.sourceBackendChange(context(), backend, backend, [target], [changed])).toThrow(denied);
   });
 
   it("forbids own runtime and applied tool-policy changes while permitting a sibling backend", () => {

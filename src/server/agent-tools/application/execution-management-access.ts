@@ -131,6 +131,10 @@ function sourceTargetSafetyShape(target: ConfigurationTarget): { id: string; [ke
   // completed document is parsed. Compare their schema-normalized empty value.
   const defaults = target.kind === "pi_rpc" || target.kind === "antigravity_acp"
     ? target.moduleConfiguration.defaults ?? {} : target.moduleConfiguration.defaults;
+  // The shared patch union can admit a shape from another provider. Preserve
+  // that invalid shape in the comparison so source changes are denied before
+  // full-document validation, rather than dereferencing absent defaults.
+  if (!defaults || typeof defaults !== "object" || Array.isArray(defaults)) return { ...target };
   return { ...target, moduleConfiguration: { ...target.moduleConfiguration, defaults: without(defaults, allowed) } };
 }
 function without(value: object, keys: readonly string[]): Record<string, unknown> {
