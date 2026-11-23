@@ -559,6 +559,24 @@ describe("execution-target catalog reader", () => {
     expect(current.health).toHaveBeenCalledTimes(2);
   });
 
+  it("offers a remote target again after a failed health observation expires", async () => {
+    let now = 0;
+    const confirm = vi.fn(async () => true);
+    const current = fixture({now: () => now, targetAdmission: () => ({eligible: true, confirmRemote: confirm})});
+    current.health.mockResolvedValueOnce({available: false});
+    await expect(current.reader.requireSelectable(scope, "profile-a")).rejects.toThrow();
+    const listed = async () => (await current.reader.read(scope)).executionTargets.find(target => target.id === "profile-a")?.available;
+
+    now = 4_999;
+    expect(await listed()).toBe(false);
+    now = 5_000;
+    expect(await listed()).toBe(true);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(current.health).toHaveBeenCalledTimes(1);
+    await current.reader.requireSelectable(scope, "profile-a");
+    expect(current.health).toHaveBeenCalledTimes(2);
+  });
+
   it("caches snapshot health briefly but rechecks an explicit selection", async () => {
     let now = 100;
     const current = fixture({ now: () => now });

@@ -281,12 +281,12 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
       if (!confirmed) return {...base, available: false, unavailableReason: boundDisplayText("Waiting for the execution target to become ready.")};
     }
     const generation = this.#healthGeneration;
-    if (useHealthCache && admission?.confirmRemote) {
-      // The picker advertises eligibility and retains any observed health. A
-      // fresh remote health probe belongs to selection on this specific host.
-      available = cached?.available ?? true;
-    } else if (useHealthCache && cached && cached.expiresAt > now) {
+    if (useHealthCache && cached && cached.expiresAt > now) {
       available = cached.available;
+    } else if (useHealthCache && admission?.confirmRemote) {
+      // After an observation expires, offer the eligible target for selection.
+      // Selecting it probes its host without connecting to any sibling.
+      available = true;
     } else {
       try {
         const health = await this.input.registry.driver(connection).health();
@@ -300,7 +300,7 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
       if ((useHealthCache || admission?.confirmRemote) && generation === this.#healthGeneration) {
         this.#health.set(cacheKey, {
           available,
-          expiresAt: now + (this.input.healthCacheMilliseconds ?? 5_000),
+          expiresAt: (this.input.now?.() ?? Date.now()) + (this.input.healthCacheMilliseconds ?? 5_000),
         });
       }
     }
