@@ -169,7 +169,27 @@ export function ConversationMessageSelectionSurface({
 
   useEffect(() => {
     if (!root || !enabled) return;
-    return observeSettledSelection({
+    let copiedSelection: { range: Range; boundaries: Range } | undefined;
+    const onCopy = (event: ClipboardEvent) => {
+      if (quoteInteraction.current?.hasNote) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.matches("input, textarea") || target.isContentEditable)
+      ) {
+        return;
+      }
+      const selection = document.getSelection();
+      if (selection?.rangeCount !== 1 || selection.isCollapsed) return;
+      const range = selection.getRangeAt(0);
+      if (!root.contains(range.commonAncestorContainer)) return;
+      // A new selection gets a new Range even when its boundaries are the same.
+      // Snapshot the boundaries too in case script updates the Range in place.
+      copiedSelection = { range, boundaries: range.cloneRange() };
+      clearPending();
+    };
+    document.addEventListener("copy", onCopy, true);
+    const stopObserving = observeSettledSelection({
       root,
       debounceMilliseconds: selectionDebounceMilliseconds,
       capture: () => {
@@ -177,11 +197,19 @@ export function ConversationMessageSelectionSurface({
         if (interaction?.hasNote) return;
         const selection = document.getSelection();
         if (selection?.rangeCount !== 1 || selection.isCollapsed) {
+          copiedSelection = undefined;
           // The editor can take focus and collapse the selection after capture.
           if (!interaction) clearPending();
           return;
         }
         const range = selection.getRangeAt(0);
+        if (
+          copiedSelection?.range === range &&
+          selectionMatchesRange(copiedSelection.boundaries)
+        ) {
+          return;
+        }
+        copiedSelection = undefined;
         if (!root.contains(range.commonAncestorContainer)) {
           clearPending();
           return;
@@ -193,6 +221,10 @@ export function ConversationMessageSelectionSurface({
         if (!quoteInteraction.current) clearPending();
       },
     });
+    return () => {
+      document.removeEventListener("copy", onCopy, true);
+      stopObserving();
+    };
   }, [captureRange, clearPending, enabled, root, selectionDebounceMilliseconds]);
 
   const rememberQuestionPress = (event: PointerEvent<HTMLDivElement>) => {

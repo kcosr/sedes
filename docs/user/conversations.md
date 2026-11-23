@@ -430,6 +430,8 @@ draft. See [Tasks and automations](tasks-and-automations.md).
 Choose files, paste into the focused composer, or drop files onto it.
 Selecting text in a completed chat message opens the quote editor. Choose
 **Add** to stage the quote and any note or **Add & send** to send the draft.
+Press **Ctrl+C** (**Cmd+C** on macOS) before the editor opens to copy the
+highlighted text and skip the editor.
 In a read-only file, rendered Markdown preview, or settled diff, select text
 and choose **Add to message** or **Add note**. See
 [Files and context](files-and-context.md#capture-an-exact-context-excerpt).
