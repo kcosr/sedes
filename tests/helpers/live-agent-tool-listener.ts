@@ -18,6 +18,9 @@ import { openOverlayDatabaseConnection } from "../../src/server/db/database.js";
 import { initializeEmptyBackendNormalizedDatabase } from "../../src/server/db/migrate.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
+import { executionPolicyRoots } from "../../src/server/configuration-admin/configuration-execution-policy.js";
+import { canonicalLocalWorkspaceRoots } from "../../src/server/execution/local-workspace-roots.js";
+import { workspaceRootGrant } from "../../src/server/execution/workspace-root-grant.js";
 import { ThreadAgentToolPolicyRepository } from "../../src/server/db/repositories/thread-agent-tool-policy-repository.js";
 import { ScopedApplicationEventHubs } from "../../src/server/events/application-event-hub.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
@@ -81,6 +84,12 @@ export async function startLiveAgentToolListener(input: {
     input.environmentId,
     { available: true, now: 110 },
   );
+  const configuredRoots = executionPolicyRoots(database, scope, input.environmentId);
+  const rootGrant = workspaceRootGrant(
+    environment.kind === "local" ? canonicalLocalWorkspaceRoots(configuredRoots) : configuredRoots,
+    input.workspace,
+  );
+  if (!rootGrant) throw new Error("live_agent_tool_workspace_root_unavailable");
   const workspace = inventory.upsertWorkspace(scope, {
     environmentId: input.environmentId,
     canonicalPath: input.workspace,
@@ -88,7 +97,8 @@ export async function startLiveAgentToolListener(input: {
     project: { kind: "new", name: "Live agent-tool workspace" },
     available: true,
     trustState: "trusted",
-    environmentConfigurationRevision: environment.configurationRevision,
+    authorityRootId: rootGrant.id,
+    environmentConfigurationRevision: rootGrant.generation,
     now: 120,
   });
   const thread = new ConversationBindingRepository(

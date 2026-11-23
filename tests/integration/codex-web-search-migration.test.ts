@@ -67,10 +67,10 @@ describe("Codex web search migration", () => {
       expect(database.prepare("SELECT * FROM principal_execution_configuration ORDER BY tenant_id, owner_principal_id").all()).toEqual(migratedRows);
       expect(database.prepare("SELECT * FROM execution_configuration_receipts ORDER BY tenant_id, owner_principal_id, mutation_id").all()).toEqual(migratedReceipts);
 
-      const repository = new ConfigurationRepository(database);
-      for (const { owner, document, request, result, stored, configurationJson, changed } of saves) {
+      // Assert 158's exact data changes before subsequent migrations normalize
+      // runtime receipts or add columns required by the current repository.
+      const replayCases = saves.map(({ owner, document, request, result, stored, configurationJson, changed }) => {
         const expectedDocument = configurationDocumentSchema.parse({ ...document, webSearch: changed ? null : document.webSearch });
-        expect(repository.get(owner)).toEqual({ revision: 9, configuration: expectedDocument, runtimes: [] });
         const row = database.prepare("SELECT configuration_json, revision, updated_at FROM principal_execution_configuration WHERE tenant_id = ? AND owner_principal_id = ?")
           .get(owner.tenantId, owner.principalId);
         expect(row).toEqual({ configuration_json: changed ? JSON.stringify(expectedDocument) : configurationJson, revision: 9, updated_at: 123 });
@@ -83,15 +83,23 @@ describe("Codex web search migration", () => {
         expect(receipt.request_fingerprint).toBe(configurationFingerprint(migratedRequest));
         expect(receipt.created_at).toBe(456);
         if (!changed) expect(receipt).toEqual({ ...stored, created_at: 456 });
+        return { owner, expectedDocument, migratedRequest, migratedResult };
+      });
+      expect(database.prepare("SELECT request_json, result_json, request_fingerprint FROM execution_configuration_receipts WHERE mutation_id = ?")
+        .get(lifecycleRequest.mutationId)).toEqual(lifecycleRow);
+
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      const repository = new ConfigurationRepository(database);
+      for (const { owner, expectedDocument, migratedRequest, migratedResult } of replayCases) {
+        expect(repository.get(owner)).toEqual({ revision: 9, configuration: expectedDocument, runtimes: [] });
         expect(repository.replaySave(owner, migratedRequest)).toEqual(migratedResult);
         const wrongOwner = owners.find(candidate => candidate.tenantId !== owner.tenantId || candidate.principalId !== owner.principalId)!;
         expect(repository.replaySave(wrongOwner, migratedRequest)).toBeUndefined();
         expect(() => repository.replaySave(owner, { ...migratedRequest, expectedRevision: 99 })).toThrow("mutation ID");
       }
-      expect(repository.replayLifecycle(scope, lifecycleRequest)).toEqual(lifecycleResult);
-      expect(repository.pendingLifecycle(scope)).toEqual([{ request: lifecycleRequest, result: lifecycleResult }]);
-      expect(database.prepare("SELECT request_json, result_json, request_fingerprint FROM execution_configuration_receipts WHERE mutation_id = ?")
-        .get(lifecycleRequest.mutationId)).toEqual(lifecycleRow);
+      const currentLifecycleResult = { ...lifecycleResult, runtime: { ...lifecycleResult.runtime, effects: [] } };
+      expect(repository.replayLifecycle(scope, lifecycleRequest)).toEqual(currentLifecycleResult);
+      expect(repository.pendingLifecycle(scope)).toEqual([{ request: lifecycleRequest, result: currentLifecycleResult }]);
       expect(database.pragma("foreign_key_check")).toEqual([]);
     } finally {
       database.close();
