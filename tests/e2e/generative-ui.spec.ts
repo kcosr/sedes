@@ -15,7 +15,7 @@ import {
   openWorkspaceDirectory,
   sendCurrentDraft,
 } from "./helpers.js";
-import { movePanel, openPanel, quickButton, stagePanel } from "./workspace-panel-helpers.js";
+import { movePanel, openPanel, panelAnnouncement, quickButton, stagePanel } from "./workspace-panel-helpers.js";
 import { loadE2ERunContext } from "./run-context.js";
 
 const PNG =
@@ -227,8 +227,12 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
       firstFrame.getByRole("heading", { name: "Inbox one" }),
     ).toBeVisible();
 
-    // Chat opens the exact published revision, even when newer revisions exist.
+    // Chat opens the exact published revision in a maximized Pages panel.
     const viewer = await openPage(page, firstCard);
+    const stage = page.locator(".workspace-panel-stage");
+    await expect(stage).toHaveAttribute("data-maximized", "pages");
+    await expect(stagePanel(page, "Chat")).toHaveCount(0);
+    await expect(panelAnnouncement(page)).toHaveText("Pages panel maximized.");
     // A cold lazy tenant may focus its retained panel target before the
     // document resolves; a warm open focuses Back. Both must leave Chat.
     await expect.poll(() => viewer.evaluate(node => {
@@ -240,6 +244,12 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
     await expect(viewer.getByRole("button", { name: "Lock page revision", exact: true })).toHaveAttribute("aria-pressed", "false");
     const revisionFrame = pageDocument(viewer);
     await expect(revisionFrame.getByRole("heading", { name: "Inbox one" })).toBeVisible();
+    await quickButton(page, "Chat").click();
+    await expect(panelAnnouncement(page)).toBeEmpty();
+    await openPage(page, firstCard);
+    await expect(panelAnnouncement(page)).toHaveText("Pages panel maximized.");
+    await viewer.getByRole("button", { name: "Restore Pages panel", exact: true }).click();
+    await expect(stagePanel(page, "Chat")).toBeVisible();
     await viewer.getByRole("button", { name: "Next page revision", exact: true }).click();
     await expect(revisionFrame.getByRole("heading", { name: "Inbox two" })).toBeVisible();
     await expect(viewer.getByRole("button", { name: "Return to published revision 1" })).toHaveText("2/2");
@@ -364,6 +374,8 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "generative-ui-phone-on-phone.png");
     const phone = await openPage(page, firstCard);
+    await expect(stage).toHaveAttribute("data-layout", "single");
+    await expect(stagePanel(page, "Chat")).toHaveCount(0);
     await expect(phone.getByLabel("Revision 1 of 4")).toHaveText("1/4");
     await expect(phone.getByRole("button", { name: "Lock page revision", exact: true })).toHaveAttribute("aria-pressed", "false");
     await expect(pageDocument(phone).locator("#layout")).toHaveText("Viewport 390 × 600");
@@ -499,6 +511,7 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
       (element) => element.scrollHeight > element.clientHeight,
     )).toBe(true);
     await capture(page, testInfo, "generative-ui-fullscreen-auto-height.png");
+    await longViewer.getByRole("button", { name: "Restore Pages panel", exact: true }).click();
     await longViewer.getByRole("button", { name: "Back to Pages", exact: true }).click();
     const library = stagePanel(page, "Pages");
     const libraryList = library.getByRole("navigation", { name: "Published pages" });
@@ -585,6 +598,8 @@ test("published HTML keeps revisions, downloads, target viewport, local images, 
 
     // Thread-following content never shows the prior thread's live document.
     await openPanel(page, "Pages");
+    await expect(library).toHaveAttribute("data-region", "right");
+    await expect(stagePanel(page, "Chat")).toBeVisible();
     await library.getByRole("navigation", { name: "Published pages" }).getByRole("button", { name: "Inbox mockup", exact: true }).click();
     await expect(pageDocument(library).getByRole("heading", { name: "Inbox five" })).toBeVisible();
     await createDraftThread(page, "No pages from another thread");
