@@ -229,13 +229,13 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     const actionPersistence = new OpenCodeThreadActionPersistence(adapterInput);
     const savedAgents = new OpenCodeSavedAgentBackendAdapter({ ...adapterInput, persistence });
     const automationExecutionPolicy = new OpenCodeAutomationExecutionPolicy(adapterInput);
-    const catalog = new OpenCodeModelCatalog({ modelPolicy: configuration.modelPolicy, readNative: async (directory, signal) => {
+    const catalog = new OpenCodeModelCatalog({ modelPolicy: configuration.modelPolicy, readNative: async (directory, signal, proofs) => {
       const runtime = await this.#startedNative(); this.#assertOpen(); signal?.throwIfAborted();
       const lease = runtime.acquire({ directory });
       try {
         const native = new OpenCodeNativeMutations(lease.client);
         const [models, defaultModel] = await Promise.all([native.listModels(directory, signal), native.getDefaultModel(directory, signal)]);
-        await runtime.assertCurrent(signal); this.#assertOpen();
+        await runtime.assertCurrent(signal, proofs); this.#assertOpen();
         return { models, ...(defaultModel ? { defaultModel } : {}) };
       } finally { lease.release(); }
     } });

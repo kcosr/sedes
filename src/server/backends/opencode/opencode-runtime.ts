@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { OpenCodeIdentityProofScope } from "./opencode-identity-proof.js";
 import path from "node:path";
 import { z } from "zod";
 import { OpenCodeHttpClient } from "./opencode-http-client.js";
@@ -329,7 +330,8 @@ export class OpenCodeRuntime {
       release: () => { if (!released) { released = true; this.#references -= 1; host.release(client); } } });
   }
 
-  async assertCurrent(signal?: AbortSignal): Promise<void> {
+  /** Local identity proofs are cheap and always fresh; a proof scope only permits reuse. */
+  async assertCurrent(signal?: AbortSignal, _proofs?: OpenCodeIdentityProofScope): Promise<void> {
     if (this.#state !== "ready" || !this.#client || !this.#identity) throw new OpenCodeRuntimeError("opencode_runtime_unavailable");
     const client = this.#client;
     const identity = this.#identity;

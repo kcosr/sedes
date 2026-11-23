@@ -171,7 +171,7 @@ describe("OpenCode native model catalog", () => {
     const service = new OpenCodeModelCatalog({ modelPolicy, readNative });
     expect((await service.read({ connection, workspace })).catalog.models).toHaveLength(1);
     expect((await service.read({ connection, workspace })).catalog.models).toHaveLength(0);
-    expect(readNative).toHaveBeenNthCalledWith(2, workspace.canonicalPath, undefined);
+    expect(readNative).toHaveBeenNthCalledWith(2, workspace.canonicalPath, undefined, undefined);
   });
 });
 

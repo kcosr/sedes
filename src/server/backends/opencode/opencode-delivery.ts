@@ -69,7 +69,9 @@ export class OpenCodeDelivery {
     let snapshot = this.context.settings.readOperation(scope, binding.applicationThreadId, operationId, kind);
     const existing = this.context.repository.readOperation(scope, binding.applicationThreadId, operationId, kind);
     if (!snapshot && existing) throw uncertain();
-    if (!existing) snapshot = (await this.settings.capture(operationId, kind)).snapshot;
+    // Only this invocation may reuse its capture at dispatch time; a replay re-checks in full.
+    const captured = existing ? undefined : await this.settings.capture(operationId, kind);
+    if (captured) snapshot = captured.snapshot;
     const requestFingerprint = openCodeOperationFingerprint({ kind, operationId, mutationId: input.mutationId,
       reconciliationToken: input.reconciliationToken, source, text, selection: snapshot!.selection,
       attachments: openCodeAttachmentEvidence(input),
@@ -128,7 +130,8 @@ export class OpenCodeDelivery {
     // can later authorize terminating its immutable preparation identities.
     attempt.preparing = true;
     // A prepared replay rechecks the latest desired/current selection before work.
-    await this.settings.prepare(operationId, kind);
+    // A fresh Send re-reads the native session and reuses its own capture's catalog.
+    await this.settings.prepare(operationId, kind, undefined, captured);
     await this.context.tools.admit(this.context, this.input, this.settings.runtime, this.settings.lifetime);
     await this.context.executionEnvironment.prepare({ context: this.context, input: this.input, runtime: this.settings.runtime,
       operation: kind, signal: this.settings.lifetime,

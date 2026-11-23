@@ -6,6 +6,7 @@ import type { ValidatedWorkspace } from "../../execution/contracts.js";
 import type { AgentConnectionProfile, BackendCatalog, BackendModelDescriptor } from "../contracts.js";
 import type { CompiledBackendModelPolicy } from "../model-policy.js";
 import { assertOpenCodeCatalogPolicy, qualifiedOpenCodeModelId } from "./opencode-model-selection.js";
+import type { OpenCodeIdentityProofScope } from "./opencode-identity-proof.js";
 
 export interface OpenCodeModelCatalogRead {
   readonly catalog: BackendCatalog;
@@ -14,12 +15,15 @@ export interface OpenCodeModelCatalogRead {
 }
 export class OpenCodeModelCatalog {
   constructor(readonly input: {
-    readonly readNative: (directory: string, signal?: AbortSignal) => Promise<{ readonly models: readonly ModelInfo[]; readonly defaultModel?: ModelInfo }>;
+    readonly readNative: (directory: string, signal?: AbortSignal, proofs?: OpenCodeIdentityProofScope) =>
+      Promise<{ readonly models: readonly ModelInfo[]; readonly defaultModel?: ModelInfo }>;
     readonly modelPolicy: CompiledBackendModelPolicy;
   }) { assertOpenCodeCatalogPolicy(input.modelPolicy); }
-  async read(input: { readonly connection: AgentConnectionProfile; readonly workspace: ValidatedWorkspace; readonly signal?: AbortSignal }): Promise<OpenCodeModelCatalogRead> {
+  /** `proofs` lets the caller's next identity proof share the catalog's trailing proof. */
+  async read(input: { readonly connection: AgentConnectionProfile; readonly workspace: ValidatedWorkspace; readonly signal?: AbortSignal;
+    readonly proofs?: OpenCodeIdentityProofScope }): Promise<OpenCodeModelCatalogRead> {
     if (input.connection.kind !== "opencode_http" || !input.connection.enabled || !input.workspace.canonicalPath.startsWith("/")) throw new Error("opencode_catalog_target_invalid");
-    const native = await this.input.readNative(input.workspace.canonicalPath, input.signal);
+    const native = await this.input.readNative(input.workspace.canonicalPath, input.signal, input.proofs);
     const models: BackendModelDescriptor[] = [];
     const modelsById = new Map<string, ModelInfo>();
     const notices: BackendCatalog["notices"][number][] = [];

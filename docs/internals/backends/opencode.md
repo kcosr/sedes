@@ -92,9 +92,14 @@ scope. A fresh launch must match the currently installed backend generation and
 desired launch digest. Unrelated target changes preserve normal ports, native
 identities and observation subscriptions. Scope acquisition, evidence recovery and controls
 have a separate lane from ordinary history/body requests. Observations multiplex
-into at most two polling requests per carrier, with bounded aggregate responses
-and separate evidence/presentation purposes. Closing one subscription cannot
-invalidate another thread's poll. Stop confirmation binds the runtime identity,
+into at most two polling batches per evidence or presentation purpose, four per
+carrier, with bounded aggregate responses. Each observation has one outstanding
+poll, so its records stay in order. A poll that becomes ready while one batch is
+open starts the second batch instead of waiting for the open batch's one-second
+host timeout; when both are open, waiting polls join the next batch oldest first.
+Closing one subscription cancels a batch only when every poll in it is cancelled,
+and cannot invalidate another thread's poll. Batch slots belong to one carrier
+channel and are not inherited by a reconnect. Stop confirmation binds the runtime identity,
 generation, ownership and state, so streaming text cannot continually invalidate
 a confirmed Stop. At the environment service boundary, stock OpenCode remains
 conservatively unknown for automatic retirement; forced confirmation is stable
@@ -155,7 +160,17 @@ Codex, Claude and Grok retain their independent runtime policies and advisories.
 Both modes require a Linux execution host and the same OS account as the Sedes
 runtime on that host (main for Local, the sidecar for SSH/outbound). Admission records PID, process start time, executable identity and
 canonical database identity. Subsequent identity changes revoke the connection;
-an endpoint alone never proves continuity. The database path is discovered from
+an endpoint alone never proves continuity.
+On SSH and outbound hosts, main proves the native identity after reads it relies
+on. A proof can serve another request only when it was issued after every native
+call on that carrier attachment had completed and no native call has started
+since. Concurrent callers share such a proof while it is in flight; one caller's
+cancellation stops only its own wait. A completed proof is reused only by
+adjacent steps of the same history refresh or settings read. Health checks and
+later operations always prove identity again, so an idle daemon replacement is
+still detected. The execution host proves identity before every write, and main
+proves it again after a prompt. A late result never affects a replacement
+attachment. The database path is discovered from
 the native process’s `OPENCODE_DB` selector or its unique open native database
 descriptor under the HOME/XDG data directory. An explicit database path must
 match the observed store. Ambiguous or conflicting evidence rejects admission;
@@ -446,7 +461,15 @@ private creation fingerprint before adoption. A missing session after an
 ambiguous request is not permission to create again.
 
 Each Submit/Steer snapshots desired settings and reserves an exact native input
-ID before dispatch. The independent input observer subscribes before effects
+ID before dispatch. At dispatch, a fresh Submit/Steer reuses the model catalog
+and desired selection from its own capture but reads the native session again,
+because another client can change its model without a Sedes settings write.
+Only the invocation that made a capture can use it, once. Its five-second window
+is measured on a monotonic clock from before the capture's catalog read until
+after the dispatch-time session read and identity proof. A session without an
+explicit model inherits the location's current default, so it repeats the full
+check, as do an expired window, a replay, a desired settings change and a new
+observation generation. The independent input observer subscribes before effects
 and records native prepared-payload admission separately from consumption.
 Prepared native transformations are allowed; a conflicting later payload blocks
 correlation. HTTP admission alone leaves the Sedes operation pending. The

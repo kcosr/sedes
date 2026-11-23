@@ -100,14 +100,18 @@ describe("OpenCode resident runtime over shared sidecar framing", () => {
     const f = fixture(), carrier = await f.attach(), client = f.client(); await client.start();
     const lease = client.acquire(f.target), observations = [];
     const call = carrier.mainChannel.call.bind(carrier.mainChannel);
-    let activePolls = 0, maximumPolls = 0;
+    const activePolls = { evidence: 0, presentation: 0 }, maximumPolls = { evidence: 0, presentation: 0, total: 0 };
     vi.spyOn(carrier.mainChannel, "call").mockImplementation(async (definition, body, options) => {
       const parsed = sidecarRuntimeBodySchema.safeParse(body);
       const value = parsed.success && parsed.data.type === "inline" ? openCodeRuntimeCommandSchema.safeParse(parsed.data.value) : undefined;
-      const polling = value?.success && value.data.action === "observe_poll";
-      if (polling) maximumPolls = Math.max(maximumPolls, ++activePolls);
+      const purpose = value?.success && value.data.action === "observe_poll" ? value.data.purpose : undefined;
+      if (purpose) {
+        activePolls[purpose]++;
+        maximumPolls[purpose] = Math.max(maximumPolls[purpose], activePolls[purpose]);
+        maximumPolls.total = Math.max(maximumPolls.total, activePolls.evidence + activePolls.presentation);
+      }
       try { return await call(definition, body, options); }
-      finally { if (polling) activePolls--; }
+      finally { if (purpose) activePolls[purpose]--; }
     });
     for (let index = 0; index < 150; index++) {
       const observation = lease.client.observe({ purpose: "presentation" }); await observation.ready; observations.push(observation);
@@ -115,13 +119,81 @@ describe("OpenCode resident runtime over shared sidecar framing", () => {
     const evidence = lease.client.observe({ purpose: "evidence" }); await evidence.ready; observations.push(evidence);
     await expect(lease.client.mutate("interruptSession", { sessionID: f.wire.sessionID }, control("many-observers-stop", "interrupt")))
       .resolves.toEqual({ interrupted: true });
-    expect(maximumPolls).toBeLessThanOrEqual(2);
+    // Two batches per purpose: a ready observation never waits behind another
+    // batch's host timeout, while 151 subscriptions hold at most four slots.
+    expect(maximumPolls.presentation).toBeLessThanOrEqual(2);
+    expect(maximumPolls.evidence).toBeLessThanOrEqual(2);
+    expect(maximumPolls.total).toBeLessThanOrEqual(4);
     f.wire.send(nativeEvent(1, "session.renamed", { title: "delivered to all" }));
     await Promise.all(observations.map(async observation => {
       const received: OpenCodeObservationRecord[] = [];
       await vi.waitFor(() => { received.push(...observation.drain()); expect(received).toHaveLength(1); }, { timeout: 3_000 });
     }));
     await Promise.all(observations.map(observation => observation.close()));
+  });
+
+  it("delivers a ready thread's first delta while another thread's poll stays open", async () => {
+    const f = fixture(), carrier = await f.attach(), client = f.client(); await client.start();
+    const ready = client.acquire(f.target);
+    const other = client.acquire({ ...f.target, session: { ...f.target.session, applicationThreadId: "other-thread", nativeSessionID: "ses_other" } });
+    const call = carrier.mainChannel.call.bind(carrier.mainChannel);
+    const opened: string[] = [], polls: { targets: string[]; done: boolean }[] = [];
+    vi.spyOn(carrier.mainChannel, "call").mockImplementation(async (definition, body, options) => {
+      const parsed = sidecarRuntimeBodySchema.safeParse(body);
+      const command = parsed.success && parsed.data.type === "inline" ? openCodeRuntimeCommandSchema.safeParse(parsed.data.value) : undefined;
+      const poll = command?.success && command.data.action === "observe_poll" ? { targets: command.data.targets.map(target => target.observationId), done: false } : undefined;
+      if (poll) polls.push(poll);
+      try {
+        const response = await call(definition, body, options);
+        if (command?.success && command.data.action === "observe_open") {
+          const decoded = sidecarRuntimeBodySchema.parse(response);
+          if (decoded.type === "inline") opened.push((openCodeRuntimeResponseSchema.parse(decoded.value) as { value: { observationId: string } }).value.observationId);
+        }
+        return response;
+      } finally { if (poll) poll.done = true; }
+    });
+    const delta = (sessionID: string, text: string) => ({ id: `evt_${text}`, type: "session.text.delta", created: 1,
+      data: { sessionID, assistantMessageID: "msg_answer", ordinal: 0, delta: text } });
+    const readyObservation = ready.client.observe({ purpose: "presentation" }); await readyObservation.ready;
+    const otherObservation = other.client.observe({ purpose: "presentation" }); await otherObservation.ready;
+    const otherId = opened[1]!;
+    // Wake only the ready thread and leave its record undrained, so its next poll
+    // starts after the other thread's host poll is already open and idle.
+    f.wire.send(delta(f.wire.sessionID, "warm"));
+    await readyObservation.wait();
+    await vi.waitFor(() => expect(polls.some(poll => !poll.done && poll.targets.length === 1 && poll.targets[0] === otherId)).toBe(true));
+    expect(readyObservation.drain()).toHaveLength(1);
+    const sent = Date.now(); f.wire.send(delta(f.wire.sessionID, "first"));
+    const received: OpenCodeObservationRecord[] = [];
+    // The host holds an idle poll for one second. Waiting behind it would miss this bound.
+    await vi.waitFor(() => { received.push(...readyObservation.drain()); expect(received).toHaveLength(1); }, { timeout: 400, interval: 5 });
+    expect(Date.now() - sent).toBeLessThan(400);
+    expect(polls.some(poll => !poll.done && poll.targets.length === 1 && poll.targets[0] === otherId)).toBe(true);
+    expect(received[0]).toMatchObject({ kind: "native", event: { type: "session.text.delta", data: { delta: "first" } } });
+    // Cancelling the other thread ends only its batch; the ready thread keeps receiving in order.
+    await otherObservation.close();
+    f.wire.send(delta(f.wire.sessionID, "second")); f.wire.send(delta(f.wire.sessionID, "third"));
+    const later: OpenCodeObservationRecord[] = [];
+    await vi.waitFor(() => { later.push(...readyObservation.drain()); expect(later).toHaveLength(2); }, { timeout: 3_000 });
+    expect(later.map(record => record.kind === "native" && record.event.type === "session.text.delta" ? record.event.data.delta : undefined)).toEqual(["second", "third"]);
+    expect(readyObservation.failure).toBeUndefined();
+    await readyObservation.close(); ready.release(); other.release();
+  });
+
+  it("starts a reconnected carrier's observations with free poll batches", async () => {
+    const f = fixture(), first = await f.attach(), firstClient = f.client(); await firstClient.start();
+    const lease = firstClient.acquire(f.target);
+    const stale = [0, 1, 2].map(() => lease.client.observe({ purpose: "presentation" }));
+    await Promise.all(stale.map(observation => observation.ready));
+    await first.close();
+    await Promise.all(stale.map(observation => observation.ended));
+    lease.release();
+    await f.attach(); const client = f.client(); await client.start();
+    const current = client.acquire(f.target), observation = current.client.observe({ purpose: "presentation" }); await observation.ready;
+    f.wire.send(nativeEvent(1, "session.renamed", { title: "after reconnect" }));
+    const received: OpenCodeObservationRecord[] = [];
+    await vi.waitFor(() => { received.push(...observation.drain()); expect(received).toHaveLength(1); }, { timeout: 400, interval: 5 });
+    await observation.close(); current.release();
   });
 
   it.each(["closed", "wrong_port", "wrong_generation"] as const)("isolates a %s poll target from other observations in the batch", async failure => {

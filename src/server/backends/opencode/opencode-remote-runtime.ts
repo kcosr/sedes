@@ -17,6 +17,7 @@ import { decodeOpenCodeNativeFailure, OpenCodeNativeMutationDeliveryError, openC
   parseAdmission, parseCompaction, parseMutationSession } from "./opencode-native-codecs.js";
 import { assessOpenCodeRuntimeVersion, haveSameOpenCodeRuntimeVersionPrecedence, OpenCodeRuntimeError, type VerifiedOpenCodeRuntimeVersion } from "./opencode-release.js";
 import { openCodeToolInvokeOperation } from "./opencode-tool-relay-wire.js";
+import type { OpenCodeIdentityProof, OpenCodeIdentityProofScope } from "./opencode-identity-proof.js";
 import { openCodeRuntimeExecuteOperation, openCodeRuntimeControlOperation, openCodeRuntimeCommandLane,
   openCodeRuntimeResponseSchema, openCodeRuntimeInfoSchema, openCodeRuntimeTargetSchema,
   openCodePortAdmissionSchema, openCodeRuntimeSuccessSchema, openCodeRuntimeInspectionSchema, openCodeObservationPollTargetSchema,
@@ -217,19 +218,47 @@ export class OpenCodeRemoteRuntime {
     try { await this.assertCurrent(); return { available: true, checkedAt: new Date().toISOString() }; }
     catch { return { available: false, checkedAt: new Date().toISOString() }; }
   }
-  async assertCurrent(signal?: AbortSignal): Promise<void> {
+  /** See OpenCodeIdentityProof for when a request can share an earlier proof. */
+  async assertCurrent(signal?: AbortSignal, proofs?: OpenCodeIdentityProofScope): Promise<void> {
+    signal?.throwIfAborted();
     const { attachment, info } = this.#ready();
-    try {
-      const result = await call(attachment, { action: "assert_current", runtimeId: info.runtimeId, nativeGeneration: info.snapshot.generation! }, signal);
-      openCodeRuntimeSuccessSchema.parse(result);
+    const calls = nativeCalls(attachment), generationKey = `${info.runtimeId}\0${info.snapshot.generation}`;
+    const shareable = (proof: OpenCodeIdentityProof | undefined): proof is OpenCodeIdentityProof => proof !== undefined &&
+      proof.owner === attachment && proof.generationKey === generationKey && proof.quiescent && proof.epoch === calls.epoch;
+    const scoped = proofs?.latest;
+    if (shareable(scoped) && scoped.settled && scoped.succeeded) {
       if (this.#attachment !== attachment) throw unavailable();
-    } catch (error) {
-      // Cancelling this observation does not revoke a previously admitted host.
-      const cancelled = signal?.aborted && (error === signal.reason ||
-        error instanceof OpenCodeRuntimeError && error.code === "opencode_request_aborted");
-      if (!cancelled && this.#attachment === attachment) this.#disconnected(attachment);
-      throw error;
+      return;
     }
+    let proof = calls.proof;
+    if (!shareable(proof) || proof.settled) proof = this.#issueProof(attachment, info, generationKey, calls);
+    proofs?.record(proof);
+    // A cancelled caller stops waiting; the shared proof continues for others.
+    await waitForProof(proof.promise, signal);
+    if (this.#attachment !== attachment) throw unavailable();
+  }
+  #issueProof(attachment: SidecarRuntimeLease, info: OpenCodeRuntimeInfo, generationKey: string, calls: NativeCallState): OpenCodeIdentityProof {
+    const lifetime = this.#lifetime.signal;
+    const proof: { -readonly [K in keyof OpenCodeIdentityProof]: OpenCodeIdentityProof[K] } = { owner: attachment, generationKey,
+      epoch: calls.epoch, quiescent: calls.inFlight === 0, settled: false, succeeded: false, promise: Promise.resolve() };
+    proof.promise = (async () => {
+      try {
+        openCodeRuntimeSuccessSchema.parse(await call(attachment, { action: "assert_current", runtimeId: info.runtimeId,
+          nativeGeneration: info.snapshot.generation! }, lifetime));
+        proof.succeeded = true;
+      } catch (error) {
+        // Only the attachment lifetime can cancel a shared proof. Any other
+        // failure revokes that attachment, never a later replacement.
+        if (!lifetime.aborted && this.#attachment === attachment) this.#disconnected(attachment);
+        throw error;
+      } finally {
+        proof.settled = true;
+        if (calls.proof === proof) calls.proof = undefined;
+      }
+    })();
+    void proof.promise.catch(() => undefined);
+    calls.proof = proof;
+    return proof;
   }
   acquire(value: OpenCodeRuntimeTarget): OpenCodeRuntimeLease {
     const { attachment, info } = this.#ready(), target = openCodeRuntimeTargetSchema.parse(value), recovery = this.#recovery;
@@ -357,7 +386,36 @@ export class OpenCodeRemoteRuntime {
   }
 }
 
+/** Port bookkeeping, host journal and observation transfer actions issue no native call. */
+const proofNeutralActions: ReadonlySet<string> = new Set(["assert_current", "acquire", "acquire_retained", "release",
+  "observe_poll", "observe_ack", "acknowledge_mutation", "acknowledge_operation"]);
+interface NativeCallState { epoch: number; inFlight: number; proof?: OpenCodeIdentityProof }
+const nativeCallStates = new WeakMap<SidecarRuntimeLease, NativeCallState>();
+function nativeCalls(attachment: SidecarRuntimeLease): NativeCallState {
+  let state = nativeCallStates.get(attachment);
+  if (!state) { state = { epoch: 0, inFlight: 0 }; nativeCallStates.set(attachment, state); }
+  return state;
+}
+function waitForProof(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
 export async function callOpenCodeRemoteRuntime(attachment: SidecarRuntimeLease, command: OpenCodeRuntimeCommandInput, signal?: AbortSignal): Promise<unknown> {
+  if (proofNeutralActions.has(command.action)) return invokeOpenCodeRemoteRuntime(attachment, command, signal);
+  // Every other command can reach the native daemon. Proofs issued before it
+  // started, or while it was in flight, cannot be shared by later callers.
+  const calls = nativeCalls(attachment);
+  calls.epoch++; calls.inFlight++;
+  try { return await invokeOpenCodeRemoteRuntime(attachment, command, signal); }
+  finally { calls.inFlight--; }
+}
+async function invokeOpenCodeRemoteRuntime(attachment: SidecarRuntimeLease, command: OpenCodeRuntimeCommandInput, signal?: AbortSignal): Promise<unknown> {
   signal?.throwIfAborted();
   const channel = attachment.channel;
   channel.assertReady();
@@ -388,48 +446,68 @@ interface PendingPoll {
   abort(): void;
 }
 // The channel is the authenticated carrier boundary, shared by every OpenCode
-// facade. At most two long-polls (one per purpose) occupy its request slots.
+// facade. Each purpose may hold two batched long-polls, so at most four occupy
+// its request slots. A poll that arrives while one batch is open starts the
+// second batch instead of waiting for the first batch's host timeout.
+const MAXIMUM_POLL_BATCHES_PER_PURPOSE = 2;
 const observationPollers = new WeakMap<SidecarRuntimeLease["channel"], Map<PollPurpose, {
-  readonly pending: Set<PendingPoll>; running: boolean;
+  /** Polls waiting for a batch, oldest first. */
+  readonly pending: Set<PendingPoll>;
+  /** Observations with a waiting or in-flight poll. */
+  readonly polling: Set<string>;
+  batches: number;
 }>>();
 function pollObservations(attachment: SidecarRuntimeLease, purpose: PollPurpose, target: PollTarget, signal: AbortSignal): Promise<unknown> {
   signal.throwIfAborted();
   let purposes = observationPollers.get(attachment.channel);
   if (!purposes) { purposes = new Map(); observationPollers.set(attachment.channel, purposes); }
   let state = purposes.get(purpose);
-  if (!state) { state = { pending: new Set(), running: false }; purposes.set(purpose, state); }
+  if (!state) { state = { pending: new Set(), polling: new Set(), batches: 0 }; purposes.set(purpose, state); }
   const poller = state;
+  // Each observation has at most one outstanding poll, which preserves its order.
+  if (poller.polling.has(target.observationId)) return Promise.reject(unavailable());
+  poller.polling.add(target.observationId);
   const response = new Promise<unknown>((resolve, reject) => {
-    const pending: PendingPoll = { target, signal, resolve, reject, abort: () => { poller.pending.delete(pending); reject(signal.reason); } };
+    const pending: PendingPoll = { target, signal, resolve, reject, abort: () => {
+      // A waiting poll leaves at once. A sent poll stays registered until its
+      // batch returns because the host still holds that observation's poll.
+      if (poller.pending.delete(pending)) poller.polling.delete(target.observationId);
+      reject(signal.reason);
+    } };
     poller.pending.add(pending); signal.addEventListener("abort", pending.abort, { once: true });
   });
-  if (!poller.running) {
-    poller.running = true;
-    queueMicrotask(() => { void (async () => {
-      try {
-        while (poller.pending.size) {
-          const batch = [...poller.pending].slice(0, 512);
-          // Caller cancellation ends only that subscriber. Cancelling the last
-          // in-flight subscriber may cancel this read-only batch safely.
-          const controller = new AbortController();
-          const cancel = () => { if (batch.every(item => item.signal.aborted)) controller.abort(); };
-          for (const item of batch) item.signal.addEventListener("abort", cancel, { once: true });
-          try {
-            const result = observationBatchSchema.parse(await call(attachment, { action: "observe_poll", purpose, targets: batch.map(item => item.target) }, controller.signal));
-            const byId = new Map(result.map(item => [item.observationId, item.result]));
-            if (byId.size !== batch.length || result.length !== batch.length || batch.some(item => !byId.has(item.target.observationId))) throw unavailable();
-            for (const item of batch) item.resolve(byId.get(item.target.observationId));
-          } catch (error) { for (const item of batch) item.reject(error); }
-          finally {
-            for (const item of batch) {
-              poller.pending.delete(item); item.signal.removeEventListener("abort", item.abort); item.signal.removeEventListener("abort", cancel);
-            }
-          }
-        }
-      } finally { poller.running = false; }
-    })(); });
-  }
+  // Polls resumed by one batch result join the same next batch.
+  queueMicrotask(() => startPollBatch(attachment, purpose, poller));
   return response;
+}
+function startPollBatch(attachment: SidecarRuntimeLease, purpose: PollPurpose,
+  poller: { readonly pending: Set<PendingPoll>; readonly polling: Set<string>; batches: number }): void {
+  if (!poller.pending.size || poller.batches >= MAXIMUM_POLL_BATCHES_PER_PURPOSE) return;
+  const batch = [...poller.pending].slice(0, 512);
+  for (const item of batch) poller.pending.delete(item);
+  poller.batches++;
+  void (async () => {
+    // Caller cancellation ends only that subscriber. Cancelling the last
+    // in-flight subscriber may cancel this read-only batch safely.
+    const controller = new AbortController();
+    const cancel = () => { if (batch.every(item => item.signal.aborted)) controller.abort(); };
+    for (const item of batch) item.signal.addEventListener("abort", cancel, { once: true });
+    try {
+      const result = observationBatchSchema.parse(await call(attachment, { action: "observe_poll", purpose, targets: batch.map(item => item.target) }, controller.signal));
+      const byId = new Map(result.map(item => [item.observationId, item.result]));
+      if (byId.size !== batch.length || result.length !== batch.length || batch.some(item => !byId.has(item.target.observationId))) throw unavailable();
+      for (const item of batch) item.resolve(byId.get(item.target.observationId));
+    } catch (error) { for (const item of batch) item.reject(error); }
+    finally {
+      for (const item of batch) {
+        poller.polling.delete(item.target.observationId);
+        item.signal.removeEventListener("abort", item.abort); item.signal.removeEventListener("abort", cancel);
+      }
+      poller.batches--;
+      // Oldest waiting polls go next; the resumed observations follow them.
+      startPollBatch(attachment, purpose, poller);
+    }
+  })();
 }
 type RemoteObservationConnection = { boundary: Awaited<OpenCodePortObservation["ready"]>; poll(): Promise<unknown>;
   acknowledge: OpenCodePortObservation["acknowledge"]; close(): Promise<void> };

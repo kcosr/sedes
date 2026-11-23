@@ -1,4 +1,5 @@
 import { acknowledgeOpenCodeTerminalOperation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
+import type { OpenCodeIdentityProofScope } from "./opencode-identity-proof.js";
 import type { FormDetail, FormInfo, PermissionRequest } from "@opencode/client";
 import { z } from "zod";
 import { interactionResponseInputSchema, type BackendConversationEvent, type DriverInteraction } from "../../../shared/protocol/backend.js";
@@ -68,7 +69,9 @@ export class OpenCodeInteractions {
     this.#signal.addEventListener("abort", () => this.close(), { once: true });
   }
 
-  async refresh(children?: readonly OpenCodeNativeSession[], activeChildren: readonly string[] = []): Promise<OpenCodeNativeInteractions> {
+  /** `proofs` receives this read's identity proofs only when this call starts the read. */
+  async refresh(children?: readonly OpenCodeNativeSession[], activeChildren: readonly string[] = [],
+    proofs?: OpenCodeIdentityProofScope): Promise<OpenCodeNativeInteractions> {
     this.#assertOpen();
     if (children) {
       if (children.some(child => child.parentID !== this.#authority.sessionID)) throw new OpenCodeNativeProtocolError();
@@ -83,9 +86,9 @@ export class OpenCodeInteractions {
       try {
         let current: OpenCodeNativeInteractions;
         do {
-          this.#refreshAgain = false; await this.#assertCurrent();
+          this.#refreshAgain = false; await this.#assertCurrent(proofs);
           current = await this.#api.getInteractions(this.#authority.sessionID, this.#signal);
-          await this.#assertCurrent();
+          await this.#assertCurrent(proofs);
           // Events and accepted responses supersede a read that was already
           // in flight. Publish only the next authoritative inventory.
           if (this.#refreshAgain) continue;
@@ -343,7 +346,9 @@ export class OpenCodeInteractions {
     if (this.#closed || this.runtime.nativeNamespaceKey !== this.context.nativeNamespaceKey || this.runtime.snapshot().generation !== this.lease.generation) throw new OpenCodeRuntimeError("opencode_interaction_generation_stale");
     requireOpenCodeBinding(this.context, this.attach);
   }
-  async #assertCurrent(): Promise<void> { this.#assertOpen(); await this.runtime.assertCurrent(this.#signal); this.#assertOpen(); }
+  async #assertCurrent(proofs?: OpenCodeIdentityProofScope): Promise<void> {
+    this.#assertOpen(); await this.runtime.assertCurrent(this.#signal, proofs); this.#assertOpen();
+  }
   #resolveGate(id: string): void { if (this.#gates.delete(id)) this.#send({ type: "interaction_resolved", backendInteractionId: id }); }
   #assertResponseAvailable(operationId: string, intent: Intent): void {
     const prior = this.context.repository.findDispatchedInteraction(this.context.scope, this.#authority.applicationThreadId,

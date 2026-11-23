@@ -5,7 +5,9 @@ import { OPENCODE_RELEASE, OpenCodeRuntimeError } from "../../src/server/backend
 import { OpenCodeRemoteRuntime } from "../../src/server/backends/opencode/opencode-remote-runtime.js";
 import { openCodeRuntimeNamespaceKey } from "../../src/server/backends/opencode/opencode-runtime.js";
 import type { OpenCodeRuntimeConfiguration } from "../../src/server/backends/opencode/opencode-runtime-configuration.js";
-import type { OpenCodeRuntimeCommand, OpenCodeRuntimeInfo } from "../../src/server/backends/opencode/opencode-runtime-wire.js";
+import type { OpenCodeRuntimeCommand, OpenCodeRuntimeCommandInput, OpenCodeRuntimeInfo } from "../../src/server/backends/opencode/opencode-runtime-wire.js";
+import { callOpenCodeRemoteRuntime } from "../../src/server/backends/opencode/opencode-remote-runtime.js";
+import { OpenCodeIdentityProofScope } from "../../src/server/backends/opencode/opencode-identity-proof.js";
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -53,9 +55,11 @@ function fixture(enabled = true) {
     },
   } as unknown as SidecarRuntimeChannel;
   const disconnected = deferred<void>();
-  const leases: SidecarRuntimeLease[] = [];
+  const leases: SidecarRuntimeLease[] = [], closeLease: (() => void)[] = [];
   const lease = (): SidecarRuntimeLease => {
-    const value: SidecarRuntimeLease = { channel, controllerEpoch: 1, serviceIncarnation: "service", closed: disconnected.promise, release: vi.fn() };
+    const own = deferred<void>(); closeLease.push(() => own.resolve());
+    const value: SidecarRuntimeLease = { channel, controllerEpoch: 1, serviceIncarnation: "service",
+      closed: Promise.race([disconnected.promise, own.promise]), release: vi.fn() };
     leases.push(value);
     return value;
   };
@@ -65,7 +69,7 @@ function fixture(enabled = true) {
   const observeVersion = vi.fn();
   const runtime = new OpenCodeRemoteRuntime({ onRuntimeVersionAssessment: observeVersion, configuration, provider: { acquire, acquireExisting }, acquireRecovery });
   cleanups.push(() => runtime.close());
-  return { runtime, observeVersion, disconnected, acquire, acquireExisting, acquireRecovery, lease, leases, respond, info,
+  return { runtime, observeVersion, disconnected, closeLease, acquire, acquireExisting, acquireRecovery, lease, leases, respond, info,
     actions: () => respond.mock.calls.map(([command]) => command.action) };
 }
 
@@ -85,9 +89,14 @@ describe("OpenCode remote startup cancellation", () => {
   it("retains valid remote version evidence when only the current observation is cancelled", async () => {
     const f = fixture(), controller = new AbortController();
     f.info.snapshot.runtimeVersion = "2.2.7"; await f.runtime.start();
-    const reason = new Error("caller cancelled");
-    f.respond.mockImplementationOnce(async () => { controller.abort(reason); throw reason; });
-    await expect(f.runtime.assertCurrent(controller.signal)).rejects.toBe(reason);
+    const reason = new Error("caller cancelled"), proof = deferred<unknown>();
+    f.respond.mockImplementationOnce(async () => proof.promise);
+    const cancelled = f.runtime.assertCurrent(controller.signal);
+    await vi.waitFor(() => expect(f.actions()).toContain("assert_current"));
+    controller.abort(reason);
+    await expect(cancelled).rejects.toBe(reason);
+    proof.resolve({ ok: true });
+    await f.runtime.assertCurrent();
     expect(f.runtime.snapshot().state).toBe("ready");
     expect(f.observeVersion).toHaveBeenCalledTimes(1);
     expect(f.leases[0]!.release).not.toHaveBeenCalled();
@@ -277,5 +286,125 @@ describe("OpenCode remote startup cancellation", () => {
     expect(f.acquire).not.toHaveBeenCalled();
     expect(f.acquireExisting).not.toHaveBeenCalled();
     expect(f.actions()).toEqual([]);
+  });
+});
+
+describe("OpenCode remote identity proof sharing", () => {
+  // Scripted host: identity proofs and native reads complete only when the test releases them.
+  function scripted(f: ReturnType<typeof fixture>) {
+    const proofs: ReturnType<typeof deferred<unknown>>[] = [], reads: ReturnType<typeof deferred<unknown>>[] = [];
+    f.respond.mockImplementation(async (command: OpenCodeRuntimeCommand) => {
+      if (command.action === "assert_current") { const proof = deferred<unknown>(); proofs.push(proof); return proof.promise; }
+      if (command.action === "read") { const read = deferred<unknown>(); reads.push(read); return read.promise; }
+      if (command.action === "lookup" || command.action === "lookup_recovery" || command.action === "ensure") return f.info;
+      throw new Error(`Unexpected command: ${command.action}`);
+    });
+    const read = (lease = f.leases.at(-1)!) => callOpenCodeRemoteRuntime(lease, { action: "read", runtimeId: f.info.runtimeId,
+      nativeGeneration: f.info.snapshot.generation!, portId: "port", method: "getSession", input: { sessionID: "ses_fixture" }, deadlineAt: null } as OpenCodeRuntimeCommandInput);
+    const proofCount = () => f.actions().filter(action => action === "assert_current").length;
+    return { proofs, reads, read, proofCount };
+  }
+
+  it("shares an in-flight proof only with callers whose native calls completed before it was issued", async () => {
+    const f = fixture(); await f.runtime.start(); const host = scripted(f), baseline = host.proofCount();
+    const first = f.runtime.assertCurrent(), joined = f.runtime.assertCurrent();
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(1));
+    expect(host.proofCount()).toBe(baseline + 1);
+    // A read that starts after the proof was issued needs a later proof.
+    const read = host.read(); await vi.waitFor(() => expect(host.reads).toHaveLength(1));
+    const afterRead = f.runtime.assertCurrent();
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(2));
+    host.proofs[0]!.resolve({ ok: true }); await Promise.all([first, joined]);
+    host.reads[0]!.resolve({}); await read;
+    // A proof issued while that read was in flight cannot cover it either.
+    const concurrent = deferred<void>(); void host.read().then(() => concurrent.resolve());
+    await vi.waitFor(() => expect(host.reads).toHaveLength(2));
+    const duringRead = f.runtime.assertCurrent();
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(3));
+    host.reads[1]!.resolve({}); await concurrent.promise;
+    const afterCompletedRead = f.runtime.assertCurrent();
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(4));
+    for (const proof of host.proofs.slice(1)) proof.resolve({ ok: true });
+    await Promise.all([afterRead, duringRead, afterCompletedRead]);
+    expect(f.runtime.snapshot().state).toBe("ready");
+  });
+
+  it("proves identity again for later operations and health checks after an idle period", async () => {
+    const f = fixture(); await f.runtime.start(); const host = scripted(f), baseline = host.proofCount();
+    const operation = new OpenCodeIdentityProofScope();
+    const settled = f.runtime.assertCurrent(undefined, operation);
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(1)); host.proofs[0]!.resolve({ ok: true }); await settled;
+    // No native call happens, but another operation still asks the host.
+    const later = f.runtime.assertCurrent(undefined, new OpenCodeIdentityProofScope());
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(2)); host.proofs[1]!.resolve({ ok: true }); await later;
+    // The daemon is replaced while idle: the next health check observes it.
+    const health = f.runtime.health();
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(3));
+    host.proofs[2]!.reject(new OpenCodeRuntimeError("opencode_runtime_identity_changed"));
+    expect(await health).toMatchObject({ available: false });
+    expect(host.proofCount()).toBe(baseline + 3);
+    expect(f.runtime.snapshot().state).toBe("disconnected");
+    expect(f.leases[0]!.release).toHaveBeenCalledOnce();
+  });
+
+  it("reuses a completed proof only for adjacent steps of the operation that observed it", async () => {
+    const f = fixture(); await f.runtime.start(); const host = scripted(f);
+    const operation = new OpenCodeIdentityProofScope();
+    const before = f.runtime.assertCurrent(undefined, operation);
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(1)); host.proofs[0]!.resolve({ ok: true }); await before;
+    await f.runtime.assertCurrent(undefined, operation);
+    expect(host.proofs).toHaveLength(1);
+    // Native work between steps requires a proof issued after it completed.
+    const read = host.read(); await vi.waitFor(() => expect(host.reads).toHaveLength(1)); host.reads[0]!.resolve({}); await read;
+    const after = f.runtime.assertCurrent(undefined, operation);
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(2)); host.proofs[1]!.resolve({ ok: true }); await after;
+    await f.runtime.assertCurrent(undefined, operation);
+    expect(host.proofs).toHaveLength(2);
+    // A failed proof is never reused.
+    const failing = new OpenCodeIdentityProofScope(), rejected = f.runtime.assertCurrent(undefined, failing);
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(3));
+    host.proofs[2]!.reject(new OpenCodeRuntimeError("opencode_runtime_identity_changed"));
+    await expect(rejected).rejects.toThrow("opencode_runtime_identity_changed");
+    await expect(f.runtime.assertCurrent(undefined, failing)).rejects.toThrow("opencode_runtime_unavailable");
+  });
+
+  it("lets a cancelled caller stop waiting without cancelling the shared proof", async () => {
+    const f = fixture(); await f.runtime.start(); const host = scripted(f), controller = new AbortController(), reason = new Error("caller cancelled");
+    const cancelled = f.runtime.assertCurrent(controller.signal), waiting = f.runtime.assertCurrent();
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(1));
+    controller.abort(reason);
+    await expect(cancelled).rejects.toBe(reason);
+    host.proofs[0]!.resolve({ ok: true });
+    await expect(waiting).resolves.toBeUndefined();
+    expect(host.proofs).toHaveLength(1);
+    expect(f.runtime.snapshot().state).toBe("ready");
+    expect(f.leases[0]!.release).not.toHaveBeenCalled();
+    // A genuine identity failure still revokes even when its only caller has cancelled.
+    const gone = new AbortController(), abandoned = f.runtime.assertCurrent(gone.signal);
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(2));
+    gone.abort(reason); await expect(abandoned).rejects.toBe(reason);
+    host.proofs[1]!.reject(new OpenCodeRuntimeError("opencode_runtime_identity_changed"));
+    await vi.waitFor(() => expect(f.runtime.snapshot().state).toBe("disconnected"));
+  });
+
+  it("keeps late proof results and scoped proofs on their own attachment across reconnect", async () => {
+    const f = fixture(); await f.runtime.start(); const host = scripted(f);
+    const operation = new OpenCodeIdentityProofScope();
+    const settled = f.runtime.assertCurrent(undefined, operation);
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(1)); host.proofs[0]!.resolve({ ok: true }); await settled;
+    const late = f.runtime.assertCurrent();
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(2));
+    f.closeLease[0]!();
+    await vi.waitFor(() => expect(f.runtime.snapshot().state).toBe("disconnected"));
+    await f.runtime.start();
+    expect(f.leases).toHaveLength(2);
+    // The old attachment's late failure cannot revoke the replacement.
+    host.proofs[1]!.reject(new OpenCodeRuntimeError("opencode_runtime_identity_changed"));
+    await expect(late).rejects.toThrow();
+    expect(f.runtime.snapshot().state).toBe("ready");
+    // The old attachment's completed proof does not satisfy the replacement.
+    const replacement = f.runtime.assertCurrent(undefined, operation);
+    await vi.waitFor(() => expect(host.proofs).toHaveLength(3)); host.proofs[2]!.resolve({ ok: true }); await replacement;
+    expect(f.leases[1]!.release).not.toHaveBeenCalled();
   });
 });

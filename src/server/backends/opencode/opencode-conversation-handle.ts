@@ -1,4 +1,5 @@
 import { acknowledgeOpenCodeTerminalOperation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
+import { OpenCodeIdentityProofScope } from "./opencode-identity-proof.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import { randomUUID } from "node:crypto";
 import type { BackendCapabilityDocument, BackendConversationEvent, SequencedBackendEvent } from "../../../shared/protocol/backend.js";
@@ -494,6 +495,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     const observation = this.#observation;
     if (!observation) throw new OpenCodeHistoryError("invalidated");
     const generation = this.#generation;
+    // Adjacent identity proofs within this one refresh may be shared.
+    const proofs = new OpenCodeIdentityProofScope();
     const initialEventBytes = this.#eventBytes, initialEventRecords = this.#eventRecords;
     let peakPartBytes = this.#partBytes;
     let consumedBytes = 0, consumedRecords = 0, chargedExtraBytes = 0, chargedExtraRecords = 0;
@@ -510,7 +513,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       if (consumedRecords + extra().records > OPENCODE_HISTORY_LIMITS.records) throw new OpenCodeHistoryError("records");
     };
     try {
-      await this.runtime.assertCurrent(signal); check();
+      await this.runtime.assertCurrent(signal, proofs); check();
       const revision = this.#structuralRevision, activityRevision = this.#activityRevision;
       const archiveRetirementRevision = this.#archiveRetirementRevision;
       const dirtyMessages = new Map(this.#dirtyMessages);
@@ -565,7 +568,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       }
       // An inactive inbox can also be deliberately parked. Only allow a bounded
       // promotion window, never masking orphaned work or unresolved interactions.
-      const interactions = await waitOpenCode(this.#interactions.refresh(activity.children, activity.activeChildren), signal);
+      const interactions = await waitOpenCode(this.#interactions.refresh(activity.children, activity.activeChildren, proofs), signal);
       const blocked = unfinished || interactions.permissions.length > 0 || interactions.forms.length > 0;
       this.#activity = activity.active ? suffix.length ? "running" : "starting"
         : blocked ? "unknown"
@@ -578,19 +581,19 @@ export class OpenCodeConversationHandle implements ConversationHandle {
           () => this.#activity === "starting" && !this.#pendingPromotion);
       }
       this.#acceptActivity(activity);
-      await this.runtime.assertCurrent(signal);
+      await this.runtime.assertCurrent(signal, proofs);
       check();
       this.#inputObservation.observer.observeHistory(retained.messages);
       if (!this.#usageCatalog) {
         // An unavailable model catalog suppresses the meter, not the transcript.
         try { this.#usageCatalog = await this.context.catalog.read({ connection: this.context.connection, workspace: this.input.workspace,
-          signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]) }); }
+          signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]), proofs }); }
         catch { /* Context remains unknown until a model limit is available. */ }
-        await this.runtime.assertCurrent(signal); check();
+        await this.runtime.assertCurrent(signal, proofs); check();
       }
       if (retained.messages.some(message => message.type === "assistant" && message.content.some(part => part.type === "tool" && classifyOpenCodeRead(part).kind === "viewed"))) {
-        const catalog = await this.context.catalog.read({ connection: this.context.connection, workspace: this.input.workspace, signal });
-        await this.runtime.assertCurrent(signal); check();
+        const catalog = await this.context.catalog.read({ connection: this.context.connection, workspace: this.input.workspace, signal, proofs });
+        await this.runtime.assertCurrent(signal, proofs); check();
         this.#viewedImages = await materializeOpenCodeViewedImages({ messages: retained.messages, nativeNamespaceKey: this.context.nativeNamespaceKey,
           sessionID: this.binding.backendConversationId, scope: this.input.scope, threadId: this.binding.applicationThreadId,
           publisher: this.context.outputArtifacts, models: catalog.modelsById, signal,
