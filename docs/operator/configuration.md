@@ -397,8 +397,8 @@ policy. The enabled targets for one backend may not span multiple
 execution environments in the current schema. A configured backend must have a target
 that fixes its environment; a selected default target must be enabled.
 
-Backend and target IDs are Sedes identifiers. They are not Pi session IDs or
-Codex/Claude/Grok native conversation IDs.
+Backend and target IDs are Sedes identifiers, not any provider's native
+conversation or session IDs.
 
 ### Backend model policy
 
@@ -465,8 +465,9 @@ A policy may contain at most 64 matchers and each dimension may contain at
 most 64 values. Provider and reasoning-effort identifiers are limited to 120
 characters; model IDs are limited to 240. Control characters are rejected.
 
-Pi has truthful native provider, model, and reasoning-effort dimensions and
-may use all three fields. Codex, Claude, and Grok have no reviewed native provider
+Pi SDK and native Pi have truthful native provider, model, and reasoning-effort
+dimensions and may use all three fields. Codex, Claude, Grok, and Antigravity
+have no reviewed native provider
 dimension, so their configuration rejects `providerIds`; use `modelIds`,
 `reasoningEfforts`, or both. A configured value need not be in the catalog at
 startup: a missing allowlist value grants nothing, while a missing denylist
@@ -852,11 +853,12 @@ Labels update immediately. Thread and execution defaults apply to new work.
 Connection compression is sampled on the next normal or recovery attachment.
 
 Backend startup defaults apply only to provider processes launched by Sedes.
-Owned Codex, Claude and Grok accept them; external Codex UDS/TCP and in-process
-Pi do not. Saving new startup values does not change a running process or
-restart it. **Restart backend required** identifies a running provider with
-pending launch settings. Use **Restart backend** and review affected threads
-if it should pick them up now. A new process
+Native Pi, owned Codex, Claude, Grok, owned OpenCode and Antigravity accept
+startup defaults. External Codex UDS/TCP, external OpenCode and in-process Pi SDK
+use their existing process environment. Saving new startup values leaves running
+processes on their current settings. **Restart backend required** identifies a
+running provider with pending launch settings. Use **Restart backend** and review
+affected threads to apply the change now. A new process
 uses current definitions at its first launch.
 
 Before removing a backend, its target, or an environment, stop the affected

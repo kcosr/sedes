@@ -232,6 +232,9 @@ recover a command and never falls back to a host shell.
 | Backend          | Disposition                                                                                                                                       |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pi SDK           | Implements SSH tools/context and shell recovery, plus remote skills when `workspace_skills` is enabled. Direct-local execution and isolated-worker authority remain unchanged. |
+| Pi native | Runs the complete RPC/companion runtime on the execution host with native tools and skills; it does not use the Pi SDK workspace shell executor. |
+| OpenCode v2 | Owned/external daemon on a supported Linux host; native tools and skills execute there, independently of the Pi SDK workspace executor. |
+| Antigravity | Owned ACP runtime on Linux/macOS, locally or in the persistent sidecar; native tools execute there. Sedes skill discovery is unsupported. |
 | Codex app-server | Uses native provider execution and remote `skills/list`; it does not consume the Pi workspace shell executor or `workspace_skills`. Its persistent runtime recovery is unchanged. |
 | Claude Agent SDK | Local worker or persistent SSH/outbound runtime. Native Claude tools and SDK skill discovery execute with that runtime; it does not consume the Pi workspace shell executor or `workspace_skills`. |
 | Grok ACP         | Local-only. Remote Grok admission, workspace-tools projection, and remote skill discovery remain unsupported; local execution is unchanged. |

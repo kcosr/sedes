@@ -96,14 +96,16 @@ Use the repository's non-live tests for deeper protocol coverage.
 ## Contents and dependency maintenance
 
 The release contains `dist/server`, `dist/client`, CLI entry points, shared
-and internal modules, sidecar/connector bundles, Pi and Claude workers,
+and internal modules, sidecar/connector bundles, Pi sandbox and Claude runtime
+workers, the Antigravity history worker,
 `node_modules`, the dedicated manifest and lockfile, `runtime-entrypoints.json`, `bin` launchers, sample
 configuration, offline installer/verifier, license notices, `BUILD-INFO.json`,
 `FILES.json`, and `SHA256SUMS`. Provenance records the source revision/branch,
 commit and build times, toolchain, exact dependency revisions/integrities,
 native build commands, linked libraries, validation checks and limitations.
 
-Codex/Claude CLI executables, Electron, Android, source development
+Provider CLI executables (native Pi, Codex, Claude Code, Grok, OpenCode, and
+Antigravity), Electron, Android, source development
 dependencies, source maps, foreign-platform optional/native payloads, and
 compiler intermediates are excluded. The dedicated boundary is
 `packages/server-runtime/package.json` and its independent lockfile. The
@@ -176,8 +178,10 @@ rebuilt as dedicated packages before this installer can activate them.
 
 ## Operator agent executables
 
-Install and authenticate Codex, Claude Code, and Grok independently for the
-Sedes service account. Configure their executable paths in the corresponding
+Install and authenticate the selected native Pi, Codex, Claude Code, Grok,
+OpenCode, or Antigravity runtime independently for its execution-host account.
+Follow each [backend guide](backends/index.md) for platform and version limits.
+Configure their executable paths in the corresponding
 backend settings (and remote execution environments where applicable).
 Sedes continues to pass the selected operator Claude executable to the SDK;
 there is no bundled CLI fallback. Pi SDK libraries are included, while its

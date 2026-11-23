@@ -797,7 +797,7 @@ receive Sedes tools through the local HTTP endpoint in Progressive or
 Individual mode, on the CLI or Native surface. The CLI surface installs the
 generated CLI in the shell environment policy. The Native surface adds
 `mcp_servers.sedes` to the thread's start, resume, or fork config instead; see
-[Native MCP presentation](../agent-tools.md#native-mcp-presentation-codex-and-claude). Progressive uses the
+[Native MCP presentation](../agent-tools.md#native-mcp-presentation). Progressive uses the
 bounded catalog/describe/invoke flow; Individual uses live help and named typed
 commands. SSH UDS uses an owner-only Unix socket only when `agent_tools_cli` is
 enabled and the managed sidecar is available.

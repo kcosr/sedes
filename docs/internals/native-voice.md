@@ -512,7 +512,7 @@ response. A dispatching or uncertain user Steer also supersedes it unless its
 reconciliation token appears in that response's complete correlation set.
 In-flight Submit is excluded because the source turn's own input can still be
 awaiting acknowledgement. This uses normalized application observations for
-Pi, Codex, Claude, Grok, and OpenCode; provider protocols are unchanged.
+all compiled backends; provider protocols are unchanged.
 
 A response superseded at capture still reaches its script hook, but produces no
 voice frame. Its deferred switch/end-interaction commands are explicitly retired
@@ -700,15 +700,16 @@ emit `turn.partial` with `progress.phase: partial`. Their delivery controls are
 independent, and `turn.partial` starts with script disabled and voice `none`.
 Neither event permits `speakThenListen`. The native queue preserves partial
 answers at completion-notice priority and only evicts provisional progress. A partial
-answer never supplies authoritative turn completion or callback evidence. Pi marks a completed assistant message that
+answer never supplies authoritative turn completion or callback evidence. Pi SDK marks a completed assistant message that
 contains a tool call and ended for tool use; an aborted or errored message is
 not progress because its tools never run. Claude marks the completed tool-use
 group or its later live classification. OpenCode marks completed tool-call
 commentary after a fresh native step-ended event confirms its tools have
 settled, while the turn is still running. Delayed events for steps already
 completed in the baseline stay silent. History replay, replacement snapshots,
-and terminal backfill do not carry this provenance. Grok intentionally has no
-live-progress producer.
+and terminal backfill do not carry this provenance. Native Pi, Grok, and
+Antigravity currently emit no live-progress provenance for these notifications;
+transcript response-phase classification alone does not authorize them.
 
 ## Foreground composer handoff
 
@@ -795,7 +796,7 @@ Blank completion, a recognized automatic stop command, and cancellation do not
 adopt or send a draft. Explicit voice Send remains literal and follows the same
 handoff eligibility as automatic completion. Successful composer submission uses
 its existing capture-and-clear behavior, preserving subsequent typing and normal
-input recovery. Pi, Codex, Claude, Grok, and OpenCode retain their existing
+input recovery. All compiled backends retain their existing
 normalized input and attachment paths; no provider-private payload enters the
 bridge.
 
@@ -1404,7 +1405,7 @@ notification stream require an explicit reconnect or Resume voice action.
 Direct input uses the same normalized request and receipt
 contracts as Android. All provider-specific speech traffic is independent of
 the selected Sedes server and uses a directly reachable speech API.
-Pi SDK, Pi, Codex, Claude, Grok, and OpenCode all use this shared application
+All seven compiled backends use this shared application
 path. Their existing input and notification capabilities remain authoritative:
 Steer requires the current advertised target, and otherwise input queues through
 the ordinary admission contract. No provider-private adapter or history shape

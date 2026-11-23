@@ -372,7 +372,7 @@ checks its captured comparison before and after asynchronous review creation.
 The normalized browser contract is version 117; sidecar Files uses the strict
 `workspace_files@8` contract, including scoped catalogs and stable repository
 keys. Local and SSH/outbound engines use the same revision resolver and bounds.
-Pi, Codex, Claude, and Grok consume the shared environment-owned Files surface:
+All compiled backends consume the shared environment-owned Files surface:
 no provider event, SDK, or history contract changes. Unsupported execution
 environments retain capability denial and never fall back to server-local Git.
 
@@ -632,11 +632,11 @@ truthful dispositions:
 
 ### Local execution environments
 
-Pi, Codex, Claude, and Grok use the common local Files provider when the
+All compiled backends use the common local Files provider when the
 workspace is admitted by the environment's allowed-root policy. No backend
 receives additional file authority.
 
-### Pi on an SSH or outbound workspace
+### Pi SDK on an SSH or outbound workspace
 
 Files is implemented only through the managed sidecar when `workspace_files`
 is enabled. The separate `workspace_tools`/`workspace_context` pair does not
@@ -652,6 +652,13 @@ viewed-image capture needs the same Files grant.
 
 Files is implemented through the managed sidecar when `workspace_files` is
 enabled. A persistent Claude runtime does not grant Files access by itself.
+
+### Native Pi, OpenCode, and Antigravity over SSH or outbound
+
+Files requires the independently enabled `workspace_files` sidecar capability
+and the environment's allowed-root policy. Native runtime access does not grant
+Files access. OpenCode retains its Linux execution-host restriction; Antigravity
+supports Linux and macOS.
 
 ### Unsupported remote shapes
 

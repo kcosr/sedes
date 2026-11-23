@@ -89,7 +89,7 @@ persistent sidecar. It remains active with zero viewers and no upstream carrier.
 through a read-only sealed-history path without recreating a process.
 
 The normalized browser contract does not contain provider-native IDs or
-Sidecar frames. Pi, Codex, Claude, and Grok remain unchanged; terminal
+Sidecar frames. All compiled backends use the same contract; terminal
 availability is resolved from the thread's execution environment. Unsupported
 environments fail before process creation and never fall back to the local
 host.
@@ -308,7 +308,7 @@ Prefer loopback, Tailscale Serve, or another private HTTPS boundary.
 
 | Surface | Disposition |
 | --- | --- |
-| Pi, Codex, Claude, and Grok backends | Unchanged; availability comes from the resolved environment |
+| All compiled backends | Unchanged; availability comes from the resolved environment |
 | Codex managed TUI | Separate `codex.tui@1` feature and carrier |
 | Local execution environment | Local PTY provider |
 | Persistent Sidecar SSH environment | Admitted terminal capability, sidecar-owned PTY/incarnation, bounded output retention, and exact reattach |

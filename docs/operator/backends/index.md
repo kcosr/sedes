@@ -98,7 +98,8 @@ an unsupported action and the backend rejects it again if called directly.
 | OpenCode v2 | `2.2.6` HTTP/SSE profile | Stable stock `>=2.2.6` | `2.2.6` |
 | Antigravity | `1.5.14` CLI, ACP 1 | Stable `>=1.5.14` within major 1, with the required ACP session capabilities | `1.5.14` reference profile |
 
-Pi, Codex, Claude, Grok, and OpenCode may admit a stable runtime newer than the release most
+Native Pi, Codex, Claude, Grok, OpenCode, and Antigravity may admit a stable
+runtime newer than the release most
 recently exercised by this repository. Sedes shows an installation advisory
 and continues to use the pinned reviewed protocol profile; a newer executable
 does not unlock new Sedes capabilities. Prereleases, exact excluded releases,
@@ -134,12 +135,12 @@ Qwen provider/model with low reasoning and read-only tools.
 
 Maintainer positioning, stated as judgment rather than measurement: Pi SDK and
 Codex are the primary integrations and carry the broadest feature set and the
-longest history in Sedes. Claude, Grok, and OpenCode are supported with the explicit
-limits in the capability matrix; Claude gained conversation-scoped Steer and
-the sidecar-hosted runtime in September 2026 and is the more actively
-extended of those two, while Grok remains a local-only runtime with no Steer,
+longest history in Sedes. Claude, Grok, OpenCode, and Antigravity are supported
+with the explicit limits in the capability matrix. Grok remains a local-only
+runtime with no Steer,
 compact, or fork support. OpenCode currently supports stock v2 on Linux
-execution hosts. Native Pi is a new separate integration with a stable >=1.4.0
+execution hosts; Antigravity uses the stock CLI on Linux/macOS locally or
+through a persistent sidecar. Native Pi is a separate integration with a stable >=1.4.0
 runtime requirement and a narrow Linux x64 AW Qwen live qualification. Expect rougher edges in these newer integrations
 and report reproducible problems with the backend, runtime version, and
 topology named.

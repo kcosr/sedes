@@ -113,10 +113,13 @@ session is safe for simultaneous writers.
 
 | Backend | Current same-installation and same-session rule |
 | --- | --- |
-| Pi | Sedes holds the canonical writer lock for an active native session. Another Pi or Sedes process must not operate that session concurrently. |
+| Pi SDK | Holds a session-writer lock shared with native Pi for the same native store. Independent Pi processes do not honor that Sedes lock; do not write the same session concurrently. |
+| Pi | The execution host owns the RPC process and the shared session-writer lease, including retained remote work and unproven cleanup. Independent same-session writers are unsupported. |
 | Owned Codex | Sedes locks the configured native Codex store. Do not run another owner against that store concurrently. A managed Codex TUI is a client of the same operator-owned app-server, not a second store writer. |
 | Claude | One runtime may query different sessions concurrently within its configured limit, but Sedes denies attaching the same native session twice. This is not a guarantee that an independent CLI may mutate that session concurrently. |
 | Grok | Sedes owns one local ACP process per resident session. There is no supported independent same-session writer contract. |
+| OpenCode v2 | Multiple native processes and Sedes backends may share the database. Runtime ownership and cleanup are separate; database sharing does not establish safe independent same-session mutation or shared Sedes receipt authority. |
+| Antigravity | One enabled Sedes backend reserves an execution environment; its targets share the owner and retained ACP sessions. This configuration reservation is not a native CLI writer lock or a guarantee of safe independent same-session mutation. |
 
 Native tools may continue to use the same provider installation for other
 sessions when that backend permits it. For the same store or session, follow
@@ -136,10 +139,20 @@ Cold behavior varies by backend and protocol generation:
 
 | Backend | Relevant cold-history behavior |
 | --- | --- |
-| Pi | Reads the complete active-branch suffix admitted by the backend. |
+| Pi SDK | Reads the complete active-branch suffix admitted by the backend. |
+| Pi | Acquires a bounded native JSONL snapshot on the execution host and projects the active branch. Detached history uses the passive read port; live attachment also owns an RPC process and companion. |
 | Codex | Legacy resume retains the complete native resume result; the paginated history path loads bounded turn shells and items per page. |
 | Claude | Its environment-owned SDK worker acquires complete authoritative history once per attach; the backend retains it for the handle lifetime and pages the normalized result. |
 | Grok | Loads a bounded provider window and reads older pages request-locally while retaining a bounded newest whole-turn window. |
+| OpenCode v2 | Reads complete native history within record, byte, and time limits, then serves normalized pages. A native SSE gap requires history reconstruction because OpenCode supplies no event replay. |
+| Antigravity | A worker on the execution host reads bounded SQLite/protobuf history, executor evidence, and referenced child sessions; normalized pages come from the resulting projection. History-only reads do not start ACP. |
+
+Antigravity checks native database changes even while an attached thread is
+idle so continuations remain observable. Unchanged snapshots reuse validated
+caches and avoid full-history transfer and projection; ordinary refreshes are
+coalesced. This is not incremental row acquisition: a changed database can
+require rereading and decoding its complete admitted history. Child databases
+are checked independently. See [Antigravity native history](backends/antigravity.md#native-history).
 
 Users with long or content-heavy native histories, slow storage, remote
 provider topology, expensive provider startup, or constrained CPU and memory

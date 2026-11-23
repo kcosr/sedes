@@ -539,8 +539,8 @@ Malformed diagnostic frames, invalid UUIDs and observer failures cannot alter
 streaming or recovery. Client opt-in belongs to the browser's existing diagnostic
 settings; server stderr output additionally requires the operator-owned
 `SEDES_DEBUG_DELIVERY` flag. No conversation authority or persisted state changes.
-Pi, Codex (local and persistent sidecar), Claude and Grok all use this implemented
-outer timing boundary. It does not expose provider identities or claim to split
+All compiled backends use this implemented outer timing boundary, including
+their supported local and persistent-sidecar paths. It does not expose provider identities or claim to split
 backend/sidecar acquisition into RPC phases.
 
 After an initial or
