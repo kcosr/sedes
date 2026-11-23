@@ -1,3 +1,5 @@
+import { storedFileRootBinding } from "./db/repositories/workspace-file-root-authority.js";
+import { canonicalLocalWorkspaceRoots } from "./execution/local-workspace-roots.js";
 import { ThreadAppliedToolPolicySetRepository } from "./db/repositories/thread-applied-tool-policy-set-repository.js";
 import { ToolPolicyRepository } from "./db/repositories/tool-policy-repository.js";
 import { ToolPolicyService } from "./tool-policies/tool-policy-service.js";
@@ -229,7 +231,7 @@ import {
 import { SidecarClientSession } from "./sidecar/sidecar-client-session.js";
 import { SidecarRuntimeOwner } from "./sidecar/sidecar-runtime.js";
 import { CompositeWorkspaceFileProvider } from "./workspace-files/composite-workspace-file-provider.js";
-import { type WorkspaceFileProvider } from "./workspace-files/contracts.js";
+import { WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID, type WorkspaceFileProvider } from "./workspace-files/contracts.js";
 import { SingleUserIdentityProvider } from "./identity/identity-provider.js";
 import { AuthenticationRepository } from "./authentication/authentication-repository.js";
 import { AuthenticationAdmission, deriveClientNavigationNamespace } from "./authentication/authentication-admission.js";
@@ -701,7 +703,8 @@ export async function startProductionApplication(
         configured, record, scope, stateDirectory: config.stateDirectory, environment,
         toolProvenanceKey, installationId: sidecarInstallationId,
         authorizedRuntimeCapabilities: [{capabilityId: "environment_variables", majorVersion: 1, operations: ["variables.resolve"]}, ...compiledBackendModuleCatalog.remoteRuntimeCapabilities()],
-        readWorkspaceBinding: id => {
+        readWorkspaceBinding: (id, rootId) => {
+          if (rootId && rootId !== "primary") return storedFileRootBinding(inventoryRepository.database, scope, id, rootId);
           const workspace = inventoryRepository.getWorkspace(scope, id);
           return {authorityRootId: workspace.authorityRootId ?? undefined, authorityRevision: workspace.environmentConfigurationRevision};
         },
@@ -804,12 +807,13 @@ export async function startProductionApplication(
       (candidate, workspace, target) => {
         const host = environmentRuntimes.get(target.environmentId);
         const owner = host?.sidecarRuntime;
-        const grants = () => owner ? owner.policyWorkspaceRoots() :
-          configurationProjection.hostPolicy(candidate, target.environmentId)?.snapshot.roots ?? [];
-        const feature = () => owner ? owner.policyCapabilityGeneration("workspace_files") : 0;
+        const grants = () => owner ? owner.acquirableWorkspaceRoots() :
+          canonicalLocalWorkspaceRoots(configurationProjection.hostPolicy(candidate, target.environmentId)?.snapshot.roots ?? []);
+        const feature = () => owner ? owner.acquirableCapabilityGeneration("workspace_files") : 0;
         const binding = target.rootId === "primary" ? {authorityRootId: workspace.authorityRootId ?? undefined,
-          authorityRevision: workspace.environmentConfigurationRevision} : undefined;
-        const grant = workspaceRootGrant(grants(), target.canonicalPath, binding);
+          authorityRevision: workspace.environmentConfigurationRevision} : storedFileRootBinding(inventoryRepository.database, candidate, workspace.id, target.rootId);
+        const grant = target.rootId === WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID ? workspaceRootGrant(grants(), target.canonicalPath) :
+          binding && workspaceRootGrant(grants(), target.canonicalPath, binding);
         const generation = feature();
         return () => {
           if (!host || environmentRuntimes.get(target.environmentId) !== host || generation === undefined ||
@@ -872,12 +876,16 @@ export async function startProductionApplication(
     const backendStartupAbort = new AbortController();
     const targetGeneration = (profile: AgentConnectionProfile): number | undefined => {
       const owner = environmentRuntimes.get(profile.executionEnvironmentId)?.sidecarRuntime;
-      if (owner) return owner.policyTargetGeneration(profile.backendInstanceId, profile.templateId);
+      if (owner) return owner.acquirableTargetGeneration(profile.backendInstanceId, profile.templateId);
       return configurationProjection.hostPolicy(scope, profile.executionEnvironmentId)?.snapshot.backends
         .find(backend => backend.id === profile.backendInstanceId)?.targets.find(target => target.id === profile.templateId)?.generation;
     };
     const runtimeModules = new PrincipalBackendRuntimeCollection({scope, registry,
       connectionGeneration: targetGeneration,
+      withConnectionAuthorization: (profile, generation, operation) => {
+        const owner = environmentRuntimes.get(profile.executionEnvironmentId)?.sidecarRuntime;
+        return owner ? owner.withTargetAuthorization(profile.backendInstanceId, profile.templateId, generation, operation) : operation();
+      },
       desiredInstanceRevision: id => backendConfiguration.getBackend(scope, id).configurationRevision,
     });
     resources.defer("backend runtime collection", () => runtimeModules.close(), {
@@ -2725,6 +2733,22 @@ export async function startProductionApplication(
         else environmentPreparationFailures.set(id, error);
       }
     };
+    const synchronizeHostPolicy = async (id: string, signal: AbortSignal, force = false): Promise<void> => {
+      const owner = environmentRuntimes.get(id)?.sidecarRuntime;
+      if (!owner || configurationRepository.runtime(scope, "environment", id).preference !== "automatic") return;
+      if (force) await owner.retryPolicy(signal);
+      else await owner.synchronizePolicy(signal);
+      const observed = owner.policyStatus();
+      const desired = configurationProjection.hostPolicy(scope, id);
+      if (desired && observed?.installed?.digest === desired.digest && observed.installed.revision === desired.revision) {
+        configurationRepository.observeHostPolicy(scope, id, desired,
+          new Map(observed.readiness.map(item => [item.id, item.state])),
+          {incarnation: observed.incarnation, epoch: observed.controllerEpoch,
+            launchDigests: new Map(observed.readiness.flatMap(item =>
+              item.id.startsWith("backend:") && item.observedLaunchDigest
+                ? [[item.id.slice("backend:".length), item.observedLaunchDigest] as const] : []))});
+      }
+    };
     const reconcileHost = async (environmentId: string): Promise<void> => {
       const before = reconciliationFingerprint();
       const previousEnvironments = new Map(environmentRuntimes);
@@ -2734,20 +2758,7 @@ export async function startProductionApplication(
         const definition = desiredConfiguration.configuration.executionEnvironments.find(item => item.id === id);
         if (definition && appliedEnvironmentFingerprints.get(id) === environmentRuntimeFingerprint(id)) {
           appliedEnvironmentRevisions.set(id, configurationRepository.runtime(scope, "environment", id).desiredRevision);
-          const owner = environmentRuntimes.get(id)?.sidecarRuntime;
-          if (owner && configurationRepository.runtime(scope, "environment", id).preference === "automatic") {
-            await owner.synchronizePolicy(maintenanceSignal());
-            const observed = owner.policyStatus();
-            const desired = configurationProjection.hostPolicy(scope, id);
-            if (desired && observed?.installed?.digest === desired.digest && observed.installed.revision === desired.revision) {
-              configurationRepository.observeHostPolicy(scope, id, desired,
-                new Map(observed.readiness.map(item => [item.id, item.state])),
-                {incarnation: observed.incarnation, epoch: observed.controllerEpoch,
-                  launchDigests: new Map(observed.readiness.flatMap(item =>
-                    item.id.startsWith("backend:") && item.observedLaunchDigest
-                      ? [[item.id.slice("backend:".length), item.observedLaunchDigest] as const] : []))});
-            }
-          }
+          await synchronizeHostPolicy(id, maintenanceSignal());
         } else {
           await replaceEnvironmentIfIdle(id, definition);
         }
@@ -3289,6 +3300,16 @@ export async function startProductionApplication(
               backendPresence.set(id, false);
             }
             if (["connect", "start", "restart"].includes(request.action)) {
+              if (request.action === "connect" && evidence.runtime.effects?.some(effect =>
+                effect.component === "host_policy" && effect.state === "awaiting_host")) {
+                try {
+                  await synchronizeHostPolicy(resourceHost(request), lifecycleSignal(), true);
+                } catch (error) {
+                  reportBackgroundError(`Backend ${id} host policy retry`)(error);
+                  const after = await captureAdministrativeResource(admitted(), false);
+                  return result("unavailable", {...after.runtime, lastError: "The host could not confirm the saved settings."});
+                }
+              }
               await applyBackendRuntime(id, true);
               startupCompletion = backendStartups.get(id)?.completion;
             }

@@ -79,7 +79,7 @@ export interface CodexManagedTuiLaunchSettings extends CodexExecutionPolicySelec
 export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLauncher {
   readonly #channels: ExecutionEnvironmentChannelProvider;
   readonly #configuration: ResolvedCodexRuntimeConfiguration;
-  readonly #configuredExecutablePath: string | undefined;
+  readonly #readConfiguredExecutablePath: () => string | undefined;
   readonly #environment: Readonly<Record<string, string>>;
   readonly #settings: (
     authority: CodexManagedTuiBindingAuthority,
@@ -127,7 +127,7 @@ export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLaunch
     }
     this.#channels = input.channels;
     this.#configuration = input.configuration;
-    this.#configuredExecutablePath = input.configuredExecutablePath;
+    this.#readConfiguredExecutablePath = () => input.configuredExecutablePath;
     this.#environment = buildCodexLaunchEnvironment(input.environment, {
       home: input.environment.HOME ?? homedir(),
     });
@@ -154,7 +154,7 @@ export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLaunch
     const executableIdentity = await resolveCodexManagedTuiExecutable(
       this.#channels,
       scope,
-      this.#configuredExecutablePath,
+      this.#readConfiguredExecutablePath(),
     );
     const executable = await this.#channels.prepareOwnedProcess(scope, {
       executablePath: executableIdentity.canonicalPath,

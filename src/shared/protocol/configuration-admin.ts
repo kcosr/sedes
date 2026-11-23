@@ -147,6 +147,9 @@ export const configurationDocumentSchema = z.strictObject({
         backend.moduleConfiguration.connection.channel.authentication.secret.source !== "protected_file") {
       context.addIssue({ code: "custom", path: ["targets", index], message: "Remote OpenCode requires an owner-protected password file on the execution host." });
     }
+    if (environment && environment.kind !== "local" && target.kind === "grok_acp" && (target.enabled || backend?.enabled)) {
+      context.addIssue({ code: "custom", path: ["targets", index], message: "Grok requires a local environment." });
+    }
     if (environment?.kind === "outbound" && environment.platform === "win32" && target.kind === "claude_agent_sdk" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "Claude requires a macOS or Linux execution host." });
     if (environment?.kind === "outbound" && environment.platform === "win32" && target.kind === "pi_rpc" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "Pi requires a macOS or Linux execution host." });
     if (environment?.kind === "outbound" && environment.platform === "win32" && target.kind === "antigravity_acp" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "Antigravity requires a macOS or Linux execution host." });

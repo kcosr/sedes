@@ -1,3 +1,4 @@
+import { workspaceFileRootGrantsMigration } from "./migrations/168-workspace-file-root-grants.js";
 import { liveExecutionPolicyMigration } from "./migrations/166-live-execution-policy.js";
 import { piNativeBackendKindMigration } from "./migrations/159-pi-native-backend-kind.js";
 import { piNativePersistenceMigration } from "./migrations/160-pi-native-persistence.js";
@@ -348,6 +349,7 @@ export const backendNormalizedMigrations = [
   antigravityLocalTitleMigration,
   liveExecutionPolicyMigration,
   workspaceRootAuthorityMigration,
+  workspaceFileRootGrantsMigration,
 ] as const;
 
 export type DatabaseMigration = {

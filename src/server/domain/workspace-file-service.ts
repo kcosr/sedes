@@ -2135,6 +2135,7 @@ export class WorkspaceFileService {
               workspaceId: workspace.id,
               environmentId: workspace.environmentId,
               rootKind: candidate.kind,
+              rootId: candidate.rootId,
               canonicalPath: candidate.canonicalPath,
             },
             ...optionalAbortSignal(signal),

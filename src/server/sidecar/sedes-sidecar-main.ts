@@ -13,6 +13,7 @@ import {
   agentToolsCatalogOperation,
   agentToolsDescribeOperation,
   agentToolsInvokeOperation,
+  SidecarOperationError,
   registerDirectoryBrowserV1Operations,
   INTERACTIVE_TERMINAL_V2_EVIDENCE,
   registerComposerAttachmentsV1Operations,
@@ -178,30 +179,10 @@ async function main(): Promise<void> {
       await recordPersistentSidecar(input.scope, serviceRegistry.serviceIncarnation, "stopped");
     },
     onRuntimeAttachment: ({ registry, peer, controllerEpoch, assertAdmission, assertController }) => {
-      // Retire endpoint namespaces from the detached controller before this one can publish a route.
-      void policyRoutes.close().catch(()=>{});
       const runtimeChannel = new SidecarRuntimeChannel(peer, registry);
       const getExecutionPolicy = () => serviceRegistry.executionPolicy(controllerEpoch);
-      const validateAgentToolRoute = (
-        id: string,
-        endpoint: string,
-        directory?: string,
-        inheritedPath?: string,
-        mergedPath?: string,
-      ) => {
-        const dir = path.dirname(executablePath),
-          inherited = process.env.PATH ?? "";
-        if (
-          endpoint !== policyRoutes.endpoint(id) ||
-          (directory !== undefined && directory !== dir) ||
-          (inheritedPath !== undefined && inheritedPath !== inherited) ||
-          (mergedPath !== undefined &&
-            mergedPath !== dir + (inherited ? path.delimiter + inherited : ""))
-        )
-          throw new Error("sidecar_policy_route_denied");
-      };
       const providerPolicy = {
-        validateAgentToolRoute,
+        validateAgentToolRoute: policyRoutes.validateProviderRoute.bind(policyRoutes),
         getExecutionPolicy,
         controllerScope: serviceRegistry.scope,
         isRecoveryController: () => serviceRegistry.recoveryController,
@@ -236,7 +217,7 @@ async function main(): Promise<void> {
         hosts: antigravityHosts, services: serviceRegistry, controllerEpoch }) : () => undefined;
       const detachTui = nativePtyAvailable ? registerCodexManagedTuiHost({ ...providerPolicy, registry, channel: runtimeChannel, hosts: codexHosts.managedTui, services: serviceRegistry, controllerEpoch }) : () => undefined;
       const unsubscribe = attachment.subscribe((event) => {
-        if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { void policyRoutes.close().catch(()=>{});detachTui(); detachCodex(); detachClaude(); detachOpenCode(); detachPi(); detachAntigravity(); runtimeChannel.close(); unsubscribe(); }
+        if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { detachTui(); detachCodex(); detachClaude(); detachOpenCode(); detachPi(); detachAntigravity(); runtimeChannel.close(); unsubscribe(); }
       });
   registerWorkspaceFilesV8Operations(registry, workspaceFiles.handlers);
   registerWorkspaceToolsV2Operations(registry, workspaceTools.handlers);
@@ -338,7 +319,22 @@ async function main(): Promise<void> {
         endpointKey,
         relay: {
           handle: (request, options) => {
-            policyRoutes.assertBinding(binding);
+            try {
+              policyRoutes.assertBinding(binding);
+            } catch (error) {
+              if (error instanceof SidecarOperationError && error.code === "sidecar_policy_route_denied") {
+                throw new AgentToolCliIngressError({
+                  code: "permission_denied",
+                  message: "This backend is no longer authorized to use the tool route.",
+                  retryable: false,
+                });
+              }
+              throw new AgentToolCliIngressError({
+                code: "unavailable",
+                message: "The tool route is waiting for its authorized controller.",
+                retryable: true,
+              });
+            }
             return relayAgentToolCliRequest(
               attachment,
               request,

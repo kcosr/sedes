@@ -1,3 +1,4 @@
+import {inRecoveryRequest} from "../../src/internal/sidecar-protocol/recovery-context.js";
 import {policyAcquireRouteOperation} from "../../src/internal/sidecar-protocol/execution-policy.js";
 import { createAgentToolCliNamedPipeEndpoint } from "../../src/internal/agent-tool-cli-protocol/local-endpoint.js";
 import { describe, expect, it, vi } from "vitest";
@@ -99,6 +100,30 @@ const workspaceContextEvidence = Object.freeze({
 });
 
 describe("SidecarClientSession", () => {
+  it("narrows opaque provider requests to retained operations before main confirms policy", async () => {
+    const streams = byteStreamPair();
+    const operations = new SidecarOperationRegistry();
+    const runtime = {capabilityId: "opencode_runtime", majorVersion: 5, operations: openCodeRuntimeOperations.map(operation => operation.operation)};
+    const body = {capabilityId: sidecarRuntimeBodyOffer.capabilityId, majorVersion: 1, operations: [sidecarRuntimeBodyOffer.operation]};
+    const received = vi.fn(() => inRecoveryRequest());
+    for (const operation of openCodeRuntimeOperations) operations.register(operation, request => { received(); return request; });
+    operations.register(sidecarRuntimeBodyOffer, () => ({accepted: true}));
+    registerControlV3Operations(operations, {buildId: artifact.buildId, artifactSha256: artifact.artifactSha256,
+      enabledSidecarCapabilities: [runtime, body].map(({capabilityId, majorVersion}) => ({capabilityId, majorVersion})), enabledSedesCapabilities: [body]});
+    const host = new SidecarProtocolPeer({role: "sidecar", sessionNonce, registry: operations,
+      transport: new LengthPrefixedSidecarFrameTransport({assurance: {kind: "test", carrierGeneration: 1}, stream: streams.right})});
+    host.start();
+    const session = await SidecarClientSession.start({connectionCompression: false, policyAttachment: "normal",
+      readDesiredPolicy: () => {throw Error("sidecar_policy_revision_conflict");}, stream: streams.left, transportKind: "ssh_stdio",
+      carrierGeneration: 1, sessionNonce, artifact, installation, signal: new AbortController().signal, authorizedCapabilities: [],
+      authorizedRuntimeCapabilities: [runtime], sedesOperations: new SidecarOperationRegistry()});
+    try {
+      const inspect = await session.runtimeChannel.encodeBody({action: "inspect"});
+      await expect(session.runtimeChannel.call(openCodeRuntimeOperations[0], inspect)).resolves.toEqual(inspect);
+      expect(received).toHaveReturnedWith(true);
+    } finally { await session.close("done"); await host.close("done"); }
+  });
+
   it.each(["ssh_stdio", "outbound_websocket"].flatMap(transportKind => [true, false].map(privateSupported => ({ transportKind, privateSupported }))))("negotiates exact OpenCode tools over $transportKind (private support $privateSupported)", async ({ transportKind, privateSupported }) => {
     const streams = byteStreamPair(), registry = new SidecarOperationRegistry();
     const runtime = { capabilityId: "opencode_runtime", majorVersion: 5, operations: openCodeRuntimeOperations.map(operation => operation.operation) };

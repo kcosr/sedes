@@ -366,9 +366,16 @@ describe("LocalWorkspaceFileProvider", () => {
     ).toThrow("workspace_file_environment_unavailable");
   });
 
-  it("compares a nested supplemental repository beneath a non-repository Primary", async () => {
+  it("keeps a supplemental comparison usable across deeper grant additions and fences it on removal", async () => {
     const current = await fixture();
     const directory = path.join(current.root, "repository");
+    const original = {id:"parent", path:current.root, generation:1};
+    const deeper = {id:"child", path:directory, generation:2};
+    let grants = [original];
+    const provider = new LocalWorkspaceFileProvider({
+      scope, environmentId, readWorkspaceRoots: () => grants,
+      readWorkspaceBinding: () => ({authorityRootId: original.id, authorityRevision: original.generation}),
+    });
     await mkdir(directory);
     await execFile("git", ["init", "-q", directory]);
     await writeFile(path.join(directory, "tracked.txt"), "before\n");
@@ -384,19 +391,19 @@ describe("LocalWorkspaceFileProvider", () => {
       canonicalPath: directory,
     };
     await expect(
-      current.provider.diffRepositories(scope, current.workspace),
+      provider.diffRepositories(scope, current.workspace),
     ).resolves.toEqual({ status: "available", repositories: [] });
-    const catalog = await current.provider.diffRepositories(scope, nested);
+    const catalog = await provider.diffRepositories(scope, nested);
     if (catalog.status !== "available") throw new Error("repository unavailable");
     const repository = catalog.repositories[0]!;
     expect(repository.rootId).toBe(nested.rootId);
-    const refs = await current.provider.diffRefCatalog(scope, nested, {
+    const refs = await provider.diffRefCatalog(scope, nested, {
       repositoryId: repository.repositoryId,
       pageSize: 20,
     });
     if (refs.status !== "available") throw new Error("revisions unavailable");
     const base = refs.revisions.find((revision) => revision.kind === "local_branch")!;
-    const created = await current.provider.diffCreateComparison(scope, nested, {
+    const created = await provider.diffCreateComparison(scope, nested, {
       repositoryId: repository.repositoryId,
       mode: "direct",
       base: { kind: "revision", revisionId: base.revisionId },
@@ -407,7 +414,8 @@ describe("LocalWorkspaceFileProvider", () => {
       comparisonId: created.comparison.comparisonId,
       fingerprint: created.comparison.fingerprint,
     };
-    const changed = await current.provider.diffChangedFiles(scope, nested, {
+    grants = [original, deeper];
+    const changed = await provider.diffChangedFiles(scope, nested, {
       ...comparison,
       pageSize: 20,
     });
@@ -417,13 +425,16 @@ describe("LocalWorkspaceFileProvider", () => {
       files: [expect.objectContaining({ newPath: "tracked.txt", changeKind: "modified" })],
     });
     if (changed.status !== "available") throw new Error("changed files unavailable");
-    await expect(current.provider.diffPatch(scope, nested, {
+    await expect(provider.diffPatch(scope, nested, {
       ...comparison,
       fileId: changed.files[0]!.fileId,
     })).resolves.toMatchObject({
       status: "available",
       patch: expect.stringContaining("+after"),
     });
+    grants = [deeper];
+    expect(() => provider.diffChangedFiles(scope, nested, { ...comparison, pageSize:20 })).toThrow(WorkspaceFileRootUnavailableError);
+    provider.close();
     current.provider.close();
   });
 

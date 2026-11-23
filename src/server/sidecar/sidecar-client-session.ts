@@ -19,7 +19,7 @@ import {
   type ExecutionPolicyPage,
 } from "../../internal/sidecar-protocol/execution-policy.js";
 import {
-  grantIndependentSettlement,
+  requiresCapabilityGrant,
   providerPolicyOperation,
   requirePolicyCapability,
   retainedPolicyOperation,
@@ -217,7 +217,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
         | SidecarOperationDefinition<unknown, unknown>
         | { capabilityId: string; majorVersion: number; operation: string },
       request: unknown,
-    ) => {
+    ): void | "recovery" => {
       if (key.capabilityId === "control" && key.operation.startsWith("policy.")) {
         if (key.operation === "policy.authorize_variables") assertApprovedVariableRequest(request);
         else if (policyWriter.getStore() !== peer)
@@ -234,12 +234,19 @@ export class SidecarClientSession implements SidecarRuntimeSession {
           return;
         throw new Error("sidecar_recovery_attachment_read_only");
       }
-      if (
-        input.policyAttachment !== "normal" ||
-        key.capabilityId === "control" ||
-        grantIndependentSettlement(key)
-      )
-        return;
+      if (input.policyAttachment !== "normal") return;
+      if (!requiresCapabilityGrant(key)) {
+        if (!providerPolicyOperation(key)) return;
+        // An opaque runtime command can contain either settlement or new work.
+        // Without current main authority, force its typed host handler to use
+        // the same exact-resource checks as an explicit recovery caller.
+        try {
+          const desired = input.readDesiredPolicy?.();
+          if (desired && policy.confirmed && (desired.revision > policy.confirmed.revision ||
+            (desired.revision === policy.confirmed.revision && desired.digest === policy.confirmed.digest))) return;
+        } catch { /* A quarantined or missing desired snapshot permits recovery only. */ }
+        return "recovery";
+      }
       const desired = input.readDesiredPolicy?.();
       if (!desired || !policy.confirmed) throw new Error("sidecar_policy_unsynchronized");
       requirePolicyCapability(desired.snapshot, key, request, policy.confirmed.snapshot);

@@ -1,3 +1,4 @@
+import { grantForNewFileRoot } from "./workspace-file-root-authority.js";
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { DomainError } from "../../domain/errors.js";
@@ -282,6 +283,7 @@ export class WorkspaceFileLinkedWorktreeRepository {
               // owns this path is gone. Defer replacement until a complete pass.
               continue;
             }
+            const grant = grantForNewFileRoot(this.database, scope, workspaceId, candidate.canonicalPath);
             this.database
               .prepare(
                 `INSERT INTO workspace_file_linked_worktree_roots(
@@ -289,9 +291,9 @@ export class WorkspaceFileLinkedWorktreeRepository {
                    canonical_path, canonical_checkout_path, canonical_git_dir,
                    identity_token, display_label, branch_ref, head_oid,
                    provenance_kind, ahead_count, behind_count, availability, revision,
-                   first_seen_at, last_seen_at, unavailable_at
+                   first_seen_at, last_seen_at, unavailable_at, authority_root_id, authority_root_generation
                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                   'available', 1, ?, ?, NULL)`,
+                   'available', 1, ?, ?, NULL, ?, ?)`,
               )
               .run(
                 scope.tenantId,
@@ -309,7 +311,7 @@ export class WorkspaceFileLinkedWorktreeRepository {
                 candidate.aheadCount,
                 candidate.behindCount,
                 input.now,
-                input.now,
+                input.now, grant?.id ?? null, grant?.generation ?? null,
               );
             continue;
           }

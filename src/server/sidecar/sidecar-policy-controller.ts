@@ -25,6 +25,11 @@ export interface SidecarPolicyRecovery {
   ): void;
 }
 
+interface PolicyEvidence {
+  status: ExecutionPolicyStatus;
+  confirmed: InstalledExecutionPolicy;
+}
+
 interface AttachedController {
   peer: PolicyConnection;
   service: SidecarServiceStatus;
@@ -41,8 +46,9 @@ export class SidecarPolicyController {
   #lastRequested: string | undefined;
   #retryIndex = 0;
   #timer: NodeJS.Timeout | undefined;
-  #confirmed: InstalledExecutionPolicy | undefined;
+  #confirmed: PolicyEvidence | undefined;
   #status: ExecutionPolicyStatus | undefined;
+  #renewable: PolicyEvidence | undefined;
   #conflictedIncarnation: string | undefined;
   #conflict = false;
   readonly #routeLeases = new Set<{
@@ -62,14 +68,20 @@ export class SidecarPolicyController {
   }
 
   attach(peer: PolicyConnection, service: SidecarServiceStatus): void {
+    const renewable = this.#renewable;
     this.detach();
+    if (renewable?.status.incarnation === service.serviceIncarnation) this.#renewable = renewable;
     this.#connection = { peer, service, controller: new AbortController() };
     this.#conflict =
       this.#conflictedIncarnation === service.serviceIncarnation ||
       this.recovery?.blocked(service.serviceIncarnation) === true;
   }
 
-  detach(): void {
+  detach(retainForAcquisition = false): void {
+    // Detached evidence can advertise eligible work. Only a newly synchronized
+    // attachment can admit it or issue routes.
+    this.#renewable = retainForAcquisition && !this.#conflict
+      ? this.#confirmed ?? this.#renewable : undefined;
     const published = this.#status !== undefined;
     this.#connection?.controller.abort();
     this.#connection = undefined;
@@ -91,78 +103,56 @@ export class SidecarPolicyController {
     return this.#conflict;
   }
 
-  #ready(key: string, generation: number): boolean {
-    return (
-      !this.#conflict &&
-      !!this.#status?.readiness.some(
-        (entry) =>
-          entry.id === key &&
-          entry.generation === generation &&
-          entry.state === "ready",
-      )
-    );
+  #evidence(forAcquisition: boolean, desired: InstalledExecutionPolicy): PolicyEvidence | undefined {
+    if (this.#conflict) return undefined;
+    const evidence = this.#confirmed ?? (forAcquisition ? this.#renewable : undefined);
+    return evidence && !diverges(evidence.confirmed, desired) ? evidence : undefined;
   }
 
-  capabilityGeneration(id: string): number | undefined {
-    const grant = this.#readDesired().snapshot.capabilities.find(
-      (entry) => entry.id === id,
-    );
-    return grant &&
-      this.#confirmed?.snapshot.capabilities.some(
-        (confirmed) =>
-          confirmed.id === id && confirmed.generation === grant.generation,
-      ) &&
-      this.#ready(`capability:${id}`, grant.generation)
-      ? grant.generation
-      : undefined;
+  capabilityGeneration(id: string, forAcquisition = false): number | undefined {
+    const desired = this.#readDesired();
+    const grant = desired.snapshot.capabilities.find(entry => entry.id === id);
+    const evidence = this.#evidence(forAcquisition, desired);
+    return grant && evidence?.confirmed.snapshot.capabilities.some(
+      installed => installed.id === id && installed.generation === grant.generation,
+    ) && subjectReady(evidence, `capability:${id}`, grant.generation) ? grant.generation : undefined;
   }
 
-  backendGeneration(id: string): number | undefined {
-    const grant = this.#readDesired().snapshot.backends.find(
-      (entry) => entry.id === id,
-    );
-    return grant &&
-      this.#confirmed?.snapshot.backends.some(
-        (confirmed) =>
-          confirmed.id === id && confirmed.generation === grant.generation,
-      ) &&
-      this.#ready(`backend:${id}`, grant.generation)
-      ? grant.generation
-      : undefined;
+  backendGeneration(id: string, forAcquisition = false): number | undefined {
+    const desired = this.#readDesired();
+    const grant = desired.snapshot.backends.find(entry => entry.id === id);
+    const evidence = this.#evidence(forAcquisition, desired);
+    return grant && evidence?.confirmed.snapshot.backends.some(
+      installed => installed.id === id && installed.generation === grant.generation,
+    ) && subjectReady(evidence, `backend:${id}`, grant.generation) ? grant.generation : undefined;
   }
 
-  targetGeneration(backendId: string, targetId: string): number | undefined {
-    if (this.backendGeneration(backendId) === undefined) return undefined;
-    const target = this.#readDesired()
-      .snapshot.backends.find((candidate) => candidate.id === backendId)
-      ?.targets.find((candidate) => candidate.id === targetId);
-    const installed = this.#confirmed?.snapshot.backends
-      .find((candidate) => candidate.id === backendId)
-      ?.targets.find((candidate) => candidate.id === targetId);
-    return target && target.generation === installed?.generation
-      ? target.generation
-      : undefined;
+  targetGeneration(backendId: string, targetId: string, forAcquisition = false): number | undefined {
+    const desired = this.#readDesired();
+    const evidence = this.#evidence(forAcquisition, desired);
+    const backend = desired.snapshot.backends.find(entry => entry.id === backendId);
+    const installed = evidence?.confirmed.snapshot.backends.find(entry => entry.id === backendId);
+    if (!backend || backend.generation !== installed?.generation ||
+      !subjectReady(evidence, `backend:${backendId}`, backend.generation)) return undefined;
+    const target = backend.targets.find(entry => entry.id === targetId);
+    return target && installed.targets.some(entry => entry.id === targetId && entry.generation === target.generation)
+      ? target.generation : undefined;
   }
 
-  workspaceRoots(): InstalledExecutionPolicy["snapshot"]["roots"] {
-    return this.#readDesired().snapshot.roots.filter(
-      (root) =>
-        this.#confirmed?.snapshot.roots.some(
-          (installed) =>
-            installed.id === root.id &&
-            installed.path === root.path &&
-            installed.generation === root.generation,
-        ) && this.#ready(`root:${root.id}`, root.generation),
-    );
+  workspaceRoots(forAcquisition = false): InstalledExecutionPolicy["snapshot"]["roots"] {
+    const desired = this.#readDesired();
+    const evidence = this.#evidence(forAcquisition, desired);
+    if (!evidence) return [];
+    return desired.snapshot.roots.filter(root => evidence.confirmed.snapshot.roots.some(
+      installed => installed.id === root.id && installed.path === root.path && installed.generation === root.generation,
+    ) && subjectReady(evidence, `root:${root.id}`, root.generation));
   }
 
   routeGeneration(backendId: string): number | undefined {
     const generation = this.capabilityGeneration("agent_tools_cli");
     return generation !== undefined &&
       this.backendGeneration(backendId) !== undefined &&
-      this.#ready(`route:${backendId}`, generation)
-      ? generation
-      : undefined;
+      subjectReady(this.#confirmed, `route:${backendId}`, generation) ? generation : undefined;
   }
 
   leaseRoute(
@@ -253,6 +243,7 @@ export class SidecarPolicyController {
         const changed =
           !this.#conflict ||
           JSON.stringify(this.#status) !== JSON.stringify(observed);
+        this.#renewable = undefined;
         this.#conflict = true;
         this.#conflictedIncarnation = observed.incarnation;
         if (observed.installed && !this.recovery?.blocked(observed.incarnation))
@@ -295,7 +286,8 @@ export class SidecarPolicyController {
         JSON.stringify(this.#status) !== JSON.stringify(observed) ||
         this.#conflict;
       this.#status = observed;
-      this.#confirmed = desired;
+      this.#renewable = undefined;
+      this.#confirmed = {confirmed: desired, status: observed};
       this.#conflict = false;
       this.#retryIndex = 0;
       this.#invalidateRoutes();
@@ -332,6 +324,10 @@ export class SidecarPolicyController {
     clearTimeout(this.#timer);
     this.#timer = undefined;
   }
+}
+
+function subjectReady(evidence: PolicyEvidence | undefined, key: string, generation: number): boolean {
+  return evidence?.status.readiness.some(entry => entry.id === key && entry.generation === generation && entry.state === "ready") === true;
 }
 
 function diverges(

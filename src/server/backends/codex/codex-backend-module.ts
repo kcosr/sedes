@@ -489,10 +489,11 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
   }
 
   async #performStart(): Promise<void> {
+    const configuration = this.#prepared.configuration;
     if (this.#context.sidecarRuntime) {
       if (this.#remoteManagedTui && codexManagedTuiModelPolicySupported(this.#prepared.modelPolicy.policy)) {
         this.#managedTui.configure(new CodexRuntimeManagedTuiLauncher({
-          ...(this.#prepared.configuration.tuiExecutablePath ? { configuredExecutablePath: this.#prepared.configuration.tuiExecutablePath } : {}),
+          get configuredExecutablePath() { return configuration.tuiExecutablePath; },
           settings: authority => {
             const current = this.#settingsRepository.find(authority.scope, authority.applicationThreadId)?.desired;
             if (!current || !codexTuiLaunchPolicyRepresentable(current) || !this.#prepared.modelPolicy.isSelectionAllowed({ modelId: current.model, reasoningEffort: current.reasoningEffort })) throw new Error("codex_tui_execution_policy_unrepresentable");
@@ -561,12 +562,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
         const launcher = new EnvironmentCodexManagedTuiLauncher({
           channels: this.#context.environmentChannel,
           configuration: resolved,
-          ...(this.#prepared.configuration.tuiExecutablePath
-            ? {
-                configuredExecutablePath:
-                  this.#prepared.configuration.tuiExecutablePath,
-              }
-            : {}),
+          get configuredExecutablePath() { return configuration.tuiExecutablePath; },
           environment: this.#environment,
           settings: (authority) => {
             const current = this.#settingsRepository.find(

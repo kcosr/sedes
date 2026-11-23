@@ -1,5 +1,5 @@
 import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
-import {attachFixturePolicy} from "../helpers/execution-policy-fixture.js";
+import { attachFixturePolicy, installFixturePolicy } from "../helpers/execution-policy-fixture.js";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import { createPiNativeSessionProcess } from "../../src/server/backends/pi/native/rpc/pi-native-launch.js";
 import { assessPiRuntimeVersion } from "../../src/server/backends/pi/native/runtime-release.js";
@@ -605,6 +605,46 @@ setInterval(() => {}, 1000);
     expect(reconcile.mock.calls[0]?.[0]).toEqual(input);
     await expect(port.reconcileFork({ ...input, inheritedSettings: { ...input.inheritedSettings, surprise: true } } as typeof input)).rejects.toThrow();
     expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("coalesces concurrent catalog callers and fences their results if revoked (%s)", async revoke => {
+    const f = await fixture(), carrier = await attachment(f), { port } = proxy(carrier.lease);
+    const gate = deferred<void>();
+    f.requests.mockImplementation(async command => {
+      await gate.promise;
+      switch ((command as { type: string }).type) {
+        case "get_available_models": return { models: [] };
+        case "get_commands": return { commands: [] };
+        default: return idleState;
+      }
+    });
+    const first = port.catalog({ cwd: "/workspace" });
+    const second = port.catalog({ cwd: "/workspace" });
+    const results = Promise.allSettled([first, second]);
+    try {
+      await vi.waitFor(() => expect(f.requests).toHaveBeenCalledTimes(3));
+      if (revoke) installFixturePolicy(f.services, carrier.epoch, serviceConfiguration, { roots: [], capabilities: [], backends: [] });
+    } finally { gate.resolve(); }
+    const [a, b] = await results;
+    expect(a.status).toBe(revoke ? "rejected" : "fulfilled");
+    expect(b).toEqual(a);
+    expect(f.launches).toHaveBeenCalledOnce();
+  });
+
+  it("replays a journaled prompt after withdrawal and refuses a fresh operation", async () => {
+    const f = await fixture(), carrier = await attachment(f), { port } = proxy(carrier.lease);
+    const session = await port.attach(identity);
+    const gate = deferred<unknown>();
+    f.requests.mockImplementation(() => gate.promise);
+    const request = { handleId: session.handleId, operationId: "existing", retainOutcome: true,
+      command: { channel: "rpc" as const, command: { type: "prompt", message: "hello" } } };
+    await expect(port.request(request)).resolves.toEqual({ status: "pending" });
+    installFixturePolicy(f.services, carrier.epoch, serviceConfiguration, { roots: [], capabilities: [], backends: [] });
+    await expect(port.request(request)).resolves.toEqual({ status: "pending" });
+    await expect(port.request({ ...request, operationId: "new" })).rejects.toMatchObject({ delivery: "not_sent" });
+    gate.resolve({ ok: true });
+    await vi.waitFor(async () => expect(await port.request(request)).toEqual({ status: "completed", result: { ok: true } }));
+    expect(f.requests).toHaveBeenCalledOnce();
   });
 
   it("carries only the strict main-owned tool environment beside user overrides", async () => {

@@ -1,5 +1,5 @@
 import { runtimeLaunchDigest } from "../../src/server/backends/provider-launch-digest.js";
-import {attachFixturePolicy} from "../helpers/execution-policy-fixture.js";
+import { attachFixturePolicy, installFixturePolicy } from "../helpers/execution-policy-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmod, copyFile, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -111,6 +111,18 @@ describe("Antigravity persistent sidecar", () => {
     expect(resumed.runtime.acquire).toHaveBeenCalledTimes(outcome === "selected" ? 1 : 0);
     expect(f.launched).toHaveBeenCalledOnce(); expect(f.createHost).toHaveBeenCalledOnce();
   });
+  it("returns retained create receipts after backend withdrawal without launching a second peer", async () => {
+    const f = await fixture(), carrier = await attachment(f), { port } = proxy(f, () => carrier.lease);
+    const request = { cwd: f.cwd, operationId: "original" };
+    const identity = await port.create(request);
+    installFixturePolicy(f.services, carrier.epoch, serviceConfiguration, { roots: [], capabilities: [], backends: [] });
+    await expect(port.create(request)).resolves.toEqual(identity);
+    await port.acknowledgeCreation({ operationId: request.operationId, ...identity });
+    await expect(port.create(request)).resolves.toEqual(identity);
+    await expect(port.create({ ...request, operationId: "new" })).rejects.toMatchObject({ delivery: "not_sent" });
+    expect(f.launched).toHaveBeenCalledOnce();
+  });
+
   it("uses one retained fallback when normal reconnect encounters configuration drift", async () => {
     const f = await fixture(), first = await attachment(f); let current = first.lease;
     const { port, runtime } = proxy(f, () => current);

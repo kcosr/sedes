@@ -1,3 +1,4 @@
+import { canonicalLocalWorkspaceRoots, type LocalWorkspaceRootGrant } from "./local-workspace-roots.js";
 import {
   createHmac,
   randomBytes,
@@ -131,7 +132,7 @@ function directoryIdentity(value: {
 export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
   readonly environment: EnvironmentSummary;
   readonly #scope: RequestScope;
-  readonly #readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
+  readonly #readWorkspaceRoots?: () => readonly LocalWorkspaceRootGrant[];
   readonly #roots: Promise<readonly string[]>;
   readonly #workspaceIds = new Map<string, string>();
   readonly #environment: Readonly<Record<string, string | undefined>>;
@@ -172,7 +173,8 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     }
     this.#configurationRevision = options.configurationRevision;
     this.#activeConfigurationRevision = options.activeConfigurationRevision;
-    this.#readWorkspaceRoots = options.readWorkspaceRoots;
+    const readRoots = options.readWorkspaceRoots;
+    if (readRoots) this.#readWorkspaceRoots = () => canonicalLocalWorkspaceRoots(readRoots());
     this.#roots = options.readWorkspaceRoots ? Promise.resolve([]) : Promise.all(
       [...new Set(options.allowedRoots.map((root) => path.resolve(root)))].map(
         async (root) => {
@@ -396,7 +398,7 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
               directoryIdentity: identity,
             })
           : undefined;
-      if (grant && !this.#readWorkspaceRoots?.().some(current => current.id === grant.id && current.generation === grant.generation))
+      if (grant && !this.#readWorkspaceRoots?.().some(current => current.id === grant.id && current.generation === grant.generation && current.path === grant.path))
         throw new Error("directory_browse_not_allowed");
       const parent = path.dirname(canonicalPath);
       return directoryBrowseResultSchema.parse({
@@ -453,16 +455,17 @@ export class LocalExecutionEnvironment implements ExecutionEnvironmentProvider {
     // moved-or-removed classification; canonical containment is checked again
     // below to reject symlink escape.
     const lexicalPath = path.resolve(candidatePath);
-    if (!roots.some((root) => pathIsWithin(root, lexicalPath))) {
+    if (!roots.some((root) => pathIsWithin(root, lexicalPath)) && !grants?.some(root => pathIsWithin(root.declaredPath, lexicalPath))) {
       throw new ExecutionWorkspaceAdmissionDeniedError();
     }
     const canonicalPath = await canonicalDirectory(candidatePath);
     if (!roots.some((root) => pathIsWithin(root, canonicalPath))) {
       throw new ExecutionWorkspaceAdmissionDeniedError();
     }
-    const grant = grants && ((original && workspaceRootGrant(grants, canonicalPath, original)) ?? workspaceRootGrant(grants, canonicalPath));
+    const grant = grants && workspaceRootGrant(grants, canonicalPath, original);
+    if (grants && original && !grant) throw new Error("workspace_authority_stale");
     const trusted = await this.#workspaceTrusted(canonicalPath);
-    if (grants && (!grant || !this.#readWorkspaceRoots?.().some(current => current.id === grant.id && current.generation === grant.generation))) {
+    if (grants && (!grant || !this.#readWorkspaceRoots?.().some(current => current.id === grant.id && current.generation === grant.generation && current.path === grant.path))) {
       throw new ExecutionWorkspaceAdmissionDeniedError();
     }
     const id = this.#workspaceIds.get(canonicalPath) ?? randomUUID();

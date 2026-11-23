@@ -790,6 +790,47 @@ describe("WorkspaceFilesSidecarHost", () => {
     }
   });
 
+  it("retries dirty watches through a transient fence and terminates a revoked watch once", async () => {
+    const policy = await mkdtemp(path.join(tmpdir(), "sedes-watch-fence-"));
+    roots.push(policy);
+    const grant = {id: "root", path: policy, generation: 1};
+    const snapshot = {roots: [grant], capabilities: [{id: "workspace_files", generation: 2}], backends: []};
+    let attached = true;
+    let invalidate!: () => void;
+    const subscription = {failed: new Promise<void>(() => undefined), close: vi.fn()};
+    const engine = {
+      validateRoot: async () => undefined,
+      watch: async (_root: unknown, callback: () => void) => { invalidate = callback; return subscription; },
+      close: vi.fn(),
+    } as unknown as WorkspaceFilesEngine;
+    const sendInvalidation = vi.fn(async () => undefined);
+    const sendWatchFailure = vi.fn(async () => undefined);
+    const host = new WorkspaceFilesSidecarHost({
+      policyGuard: createWorkspacePolicyGuard(() => attached ? snapshot : undefined),
+      sessionNonce: "n".repeat(32), engine, sendInvalidation, sendWatchFailure,
+      openDownloadStream: () => { throw new Error("unexpected_stream"); }, onDownloadCleanupFailure: () => {},
+    });
+    try {
+      const {rootHandle} = await host.handlers.rootOpen({
+        admissionId: randomUUID(), rootId: "primary", rootKind: "primary", declaredPath: policy, policyRootPath: policy,
+      }, context());
+      const {subscriptionHandle} = await host.handlers.watchOpen({rootHandle}, context());
+      attached = false;
+      invalidate();
+      invalidate();
+      expect(sendInvalidation).not.toHaveBeenCalled();
+      expect(sendWatchFailure).not.toHaveBeenCalled();
+      attached = true;
+      await vi.waitFor(() => expect(sendInvalidation).toHaveBeenCalledWith(subscriptionHandle), {timeout:2000});
+      snapshot.roots.length = 0;
+      invalidate();
+      invalidate();
+      expect(subscription.close).toHaveBeenCalledOnce();
+      expect(sendWatchFailure).toHaveBeenCalledExactlyOnceWith(subscriptionHandle);
+      expect(sendInvalidation).toHaveBeenCalledOnce();
+    } finally { host.close(); }
+  });
+
   it("emits one path-free terminal event when an established watch fails", async () => {
     const policy = await mkdtemp(path.join(tmpdir(), "h-sidecar-watch-"));
     roots.push(policy);

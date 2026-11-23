@@ -1,4 +1,5 @@
-import { WorkspaceFileRootUnavailableError } from "./contracts.js";
+import { canonicalLocalWorkspaceRoots } from "../execution/local-workspace-roots.js";
+import { WorkspaceFileRootUnavailableError, WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID } from "./contracts.js";
 import { workspaceRootGrant, type WorkspaceRootGrant } from "../execution/workspace-root-grant.js";
 import { isWithinRemoteRoot } from "../execution/remote-path.js";
 import path from "node:path";
@@ -55,7 +56,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
 
   constructor(readonly input: {
     readonly readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
-    readonly readWorkspaceBinding?: (workspaceId: string) => {authorityRootId?: string; authorityRevision: number};
+    readonly readWorkspaceBinding?: (workspaceId: string, rootId?: string) => {authorityRootId?: string; authorityRevision: number} | undefined;
     readonly scope: RequestScope;
     readonly environmentId: string;
     readonly watchers?: LocalWorkspaceFileWatcherRegistry;
@@ -110,7 +111,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     ) {
       throw new Error("workspace_file_environment_unavailable");
     }
-    const authority = this.#capture(root.canonicalPath, root.rootKind === "primary" ? root.workspaceId : undefined);
+    const authority = this.#capture(root.canonicalPath, root.rootKind === "primary" || root.rootId ? root.workspaceId : undefined, root.rootId);
     await this.#engine.validateRoot(root.canonicalPath);
     authority?.check();
   }
@@ -145,12 +146,13 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
       throw new Error("workspace_file_linked_worktree_primary_required");
     }
     const primary = this.#root(scope, primaryRoot);
-    const candidates = this.input.readWorkspaceRoots?.();
+    const candidates = this.input.readWorkspaceRoots && canonicalLocalWorkspaceRoots(this.input.readWorkspaceRoots());
     const result = await this.#engine.discoverLinkedWorktrees(primary, signal, candidates?.map(root => root.path));
     primary.assertCurrent?.();
+    const current = this.input.readWorkspaceRoots && canonicalLocalWorkspaceRoots(this.input.readWorkspaceRoots());
     return candidates ? { ...result, worktrees: result.worktrees.filter(worktree => {
       const old = workspaceRootGrant(candidates, worktree.canonicalCheckoutPath);
-      return old && this.input.readWorkspaceRoots?.().some(root => root.id === old.id && root.generation === old.generation);
+      return old && current?.some(root => root.id === old.id && root.generation === old.generation && root.path === old.path);
     }) } : result;
   }
 
@@ -406,14 +408,15 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     this.#engine.close();
   }
 
-  #capture(path: string, primaryWorkspaceId?: string) {
+  #capture(path: string, workspaceId?: string, rootId?: string) {
     const roots = this.input.readWorkspaceRoots;
     if (!roots) return undefined;
-    const binding = primaryWorkspaceId ? this.input.readWorkspaceBinding?.(primaryWorkspaceId) : undefined;
-    const root = workspaceRootGrant(roots(), path, binding);
-    if (!root || (primaryWorkspaceId && !binding)) throw new WorkspaceFileRootUnavailableError();
+    const requiresBinding = workspaceId !== undefined && rootId !== WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID;
+    const binding = requiresBinding ? this.input.readWorkspaceBinding?.(workspaceId, rootId) : undefined;
+    const root = workspaceRootGrant(canonicalLocalWorkspaceRoots(roots()), path, binding);
+    if (!root || (requiresBinding && !binding)) throw new WorkspaceFileRootUnavailableError();
     return { root, check() {
-      if (!roots().some(current => current.id === root.id && current.generation === root.generation)) throw new WorkspaceFileRootUnavailableError();
+      if (!canonicalLocalWorkspaceRoots(roots()).some(current => current.id === root.id && current.generation === root.generation && current.path === root.path)) throw new WorkspaceFileRootUnavailableError();
     } };
   }
 
@@ -435,7 +438,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     ) {
       throw new Error("workspace_file_environment_unavailable");
     }
-    const authority = this.#capture(root.canonicalPath, root.rootId === "primary" ? root.workspaceId : undefined);
+    const authority = this.#capture(root.canonicalPath, root.workspaceId, root.rootId);
     return {
       ...(authority && { assertCurrent: authority.check }),
       canonicalPath: root.canonicalPath,

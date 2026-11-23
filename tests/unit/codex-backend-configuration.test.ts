@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { configurationBackendSchema } from "../../src/shared/protocol/configuration-admin.js";
 import type { BackendModuleConfigurationInput } from "../../src/server/backends/module.js";
 import {
   parseCodexBackendConfiguration,
@@ -269,6 +270,19 @@ describe("Codex backend configuration", () => {
         ).tuiExecutablePath = "/opt/codex/../bin/codex";
       }),
     ).toThrow();
+  });
+
+  it("reads the currently saved managed TUI path for each new terminal", () => {
+    const input = validInput();
+    const { protocolRelease: _release, ...instance } = input.backend;
+    const backend = configurationBackendSchema.parse({ ...instance, label: "TUI" });
+    if (backend.kind !== "codex_app_server") throw new Error("expected_codex");
+    const prepared = parseCodexBackendConfiguration({ ...input, readCurrentBackend: () => backend });
+    expect(prepared.configuration.tuiExecutablePath).toBeUndefined();
+    backend.moduleConfiguration.tuiExecutablePath = "/opt/other/codex";
+    expect(prepared.configuration.tuiExecutablePath).toBe("/opt/other/codex");
+    delete backend.moduleConfiguration.tuiExecutablePath;
+    expect(prepared.configuration.tuiExecutablePath).toBeUndefined();
   });
 
   it("accepts the frozen external Unix and TCP WebSocket contracts", () => {

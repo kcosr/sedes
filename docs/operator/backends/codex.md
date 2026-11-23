@@ -125,7 +125,9 @@ Releases newer than the 0.169.0 tested-through threshold are admitted with an
 installation advisory. They do not gain capabilities merely because of their
 version. Managed TUI uses `moduleConfiguration.tuiExecutablePath` when present;
 otherwise it resolves the first `codex` on the execution environment account's
-`PATH`. This policy is the same for a directly run server and Electron Local.
+`PATH`. Saving a new executable path applies to the next managed TUI launch. An
+open TUI keeps its process and viewers. This policy is the same for a directly
+run server and Electron Local.
 The command is version checked on every Start; user-owned bytes are not pinned.
 
 Paginated history uses the stable `thread/turns/list` and `thread/items/list`

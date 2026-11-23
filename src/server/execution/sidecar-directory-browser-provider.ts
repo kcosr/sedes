@@ -38,6 +38,7 @@ export class SidecarDirectoryBrowserProvider {
 
   constructor(readonly input: {
     readonly readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
+    readonly confirmWorkspacePolicy?: () => Promise<void>;
     readonly readFeatureGeneration?: () => number | undefined;
     readonly platform: RemotePlatform;
     readonly scope: RequestScope;
@@ -86,6 +87,7 @@ export class SidecarDirectoryBrowserProvider {
       throw request.signal.reason ?? new Error("directory_browse_cancelled");
     }
     const signal = request.signal ?? new AbortController().signal;
+    await this.input.confirmWorkspacePolicy?.();
     if (this.#confirmed?.() === false) {
       // A direct browse can be the first request on a lazily attached SSH
       // host. The operation lease joins its handshake and policy confirmation.

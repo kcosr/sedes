@@ -1,4 +1,4 @@
-import {providerPolicyOperation,requirePolicyCapability,retainedPolicyOperation} from "../../internal/sidecar-protocol/execution-policy-admission.js";
+import {providerPolicyOperation, requirePolicyCapability, requiresCapabilityGrant, retainedPolicyOperation} from "../../internal/sidecar-protocol/execution-policy-admission.js";
 import { windowsSidecarIpc } from "./sidecar-windows-ipc.js";
 import { chmod, lstat, unlink } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
@@ -228,7 +228,7 @@ export class PersistentSidecarServiceServer {
             if (retainedPolicyOperation(key) || providerPolicyOperation(key) || key.capabilityId==="runtime_bodies") return;
             throw new Error("sidecar_recovery_attachment_read_only");
           }
-          requirePolicyCapability(this.#registry.executionPolicy(controllerEpoch),key,body);
+          if (requiresCapabilityGrant(key)) requirePolicyCapability(this.#registry.executionPolicy(controllerEpoch), key, body);
         },
         ...(this.#beforeRuntimeOperation ? { prepareDispatch: this.#beforeRuntimeOperation } : {}),
       });

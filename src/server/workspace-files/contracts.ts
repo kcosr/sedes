@@ -48,6 +48,7 @@ export interface WorkspaceFileRootTarget {
 }
 
 export interface WorkspaceFileRootValidationTarget {
+  readonly rootId?: WorkspaceFileRootId;
   readonly workspaceId: string;
   readonly environmentId: string;
   readonly rootKind:

@@ -23,7 +23,16 @@ export function attachFixturePolicy(
   },
 ): number {
   const epoch = service.attach(configuration, mode);
-  if (mode === "recovery") return epoch;
+  if (mode === "normal") installFixturePolicy(service, epoch, configuration, snapshot);
+  return epoch;
+}
+
+export function installFixturePolicy(
+  service: PersistentSidecarServiceRegistry,
+  epoch: number,
+  configuration: SidecarServiceConfiguration,
+  snapshot: ExecutionPolicySnapshot,
+): void {
   const { installed, incarnation } = service.readPolicy(epoch, () => "ready");
   const bytes = executionPolicyBytes(snapshot),
     digest = executionPolicyDigest(snapshot);
@@ -45,7 +54,6 @@ export function attachFixturePolicy(
     });
   }
   service.applyPolicy(epoch, { ...binding, base: installed, configuration });
-  return epoch;
 }
 export async function installFramedFixturePolicy(
   peer: SidecarProtocolPeer,

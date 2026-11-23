@@ -1,7 +1,7 @@
 import { launchAdmission, currentBackendGrant, type ProviderPolicyAttachment } from "../provider-policy-admission.js";
 import { runtimeLaunchDigest } from "../provider-launch-digest.js";
 import { randomUUID } from "node:crypto";
-import { SidecarOperationError, type SidecarOperationRegistry } from "../../../internal/sidecar-protocol/operation-registry.js";
+import type { SidecarOperationRegistry } from "../../../internal/sidecar-protocol/operation-registry.js";
 import type { SidecarRuntimeChannel } from "../../sidecar/runtime-channel.js";
 import type { PersistentSidecarServiceRegistry } from "../../sidecar/persistent-sidecar-service-registry.js";
 import type { OpenCodeRuntimeHostRegistry } from "./opencode-runtime-host-registry.js";
@@ -166,7 +166,7 @@ export function registerOpenCodeRuntimeHost(input: ProviderPolicyAttachment & {
       const host = input.hosts.get(command.runtimeId), port = recovery ? host.acquireRetained(command.target) : host.acquire(command.target), portId = randomUUID();
       ports.set(portId, { host, port, recovery }); return { portId, authority: port.authority };
     }
-    const { port, recovery } = portFor(command);
+    const { host, port, recovery } = portFor(command);
     switch (command.action) {
       case "release": releasePort(command.portId); return { ok: true };
       case "read": {
@@ -178,15 +178,25 @@ export function registerOpenCodeRuntimeHost(input: ProviderPolicyAttachment & {
           command.deadlineAt === null ? { signal } : { deadlineAt: command.deadlineAt, signal });
       }
       case "mutate": {
-        if (!OPENCODE_CONTROL_MUTATIONS.has(command.method)) {
-          // Outcome lookup is explicit: a recovery attachment never dispatches
-          // or infers a replay from an identity without its original request.
+        // The journal compares the immutable fingerprint first. A retry joins
+        // its admitted write or reads its recorded outcome across revocation.
+        const admit = () => {
+          if (OPENCODE_CONTROL_MUTATIONS.has(command.method)) return;
+          // Recovery has no authority to infer a previously forgotten outcome.
           if (recovery) throw denied();
-          currentBackendGrant(input, runtime);
-          input.services.assertAdmission(input.controllerEpoch);
-        }
-        // A disconnected/cancelled carrier cannot cancel an admitted write.
-        return port.mutate(command.method, parseOpenCodeMutationInput(command.method, command.input), command.control);
+          try {
+            const grant = currentBackendGrant(input, runtime);
+            input.services.assertAdmission(input.controllerEpoch);
+            return () => {
+              if (!input.services.hasInstalledBackend(grant.id, grant.kind, grant.generation))
+                throw new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_request_authority_mismatch");
+            };
+          } catch {
+            throw new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_request_authority_mismatch");
+          }
+        };
+        return host.mutate(port.authority, command.method, parseOpenCodeMutationInput(command.method, command.input),
+          command.control, undefined, admit);
       }
       case "outcome": return port.outcome(command.method, command.identity);
       case "acknowledge_mutation": await port.acknowledgeMutation(command.method, command.identity); return { ok: true };
@@ -218,8 +228,7 @@ export function registerOpenCodeRuntimeHost(input: ProviderPolicyAttachment & {
       const code = error instanceof Error ? error.message : "";
       const reason = command?.action === "stop" ? stopRefusals.get(code) : undefined;
       return input.channel.encodeBody(reason ? { status: "control_rejected", reason }
-        : { status: "failed", failure: encodeOpenCodeNativeFailure(error instanceof SidecarOperationError && command?.action === "mutate"
-          ? new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_request_authority_mismatch") : error, command?.action === "mutate") });
+        : { status: "failed", failure: encodeOpenCodeNativeFailure(error, command?.action === "mutate") });
     }
   });
   return () => {

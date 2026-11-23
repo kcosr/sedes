@@ -561,6 +561,7 @@ describe("Codex production application integration", () => {
     const roots = () => projection.hostPolicy(scope, reconciledEnvironment.id)!.snapshot.roots;
     const root = roots()[0]!;
     localAuthority.upsertWorkspace(scope, {
+      rebindAuthority: true,
       id: workspaceRecord.id,
       environmentId: workspaceRecord.environmentId,
       canonicalPath: workspaceRecord.canonicalPath,

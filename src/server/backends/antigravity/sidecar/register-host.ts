@@ -48,7 +48,7 @@ export function registerAntigravityHost(input: ProviderPolicyAttachment & { read
       }
       authority.assertAdmission();
     } };
-    if (["catalog", "list", "create", "attach", "connect"].includes(command.action)) callAuthority.assertAdmission();
+    if (["catalog", "list", "attach", "connect"].includes(command.action)) callAuthority.assertAdmission();
     if (command.action === "history" && !host.hasRetainedSession(command.input)) callAuthority.assertAdmission();
     switch (command.action) {
       case "connect": return host.connect(signal, callAuthority);

@@ -329,7 +329,7 @@ export function RuntimeHealth({ controller, status, configuration, children }: {
       {runtime.effects.map(effect => <li key={JSON.stringify([effect.component, effect.subjectId])}>
         <details>
           <summary>
-            <strong>{componentLabels[effect.component]}</strong> · {effectSubject(effect, { resourceId: runtime.resourceId, label }, configuration)} · {effectLabels[effect.state]}
+            <strong>{componentLabels[effect.component]}</strong> · {effectSubject(effect, { resourceId: runtime.resourceId, label }, configuration)} · {effect.state === "next_launch" && effect.subjectId.startsWith("managed_tui:") ? "On next terminal launch" : effectLabels[effect.state]}
             {effect.detail ? <span> · {effect.detail}</span> : null}
           </summary>
           <KeyValueList className="execution-facts" items={[

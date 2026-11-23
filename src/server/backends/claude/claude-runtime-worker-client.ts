@@ -446,6 +446,7 @@ class WorkerSession implements ClaudeOwnedRuntimeSession {
     try {
       await this.#client.initialize();
       if (this.#closed) throw new Error("claude_runtime_session_closed");
+      options.assertLaunchAdmission?.();
       this.#openAttempted = true;
       const timeoutSignal = AbortSignal.timeout(
         options.initializationTimeoutMs,

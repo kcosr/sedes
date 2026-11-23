@@ -178,7 +178,7 @@ export class SidecarProtocolPeer {
   #helloInProgress = false;
   #started = false;
   #closed = false;
-  readonly #beforeCall:((key:SidecarOperationDefinition<unknown,unknown>, request:unknown)=>void)|undefined;
+  readonly #beforeCall:((key:SidecarOperationDefinition<unknown,unknown>, request:unknown)=>void | "recovery")|undefined;
   readonly #onReady: (() => void) | undefined;
   readonly #onClosing: (() => void) | undefined;
   readonly #onDiagnostic: ((record: SidecarHeartbeatDiagnostic, error?: unknown) => void) | undefined;
@@ -191,7 +191,7 @@ export class SidecarProtocolPeer {
     readonly registry: SidecarOperationRegistry;
     readonly limits?: Partial<SidecarProtocolLimits>;
     readonly requestIdFactory?: () => string;
-    readonly beforeCall?:(key:SidecarOperationDefinition<unknown,unknown>, request:unknown)=>void;
+    readonly beforeCall?:(key:SidecarOperationDefinition<unknown,unknown>, request:unknown)=>void | "recovery";
     readonly onReady?: () => void;
     /** Runs before connection-scoped request signals are aborted. */
     readonly onClosing?: () => void;
@@ -270,7 +270,7 @@ export class SidecarProtocolPeer {
     } else if (!this.#remoteOperations.has(operationKey(definition))) {
       throw new Error("sidecar_operation_not_negotiated");
     }
-    this.#beforeCall?.(definition as SidecarOperationDefinition<unknown,unknown>, request);
+    const disposition = this.#beforeCall?.(definition as SidecarOperationDefinition<unknown,unknown>, request);
     if (this.#outbound.size >= this.#limits.maximumOutboundRequests) {
       throw new Error("sidecar_protocol_outbound_request_limit");
     }
@@ -291,7 +291,7 @@ export class SidecarProtocolPeer {
       wireVersion: SIDECAR_WIRE_VERSION,
       sessionNonce: this.#sessionNonce,
       type: "request",
-      ...(this.#role==="sedes" && inRecoveryRequest()?{recovery:true as const}:{}),
+      ...(this.#role==="sedes" && (inRecoveryRequest() || disposition === "recovery")?{recovery:true as const}:{}),
       requestNamespace: this.#role,
       requestId,
       capabilityId: definition.capabilityId,

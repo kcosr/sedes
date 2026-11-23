@@ -20,7 +20,8 @@ export function createWorkspacePolicyGuard(readPolicy: () => ExecutionPolicySnap
       if (!grant || (expectedCapabilityGeneration !== undefined && grant.generation !== expectedCapabilityGeneration) || (path !== undefined && !root)) throw new SidecarOperationError("workspace_policy_denied");
       const check = () => {
         const current = readPolicy();
-        if (!current?.capabilities.some(item => item.id === grant.id && item.generation === grant.generation) ||
+        if (!current) throw new SidecarOperationError("workspace_policy_unavailable", true);
+        if (!current.capabilities.some(item => item.id === grant.id && item.generation === grant.generation) ||
           (root && !current.roots.some(item => item.id === root.id && item.generation === root.generation))) {
           throw new SidecarOperationError("workspace_policy_revoked");
         }

@@ -181,6 +181,7 @@ export class PrincipalBackendRuntimeCollection
     readonly input: {
       readonly scope: RequestScope;
       readonly registry: AgentBackendRegistry;
+      readonly withConnectionAuthorization?: BackendDriverFactory["withConnectionAuthorization"];
       readonly connectionGeneration?: (connection: BackendModuleRuntimeContext["connections"][number]) => number | undefined;
       readonly desiredInstanceRevision: (backendInstanceId: string) => number | undefined;
     },
@@ -455,6 +456,7 @@ export class PrincipalBackendRuntimeCollection
     };
     const factory: BackendDriverFactory = {
       connectionGeneration,
+      ...(this.input.withConnectionAuthorization && {withConnectionAuthorization: this.input.withConnectionAuthorization}),
       scope: runtime.driverFactory.scope,
       instance: runtime.driverFactory.instance,
       connectionKinds: runtime.driverFactory.connectionKinds,

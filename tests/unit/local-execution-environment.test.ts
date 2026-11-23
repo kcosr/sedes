@@ -181,6 +181,30 @@ describe("LocalExecutionEnvironment", () => {
     ).rejects.toThrow("directory_browse_cursor_invalid");
   });
 
+  it("preserves the declared grant of a symlinked local root until an explicit reopen", async () => {
+    const {root, workspacePath} = await fixture();
+    const alias = path.join(root, "alias");
+    await symlink(workspacePath, alias, "dir");
+    await mkdir(path.join(workspacePath, "repo"));
+    const repo = await realpath(path.join(workspacePath, "repo"));
+    const initial = {id:"declared-alias",path:alias,generation:1};
+    const deeper = {id:"deeper",path:repo,generation:2};
+    let grants = [initial];
+    const environment = new LocalExecutionEnvironment({
+      scope, environmentId: "local", allowedRoots: [alias], configurationRevision: 0,
+      activeConfigurationRevision: () => 0, readWorkspaceRoots: () => grants, workspaceTrusted: () => true,
+    });
+    const original = await environment.validateWorkspace(scope, "local", path.join(alias, "repo"));
+    expect(original).toMatchObject({canonicalPath:repo, authorityRootId:initial.id, authorityRevision:1});
+    grants = [initial, deeper];
+    await expect(environment.revalidateWorkspace(scope, original)).resolves.toMatchObject({authorityRootId:initial.id});
+    grants = [deeper];
+    await expect(environment.revalidateWorkspace(scope, original)).rejects.toThrow("workspace_authority_stale");
+    await expect(environment.validateWorkspace(scope, "local", repo)).resolves.toMatchObject({
+      authorityRootId:deeper.id, summary: {id:original.summary.id},
+    });
+  });
+
   it("validates canonical workspaces within configured roots", async () => {
     const { provider, root, workspacePath } = await fixture();
     const workspace = await provider.validateWorkspace(

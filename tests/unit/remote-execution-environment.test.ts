@@ -283,7 +283,8 @@ it("keeps the original root on ordinary leases and requires revalidation after i
   await expect(host.acquireLease(scope, request)).rejects.toThrow("workspace_authority_stale");
   roots.push({ ...parent, generation: 10 });
   await expect(host.acquireLease(scope, request)).rejects.toThrow("workspace_authority_stale");
-  const refreshed = await host.revalidateWorkspace(scope, original);
+  await expect(host.revalidateWorkspace(scope, original)).rejects.toThrow("workspace_authority_stale");
+  const refreshed = await host.validateWorkspace(scope, host.environment.id, original.canonicalPath);
   expect(refreshed.summary.id).toBe(original.summary.id);
   expect(refreshed.authorityRootId).toBe(child.id);
   await lease.release();

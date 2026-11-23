@@ -8,7 +8,7 @@ import type Database from "better-sqlite3";
 import {
   configurationDocumentSchema, configurationLifecycleRequestSchema, configurationLifecycleResultSchema,
   configurationRuntimeStateSchema, configurationSnapshotSchema,
-  type ConfigurationDocument, type ConfigurationLifecycleRequest,
+  type ConfigurationDocument, type ConfigurationEffect, type ConfigurationLifecycleRequest,
   type ConfigurationLifecycleResult, type ConfigurationRuntimeState,
   type ConfigurationSnapshot, type SaveConfigurationRequest,
 } from "../../shared/protocol/configuration-admin.js";
@@ -198,8 +198,10 @@ export class ConfigurationRepository {
             : kind === "root" ? installed.snapshot.roots.some(r => r.id === id)
             : kind === "capability" && installed.snapshot.capabilities.some(c => c.id === id);
           const state = granted ? readiness.get(subject) : "ready";
-          const outcome = state === "ready" ? "applied" as const : state === "unsupported" || state === "failed" ? state : "awaiting_host" as const;
-          return { ...effect, state: outcome, effectiveRevision: outcome === "applied" ? effect.desiredRevision : effect.effectiveRevision,
+          const outcome: ConfigurationEffect["state"] = state === "ready"
+            ? granted && kind === "managed_tui" ? "next_launch" : "applied"
+            : state === "unsupported" || state === "failed" ? state : "awaiting_host";
+          return { ...effect, state: outcome, effectiveRevision: state === "ready" ? effect.desiredRevision : effect.effectiveRevision,
             ...(stamp ? { lastHostConfirmation: stamp } : {}) };
         });
         const grant = runtime.resourceKind === "backend" && installed.snapshot.backends.find(b => b.id === runtime.resourceId);

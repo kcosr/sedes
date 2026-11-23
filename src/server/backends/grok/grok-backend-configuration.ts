@@ -133,9 +133,7 @@ export interface PreparedGrokBackendConfiguration {
   }>[];
 }
 
-/** Settings can preserve a desired remote binding and report its unsupported
- * state. Native runtime preparation below still requires a local environment. */
-export function validateGrokDesiredConfiguration(
+export function parseGrokBackendConfiguration(
   input: GrokBackendConfigurationInput,
 ): PreparedGrokBackendConfiguration {
   if (input.backend.kind !== "grok_build") {
@@ -168,7 +166,7 @@ export function validateGrokDesiredConfiguration(
     const environment = input.executionEnvironments.find(
       ({ id }) => id === connection.executionEnvironmentId,
     );
-    if (!environment) {
+    if (!environment || (environment.kind !== "local" && (input.backend.enabled || connection.enabled))) {
       throw new Error("grok_execution_environment_invalid");
     }
     const { model, reasoningEffort } = connection.configuration.defaults;
@@ -209,14 +207,4 @@ export function validateGrokDesiredConfiguration(
     ...(executionEnvironmentId ? { executionEnvironmentId } : {}),
     connections,
   });
-}
-
-
-export function parseGrokBackendConfiguration(input: GrokBackendConfigurationInput): PreparedGrokBackendConfiguration {
-  const prepared = validateGrokDesiredConfiguration(input);
-  if (prepared.connections.some(connection =>
-    input.executionEnvironments.find(environment => environment.id === connection.executionEnvironmentId)?.kind !== "local")) {
-    throw new Error("grok_execution_environment_invalid");
-  }
-  return prepared;
 }

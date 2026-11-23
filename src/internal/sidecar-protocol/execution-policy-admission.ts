@@ -66,6 +66,11 @@ export function providerPolicyOperation(key: SidecarOperationKey): boolean {
     key.capabilityId === "codex_managed_tui"
   );
 }
+/** Typed provider handlers enforce launch authority after decoding nested operations. */
+export function requiresCapabilityGrant(key: SidecarOperationKey): boolean {
+  return key.capabilityId !== "control" && key.capabilityId !== "runtime_bodies" &&
+    !grantIndependentSettlement(key) && !providerPolicyOperation(key);
+}
 export function requirePolicyCapability(
   policy: ExecutionPolicySnapshot,
   key: SidecarOperationKey,
@@ -73,13 +78,6 @@ export function requirePolicyCapability(
   confirmed?: ExecutionPolicySnapshot,
 ): void {
   const { capabilityId } = key;
-  if (
-    capabilityId === "control" ||
-    grantIndependentSettlement(key) ||
-    providerPolicyOperation(key) ||
-    capabilityId === "runtime_bodies"
-  )
-    return;
   if (capabilityId === "environment_variables") {
     const id =
       request && typeof request === "object" && "backendInstanceId" in request

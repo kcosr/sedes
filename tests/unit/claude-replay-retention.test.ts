@@ -51,6 +51,37 @@ async function fixture(highWaterEntries = 8, highWaterBytes?: number) {
 }
 
 describe("Claude acknowledged replay retention", () => {
+  it.each(["open", "fork"] as const)("closes a %s whose grant was withdrawn during startup", async action => {
+    const f = await fixture();
+    let finish!: () => void;
+    const start = new Promise<void>(resolve => { finish = resolve; });
+    const create = f.runtime.createSession.getMockImplementation()!;
+    f.runtime.createSession.mockImplementationOnce(options => {
+      const session = create(options);
+      session.start.mockImplementationOnce(async () => { await start; return session.initialization; });
+      return session;
+    });
+    const child = randomUUID();
+    const listener = vi.fn();
+    let allowed = true;
+    const assertPolicy = () => { if (!allowed) throw new Error("policy_withdrawn"); };
+    const pending = action === "open" ? f.host.execute({ ...f.authority, action, replay: "full",
+      request: { queryId: child, sessionId: child, cwd: "/workspace", launch: "new", environment: {}, enableCanUseTool: false } }, listener, assertPolicy)
+      : f.host.execute({ ...f.authority, action, request: { sessionId: child, sourceSessionId: sessionId, resumeSessionAt: randomUUID(),
+        cwd: "/workspace", model: "claude-sonnet-4-6" } }, listener, assertPolicy);
+    expect(f.sessions[1]!.start).toHaveBeenCalledOnce();
+    const attach = { ...f.authority, action: "attach" as const, replay: "full" as const, request: { sessionId: child } };
+    const concurrent = action === "open" ? f.host.execute(attach, listener) : undefined;
+    allowed = false;
+    finish();
+    await expect(pending).rejects.toThrow(action === "open" ? "policy_withdrawn" : "claude_fork_launch_failed");
+    if (concurrent) await expect(concurrent).rejects.toThrow("policy_withdrawn");
+    await expect(f.host.execute(attach, listener)).rejects.toThrow("claude_persistent_session_not_found");
+    expect(f.sessions[1]!.closed).toBe(true);
+    expect(listener).not.toHaveBeenCalled();
+    await expect(f.snapshot()).resolves.toMatchObject({ queryId: sessionId });
+  });
+
   it("compacts exact closed text streams only after every original and replacement is acknowledged", () => {
     const replay = events(stream("api-message"));
     const hole = new Map([[3, replay.get(3)!]]);

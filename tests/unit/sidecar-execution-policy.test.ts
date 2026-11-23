@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import {
@@ -75,6 +75,48 @@ function fixture() {
   };
 }
 describe("live persistent execution policy", () => {
+  it("rejects a manufactured second Antigravity instance without replacing installed grants", () => {
+    const { service, epoch, transfer } = fixture();
+    const original = transfer(empty, 1);
+    original.stage();
+    service.applyPolicy(epoch, {
+      ...original.fields,
+      base: null,
+      configuration,
+    });
+    const backends = ["one", "two"].map((id) => ({
+      id,
+      generation: 1,
+      kind: "antigravity",
+      launchDigest: "a".repeat(64),
+      targets: [],
+    }));
+    const snapshot = { roots: [], capabilities: [], backends };
+    expect(() => executionPolicyBytes(snapshot)).toThrow(
+      "duplicate_antigravity",
+    );
+    const bytes = Buffer.from(JSON.stringify(snapshot));
+    const binding = {
+      ...original.fields,
+      transferId: randomUUID(),
+      revision: 2,
+      digest: createHash("sha256").update(bytes).digest("hex"),
+    };
+    service.stagePolicy(epoch, {
+      ...binding,
+      length: bytes.length,
+      offset: 0,
+      block: bytes.toString("base64"),
+    });
+    expect(() =>
+      service.applyPolicy(epoch, {
+        ...binding,
+        configuration,
+        base: { revision: 1, digest: original.fields.digest },
+      }),
+    ).toThrow("sidecar_policy_snapshot_invalid");
+    expect(service.executionPolicy(epoch)).toEqual(empty);
+  });
   it("keeps paged evidence coherent, scoped, bounded and invalidated on a new install", () => {
     vi.useFakeTimers();
     try {

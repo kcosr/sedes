@@ -1,3 +1,4 @@
+import { WorkspaceApplicationService } from "../../src/server/application/workspace-application-service.js";
 import { ConfigurationProjection } from "../../src/server/configuration-admin/configuration-projection.js";
 import { executionPolicyRoots, writeExecutionPolicy } from "../../src/server/configuration-admin/configuration-execution-policy.js";
 import { ConfigurationRepository } from "../../src/server/configuration-admin/configuration-repository.js";
@@ -3000,8 +3001,13 @@ describe("backend-normalized application adapters", () => {
         async browseDirectories() {
           throw new Error("not used");
         },
-        async validateWorkspace() {
-          throw new Error("not used");
+        async validateWorkspace(scope, environmentId, canonicalPath) {
+          const grant = executionPolicyRoots(current.database, scope, environmentId).find(candidate => candidate.path === canonicalPath)!;
+          return {
+            canonicalPath, authorityRootId: grant.id, authorityRevision: grant.generation,
+            summary: { id: current.workspaceId, environmentId, displayName: "Renewed temporary workspace",
+              displayPath: canonicalPath, availability: "available", trustState: "untrusted", revision: 1 },
+          };
         },
         revalidateWorkspace,
         async acquireLease() {
@@ -3121,6 +3127,12 @@ describe("backend-normalized application adapters", () => {
         });
         return writeExecutionPolicy(current.database, current.scope, current.environmentId, saved).roots[0]!.generation;
       })();
+      await expect(lifecycle.resolve(current.scope, current.threadId)).rejects.toMatchObject({code: "conflict"});
+      expect(inventoryBeforeRenewal.getWorkspace(current.scope, current.workspaceId)).toEqual(workspaceBeforeRenewal);
+      const admissions = new WorkspaceApplicationService({
+        inventory: inventoryBeforeRenewal, execution: environments, publications: {handoffAuthoritativeReplacement}, now: () => 511,
+      });
+      await admissions.restoreLocation(current.scope, current.workspaceId);
       const renewed = await lifecycle.resolve(current.scope, current.threadId);
       expect(handoffAuthoritativeReplacement).toHaveBeenCalledOnce();
       expect(handoffAuthoritativeReplacement).toHaveBeenCalledWith(
@@ -3157,7 +3169,7 @@ describe("backend-normalized application adapters", () => {
         },
       });
       expect(handoffAuthoritativeReplacement).toHaveBeenCalledOnce();
-      expect(revalidateWorkspace).toHaveBeenCalledTimes(2);
+      expect(revalidateWorkspace).toHaveBeenCalledTimes(3);
       await expect(
         new DatabaseThreadApplicationInventoryReader({
           inventory: new InventoryRepository(current.database),

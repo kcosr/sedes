@@ -119,9 +119,9 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
           },
           request.signal ? { signal: request.signal } : undefined,
         );
-        check();
         if (opened.state === "ready") return withoutState(opened);
         uploadHandle = opened.uploadHandle;
+        check();
         let offset = opened.nextOffset;
         for await (const piece of chunksFromOffset(
           request.content(),
@@ -143,13 +143,11 @@ export class SidecarExecutionAttachmentStager implements ExecutionAttachmentStag
           offset = appended.nextOffset;
         }
         check();
-        const result = await lease.session.call(
+        return await lease.session.call(
           composerAttachmentsMaterializationCommitOperation,
           { uploadHandle },
           request.signal ? { signal: request.signal } : undefined,
         );
-        check();
-        return result;
       } catch (error) {
         if (isOutcomeUnknown(error)) {
           uncertain = error;

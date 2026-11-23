@@ -379,6 +379,7 @@ export class PiNativeHost implements PiNativePort {
       throw new PiNativeError("pi_native_recovery_control_only");
     const control = piNativeCommandIsControl(command);
     if (!control) this.#admit(authority, signal);
+    else if (!piNativeCommandIsRecoveryControl(command)) authority.assertAdmission();
     if (session.closed || !session.process) throw new PiNativeError("pi_native_session_ended", "not_sent");
     if (!control && session.continuityLost) throw new PiNativeError("pi_native_observation_continuity_lost", "not_sent");
     if (!validId(input.operationId)) throw new PiNativeError("pi_native_operation_identity_invalid");

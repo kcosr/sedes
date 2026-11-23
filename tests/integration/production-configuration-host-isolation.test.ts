@@ -23,6 +23,7 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
   const a = randomUUID(), b = randomUUID();
   const entered = gate(), release = gate(), hostsCreated = gate();
   let armed = false, ready = false;
+  const forcedRetries: string[] = [];
   const notify = new Map<string, () => void>();
   let application: RunningApplication | undefined;
   let operation: Promise<unknown> | undefined;
@@ -55,6 +56,11 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
     });
     let installed: InstalledExecutionPolicy | undefined;
     vi.spyOn(owner, "synchronizePolicy").mockImplementation(async () => { installed = input.readDesiredPolicy!(); });
+    vi.spyOn(owner, "retryPolicy").mockImplementation(async () => {
+      installed = input.readDesiredPolicy!();
+      forcedRetries.push(id);
+      ready = true;
+    });
     vi.spyOn(owner, "policyStatus").mockImplementation((): ExecutionPolicyStatus | undefined => {
       if (!installed) return undefined;
       const { snapshot, revision, digest, configuration } = installed;
@@ -105,8 +111,15 @@ it.each(["maintenance", "impact", "removal"] as const)("publishes another host's
     expect((await service.get(scope)).configuration.executionEnvironments.find(e => e.id === a)?.label).toBe("Renamed during remote wait");
     const observed = () => service.repository.runtime(scope, "environment", a).effects?.find(e => e.subjectId === "backend:added-pi");
     await vi.waitFor(() => expect(observed()).toMatchObject({state:"awaiting_host", desiredRevision:saved.revision, lastHostConfirmation:{epoch:1}}));
-    ready = true;
-    notify.get(a)!();
+    if (blocker === "maintenance") {
+      const action = {resourceKind: "backend" as const, resourceId: "added-pi", action: "connect" as const, expectedRevision: saved.revision};
+      const preview = await service.impact(scope, action);
+      await service.lifecycle(scope, {...action, mutationId: randomUUID(), expectedIncarnation: preview.incarnation, impactToken: preview.token});
+      expect(forcedRetries).toEqual([a]);
+    } else {
+      ready = true;
+      notify.get(a)!();
+    }
     await vi.waitFor(() => expect(observed()).toMatchObject({state:"applied", effectiveRevision:saved.revision}), {timeout:2000});
     release.open();
     if (blocker === "removal") expect(await outcome).toMatchObject({code:"conflict"});

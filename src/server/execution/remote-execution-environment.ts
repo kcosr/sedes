@@ -33,6 +33,7 @@ export class RemoteExecutionEnvironment implements ExecutionEnvironmentProvider 
   readonly #platform: RemotePlatform;
   readonly #isExecutionAvailable: () => boolean;
   readonly #scope: RequestScope;
+  readonly #confirmWorkspacePolicy?: () => Promise<void>;
   readonly #readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
   readonly #roots: readonly string[];
   readonly #configurationRevision: number;
@@ -56,6 +57,7 @@ export class RemoteExecutionEnvironment implements ExecutionEnvironmentProvider 
       readonly platform: RemotePlatform;
       readonly environmentId: string;
       readonly scope: RequestScope;
+      readonly confirmWorkspacePolicy?: () => Promise<void>;
       readonly readWorkspaceRoots?: () => readonly WorkspaceRootGrant[];
       readonly allowedRoots: readonly string[];
       readonly label?: string;
@@ -102,6 +104,7 @@ export class RemoteExecutionEnvironment implements ExecutionEnvironmentProvider 
     this.#isExecutionAvailable =
       options.kind === "outbound" ? options.isExecutionAvailable : () => true;
     this.#scope = Object.freeze({ ...options.scope });
+    this.#confirmWorkspacePolicy = options.confirmWorkspacePolicy;
     this.#readWorkspaceRoots = options.readWorkspaceRoots;
     this.#roots = Object.freeze([...new Set(options.allowedRoots)]);
     this.#configurationRevision = options.configurationRevision;
@@ -171,8 +174,10 @@ export class RemoteExecutionEnvironment implements ExecutionEnvironmentProvider 
     original?: ValidatedWorkspace,
   ): Promise<ValidatedWorkspace> {
     await this.#assertActive(scope, environmentId);
+    await this.#confirmWorkspacePolicy?.();
     const grants = this.#readWorkspaceRoots?.();
-    const grant = grants && ((original && workspaceRootGrant(grants, candidatePath, original)) ?? workspaceRootGrant(grants, candidatePath));
+    const grant = grants && workspaceRootGrant(grants, candidatePath, original);
+    if (grants && original && !grant) throw new Error("workspace_authority_stale");
     if (
       !isNormalizedRemotePath(candidatePath, this.#platform) ||
       (grants ? !grant : !this.#roots.some((root) => isWithinRemoteRoot(candidatePath, root)))

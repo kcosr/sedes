@@ -68,6 +68,27 @@ function status(desired?: InstalledExecutionPolicy): ExecutionPolicyStatus {
 afterEach(() => vi.useRealTimers());
 
 describe("persistent sidecar policy synchronization", () => {
+  it("limits disconnected evidence to acquisition of unchanged grants on a known incarnation", async () => {
+    let desired = policy(3);
+    const peer = {readPolicy: async () => status(desired), applyPolicy: async (next: InstalledExecutionPolicy) => status(next)};
+    const controller = new SidecarPolicyController(() => desired, vi.fn());
+    controller.attach(peer, service);
+    await controller.synchronize();
+    controller.detach(true);
+    expect(controller.status).toBeUndefined();
+    expect(controller.targetGeneration("backend", "target")).toBeUndefined();
+    expect(controller.targetGeneration("backend", "target", true)).toBe(1);
+    expect(controller.workspaceRoots(true)).toEqual(desired.snapshot.roots);
+    expect(controller.routeGeneration("backend")).toBeUndefined();
+    desired = policy(2);
+    expect(controller.targetGeneration("backend", "target", true)).toBeUndefined();
+    desired = policy(4);
+    expect(controller.capabilityGeneration("agent_tools_cli", true)).toBeUndefined();
+    controller.attach(peer, {...service, serviceIncarnation: "different"});
+    expect(controller.targetGeneration("backend", "target", true)).toBeUndefined();
+    controller.detach();
+  });
+
   it("confirms a fresh epoch, keeps surviving subjects usable while applying, and fences a withdrawn route immediately", async () => {
     let desired = policy(1);
     let host = status(desired);

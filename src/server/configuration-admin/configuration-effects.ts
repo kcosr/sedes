@@ -61,7 +61,7 @@ function inputs(scope: RequestScope, document: ConfigurationDocument, kind: Kind
     const label = backend.kind === "pi_native" || backend.kind === "antigravity" ? "Tool access for new provider sessions" : "Provider tool access";
     add("host_policy", `route:${id}`, live, true, label);
   }
-  if (backend.enabled && backend.kind === "codex_app_server") add("host_policy", `managed_tui:${id}`, live, backend.moduleConfiguration.tuiExecutablePath ?? null);
+  if (backend.enabled && backend.kind === "codex_app_server") add("host_policy", `managed_tui:${id}`, environment.kind === "local" ? "next_launch" : live, backend.moduleConfiguration.tuiExecutablePath ?? null);
   for (const target of [...bindings].sort(compareIds)) {
     add("presentation", `target:${target.id}`, "applied", target.label);
     if (target.enabled) add("host_policy", `target:${target.id}`, live, true);

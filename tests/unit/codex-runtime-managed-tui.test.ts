@@ -1,7 +1,7 @@
 import { deriveConnectionProfileId } from "../../src/server/db/connection-profile-id.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
 import { launchAdmission } from "../../src/server/backends/provider-policy-admission.js";
-import {attachFixturePolicy} from "../helpers/execution-policy-fixture.js";
+import { attachFixturePolicy, installFixturePolicy } from "../helpers/execution-policy-fixture.js";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
@@ -221,6 +221,33 @@ describe("persistent Codex managed TUI", () => {
     viewer.detach();
     await expect(viewer.input(Buffer.from("bad"))).rejects.toThrow("detached");
     expect(host.processes[0]!.process.close).not.toHaveBeenCalled();
+  });
+
+  it("preserves viewer traffic across a TUI executable edit and checks the new path on the next launch", async () => {
+    const host = fixture();
+    const remote = await host.attach();
+    const state = await remote.registry.start(authority, host.launcher);
+    const output = vi.fn();
+    const viewer = remote.registry.attachScopedViewer(scope, "thread", state.resourceGeneration!, { viewerId: "viewer", output, stateChanged: vi.fn() });
+    await viewer.resize(80, 24);
+    const nextPath = "/different/codex";
+    const current = host.services.executionPolicy(remote.epoch);
+    const backend = { ...current.backends[0]!, managedTuiDigest: configurationFingerprint(nextPath) };
+    const snapshot = { ...current, backends: [backend] };
+    installFixturePolicy(host.services, remote.epoch, configuration, snapshot);
+    await viewer.input(Buffer.from("continue"));
+    host.processes[0]!.output.write(Buffer.from("still running"));
+    await vi.waitFor(() => expect(output).toHaveBeenCalledWith(Buffer.from("still running")));
+    expect(host.processes[0]!.process.write).toHaveBeenCalledWith(Uint8Array.from(Buffer.from("continue")));
+    expect(host.processes[0]!.process.close).not.toHaveBeenCalled();
+    installFixturePolicy(host.services, remote.epoch, configuration, { ...snapshot, backends: [{ ...backend, targets: [{ id: "template", generation: 2 }] }] });
+    await expect(viewer.input(Buffer.from("stale"))).rejects.toThrow("codex_tui_policy_denied");
+    viewer.detach();
+    await remote.registry.stop(authority);
+    await expect(remote.registry.start(authority, host.launcher)).rejects.toThrow("codex_tui_executable_denied");
+    const updated = new CodexRuntimeManagedTuiLauncher({ ...host.launcher.input, configuredExecutablePath: nextPath });
+    expect((await remote.registry.start(authority, updated)).lifecycle).toBe("running");
+    expect(host.createLauncher.mock.calls.at(-1)?.[0]).toMatchObject({ configuredExecutablePath: nextPath });
   });
 
   it("holds remote viewer input through the Speed settings handoff", async () => {

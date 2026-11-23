@@ -166,6 +166,26 @@ describe("database-owned configuration", () => {
     expect(current.projection.policyRecovery(current.scope,environmentId).blocked(incarnation)).toBe(false);
   });
 
+  it("reports a confirmed managed terminal executable edit for the next terminal launch", async () => {
+    const current = fixture();
+    const document = remoteDocument();
+    const backend = { id: "remote-codex", kind: "codex_app_server" as const, label: "Codex", enabled: true, modelPolicy: { type: "catalog" as const },
+      moduleConfiguration: { tuiExecutablePath: "/original/codex", connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: "/run/codex.sock" } },
+        policy: { allowedSandboxModes: ["read-only" as const], allowedNetworkAccess: ["disabled" as const], allowedApprovalPolicies: ["on-request" as const], allowedApprovalReviewers: ["user" as const] } } };
+    document.backends.push(backend);
+    document.targets.push({ ...codexTarget(backend.id), executionEnvironmentId: remoteId, enabled: true });
+    const save = () => current.service.save(current.scope, { mutationId: randomUUID(), expectedRevision: current.repository.get(current.scope).revision, configuration: document });
+    await save();
+    backend.moduleConfiguration.tuiExecutablePath = "/different/codex";
+    const saved = await save();
+    const installed = current.projection.hostPolicy(current.scope, remoteId)!;
+    const subjectId = `managed_tui:${backend.id}`;
+    const effect = () => current.repository.runtime(current.scope, "backend", backend.id).effects?.find(effect => effect.subjectId === subjectId);
+    expect(effect()?.state).toBe("awaiting_host");
+    current.repository.observeHostPolicy(current.scope, remoteId, installed, new Map([[subjectId, "ready"]]), { incarnation: randomUUID(), epoch: 1 });
+    expect(effect()).toMatchObject({ state: "next_launch", effectiveRevision: saved.revision });
+  });
+
   it("requires the retained provider's actual launch digest after main restarts with a launch-only edit", async () => {
     const current = fixture();
     const document = remoteDocument();

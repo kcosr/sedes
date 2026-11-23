@@ -278,7 +278,7 @@ export class ClaudePersistentRuntimeHost {
   }
 
   async execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void, assertPolicy?: () => void): Promise<unknown> {
-    if (command.action === "fork") { assertPolicy?.(); return await this.#forkLaunch(command); }
+    if (command.action === "fork") return await this.#forkLaunch(command, assertPolicy);
     if (command.runtimeId !== this.runtimeId) throw new Error("claude_persistent_runtime_unknown");
     this.input.services.assertController(command.controllerEpoch);
     const existingOpen = command.action === "open" && this.#sessions.has(command.request.sessionId);
@@ -738,7 +738,7 @@ export class ClaudePersistentRuntimeHost {
    * refusal before the launch starts is reported as such, so main can treat
    * it as proof that no child was created.
    */
-  async #forkLaunch(command: Extract<ClaudePersistentCommand, { action: "fork" }>): Promise<ClaudeRuntimeForkResult> {
+  async #forkLaunch(command: Extract<ClaudePersistentCommand, { action: "fork" }>, assertPolicy?: () => void): Promise<ClaudeRuntimeForkResult> {
     const request = command.request;
     const started = performance.now();
     try {
@@ -747,6 +747,7 @@ export class ClaudePersistentRuntimeHost {
         this.input.services.assertController(command.controllerEpoch);
         if (this.#closed || this.#cleanupUnproven || this.#runtimeStopped || this.#frozen) throw new Error("claude_persistent_admission_frozen");
         this.input.services.assertAdmission(command.controllerEpoch);
+        assertPolicy?.();
         if (this.#sessions.has(request.sessionId) || this.#forkLaunches.has(request.sessionId)) throw new Error("claude_persistent_session_configuration_conflict");
       } catch (error) {
         throw claudeForkLaunchFailure("claude_fork_launch_refused", error);
@@ -756,6 +757,7 @@ export class ClaudePersistentRuntimeHost {
       }
       const config = this.input.configuration;
       const launch = this.input.client.forkSession({
+        assertLaunchAdmission: assertPolicy,
         executablePath: config.executablePath, initializationTimeoutMs: config.initializationTimeoutMs,
         sessionId: request.sessionId, sourceSessionId: request.sourceSessionId, resumeSessionAt: request.resumeSessionAt,
         cwd: request.cwd, ...(request.title ? { title: request.title } : {}), model: request.model,
@@ -807,6 +809,7 @@ export class ClaudePersistentRuntimeHost {
     const config = this.input.configuration;
     let created!: Session;
     const runtime = this.input.client.createSession({
+      assertLaunchAdmission: assertPolicy,
       ...request, executablePath: config.executablePath, initializationTimeoutMs: config.initializationTimeoutMs,
       environment: request.environment,
       ...(request.enableCanUseTool ? { canUseTool: this.#canUseTool(() => created) } : {}),
@@ -827,7 +830,9 @@ export class ClaudePersistentRuntimeHost {
     session = created;
     session.backgroundActivity.reset();
     this.#sessions.set(session.id, session); this.#inflight++; this.#revision++;
-    session.starting = runtime.start();
+    // A concurrent open or attach awaits the same admission decision. Only
+    // queries admitted after startup become available as retained sessions.
+    session.starting = runtime.start().then(() => assertPolicy?.());
     try { await session.starting; }
     catch (error) {
       try { await runtime.close(); this.#sessions.delete(session.id); }

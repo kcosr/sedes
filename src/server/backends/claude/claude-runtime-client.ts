@@ -62,6 +62,8 @@ export interface ClaudeRuntimeProbeResult {
 }
 
 export interface ClaudeRuntimeSessionOptions {
+  /** Host authority checked after worker initialization, before opening the native query. */
+  readonly assertLaunchAdmission?: () => void;
   /** The durable Sedes binding for an application-owned query. Native callers
    * without an application binding retain their exact launch authority. */
   readonly applicationThreadId?: string;

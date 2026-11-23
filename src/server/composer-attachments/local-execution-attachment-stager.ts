@@ -62,10 +62,7 @@ export class LocalExecutionAttachmentStager implements ExecutionAttachmentStager
     const admissionId = randomUUID();
     const check = request.lease.assertCurrent;
     const opened = await this.#engine.open(admissionId, identity, check);
-    if (opened.state === "ready") {
-      check?.();
-      return withoutState(opened);
-    }
+    if (opened.state === "ready") return withoutState(opened);
     let offset = 0;
     try {
       for await (const source of request.content()) {
@@ -84,9 +81,7 @@ export class LocalExecutionAttachmentStager implements ExecutionAttachmentStager
         }
       }
       request.signal?.throwIfAborted();
-      const result = await this.#engine.commit(opened.uploadHandle);
-      check?.();
-      return result;
+      return await this.#engine.commit(opened.uploadHandle);
     } catch (error) {
       await this.#engine.abort(opened.uploadHandle).catch(() => undefined);
       throw error;

@@ -1,3 +1,4 @@
+import { grantForNewFileRoot } from "./workspace-file-root-authority.js";
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { DomainError } from "../../domain/errors.js";
@@ -203,13 +204,14 @@ export class WorkspaceFileRootRepository {
           );
         }
         const rootId = `link-${randomUUID()}`;
+        const grant = grantForNewFileRoot(this.database, scope, workspaceId, canonicalPath);
         this.database
           .prepare(
             `
               INSERT INTO workspace_file_link_roots(
                 tenant_id, owner_principal_id, workspace_id, root_id,
-                canonical_path, created_at
-              ) VALUES (?, ?, ?, ?, ?, ?)
+                canonical_path, created_at, authority_root_id, authority_root_generation
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             `,
           )
           .run(
@@ -218,7 +220,7 @@ export class WorkspaceFileRootRepository {
             workspaceId,
             rootId,
             canonicalPath,
-            now,
+            now, grant?.id ?? null, grant?.generation ?? null,
           );
         return this.findLinkRoot(scope, workspaceId, rootId)!;
       })
@@ -381,6 +383,7 @@ export class WorkspaceFileRootRepository {
             }
           ).nextSortOrder;
         const rootId = randomUUID();
+        const grant = grantForNewFileRoot(this.database, scope, workspaceId, input.canonicalPath);
         try {
           this.database
             .prepare(
@@ -388,8 +391,8 @@ export class WorkspaceFileRootRepository {
               INSERT INTO workspace_file_roots(
                 tenant_id, owner_principal_id, workspace_id, root_id,
                 canonical_path, display_label, sort_order, availability,
-                revision, created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, 'available', 1, ?, ?)
+                revision, created_at, updated_at, authority_root_id, authority_root_generation
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, 'available', 1, ?, ?, ?, ?)
             `,
             )
             .run(
@@ -401,7 +404,7 @@ export class WorkspaceFileRootRepository {
               input.resolvedDisplayLabel,
               sortOrder,
               input.now,
-              input.now,
+              input.now, grant?.id ?? null, grant?.generation ?? null,
             );
         } catch (error) {
           if (isConstraintError(error)) {

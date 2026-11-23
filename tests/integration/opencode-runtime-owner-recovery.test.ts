@@ -127,6 +127,48 @@ describe("OpenCode recovery through the production sidecar owner", () => {
     narrow.release(); normal.release();
   });
 
+  it("records a not-sent outcome when the backend is withdrawn before native dispatch", async () => {
+    const f = fixture("ssh_stdio"), client = f.client();
+    await client.start();
+    const normal = client.acquire(f.target);
+    await normal.client.read("getSession", { sessionID: f.wire.sessionID });
+    const hooks = f.owners[0]!.nativeHost.hooks;
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const probe = vi.spyOn(hooks, "assertCurrent").mockImplementationOnce(() => barrier);
+    const input = { sessionID: f.wire.sessionID, id: "msg_revoked", text: "held", delivery: "queue" as const, resume: true };
+    const controlInput = control("revoked-before-dispatch");
+    const result = normal.client.mutate("prompt", input, controlInput);
+    try {
+      await vi.waitFor(() => expect(probe).toHaveBeenCalled());
+      await f.withdrawBackend();
+      release();
+      await expect(result).rejects.toMatchObject({ delivery: "not_sent" });
+      await expect(normal.client.mutate("prompt", input, controlInput)).rejects.toMatchObject({ delivery: "not_sent" });
+      expect(f.promptCount()).toBe(0);
+    } finally { release(); normal.release(); }
+  });
+
+  it("settles a retained prompt after grant withdrawal without replaying native delivery", async () => {
+    const f = fixture("ssh_stdio"), client = f.client(); await client.start();
+    const normal = client.acquire(f.target), gate = f.holdPromptResponse(), original = control("existing");
+    const prompt = { sessionID: f.wire.sessionID, id: "msg_existing", text: "pending", delivery: "queue" as const, resume: true };
+    const pending = normal.client.mutate("prompt", prompt, original);
+    await gate.entered;
+    try {
+      await f.withdrawBackend();
+      await expect(normal.client.outcome("prompt", original.identity)).resolves.toMatchObject({ status: "pending" });
+      const retry = normal.client.mutate("prompt", prompt, original);
+      await expect(normal.client.mutate("prompt", { ...prompt, id: "msg_new" }, control("new")))
+        .rejects.toMatchObject({ delivery: "not_sent" });
+      gate.release();
+      const result = await pending;
+      await expect(retry).resolves.toEqual(result);
+      await expect(normal.client.mutate("prompt", prompt, original)).resolves.toEqual(result);
+      expect(f.promptCount()).toBe(1);
+    } finally { gate.release(); normal.release(); }
+  });
+
   it.each(["ssh_stdio", "outbound_websocket"])("recovers a tool on its existing %s carrier without replacing normal authority", async kind => {
     const f = fixture(kind), original = f.client(); await original.start();
     const normal = original.acquire(f.target);

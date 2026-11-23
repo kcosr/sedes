@@ -243,7 +243,7 @@ runtimes over SSH or outbound connections on Linux/macOS with Node.js 24.18+.
 Native Windows Claude is unsupported. Previously disabled remote definitions
 retain their historical associations; supported Linux/macOS definitions can be
 explicitly enabled after checking the remote setup.
-Remote Grok and Cursor runtimes remain unsupported.
+Grok requires a local environment. Settings rejects enabling a Grok backend or target on an SSH or paired host. Remote Cursor runtimes remain unsupported.
 
 ## Environment variables
 

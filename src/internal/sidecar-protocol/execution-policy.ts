@@ -58,6 +58,8 @@ export function executionPolicyBytes(input: ExecutionPolicySnapshot): Buffer {
   const snapshot = snapshotSchema.parse(input);
   if (new Set(snapshot.roots.map((r) => r.path)).size !== snapshot.roots.length)
     throw new Error("sidecar_policy_duplicate_root");
+  if (snapshot.backends.filter((b) => b.kind === "antigravity").length > 1)
+    throw new Error("sidecar_policy_duplicate_antigravity");
   const targets = snapshot.backends.flatMap((b) => b.targets);
   if (
     targets.length > 64 ||

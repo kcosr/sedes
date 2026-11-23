@@ -7,7 +7,7 @@ import path from "node:path";
 import { configurationDocumentSchema, type ConfigurationDocument } from "../../shared/protocol/configuration-admin.js";
 import { parseCodexBackendConfiguration } from "../backends/codex/codex-backend-configuration.js";
 import { parseClaudeBackendConfiguration } from "../backends/claude/claude-backend-configuration.js";
-import { validateGrokDesiredConfiguration } from "../backends/grok/grok-backend-configuration.js";
+import { parseGrokBackendConfiguration } from "../backends/grok/grok-backend-configuration.js";
 import { compileBackendModelPolicy } from "../backends/model-policy.js";
 import type { BackendModuleConfigurationInput } from "../backends/module.js";
 import { DomainError } from "../domain/errors.js";
@@ -47,7 +47,7 @@ export function validateConfigurationDocument(value: unknown): ConfigurationDocu
       switch (backend.kind) {
         case "codex_app_server": parseCodexBackendConfiguration(input); break;
         case "claude_agent_sdk": parseClaudeBackendConfiguration(input); break;
-        case "grok_build": validateGrokDesiredConfiguration({ ...input, backend: { ...input.backend, kind: "grok_build" },
+        case "grok_build": parseGrokBackendConfiguration({ ...input, backend: { ...input.backend, kind: "grok_build" },
           connections: input.connections.map(connection => ({ ...connection, kind: "grok_acp" as const })) }); break;
         case "opencode": parseOpenCodeBackendConfiguration(input); break;
         case "pi": compileBackendModelPolicy(backend.modelPolicy, "provider_model_effort"); break;

@@ -1,3 +1,4 @@
+import { delimiter } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
   type ExecutionPolicySnapshot,
@@ -196,7 +197,18 @@ export class ExecutionPolicyRoutes {
     this.#assertGrant(binding);
   }
   #assertGrant(binding: AgentToolRouteBinding): void {
-    const policy = this.options.readPolicy();
+    // The endpoint belongs to the daemon grant. Each invocation still needs a
+    // synchronized normal controller, including when a recovery peer is attached.
+    let policy: ExecutionPolicySnapshot;
+    try {
+      policy = this.options.readPolicy();
+    } catch (error) {
+      throw new SidecarOperationError(
+        "sidecar_policy_route_unavailable",
+        true,
+        { cause: error },
+      );
+    }
     if (
       !policy.backends.some(
         (b) =>
@@ -235,6 +247,26 @@ export class ExecutionPolicyRoutes {
     if (!route?.ingress) return undefined;
     this.assertBinding(route.binding);
     return route.ingress.endpointUrl;
+  }
+  validateProviderRoute(
+    id: string,
+    endpoint: string,
+    directory?: string,
+    inheritedPath?: string,
+    mergedPath?: string,
+  ): void {
+    const expectedDirectory = this.options.executableDirectory,
+      expectedPath = this.options.inheritedPath;
+    if (
+      endpoint !== this.endpoint(id) ||
+      (directory !== undefined && directory !== expectedDirectory) ||
+      (inheritedPath !== undefined && inheritedPath !== expectedPath) ||
+      (mergedPath !== undefined &&
+        mergedPath !==
+          expectedDirectory + (expectedPath ? delimiter + expectedPath : ""))
+    ) {
+      throw new SidecarOperationError("sidecar_policy_route_denied");
+    }
   }
   #descriptor(ingress: PreparedIngress) {
     return sidecarAgentToolCliMetadataSchema.parse({

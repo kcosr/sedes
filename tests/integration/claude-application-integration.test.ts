@@ -436,6 +436,7 @@ describe("Claude production application integration", () => {
         environment.id, { available: true, now: 300 });
       const root = projection.hostPolicy(scope, environment.id)!.snapshot.roots.find(candidate => candidate.path === process.cwd())!;
       inventory.upsertWorkspace(scope, {
+        rebindAuthority: true,
         id: workspace.id,
         environmentId: environment.id,
         canonicalPath: process.cwd(),

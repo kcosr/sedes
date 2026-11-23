@@ -1,5 +1,4 @@
 import { SidecarOperationError } from "../../../../../internal/sidecar-protocol/operation-registry.js";
-import { piNativeCommandIsRecoveryControl, piNativeCommandIsControl } from "../command-policy.js";
 import { launchAdmission, currentBackendGrant, type ProviderPolicyAttachment } from "../../../provider-policy-admission.js";
 import { runtimeLaunchDigest } from "../../../provider-launch-digest.js";
 import type { SidecarOperationRegistry } from "../../../../../internal/sidecar-protocol/operation-registry.js";
@@ -28,6 +27,7 @@ export function registerPiNativeHost(input: ProviderPolicyAttachment & {
   const authority: PiNativeHostAuthority = { assertCurrent, assertAdmission: () => {
     assertCurrent(); input.services.assertAdmission(input.controllerEpoch);
   } };
+  const catalogAuthorities = new WeakMap<object, PiNativeHostAuthority>();
   const run = async (command: PiNativeHostCommand, signal: AbortSignal): Promise<unknown> => {
     assertCurrent(); signal.throwIfAborted();
     if (command.controllerEpoch !== input.controllerEpoch || command.serviceIncarnation !== input.services.serviceIncarnation) throw new PiNativeError("pi_native_controller_stale");
@@ -67,7 +67,15 @@ export function registerPiNativeHost(input: ProviderPolicyAttachment & {
     if (["catalog", "list", "create", "attach", "fork", "resolve_session_directory"].includes(command.action)) callAuthority.assertAdmission();
     if (command.action === "history" && !host.hasRetainedSession(command.input)) callAuthority.assertAdmission();
     switch (command.action) {
-      case "catalog": return host.catalog(command.input, signal, callAuthority);
+      case "catalog": {
+        // Readers on this controller share one probe for the same host and cwd.
+        // The current caller's admission has already been checked above.
+        const owner = catalogAuthorities.get(host) ?? callAuthority;
+        catalogAuthorities.set(host, owner);
+        const result = await host.catalog(command.input, signal, owner);
+        callAuthority.assertAdmission();
+        return result;
+      }
       case "resolve_session_directory": return host.resolveSessionDirectory(command.input, signal, callAuthority);
       case "create": return host.create(command.input, signal, callAuthority);
       case "fork": return host.fork(command.input, signal, callAuthority);
@@ -77,12 +85,7 @@ export function registerPiNativeHost(input: ProviderPolicyAttachment & {
       case "attach": return host.attach(command.input, signal, callAuthority);
       case "attach_for_drain": return host.attachForDrain(command.input, signal, callAuthority);
       case "attach_for_control": return host.attachForControl(command.input, signal, callAuthority);
-      case "request":
-        if (!piNativeCommandIsRecoveryControl(command.input.command)) {
-          if (mode === "retained" && piNativeCommandIsControl(command.input.command)) throw new PiNativeError("pi_native_recovery_control_only");
-          callAuthority.assertAdmission();
-        }
-        return host.request(command.input, signal, callAuthority);
+      case "request": return host.request(command.input, signal, callAuthority);
       case "outcome": return host.outcome(command.input, signal, callAuthority);
       case "acknowledge_operation": await host.acknowledgeOperation(command.input, signal, callAuthority); return { ok: true };
       case "abandon_observation": return host.abandonObservation(command.input, signal, callAuthority);

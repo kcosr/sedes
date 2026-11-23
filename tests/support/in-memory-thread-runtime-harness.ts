@@ -259,8 +259,18 @@ export async function createInMemoryThreadRuntimeHarness(options: {
   const workspaceInventory = new InventoryRepository(database);
   workspaceInventory.updateEnvironmentAvailability(scope, environmentRecord.id, {available: true, now: 30});
   const root = projection.hostPolicy(scope, environmentRecord.id)!.snapshot.roots[0]!;
-  workspaceInventory.upsertWorkspace(scope, {id: workspaceRecord.id, environmentId: environmentRecord.id, canonicalPath: workspaceRecord.canonicalPath,
-    displayName: workspaceRecord.displayName, available: true, trustState: "trusted", authorityRootId: root.id, environmentConfigurationRevision: root.generation, now: 30});
+  workspaceInventory.upsertWorkspace(scope, {
+    id: workspaceRecord.id,
+    environmentId: environmentRecord.id,
+    canonicalPath: workspaceRecord.canonicalPath,
+    displayName: workspaceRecord.displayName,
+    available: true,
+    trustState: "trusted",
+    rebindAuthority: true,
+    authorityRootId: root.id,
+    environmentConfigurationRevision: root.generation,
+    now: 30,
+  });
   const backend = backendConfiguration.getBackend(scope, "memory-backend");
   const profile = backendConfiguration.listProfiles(scope)[0]!;
   const instance: AgentBackendInstance = {

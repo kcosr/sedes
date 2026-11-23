@@ -1,3 +1,4 @@
+import { canonicalLocalWorkspaceRoots } from "../execution/local-workspace-roots.js";
 import type { InstalledExecutionPolicy } from "../../internal/sidecar-protocol/execution-policy.js";
 import { execFile as execFileCallback } from "node:child_process";
 import { AGENT_TOOL_CLI_CAPABILITY } from "../../internal/agent-tool-cli-protocol/capability.js";
@@ -101,7 +102,7 @@ export interface ExecutionEnvironmentRuntimeInput {
   readonly readDesiredPolicy?: () => InstalledExecutionPolicy;
   readonly onPolicyChanged?: () => void;
   readonly policyRecovery?: SidecarRuntimeOwnerOptions<SidecarClientSession>["policyRecovery"];
-  readonly readWorkspaceBinding?: (workspaceId: string) => {authorityRootId?: string; authorityRevision: number};
+  readonly readWorkspaceBinding?: (workspaceId: string, rootId?: string) => {authorityRootId?: string; authorityRevision: number} | undefined;
   readonly readWorkspaceRoots: () => InstalledExecutionPolicy["snapshot"]["roots"];
   readonly outboundConnection?: {
     createProvisioner(input: {
@@ -247,10 +248,10 @@ export async function createExecutionEnvironmentRuntime(
           networkProfiles.set(backendInstanceId, profiles);
           workspaceIsolations.set(backendInstanceId, new LocalThreadWorkspaceIsolationResolver({
             allocations: input.piSandbox.allocations, materializer: input.piSandbox.materializer, runtime,
-            readWorkspaceRoots: input.readWorkspaceRoots, backendInstanceId, admittedNetworkProfiles: new Set(profiles),
+            readWorkspaceRoots: () => canonicalLocalWorkspaceRoots(input.readWorkspaceRoots()), backendInstanceId, admittedNetworkProfiles: new Set(profiles),
           }));
         } else {
-          workspaceIsolations.set(backendInstanceId, new UnavailableThreadWorkspaceIsolationResolver(input.piSandbox.allocations));
+          workspaceIsolations.set(backendInstanceId, new UnavailableThreadWorkspaceIsolationResolver(input.piSandbox.allocations, () => canonicalLocalWorkspaceRoots(input.readWorkspaceRoots())));
         }
       };
       for (const backendId of input.localPiBackendInstanceIds) await ensureLocalPiBackend(backendId);
@@ -278,7 +279,7 @@ export async function createExecutionEnvironmentRuntime(
     const platform = configured.kind === "outbound" ? configured.platform : "linux";
     const readDesiredPolicy = input.readDesiredPolicy;
     if (!readDesiredPolicy) throw new Error("remote_execution_policy_missing");
-    const readWorkspaceRoots = () => runtime.policyWorkspaceRoots();
+    const readWorkspaceRoots = () => runtime.acquirableWorkspaceRoots();
     const readRootPaths = () => readWorkspaceRoots().map(root => root.path);
     let directoryBrowser: SidecarDirectoryBrowserProvider | undefined;
     const provider = new RemoteExecutionEnvironment({
@@ -289,6 +290,7 @@ export async function createExecutionEnvironmentRuntime(
       environmentId: record.id,
       scope,
       allowedRoots: configured.workspaceRoots,
+      confirmWorkspacePolicy: () => runtime.confirmWorkspacePolicy(),
       readWorkspaceRoots,
       label: configured.label,
       availability: outbound ? "unavailable" : record.availability,
@@ -469,7 +471,7 @@ export async function createExecutionEnvironmentRuntime(
       runtime,
       enabled: true,
       readWorkspaceRoots,
-      readTerminalGeneration: () => runtime.policyCapabilityGeneration("interactive_terminal"),
+      readTerminalGeneration: () => runtime.acquirableCapabilityGeneration("interactive_terminal"),
     });
     directoryBrowser = new SidecarDirectoryBrowserProvider({
         platform,
@@ -480,6 +482,7 @@ export async function createExecutionEnvironmentRuntime(
         confirmed: () => runtime.canAcquireCapability("directory_browser", 1),
         readWorkspaceRoots,
         readFeatureGeneration: () => runtime.policyCapabilityGeneration("directory_browser"),
+        confirmWorkspacePolicy: () => runtime.confirmWorkspacePolicy(),
         runtime,
       });
     const workspaceFiles = new SidecarWorkspaceFileProvider({
@@ -487,10 +490,11 @@ export async function createExecutionEnvironmentRuntime(
           environmentId: record.id,
           policyRoots: configured.workspaceRoots,
           readPolicyRoots: readRootPaths, enabled: () => runtime.canAcquireCapability("workspace_files", 8),
-            selectPolicyRoot: (candidate, primaryWorkspaceId) => {
-              const binding = primaryWorkspaceId ? input.readWorkspaceBinding?.(primaryWorkspaceId) : undefined;
+            selectPolicyRoot: (candidate, workspaceId, rootId) => {
+              const binding = workspaceId ? input.readWorkspaceBinding?.(workspaceId, rootId) : undefined;
+              if (workspaceId && !binding) return undefined;
               const grant = workspaceRootGrant(readWorkspaceRoots(), candidate, binding);
-              const featureGeneration = runtime.policyCapabilityGeneration("workspace_files");
+              const featureGeneration = runtime.acquirableCapabilityGeneration("workspace_files");
               return grant && featureGeneration !== undefined ? {path: grant.path, key: `${grant.id}/${grant.generation}/${featureGeneration}`} : undefined;
             },
           runtime,
@@ -503,7 +507,7 @@ export async function createExecutionEnvironmentRuntime(
           environmentId: record.id,
           installationKey: input.toolProvenanceKey,
           enabled: () => runtime.canAcquireCapability("composer_attachments", 1),
-          readAttachmentGeneration: () => runtime.policyCapabilityGeneration("composer_attachments"),
+          readAttachmentGeneration: () => runtime.acquirableCapabilityGeneration("composer_attachments"),
           runtime,
         });
     resources.defer("remote attachment staging", () => attachments.close(), {
@@ -567,10 +571,10 @@ function sidecarEnvironmentOperations(input: {
     if (workspace.summary.environmentId !== input.environmentId)
       throw new Error("environment_workspace_operations_unavailable");
     const grant = workspaceRootGrant(input.readWorkspaceRoots(), workspace.canonicalPath, workspace);
-    const generation = input.runtime.policyCapabilityGeneration(feature);
+    const generation = input.runtime.acquirableCapabilityGeneration(feature);
     if (!grant || generation === undefined) throw new Error("environment_workspace_operations_unavailable");
     return {policyRootPath: grant.path, assertCurrent() {
-      if (input.runtime.policyCapabilityGeneration(feature) !== generation ||
+      if (input.runtime.acquirableCapabilityGeneration(feature) !== generation ||
           !workspaceRootGrant(input.readWorkspaceRoots(), workspace.canonicalPath, workspace)) {
         throw new Error("environment_workspace_operations_unavailable");
       }

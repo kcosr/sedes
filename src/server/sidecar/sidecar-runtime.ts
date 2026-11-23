@@ -267,8 +267,8 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   }
 
   canAcquireCapability(capabilityId: string, majorVersion: number): boolean {
-    if (this.#closed || this.#intentionallyDisconnected || this.#retirementFailure !== undefined || !this.#isTransportAvailable()) return false;
-    if (this.#policy.capabilityGeneration(capabilityId) === undefined) return false;
+    if (!this.#canAttach()) return false;
+    if (this.#policy.capabilityGeneration(capabilityId, true) === undefined) return false;
     return capabilityId === AGENT_TOOL_CLI_CAPABILITY.capabilityId ? majorVersion === AGENT_TOOL_CLI_CAPABILITY.majorVersion :
       this.negotiatedCapabilities.some(capability => capability.capabilityId === capabilityId && capability.majorVersion === majorVersion);
   }
@@ -276,15 +276,46 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   policyStatus() { return this.#policy.status; }
   conflictsWithDesiredPolicy(): boolean { return this.#policy.conflict === true; }
   policyBackendGeneration(id: string): number | undefined { return this.#policy.backendGeneration(id); }
-  policyTargetGeneration(backendId: string, targetId: string): number | undefined { return this.#policy.targetGeneration(backendId, targetId); }
+  acquirableTargetGeneration(backendId: string, targetId: string): number | undefined {
+    return this.#canAttach() ? this.#policy.targetGeneration(backendId, targetId, true) : undefined;
+  }
+
+  async withTargetAuthorization<T>(backendId: string, targetId: string, generation: number, operation: () => T): Promise<T> {
+    if (this.acquirableTargetGeneration(backendId, targetId) !== generation) throw new SidecarUnavailableError();
+    const lease = await this.acquireOperation(this.#scope, this.#executionEnvironmentId, this.#attachmentController.signal);
+    try {
+      if (this.#current?.session !== lease.session || this.#policy.targetGeneration(backendId, targetId) !== generation)
+        throw new SidecarUnavailableError();
+      return await operation();
+    } finally {
+      lease.release();
+    }
+  }
+
+  #canAttach(): boolean {
+    return !this.#closed && !this.#intentionallyDisconnected && this.#retirementFailure === undefined && this.#isTransportAvailable();
+  }
   policyCapabilityGeneration(id: string): number | undefined { return this.#policy.capabilityGeneration(id); }
+  acquirableCapabilityGeneration(id: string): number | undefined { return this.#canAttach() ? this.#policy.capabilityGeneration(id, true) : undefined; }
   policyRouteGeneration(id: string): number | undefined { return this.#policy.routeGeneration(id); }
   retainToolRoute(backendId: string, backendGeneration: number, capabilityGeneration: number) {
     if (this.#closed || this.#intentionallyDisconnected || !this.#isTransportAvailable() ||
       this.policyBackendGeneration(backendId) !== backendGeneration) throw new SidecarUnavailableError();
     return this.#policy.leaseRoute(capabilityGeneration, backendId);
   }
-  policyWorkspaceRoots() { return this.#policy.workspaceRoots() ?? []; }
+  async confirmWorkspacePolicy(): Promise<void> {
+    if (this.#current && this.#canAttach() && this.#policy.status?.installed && !this.#policy.conflict) return;
+    const lease = await this.acquireOperation(this.#scope, this.#executionEnvironmentId, this.#attachmentController.signal);
+    lease.release();
+  }
+  acquirableWorkspaceRoots() { return this.#canAttach() ? this.#policy.workspaceRoots(true) : []; }
+
+  async retryPolicy(signal: AbortSignal): Promise<void> {
+    // Starting a normal session after idle expiry checks the host preference
+    // and synchronizes its first policy without a service-management command.
+    if (this.#current) await this.synchronizePolicy(signal, true);
+    else await this.#session(signal);
+  }
 
   async synchronizePolicy(signal?: AbortSignal, force = false): Promise<void> {
     if (!this.#current) return;
@@ -567,6 +598,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
 
   async disconnect(reason = "sidecar_intentionally_disconnected"): Promise<void> {
     this.#intentionallyDisconnected = true;
+    this.#policy.detach();
     await this.#retireAttachment(reason);
   }
 
@@ -831,7 +863,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   #sessionClosed(owned: OwnedSession<Session>, error?: unknown): void {
     if (this.#current !== owned) return;
     this.#current = undefined;
-    this.#policy.detach();
+    this.#policy.detach(true);
     if (error instanceof SidecarSessionCleanupError) {
       this.#retirementFailure ??= error;
     } else {
@@ -870,7 +902,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
         return;
       }
       this.#current = undefined;
-      this.#policy.detach();
+      this.#policy.detach(true);
       void this.#beginSessionClose(owned, "sidecar_idle_expired").catch(
         this.#onBackgroundError,
       );
@@ -963,7 +995,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
     const current = this.#current;
     if (current) {
       this.#current = undefined;
-      this.#policy.detach();
+      this.#policy.detach(!this.#intentionallyDisconnected);
       void this.#beginSessionClose(current, reason);
     }
     await Promise.all([...this.#retiringSessions]);

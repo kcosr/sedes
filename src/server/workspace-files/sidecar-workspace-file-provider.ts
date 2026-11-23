@@ -83,7 +83,7 @@ function combineAbortSignals(
 
 import { recoverSidecarOperation } from "../sidecar/sidecar-operation-recovery.js";
 
-type SelectFilePolicyRoot = (path: string, primaryWorkspaceId?: string) => {path: string; key: string} | undefined;
+type SelectFilePolicyRoot = (path: string, workspaceId?: string, rootId?: string) => {path: string; key: string} | undefined;
 
 export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
   readonly #scope: RequestScope;
@@ -162,7 +162,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     signal?: AbortSignal,
   ): Promise<void> {
     this.#assert(scope, root.environmentId);
-    const policyRootPath = this.#policyRoot(root.canonicalPath, root.rootKind === "primary" ? root.workspaceId : undefined);
+    const policyRootPath = this.#policyRoot(root.canonicalPath, root.rootKind === "primary" || root.rootId ? root.workspaceId : undefined, root.rootId);
     if (!policyRootPath) throw new WorkspaceFileRootUnavailableError();
     let lease: Awaited<
       ReturnType<
@@ -1063,7 +1063,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       throw classifyError(error);
     }
     const rootKind = this.#rootKind(root);
-    const selected = this.#selectRoot(root.canonicalPath, rootKind === "primary" ? root.workspaceId : undefined);
+    const selected = this.#selectRoot(root.canonicalPath, root.workspaceId, root.rootId);
     const policyRootPath = selected?.path;
     const candidateKey = root.rootId === WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID
       ? rootHandleKey(root.workspaceId, root.rootId, rootKind, root.canonicalPath,
@@ -1160,7 +1160,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     canonicalPath: string,
     signal?: AbortSignal,
   ): Promise<string> {
-    const selected = this.#selectRoot(canonicalPath, rootKind === "primary" ? workspaceId : undefined);
+    const selected = this.#selectRoot(canonicalPath, workspaceId, rootId);
     const policyRootPath = selected?.path;
     if (!selected || !policyRootPath) throw new WorkspaceFileRootUnavailableError();
     const key = rootHandleKey(workspaceId, rootId, rootKind, canonicalPath, selected.key);
@@ -1201,12 +1201,12 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     );
   }
 
-  #policyRoot(candidate: string, primaryWorkspaceId?: string): string | undefined {
-    return this.#selectRoot(candidate, primaryWorkspaceId)?.path;
+  #policyRoot(candidate: string, workspaceId?: string, rootId?: string): string | undefined {
+    return this.#selectRoot(candidate, workspaceId, rootId)?.path;
   }
 
-  #selectRoot(candidate: string, primaryWorkspaceId?: string) {
-    if (this.#selectPolicyRoot) return this.#selectPolicyRoot(candidate, primaryWorkspaceId);
+  #selectRoot(candidate: string, workspaceId?: string, rootId?: string) {
+    if (this.#selectPolicyRoot) return this.#selectPolicyRoot(candidate, rootId === WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID ? undefined : workspaceId, rootId);
     const path = this.#policyRoots()
       .filter((root) => isWithin(root, candidate))
       .sort((left, right) => right.length - left.length)[0];

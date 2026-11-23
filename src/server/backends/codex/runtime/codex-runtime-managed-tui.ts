@@ -309,7 +309,7 @@ export function registerCodexManagedTuiHost(input: ProviderPolicyAttachment & {
     const { tenantId, principalId } = runtime.configuration.scope;
     const target = profileId && grant.targets.find(t => deriveConnectionProfileId(tenantId, principalId, t.id) === profileId);
     if (profileId && !target) throw new Error("codex_tui_target_denied");
-    return JSON.stringify([grant.generation, grant.managedTuiDigest, target ? target.generation : null]);
+    return JSON.stringify([grant.generation, target ? target.generation : null]);
   }
   const emit = (runtimeId: string, event: TuiEvent, permitted?: () => boolean) => {
     if (detached) return;

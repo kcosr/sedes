@@ -1,3 +1,6 @@
+import { AgentBackendRegistry } from "../../src/server/backends/registry.js";
+import type { AgentConnectionProfile, ConversationBackendDriver } from "../../src/server/backends/contracts.js";
+import { executionPolicyDigest, type InstalledExecutionPolicy } from "../../src/internal/sidecar-protocol/execution-policy.js";
 import { ownerPolicy, ownerPolicyPeer } from "../helpers/sidecar-owner-policy.js";
 import { SshInteractiveTerminalProvider } from "../../src/server/execution/ssh-interactive-terminal-provider.js";
 import { managedSshAgentToolCliAvailability } from "../../src/server/runtime/agent-tool-cli-availability.js";
@@ -46,6 +49,7 @@ const installation = Object.freeze({
 function fixture(
   options: {
     readonly idleMilliseconds?: number;
+    readonly readDesiredPolicy?: () => InstalledExecutionPolicy;
     readonly sessionCloseError?: Error;
     readonly sessionCloseGate?: Promise<void>;
     readonly agentTools?: boolean;
@@ -86,7 +90,7 @@ function fixture(
   const owner = new SidecarRuntimeOwner({ connectionCompression: options.connectionCompression ?? (() => true),
     scope,
     executionEnvironmentId: environmentId,
-    readDesiredPolicy: () => ownerPolicy(["workspace_files", ...(options.terminal ? ["interactive_terminal"] : []), ...(options.agentTools ? ["agent_tools_cli"] : [])], {environmentRevision, operationsRevision}),
+    readDesiredPolicy: options.readDesiredPolicy ?? (() => ownerPolicy(["workspace_files", ...(options.terminal ? ["interactive_terminal"] : []), ...(options.agentTools ? ["agent_tools_cli"] : [])], {environmentRevision, operationsRevision})),
     authorizedRuntimeCapabilities: [],
     isAutomaticConnectionEnabled: () => true,
     isTransportAvailable: options.isTransportAvailable,
@@ -312,7 +316,61 @@ describe("SidecarRuntimeOwner", () => {
     await value.owner.close();
   });
 
-  it.each([true, false])("gates PTY authority on the current confirmed attachment (PTY=%s)", async terminalSupported => {
+  it("reacquires confirmation for a Pi SDK driver and held handle after idle and transport loss", async () => {
+    vi.useFakeTimers();
+    let generation = 1;
+    const value = fixture({idleMilliseconds: 5000, readDesiredPolicy() {
+      const policy = ownerPolicy();
+      const snapshot = {...policy.snapshot, backends: [{...policy.snapshot.backends[0]!, kind: "pi",
+        targets: [{id: "target", generation}]}]};
+      return {...policy, revision: generation, snapshot, digest: executionPolicyDigest(snapshot)};
+    }});
+    const registry = new AgentBackendRegistry();
+    const instance = {id: "backend", kind: "pi" as const, label: "Pi", enabled: true,
+      protocolRelease: "test", configurationRevision: 1, tenantId: scope.tenantId};
+    const connection: AgentConnectionProfile = {id: "profile", templateId: "target", kind: "pi_sdk", backendInstanceId: instance.id,
+      label: "Pi SDK", enabled: true, tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, executionEnvironmentId: environmentId, configurationRevision: 1};
+    const submit = vi.fn(async () => "submitted");
+    const attach = vi.fn(async () => ({submit}));
+    registry.register({scope, instance, connectionKinds: ["pi_sdk"], supportsConversationCreation: false,
+      connectionGeneration: profile => value.owner.acquirableTargetGeneration(profile.backendInstanceId, profile.templateId),
+      withConnectionAuthorization: (profile, generation, run) => value.owner.withTargetAuthorization(profile.backendInstanceId, profile.templateId, generation, run),
+      create: () => ({instance, connection, attach}) as unknown as ConversationBackendDriver,
+    });
+    try {
+      const lease = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
+      lease.release();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(value.owner.policyStatus()).toBeUndefined();
+      const driver = registry.driver(connection);
+      expect(value.startSession).toHaveBeenCalledTimes(1);
+      const handle = await driver.attach({} as Parameters<typeof driver.attach>[0]);
+      expect(value.startSession).toHaveBeenCalledTimes(2);
+      await value.owner.disconnectTransport("carrier_lost");
+      // No background reconnect: foreground submit joins the new epoch first.
+      const input = {} as Parameters<typeof handle.submit>[0];
+      const gate = deferred<void>();
+      const fresh = new FakeSession();
+      const apply = vi.spyOn(fresh, "applyPolicy").mockImplementation(async desired => {
+        await gate.promise;
+        return fresh.policy.applyPolicy(desired);
+      });
+      value.startSession.mockResolvedValueOnce(fresh);
+      const submission = handle.submit(input);
+      await vi.waitFor(() => expect(apply).toHaveBeenCalledOnce());
+      expect(submit).not.toHaveBeenCalled();
+      gate.resolve();
+      await expect(submission).resolves.toBe("submitted");
+      expect(value.startSession).toHaveBeenCalledTimes(3);
+      await value.owner.disconnectTransport("carrier_lost");
+      generation++;
+      await expect(handle.submit(input)).rejects.toThrow();
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(value.startSession).toHaveBeenCalledTimes(3);
+    } finally { await value.owner.close(); vi.useRealTimers(); }
+  });
+
+  it.each([true, false])("retains eligible PTY selection across idle retirement and reacquires live authority (PTY=%s)", async terminalSupported => {
     vi.useFakeTimers();
     let connected = true;
     const value = fixture({ idleMilliseconds: 5000, terminal: true, terminalSupported, isTransportAvailable: () => connected });
@@ -336,8 +394,9 @@ describe("SidecarRuntimeOwner", () => {
       await vi.advanceTimersByTimeAsync(5000);
       expect(value.sessions[0]!.close).toHaveBeenCalledWith("sidecar_idle_expired");
       expect(value.owner.negotiatedCapabilities).toEqual(first.session.negotiatedCapabilities);
-      expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(false);
-      expect(provider.availability(scope, environmentId)).toBe("unavailable");
+      expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(terminalSupported);
+      expect(provider.availability(scope, environmentId)).toBe(terminalSupported ? "available" : "unavailable");
+      expect(value.owner.policyCapabilityGeneration("interactive_terminal")).toBeUndefined();
       connected = false;
       expect(provider.availability(scope, environmentId)).toBe("unavailable");
       expect(value.owner.negotiatedCapabilities).toEqual([]);
@@ -699,6 +758,24 @@ describe("SidecarRuntimeOwner", () => {
     expect(value.install).not.toHaveBeenCalled();
     expect(value.owner.activeAgentToolLeaseCount).toBe(0);
     await value.owner.close();
+  });
+
+  it("retries policy on demand and respects an explicit host disconnect", async () => {
+    const value = fixture();
+    const signal = new AbortController().signal;
+    try {
+      await value.owner.retryPolicy(signal);
+      expect(value.launch).toHaveBeenCalledOnce();
+      const synchronize = vi.spyOn(value.owner, "synchronizePolicy");
+      await value.owner.retryPolicy(signal);
+      expect(synchronize).toHaveBeenCalledWith(signal, true);
+      expect(value.launch).toHaveBeenCalledOnce();
+      await value.owner.disconnect();
+      await expect(value.owner.retryPolicy(signal)).rejects.toBeInstanceOf(SidecarUnavailableError);
+      expect(value.launch).toHaveBeenCalledOnce();
+    } finally {
+      await value.owner.close();
+    }
   });
 
   it("applies environment and operation revisions to the admitted service while a watch is open", async () => {

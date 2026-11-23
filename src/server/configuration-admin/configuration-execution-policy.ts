@@ -98,7 +98,8 @@ export function writeExecutionPolicy(database: Database.Database, scope: Request
   const capabilities = environment && environment.kind !== "local" && environment.operations.kind === "sidecar"
     ? [...environment.operations.enabledCapabilities].sort().map(id => subject(id, before.capabilities)) : [];
   const bindings = document.targets.filter(target => target.executionEnvironmentId === environmentId);
-  const backends = document.backends.filter(backend => backend.enabled && bindings.some(target => target.backendInstanceId === backend.id))
+  const backends = document.backends.filter(backend => backend.enabled &&
+    (backend.kind !== "grok_build" || environment?.kind === "local") && bindings.some(target => target.backendInstanceId === backend.id))
     .sort(compareIds).map(backend => {
       const incumbent = before.backends.find(item => item.id === backend.id);
       return { ...subject(backend.id, before.backends), kind: backend.kind, launchDigest: providerLaunchDigest(backend, environment?.environmentVariables?.startup),

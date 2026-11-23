@@ -91,6 +91,27 @@ describe("backend-scoped CLI endpoint lifetime", () => {
         capabilityId: "agent_tools_cli",
       });
       const original = manager.binding("one");
+      expect(() =>
+        manager.validateProviderRoute("one", descriptor.endpoint, "/wrong"),
+      ).toThrow(
+        expect.objectContaining({
+          name: "SidecarOperationError",
+          code: "sidecar_policy_route_denied",
+          retryable: false,
+        }),
+      );
+      expect(() =>
+        manager.validateProviderRoute("two", descriptor.endpoint),
+      ).toThrow(
+        expect.objectContaining({ code: "sidecar_policy_route_denied" }),
+      );
+      manager.validateProviderRoute(
+        "one",
+        descriptor.endpoint,
+        "/opt/sedes",
+        "/bin",
+        "/opt/sedes:/bin",
+      );
       snapshot = {
         ...snapshot,
         backends: [...snapshot.backends, backend("two")],

@@ -50,7 +50,9 @@ vi.mock("../../src/server/sidecar/sidecar-runtime.js", async (original) => {
       get negotiatedCapabilities() { return this.transportAvailable() ? fake.negotiatedCapabilities ?? [] : []; }
       private transportAvailable() { return (this.options.isTransportAvailable as (() => boolean) | undefined)?.() ?? true; }
       private desired() { return (this.options.readDesiredPolicy as () => InstalledExecutionPolicy)(); }
-      policyWorkspaceRoots() { return this.desired().snapshot.roots; }
+      confirmWorkspacePolicy = async () => {};
+      acquirableCapabilityGeneration(id: string) { return this.policyCapabilityGeneration(id); }
+      acquirableWorkspaceRoots() { return this.desired().snapshot.roots; }
       policyCapabilityGeneration(id: string) { return this.desired().snapshot.capabilities.find(entry => entry.id === id)?.generation; }
       canAcquireCapability(capabilityId: string, majorVersion: number) {
         const matches = (capability: { capabilityId: string; majorVersion: number }) => capability.capabilityId === capabilityId && capability.majorVersion === majorVersion;

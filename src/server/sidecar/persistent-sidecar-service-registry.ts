@@ -115,6 +115,11 @@ export class PersistentSidecarServiceRegistry {
     return this.#attachmentMode === "recovery" || inRecoveryRequest();
   }
 
+  /** A resident journal can finish admitted work across a detach while its original grant holds. */
+  hasInstalledBackend(id: string, kind: string, generation: number): boolean {
+    return this.#policy.hasInstalledBackend(id, kind, generation);
+  }
+
   executionPolicy(epoch: number): ExecutionPolicySnapshot {
     this.assertAdmission(epoch);
     return this.#policy.current(epoch);

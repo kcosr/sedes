@@ -20,6 +20,8 @@ export interface BackendDriverFactory {
    */
   readonly creationIdentity?: ConversationCreationIdentity;
   readonly connectionGeneration?: (connection: AgentConnectionProfile) => number | undefined;
+  /** Reacquire a live host grant before entering the driver or a held handle. */
+  readonly withConnectionAuthorization?: <T>(connection: AgentConnectionProfile, generation: number, operation: () => T) => T | Promise<T>;
   create(connection: AgentConnectionProfile): ConversationBackendDriver;
 }
 
@@ -29,7 +31,7 @@ function backendKey(scope: RequestScope, backendInstanceId: string): string {
 
 /** A retained handle may still observe, reconcile, settle interactions and interrupt.
  * New effects require the generation that admitted the original handle. */
-function guardHandle(handle: ConversationHandle, assertCurrent: () => void): ConversationHandle {
+function guardHandle(handle: ConversationHandle, authorized: (operation: () => unknown) => unknown): ConversationHandle {
   return new Proxy(handle, {
     get(target, property) {
       const value: unknown = Reflect.get(target, property, target);
@@ -40,10 +42,7 @@ function guardHandle(handle: ConversationHandle, assertCurrent: () => void): Con
         case "perform":
         case "mutateProviderFeature":
         case "recoverModelFailure":
-          return (...args: unknown[]) => {
-            assertCurrent();
-            return Reflect.apply(value, target, args);
-          };
+          return (...args: unknown[]) => authorized(() => Reflect.apply(value, target, args));
         default:
           return value.bind(target);
       }
@@ -146,25 +145,27 @@ export class AgentBackendRegistry {
         "The backend factory returned a driver for a different configured target.",
       );
     }
-    const assertGeneration = () => {
-      if (factory.connectionGeneration && (this.factories.get(backendKey(factory.scope, factory.instance.id)) !== factory ||
-          factory.connectionGeneration(connection) !== generation)) {
-        throw new DomainError("runtime_unavailable", "The target authorization changed.", true);
-      }
+    const key = backendKey(factory.scope, factory.instance.id);
+    const authorized = (operation: () => unknown) => {
+      const invoke = () => {
+        if (this.#suspensions.has(key))
+          throw new DomainError("runtime_unavailable", "Configuration change pending for this backend.", true);
+        if (this.factories.get(key) !== factory)
+          throw new Error("backend_registry_generation_changed");
+        if (factory.connectionGeneration && factory.connectionGeneration(connection) !== generation)
+          throw new DomainError("runtime_unavailable", "The target authorization changed.", true);
+        return operation();
+      };
+      return factory.withConnectionAuthorization && generation !== undefined
+        ? factory.withConnectionAuthorization(connection, generation, invoke)
+        : invoke();
     };
     return new Proxy(driver, {
       get: (target, property) => {
         const value: unknown = Reflect.get(target, property, target);
         if (typeof value !== "function") return value;
         return (...args: unknown[]) => {
-          const key = backendKey(factory.scope, factory.instance.id);
-          if (this.#suspensions.has(key))
-            throw new DomainError("runtime_unavailable", "Configuration change pending for this backend.", true);
-          if (this.factories.get(key) !== factory) {
-            throw new Error("backend_registry_generation_changed");
-          }
-          assertGeneration();
-          const result: unknown = Reflect.apply(value, target, args);
+          const result = authorized(() => Reflect.apply(value, target, args));
           const pending = this.#inFlight.get(key) ?? new Set<Promise<void>>();
           this.#inFlight.set(key, pending);
           const settled = Promise.resolve(result)
@@ -179,7 +180,7 @@ export class AgentBackendRegistry {
             });
           pending.add(settled);
           if (property === "attach" && factory.connectionGeneration) {
-            return Promise.resolve(result as Promise<ConversationHandle>).then(handle => guardHandle(handle, assertGeneration));
+            return Promise.resolve(result as Promise<ConversationHandle>).then(handle => guardHandle(handle, authorized));
           }
           return result;
         };

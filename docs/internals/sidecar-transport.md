@@ -67,6 +67,14 @@ grants at save and exposes additions after host confirmation. A running
 attachment can update these grants while unrelated turns, terminals and file
 watches stay on their original connection.
 
+After idle retirement or carrier loss, unchanged grants from the last confirmed
+incarnation keep targets and features selectable. A foreground driver call or
+new turn on a held handle reacquires the carrier and confirms the target on its
+current controller before entering the provider. Discovery of a different
+incarnation discards the previous selection evidence. Exact settlement, such
+as download cancellation and shell result acknowledgement, uses controller
+authority even while policy synchronization or service draining is in progress.
+
 Main polls preparing subjects every two seconds and refreshes settled readiness
 every 30 seconds. Failed delivery is retried after 1, 2, 4, 8, 16 and 30
 seconds, then on a five-minute retry, a new save, explicit retry or reconnection.
@@ -74,7 +82,11 @@ A confirmed conflict between restored local state and a newer or divergent
 installed policy fences ordinary work until the operator replaces that service
 incarnation. Managed route descriptors travel through a scoped
 `policy.acquire_route` call bound to a backend instance and feature generation.
-Their endpoint and PATH stay outside hello and policy status.
+Their endpoint and PATH stay outside hello and policy status. The daemon keeps
+each listener while its backend and feature grants retain their generations.
+CLI calls return a retryable unavailable error until a replacement controller
+confirms those grants. Withdrawal retires the listener, and regranting access
+creates a new endpoint.
 
 Recovery can borrow a restricted view of the current connection for an exact
 retained operation or attach to an existing service through management. An

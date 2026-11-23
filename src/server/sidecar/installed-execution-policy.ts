@@ -35,6 +35,12 @@ export class InstalledExecutionPolicyStore {
     return this.#installed.snapshot;
   }
 
+  hasInstalledBackend(id: string, kind: string, generation: number): boolean {
+    return this.#installed?.snapshot.backends.some(backend =>
+      backend.id === id && backend.kind === kind && backend.generation === generation && backend.targets.length > 0,
+    ) ?? false;
+  }
+
   discardStaging(): void {
     this.#discard();
   }

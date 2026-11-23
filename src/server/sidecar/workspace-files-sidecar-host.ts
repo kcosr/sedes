@@ -46,6 +46,7 @@ interface AdmittedRoot {
 }
 
 interface ActiveWatch {
+  retry?: NodeJS.Timeout;
   readonly rootHandle: string;
   readonly subscription: WorkspaceFileWatchSubscription;
 }
@@ -89,7 +90,7 @@ export class WorkspaceFilesSidecarHost {
   /** Watches are attachment-local hints; clients refresh when opening new ones. */
   detach(): void {
     this.#attachmentEpoch += 1;
-    for (const watch of this.#watches.values()) watch.subscription.close();
+    for (const handle of this.#watches.keys()) this.#discardWatch(handle);
     this.#watches.clear();
     this.#roots.clear();
     this.#admissions.clear();
@@ -374,7 +375,7 @@ export class WorkspaceFilesSidecarHost {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
-    for (const watch of this.#watches.values()) watch.subscription.close();
+    for (const handle of this.#watches.keys()) this.#discardWatch(handle);
     for (const download of this.#downloads.values()) {
       download.controller.abort(new Error("sidecar_session_closed"));
     }
@@ -653,8 +654,7 @@ export class WorkspaceFilesSidecarHost {
     if (!root) throw new SidecarOperationError("sidecar_root_handle_invalid");
     for (const [handle, watch] of this.#watches) {
       if (watch.rootHandle !== rootHandle) continue;
-      watch.subscription.close();
-      this.#watches.delete(handle);
+      this.#discardWatch(handle);
     }
     this.#roots.delete(rootHandle);
     this.#admissions.delete(root.admissionId);
@@ -738,10 +738,7 @@ export class WorkspaceFilesSidecarHost {
       throw new SidecarOperationError("sidecar_watch_capacity", true);
     const root = this.#root(rootHandle);
     const subscriptionHandle = randomUUID();
-    const subscription = await this.#engine.watch(root, () => {
-      try { this.#admittedRoot(rootHandle); } catch { this.#watches.get(subscriptionHandle)?.subscription.close(); this.#watches.delete(subscriptionHandle); return; }
-      void this.#sendInvalidation(subscriptionHandle).catch(() => undefined);
-    });
+    const subscription = await this.#engine.watch(root, () => this.#invalidateWatch(subscriptionHandle));
     try {
       assertAdmission();
       // A cancelled open's response is discarded, so Sedes could never close
@@ -754,25 +751,47 @@ export class WorkspaceFilesSidecarHost {
       throw error;
     }
     this.#watches.set(subscriptionHandle, { rootHandle, subscription });
-    void subscription.failed.then(() => {
-      const active = this.#watches.get(subscriptionHandle);
-      if (active?.subscription === subscription) {
-        this.#watches.delete(subscriptionHandle);
-        void this.#sendWatchFailure(subscriptionHandle).catch(() => undefined);
-      }
-    });
+    void subscription.failed.then(() => this.#failWatch(subscriptionHandle));
     return { subscriptionHandle };
   }
 
   #watchClose(subscriptionHandle: string): { readonly closed: true } {
     this.#assertOpen();
-    const watch = this.#watches.get(subscriptionHandle);
-    if (!watch) {
-      throw new SidecarOperationError("sidecar_watch_handle_invalid");
-    }
-    this.#watches.delete(subscriptionHandle);
-    watch.subscription.close();
+    if (!this.#discardWatch(subscriptionHandle)) throw new SidecarOperationError("sidecar_watch_handle_invalid");
     return { closed: true };
+  }
+
+  #discardWatch(handle: string): boolean {
+    const watch = this.#watches.get(handle);
+    if (!watch) return false;
+    this.#watches.delete(handle);
+    clearTimeout(watch.retry);
+    watch.subscription.close();
+    return true;
+  }
+
+  #failWatch(handle: string): void {
+    if (this.#discardWatch(handle)) void this.#sendWatchFailure(handle).catch(() => undefined);
+  }
+
+  #invalidateWatch(handle: string): void {
+    const watch = this.#watches.get(handle);
+    if (!watch) return;
+    clearTimeout(watch.retry);
+    try {
+      this.#admittedRoot(watch.rootHandle);
+    } catch (error) {
+      if (error instanceof SidecarOperationError && error.code === "workspace_policy_revoked") {
+        this.#failWatch(handle);
+      } else {
+        // Recovery and draining can temporarily fence reads. Keep the dirty
+        // notification until the attachment is authorized again or detached.
+        watch.retry = setTimeout(() => this.#invalidateWatch(handle), 500);
+        watch.retry.unref();
+      }
+      return;
+    }
+    void this.#sendInvalidation(handle).catch(() => undefined);
   }
 
   #root(
