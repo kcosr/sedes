@@ -312,6 +312,7 @@ User-facing changes are collected here before release. See the
   no longer waits up to a second behind another thread's idle update request.
   Model and Steer checks are unchanged; see
   [OpenCode settings](docs/operator/backends/opencode.md#conversations-and-settings).
+  ([#154](https://github.com/kcosr/sedes/pull/154))
 
 - Selecting chat text or tapping a highlighted question opens the quote
   editor with the quote directly above a two-row optional note and the
