@@ -1105,6 +1105,36 @@ describe("native Pi driver", () => {
     await expect(handle.perform(input)).resolves.toMatchObject({ accepted: true });
     expect(fixture.commands.filter(command => command.type === type)).toHaveLength(1);
   });
+  it("renames during a running turn while settings and compaction still require idle", async () => {
+    const { driver, fixture } = setup(); const handle = await driver.attach(conversation); await handle.submit(submission());
+    expect(fixture.state.isIdle).toBe(false);
+    const request = fixture.port.request;
+    fixture.port.request = async (input, signal) => {
+      const result = await request(input, signal);
+      const command = input.command.command;
+      if (command.type === "set_session_name") {
+        const entry = { id: "title", parentId: fixture.state.leafId, type: "session_info" as const, timestamp: time, name: String(command.name) };
+        fixture.state = { ...fixture.state, entries: [...fixture.state.entries, entry], leafId: entry.id };
+      }
+      return result;
+    };
+    await expect(handle.perform({ action: "rename", title: "Renamed mid-turn", applicationOperationId: "rename" })).resolves.toMatchObject({ accepted: true });
+    expect(fixture.commands.filter(command => command.type === "set_session_name").map(command => command.command.name)).toEqual(["Renamed mid-turn"]);
+    const issued = fixture.commands.length;
+    for (const input of [
+      { action: "compact" as const, applicationOperationId: "compact" },
+      { action: "set_model" as const, provider: "provider", modelId: "model", applicationOperationId: "model" },
+      { action: "set_thinking_level" as const, level: "high", applicationOperationId: "thinking" },
+      { action: "set_tool_access" as const, mode: "read_only", applicationOperationId: "tools" },
+    ]) await expect(handle.perform(input)).rejects.toMatchObject({ backendCode: "pi_native_settings_busy", crossedSubmissionBoundary: false });
+    expect(new Set(fixture.commands.slice(issued).map(command => command.type))).toEqual(new Set(["snapshot"]));
+    fixture.state = { ...fixture.state, entries: [...fixture.state.entries, answer("a", "title")], leafId: "a", isIdle: true };
+    fixture.push({ kind: "rpc", payload: { type: "message_end", message: { role: "assistant" } } });
+    await vi.waitFor(async () => expect((await handle.establishProjection({ signal: new AbortController().signal })).snapshot.turnsById["user:submit"]?.status).toBe("completed"));
+    const final = (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
+    expect(final.orderedBackendTurnIds).toEqual(["user:submit"]);
+    expect(final.turnsById["user:submit"]!.orderedBackendItemIds.map(id => JSON.stringify(final.itemsById[id])).join("")).toContain("Done");
+  });
   it("keeps an applied tool policy crossed when the following catalog snapshot is refused", async () => {
     const operations = operationStore(); const { driver, fixture } = setup({ operations });
     const handle = await driver.attach(conversation);
