@@ -8,7 +8,25 @@ import { openCodeConversationError, requireOpenCodeBinding, type OpenCodeConvers
 import { classifyObserved, decodeOpenCodeModelId, qualifiedOpenCodeModelId, resolveOpenCodeSelection,
   sameOpenCodeSelection, type OpenCodeObservation, type OpenCodeSelection } from "./opencode-model-selection.js";
 import type { OpenCodeModelCatalogRead } from "./opencode-model-catalog.js";
+import { OpenCodeIdentityProofScope } from "./opencode-identity-proof.js";
 import type { OpenCodeOperationSettingsSnapshot, OpenCodeThreadSettingsRecord } from "./opencode-thread-settings-repository.js";
+
+/** Settings frozen for one Submit/Steer invocation. Only that invocation may pass it to prepare(). */
+export interface OpenCodeSettingsCapture {
+  readonly snapshot: OpenCodeOperationSettingsSnapshot;
+  readonly catalog: OpenCodeModelCatalogRead;
+}
+// A capture older than this, for example after a slow attachment read, repeats
+// the full check so dispatch never relies on a stale model catalog.
+const CAPTURE_REUSE_MILLISECONDS = 5_000;
+interface CapturedSettings {
+  readonly capturedAt: number;
+  readonly operationId: string;
+  readonly kind: "submit" | "steer";
+  readonly read: OpenCodeObservedSettings;
+  readonly desired: OpenCodeSelection;
+  readonly snapshot: OpenCodeOperationSettingsSnapshot;
+}
 
 export interface OpenCodeObservedSettings {
   readonly session: OpenCodeNativeSession;
@@ -23,6 +41,7 @@ export class OpenCodeExecutionSettings {
   readonly #native: OpenCodeNativeMutations;
   readonly lifetime: AbortSignal;
   #observationSequence = 0;
+  readonly #captures = new WeakMap<OpenCodeSettingsCapture, CapturedSettings>();
   constructor(readonly context: OpenCodeDriverContext, readonly input: AttachConversationInput,
     readonly runtime: OpenCodeConversationRuntime, readonly client: OpenCodeNativePort, readonly generation: string, lifetime: AbortSignal) {
     this.#api = new OpenCodeNativeApi(client); this.#native = new OpenCodeNativeMutations(client);
@@ -32,7 +51,8 @@ export class OpenCodeExecutionSettings {
   async observe(signal?: AbortSignal): Promise<OpenCodeObservedSettings> {
     signal = this.#signal(signal);
     const sequence = ++this.#observationSequence;
-    await this.assertCurrent(signal);
+    const proofs = new OpenCodeIdentityProofScope();
+    await this.assertCurrent(signal, proofs);
     const settings = this.context.settings.get(this.input.scope, this.input.binding.applicationThreadId);
     if (settings.observationGeneration !== this.generation) {
       if (!this.context.settings.beginObservation(this.input.scope, settings.applicationThreadId,
@@ -40,19 +60,24 @@ export class OpenCodeExecutionSettings {
     }
     const [session, catalog] = await Promise.all([
       this.#api.getSession(this.input.binding.backendConversationId, signal),
-      this.context.catalog.read({ connection: this.context.connection, workspace: this.input.workspace, ...(signal ? { signal } : {}) }),
+      this.context.catalog.read({ connection: this.context.connection, workspace: this.input.workspace, proofs, ...(signal ? { signal } : {}) }),
     ]);
     this.#assertSession(session);
-    await this.assertCurrent(signal);
+    await this.assertCurrent(signal, proofs);
     const observed = classifyObserved({ selection: nativeSelection(session, catalog), catalog });
     this.#publishObserved(settings, observed, sequence);
     return { session, catalog, settings, observed };
   }
 
-  async prepare(operationId: string, kind: "submit" | "steer", signal?: AbortSignal): Promise<{
+  /** `fresh` is this invocation's own capture; a replay or another invocation passes none. */
+  async prepare(operationId: string, kind: "submit" | "steer", signal?: AbortSignal, fresh?: OpenCodeSettingsCapture): Promise<{
     readonly snapshot: OpenCodeOperationSettingsSnapshot; readonly catalog: OpenCodeModelCatalogRead;
   }> {
-    const { read, desired, snapshot } = await this.#capture(operationId, kind, signal);
+    const captured = fresh ? this.#captures.get(fresh) : undefined;
+    if (fresh) this.#captures.delete(fresh);
+    const reusable = captured && captured.operationId === operationId && captured.kind === kind &&
+      Date.now() - captured.capturedAt <= CAPTURE_REUSE_MILLISECONDS;
+    const { read, desired, snapshot } = reusable ? await this.#recheck(captured, signal) : await this.#capture(operationId, kind, signal);
     if (!sameOpenCodeSelection(read.observed.resolvedSelection, desired)) {
       if (kind === "steer") throw unavailable("The desired and active OpenCode settings differ. Steering cannot change the active model.");
       await this.apply(desired, read, openCodeOperationControl(snapshot, "prepare-model"), signal);
@@ -61,11 +86,32 @@ export class OpenCodeExecutionSettings {
   }
 
   /** Freeze request identity without issuing writes before an input receipt exists. */
-  async capture(operationId: string, kind: "submit" | "steer", signal?: AbortSignal): Promise<{
-    readonly snapshot: OpenCodeOperationSettingsSnapshot; readonly catalog: OpenCodeModelCatalogRead;
-  }> {
-    const { read, snapshot } = await this.#capture(operationId, kind, signal);
-    return { snapshot, catalog: read.catalog };
+  async capture(operationId: string, kind: "submit" | "steer", signal?: AbortSignal): Promise<OpenCodeSettingsCapture> {
+    const captured = await this.#capture(operationId, kind, signal);
+    const result: OpenCodeSettingsCapture = Object.freeze({ snapshot: captured.snapshot, catalog: captured.read.catalog });
+    this.#captures.set(result, { capturedAt: Date.now(), operationId, kind, ...captured });
+    return result;
+  }
+
+  /** Dispatch-time check for this invocation's capture. Desired settings, model
+   * policy and catalog come from that capture; the native session is read again
+   * because another client can change its model without a Sedes settings write. */
+  async #recheck(captured: CapturedSettings, signal?: AbortSignal) {
+    signal = this.#signal(signal);
+    const settings = this.context.settings.get(this.input.scope, this.input.binding.applicationThreadId);
+    if (settings.revision !== captured.read.settings.revision || settings.revision !== captured.snapshot.settingsRevision ||
+        settings.observationGeneration !== this.generation) return this.#capture(captured.operationId, captured.kind, signal);
+    const sequence = ++this.#observationSequence;
+    this.assertCurrentSync(signal);
+    // The capture's trailing identity proof precedes this read; this proof follows it.
+    const session = await this.#api.getSession(this.input.binding.backendConversationId, signal);
+    this.#assertSession(session);
+    await this.assertCurrent(signal);
+    const catalog = captured.read.catalog;
+    const observed = classifyObserved({ selection: nativeSelection(session, catalog), catalog });
+    this.#publishObserved(settings, observed, sequence);
+    if (observed.classification !== "recognized") throw unrecognized();
+    return { read: { session, catalog, settings, observed }, desired: captured.desired, snapshot: captured.snapshot };
   }
 
   async #capture(operationId: string, kind: "submit" | "steer", signal?: AbortSignal) {
@@ -73,8 +119,7 @@ export class OpenCodeExecutionSettings {
     if (!read.settings.desired) throw unavailable("Choose supported OpenCode settings before sending input.");
     const desired = resolveOpenCodeSelection({ connection: this.context.connection, catalog: read.catalog.catalog,
       modelId: qualifiedOpenCodeModelId(read.settings.desired), variant: read.settings.desired.variant, modelPolicy: this.context.modelPolicy });
-    if (read.observed.classification !== "recognized") throw unavailable(
-      "OpenCode has custom or unavailable native settings. Choose a supported model or Default effort before sending input.");
+    if (read.observed.classification !== "recognized") throw unrecognized();
     const snapshot = this.context.settings.captureOperation(this.input.scope, {
       applicationThreadId: read.settings.applicationThreadId, applicationOperationId: operationId,
       operationKind: kind, expectedRevision: read.settings.revision, now: Date.now(),
@@ -104,10 +149,10 @@ export class OpenCodeExecutionSettings {
     // evidence. The enclosing action or input admission commits that fence.
   }
 
-  async assertCurrent(signal?: AbortSignal): Promise<void> {
+  async assertCurrent(signal?: AbortSignal, proofs?: OpenCodeIdentityProofScope): Promise<void> {
     signal = this.#signal(signal);
     this.assertCurrentSync(signal);
-    await this.runtime.assertCurrent(signal);
+    await this.runtime.assertCurrent(signal, proofs);
     this.assertCurrentSync(signal);
   }
   assertCurrentSync(signal?: AbortSignal): void {
@@ -144,4 +189,7 @@ function nativeSelection(session: OpenCodeNativeSession, catalog: OpenCodeModelC
   return model ? decodeOpenCodeModelId(model.id) : null;
 }
 function changed() { return openCodeConversationError("opencode_settings_changed", "The OpenCode settings changed while this operation was being prepared.", "invalid_state"); }
+function unrecognized() {
+  return unavailable("OpenCode has custom or unavailable native settings. Choose a supported model or Default effort before sending input.");
+}
 function unavailable(message: string) { return openCodeConversationError("opencode_settings_unavailable", message, "invalid_state"); }
